@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "smetana",
+  "project_id": "195bc2ee-0150-4417-bdbe-17ad9827660d"
+}
