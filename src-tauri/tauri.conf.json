@@ -35,6 +35,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "externalBin": ["binaries/bd"],
+    "resources": ["binaries/LICENSE-bd"],
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
