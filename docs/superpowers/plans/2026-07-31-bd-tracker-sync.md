@@ -152,9 +152,11 @@ export default defineConfig({
 
 ```
 src-tauri/target/
-src-tauri/binaries/
 src-tauri/gen/
 ```
+
+Каталог `src-tauri/binaries/` здесь намеренно не упоминается: в задаче 2 в нём появится
+отслеживаемый файл лицензии, а перекрыть исключение целого каталога точечным `!` git не умеет.
 
 - [ ] **Шаг 7: Проверить, что окно открывается**
 
@@ -320,7 +322,8 @@ curl -sL "https://raw.githubusercontent.com/gastownhall/beads/v1.1.2/LICENSE" \
   -o src-tauri/binaries/LICENSE-bd
 ```
 
-Файл лицензии, в отличие от бинарника, коммитится — добавить исключение в `.gitignore`:
+Файл лицензии, в отличие от бинарника, коммитится — дописать в `.gitignore` две строки. Именно
+`binaries/*`, а не `binaries/`: исключение целого каталога точечным `!` не перекрывается.
 
 ```
 src-tauri/binaries/*
