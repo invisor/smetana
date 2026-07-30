@@ -61,7 +61,7 @@ fs-watch каталога `.beads` с инкрементальной догру�
 
 ---
 
-### Задача 1: тулчейн Rust и каркас Tauri
+### Task 1: тулчейн Rust и каркас Tauri
 
 **Файлы:**
 - Создать: `src-tauri/` (генерируется), `src-tauri/tauri.conf.json`
@@ -184,7 +184,7 @@ git commit -m "feat: каркас Tauri поверх существующего 
 
 ---
 
-### Задача 2: поставка bd вшитым бинарником
+### Task 2: поставка bd вшитым бинарником
 
 **Файлы:**
 - Создать: `scripts/fetch-bd.mjs`
@@ -389,7 +389,7 @@ git commit -m "feat: bd едет в бандле как sidecar"
 
 ---
 
-### Задача 3: модель данных и разбор вывода bd
+### Task 3: модель данных и разбор вывода bd
 
 **Файлы:**
 - Создать: `src-tauri/src/tracker/mod.rs`, `src-tauri/src/tracker/model.rs`,
@@ -792,7 +792,7 @@ git commit -m "feat: модель трекера и разбор вывода bd
 
 ---
 
-### Задача 4: запуск bd
+### Task 4: запуск bd
 
 **Файлы:**
 - Изменить: `src-tauri/src/tracker/bd.rs`
@@ -936,7 +936,7 @@ git commit -m "feat: запуск bd через sidecar"
 
 ---
 
-### Задача 5: снимок трекера и вычисление дельты
+### Task 5: снимок трекера и вычисление дельты
 
 **Файлы:**
 - Создать: `src-tauri/src/tracker/store.rs`
@@ -1178,7 +1178,7 @@ git commit -m "feat: снимок трекера и вычисление дел�
 
 ---
 
-### Задача 6: слежение за каталогом .beads
+### Task 6: слежение за каталогом .beads
 
 **Файлы:**
 - Создать: `src-tauri/src/tracker/watcher.rs`
@@ -1295,7 +1295,7 @@ git commit -m "feat: слежение за каталогом .beads"
 
 ---
 
-### Задача 7: воркер и команды Tauri
+### Task 7: воркер и команды Tauri
 
 **Файлы:**
 - Создать: `src-tauri/src/tracker/service.rs`, `src-tauri/src/tracker/commands.rs`
@@ -1659,7 +1659,7 @@ git commit -m "feat: воркер трекера и команды Tauri"
 
 ---
 
-### Задача 8: доска на реальных данных
+### Task 8: доска на реальных данных
 
 **Файлы:**
 - Создать: `src/stores/tracker.js`, `src/stores/mockBackend.js`
@@ -1933,7 +1933,7 @@ git commit -m "feat: доска показывает реальные задач
 
 ---
 
-### Задача 9: создание, правка и закрытие задач
+### Task 9: создание, правка и закрытие задач
 
 **Файлы:**
 - Создать: `src/components/kanban/NewTaskModal.vue`
