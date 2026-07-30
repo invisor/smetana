@@ -85,7 +85,7 @@ step up, never a colour change and never a transform, so controls in a dense lis
 ### Icons
 
 `core/icons.js` is the only file that names Lucide, and it registers glyphs explicitly so the build
-tree-shakes to the ~40 actually used (there is a ~10 MB binary budget). Adding a glyph to the UI
+tree-shakes to the ~40 actually used. Adding a glyph to the UI
 means adding it there first; `Icon` warns in dev for an unregistered name. Swapping icon sets means
 replacing that one file. Note `message-circle-question-mark` is kept as the design-system key and
 mapped to lucide 0.469's `MessageCircleQuestion`.
