@@ -1,0 +1,20 @@
+/* MOTION. Movement means something actually happened.
+   No entrance animation, no decorative transitions. */
+:root{
+  --dur-instant:0ms; /* @kind other */
+  --dur-fast:90ms; /* @kind other */
+  --dur-base:140ms; /* @kind other */
+  --dur-flash:600ms; /* @kind other */
+  --dur-pulse:1600ms; /* @kind other */
+  --ease-out:cubic-bezier(.2,.8,.3,1); /* @kind other */
+  --ease-in-out:cubic-bezier(.4,0,.2,1); /* @kind other */
+  --transition-control:background-color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out),color var(--dur-fast) var(--ease-out); /* @kind other */
+}
+@keyframes sm-flash{from{background-color:var(--change-flash)}to{background-color:transparent}}
+@keyframes sm-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+@keyframes sm-spin{to{transform:rotate(360deg)}}
+@keyframes sm-skeleton{0%{opacity:.45}50%{opacity:.8}100%{opacity:.45}}
+@media (prefers-reduced-motion:reduce){
+  :root{--dur-fast:0ms; /* @kind other */--dur-base:0ms; /* @kind other */--dur-flash:0ms; /* @kind other */--dur-pulse:0ms /* @kind other */}
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}

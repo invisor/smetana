@@ -1,0 +1,40 @@
+/* SPACING + SIZING, TWO DENSITIES.
+   Density changes only the space scale and row/control heights - never colour,
+   radius or type. Default is comfortable; [data-density="compact"] on the root. */
+:root{
+  --space-0:0;--space-1:2px;--space-2:4px;--space-3:6px;--space-4:8px;
+  --space-5:12px;--space-6:16px;--space-7:20px;--space-8:24px;--space-9:32px;--space-10:40px;
+
+  --row-h:28px;
+  --control-h:28px;
+  --control-h-sm:24px;
+  --control-h-lg:34px;
+  --tab-h:32px;
+  --titlebar-h:36px;
+  --scope-bar-h:30px;
+  --card-pad:10px;
+  --panel-pad:12px;
+  --log-line-h:18px;
+  --tree-indent:14px;
+  --panel-min-w:180px;
+  --panel-left-w:248px;
+  --panel-right-w:320px;
+  --resizer-w:5px; /* @kind spacing */
+  --icon-sm:14px;--icon-md:16px;--icon-lg:20px; /* @kind spacing */
+}
+[data-density="compact"]{
+  --space-1:2px;--space-2:3px;--space-3:4px;--space-4:6px;
+  --space-5:8px;--space-6:12px;--space-7:14px;--space-8:18px;--space-9:24px;--space-10:32px;
+
+  --row-h:22px;
+  --control-h:24px;
+  --control-h-sm:20px;
+  --control-h-lg:28px;
+  --tab-h:26px;
+  --titlebar-h:30px;
+  --scope-bar-h:24px;
+  --card-pad:7px;
+  --panel-pad:8px;
+  --log-line-h:15px;
+  --tree-indent:11px;
+}

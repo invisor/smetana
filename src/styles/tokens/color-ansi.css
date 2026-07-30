@@ -1,0 +1,17 @@
+/* ANSI 16. Agents are console processes; their output is escape-coloured.
+   Tuned per theme against --editor-bg, not lifted from xterm defaults:
+   every entry clears 4.5:1 on the log background (bright variants 4.5:1 too). */
+:root{
+  --ansi-black:#2a3338;--ansi-red:#b23a28;--ansi-green:#48762f;--ansi-yellow:#856012;
+  --ansi-blue:#2a5da8;--ansi-magenta:#8a3a96;--ansi-cyan:#13707a;--ansi-white:#6f7c82;
+  --ansi-bright-black:#4c595f;--ansi-bright-red:#c54933;--ansi-bright-green:#507e36;
+  --ansi-bright-yellow:#916b15;--ansi-bright-blue:#3670bd;--ansi-bright-magenta:#9f4bab;
+  --ansi-bright-cyan:#167e89;--ansi-bright-white:#16201f;
+}
+[data-theme="dark"]{
+  --ansi-black:#566471;--ansi-red:#e8796b;--ansi-green:#8fbf7a;--ansi-yellow:#e0b152;
+  --ansi-blue:#7fa9e0;--ansi-magenta:#c58bd6;--ansi-cyan:#6bc5ce;--ansi-white:#c8d1d8;
+  --ansi-bright-black:#717f8c;--ansi-bright-red:#ff9384;--ansi-bright-green:#a8d693;
+  --ansi-bright-yellow:#f2c86a;--ansi-bright-blue:#9bc0f0;--ansi-bright-magenta:#dba4ea;
+  --ansi-bright-cyan:#85dde5;--ansi-bright-white:#e8eff4;
+}

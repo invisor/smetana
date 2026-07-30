@@ -1,0 +1,33 @@
+/* GENERATED STATUS PALETTE — 12 deterministic slots.
+   Hues chosen to exclude +/-18 deg around every reserved semantic hue
+   (8 failed, 40 needs-you, 152 done, 188 running, 218 ready, 288 blocked)
+   and held at lower chroma than needs-you, so a generated status can never
+   out-shout the attention ladder. See guidelines/status-color-algorithm.html */
+:root{
+  --status-gen-0-fg:#7a4200;--status-gen-0-bg:#ffecde;--status-gen-0-border:#e0bc9e;
+  --status-gen-1-fg:#734800;--status-gen-1-bg:#fbeedc;--status-gen-1-border:#dac09b;
+  --status-gen-2-fg:#694e00;--status-gen-2-bg:#f7f0db;--status-gen-2-border:#d3c39a;
+  --status-gen-3-fg:#5d5400;--status-gen-3-bg:#f3f1dc;--status-gen-3-border:#cac79b;
+  --status-gen-4-fg:#4e5a00;--status-gen-4-bg:#eef3de;--status-gen-4-border:#c0ca9f;
+  --status-gen-5-fg:#3c5e18;--status-gen-5-bg:#e9f4e1;--status-gen-5-border:#b6cda6;
+  --status-gen-6-fg:#005886;--status-gen-6-bg:#e0f3ff;--status-gen-6-border:#a3cae6;
+  --status-gen-7-fg:#20548a;--status-gen-7-bg:#e3f2ff;--status-gen-7-border:#a9c7e9;
+  --status-gen-8-fg:#34508c;--status-gen-8-bg:#e7f0ff;--status-gen-8-border:#b1c4eb;
+  --status-gen-9-fg:#663f7c;--status-gen-9-bg:#f7ebfe;--status-gen-9-border:#d1bae0;
+  --status-gen-10-fg:#713b70;--status-gen-10-bg:#fbeafa;--status-gen-10-border:#d9b7d7;
+  --status-gen-11-fg:#783863;--status-gen-11-bg:#fee9f5;--status-gen-11-border:#e0b6cf;
+}
+[data-theme="dark"]{
+  --status-gen-0-fg:#e7b183;--status-gen-0-bg:#311e0c;--status-gen-0-border:#634428;
+  --status-gen-1-fg:#dfb67d;--status-gen-1-bg:#2e2009;--status-gen-1-border:#5e4724;
+  --status-gen-2-fg:#d4bc7b;--status-gen-2-bg:#2b2208;--status-gen-2-border:#584a23;
+  --status-gen-3-fg:#c7c17e;--status-gen-3-bg:#262409;--status-gen-3-border:#514d24;
+  --status-gen-4-fg:#b8c685;--status-gen-4-bg:#21260d;--status-gen-4-border:#495029;
+  --status-gen-5-fg:#a9ca8f;--status-gen-5-bg:#1b2711;--status-gen-5-border:#3f5330;
+  --status-gen-6-fg:#88c6f1;--status-gen-6-bg:#0d2535;--status-gen-6-border:#2b5069;
+  --status-gen-7-fg:#94c2f5;--status-gen-7-bg:#132436;--status-gen-7-border:#334e6c;
+  --status-gen-8-fg:#a1bef7;--status-gen-8-bg:#182237;--status-gen-8-border:#3b4b6d;
+  --status-gen-9-fg:#d1aee7;--status-gen-9-bg:#2a1d31;--status-gen-9-border:#574263;
+  --status-gen-10-fg:#ddaadb;--status-gen-10-bg:#2e1b2d;--status-gen-10-border:#5e405c;
+  --status-gen-11-fg:#e6a8ce;--status-gen-11-bg:#311a28;--status-gen-11-border:#623e55;
+}

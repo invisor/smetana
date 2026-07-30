@@ -1,0 +1,37 @@
+/* RADII, DEPTH, ELEVATION, Z.
+   Depth is theme-specific by design:
+   light - real shadows, raised surfaces go lighter;
+   dark  - shadows are near-invisible at these luminances, so structure is
+           carried by borders; the shadow tokens collapse to hairline rings. */
+:root{
+  --radius-0:0;--radius-1:2px;--radius-2:3px;--radius-3:4px;--radius-4:6px;--radius-5:8px;
+  --radius-pill:999px;
+
+  --border-w:1px;--border-w-strong:2px;--accent-bar-w:3px;
+
+  --shadow-none:none;
+  --shadow-raised:0 1px 2px rgba(22,32,31,.08);
+  --shadow-overlay:0 4px 12px rgba(22,32,31,.14),0 1px 3px rgba(22,32,31,.10);
+  --shadow-modal:0 16px 40px rgba(22,32,31,.20),0 2px 6px rgba(22,32,31,.12);
+  --shadow-drag:0 6px 16px rgba(22,32,31,.20);
+
+  --ring-raised:none; /* @kind shadow */
+  --ring-overlay:none; /* @kind shadow */
+
+  --z-base:0; /* @kind other */
+  --z-panel:10; /* @kind other */
+  --z-sticky:20; /* @kind other */
+  --z-dropdown:100; /* @kind other */
+  --z-tooltip:200; /* @kind other */
+  --z-modal:300; /* @kind other */
+  --z-toast:400; /* @kind other */
+}
+[data-theme="dark"]{
+  --shadow-raised:none;
+  --shadow-overlay:0 6px 16px rgba(0,0,0,.45);
+  --shadow-modal:0 20px 48px rgba(0,0,0,.60);
+  --shadow-drag:0 8px 20px rgba(0,0,0,.55);
+
+  --ring-raised:inset 0 0 0 1px var(--border-subtle); /* @kind shadow */
+  --ring-overlay:inset 0 0 0 1px var(--border-strong); /* @kind shadow */
+}

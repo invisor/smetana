@@ -1,0 +1,95 @@
+/* SURFACES, BORDERS, TEXT, INTERACTIVE.
+   Light theme = cool paper with a faint blue-green cast; depth carried by
+   SHADOW + surface lift (raised surfaces go lighter, up to pure white).
+   Dark theme = blue-slate ink, never near-black; depth carried by BORDERS
+   (shadows are almost invisible at these values), surfaces lift only slightly. */
+:root{
+  --canvas:#eaeeef;
+  --surface-sunken:#e1e6e7;
+  --surface:#f4f7f7;
+  --surface-raised:#ffffff;
+  --surface-overlay:#ffffff;
+  --surface-hover:#e4e9ea;
+  --surface-active:#d9e0e1;
+  --surface-selected:#dde7ef;
+
+  --border-subtle:#dde3e3;
+  --border:#c9d1d2;
+  --border-strong:#a9b4b6;
+
+  --text-primary:#16201f;
+  --text-secondary:#4a565a;
+  --text-muted:#6b777c;
+  --text-inverse:#f4f7f7;
+  --text-link:#1f5d8f;
+  --text-link-hover:#123f63;
+
+  /* Primary action is ink-on-paper contrast, not a brand colour: the colour
+     budget belongs to status and attention. */
+  --action-primary-bg:#1b2529;
+  --action-primary-bg-hover:#2b3a3f;
+  --action-primary-bg-active:#101719;
+  --action-primary-fg:#f4f7f7;
+  --action-secondary-bg:#f4f7f7;
+  --action-secondary-bg-hover:#e4e9ea;
+  --action-secondary-bg-active:#d9e0e1;
+  --action-danger-bg:#a33224;
+  --action-danger-bg-hover:#b93d2d;
+  --action-danger-bg-active:#8b2a1e;
+  --action-danger-fg:#ffffff;
+
+  --focus-ring:#1c6fd0;
+  --focus-ring-offset:#ffffff;
+  --selection-bg:#c6dcf0;
+
+  --scrollbar-track:transparent;
+  --scrollbar-thumb:#c2caca;
+  --scrollbar-thumb-hover:#a3adae;
+
+  --scope-bar:#dfe6e6;
+  --overlay-scrim:rgba(20,28,28,.38);
+}
+[data-theme="dark"]{
+  --canvas:#10151a;
+  --surface-sunken:#0c1116;
+  --surface:#161b21;
+  --surface-raised:#1b2229;
+  --surface-overlay:#1f272f;
+  --surface-hover:#202932;
+  --surface-active:#26303a;
+  --surface-selected:#1f2c39;
+
+  --border-subtle:#232b33;
+  --border:#2e3841;
+  --border-strong:#3d4954;
+
+  --text-primary:#e3e8ed;
+  --text-secondary:#a8b3bd;
+  --text-muted:#7c8b97;
+  --text-inverse:#10151a;
+  --text-link:#8fb6e8;
+  --text-link-hover:#b3cef2;
+
+  --action-primary-bg:#dfe6ec;
+  --action-primary-bg-hover:#f0f4f8;
+  --action-primary-bg-active:#c3ccd4;
+  --action-primary-fg:#10151a;
+  --action-secondary-bg:#1b2229;
+  --action-secondary-bg-hover:#232c35;
+  --action-secondary-bg-active:#2a3540;
+  --action-danger-bg:#8f2d20;
+  --action-danger-bg-hover:#a63627;
+  --action-danger-bg-active:#79251a;
+  --action-danger-fg:#ffeae6;
+
+  --focus-ring:#5fa8ff;
+  --focus-ring-offset:#10151a;
+  --selection-bg:#2b4560;
+
+  --scrollbar-track:transparent;
+  --scrollbar-thumb:#333e48;
+  --scrollbar-thumb-hover:#465360;
+
+  --scope-bar:#141a20;
+  --overlay-scrim:rgba(4,7,10,.62);
+}

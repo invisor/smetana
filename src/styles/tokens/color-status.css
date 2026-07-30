@@ -1,0 +1,45 @@
+/* RESERVED SEMANTIC STATUSES + THE ATTENTION LADDER.
+   Three levels, enforced everywhere:
+     attn-loud  - needs you personally. Saturated, may move. Budgeted: rare.
+     attn-live  - work is happening. Noticeable, calm.
+     attn-quiet - done / closed / inactive. Muted, may drop to 55% opacity.
+   Reserved hues: 8 failed, 40 needs-you, 152 done, 188 running, 218 ready,
+   288 blocked. Generated statuses are excluded from these hue bands. */
+:root{
+  --status-blocked-fg:#6e3e96;--status-blocked-bg:#f0e8f8;--status-blocked-border:#d3bee6;
+  --status-ready-fg:#235c9e;--status-ready-bg:#e6eff9;--status-ready-border:#bbd3eb;
+  --status-running-fg:#0b6a72;--status-running-bg:#dff1f2;--status-running-border:#a9d8dc;
+  --status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;
+  --status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;
+  --status-failed-fg:#a33224;--status-failed-bg:#fbe8e5;--status-failed-border:#edbfb8;
+
+  --attn-loud:#b96a06;
+  --attn-loud-contrast:#ffffff;
+  --attn-live:#0b6a72;
+  --attn-quiet:var(--text-muted);
+  --attn-quiet-opacity:.62; /* @kind other */
+
+  --change-flash:#fbf0da;
+  --hatch-blocked:#6e3e96;
+  --graph-line:#a9b4b6;
+  --graph-line-active:#6e3e96;
+}
+[data-theme="dark"]{
+  --status-blocked-fg:#c9a6e8;--status-blocked-bg:#241c30;--status-blocked-border:#4a3a5e;
+  --status-ready-fg:#8fb6e8;--status-ready-bg:#16202e;--status-ready-border:#2e4562;
+  --status-running-fg:#6fd0d8;--status-running-bg:#0f2427;--status-running-border:#235257;
+  --status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;
+  --status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;
+  --status-failed-fg:#ee8878;--status-failed-bg:#2c1815;--status-failed-border:#653029;
+
+  --attn-loud:#f2b03d;
+  --attn-loud-contrast:#20180a;
+  --attn-live:#6fd0d8;
+  --attn-quiet:var(--text-muted);
+  --attn-quiet-opacity:.55; /* @kind other */
+
+  --change-flash:#2b2010;
+  --hatch-blocked:#c9a6e8;
+  --graph-line:#3d4954;
+  --graph-line-active:#c9a6e8;
+}

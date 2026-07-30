@@ -1,0 +1,7 @@
+/* Type strategy: ONE webfont only.
+   Sans = platform system stack (zero bytes, native metrics on all three webviews).
+   Mono = IBM Plex Mono, loaded, because monospace carries as much meaning as the
+   sans here (task ids bd-a1b2, paths, branches, diffs) and the system monos differ
+   too much to design against: Menlo / Consolas / DejaVu Sans Mono have different
+   widths, x-heights and zero shapes. Latin subset, 3 weights. */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');

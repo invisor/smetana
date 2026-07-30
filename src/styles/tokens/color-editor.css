@@ -1,0 +1,49 @@
+/* CODE VIEWER (CodeMirror 6) + LOG PANEL + GIT DIFF MARKERS. */
+:root{
+  --editor-bg:#f7faf9;
+  --editor-gutter-bg:#f7faf9;
+  --editor-line-number:#8b979b;
+  --editor-line-number-active:#16201f;
+  --editor-active-line:#eef3f2;
+  --editor-selection:#c6dcf0;
+  --editor-selection-match:#d8e8d3;
+  --editor-cursor:#16201f;
+  --editor-indent-guide:#e0e6e5;
+  --editor-match-highlight:#f5d98a;
+
+  --syn-keyword:#8a3a96;--syn-string:#48762f;--syn-number:#a3560f;
+  --syn-comment:#6b777c;--syn-function:#2a5da8;--syn-type:#13707a;
+  --syn-variable:#16201f;--syn-operator:#4a565a;--syn-punctuation:#6b777c;
+  --syn-invalid:#b23a28;
+
+  --diff-added-bg:#e2f0dd;--diff-added-gutter:#5b8f3d;--diff-added-fg:#2f5c1c;
+  --diff-removed-bg:#fbe4e0;--diff-removed-gutter:#c94a34;--diff-removed-fg:#8f2a1c;
+  --diff-changed-bg:#fbf0da;--diff-changed-gutter:#b96a06;--diff-changed-fg:#7a4708;
+
+  --git-modified:#b96a06;--git-added:#48762f;--git-deleted:#b23a28;
+  --git-untracked:#13707a;--git-ignored:#9aa6aa;--git-conflict:#8a3a96;
+}
+[data-theme="dark"]{
+  --editor-bg:#0e1317;
+  --editor-gutter-bg:#0e1317;
+  --editor-line-number:#5b6771;
+  --editor-line-number-active:#e3e8ed;
+  --editor-active-line:#161d23;
+  --editor-selection:#2b4560;
+  --editor-selection-match:#2a3d33;
+  --editor-cursor:#f2b03d;
+  --editor-indent-guide:#1e262e;
+  --editor-match-highlight:#6a4e1b;
+
+  --syn-keyword:#c58bd6;--syn-string:#8fbf7a;--syn-number:#e0a45c;
+  --syn-comment:#7c8b97;--syn-function:#9bc0f0;--syn-type:#6bc5ce;
+  --syn-variable:#e3e8ed;--syn-operator:#a8b3bd;--syn-punctuation:#7c8b97;
+  --syn-invalid:#ff9384;
+
+  --diff-added-bg:#132218;--diff-added-gutter:#5b8f3d;--diff-added-fg:#a8d693;
+  --diff-removed-bg:#25150f;--diff-removed-gutter:#c94a34;--diff-removed-fg:#ff9384;
+  --diff-changed-bg:#221a0d;--diff-changed-gutter:#b96a06;--diff-changed-fg:#f2c86a;
+
+  --git-modified:#e0b152;--git-added:#8fbf7a;--git-deleted:#e8796b;
+  --git-untracked:#6bc5ce;--git-ignored:#5b6771;--git-conflict:#c58bd6;
+}
