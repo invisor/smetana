@@ -10,3 +10,7 @@ dist/
 .beads-credential-key
 .claude
 docs
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/

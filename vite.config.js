@@ -4,6 +4,12 @@ import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
   plugins: [vue()],
+  // Tauri handles terminal output itself
+  clearScreen: false,
+  server: {
+    strictPort: true,
+    watch: { ignored: ['**/src-tauri/**'] }
+  },
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) }
   },
