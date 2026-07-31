@@ -10,14 +10,27 @@ use super::model::{parse, Outcome, Settings};
 pub enum Problem {
     Broken,
     TooNew,
+    /// Файл есть, но прочитать его не вышло: не хватило прав, это каталог,
+    /// сбойнул диск. От испорченного файла это отличается тем, что копировать
+    /// нечего — `fs::copy` того же файла упадёт по той же причине.
+    Unreadable,
 }
 
 /// Читает настройки. Отсутствие файла — не ошибка, а первый запуск.
 /// Испорченный и слишком новый файл не выбрасываем: он мог быть чьей-то
 /// работой, поэтому уезжает в `.bak`, а приложение стартует с умолчаний.
+/// Файл, который есть, но не читается (нет прав, это каталог и т.п.), —
+/// не первый запуск: копию снять нельзя, поэтому просто сообщаем о проблеме.
 pub fn load(path: &Path) -> (Settings, Option<Problem>) {
-    let Ok(text) = fs::read_to_string(path) else {
-        return (Settings::default(), None);
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return (Settings::default(), None);
+        }
+        Err(err) => {
+            log::warn!("настройки: не удалось прочитать {}: {err}", path.display());
+            return (Settings::default(), Some(Problem::Unreadable));
+        }
     };
     match parse(&text) {
         Outcome::Ok(settings) => (settings, None),
@@ -76,6 +89,22 @@ mod tests {
 
         assert_eq!(settings, Settings::default());
         assert!(problem.is_none(), "отсутствие файла — не проблема");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unreadable_file_is_reported_without_a_backup() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        // Каталог на месте файла — портируемый способ получить ошибку чтения,
+        // отличную от NotFound, без chmod (тот под root ведёт себя иначе).
+        fs::create_dir_all(&path).expect("подготовка");
+
+        let (settings, problem) = load(&path);
+
+        assert_eq!(settings, Settings::default());
+        assert!(matches!(problem, Some(Problem::Unreadable)));
+        assert!(!dir.join("settings.json.bak").exists(), "копировать нечего — файла не было");
         let _ = fs::remove_dir_all(&dir);
     }
 
