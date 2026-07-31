@@ -42,8 +42,6 @@ pub struct ColumnDef {
     pub category: String,
 }
 
-// Потребитель появится в задаче 5 (снимок трекера).
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub generation: u64,
@@ -51,8 +49,6 @@ pub struct Snapshot {
     pub issues: Vec<Issue>,
 }
 
-// Потребитель появится в задаче 5 (вычисление дельты).
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Delta {
     pub generation: u64,
@@ -63,8 +59,6 @@ pub struct Delta {
 }
 
 impl Delta {
-    // Потребитель появится в задаче 5 (вычисление дельты).
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.upserted.is_empty() && self.removed.is_empty() && self.columns.is_none()
     }
