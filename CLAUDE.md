@@ -82,8 +82,11 @@ gets a hash colour with a 2-letter code), and Rust's diagnostics to short Englis
 raw text left in the console.
 
 In a browser there is no back end, so `src/stores/mockBackend.js` installs the official `mockIPC`
-with the old fixtures: read commands answer, writes reject loudly. That is what keeps `npm run dev`
-and `?view=gallery` working with no branching in components.
+with the old fixtures: read commands answer, and writes to the tracker reject loudly — a "write"
+that looked like it worked would be worse than none. `settings_save` is the one exception: it is
+accepted and dropped, because a browser has nowhere to keep it and failing every debounce tick
+would only fill the console. That is what keeps `npm run dev` and `?view=gallery` working with no
+branching in components.
 
 ### The bd sidecar
 
@@ -99,38 +102,45 @@ script; a mismatch surfaces as `bd-version-mismatch` in health, not as a crash.
 
 ### Settings
 
-What the app remembers between runs lives in one JSON file in
-`app_config_dir()` (`~/Library/Application Support/com.invisor.smetana/settings.json`
-on macOS). `src-tauri/src/settings/` owns it: `model.rs` is the schema, the
-validation and the merge — pure, and where the tests are; `file.rs` is the disk
-(atomic write through a temp file, a `.bak` copy of anything unparseable or
-too new);
-`commands.rs` is two thin commands.
+What the app remembers between runs lives in one JSON file in `app_config_dir()`
+(`~/Library/Application Support/com.invisor.smetana/settings.json` on macOS).
+`src-tauri/src/settings/` owns it: `model.rs` is the schema, the validation and the merge — pure,
+and where the tests are; `file.rs` is the disk (atomic write through a per-call temp file that is
+`sync_all`ed and renamed, a `.bak` copy of anything unparseable or too new); `commands.rs` is two
+thin commands.
 
-The file keeps appearance and panel layout at the root and everything about
-content under the project's absolute path. There is still one project, so the
-map holds one entry — but that is the shape multi-project will land in. The map
-never crosses the IPC boundary: `settings_load` returns the resolved view for
-the current directory (`{ appearance, layout, project }`) and `settings_save`
-puts it back, stamps `usedAt` and trims the map to the 20 most recent projects.
+The file keeps appearance and panel layout at the root and everything about content under the
+project's absolute path. There is still one project, so the map holds one entry — but that is the
+shape multi-project will land in. The map never crosses the IPC boundary: `settings_load` returns
+the resolved view for the current directory (`{ appearance, layout, project }`) and `settings_save`
+puts it back, stamps `usedAt` and trims the map to the 20 most recent projects, dropping the
+least recently used and never the current one.
 
-The front end owns the truth here — the opposite of the tracker, where bd owns
-it. `src/stores/settings.js` holds a reactive object and writes it back with a
-400 ms debounce; components read and write plain fields.
+The front end owns the truth here — the opposite of the tracker, where bd owns it.
+`src/stores/settings.js` holds a reactive object and writes it back with a 400 ms debounce, one
+write in flight at a time; components read and write plain fields. Closing the window does not wait
+for the debounce: the store holds the close through `onCloseRequested`, flushes with a two-second
+ceiling and then destroys the window itself — the window always closes, a slow back end costs the
+last edit rather than the app.
 
-Nothing about settings is reachable from the interface: there is no settings
-screen and no theme switch. `?theme=` and `?density=` still override both for
-one run and are deliberately **not** written back — one visit to the dev server
-must not repaint the app forever. `?view=gallery` neither reads nor writes.
+Nothing about settings is reachable from the interface: there is no settings screen and no theme
+switch. `?theme=` and `?density=` still override both for one run and are deliberately **not**
+written back — one visit to the dev server must not repaint the app forever. `?view=gallery`
+neither reads nor writes.
 
-A missing file is the first run, not an error. A broken or too-new file is
-copied to `settings.json.bak` and the app starts from defaults; one that
-cannot be read at all — wrong permissions, a directory in its place — has
-nothing to copy, so it is only logged. A single field with a value outside
-its allowed set loses that field, not the file.
+A missing file is the first run, not an error. A broken or too-new file is copied to
+`settings.json.bak` and the app starts from defaults, and saving over it afterwards is fine. One
+that cannot be read at all — wrong permissions, a directory in its place — has nothing to copy, so
+it is logged *and* `settings_save` refuses: overwriting a file nobody could read would destroy it
+sight unseen. Damage is contained field by field where it can be: a single field whose *value* is
+outside its allowed set loses that field, while a section whose *type* is wrong
+(`{"layout": {"leftCollapsed": "yes"}}`) fails to deserialize and loses the whole section to its
+defaults — the same holds for one project entry among many.
 
-Window size and position are not in this file: `tauri-plugin-window-state`
-handles them.
+The side-tab set is a closed list written out twice, in `model.rs` and in `views/DesktopApp.vue`.
+Changing one without the other is silent: the value survives the session and comes back as Files.
+
+Window size and position are not in this file: `tauri-plugin-window-state` handles them.
 
 ### Styling: inline style objects, never CSS classes
 
