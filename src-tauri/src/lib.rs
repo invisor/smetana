@@ -1,3 +1,4 @@
+mod settings;
 mod tracker;
 
 use tauri::Manager;
