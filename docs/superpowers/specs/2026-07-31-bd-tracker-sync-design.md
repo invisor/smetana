@@ -45,6 +45,9 @@
   stdout остаётся чистым JSON.
 - У `bd list` дефолтный `--limit 50`; для полной выборки обязателен `-n 0`.
 - `bd create --json` возвращает **объект**, а `bd update` и `bd close --json` — **массив**
+- Заголовок передаётся флагом `--title`, а не позиционно: bd 1.1.2 отвергает заголовок,
+  начинающийся с дефиса, даже после разделителя `--` («looks like a flag»). Проверено запуском.
+  Идентификаторы в `update`, `close` и `reopen` позиционные и отделены `--`.
   (эти команды принимают несколько id). Парсер обязан принимать обе формы.
 - `bd statuses --json` отдаёт `built_in_statuses[]` и кастомные с полями
   `{name, category, icon, description}`; категории — `active`, `wip`, `done`, `frozen`.
@@ -139,7 +142,7 @@ src-tauri/src/tracker/                    │
 | колонки | `bd statuses --json` |
 | полная выборка | `bd list --all -n 0 --json` |
 | инкремент | `bd list --all -n 0 --updated-after <RFC3339> --json` |
-| создание | `bd create <title> -t <type> -p <n> [-d <desc>] --json` |
+| создание | `bd create --json --title <title> -t <type> -p <n> [-d <desc>]` |
 | правка | `bd update <id> [-s|-t|-p|-a|--title|-d|--add-label|--remove-label] --json` |
 | закрытие | `bd close <id> --json` |
 | переоткрытие | `bd reopen <id> --json` |
