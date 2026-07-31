@@ -11,15 +11,34 @@ pub fn is_relevant(path: &Path) -> bool {
     (in_noms && (name == "manifest" || name == "journal.idx")) || name == "last-touched"
 }
 
+/// Что watcher сообщает воркеру.
+pub enum WatchEvent {
+    /// В `.beads` что-то записали — пора догружать.
+    Changed,
+    /// Слежение сломалось на ходу. Дальше остаётся только периодическая
+    /// сверка раз в минуту, и знать об этом должен не только лог.
+    Failed(String),
+}
+
 /// Возвращённый watcher нужно держать живым: при его уничтожении слежение
 /// прекращается молча.
-pub fn spawn(beads_dir: PathBuf, tx: Sender<()>) -> notify::Result<RecommendedWatcher> {
+pub fn spawn(beads_dir: PathBuf, tx: Sender<WatchEvent>) -> notify::Result<RecommendedWatcher> {
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let Ok(event) = res else { return };
-        if event.paths.iter().any(|p| is_relevant(p)) {
-            // Схлопывание частых событий делает воркер; здесь достаточно
-            // не блокироваться, если очередь уже полна.
-            let _ = tx.try_send(());
+        match res {
+            Ok(event) => {
+                if event.paths.iter().any(|p| is_relevant(p)) {
+                    // Схлопывание частых событий делает воркер; здесь достаточно
+                    // не блокироваться, если очередь уже полна.
+                    let _ = tx.try_send(WatchEvent::Changed);
+                }
+            }
+            // Проглоченная здесь ошибка означала бы приложение, которое до
+            // перезапуска живёт на одной шестидесятисекундной сверке и молчит
+            // об этом. Переполненная очередь потерей не грозит: она полна
+            // ровно тогда, когда события идут потоком, то есть слежение живо.
+            Err(e) => {
+                let _ = tx.try_send(WatchEvent::Failed(e.to_string()));
+            }
         }
     })?;
     watcher.watch(&beads_dir, RecursiveMode::Recursive)?;

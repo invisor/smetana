@@ -93,7 +93,7 @@ pub struct IssuePatch {
     pub remove_labels: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HealthState {
     Ok,
@@ -102,7 +102,10 @@ pub enum HealthState {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Сравнение нужно, чтобы событие уходило только на настоящую смену
+/// состояния: health на каждом удачном тике — это шум, за которым не видно
+/// настоящей беды.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Health {
     pub state: HealthState,
     #[serde(skip_serializing_if = "Option::is_none")]
