@@ -69,26 +69,58 @@ function applyDelta(delta) {
   trackerState.generation = delta.generation
 }
 
+/* Ошибки бэкенда — диагностика: их текст говорит языком bd и адресован тому,
+   кто чинит, а не тому, кто работает. Пользователю показываем короткое
+   объяснение, что именно не получилось, полный текст оставляем в консоли.
+   Заодно чтение и запись перестали делить одну подпись: read-ошибка под
+   заголовком "не удалось записать" врала о происходящем. */
+const ERRORS = {
+  read: {
+    title: 'Could not read the tracker',
+    description: 'The board may be out of date. It will catch up on the next change.'
+  },
+  write: {
+    title: 'Could not save to the tracker',
+    description: 'Nothing was written. The board shows what the tracker has.'
+  }
+}
+
+function report(kind, error) {
+  console.error(`[tracker] ${kind} failed:`, error)
+  trackerState.lastError = ERRORS[kind]
+}
+
+function applySnapshot(snapshot) {
+  trackerState.columns = snapshot.columns
+  trackerState.issues.clear()
+  for (const issue of snapshot.issues) trackerState.issues.set(issue.id, issue)
+  trackerState.generation = snapshot.generation
+  trackerState.ready = true
+}
+
 /* tracker_resync теперь может отклониться (bd упал) — в этом случае нельзя
    считать это успехом и стирать состояние: оставляем доску как была и
    запоминаем ошибку. */
 export async function resync() {
   try {
-    const snapshot = await invoke('tracker_resync')
-    trackerState.columns = snapshot.columns
-    trackerState.issues.clear()
-    for (const issue of snapshot.issues) trackerState.issues.set(issue.id, issue)
-    trackerState.generation = snapshot.generation
-    trackerState.ready = true
+    applySnapshot(await invoke('tracker_resync'))
     trackerState.lastError = null
   } catch (err) {
-    trackerState.lastError = err
+    report('read', err)
   }
+}
+
+/* message в health — диагностика: она по-русски и говорит языком bd. В
+   интерфейс идёт короткий текст по одному лишь state, а подробность остаётся
+   там, где её ищут при отладке. */
+function setHealth(health) {
+  trackerState.health = health
+  if (health.state !== 'ok') console.warn('[tracker] health:', health.state, health.message ?? '')
 }
 
 export async function initTracker() {
   await listen('tracker:health', (event) => {
-    trackerState.health = event.payload
+    setHealth(event.payload)
   })
   /* Поколение растёт на единицу с каждой дельтой. Разрыв означает, что
      событие потеряно — берём снимок целиком. */
@@ -106,15 +138,24 @@ export async function initTracker() {
      эта команда — единственный способ узнать состояние, отправленное до
      подписки. */
   try {
-    trackerState.health = await invoke('tracker_health')
+    setHealth(await invoke('tracker_health'))
   } catch (err) {
-    trackerState.lastError = err
+    report('read', err)
   }
 
+  /* Снимок и дельты идут разными путями: пока ответ команды летит обратно в
+     веб-вью, вотчер успевает прислать дельту и продвинуть поколение. Тогда
+     снимок — это прошлое, и раскатывать его нельзя. Он вернул бы старые
+     значения поверх новых, потерял бы удаления, которые дельта уже
+     применила, и откатил бы счётчик поколений назад; следующая дельта
+     обычно чинит это разрывом нумерации, но если трекер затих, её не будет,
+     а в Rust уже лежит новое значение — его полная сверка не увидит
+     расхождения и ничего не пришлёт. Доска осталась бы неправильной молча.
+     Поэтому устаревший снимок игнорируем целиком, а свежий заменяет
+     состояние так же, как в resync(): с очисткой, иначе те же удаления
+     потеряются. */
   const snapshot = await invoke('tracker_snapshot')
-  trackerState.columns = snapshot.columns
-  for (const issue of snapshot.issues) trackerState.issues.set(issue.id, issue)
-  trackerState.generation = snapshot.generation
+  if (snapshot.generation >= trackerState.generation) applySnapshot(snapshot)
   trackerState.ready = true
 }
 
@@ -149,7 +190,7 @@ async function write(id, optimistic, run) {
     if (optimisticValue && sameIssue(trackerState.issues.get(id), optimisticValue)) {
       trackerState.issues.set(id, before)
     }
-    trackerState.lastError = String(error)
+    report('write', error)
     throw error
   }
 }
