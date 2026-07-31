@@ -1,7 +1,7 @@
 use tauri::State;
 use tokio::sync::oneshot;
 
-use super::model::{Issue, IssuePatch, NewIssue, Snapshot, TrackerError};
+use super::model::{Health, Issue, IssuePatch, NewIssue, Snapshot, TrackerError};
 use super::service::{Request, TrackerHandle};
 
 /// Команды намеренно тонкие: всё, что они делают, — кладут запрос в очередь
@@ -19,6 +19,13 @@ async fn ask<T>(
         .map_err(|_| TrackerError::Spawn("воркер трекера не запущен".into()))?;
     rx.await
         .map_err(|_| TrackerError::Spawn("воркер трекера не ответил".into()))
+}
+
+/// Событие tracker:health может уйти раньше, чем фронт подпишется, — эта
+/// команда отдаёт последнее состояние тому, кто его пропустил.
+#[tauri::command]
+pub async fn tracker_health(handle: State<'_, TrackerHandle>) -> Result<Health, TrackerError> {
+    ask(&handle, Request::Health).await
 }
 
 #[tauri::command]

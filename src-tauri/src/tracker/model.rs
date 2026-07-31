@@ -121,6 +121,8 @@ pub enum TrackerError {
     Spawn(String),
     #[error("bd вернул пустой результат")]
     Empty,
+    #[error("в каталоге нет трекера: {0}")]
+    NoTracker(String),
 }
 
 // Tauri требует, чтобы ошибка команды умела сериализоваться.

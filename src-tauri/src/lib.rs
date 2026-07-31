@@ -15,12 +15,12 @@ pub fn run() {
         )?;
       }
       // Проект один — тот, в котором лежит .beads. Выбор каталога появится позже.
-      let project_dir = tracker::service::find_project_dir()?;
-      let handle = tracker::service::start(app.handle().clone(), project_dir);
+      let handle = tracker::service::start(app.handle().clone(), tracker::service::project_dir());
       app.manage(handle);
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
+      tracker::commands::tracker_health,
       tracker::commands::tracker_snapshot,
       tracker::commands::tracker_resync,
       tracker::commands::tracker_create,
