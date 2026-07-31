@@ -30,6 +30,9 @@ const outDir = join(root, 'src-tauri', 'binaries')
 const hostTriple = () =>
   execFileSync('rustc', ['--print', 'host-tuple'], { encoding: 'utf8' }).trim()
 
+const targetPath = (triple) =>
+  join(outDir, triple.includes('windows') ? `bd-${triple}.exe` : `bd-${triple}`)
+
 async function download(url, dest) {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`${url} → HTTP ${res.status}`)
@@ -52,11 +55,7 @@ async function install(triple, sums) {
   if (!asset) throw new Error(`нет релиза bd для ${triple}`)
 
   const windows = triple.includes('windows')
-  const target = join(outDir, windows ? `bd-${triple}.exe` : `bd-${triple}`)
-  if (existsSync(target)) {
-    console.log(`✓ ${triple} уже на месте`)
-    return
-  }
+  const target = targetPath(triple)
 
   const work = await mkdtemp(join(tmpdir(), 'fetch-bd-'))
   try {
@@ -80,5 +79,15 @@ async function install(triple, sums) {
 }
 
 const triples = process.argv.includes('--all') ? Object.keys(ASSET_BY_TRIPLE) : [hostTriple()]
-const sums = await checksums()
-for (const triple of triples) await install(triple, sums)
+const missing = []
+for (const triple of triples) {
+  if (existsSync(targetPath(triple))) console.log(`✓ ${triple} уже на месте`)
+  else missing.push(triple)
+}
+
+/* В сеть выходим, только если действительно есть что качать: postinstall
+   на машине с уже загруженным бинарником обязан работать офлайн. */
+if (missing.length) {
+  const sums = await checksums()
+  for (const triple of missing) await install(triple, sums)
+}
