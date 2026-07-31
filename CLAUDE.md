@@ -75,11 +75,11 @@ answers `tracker_health`. `DesktopApp.vue` renders it where the board would be �
 loud budget belongs to the card that needs a human.
 
 `src/stores/tracker.js` and `src/stores/settings.js` are the **only** files in `src/` that know Tauri
-exists — components see reactive stores and nothing else. It also owns the two translations: bd's
-statuses to the design
-system's (`open → ready`, `in_progress → running`, `closed → done`; everything else, including
-custom statuses, passes through to `normalizeStatus` and gets a hash colour with a 2-letter code),
-and Rust's diagnostics to short English messages, with the raw text left in the console.
+exists — components see reactive stores and nothing else. `tracker.js` also owns the two
+translations: bd's statuses to the design system's (`open → ready`, `in_progress → running`,
+`closed → done`; everything else, including custom statuses, passes through to `normalizeStatus` and
+gets a hash colour with a 2-letter code), and Rust's diagnostics to short English messages, with the
+raw text left in the console.
 
 In a browser there is no back end, so `src/stores/mockBackend.js` installs the official `mockIPC`
 with the old fixtures: read commands answer, writes reject loudly. That is what keeps `npm run dev`
@@ -103,7 +103,8 @@ What the app remembers between runs lives in one JSON file in
 `app_config_dir()` (`~/Library/Application Support/com.invisor.smetana/settings.json`
 on macOS). `src-tauri/src/settings/` owns it: `model.rs` is the schema, the
 validation and the merge — pure, and where the tests are; `file.rs` is the disk
-(atomic write through a temp file, a `.bak` copy of anything unreadable);
+(atomic write through a temp file, a `.bak` copy of anything unparseable or
+too new);
 `commands.rs` is two thin commands.
 
 The file keeps appearance and panel layout at the root and everything about
@@ -123,8 +124,10 @@ one run and are deliberately **not** written back — one visit to the dev serve
 must not repaint the app forever. `?view=gallery` neither reads nor writes.
 
 A missing file is the first run, not an error. A broken or too-new file is
-copied to `settings.json.bak` and the app starts from defaults. A single field
-with a value outside its allowed set loses that field, not the file.
+copied to `settings.json.bak` and the app starts from defaults; one that
+cannot be read at all — wrong permissions, a directory in its place — has
+nothing to copy, so it is only logged. A single field with a value outside
+its allowed set loses that field, not the file.
 
 Window size and position are not in this file: `tauri-plugin-window-state`
 handles them.
