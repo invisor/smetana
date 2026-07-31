@@ -5,7 +5,7 @@
    The core moment this screen is built for: you come back after two hours and
    read, in three seconds, what finished, what stalled, and what is waiting for
    you. Hence the loud budget — exactly one card and one callout shout here. */
-import { computed, ref, watchEffect } from 'vue'
+import { computed, onMounted, ref, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
@@ -13,9 +13,9 @@ import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
 import LogView from '../components/agent/LogView.vue'
+import { boardColumns, initTracker } from '../stores/tracker.js'
 import {
   agents,
-  columns,
   expanded as initialExpanded,
   inspector,
   logLines,
@@ -42,6 +42,7 @@ const activeTab = ref('kanban')
 /* No card starts selected: the inspector already shows bd-a1b2, and a selection
    border would take the loud amber edge away from the card that needs you. */
 const selectedTask = ref(null)
+onMounted(initTracker)
 const follow = ref(true)
 const streamState = ref('streaming')
 const logQuery = ref('')
@@ -192,7 +193,7 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
       <!-- centre: tabs over the board -->
       <div :style="centerStyle">
         <TabBar :tabs="tabs" :active-id="activeTab" @select="activeTab = $event" />
-        <KanbanBoard :columns="columns" :selected-id="selectedTask" @select="selectedTask = $event" />
+        <KanbanBoard :columns="boardColumns" :selected-id="selectedTask" @select="selectedTask = $event" />
       </div>
 
       <!-- right: the task that is waiting on you, and its live output -->
