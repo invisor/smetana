@@ -57,7 +57,12 @@ const project = settings.project
 const expanded = computed(() => Object.fromEntries(project.expanded.map((path) => [path, true])))
 
 /* The sidebar holds three views of the same worktree, one at a time: its files,
-   its git state, the agents working in it. */
+   its git state, the agents working in it.
+
+   This set is duplicated across the IPC boundary: the same three ids are the
+   closed list in `src-tauri/src/settings/model.rs` (SIDE_TABS). Change one and
+   you must change the other — a fourth tab added only here would work all
+   session and come back as Files after a restart, with no error anywhere. */
 const SIDE_TABS = [
   { id: 'files', label: 'Files' },
   { id: 'git', label: 'Git' },
@@ -117,11 +122,23 @@ watch(
 /* Пока приложение было закрыто, задачу могли закрыть и убрать из трекера.
    Восстанавливать выбор, которого больше нет, нельзя: инспектор показал бы
    пустоту, а файл продолжал бы хранить мусор. Ждём готовности трекера —
-   до неё "не нашлось" ничего не значит. */
+   до неё "не нашлось" ничего не значит.
+
+   Одной готовности мало: ready означает лишь "снимок пришёл", а снимок
+   приходит и пустым — когда bd не нашлось, когда в каталоге нет .beads,
+   когда первая синхронизация упала. В этих случаях "не нашлось" говорит не
+   про задачу, а про трекер, и стирать выбор нельзя: дебаунс тут же унёс бы
+   null на диск, и один запуск со сломанным bd — из Finder, например —
+   потерял бы запомненную задачу навсегда. Поэтому спрашиваем и здоровье. */
 watch(
-  () => [trackerState.ready, trackerState.issues.size],
+  () => [trackerState.ready, trackerState.health.state, trackerState.issues.size],
   () => {
-    if (trackerState.ready && project.selectedTask && !issueById(project.selectedTask)) {
+    if (
+      trackerState.ready &&
+      trackerState.health.state === 'ok' &&
+      project.selectedTask &&
+      !issueById(project.selectedTask)
+    ) {
       project.selectedTask = null
     }
   },
