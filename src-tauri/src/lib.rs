@@ -28,6 +28,8 @@ pub fn run() {
       tracker::commands::tracker_update,
       tracker::commands::tracker_close,
       tracker::commands::tracker_reopen,
+      settings::commands::settings_load,
+      settings::commands::settings_save,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
