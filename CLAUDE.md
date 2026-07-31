@@ -74,8 +74,9 @@ the event fires microseconds after start, before the webview can subscribe, so t
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
 
-`src/stores/tracker.js` is the **only** file in `src/` that knows Tauri exists — components see a
-reactive store and nothing else. It also owns the two translations: bd's statuses to the design
+`src/stores/tracker.js` and `src/stores/settings.js` are the **only** files in `src/` that know Tauri
+exists — components see reactive stores and nothing else. It also owns the two translations: bd's
+statuses to the design
 system's (`open → ready`, `in_progress → running`, `closed → done`; everything else, including
 custom statuses, passes through to `normalizeStatus` and gets a hash colour with a 2-letter code),
 and Rust's diagnostics to short English messages, with the raw text left in the console.
@@ -95,6 +96,38 @@ release, verifies it against the sha256 digests committed next to `BD_VERSION` (
 front end alone should not need a Rust toolchain and a 43 MB download. `npm run fetch-bd` and CI
 fail hard instead. `EXPECTED_BD_VERSION` in `service.rs` must stay in step with `BD_VERSION` in the
 script; a mismatch surfaces as `bd-version-mismatch` in health, not as a crash.
+
+### Settings
+
+What the app remembers between runs lives in one JSON file in
+`app_config_dir()` (`~/Library/Application Support/com.invisor.smetana/settings.json`
+on macOS). `src-tauri/src/settings/` owns it: `model.rs` is the schema, the
+validation and the merge — pure, and where the tests are; `file.rs` is the disk
+(atomic write through a temp file, a `.bak` copy of anything unreadable);
+`commands.rs` is two thin commands.
+
+The file keeps appearance and panel layout at the root and everything about
+content under the project's absolute path. There is still one project, so the
+map holds one entry — but that is the shape multi-project will land in. The map
+never crosses the IPC boundary: `settings_load` returns the resolved view for
+the current directory (`{ appearance, layout, project }`) and `settings_save`
+puts it back, stamps `usedAt` and trims the map to the 20 most recent projects.
+
+The front end owns the truth here — the opposite of the tracker, where bd owns
+it. `src/stores/settings.js` holds a reactive object and writes it back with a
+400 ms debounce; components read and write plain fields.
+
+Nothing about settings is reachable from the interface: there is no settings
+screen and no theme switch. `?theme=` and `?density=` still override both for
+one run and are deliberately **not** written back — one visit to the dev server
+must not repaint the app forever. `?view=gallery` neither reads nor writes.
+
+A missing file is the first run, not an error. A broken or too-new file is
+copied to `settings.json.bak` and the app starts from defaults. A single field
+with a value outside its allowed set loses that field, not the file.
+
+Window size and position are not in this file: `tauri-plugin-window-state`
+handles them.
 
 ### Styling: inline style objects, never CSS classes
 

@@ -76,9 +76,6 @@ const ADD_TO = 'ready'
 const newTaskOpen = ref(false)
 const creating = ref(false)
 
-/* Either side folds away to a 32px rail so the board gets the width; the rail
-   keeps the panel's name and the button that brings it back. */
-
 const selectedIssue = computed(() => (project.selectedTask ? issueById(project.selectedTask) : null))
 
 const submitNewTask = async (issue) => {
@@ -222,6 +219,8 @@ const rootStyle = {
 }
 const bodyStyle = { flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch' }
 
+/* Either side folds away to a 32px rail so the board gets the width; the rail
+   keeps the panel's name and the button that brings it back. */
 const leftStyle = computed(() => ({
   flex: '0 0 auto',
   width: layout.leftCollapsed ? '32px' : '252px',
