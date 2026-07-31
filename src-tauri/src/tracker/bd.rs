@@ -2,6 +2,8 @@ use super::model::{ColumnDef, IssuePatch, Issue, NewIssue, TrackerError};
 
 /// Порядок колонок задают категории bd: сначала доступное, потом в работе,
 /// потом отложенное, потом завершённое.
+// Потребитель появится в задаче 4 (раннер вызывает parse_columns).
+#[allow(dead_code)]
 fn category_rank(category: &str) -> u8 {
     match category {
         "active" => 0,
@@ -14,6 +16,8 @@ fn category_rank(category: &str) -> u8 {
 
 /// Предупреждения bd уходят в stderr, но полагаться на это целиком не стоит:
 /// отрезаем всё до первой скобки.
+// Потребитель появится в задаче 4 (раннер вызывает parse_issues/parse_columns).
+#[allow(dead_code)]
 fn slice_json(stdout: &str) -> Result<&str, TrackerError> {
     stdout
         .find(['[', '{'])
@@ -23,6 +27,8 @@ fn slice_json(stdout: &str) -> Result<&str, TrackerError> {
 
 /// bd create отдаёт объект, а update и close — массив, потому что принимают
 /// несколько идентификаторов. Приводим обе формы к вектору.
+// Потребитель появится в задаче 4 (Bd::one, Bd::list_all, Bd::list_updated_after).
+#[allow(dead_code)]
 pub fn parse_issues(stdout: &str) -> Result<Vec<Issue>, TrackerError> {
     let value: serde_json::Value =
         serde_json::from_str(slice_json(stdout)?).map_err(|e| TrackerError::Parse(e.to_string()))?;
@@ -39,6 +45,8 @@ pub fn parse_issues(stdout: &str) -> Result<Vec<Issue>, TrackerError> {
     }
 }
 
+// Потребитель появится в задаче 4 (Bd::columns).
+#[allow(dead_code)]
 pub fn parse_columns(stdout: &str) -> Result<Vec<ColumnDef>, TrackerError> {
     #[derive(serde::Deserialize)]
     struct Out {
@@ -55,6 +63,8 @@ pub fn parse_columns(stdout: &str) -> Result<Vec<ColumnDef>, TrackerError> {
     Ok(columns)
 }
 
+// Потребитель появится в задаче 4 (Bd::version).
+#[allow(dead_code)]
 pub fn parse_version(stdout: &str) -> Option<String> {
     stdout
         .split_whitespace()
@@ -63,6 +73,8 @@ pub fn parse_version(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+// Потребитель появится в задаче 4 (Bd::create).
+#[allow(dead_code)]
 pub fn create_args(new: &NewIssue) -> Vec<String> {
     let mut args = vec![
         "create".to_string(),
@@ -80,6 +92,8 @@ pub fn create_args(new: &NewIssue) -> Vec<String> {
     args
 }
 
+// Потребитель появится в задаче 4 (Bd::update).
+#[allow(dead_code)]
 pub fn update_args(id: &str, patch: &IssuePatch) -> Vec<String> {
     let mut args = vec!["update".to_string(), id.to_string(), "--json".to_string()];
     let mut push = |flag: &str, value: String| {

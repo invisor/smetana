@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 /// Ребро графа зависимостей. bd отдаёт у задачи только исходящие связи:
 /// issue_id зависит от depends_on_id.
+// Потребитель появится в задаче 4 (раннер разбирает Issue.dependencies).
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Dependency {
     pub issue_id: String,
@@ -13,6 +15,8 @@ pub struct Dependency {
 
 /// Задача в том виде, в каком её отдаёт bd. Пустые поля bd опускает целиком,
 /// поэтому всё необязательное — Option или коллекция со значением по умолчанию.
+// Потребитель появится в задаче 4 (раннер возвращает Issue из parse_issues).
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
@@ -35,6 +39,8 @@ pub struct Issue {
 
 /// Колонка доски. Из bd берём только имя и категорию: глиф и цвет
 /// принадлежат status.js, свои иконки bd мы намеренно игнорируем.
+// Потребитель появится в задаче 4 (раннер возвращает ColumnDef из parse_columns).
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColumnDef {
     pub name: String,
@@ -42,6 +48,8 @@ pub struct ColumnDef {
     pub category: String,
 }
 
+// Потребитель появится в задаче 5 (снимок трекера).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub generation: u64,
@@ -49,6 +57,8 @@ pub struct Snapshot {
     pub issues: Vec<Issue>,
 }
 
+// Потребитель появится в задаче 5 (вычисление дельты).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Delta {
     pub generation: u64,
@@ -59,11 +69,15 @@ pub struct Delta {
 }
 
 impl Delta {
+    // Потребитель появится в задаче 5 (вычисление дельты).
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.upserted.is_empty() && self.removed.is_empty() && self.columns.is_none()
     }
 }
 
+// Потребитель появится в задаче 4 (Bd::create принимает &NewIssue).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct NewIssue {
     pub title: String,
@@ -73,6 +87,8 @@ pub struct NewIssue {
     pub description: Option<String>,
 }
 
+// Потребитель появится в задаче 4 (Bd::update принимает &IssuePatch).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct IssuePatch {
     #[serde(default)]
@@ -93,6 +109,8 @@ pub struct IssuePatch {
     pub remove_labels: Vec<String>,
 }
 
+// Потребитель появится в задаче 7 (воркер эмитит tracker:health).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HealthState {
@@ -102,6 +120,8 @@ pub enum HealthState {
     Error,
 }
 
+// Потребитель появится в задаче 7 (воркер эмитит tracker:health).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Health {
     pub state: HealthState,
@@ -111,14 +131,20 @@ pub struct Health {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrackerError {
+    // Потребитель появится в задаче 4 (раннер проверяет код завершения bd).
+    #[allow(dead_code)]
     #[error("bd завершился с кодом {code}: {stderr}")]
     Command { code: i32, stderr: String },
     #[error("в выводе bd нет JSON")]
     NoJson,
     #[error("не удалось разобрать вывод bd: {0}")]
     Parse(String),
+    // Потребитель появится в задаче 4 (раннер оборачивает ошибку запуска процесса).
+    #[allow(dead_code)]
     #[error("не удалось запустить bd: {0}")]
     Spawn(String),
+    // Потребитель появится в задаче 4 (раннер проверяет пустой stdout).
+    #[allow(dead_code)]
     #[error("bd вернул пустой результат")]
     Empty,
 }
