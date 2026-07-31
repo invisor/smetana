@@ -1591,21 +1591,44 @@ pub mod store;
 pub mod watcher;
 ```
 
-В `src-tauri/src/lib.rs`:
+В `src-tauri/src/lib.rs`. Внимание: у сгенерированного каркаса **уже есть** своё замыкание
+`.setup(...)` с регистрацией плагина логирования, а `Builder::setup` принимает только одно. Свою
+часть нужно встроить в существующее замыкание, а не заменить его.
+
+Каталог проекта нельзя брать как `std::env::current_dir()`: под `npm run tauri dev` рабочим
+каталогом оказывается `src-tauri/`, где никакого `.beads` нет, а собранное приложение macOS,
+запущенное из Finder, стартует с `/`. Поэтому поднимаемся вверх до первого каталога с `.beads`:
 
 ```rust
 mod tracker;
 
+use std::path::PathBuf;
+
 use tauri::Manager;
+
+/// Рабочий каталог процесса не совпадает с каталогом проекта: `tauri dev`
+/// запускает бинарник из `src-tauri/`, а приложение из Finder — из корня.
+/// Поднимаемся вверх до первого каталога с `.beads`; если такого нет,
+/// возвращаем исходный, чтобы сработала честная диагностика not-a-beads-repo.
+fn project_dir() -> PathBuf {
+    let start = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut dir = start.as_path();
+    loop {
+        if dir.join(".beads").is_dir() {
+            return dir.to_path_buf();
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return start,
+        }
+    }
+}
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            // Проект один — каталог, из которого запущено приложение.
-            // Выбор каталога появится позже.
-            let project_dir = std::env::current_dir()?;
-            let handle = tracker::service::start(app.handle().clone(), project_dir);
+            let handle = tracker::service::start(app.handle().clone(), project_dir());
             app.manage(handle);
             Ok(())
         })
