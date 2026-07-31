@@ -119,3 +119,46 @@ export async function initTracker() {
   trackerState.generation = snapshot.generation
   trackerState.ready = true
 }
+
+/* Запись занимает около двух секунд, поэтому изменение применяется сразу,
+   а элемент помечается как "в полёте". Пометка идёт через state карточки и
+   data-attention — не цветом: цвет в этой системе принадлежит статусу. */
+async function write(id, optimistic, run) {
+  const before = id ? trackerState.issues.get(id) : null
+  if (before && optimistic) trackerState.issues.set(id, { ...before, ...optimistic })
+  if (id) trackerState.inflight.add(id)
+  trackerState.lastError = null
+
+  try {
+    const issue = await run()
+    trackerState.issues.set(issue.id, issue)
+    return issue
+  } catch (error) {
+    if (before) trackerState.issues.set(id, before)
+    trackerState.lastError = String(error)
+    throw error
+  } finally {
+    if (id) trackerState.inflight.delete(id)
+  }
+}
+
+export function createIssue(issue) {
+  return write(null, null, () => invoke('tracker_create', { issue }))
+}
+
+export function updateIssue(id, patch) {
+  const optimistic = {}
+  if (patch.title !== undefined) optimistic.title = patch.title
+  if (patch.status !== undefined) optimistic.status = patch.status
+  if (patch.priority !== undefined) optimistic.priority = patch.priority
+  if (patch.assignee !== undefined) optimistic.assignee = patch.assignee
+  return write(id, optimistic, () => invoke('tracker_update', { id, patch }))
+}
+
+export function closeIssue(id, reason = null) {
+  return write(id, { status: 'closed' }, () => invoke('tracker_close', { id, reason }))
+}
+
+export function reopenIssue(id) {
+  return write(id, { status: 'open' }, () => invoke('tracker_reopen', { id }))
+}

@@ -44,6 +44,7 @@ export { default as Assignee } from './kanban/Assignee.vue'
 export { default as ColumnHeader } from './kanban/ColumnHeader.vue'
 export { default as KanbanBoard } from './kanban/KanbanBoard.vue'
 export { default as KanbanColumn } from './kanban/KanbanColumn.vue'
+export { default as NewTaskModal } from './kanban/NewTaskModal.vue'
 export { default as TaskCard } from './kanban/TaskCard.vue'
 
 // agent

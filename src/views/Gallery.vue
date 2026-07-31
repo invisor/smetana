@@ -20,6 +20,7 @@ import {
   Input,
   LogView,
   Modal,
+  NewTaskModal,
   Panel,
   Select,
   Skeleton,
@@ -126,6 +127,13 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <Assignee kind="agent" name="claude-1" />
         <Assignee kind="human" name="you" />
         <Assignee />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Kanban</div>
+      <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <NewTaskModal :open="true" @close="() => {}" @submit="() => {}" />
       </div>
     </section>
 

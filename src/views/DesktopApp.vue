@@ -12,8 +12,22 @@ import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
+import Input from '../components/core/Input.vue'
+import Select from '../components/core/Select.vue'
+import NewTaskModal from '../components/kanban/NewTaskModal.vue'
+import Toast from '../components/overlays/Toast.vue'
 import LogView from '../components/agent/LogView.vue'
-import { boardColumns, initTracker } from '../stores/tracker.js'
+import {
+  boardColumns,
+  closeIssue,
+  createIssue,
+  initTracker,
+  issueById,
+  reopenIssue,
+  toUiStatus,
+  trackerState,
+  updateIssue
+} from '../stores/tracker.js'
 import {
   agents,
   expanded as initialExpanded,
@@ -46,6 +60,31 @@ onMounted(initTracker)
 const follow = ref(true)
 const streamState = ref('streaming')
 const logQuery = ref('')
+
+const newTaskOpen = ref(false)
+const creating = ref(false)
+
+const selectedIssue = computed(() => (selectedTask.value ? issueById(selectedTask.value) : null))
+
+const submitNewTask = async (issue) => {
+  creating.value = true
+  try {
+    const created = await createIssue(issue)
+    newTaskOpen.value = false
+    selectedTask.value = created.id
+  } catch {
+    // сообщение уже лежит в trackerState.lastError
+  } finally {
+    creating.value = false
+  }
+}
+
+const renameSelected = (title) => updateIssue(selectedTask.value, { title }).catch(() => {})
+const setSelectedStatus = (status) => updateIssue(selectedTask.value, { status }).catch(() => {})
+const closeSelected = () => closeIssue(selectedTask.value).catch(() => {})
+const reopenSelected = () => reopenIssue(selectedTask.value).catch(() => {})
+
+const statusOptions = computed(() => trackerState.columns.map((c) => c.name))
 
 const toggleDir = (path) => {
   expanded.value = { ...expanded.value, [path]: !expanded.value[path] }
@@ -193,6 +232,10 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
       <!-- centre: tabs over the board -->
       <div :style="centerStyle">
         <TabBar :tabs="tabs" :active-id="activeTab" @select="activeTab = $event" />
+        <div :style="{ display: 'flex', justifyContent: 'flex-end', padding: '0 var(--panel-pad)' }">
+          <Button variant="primary" size="sm" icon="plus" @click="newTaskOpen = true">New task</Button>
+        </div>
+        <NewTaskModal :open="newTaskOpen" :busy="creating" @close="newTaskOpen = false" @submit="submitNewTask" />
         <KanbanBoard :columns="boardColumns" :selected-id="selectedTask" @select="selectedTask = $event" />
       </div>
 
@@ -200,34 +243,53 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
       <div :style="rightStyle">
         <div :style="microHeader()">Task &amp; output</div>
         <div :style="inspectorBody">
-          <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
-            <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-              {{ inspector.id }}
-            </span>
-            <StatusBadge :status="inspector.status" size="sm" />
-          </div>
-
-          <div :style="{ fontSize: 'var(--text-md)', lineHeight: 'var(--leading-snug)', textWrap: 'pretty' }">
-            {{ inspector.title }}
-          </div>
-
-          <div :style="calloutStyle">
-            <div :style="calloutLabel">waiting on you · {{ inspector.waitingFor }}</div>
-            <div :style="{ fontSize: 'var(--text-sm)' }">
-              {{ questionParts[0]
-              }}<span :style="{ fontFamily: 'var(--font-mono)' }">{{ inspector.collidesWith }}</span
-              >{{ questionParts[1] }}
+          <template v-if="selectedIssue">
+            <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
+              <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+                {{ selectedIssue.id }}
+              </span>
+              <StatusBadge :status="toUiStatus(selectedIssue.status)" size="sm" />
             </div>
+            <Input :model-value="selectedIssue.title" @update:model-value="renameSelected" />
+            <Select :model-value="selectedIssue.status" :options="statusOptions" @update:model-value="setSelectedStatus" />
             <div :style="{ display: 'flex', gap: 'var(--space-4)' }">
-              <Button variant="primary" size="sm">Overwrite</Button>
-              <Button variant="secondary" size="sm">Pick new name</Button>
+              <Button v-if="selectedIssue.status !== 'closed'" variant="secondary" size="sm" @click="closeSelected">
+                Close
+              </Button>
+              <Button v-else variant="secondary" size="sm" @click="reopenSelected">Reopen</Button>
             </div>
-          </div>
+          </template>
 
-          <div :style="blocksLine">
-            <span :style="hatchSwatch" />
-            blocks {{ inspector.blocksDownstream }} downstream tasks
-          </div>
+          <template v-else>
+            <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
+              <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+                {{ inspector.id }}
+              </span>
+              <StatusBadge :status="inspector.status" size="sm" />
+            </div>
+
+            <div :style="{ fontSize: 'var(--text-md)', lineHeight: 'var(--leading-snug)', textWrap: 'pretty' }">
+              {{ inspector.title }}
+            </div>
+
+            <div :style="calloutStyle">
+              <div :style="calloutLabel">waiting on you · {{ inspector.waitingFor }}</div>
+              <div :style="{ fontSize: 'var(--text-sm)' }">
+                {{ questionParts[0]
+                }}<span :style="{ fontFamily: 'var(--font-mono)' }">{{ inspector.collidesWith }}</span
+                >{{ questionParts[1] }}
+              </div>
+              <div :style="{ display: 'flex', gap: 'var(--space-4)' }">
+                <Button variant="primary" size="sm">Overwrite</Button>
+                <Button variant="secondary" size="sm">Pick new name</Button>
+              </div>
+            </div>
+
+            <div :style="blocksLine">
+              <span :style="hatchSwatch" />
+              blocks {{ inspector.blocksDownstream }} downstream tasks
+            </div>
+          </template>
 
           <LogView
             :lines="logLines"
@@ -240,6 +302,11 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           />
         </div>
       </div>
+    </div>
+
+    <div v-if="trackerState.lastError" :style="{ position: 'fixed', right: 'var(--space-6)', bottom: 'var(--space-6)', zIndex: 'var(--z-toast)' }">
+      <Toast tone="error" title="Не удалось записать в трекер" :description="trackerState.lastError"
+             @close="trackerState.lastError = null" />
     </div>
   </div>
 </template>
