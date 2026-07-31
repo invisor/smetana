@@ -440,6 +440,65 @@ mod tests {
     }
 
     #[test]
+    fn trim_compares_instants_not_strings_and_never_evicts_the_current_project() {
+        let mut projects: BTreeMap<String, ProjectState> = BTreeMap::new();
+
+        // Текущий проект несёт самую старую метку из всех — и всё равно
+        // обязан остаться: он исключён из отбора структурно, а не потому,
+        // что его дата оказалась наибольшей (как было в старом тесте).
+        projects.insert(
+            "/current".into(),
+            ProjectState { used_at: Some("2000-01-01T00:00:00+00:00".into()), ..ProjectState::default() },
+        );
+
+        // Наполнитель — заведомо самые свежие записи, отбору не подлежат
+        // при любом способе сравнения; занимают все места, кроме одного.
+        let filler_count = MAX_PROJECTS - 2;
+        for i in 0..filler_count {
+            projects.insert(
+                format!("/filler{i:02}"),
+                ProjectState {
+                    used_at: Some(format!("2026-07-{:02}T00:00:00+00:00", i + 1)),
+                    ..ProjectState::default()
+                },
+            );
+        }
+
+        // Momент "/newer-instant" на самом деле позже "/older-instant" —
+        // 23:00Z против 22:00Z того же дня по UTC (01:00+03:00 — это и есть
+        // 22:00Z). Но как *строка* "2026-05-01..." больше "2026-04-30..." —
+        // сравниваются цифры дня, "05" > "04" — и лексикографический
+        // порядок расставил бы их наоборот.
+        projects.insert(
+            "/older-instant".into(),
+            ProjectState { used_at: Some("2026-05-01T01:00:00+03:00".into()), ..ProjectState::default() },
+        );
+        projects.insert(
+            "/newer-instant".into(),
+            ProjectState { used_at: Some("2026-04-30T23:00:00Z".into()), ..ProjectState::default() },
+        );
+
+        assert_eq!(projects.len(), MAX_PROJECTS + 1, "проверка на входе: обрезка должна случиться");
+
+        trim(&mut projects, "/current");
+
+        assert_eq!(projects.len(), MAX_PROJECTS);
+        assert!(projects.contains_key("/current"), "текущий проект не выселяется никогда");
+        assert!(
+            projects.contains_key("/newer-instant"),
+            "более поздний момент остаётся, даже когда его строка лексикографически меньше"
+        );
+        assert!(
+            !projects.contains_key("/older-instant"),
+            "более ранний момент уходит, даже когда его строка лексикографически больше"
+        );
+        for i in 0..filler_count {
+            let path = format!("/filler{i:02}");
+            assert!(projects.contains_key(&path), "заведомо свежие записи не должны были попасть под обрезку");
+        }
+    }
+
+    #[test]
     fn resolve_gives_defaults_for_an_unknown_project() {
         let file = settings_of(r#"{"version":1,"projects":{"/other":{"sideTab":"agents"}}}"#);
         assert_eq!(resolve(&file, "/mine").project, ProjectState::default());
