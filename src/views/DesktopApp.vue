@@ -5,7 +5,7 @@
    The core moment this screen is built for: you come back after two hours and
    read, in three seconds, what finished, what stalled, and what is waiting for
    you. Hence the loud budget — exactly one card and one callout shout here. */
-import { computed, onMounted, ref, watchEffect } from 'vue'
+import { computed, onMounted, ref, watch, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
@@ -79,12 +79,58 @@ const submitNewTask = async (issue) => {
   }
 }
 
-const renameSelected = (title) => updateIssue(selectedTask.value, { title }).catch(() => {})
+/* Renaming must not fire a ~2s tracker write per keystroke. Keep a local
+   draft while the field has focus and commit it only on Enter or blur, and
+   only when it actually differs from what is stored. While the field is not
+   being edited, a title changed elsewhere (watcher delta, another write)
+   still has to show up here — that's the second watcher below. */
+const titleDraft = ref('')
+const titleEditing = ref(false)
+
+watch(selectedTask, () => {
+  titleEditing.value = false
+  titleDraft.value = selectedIssue.value?.title ?? ''
+})
+
+watch(
+  () => selectedIssue.value?.title,
+  (nextTitle) => {
+    if (!titleEditing.value) titleDraft.value = nextTitle ?? ''
+  }
+)
+
+const commitTitle = () => {
+  const issue = selectedIssue.value
+  if (!issue) return
+  const next = titleDraft.value.trim()
+  if (next && next !== issue.title) {
+    updateIssue(issue.id, { title: next }).catch(() => {})
+  } else {
+    titleDraft.value = issue.title
+  }
+}
+
+const blurTitle = () => {
+  titleEditing.value = false
+  commitTitle()
+}
+
 const setSelectedStatus = (status) => updateIssue(selectedTask.value, { status }).catch(() => {})
 const closeSelected = () => closeIssue(selectedTask.value).catch(() => {})
 const reopenSelected = () => reopenIssue(selectedTask.value).catch(() => {})
 
-const statusOptions = computed(() => trackerState.columns.map((c) => c.name))
+/* bd's own status names (open/in_progress/…) are identifiers, not prose —
+   the picker still has to send them, but it must read as a sentence-case
+   phrase, not a slug. toUiStatus gives the design system's name for the
+   reserved ones; custom bd statuses pass through unchanged and get the same
+   treatment so they stay readable too. */
+const statusLabel = (name) => {
+  const words = toUiStatus(name).replace(/[-_]+/g, ' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+const statusOptions = computed(() =>
+  trackerState.columns.map((c) => ({ value: c.name, label: statusLabel(c.name) }))
+)
 
 const toggleDir = (path) => {
   expanded.value = { ...expanded.value, [path]: !expanded.value[path] }
@@ -250,7 +296,12 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
               </span>
               <StatusBadge :status="toUiStatus(selectedIssue.status)" size="sm" />
             </div>
-            <Input :model-value="selectedIssue.title" @update:model-value="renameSelected" />
+            <Input
+              v-model="titleDraft"
+              @focusin="titleEditing = true"
+              @focusout="blurTitle"
+              @keydown.enter="commitTitle"
+            />
             <Select :model-value="selectedIssue.status" :options="statusOptions" @update:model-value="setSelectedStatus" />
             <div :style="{ display: 'flex', gap: 'var(--space-4)' }">
               <Button v-if="selectedIssue.status !== 'closed'" variant="secondary" size="sm" @click="closeSelected">

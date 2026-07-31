@@ -18,7 +18,6 @@ export const trackerState = reactive({
   generation: 0,
   columns: [],
   issues: new Map(),
-  inflight: new Set(),
   health: { state: 'ok' },
   lastError: null
 })
@@ -56,8 +55,7 @@ export const boardColumns = computed(() => {
       status: toUiStatus(issue.status),
       blockedBy: blockedBy.get(issue.id) ?? 0,
       blocks: blocks.get(issue.id) ?? 0,
-      spawnedFrom: issue.parent ?? undefined,
-      state: trackerState.inflight.has(issue.id) ? 'changed' : 'default'
+      spawnedFrom: issue.parent ?? undefined
     })
   }
 
@@ -120,13 +118,27 @@ export async function initTracker() {
   trackerState.ready = true
 }
 
-/* Запись занимает около двух секунд, поэтому изменение применяется сразу,
-   а элемент помечается как "в полёте". Пометка идёт через state карточки и
-   data-attention — не цветом: цвет в этой системе принадлежит статусу. */
+/* Записи в Map заменяются целиком, а не мутируются, поэтому сравнение по
+   ссылке ничего не говорит о содержимом — только JSON-по-значению отличает
+   "то же самое" от "кто-то успел изменить". */
+function sameIssue(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/* Запись занимает около двух секунд. Оптимистичное значение применяется
+   сразу — пользователь видит свою правку без ожидания, и это единственная
+   индикация происходящего: отдельной пометки "в полёте" на карточке нет и не
+   должно быть, цвет в этой системе принадлежит статусу, а не факту записи.
+
+   Если запись упала, откатывать нужно с оглядкой: за эти две секунды карточку
+   мог обновить вотчер или другая запись. Откатываем, только если текущее
+   значение всё ещё равно тому, что записал именно этот вызов, — сравнение по
+   значению, а не по ссылке. Если оно уже другое, чужие изменения важнее
+   нашего отката, и мы просто запоминаем ошибку. */
 async function write(id, optimistic, run) {
   const before = id ? trackerState.issues.get(id) : null
-  if (before && optimistic) trackerState.issues.set(id, { ...before, ...optimistic })
-  if (id) trackerState.inflight.add(id)
+  const optimisticValue = before && optimistic ? { ...before, ...optimistic } : null
+  if (optimisticValue) trackerState.issues.set(id, optimisticValue)
   trackerState.lastError = null
 
   try {
@@ -134,11 +146,11 @@ async function write(id, optimistic, run) {
     trackerState.issues.set(issue.id, issue)
     return issue
   } catch (error) {
-    if (before) trackerState.issues.set(id, before)
+    if (optimisticValue && sameIssue(trackerState.issues.get(id), optimisticValue)) {
+      trackerState.issues.set(id, before)
+    }
     trackerState.lastError = String(error)
     throw error
-  } finally {
-    if (id) trackerState.inflight.delete(id)
   }
 }
 

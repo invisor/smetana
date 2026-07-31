@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
 import Input from '../core/Input.vue'
@@ -37,9 +37,23 @@ const submit = () => {
     priority: Number(priority.value),
     description: description.value.trim() || null
   })
-  title.value = ''
-  description.value = ''
 }
+
+/* Не очищаем в submit(): если запись упала, пользователь должен увидеть свой
+   текст, а не пустое поле — сброс идёт от исхода, а не от факта отправки.
+   Родитель закрывает диалог и при успехе, и при отмене; при упавшей записи
+   он остаётся открытым, так что сброс по "open -> false" покрывает оба
+   случая, которые должны очищать форму, и ни разу — тот, что не должен. */
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen) return
+    title.value = ''
+    issueType.value = 'task'
+    priority.value = '2'
+    description.value = ''
+  }
+)
 
 const fields = { display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }
 const row = { display: 'flex', gap: 'var(--space-4)' }
@@ -54,7 +68,7 @@ const field = { flex: 1, minWidth: 0 }
 </script>
 
 <template>
-  <Modal :open="open" title="New task" description="Goes straight into the tracker." @close="$emit('close')">
+  <Modal :open="open" :closable="!busy" title="New task" description="Goes straight into the tracker." @close="$emit('close')">
     <div :style="fields">
       <div>
         <div :style="label">Title</div>
@@ -76,7 +90,7 @@ const field = { flex: 1, minWidth: 0 }
       </div>
     </div>
     <template #footer>
-      <Button variant="ghost" @click="$emit('close')">Cancel</Button>
+      <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>
       <Button variant="primary" :disabled="!valid || busy" @click="submit">
         {{ busy ? 'Creating…' : 'Create' }}
       </Button>
