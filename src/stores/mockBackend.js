@@ -1,6 +1,14 @@
 /* В браузере бэкенда нет, а проверять компоненты нужно (npm run dev,
    ?view=gallery). Ставим официальный mockIPC, чтобы компоненты знали
-   только invoke и listen и нигде не ветвились. */
+   только invoke и listen и нигде не ветвились.
+
+   Это read-only заглушка для браузерного режима, а не второй бэкенд:
+   она отвечает на три команды чтения (snapshot/resync/health) фикстурой
+   и ничего не пишет и не хранит между вызовами. Команды записи
+   (tracker_create/update/close/reopen и любая другая, которой здесь нет)
+   должны с треском проваливаться, а не отвечать правдоподобной, но
+   вымышленной задачей — иначе в браузере "запись" выглядела бы рабочей,
+   молча не делая ничего. */
 import { mockIPC } from '@tauri-apps/api/mocks'
 import { columns as fixtureColumns } from '../views/desktopAppData.js'
 
@@ -65,8 +73,14 @@ export function installMockBackend() {
   mockIPC((command) => {
     if (command === 'tracker_snapshot' || command === 'tracker_resync') return snapshot
     if (command === 'tracker_health') return { state: 'ok' }
-    // Записи в браузерном режиме нет: возвращаем задачу как есть.
-    return issues[0]
+    // Любая команда записи (tracker_create/update/close/reopen, и всё, что
+    // появится позже) должна отклониться явно, а не молча вернуть похожую на
+    // правду, но чужую задачу — иначе в браузере "запись" выглядела бы
+    // рабочей, ничего не делая.
+    throw new Error(
+      `mockBackend: "${command}" is not implemented — this is a read-only stub for browser ` +
+        'dev mode; writes to the tracker require the real Tauri backend (npm run tauri dev).'
+    )
   }, { shouldMockEvents: true })
 
   return true
