@@ -4,8 +4,6 @@ use super::model::{ColumnDef, Delta, Issue, Snapshot};
 
 /// Снимок трекера в памяти. Владеет им единственный воркер, поэтому
 /// синхронизация здесь не нужна.
-// Потребитель появится в задаче 7 (воркер владеет Store).
-#[allow(dead_code)]
 #[derive(Default)]
 pub struct Store {
     issues: BTreeMap<String, Issue>,
@@ -15,21 +13,18 @@ pub struct Store {
 }
 
 impl Store {
-    // Потребитель появится в задаче 7 (воркер отдаёт поколение фронту).
+    /// Поколение фронт читает из снимка и дельты, поэтому в самом приложении
+    /// этот доступ не нужен — он остаётся ради утверждений в тестах ниже.
     #[allow(dead_code)]
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
     /// Метка времени для следующей инкрементальной догрузки.
-    // Потребитель появится в задаче 7 (воркер запрашивает list_updated_after).
-    #[allow(dead_code)]
     pub fn last_seen(&self) -> &str {
         &self.last_seen
     }
 
-    // Потребитель появится в задаче 7 (воркер отдаёт снимок при запуске).
-    #[allow(dead_code)]
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             generation: self.generation,
@@ -39,8 +34,6 @@ impl Store {
     }
 
     /// Возвращает true, если набор колонок действительно изменился.
-    // Потребитель появится в задаче 7 (воркер обновляет колонки).
-    #[allow(dead_code)]
     pub fn set_columns(&mut self, columns: Vec<ColumnDef>) -> bool {
         if self.columns == columns {
             return false;
@@ -49,16 +42,12 @@ impl Store {
         true
     }
 
-    // Потребитель появится в задаче 7 (воркер применяет догрузку).
-    #[allow(dead_code)]
     pub fn apply_incremental(&mut self, fetched: Vec<Issue>) -> Delta {
         self.apply(fetched, false)
     }
 
     /// Полная сверка: всё, чего нет в выборке, считается удалённым.
     /// Инкремент так делать не может — он по определению видит не всё.
-    // Потребитель появится в задаче 7 (воркер выполняет периодическую сверку).
-    #[allow(dead_code)]
     pub fn apply_full(&mut self, fetched: Vec<Issue>) -> Delta {
         self.apply(fetched, true)
     }
@@ -97,14 +86,10 @@ impl Store {
     }
 
     /// Кладёт результат собственной записи, не дожидаясь watcher.
-    // Потребитель появится в задаче 7 (команды tracker_create/update/close/reopen).
-    #[allow(dead_code)]
     pub fn upsert_one(&mut self, issue: Issue) -> Delta {
         self.apply_incremental(vec![issue])
     }
 
-    // Потребитель появится в задаче 7 (воркер уведомляет о смене колонок).
-    #[allow(dead_code)]
     pub fn columns_delta(&mut self) -> Delta {
         self.generation += 1;
         Delta {

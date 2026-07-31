@@ -5,8 +5,6 @@ use tokio::sync::mpsc::Sender;
 
 /// Значимых путей ровно три. Всё остальное в .beads — конфиги, бэкапы и
 /// кэш git-ремоута — шумит, но к содержимому трекера отношения не имеет.
-// Потребитель появится в задаче 7 (воркер вызывает is_relevant вне тестов).
-#[allow(dead_code)]
 pub fn is_relevant(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let in_noms = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("noms");
@@ -15,8 +13,6 @@ pub fn is_relevant(path: &Path) -> bool {
 
 /// Возвращённый watcher нужно держать живым: при его уничтожении слежение
 /// прекращается молча.
-// Потребитель появится в задаче 7 (воркер зовёт spawn при старте).
-#[allow(dead_code)]
 pub fn spawn(beads_dir: PathBuf, tx: Sender<()>) -> notify::Result<RecommendedWatcher> {
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };

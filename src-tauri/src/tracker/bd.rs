@@ -119,8 +119,6 @@ use tauri_plugin_shell::ShellExt;
 
 /// Обёртка над вшитым бинарником bd. Единственное место, которое знает,
 /// как выглядят аргументы CLI.
-// Потребитель появится в задаче 7 (воркер владеет Bd).
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Bd {
     app: AppHandle,
@@ -128,8 +126,6 @@ pub struct Bd {
 }
 
 impl Bd {
-    // Потребитель появится в задаче 7 (воркер создаёт Bd).
-    #[allow(dead_code)]
     pub fn new(app: AppHandle, cwd: PathBuf) -> Self {
         Self { app, cwd }
     }
@@ -137,8 +133,6 @@ impl Bd {
     /// Ошибкой считается только ненулевой код возврата. Предупреждения bd
     /// ("dolt auto-push failed", "beads.role not configured") идут в stderr
     /// постоянно и ошибкой не являются.
-    // Потребитель появится в задаче 7 (все методы Bd вызывают run).
-    #[allow(dead_code)]
     async fn run(&self, args: Vec<String>) -> Result<String, TrackerError> {
         let output = self
             .app
@@ -160,8 +154,6 @@ impl Bd {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    // Потребитель появится в задаче 7 (Bd::create, Bd::update).
-    #[allow(dead_code)]
     async fn one(&self, args: Vec<String>) -> Result<Issue, TrackerError> {
         parse_issues(&self.run(args).await?)?
             .into_iter()
@@ -169,21 +161,15 @@ impl Bd {
             .ok_or(TrackerError::Empty)
     }
 
-    // Потребитель появится в задаче 7 (воркер запрашивает версию bd).
-    #[allow(dead_code)]
     pub async fn version(&self) -> Result<Option<String>, TrackerError> {
         Ok(parse_version(&self.run(vec!["version".into()]).await?))
     }
 
-    // Потребитель появится в задаче 7 (воркер строит снимок доски).
-    #[allow(dead_code)]
     pub async fn columns(&self) -> Result<Vec<ColumnDef>, TrackerError> {
         parse_columns(&self.run(vec!["statuses".into(), "--json".into()]).await?)
     }
 
     /// -n 0 обязателен: по умолчанию bd list отдаёт только 50 записей.
-    // Потребитель появится в задаче 7 (воркер строит снимок доски).
-    #[allow(dead_code)]
     pub async fn list_all(&self) -> Result<Vec<Issue>, TrackerError> {
         parse_issues(
             &self
@@ -198,8 +184,6 @@ impl Bd {
         )
     }
 
-    // Потребитель появится в задаче 7 (воркер вычисляет дельту).
-    #[allow(dead_code)]
     pub async fn list_updated_after(&self, since: &str) -> Result<Vec<Issue>, TrackerError> {
         parse_issues(
             &self
@@ -216,20 +200,14 @@ impl Bd {
         )
     }
 
-    // Потребитель появится в задаче 7 (команда tracker_create).
-    #[allow(dead_code)]
     pub async fn create(&self, new: &NewIssue) -> Result<Issue, TrackerError> {
         self.one(create_args(new)).await
     }
 
-    // Потребитель появится в задаче 7 (команда tracker_update).
-    #[allow(dead_code)]
     pub async fn update(&self, id: &str, patch: &IssuePatch) -> Result<Issue, TrackerError> {
         self.one(update_args(id, patch)).await
     }
 
-    // Потребитель появится в задаче 7 (команда tracker_close).
-    #[allow(dead_code)]
     pub async fn close(&self, id: &str, reason: Option<&str>) -> Result<Issue, TrackerError> {
         let mut args = vec!["close".to_string(), id.to_string(), "--json".to_string()];
         if let Some(reason) = reason {
@@ -239,8 +217,6 @@ impl Bd {
         self.one(args).await
     }
 
-    // Потребитель появится в задаче 7 (команда tracker_reopen).
-    #[allow(dead_code)]
     pub async fn reopen(&self, id: &str) -> Result<Issue, TrackerError> {
         self.one(vec!["reopen".into(), id.to_string(), "--json".into()])
             .await

@@ -93,8 +93,6 @@ pub struct IssuePatch {
     pub remove_labels: Vec<String>,
 }
 
-// Потребитель появится в задаче 7 (воркер эмитит tracker:health).
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HealthState {
@@ -104,8 +102,6 @@ pub enum HealthState {
     Error,
 }
 
-// Потребитель появится в задаче 7 (воркер эмитит tracker:health).
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Health {
     pub state: HealthState,
