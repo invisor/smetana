@@ -5,17 +5,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```sh
-npm install
-npm run dev      # http://localhost:5173
+npm install          # postinstall fetches the bd sidecar; it warns and continues without one
+npm run dev          # http://localhost:5173 — front end alone, backed by the mock
 npm run build
-npm run preview  # serve the production build
+npm run preview      # serve the production build
+npm run tauri dev    # the actual desktop app: Rust worker, real bd, live board
+npm run fetch-bd     # download the bd binary explicitly (fails hard, unlike postinstall)
+cd src-tauri && cargo test
 ```
 
-There is no test runner, linter or formatter in this repository — do not invent one, and do not
-claim a change is "tested" on the basis of a build succeeding.
+`cargo test` is the only test runner in this repository, and it covers the Rust side only. There is
+no front-end test runner, linter or formatter — do not invent one, and do not claim a change is
+"tested" on the basis of a build succeeding.
 
-The way to verify a change is to open it in the dev server with the query parameters the app reads
-(`src/App.vue`):
+The way to verify a front-end change is to open it in the dev server with the query parameters the
+app reads (`src/App.vue`):
 
 | parameter | values | default |
 |---|---|---|
@@ -30,17 +34,67 @@ look correct in exactly one of them.
 
 ## Architecture
 
-This is the Vue 3 front end of a desktop app for supervising autonomous AI coding agents, ported
-from the **Smetana Design System** (`claude.ai/design`, project `5da5ca35`). Tokens are copied from
-the design system verbatim; components are ports of its React sources, keeping prop names, computed
-styles and behaviour. React `value`/`onChange` became `v-model` (`modelValue`); React `children`
-props became named slots. When something looks odd, the design system is the source of truth —
-match it rather than "fixing" it.
+A desktop app for supervising autonomous AI coding agents: a Tauri 2 shell (`src-tauri/`, Rust)
+around a Vue 3 front end (`src/`). The front end is ported from the **Smetana Design System**
+(`claude.ai/design`, project `5da5ca35`). Tokens are copied from the design system verbatim;
+components are ports of its React sources, keeping prop names, computed styles and behaviour. React
+`value`/`onChange` became `v-model` (`modelValue`); React `children` props became named slots. When
+something looks odd, the design system is the source of truth — match it rather than "fixing" it.
 
 `src/main.js` → `src/App.vue` → either `views/DesktopApp.vue` (the three-column shell: worktree
 files + agents, tab bar over the kanban, task inspector with live log) or `views/Gallery.vue`
-(code-split, never in the app bundle). `views/desktopAppData.js` is sample fixture state — the
-tracker, agent and log data a real backend would supply.
+(code-split, never in the app bundle). The board is live tracker data. Everything else on the
+screen — the file tree, the agents, the log — is still fixture state in `views/desktopAppData.js`.
+
+### The tracker bridge
+
+The board shows the **bd** issue tracker of the directory the app was opened in, and follows it as
+it changes, no matter who changed it: this window, an agent, or a person in a terminal. bd has no
+daemon and no API — its CLI is the API, and one call costs about two seconds. Hence the shape of
+`src-tauri/src/tracker/`:
+
+| file | what it does |
+|---|---|
+| `model.rs` | `Issue`, `ColumnDef`, `Delta`, `Health`, `TrackerError` — the vocabulary the front end sees |
+| `bd.rs` | the only file that knows bd's CLI: arguments, spawning, parsing |
+| `store.rs` | the in-memory snapshot and the delta computation |
+| `watcher.rs` | `notify` on `.beads/`, path filter, failure reporting |
+| `service.rs` | the worker: one owner of mutable state, a request queue, deltas and health events |
+| `commands.rs` | thin `#[tauri::command]`s that put a request on the queue and await the reply |
+
+`service.rs` is a single tokio task holding the snapshot; commands, watcher ticks and the 60-second
+safety sweep meet in one `select!`. Nothing shares mutable state with it — that is what keeps
+~2-second bd calls from blocking each other unpredictably. Writes go straight into the snapshot and
+out as a delta without waiting for the watcher. `generation` advances by exactly one per emitted
+delta; the front end resyncs when it sees a gap. `store.rs` and the argument builders in `bd.rs` are
+pure and carry the unit tests.
+
+Health (`ok`, `not-a-beads-repo`, `bd-version-mismatch`, `error`) is both an event and a command:
+the event fires microseconds after start, before the webview can subscribe, so the worker also
+answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
+loud budget belongs to the card that needs a human.
+
+`src/stores/tracker.js` is the **only** file in `src/` that knows Tauri exists — components see a
+reactive store and nothing else. It also owns the two translations: bd's statuses to the design
+system's (`open → ready`, `in_progress → running`, `closed → done`; everything else, including
+custom statuses, passes through to `normalizeStatus` and gets a hash colour with a 2-letter code),
+and Rust's diagnostics to short English messages, with the raw text left in the console.
+
+In a browser there is no back end, so `src/stores/mockBackend.js` installs the official `mockIPC`
+with the old fixtures: read commands answer, writes reject loudly. That is what keeps `npm run dev`
+and `?view=gallery` working with no branching in components.
+
+### The bd sidecar
+
+bd ships inside the bundle (`bundle.externalBin`), so the app is self-contained and the version is
+fixed. The binary is 128 MB and is **not** committed: `scripts/fetch-bd.mjs` downloads the pinned
+release, verifies it against the sha256 digests committed next to `BD_VERSION` (the release's own
+`checksums.txt` is only a cross-check), and lays it out as `src-tauri/binaries/bd-<target-triple>`.
+
+`postinstall` runs it with `--optional` and only warns on failure — a contributor who wants the
+front end alone should not need a Rust toolchain and a 43 MB download. `npm run fetch-bd` and CI
+fail hard instead. `EXPECTED_BD_VERSION` in `service.rs` must stay in step with `BD_VERSION` in the
+script; a mismatch surfaces as `bd-version-mismatch` in health, not as a crash.
 
 ### Styling: inline style objects, never CSS classes
 
