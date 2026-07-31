@@ -1,9 +1,15 @@
 //! Диск: где лежит файл настроек, как он читается и как пишется.
 
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::model::{parse, Outcome, Settings};
+
+/// Счётчик временных файлов. Вместе с pid даёт имя, которого нет ни у одной
+/// другой записи — ни в этом процессе, ни в соседнем.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Почему файл не прочитался. Диагностика для лога, не для интерфейса.
 #[derive(Debug)]
@@ -47,14 +53,43 @@ pub fn load(path: &Path) -> (Settings, Option<Problem>) {
 
 /// Запись атомарна: сначала соседний файл, потом переименование. Иначе обрыв
 /// на середине оставил бы половину JSON, и следующий запуск потерял бы всё.
+/// Содержимое сбрасывается на диск до переименования — без этого потеря
+/// питания может сделать долговечным переименование, но не то, что в файле.
+/// Имя временного файла своё на каждый вызов: одно общее имя две записи
+/// внахлёст поделили бы, и первая переименовала бы недописанное второй.
 pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     }
     let text = serde_json::to_string_pretty(settings).map_err(|err| err.to_string())?;
-    let temp = path.with_extension("json.tmp");
-    fs::write(&temp, text).map_err(|err| format!("{}: {err}", temp.display()))?;
-    fs::rename(&temp, path).map_err(|err| format!("{}: {err}", path.display()))
+    let temp = temp_path(path);
+    if let Err(err) = write_all(&temp, &text) {
+        // Мусор за собой убираем сами: имя уникальное, и переиспользовать
+        // недописанный файл всё равно некому.
+        let _ = fs::remove_file(&temp);
+        return Err(format!("{}: {err}", temp.display()));
+    }
+    fs::rename(&temp, path).map_err(|err| {
+        let _ = fs::remove_file(&temp);
+        format!("{}: {err}", path.display())
+    })
+}
+
+/// `settings.<pid>.<n>.tmp` рядом с целью: переименование внутри одного
+/// каталога — единственное, что файловая система обещает делать атомарно.
+fn temp_path(path: &Path) -> PathBuf {
+    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let name = format!("settings.{}.{n}.tmp", std::process::id());
+    match path.parent() {
+        Some(dir) => dir.join(name),
+        None => PathBuf::from(name),
+    }
+}
+
+fn write_all(temp: &Path, text: &str) -> std::io::Result<()> {
+    let mut file = fs::File::create(temp)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
 }
 
 fn back_up(path: &Path) {
@@ -153,7 +188,14 @@ mod tests {
 
         assert_eq!(read_back, settings);
         assert!(problem.is_none());
-        assert!(!path.with_extension("json.tmp").exists(), "временный файл не остаётся");
+        // Имя временного файла теперь своё на каждый вызов, поэтому смотрим
+        // не на конкретное имя, а на то, что в каталоге не осталось ни одного.
+        let leftovers: Vec<_> = fs::read_dir(path.parent().expect("каталог"))
+            .expect("обход каталога")
+            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+            .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "временный файл не остаётся: {leftovers:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

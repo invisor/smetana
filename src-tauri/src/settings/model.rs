@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -15,6 +16,11 @@ pub const MAX_PROJECTS: usize = 20;
 
 const THEMES: [&str; 2] = ["dark", "light"];
 const DENSITIES: [&str; 2] = ["comfortable", "compact"];
+/// Закрытый список — и он продублирован по ту сторону IPC: те же три вкладки
+/// перечислены в `src/views/DesktopApp.vue` (константа `SIDE_TABS`). Меняя
+/// один список, меняйте и второй: значение, которого здесь нет, по дороге на
+/// диск молча станет "files", и после перезапуска человек увидит не то, что
+/// оставил.
 const SIDE_TABS: [&str; 3] = ["files", "git", "agents"];
 /// Закрытого списка вкладок у центра нет и не будет: вкладки файлов приходят
 /// из проекта. Поэтому проверяем не принадлежность списку, а вменяемость.
@@ -160,7 +166,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, project: &str,
     let mut state = resolved.project;
     state.used_at = Some(now);
     file.projects.insert(project.to_owned(), state);
-    trim(&mut file.projects);
+    trim(&mut file.projects, project);
 }
 
 /// Секция читается отдельно от соседей: сломанный тип в одной не должен
@@ -187,11 +193,13 @@ fn projects(object: &Map<String, Value>) -> BTreeMap<String, ProjectState> {
         .collect()
 }
 
-/// Пошаговая миграция файла к текущей версии.
+/// Шов для миграций, а не миграция.
 ///
-/// Шаг пока один: файл без поля `version` — это и есть первая схема, полей в
-/// нём столько же, и он читается как есть; версию проставляет `parse`. Когда
-/// схема разойдётся со старой, сюда добавится ветка по `from`.
+/// `parse` читает `version`, зовёт эту функцию и сам проставляет
+/// `CURRENT_VERSION`. Сегодня обе ветки возвращают объект как есть: файл без
+/// версии — это и есть первая схема, полей в нём столько же, и он читается
+/// без переделки. Когда схема разойдётся со старой, переписывание полей
+/// появится здесь; цепочки шагов пока нет, и делать вид, что она есть, незачем.
 fn migrate(object: Map<String, Value>, from: u64) -> Map<String, Value> {
     match from {
         0 | 1 => object,
@@ -202,17 +210,36 @@ fn migrate(object: Map<String, Value>, from: u64) -> Map<String, Value> {
 
 /// Оставляем MAX_PROJECTS самых свежих. Запись без `usedAt` считается самой
 /// старой: она из файла, написанного руками, и ей нечем себя защитить.
-fn trim(projects: &mut BTreeMap<String, ProjectState>) {
+///
+/// `usedAt` сравнивается как момент времени, а не как строка: RFC 3339
+/// допускает и `Z`, и `+00:00`, и любое смещение, и лексикографически они
+/// выстраиваются не по возрасту ('Z' больше '.', `+03:00` вообще не на месте).
+/// Непонятная метка приравнивается к отсутствующей.
+///
+/// Текущий проект не выселяется никогда — не потому, что его метка самая
+/// свежая (это совпадение), а потому, что он исключён из отбора.
+fn trim(projects: &mut BTreeMap<String, ProjectState>, current: &str) {
     if projects.len() <= MAX_PROJECTS {
         return;
     }
-    let mut ordered: Vec<(String, Option<String>)> = projects
+    let mut ordered: Vec<(String, Option<DateTime<FixedOffset>>)> = projects
         .iter()
-        .map(|(path, state)| (path.clone(), state.used_at.clone()))
+        .filter(|(path, _)| path.as_str() != current)
+        .map(|(path, state)| {
+            let stamp =
+                state.used_at.as_deref().and_then(|text| DateTime::parse_from_rfc3339(text).ok());
+            (path.clone(), stamp)
+        })
         .collect();
     // None меньше любого Some, поэтому по убыванию свежие оказываются впереди.
     ordered.sort_by(|a, b| b.1.cmp(&a.1));
-    for (path, _) in ordered.into_iter().skip(MAX_PROJECTS) {
+    // Место под текущий проект уже занято, если он в карте есть.
+    let keep = if projects.contains_key(current) {
+        MAX_PROJECTS.saturating_sub(1)
+    } else {
+        MAX_PROJECTS
+    };
+    for (path, _) in ordered.into_iter().skip(keep) {
         projects.remove(&path);
     }
 }

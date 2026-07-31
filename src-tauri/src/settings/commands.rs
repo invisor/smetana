@@ -3,6 +3,11 @@
 //! В отличие от трекера, воркер здесь не нужен: истина по настройкам живёт во
 //! фронте, снаружи их никто не меняет, а файл читается и пишется за
 //! миллисекунды — очередь запросов сторожила бы то, за что никто не борется.
+//!
+//! `current_project()` тянется в `tracker::service` — это подпорка, а не
+//! замысел. Когда появится «открыть последний проект», зависимость придётся
+//! развернуть: путь будут передавать настройкам снаружи, а не настройки будут
+//! добывать его у трекера.
 
 use std::path::PathBuf;
 
@@ -67,7 +72,20 @@ pub async fn settings_load(app: AppHandle) -> Result<ResolvedSettings, SettingsE
 #[tauri::command]
 pub async fn settings_save(app: AppHandle, settings: ResolvedSettings) -> Result<(), SettingsError> {
     let path = settings_path(&app)?;
-    let (mut stored, _) = file::load(&path);
+    let (mut stored, problem) = file::load(&path);
+
+    /* Асимметрия намеренная. Сломанный и слишком новый файл уже уехали в
+       .bak — там записывать поверх безопасно, а отказ оставил бы человека
+       навсегда без возможности сохраниться. С нечитаемым файлом наоборот:
+       копию снять было нечем, а `rename` спрашивает права только у каталога,
+       так что запись молча стёрла бы то, что мы даже не смогли прочесть. */
+    if matches!(problem, Some(file::Problem::Unreadable)) {
+        return Err(SettingsError::Write(format!(
+            "{}: существующий файл не удалось прочитать, поэтому он не был перезаписан",
+            path.display()
+        )));
+    }
+
     merge(&mut stored, settings, &current_project(), chrono::Utc::now().to_rfc3339());
     file::save(&path, &stored).map_err(SettingsError::Write)
 }
