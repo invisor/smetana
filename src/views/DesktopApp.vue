@@ -15,6 +15,7 @@ import Button from '../components/core/Button.vue'
 import Input from '../components/core/Input.vue'
 import Select from '../components/core/Select.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
+import EmptyState from '../components/core/EmptyState.vue'
 import Toast from '../components/overlays/Toast.vue'
 import LogView from '../components/agent/LogView.vue'
 import {
@@ -131,6 +132,42 @@ const statusLabel = (name) => {
 const statusOptions = computed(() =>
   trackerState.columns.map((c) => ({ value: c.name, label: statusLabel(c.name) }))
 )
+
+/* What the tracker's health means where the board would be. The generic
+   "No board yet — connect a tracker" is wrong for a folder without .beads:
+   there is nothing to connect to and creating a task there fails. Each state
+   says what it is and what to do about it, and all of them stay quiet — this
+   is information, not an emergency, and the loud budget belongs to the card
+   that is waiting on you. The diagnostic text from Rust goes to the console,
+   not here. */
+const HEALTH_NOTICE = {
+  'not-a-beads-repo': {
+    icon: 'folder-git-2',
+    title: 'No tracker here',
+    description:
+      'No .beads directory in this folder or any folder above it. Open the app from a project that bd tracks.'
+  },
+  'bd-version-mismatch': {
+    icon: 'info',
+    title: 'Unexpected bd version',
+    description:
+      'The bundled bd is not the version this build was checked against. Tasks may be read or written incorrectly.'
+  },
+  error: {
+    icon: 'triangle-alert',
+    title: 'bd is failing',
+    description:
+      'The tracker command keeps returning errors — see the console for what it said. The board recovers on its own once it succeeds.'
+  }
+}
+
+/* Only when there is nothing else to show: a failing bd is no reason to hide
+   the tasks that were already read. */
+const healthNotice = computed(() => {
+  if (trackerState.health.state === 'ok') return null
+  if (boardColumns.value.some((column) => column.tasks.length)) return null
+  return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
+})
 
 const toggleDir = (path) => {
   expanded.value = { ...expanded.value, [path]: !expanded.value[path] }
@@ -282,7 +319,8 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           <Button variant="primary" size="sm" icon="plus" @click="newTaskOpen = true">New task</Button>
         </div>
         <NewTaskModal :open="newTaskOpen" :busy="creating" @close="newTaskOpen = false" @submit="submitNewTask" />
-        <KanbanBoard :columns="boardColumns" :selected-id="selectedTask" @select="selectedTask = $event" />
+        <EmptyState v-if="healthNotice" v-bind="healthNotice" />
+        <KanbanBoard v-else :columns="boardColumns" :selected-id="selectedTask" @select="selectedTask = $event" />
       </div>
 
       <!-- right: the task that is waiting on you, and its live output -->
@@ -356,7 +394,7 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
     </div>
 
     <div v-if="trackerState.lastError" :style="{ position: 'fixed', right: 'var(--space-6)', bottom: 'var(--space-6)', zIndex: 'var(--z-toast)' }">
-      <Toast tone="error" title="Не удалось записать в трекер" :description="trackerState.lastError"
+      <Toast tone="error" :title="trackerState.lastError.title" :description="trackerState.lastError.description"
              @close="trackerState.lastError = null" />
     </div>
   </div>
