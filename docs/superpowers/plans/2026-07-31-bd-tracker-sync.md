@@ -1312,8 +1312,8 @@ git commit -m "feat: слежение за каталогом .beads"
 
 **Интерфейсы:**
 - Потребляет: `Bd`, `Store`, `watcher::spawn`
-- Отдаёт фронту команды `tracker_snapshot`, `tracker_resync`, `tracker_create`, `tracker_update`,
-  `tracker_close`, `tracker_reopen` и события `tracker:delta`, `tracker:health`.
+- Отдаёт фронту команды `tracker_snapshot`, `tracker_resync`, `tracker_health`, `tracker_create`,
+  `tracker_update`, `tracker_close`, `tracker_reopen` и события `tracker:delta`, `tracker:health`.
 
 - [ ] **Шаг 1: Написать воркер**
 

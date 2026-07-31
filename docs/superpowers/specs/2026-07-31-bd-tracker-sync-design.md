@@ -112,7 +112,8 @@ src-tauri/src/tracker/                    │
 | `tracker_update` | `id`, `IssuePatch` | `Issue` |
 | `tracker_close` | `id`, `reason?` | `Issue` |
 | `tracker_reopen` | `id` | `Issue` |
-| `tracker_resync` | — | `Snapshot` |
+| `tracker_resync` | — | `Snapshot` (ошибка bd доходит до вызывающего, а не только в health) |
+| `tracker_health` | — | `Health` — последнее известное состояние |
 
 `IssuePatch` — все поля необязательные: `title`, `description`, `status`, `issue_type`, `priority`,
 `assignee`, `add_labels`, `remove_labels`.
@@ -124,6 +125,12 @@ src-tauri/src/tracker/                    │
 
 `generation` — монотонный счётчик снимка. Увидев разрыв в нумерации, фронт вызывает
 `tracker_resync` и заменяет состояние целиком.
+
+**Health доступен и событием, и командой.** Событие уходит через микросекунды после старта — раньше,
+чем webview успевает подписаться, — поэтому одного его мало: воркер хранит последнее состояние и
+отдаёт его по `tracker_health`. По той же причине воркер входит в цикл обработки запросов даже когда
+каталог не является beads-репозиторием: иначе вместо честного «здесь нет `.beads`» пользователь
+увидел бы «воркер трекера не запущен».
 
 **Соответствие командам bd**
 
