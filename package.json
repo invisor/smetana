@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "postinstall": "node scripts/fetch-bd.mjs",
+    "postinstall": "node scripts/fetch-bd.mjs --optional",
     "fetch-bd": "node scripts/fetch-bd.mjs"
   },
   "dependencies": {
