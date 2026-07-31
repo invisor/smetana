@@ -178,10 +178,26 @@ mod tests {
         assert_eq!(store.last_seen(), "2026-07-31T00:00:05Z");
     }
 
+    /// columns_delta корректна ровно тогда, когда её зовут после
+    /// set_columns, вернувшего true, — поэтому проверяем связку целиком, а не
+    /// один только флаг: и что дельта несёт новый набор, и что поколение
+    /// сдвинулось на единицу, и что задач в ней нет.
     #[test]
     fn смена_набора_колонок_попадает_в_дельту() {
+        let columns = vec![
+            ColumnDef { name: "open".into(), category: "active".into() },
+            ColumnDef { name: "closed".into(), category: "done".into() },
+        ];
         let mut store = Store::default();
-        assert!(store.set_columns(vec![ColumnDef { name: "open".into(), category: "active".into() }]));
-        assert!(!store.set_columns(vec![ColumnDef { name: "open".into(), category: "active".into() }]));
+
+        assert!(store.set_columns(columns.clone()));
+        let delta = store.columns_delta();
+        assert_eq!(delta.columns.as_deref(), Some(&columns[..]));
+        assert_eq!(delta.generation, 1);
+        assert!(delta.upserted.is_empty() && delta.removed.is_empty());
+        assert!(!delta.is_empty());
+
+        assert!(!store.set_columns(columns), "тот же набор дельты не порождает");
+        assert_eq!(store.generation(), 1);
     }
 }

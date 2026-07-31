@@ -1,4 +1,9 @@
-use super::model::{ColumnDef, IssuePatch, Issue, NewIssue, TrackerError};
+use std::path::PathBuf;
+
+use tauri::AppHandle;
+use tauri_plugin_shell::ShellExt;
+
+use super::model::{ColumnDef, Issue, IssuePatch, NewIssue, TrackerError};
 
 /// Порядок колонок задают категории bd: сначала доступное, потом в работе,
 /// потом отложенное, потом завершённое.
@@ -63,11 +68,18 @@ pub fn parse_version(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Заголовок уезжает во флаг `--title`, а не в позиционный аргумент.
+/// Оболочки здесь нет, инъекция невозможна, но задача с именем «-n 5» —
+/// вполне достижимая: bd проверяет позиционный заголовок на ведущий дефис и
+/// отказывается его создавать, причём даже после `--` (проверено на bd 1.1.2:
+/// `title "-n 5" looks like a flag`). Значение флага такой проверки не
+/// проходит и берётся как есть.
 pub fn create_args(new: &NewIssue) -> Vec<String> {
     let mut args = vec![
         "create".to_string(),
-        new.title.clone(),
         "--json".to_string(),
+        "--title".to_string(),
+        new.title.clone(),
         "-t".to_string(),
         new.issue_type.clone(),
         "-p".to_string(),
@@ -80,8 +92,10 @@ pub fn create_args(new: &NewIssue) -> Vec<String> {
     args
 }
 
+/// `--` перед идентификатором: всё, что после него, bd разбирает как
+/// позиционный аргумент, а не как флаг.
 pub fn update_args(id: &str, patch: &IssuePatch) -> Vec<String> {
-    let mut args = vec!["update".to_string(), id.to_string(), "--json".to_string()];
+    let mut args = vec!["update".to_string(), "--json".to_string()];
     let mut push = |flag: &str, value: String| {
         args.push(flag.to_string());
         args.push(value);
@@ -110,12 +124,10 @@ pub fn update_args(id: &str, patch: &IssuePatch) -> Vec<String> {
     for label in &patch.remove_labels {
         push("--remove-label", label.clone());
     }
+    args.push("--".into());
+    args.push(id.to_string());
     args
 }
-
-use std::path::PathBuf;
-use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 
 /// Обёртка над вшитым бинарником bd. Единственное место, которое знает,
 /// как выглядят аргументы CLI.
@@ -209,16 +221,18 @@ impl Bd {
     }
 
     pub async fn close(&self, id: &str, reason: Option<&str>) -> Result<Issue, TrackerError> {
-        let mut args = vec!["close".to_string(), id.to_string(), "--json".to_string()];
+        let mut args = vec!["close".to_string(), "--json".to_string()];
         if let Some(reason) = reason {
             args.push("-r".into());
             args.push(reason.to_string());
         }
+        args.push("--".into());
+        args.push(id.to_string());
         self.one(args).await
     }
 
     pub async fn reopen(&self, id: &str) -> Result<Issue, TrackerError> {
-        self.one(vec!["reopen".into(), id.to_string(), "--json".into()])
+        self.one(vec!["reopen".into(), "--json".into(), "--".into(), id.to_string()])
             .await
     }
 }
@@ -300,6 +314,16 @@ mod tests {
         let patch = IssuePatch { status: Some("in_progress".into()), title: Some("новое".into()),
             ..Default::default() };
         assert_eq!(update_args("smetana-1", &patch),
-            vec!["update", "smetana-1", "--json", "-s", "in_progress", "--title", "новое"]);
+            vec!["update", "--json", "-s", "in_progress", "--title", "новое", "--", "smetana-1"]);
+    }
+
+    /// Заголовок с ведущим дефисом bd обязан принять как заголовок, а не
+    /// как флаг: позиционным аргументом он этого не умеет даже после `--`.
+    #[test]
+    fn заголовок_уходит_флагом_а_не_позиционным_аргументом() {
+        let new = NewIssue { title: "-n 5".into(), issue_type: "task".into(), priority: 2,
+            description: None };
+        assert_eq!(create_args(&new),
+            vec!["create", "--json", "--title", "-n 5", "-t", "task", "-p", "2"]);
     }
 }
