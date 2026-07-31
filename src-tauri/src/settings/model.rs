@@ -387,6 +387,39 @@ mod tests {
     }
 
     #[test]
+    fn a_value_the_front_end_should_not_have_sent_does_not_reach_the_file() {
+        let mut file = Settings::default();
+        let resolved = ResolvedSettings {
+            appearance: Appearance { theme: "neon".into(), density: "comfortable".into() },
+            layout: Layout::default(),
+            project: ProjectState { side_tab: "tarot".into(), ..ProjectState::default() },
+        };
+
+        merge(&mut file, resolved, "/p", "2026-08-01T09:12:00+00:00".into());
+
+        assert_eq!(file.appearance.theme, "dark", "проверка на входе, а не только на выходе");
+        assert_eq!(file.projects["/p"].side_tab, "files");
+    }
+
+    #[test]
+    fn the_expanded_list_loses_blanks_duplicates_and_everything_past_the_limit() {
+        let mut paths = vec![String::from("/a"), String::from("/a"), String::new(), "x".repeat(MAX_PATH_LEN + 1)];
+        for i in 0..MAX_EXPANDED {
+            paths.push(format!("/dir{i:04}"));
+        }
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {"expanded": paths}}});
+
+        let settings = settings_of(&text.to_string());
+
+        let expanded = &settings.projects["/p"].expanded;
+        let last_kept = format!("/dir{:04}", MAX_EXPANDED - 2);
+        assert_eq!(expanded.len(), MAX_EXPANDED, "длиннее предела список не хранится");
+        assert_eq!(expanded[0], "/a");
+        assert_eq!(expanded[1], "/dir0000", "дубль, пустая строка и слишком длинный путь выпали");
+        assert_eq!(expanded.last(), Some(&last_kept), "обрезается хвост, а не начало");
+    }
+
+    #[test]
     fn merge_keeps_only_the_newest_projects() {
         let mut file = Settings::default();
         for i in 0..MAX_PROJECTS + 5 {
