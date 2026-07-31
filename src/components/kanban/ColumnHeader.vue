@@ -8,8 +8,13 @@ import { statusColors } from '../status/status.js'
 const props = defineProps({
   status: { type: String, required: true },
   count: { type: Number, default: 0 },
-  wipLimit: { type: Number, default: null }
+  wipLimit: { type: Number, default: null },
+  /* Не всякая колонка принимает новые задачи: в bd задача рождается только
+     в одном статусе, и "+" стоит там, где нажатие действительно сработает. */
+  addable: { type: Boolean, default: true }
 })
+
+defineEmits(['add'])
 
 const c = computed(() => statusColors(props.status))
 const over = computed(() => props.wipLimit != null && props.count > props.wipLimit)
@@ -57,7 +62,7 @@ const wipStyle = computed(() => ({
     </span>
     <span :style="{ flex: 1 }" />
     <slot name="actions">
-      <IconButton icon="plus" :label="`Add task to ${c.key}`" size="sm" />
+      <IconButton v-if="addable" icon="plus" :label="`Add task to ${c.key}`" size="sm" @click="$emit('add')" />
     </slot>
   </div>
 </template>

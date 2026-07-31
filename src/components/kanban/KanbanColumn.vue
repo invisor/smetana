@@ -9,10 +9,11 @@ const props = defineProps({
   tasks: { type: Array, default: () => [] },
   wipLimit: { type: Number, default: null },
   dropTarget: { type: Boolean, default: false },
-  selectedId: { type: String, default: undefined }
+  selectedId: { type: String, default: undefined },
+  addable: { type: Boolean, default: true }
 })
 
-defineEmits(['select'])
+defineEmits(['select', 'add'])
 
 const style = {
   color: 'var(--text-primary)',
@@ -42,7 +43,13 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
 
 <template>
   <div :style="style">
-    <ColumnHeader :status="status" :count="tasks.length" :wip-limit="wipLimit" />
+    <ColumnHeader
+      :status="status"
+      :count="tasks.length"
+      :wip-limit="wipLimit"
+      :addable="addable"
+      @add="$emit('add', status)"
+    />
     <div :style="listStyle">
       <template v-if="tasks.length">
         <TaskCard

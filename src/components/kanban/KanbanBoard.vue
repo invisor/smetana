@@ -6,10 +6,14 @@ import EmptyState from '../core/EmptyState.vue'
    never assumes four fixed columns. */
 defineProps({
   columns: { type: Array, default: () => [] },
-  selectedId: { type: String, default: undefined }
+  selectedId: { type: String, default: undefined },
+  /* Статус единственной колонки, которая принимает новые задачи — только у неё
+     есть "+". null: доска ничего не создаёт. Какой это статус, решает продукт:
+     фиксированного набора колонок здесь нет и быть не может. */
+  addTo: { type: String, default: null }
 })
 
-defineEmits(['select'])
+defineEmits(['select', 'add'])
 
 const style = {
   display: 'flex',
@@ -35,7 +39,9 @@ const style = {
       :key="c.status"
       v-bind="c"
       :selected-id="selectedId"
+      :addable="c.status === addTo"
       @select="$emit('select', $event)"
+      @add="$emit('add', $event)"
     />
   </div>
 </template>

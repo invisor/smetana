@@ -7,6 +7,7 @@
    you. Hence the loud budget — exactly one card and one callout shout here. */
 import { computed, onMounted, ref, watch, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
+import Panel from '../components/shell/Panel.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
@@ -54,6 +55,15 @@ watchEffect(() => {
 const expanded = ref({ ...initialExpanded })
 const selectedPath = ref('src/tabs.rs')
 const activeTab = ref('kanban')
+/* The sidebar holds three views of the same worktree, one at a time: its files,
+   its git state, the agents working in it. */
+const SIDE_TABS = [
+  { id: 'files', label: 'Files' },
+  { id: 'git', label: 'Git' },
+  { id: 'agents', label: 'Agents' }
+]
+const sideTab = ref('files')
+const hoveredSideTab = ref(null)
 /* No card starts selected: the inspector already shows bd-a1b2, and a selection
    border would take the loud amber edge away from the card that needs you. */
 const selectedTask = ref(null)
@@ -62,8 +72,17 @@ const follow = ref(true)
 const streamState = ref('streaming')
 const logQuery = ref('')
 
+/* bd gives a new task the one status it has for them — open, which the board
+   calls ready. So that column, and only it, carries the "+": a plus over any
+   other column would promise a placement the tracker cannot make. */
+const ADD_TO = 'ready'
 const newTaskOpen = ref(false)
 const creating = ref(false)
+
+/* Either side folds away to a 32px rail so the board gets the width; the rail
+   keeps the panel's name and the button that brings it back. */
+const leftCollapsed = ref(false)
+const rightCollapsed = ref(false)
 
 const selectedIssue = computed(() => (selectedTask.value ? issueById(selectedTask.value) : null))
 
@@ -189,20 +208,25 @@ const rootStyle = {
 }
 const bodyStyle = { flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch' }
 
-const leftStyle = {
+const leftStyle = computed(() => ({
   flex: '0 0 auto',
-  width: '252px',
+  width: leftCollapsed.value ? '32px' : '252px',
+  display: 'flex',
+  minWidth: 0
+}))
+/* Panel scrolls its slot as one block; the worktree line and the tab row have
+   to stay put, so only what is under them scrolls. */
+const sidebarStyle = {
   display: 'flex',
   flexDirection: 'column',
-  background: 'var(--surface)',
-  borderRight: 'var(--border-w) solid var(--border)',
-  minWidth: 0
+  height: '100%',
+  minHeight: 0
 }
 /* 10px uppercase mono: a label, not a sentence */
 const microHeader = (topRule = false) => ({
   display: 'flex',
   alignItems: 'center',
-  height: '30px',
+  height: 'var(--tab-h)',
   flex: '0 0 auto',
   padding: '0 var(--space-5)',
   borderTop: topRule ? 'var(--border-w) solid var(--border-subtle)' : undefined,
@@ -212,6 +236,38 @@ const microHeader = (topRule = false) => ({
   textTransform: 'uppercase',
   color: 'var(--text-muted)'
 })
+/* The sidebar's own tab row: same height and top accent as the document tabs,
+   but micro type, because these are section names and not open files. */
+const sideTabBar = {
+  display: 'flex',
+  alignItems: 'stretch',
+  height: 'var(--tab-h)',
+  flex: '0 0 auto',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)'
+}
+const sideTabStyle = (tab, last) => {
+  const active = sideTab.value === tab.id
+  return {
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
+    letterSpacing: 'var(--tracking-caps)',
+    textTransform: 'uppercase',
+    color: active ? 'var(--text-primary)' : 'var(--text-muted)',
+    background: active
+      ? 'var(--surface-raised)'
+      : hoveredSideTab.value === tab.id
+        ? 'var(--surface-hover)'
+        : 'transparent',
+    boxShadow: active ? 'inset 0 2px 0 0 var(--text-primary)' : 'none',
+    borderRight: last ? undefined : 'var(--border-w) solid var(--border-subtle)',
+    cursor: 'default',
+    transition: 'var(--transition-control)'
+  }
+}
 const agentRow = {
   display: 'flex',
   alignItems: 'center',
@@ -232,23 +288,20 @@ const runningMark = { width: '8px', height: '8px', borderRadius: '50%', backgrou
 
 const centerStyle = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }
 
-const rightStyle = {
+/* Collapsed, the column is the same 32px rail AppShell reserves for one. */
+const rightStyle = computed(() => ({
   flex: '0 0 auto',
-  width: '340px',
+  width: rightCollapsed.value ? '32px' : '340px',
   display: 'flex',
-  flexDirection: 'column',
-  background: 'var(--surface)',
-  borderLeft: 'var(--border-w) solid var(--border)',
   minWidth: 0
-}
+}))
+/* Panel already owns the scroll container; this is only the layout inside it. */
 const inspectorBody = {
   display: 'flex',
   flexDirection: 'column',
   gap: 'var(--space-5)',
   padding: 'var(--panel-pad)',
-  minWidth: 0,
-  minHeight: 0,
-  overflow: 'auto'
+  minWidth: 0
 }
 const calloutStyle = {
   display: 'flex',
@@ -290,106 +343,157 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
     <div :style="bodyStyle">
       <!-- left: worktree files and the agents working in it -->
       <div :style="leftStyle">
-        <div :style="microHeader(true)">{{ scope.worktree }}</div>
-        <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
-          <FileTree
-            :nodes="tree"
-            :expanded="expanded"
-            :selected-path="selectedPath"
-            @toggle="toggleDir"
-            @select="selectedPath = $event"
-          />
-          <div :style="microHeader()">Agents</div>
-          <div v-for="a in agents" :key="a.name" :style="agentRow">
-            <span :style="a.state === 'needs-you' ? needsYouMark : runningMark" />
-            <span>{{ a.name }}</span>
-            <span :style="{ color: 'var(--text-muted)' }">{{ a.task }}</span>
-            <span :style="{ flex: 1 }" />
-            <span :style="{ color: a.state === 'needs-you' ? 'var(--attn-loud)' : 'var(--text-muted)' }">
-              {{ a.elapsed }}
-            </span>
+        <Panel
+          title="Projects"
+          side="left"
+          :collapsed="leftCollapsed"
+          :style="{ flex: 1, minWidth: 0 }"
+          @toggle="leftCollapsed = !leftCollapsed"
+        >
+          <div :style="sidebarStyle">
+            <div :style="microHeader()">{{ scope.worktree }}</div>
+            <div role="tablist" :style="sideTabBar">
+              <div
+                v-for="(t, i) in SIDE_TABS"
+                :key="t.id"
+                role="tab"
+                :aria-selected="sideTab === t.id"
+                :tabindex="sideTab === t.id ? 0 : -1"
+                :style="sideTabStyle(t, i === SIDE_TABS.length - 1)"
+                @click="sideTab = t.id"
+                @mouseenter="hoveredSideTab = t.id"
+                @mouseleave="hoveredSideTab = null"
+              >
+                {{ t.label }}
+              </div>
+            </div>
+            <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
+              <FileTree
+                v-if="sideTab === 'files'"
+                :nodes="tree"
+                :expanded="expanded"
+                :selected-path="selectedPath"
+                @toggle="toggleDir"
+                @select="selectedPath = $event"
+              />
+              <EmptyState
+                v-else-if="sideTab === 'git'"
+                compact
+                icon="git-branch"
+                title="Git is not connected"
+                description="Changes and branch state will live here. Nothing in the app reads git yet."
+              />
+              <template v-else>
+                <div v-for="a in agents" :key="a.name" :style="agentRow">
+                  <span :style="a.state === 'needs-you' ? needsYouMark : runningMark" />
+                  <span>{{ a.name }}</span>
+                  <span :style="{ color: 'var(--text-muted)' }">{{ a.task }}</span>
+                  <span :style="{ flex: 1 }" />
+                  <span :style="{ color: a.state === 'needs-you' ? 'var(--attn-loud)' : 'var(--text-muted)' }">
+                    {{ a.elapsed }}
+                  </span>
+                </div>
+              </template>
+            </div>
           </div>
-        </div>
+        </Panel>
       </div>
 
       <!-- centre: tabs over the board -->
       <div :style="centerStyle">
         <TabBar :tabs="tabs" :active-id="activeTab" @select="activeTab = $event" />
-        <div :style="{ display: 'flex', justifyContent: 'flex-end', padding: '0 var(--panel-pad)' }">
-          <Button variant="primary" size="sm" icon="plus" @click="newTaskOpen = true">New task</Button>
-        </div>
-        <NewTaskModal :open="newTaskOpen" :busy="creating" @close="newTaskOpen = false" @submit="submitNewTask" />
+        <NewTaskModal
+          :open="newTaskOpen"
+          :busy="creating"
+          :status="ADD_TO"
+          @close="newTaskOpen = false"
+          @submit="submitNewTask"
+        />
         <EmptyState v-if="healthNotice" v-bind="healthNotice" />
-        <KanbanBoard v-else :columns="boardColumns" :selected-id="selectedTask" @select="selectedTask = $event" />
+        <KanbanBoard
+          v-else
+          :columns="boardColumns"
+          :selected-id="selectedTask"
+          :add-to="ADD_TO"
+          @select="selectedTask = $event"
+          @add="newTaskOpen = true"
+        />
       </div>
 
       <!-- right: the task that is waiting on you, and its live output -->
       <div :style="rightStyle">
-        <div :style="microHeader()">Task &amp; output</div>
-        <div :style="inspectorBody">
-          <template v-if="selectedIssue">
-            <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
-              <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-                {{ selectedIssue.id }}
-              </span>
-              <StatusBadge :status="toUiStatus(selectedIssue.status)" size="sm" />
-            </div>
-            <Input
-              v-model="titleDraft"
-              @focusin="titleEditing = true"
-              @focusout="blurTitle"
-              @keydown.enter="commitTitle"
-            />
-            <Select :model-value="selectedIssue.status" :options="statusOptions" @update:model-value="setSelectedStatus" />
-            <div :style="{ display: 'flex', gap: 'var(--space-4)' }">
-              <Button v-if="selectedIssue.status !== 'closed'" variant="secondary" size="sm" @click="closeSelected">
-                Close
-              </Button>
-              <Button v-else variant="secondary" size="sm" @click="reopenSelected">Reopen</Button>
-            </div>
-          </template>
-
-          <template v-else>
-            <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
-              <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-                {{ inspector.id }}
-              </span>
-              <StatusBadge :status="inspector.status" size="sm" />
-            </div>
-
-            <div :style="{ fontSize: 'var(--text-md)', lineHeight: 'var(--leading-snug)', textWrap: 'pretty' }">
-              {{ inspector.title }}
-            </div>
-
-            <div :style="calloutStyle">
-              <div :style="calloutLabel">waiting on you · {{ inspector.waitingFor }}</div>
-              <div :style="{ fontSize: 'var(--text-sm)' }">
-                {{ questionParts[0]
-                }}<span :style="{ fontFamily: 'var(--font-mono)' }">{{ inspector.collidesWith }}</span
-                >{{ questionParts[1] }}
+        <Panel
+          title="Task &amp; output"
+          side="right"
+          :collapsed="rightCollapsed"
+          :style="{ flex: 1, minWidth: 0 }"
+          @toggle="rightCollapsed = !rightCollapsed"
+        >
+          <div :style="inspectorBody">
+            <template v-if="selectedIssue">
+              <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
+                <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+                  {{ selectedIssue.id }}
+                </span>
+                <StatusBadge :status="toUiStatus(selectedIssue.status)" size="sm" />
               </div>
+              <Input
+                v-model="titleDraft"
+                @focusin="titleEditing = true"
+                @focusout="blurTitle"
+                @keydown.enter="commitTitle"
+              />
+              <Select :model-value="selectedIssue.status" :options="statusOptions" @update:model-value="setSelectedStatus" />
               <div :style="{ display: 'flex', gap: 'var(--space-4)' }">
-                <Button variant="primary" size="sm">Overwrite</Button>
-                <Button variant="secondary" size="sm">Pick new name</Button>
+                <Button v-if="selectedIssue.status !== 'closed'" variant="secondary" size="sm" @click="closeSelected">
+                  Close
+                </Button>
+                <Button v-else variant="secondary" size="sm" @click="reopenSelected">Reopen</Button>
               </div>
-            </div>
+            </template>
 
-            <div :style="blocksLine">
-              <span :style="hatchSwatch" />
-              blocks {{ inspector.blocksDownstream }} downstream tasks
-            </div>
-          </template>
+            <template v-else>
+              <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
+                <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+                  {{ inspector.id }}
+                </span>
+                <StatusBadge :status="inspector.status" size="sm" />
+              </div>
 
-          <LogView
-            :lines="logLines"
-            :stream-state="streamState"
-            :follow="follow"
-            v-model:query="logQuery"
-            :height="260"
-            @toggle-follow="follow = !follow"
-            @toggle-stream="toggleStream"
-          />
-        </div>
+              <div :style="{ fontSize: 'var(--text-md)', lineHeight: 'var(--leading-snug)', textWrap: 'pretty' }">
+                {{ inspector.title }}
+              </div>
+
+              <div :style="calloutStyle">
+                <div :style="calloutLabel">waiting on you · {{ inspector.waitingFor }}</div>
+                <div :style="{ fontSize: 'var(--text-sm)' }">
+                  {{ questionParts[0]
+                  }}<span :style="{ fontFamily: 'var(--font-mono)' }">{{ inspector.collidesWith }}</span
+                  >{{ questionParts[1] }}
+                </div>
+                <div :style="{ display: 'flex', gap: 'var(--space-4)' }">
+                  <Button variant="primary" size="sm">Overwrite</Button>
+                  <Button variant="secondary" size="sm">Pick new name</Button>
+                </div>
+              </div>
+
+              <div :style="blocksLine">
+                <span :style="hatchSwatch" />
+                blocks {{ inspector.blocksDownstream }} downstream tasks
+              </div>
+            </template>
+
+            <LogView
+              :lines="logLines"
+              :stream-state="streamState"
+              :follow="follow"
+              v-model:query="logQuery"
+              :height="260"
+              @toggle-follow="follow = !follow"
+              @toggle-stream="toggleStream"
+            />
+          </div>
+        </Panel>
       </div>
     </div>
 

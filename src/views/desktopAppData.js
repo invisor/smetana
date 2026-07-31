@@ -33,6 +33,13 @@ export const tabs = [
 ]
 
 export const columns = [
+  /* bd always has an open status, so the mock has to as well: ready is the one
+     column that takes new tasks, and without it the "+" is nowhere to be seen
+     in the browser. */
+  {
+    status: 'ready',
+    tasks: [{ id: 'bd-4e88', title: 'Vendor IBM Plex Mono for offline builds', status: 'ready' }]
+  },
   {
     status: 'needs-you',
     tasks: [

@@ -42,7 +42,9 @@ const headerStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
-  height: 'var(--scope-bar-h)',
+  /* Одна высота с рядом вкладок: заголовки колонок стоят с ним в один ряд,
+     и разница в пару пикселей читается как перекос, а не как акцент. */
+  height: 'var(--tab-h)',
   flex: '0 0 auto',
   padding: '0 var(--space-3) 0 var(--space-5)',
   borderBottom: 'var(--border-w) solid var(--border-subtle)'

@@ -7,7 +7,9 @@ import Select from '../core/Select.vue'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  busy: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false },
+  /* Колонка, из которой открыли диалог: она и решает, где окажется карточка. */
+  status: { type: String, default: null }
 })
 
 const emit = defineEmits(['close', 'submit'])
@@ -28,6 +30,12 @@ const priority = ref('2')
 const description = ref('')
 
 const valid = computed(() => title.value.trim().length > 0)
+
+const intro = computed(() =>
+  props.status
+    ? `Goes straight into the tracker, in ${String(props.status).replace(/-/g, ' ')}.`
+    : 'Goes straight into the tracker.'
+)
 
 const submit = () => {
   if (!valid.value || props.busy) return
@@ -68,7 +76,7 @@ const field = { flex: 1, minWidth: 0 }
 </script>
 
 <template>
-  <Modal :open="open" :closable="!busy" title="New task" description="Goes straight into the tracker." @close="$emit('close')">
+  <Modal :open="open" :closable="!busy" title="New task" :description="intro" @close="$emit('close')">
     <div :style="fields">
       <div>
         <div :style="label">Title</div>
