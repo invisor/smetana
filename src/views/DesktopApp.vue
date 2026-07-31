@@ -30,15 +30,8 @@ import {
   trackerState,
   updateIssue
 } from '../stores/tracker.js'
-import {
-  agents,
-  expanded as initialExpanded,
-  inspector,
-  logLines,
-  scope,
-  tabs,
-  tree
-} from './desktopAppData.js'
+import { settings } from '../stores/settings.js'
+import { agents, inspector, logLines, scope, tabs, tree } from './desktopAppData.js'
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -52,9 +45,17 @@ watchEffect(() => {
   el.setAttribute('data-density', props.density)
 })
 
-const expanded = ref({ ...initialExpanded })
-const selectedPath = ref('src/tabs.rs')
-const activeTab = ref('kanban')
+/* Всё, что переживает перезапуск, живёт в настройках: панели — в layout,
+   выбор внутри проекта — в project. Локальные ref остались только у того,
+   что относится к текущему моменту: лог, модалка, черновик заголовка. */
+const layout = settings.layout
+const project = settings.project
+
+/* FileTree ждёт карту «путь → открыт», а на диске лежит список раскрытых
+   каталогов: в файле, который читают глазами, список честнее карты из
+   одних true. */
+const expanded = computed(() => Object.fromEntries(project.expanded.map((path) => [path, true])))
+
 /* The sidebar holds three views of the same worktree, one at a time: its files,
    its git state, the agents working in it. */
 const SIDE_TABS = [
@@ -62,11 +63,7 @@ const SIDE_TABS = [
   { id: 'git', label: 'Git' },
   { id: 'agents', label: 'Agents' }
 ]
-const sideTab = ref('files')
 const hoveredSideTab = ref(null)
-/* No card starts selected: the inspector already shows bd-a1b2, and a selection
-   border would take the loud amber edge away from the card that needs you. */
-const selectedTask = ref(null)
 onMounted(initTracker)
 const follow = ref(true)
 const streamState = ref('streaming')
@@ -81,17 +78,15 @@ const creating = ref(false)
 
 /* Either side folds away to a 32px rail so the board gets the width; the rail
    keeps the panel's name and the button that brings it back. */
-const leftCollapsed = ref(false)
-const rightCollapsed = ref(false)
 
-const selectedIssue = computed(() => (selectedTask.value ? issueById(selectedTask.value) : null))
+const selectedIssue = computed(() => (project.selectedTask ? issueById(project.selectedTask) : null))
 
 const submitNewTask = async (issue) => {
   creating.value = true
   try {
     const created = await createIssue(issue)
     newTaskOpen.value = false
-    selectedTask.value = created.id
+    project.selectedTask = created.id
   } catch {
     // сообщение уже лежит в trackerState.lastError
   } finally {
@@ -107,16 +102,33 @@ const submitNewTask = async (issue) => {
 const titleDraft = ref('')
 const titleEditing = ref(false)
 
-watch(selectedTask, () => {
-  titleEditing.value = false
-  titleDraft.value = selectedIssue.value?.title ?? ''
-})
+watch(
+  () => project.selectedTask,
+  () => {
+    titleEditing.value = false
+    titleDraft.value = selectedIssue.value?.title ?? ''
+  }
+)
 
 watch(
   () => selectedIssue.value?.title,
   (nextTitle) => {
     if (!titleEditing.value) titleDraft.value = nextTitle ?? ''
   }
+)
+
+/* Пока приложение было закрыто, задачу могли закрыть и убрать из трекера.
+   Восстанавливать выбор, которого больше нет, нельзя: инспектор показал бы
+   пустоту, а файл продолжал бы хранить мусор. Ждём готовности трекера —
+   до неё "не нашлось" ничего не значит. */
+watch(
+  () => [trackerState.ready, trackerState.issues.size],
+  () => {
+    if (trackerState.ready && project.selectedTask && !issueById(project.selectedTask)) {
+      project.selectedTask = null
+    }
+  },
+  { immediate: true }
 )
 
 const commitTitle = () => {
@@ -135,9 +147,9 @@ const blurTitle = () => {
   commitTitle()
 }
 
-const setSelectedStatus = (status) => updateIssue(selectedTask.value, { status }).catch(() => {})
-const closeSelected = () => closeIssue(selectedTask.value).catch(() => {})
-const reopenSelected = () => reopenIssue(selectedTask.value).catch(() => {})
+const setSelectedStatus = (status) => updateIssue(project.selectedTask, { status }).catch(() => {})
+const closeSelected = () => closeIssue(project.selectedTask).catch(() => {})
+const reopenSelected = () => reopenIssue(project.selectedTask).catch(() => {})
 
 /* bd's own status names (open/in_progress/…) are identifiers, not prose —
    the picker still has to send them, but it must read as a sentence-case
@@ -189,7 +201,9 @@ const healthNotice = computed(() => {
 })
 
 const toggleDir = (path) => {
-  expanded.value = { ...expanded.value, [path]: !expanded.value[path] }
+  const at = project.expanded.indexOf(path)
+  if (at === -1) project.expanded.push(path)
+  else project.expanded.splice(at, 1)
 }
 const toggleStream = () => {
   streamState.value = streamState.value === 'streaming' ? 'paused' : 'streaming'
@@ -210,7 +224,7 @@ const bodyStyle = { flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch
 
 const leftStyle = computed(() => ({
   flex: '0 0 auto',
-  width: leftCollapsed.value ? '32px' : '252px',
+  width: layout.leftCollapsed ? '32px' : '252px',
   display: 'flex',
   minWidth: 0
 }))
@@ -246,7 +260,7 @@ const sideTabBar = {
   borderBottom: 'var(--border-w) solid var(--border-subtle)'
 }
 const sideTabStyle = (tab, last) => {
-  const active = sideTab.value === tab.id
+  const active = project.sideTab === tab.id
   return {
     flex: 1,
     minWidth: 0,
@@ -291,7 +305,7 @@ const centerStyle = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'col
 /* Collapsed, the column is the same 32px rail AppShell reserves for one. */
 const rightStyle = computed(() => ({
   flex: '0 0 auto',
-  width: rightCollapsed.value ? '32px' : '340px',
+  width: layout.rightCollapsed ? '32px' : '340px',
   display: 'flex',
   minWidth: 0
 }))
@@ -346,9 +360,9 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
         <Panel
           title="Projects"
           side="left"
-          :collapsed="leftCollapsed"
+          :collapsed="layout.leftCollapsed"
           :style="{ flex: 1, minWidth: 0 }"
-          @toggle="leftCollapsed = !leftCollapsed"
+          @toggle="layout.leftCollapsed = !layout.leftCollapsed"
         >
           <div :style="sidebarStyle">
             <div :style="microHeader()">{{ scope.worktree }}</div>
@@ -357,10 +371,10 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
                 v-for="(t, i) in SIDE_TABS"
                 :key="t.id"
                 role="tab"
-                :aria-selected="sideTab === t.id"
-                :tabindex="sideTab === t.id ? 0 : -1"
+                :aria-selected="project.sideTab === t.id"
+                :tabindex="project.sideTab === t.id ? 0 : -1"
                 :style="sideTabStyle(t, i === SIDE_TABS.length - 1)"
-                @click="sideTab = t.id"
+                @click="project.sideTab = t.id"
                 @mouseenter="hoveredSideTab = t.id"
                 @mouseleave="hoveredSideTab = null"
               >
@@ -369,15 +383,15 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
             </div>
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
-                v-if="sideTab === 'files'"
+                v-if="project.sideTab === 'files'"
                 :nodes="tree"
                 :expanded="expanded"
-                :selected-path="selectedPath"
+                :selected-path="project.selectedPath ?? undefined"
                 @toggle="toggleDir"
-                @select="selectedPath = $event"
+                @select="project.selectedPath = $event"
               />
               <EmptyState
-                v-else-if="sideTab === 'git'"
+                v-else-if="project.sideTab === 'git'"
                 compact
                 icon="git-branch"
                 title="Git is not connected"
@@ -401,7 +415,7 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
 
       <!-- centre: tabs over the board -->
       <div :style="centerStyle">
-        <TabBar :tabs="tabs" :active-id="activeTab" @select="activeTab = $event" />
+        <TabBar :tabs="tabs" :active-id="project.activeTab" @select="project.activeTab = $event" />
         <NewTaskModal
           :open="newTaskOpen"
           :busy="creating"
@@ -413,9 +427,9 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
         <KanbanBoard
           v-else
           :columns="boardColumns"
-          :selected-id="selectedTask"
+          :selected-id="project.selectedTask"
           :add-to="ADD_TO"
-          @select="selectedTask = $event"
+          @select="project.selectedTask = $event"
           @add="newTaskOpen = true"
         />
       </div>
@@ -425,9 +439,9 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
         <Panel
           title="Task &amp; output"
           side="right"
-          :collapsed="rightCollapsed"
+          :collapsed="layout.rightCollapsed"
           :style="{ flex: 1, minWidth: 0 }"
-          @toggle="rightCollapsed = !rightCollapsed"
+          @toggle="layout.rightCollapsed = !layout.rightCollapsed"
         >
           <div :style="inspectorBody">
             <template v-if="selectedIssue">
