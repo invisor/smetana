@@ -14,6 +14,7 @@ import {
   DependencyMark,
   DependencySpine,
   EmptyState,
+  FileEditor,
   FileTree,
   Icon,
   IconButton,
@@ -48,6 +49,7 @@ watchEffect(() => {
 })
 
 const text = ref('wt/bd-a1b2')
+const editorText = ref('fn main() {\n    println!("hello");\n}\n')
 const choice = ref('running')
 const checked = ref(true)
 const switched = ref(true)
@@ -158,6 +160,26 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           </template>
           <template #right><Panel title="Task" side="right" collapsed /></template>
         </AppShell>
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Editor</div>
+      <div :style="{ height: '200px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <FileEditor v-model="editorText" />
+      </div>
+      <div :style="{ height: '120px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <FileEditor
+          model-value=""
+          read-only
+          :notice="{ tone: 'blocked', text: 'Binary file — not shown.' }"
+        />
+      </div>
+      <div :style="{ height: '120px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <FileEditor
+          model-value="локальные правки"
+          :notice="{ tone: 'stale', text: 'This file changed on disk since it was opened.' }"
+        />
       </div>
     </section>
 
