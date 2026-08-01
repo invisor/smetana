@@ -1,3 +1,4 @@
+mod files;
 mod project;
 mod settings;
 mod tracker;
