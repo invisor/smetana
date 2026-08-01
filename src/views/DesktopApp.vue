@@ -19,6 +19,8 @@ import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Toast from '../components/overlays/Toast.vue'
 import LogView from '../components/agent/LogView.vue'
+import ProjectList from '../components/shell/ProjectList.vue'
+import Skeleton from '../components/core/Skeleton.vue'
 import {
   boardColumns,
   closeIssue,
@@ -31,6 +33,15 @@ import {
   updateIssue
 } from '../stores/tracker.js'
 import { settings } from '../stores/settings.js'
+import {
+  activePath,
+  addProject,
+  adoptInitialProject,
+  initActive,
+  projectRows,
+  removeProject,
+  switchTo
+} from '../stores/projects.js'
 import { agents, inspector, logLines, scope, tabs, tree } from './desktopAppData.js'
 
 const props = defineProps({
@@ -70,6 +81,16 @@ const SIDE_TABS = [
 ]
 const hoveredSideTab = ref(null)
 onMounted(initTracker)
+onMounted(adoptInitialProject)
+const initing = ref(false)
+const initHere = async () => {
+  initing.value = true
+  try {
+    await initActive()
+  } finally {
+    initing.value = false
+  }
+}
 const follow = ref(true)
 const streamState = ref('streaming')
 const logQuery = ref('')
@@ -186,11 +207,16 @@ const statusOptions = computed(() =>
    that is waiting on you. The diagnostic text from Rust goes to the console,
    not here. */
 const HEALTH_NOTICE = {
+  'no-project': {
+    icon: 'folder-git-2',
+    title: 'No project open',
+    description: 'Add a folder that bd tracks — or one you want it to.'
+  },
   'not-a-beads-repo': {
     icon: 'folder-git-2',
     title: 'No tracker here',
     description:
-      'No .beads directory in this folder or any folder above it. Open the app from a project that bd tracks.'
+      'No .beads directory in this folder or any folder above it. Initialize bd to start tracking tasks in it.'
   },
   'bd-version-mismatch': {
     icon: 'info',
@@ -252,20 +278,6 @@ const sidebarStyle = {
   height: '100%',
   minHeight: 0
 }
-/* 10px uppercase mono: a label, not a sentence */
-const microHeader = (topRule = false) => ({
-  display: 'flex',
-  alignItems: 'center',
-  height: 'var(--tab-h)',
-  flex: '0 0 auto',
-  padding: '0 var(--space-5)',
-  borderTop: topRule ? 'var(--border-w) solid var(--border-subtle)' : undefined,
-  borderBottom: 'var(--border-w) solid var(--border-subtle)',
-  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
-  letterSpacing: 'var(--tracking-caps)',
-  textTransform: 'uppercase',
-  color: 'var(--text-muted)'
-})
 /* The sidebar's own tab row: same height and top accent as the document tabs,
    but micro type, because these are section names and not open files. */
 const sideTabBar = {
@@ -368,7 +380,7 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
 
 <template>
   <div :style="rootStyle">
-    <ScopeIndicator v-bind="scope" />
+    <ScopeIndicator v-bind="scope" :repo="activePath ? activePath.split('/').filter(Boolean).pop() : '—'" />
 
     <div :style="bodyStyle">
       <!-- left: worktree files and the agents working in it -->
@@ -381,7 +393,13 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           @toggle="layout.leftCollapsed = !layout.leftCollapsed"
         >
           <div :style="sidebarStyle">
-            <div :style="microHeader()">{{ scope.worktree }}</div>
+            <ProjectList
+              :projects="projectRows"
+              :active-path="activePath"
+              @select="switchTo"
+              @add="addProject"
+              @remove="removeProject"
+            />
             <div role="tablist" :style="sideTabBar">
               <div
                 v-for="(t, i) in SIDE_TABS"
@@ -439,7 +457,19 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           @close="newTaskOpen = false"
           @submit="submitNewTask"
         />
-        <EmptyState v-if="healthNotice" v-bind="healthNotice" />
+        <div v-if="trackerState.switching" :style="{ padding: 'var(--panel-pad)' }">
+          <Skeleton :lines="6" :height="12" />
+        </div>
+        <EmptyState v-else-if="healthNotice" v-bind="healthNotice">
+          <template v-if="trackerState.health.state === 'not-a-beads-repo'" #action>
+            <Button variant="primary" size="sm" :disabled="initing" @click="initHere">
+              {{ initing ? 'Initializing…' : 'Initialize bd' }}
+            </Button>
+          </template>
+          <template v-else-if="trackerState.health.state === 'no-project'" #action>
+            <Button variant="primary" size="sm" @click="addProject">Add project…</Button>
+          </template>
+        </EmptyState>
         <KanbanBoard
           v-else
           :columns="boardColumns"

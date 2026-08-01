@@ -74,12 +74,15 @@ the event fires microseconds after start, before the webview can subscribe, so t
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
 
-`src/stores/tracker.js` and `src/stores/settings.js` are the **only** files in `src/` that know Tauri
-exists — components see reactive stores and nothing else. `tracker.js` also owns the two
-translations: bd's statuses to the design system's (`open → ready`, `in_progress → running`,
-`closed → done`; everything else, including custom statuses, passes through to `normalizeStatus` and
-gets a hash colour with a 2-letter code), and Rust's diagnostics to short English messages, with the
-raw text left in the console.
+`src/stores/tracker.js`, `src/stores/settings.js` and `src/stores/projects.js` are the **only** files
+in `src/` that know Tauri exists — components see reactive stores and nothing else. `tracker.js` also
+owns the two translations: bd's statuses to the design system's (`open → ready`, `in_progress →
+running`, `closed → done`; everything else, including custom statuses, passes through to
+`normalizeStatus` and gets a hash colour with a 2-letter code), and Rust's diagnostics to short
+English messages, with the raw text left in the console. `projects.js` owns the list of open
+projects, which one is active, and moving between them — settings hold the list's truth, bd holds the
+board's, so a switch reads the new layout with `settings_load` before it asks the tracker to point at
+the new directory — plus offering `bd init` in a folder that has none yet.
 
 In a browser there is no back end, so `src/stores/mockBackend.js` installs the official `mockIPC`
 with the old fixtures: read commands answer, and writes to the tracker reject loudly — a "write"
@@ -109,12 +112,14 @@ and where the tests are; `file.rs` is the disk (atomic write through a per-call 
 `sync_all`ed and renamed, a `.bak` copy of anything unparseable or too new); `commands.rs` is two
 thin commands.
 
-The file keeps appearance and panel layout at the root and everything about content under the
-project's absolute path. There is still one project, so the map holds one entry — but that is the
-shape multi-project will land in. The map never crosses the IPC boundary: `settings_load` returns
-the resolved view for the current directory (`{ appearance, layout, project }`) and `settings_save`
-puts it back, stamps `usedAt` and trims the map to the 20 most recent projects, dropping the
-least recently used and never the current one.
+The file keeps appearance and panel layout at the root; below that, `openProjects` is the list of
+projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
+a map from each project's absolute path to its content state (side tab, active tab, selection,
+expanded folders, `usedAt`). The map never crosses the IPC boundary: `settings_load` returns the
+resolved view for one project (`{ appearance, layout, project, openProjects, activeProject }`) and
+`settings_save` puts it back, stamps `usedAt` on the active project and trims `projects` toward the
+20 most recently used — but never evicts the current project or anything still in `openProjects`, so
+the cap only bites entries from past visits that were closed, not projects a person still has open.
 
 The front end owns the truth here — the opposite of the tracker, where bd owns it.
 `src/stores/settings.js` holds a reactive object and writes it back with a 400 ms debounce, one
