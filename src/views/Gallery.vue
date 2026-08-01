@@ -22,6 +22,7 @@ import {
   Modal,
   NewTaskModal,
   Panel,
+  ProjectList,
   Select,
   Skeleton,
   StatusBadge,
@@ -152,6 +153,33 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           </template>
           <template #right><Panel title="Task" side="right" collapsed /></template>
         </AppShell>
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Projects</div>
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectList
+            :projects="[
+              { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
+              { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }
+            ]"
+            active-path="/Users/you/dev/smetana"
+          />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectList
+            :projects="[
+              { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
+              { path: '/Users/you/notes', name: 'notes', tracked: false }
+            ]"
+            active-path="/Users/you/notes"
+          />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectList :projects="[]" />
+        </div>
       </div>
     </section>
 
