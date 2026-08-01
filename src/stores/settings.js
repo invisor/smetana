@@ -111,8 +111,15 @@ async function closeAfterFlush() {
   closing = true
   /* Вопрос про несохранённые файлы встаёт до дозаписи настроек, а не внутри
      её двухсекундного потолка: настройки можно потерять, чужую работу — нет.
-     Ответ «Отмена» возвращает флаг и оставляет окно открытым. */
-  if (!(await confirmUnsaved())) {
+     Отказ обработчика не имеет права запереть окно: считаем, что закрывать
+     можно, и идём дальше. */
+  let mayClose = true
+  try {
+    mayClose = await confirmUnsaved()
+  } catch (err) {
+    console.error('[settings] вопрос о несохранённом не отработал:', err)
+  }
+  if (!mayClose) {
     closing = false
     return
   }

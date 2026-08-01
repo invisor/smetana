@@ -60,14 +60,14 @@ import {
   activeBuffer,
   closeTab,
   confirmUnsaved,
-  discardAll,
+  discardTabs,
   isDirty,
   onUnsaved,
   openFile,
   promote,
   restoreTabs,
-  saveAll,
   saveTab,
+  saveTabs,
   setText,
   tabList
 } from '../stores/tabs.js'
@@ -334,19 +334,40 @@ onMounted(() =>
   onUnsaved(
     (paths) =>
       new Promise((resolve) => {
+        /* Второй вопрос не имеет права осиротить первый: тот, кто ждёт ответа,
+           получит «нет» и свернёт свою работу штатно, сняв свои флаги. Иначе
+           `moving` в projects.js остался бы взведённым навсегда. */
+        if (unsaved.value) unsaved.value.resolve(false)
         unsaved.value = { paths, resolve }
       })
   )
 )
 
+/* Ответ обязан разрешить обещание при любом исходе: модалки на экране уже нет,
+   а тот, кто ждёт, держит взведённым свой флаг — `closing` в настройках,
+   `moving` в проектах. Неразрешённое обещание здесь означает окно, которое не
+   закрыть, и список проектов, который не переключить. */
 const answerUnsaved = async (answer) => {
   const pending = unsaved.value
   unsaved.value = null
   if (!pending) return
-  if (answer === 'cancel') return pending.resolve(false)
-  if (answer === 'save') await saveAll()
-  else discardAll()
-  pending.resolve(true)
+  try {
+    if (answer === 'cancel') return pending.resolve(false)
+    if (answer === 'save') {
+      await saveTabs(pending.paths)
+      /* Запись могла не удаться — тогда вкладки остались грязными, и пропускать
+         дальше нельзя: закрытие уничтожило бы текст, который просили сохранить.
+         Полоска с причиной отказа уже на экране, человек решит сам. */
+      if (pending.paths.some(isDirty)) return pending.resolve(false)
+    } else {
+      discardTabs(pending.paths)
+    }
+    pending.resolve(true)
+  } catch (err) {
+    /* Повторный resolve безвреден: обещание разрешается один раз. */
+    console.error('[desktop] ответ о несохранённом не отработал:', err)
+    pending.resolve(false)
+  }
 }
 
 const onCloseTab = async (id) => {

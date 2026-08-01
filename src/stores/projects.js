@@ -122,7 +122,11 @@ export async function addProject() {
 
   moving = true
   try {
-    if (!(await confirmUnsaved())) return
+    /* Спрашиваем только там, где будет переезд: выбранный проект уже активен —
+       вкладки остаются на месте, и вопрос был бы вопросом ни о чём. Он всё так
+       же стоит до flushPending: состояние уходящего проекта не должно лечь на
+       диск раньше, чем человек решил, ехать ли вообще. */
+    if (path !== settings.activeProject && !(await confirmUnsaved())) return
     /* Сначала дописываем состояние уходящего проекта, и только потом меняем
        список: запись, начатая после добавления строки, унесла бы состояние
        старого проекта уже под новым списком. Порядок здесь не должен зависеть
@@ -145,11 +149,18 @@ export async function removeProject(path) {
   if (moving) return
   moving = true
   try {
-    if (!(await confirmUnsaved())) return
+    /* Строки уже нет — ни спрашивать, ни писать не о чем. */
+    if (!settings.openProjects.includes(path)) return
+    /* Вопрос — только про переезд. Удаление неактивной строки вкладок не
+       касается вовсе, и «Не сохранять» стёрло бы правки текущего проекта ни за
+       что. И по-прежнему до flushPending — по той же причине, что в switchTo. */
+    if (path === settings.activeProject && !(await confirmUnsaved())) return
     /* Как и в switchTo: состояние уходящего проекта обязано лечь на диск до
        того, как список поменяется, иначе четырёхсотмиллисекундный дебаунс
        перезапишет несохранённую правку уже урезанным списком. */
     await flushPending()
+    /* Индекс берём после ожиданий: вопрос стоит сколько угодно, и место строки
+       за это время могло уехать. */
     const at = settings.openProjects.indexOf(path)
     if (at === -1) return
     settings.openProjects.splice(at, 1)

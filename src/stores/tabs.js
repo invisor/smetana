@@ -172,37 +172,45 @@ export function saveTab(path) {
   const buffer = buffers.get(path)
   if (!buffer || buffer.error || !isDirty(path)) return chain
   const text = buffer.text
-  chain = chain.then(async () => {
-    /* Метку берём в момент выполнения, а не постановки в очередь: первая из
-       двух записей подряд уже сдвинула её на диске, и метка, захваченная при
-       постановке, дала бы `stale` на собственное сохранение. Текст, наоборот,
-       захвачен при постановке — сохраняем то, что человек попросил. */
-    const before = buffers.get(path)
-    if (!before || before.error) return
-    try {
-      const mtime = await writeFile(path, text, before.mtime)
-      const current = buffers.get(path)
-      if (!current) return
-      /* original ставим равным тому, что записали, а не текущему тексту:
-         человек мог продолжить печатать, пока запись летела, и его новые
-         правки обязаны остаться грязными. */
-      buffers.set(path, { ...current, original: text, mtime, saveError: null, stale: false })
-    } catch (error) {
-      const current = buffers.get(path)
-      if (!current) return
-      if (error.kind === 'stale') {
-        /* Ничего не записано и ничего не потеряно. Показываем полоску и ждём
-           решения: перечитать или оставить своё. */
-        buffers.set(path, { ...current, stale: true })
-      } else {
-        /* Отказ записи — не отказ чтения. В `error` живёт «файл не удалось
-           открыть», и оно делает поле нередактируемым; для неудавшегося
-           сохранения это заперло бы набранный текст: ни поправить, ни
-           сохранить заново. */
-        buffers.set(path, { ...current, saveError: error })
+  chain = chain
+    .then(async () => {
+      /* Метку берём в момент выполнения, а не постановки в очередь: первая из
+         двух записей подряд уже сдвинула её на диске, и метка, захваченная при
+         постановке, дала бы `stale` на собственное сохранение. Текст, наоборот,
+         захвачен при постановке — сохраняем то, что человек попросил. */
+      const before = buffers.get(path)
+      if (!before || before.error) return
+      try {
+        const mtime = await writeFile(path, text, before.mtime)
+        const current = buffers.get(path)
+        if (!current) return
+        /* original ставим равным тому, что записали, а не текущему тексту:
+           человек мог продолжить печатать, пока запись летела, и его новые
+           правки обязаны остаться грязными. */
+        buffers.set(path, { ...current, original: text, mtime, saveError: null, stale: false })
+      } catch (error) {
+        const current = buffers.get(path)
+        if (!current) return
+        if (error.kind === 'stale') {
+          /* Ничего не записано и ничего не потеряно. Показываем полоску и ждём
+             решения: перечитать или оставить своё. */
+          buffers.set(path, { ...current, stale: true })
+        } else {
+          /* Отказ записи — не отказ чтения. В `error` живёт «файл не удалось
+             открыть», и оно делает поле нередактируемым; для неудавшегося
+             сохранения это заперло бы набранный текст: ни поправить, ни
+             сохранить заново. */
+          buffers.set(path, { ...current, saveError: error })
+        }
       }
-    }
-  })
+    })
+    /* Отвергнутое обещание, оставленное в цепочке, отравило бы все следующие
+       записи: их `.then` молча пропустил бы тело, и Cmd+S перестал бы что-либо
+       делать до перезапуска. Отказ самой записи разобран выше, сюда попадает
+       только неожиданное — но и оно не имеет права остановить очередь. */
+    .catch((err) => {
+      console.error('[tabs] запись не удалась:', err)
+    })
   return chain
 }
 
@@ -232,16 +240,17 @@ export async function keepMine(path) {
   }
 }
 
-/* Отказ от всего несохранённого — ответ «Не сохранять» в модалке. */
-export function discardAll() {
-  for (const path of project().openTabs) {
+export function saveTabs(paths) {
+  return Promise.all(paths.filter(isDirty).map(saveTab))
+}
+
+/* Отказ от несохранённого в перечисленных вкладках — ответ «Не сохранять».
+   Список обязателен: спросили про одну вкладку — трогаем только её. */
+export function discardTabs(paths) {
+  for (const path of paths) {
     const buffer = buffers.get(path)
     if (buffer) buffers.set(path, { ...buffer, original: buffer.text })
   }
-}
-
-export function saveAll() {
-  return Promise.all(dirtyPaths.value.map(saveTab))
 }
 
 /* Переезд на другой проект: буферы старого проекта не должны пережить его
