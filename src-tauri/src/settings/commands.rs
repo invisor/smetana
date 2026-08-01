@@ -4,10 +4,9 @@
 //! фронте, снаружи их никто не меняет, а файл читается и пишется за
 //! миллисекунды — очередь запросов сторожила бы то, за что никто не борется.
 //!
-//! `current_project()` берёт каталог из `crate::project` — тоже подпорка, а не
-//! замысел. Когда появится «открыть последний проект», зависимость придётся
-//! развернуть: активный проект будет приходить от фронта, а не добываться
-//! здесь самостоятельно.
+//! Активный проект приходит от фронта и лежит в самом файле. Раньше он
+//! добывался у трекера, и это была подпорка: настройки зависели от трекера
+//! ради значения, которое им же и принадлежит.
 
 use std::path::PathBuf;
 
@@ -15,6 +14,7 @@ use tauri::{AppHandle, Manager};
 
 use super::file;
 use super::model::{merge, resolve, ResolvedSettings};
+use crate::project;
 
 /// Ошибок чтения у настроек почти нет: файла может не быть, он может быть
 /// сломан — это обычная жизнь, а не отказ. Настоящих бед две: некуда писать
@@ -41,14 +41,14 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, SettingsError> {
         .map_err(|err| SettingsError::Dir(err.to_string()))
 }
 
-/// Текущий проект — тот же каталог, который смотрит трекер. Функция чистая и
-/// в пределах запуска не меняется, поэтому её просто зовут, а не хранят.
-fn current_project() -> String {
-    crate::project::default_project().unwrap_or_default().to_string_lossy().into_owned()
-}
-
+/// `project` — «покажи состояние вот этого проекта»: так фронт получает
+/// раскладку другого проекта при переключении. Без аргумента отвечаем про
+/// активный из файла.
 #[tauri::command]
-pub async fn settings_load(app: AppHandle) -> Result<ResolvedSettings, SettingsError> {
+pub async fn settings_load(
+    app: AppHandle,
+    project: Option<String>,
+) -> Result<ResolvedSettings, SettingsError> {
     let path = settings_path(&app)?;
     let (settings, problem) = file::load(&path);
     match problem {
@@ -63,7 +63,16 @@ pub async fn settings_load(app: AppHandle) -> Result<ResolvedSettings, SettingsE
         }
         None => {}
     }
-    Ok(resolve(&settings, Some(&current_project())))
+
+    let mut view = resolve(&settings, project.as_deref());
+    // Первый запуск: списка ещё нет. Открываемся тем каталогом, из которого
+    // запустили, если он отслеживается; в список его положит фронт — файл
+    // чтением не меняется.
+    if view.open_projects.is_empty() && view.active_project.is_none() {
+        view.active_project =
+            project::default_project().map(|dir| dir.to_string_lossy().into_owned());
+    }
+    Ok(view)
 }
 
 /// Файл перечитывается на каждую запись: между двумя сохранениями его мог
