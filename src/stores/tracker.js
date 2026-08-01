@@ -15,6 +15,10 @@ export const toUiStatus = (name) => UI_STATUS[name] ?? name
 
 export const trackerState = reactive({
   ready: false,
+  /* Идёт смена проекта. Пока она идёт, дельты игнорируются: они могут
+     относиться и к старому каталогу, и к новому, а истина придёт ответом
+     команды — снимком целиком. */
+  switching: false,
   generation: 0,
   columns: [],
   issues: new Map(),
@@ -110,6 +114,46 @@ export async function resync() {
   }
 }
 
+/* Смена проекта. Ответ команды — снимок нового каталога целиком, поэтому
+   раскатываем его так же, как resync(): с очисткой, иначе задачи прошлого
+   проекта остались бы на доске. */
+export async function setProject(path) {
+  trackerState.switching = true
+  try {
+    applySnapshot(await invoke('tracker_set_project', { path }))
+    trackerState.lastError = null
+  } catch (err) {
+    report('read', err)
+  } finally {
+    trackerState.switching = false
+  }
+}
+
+/* bd init в каталоге активного проекта. Успех приносит доску; отказ уходит
+   наверх — вызывающему есть что показать человеку. */
+export async function initBd() {
+  trackerState.switching = true
+  try {
+    applySnapshot(await invoke('tracker_init'))
+    trackerState.lastError = null
+  } catch (err) {
+    report('write', err)
+    throw err
+  } finally {
+    trackerState.switching = false
+  }
+}
+
+/* Есть ли трекер в этих каталогах — вопрос к файловой системе, не к bd. */
+export async function probeProjects(paths) {
+  try {
+    return await invoke('tracker_probe', { paths })
+  } catch (err) {
+    console.error('[tracker] probe failed:', err)
+    return paths.map((path) => ({ path, tracked: true }))
+  }
+}
+
 /* message в health — диагностика: она по-русски и говорит языком bd. В
    интерфейс идёт короткий текст по одному лишь state, а подробность остаётся
    там, где её ищут при отладке. */
@@ -125,6 +169,7 @@ export async function initTracker() {
   /* Поколение растёт на единицу с каждой дельтой. Разрыв означает, что
      событие потеряно — берём снимок целиком. */
   await listen('tracker:delta', (event) => {
+    if (trackerState.switching) return
     const delta = event.payload
     if (trackerState.ready && delta.generation > trackerState.generation + 1) {
       resync()

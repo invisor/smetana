@@ -14,6 +14,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 const defaults = () => ({
   appearance: { theme: 'dark', density: 'comfortable' },
   layout: { leftCollapsed: false, rightCollapsed: false },
+  openProjects: [],
+  activeProject: null,
   project: {
     sideTab: 'files',
     activeTab: 'kanban',
@@ -66,7 +68,7 @@ function flush() {
 
 /* Отправляет отложенное немедленно и отдаёт обещание, по которому видно,
    когда диск догнал состояние. */
-function flushPending() {
+export function flushPending() {
   if (timer) {
     clearTimeout(timer)
     return flush()
@@ -131,12 +133,16 @@ function watchClose() {
   }
 }
 
-export async function loadSettings() {
+/* `project` — «прочитай состояние вот этого проекта»: так стор проектов
+   забирает раскладку при переключении, не перезапуская приложение. */
+export async function loadSettings(project = null) {
   try {
-    const stored = await invoke('settings_load')
+    const stored = await invoke('settings_load', { project })
     settings.appearance = { ...settings.appearance, ...stored.appearance }
     settings.layout = { ...settings.layout, ...stored.layout }
-    settings.project = { ...settings.project, ...stored.project }
+    settings.project = { ...defaults().project, ...stored.project }
+    settings.openProjects = stored.openProjects ?? []
+    settings.activeProject = stored.activeProject ?? null
   } catch (err) {
     console.error('[settings] прочитать не удалось, берём умолчания:', err)
   }

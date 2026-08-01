@@ -39,6 +39,11 @@ const DEPENDENCY_EDGES = {
   'bd-77e1': ['bd-a1b2', 'bd-7f31']
 }
 
+/* В браузере проектов два, чтобы список в панели было на чём смотреть.
+   Первый — «настоящий», второй — без трекера: без него пометку
+   «здесь нет bd» негде увидеть в npm run dev. */
+const MOCK_PROJECTS = ['/Users/you/dev/smetana', '/Users/you/dev/notes']
+
 function fixtureIssues() {
   return fixtureColumns.flatMap((column) =>
     column.tasks.map((task) => ({
@@ -73,12 +78,25 @@ export function installMockBackend() {
   mockIPC((command) => {
     if (command === 'tracker_snapshot' || command === 'tracker_resync') return snapshot
     if (command === 'tracker_health') return { state: 'ok' }
-    if (command === 'settings_load') return settingsDefaults()
+    if (command === 'settings_load') {
+      return { ...settingsDefaults(), openProjects: MOCK_PROJECTS, activeProject: MOCK_PROJECTS[0] }
+    }
     /* Настройки — не данные трекера: в браузере им негде храниться, и это не
        обман, а отсутствие места. Ронять запись здесь значило бы сыпать
        ошибками на каждое движение панели ради того, что и так очевидно:
        в браузере состояние не переживает перезагрузку. */
     if (command === 'settings_save') return null
+    if (command === 'tracker_set_project') return snapshot
+    if (command === 'tracker_probe') {
+      return MOCK_PROJECTS.map((path) => ({ path, tracked: path === MOCK_PROJECTS[0] }))
+    }
+    /* Выбрать папку в браузере нечем. Отвечаем как отменённый диалог: это
+       отказ, а не выдуманный путь — тем же правилом, по которому здесь
+       отклоняются записи в трекер. */
+    if (command === 'plugin:dialog|open') {
+      console.info('[mockBackend] выбор папки в браузере недоступен — диалог считается отменённым')
+      return null
+    }
     // Любая команда записи (tracker_create/update/close/reopen, и всё, что
     // появится позже) должна отклониться явно, а не молча вернуть похожую на
     // правду, но чужую задачу — иначе в браузере "запись" выглядела бы
