@@ -44,7 +44,7 @@ import {
   removeProject,
   switchTo
 } from '../stores/projects.js'
-import { agents, inspector, logLines, scope, tabs, tree } from './desktopAppData.js'
+import { agents, inspector, logLines, scope, tabs } from './desktopAppData.js'
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -68,6 +68,11 @@ const project = settings.project
    каталогов: в файле, который читают глазами, список честнее карты из
    одних true. */
 const expanded = computed(() => Object.fromEntries(project.expanded.map((path) => [path, true])))
+
+/* Фикстурное дерево уехало из desktopAppData.js в Task 6 — настоящее дерево
+   приходит с диска через stores/files.js, но эта задача его ещё не подключает
+   (см. Task 7 и далее). До тех пор дерево пустое, а не выдуманное. */
+const tree = []
 
 /* The sidebar holds three views of the same worktree, one at a time: its files,
    its git state, the agents working in it.

@@ -2,23 +2,6 @@
    DesktopApp template renders with. Replace with real tracker / agent data. */
 const E = '\u001b'
 
-export const tree = [
-  {
-    path: 'src',
-    name: 'src',
-    kind: 'dir',
-    children: [
-      { path: 'src/tabs.rs', name: 'tabs.rs', git: 'modified' },
-      { path: 'src/agent.rs', name: 'agent.rs', readOnly: true },
-      { path: 'src/worktree.rs', name: 'worktree.rs', git: 'modified' },
-      { path: 'src/scratch.rs', name: 'scratch.rs', git: 'untracked' }
-    ]
-  },
-  { path: 'Cargo.toml', name: 'Cargo.toml' }
-]
-
-export const expanded = { src: true }
-
 export const agents = [
   { name: 'claude-1', task: 'bd-a1b2', elapsed: '2h 14m', state: 'needs-you' },
   { name: 'claude-2', task: 'bd-3c9d', elapsed: '1h 02m', state: 'running' },

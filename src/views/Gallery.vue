@@ -33,7 +33,8 @@ import {
   ToolCall,
   Tooltip
 } from '../components/index.js'
-import { expanded, logLines, tabs, tree } from './desktopAppData.js'
+import { logLines, tabs } from './desktopAppData.js'
+import { MOCK_TREE } from '../stores/mockBackend.js'
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -145,7 +146,11 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <AppShell :height="160" :left-width="180" :right-width="180">
           <template #left>
             <Panel title="Files" side="left">
-              <FileTree :nodes="tree" :expanded="expanded" selected-path="src/tabs.rs" />
+              <FileTree
+                :nodes="MOCK_TREE['']"
+                :expanded="{}"
+                selected-path="Cargo.toml"
+              />
             </Panel>
           </template>
           <template #center>

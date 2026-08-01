@@ -44,6 +44,25 @@ const DEPENDENCY_EDGES = {
    «здесь нет bd» негде увидеть в npm run dev. */
 const MOCK_PROJECTS = ['/Users/you/dev/smetana', '/Users/you/dev/notes']
 
+/* Дерево, которое раньше лежало в views/desktopAppData.js. Настоящее дерево
+   приходит с диска, но в браузере диска нет, а Gallery нужно на чём-то
+   показывать FileTree. Форма — ответы files_list: путь каталога → его записи. */
+export const MOCK_TREE = {
+  '': [
+    { name: 'src', path: 'src', kind: 'dir' },
+    { name: 'Cargo.toml', path: 'Cargo.toml', kind: 'file' }
+  ],
+  src: [
+    { name: 'agent.rs', path: 'src/agent.rs', kind: 'file' },
+    { name: 'scratch.rs', path: 'src/scratch.rs', kind: 'file' },
+    { name: 'tabs.rs', path: 'src/tabs.rs', kind: 'file' },
+    { name: 'worktree.rs', path: 'src/worktree.rs', kind: 'file' }
+  ]
+}
+
+const MOCK_FILE = `fn main() {\n    println!("hello from the mock backend");\n}\n`
+const MOCK_MTIME = 1754006400000
+
 function fixtureIssues() {
   return fixtureColumns.flatMap((column) =>
     column.tasks.map((task) => ({
@@ -110,10 +129,23 @@ export function installMockBackend() {
       console.info('[mockBackend] выбор папки в браузере недоступен — диалог считается отменённым')
       return null
     }
-    // Любая команда записи (tracker_create/update/close/reopen, и всё, что
-    // появится позже) должна отклониться явно, а не молча вернуть похожую на
-    // правду, но чужую задачу — иначе в браузере "запись" выглядела бы
-    // рабочей, ничего не делая.
+    if (command === 'files_list') {
+      const dir = payload?.dir ?? ''
+      /* Каталога, которого нет в фикстуре, в браузере не бывает: отвечаем
+         пустым списком, а не отказом — так дерево остаётся кликабельным. */
+      return { dir, entries: MOCK_TREE[dir] ?? [], truncated: 0 }
+    }
+    if (command === 'files_read') {
+      return { path: payload?.path ?? '', text: MOCK_FILE, mtime: MOCK_MTIME }
+    }
+    /* Ничего не менялось: в браузере файлам меняться неоткуда. */
+    if (command === 'files_stat') {
+      return (payload?.paths ?? []).map((path) => ({ path, mtime: MOCK_MTIME }))
+    }
+    // Любая команда записи (tracker_create/update/close/reopen, files_write,
+    // и всё, что появится позже) должна отклониться явно, а не молча вернуть
+    // похожую на правду, но чужую задачу — иначе в браузере "запись"
+    // выглядела бы рабочей, ничего не делая.
     throw new Error(
       `mockBackend: "${command}" is not implemented — this is a read-only stub for browser ` +
         'dev mode; writes to the tracker require the real Tauri backend (npm run tauri dev).'
