@@ -107,8 +107,13 @@ impl Default for Settings {
     }
 }
 
-/// То, что видит фронт: общее плюс запись текущего проекта. Карты остальных
-/// проектов за границу не выходит — фронт про неё не знает.
+/// То, что видит фронт: общее (`appearance`, `layout`), состояние одного
+/// проекта (`project`), состав списка открытых (`open_projects`) и то, какой
+/// из них активен (`active_project`). Последние два — половина того, что
+/// пересекает IPC: список на экране и подсветка строки берутся из них, и они
+/// же приходят обратно в `settings_save`, потому что истина по составу списка
+/// живёт во фронте. Карта остальных проектов за границу не выходит — фронт
+/// про неё не знает.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ResolvedSettings {
@@ -151,8 +156,26 @@ pub fn parse(text: &str) -> Outcome {
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
     };
+    adopt_last_project(&mut settings);
     settings.validate();
     Outcome::Ok(settings)
+}
+
+/// Файл, написанный до появления списка, знает только `lastProject`. Без этого
+/// шага `validate` увидела бы активного вне пустого списка и обнулила его —
+/// человек, обновивший приложение, встретил бы пустую панель вместо своего
+/// проекта. Версия схемы здесь не помогает: те файлы тоже несут `version: 1`,
+/// поэтому решаем по содержимому.
+///
+/// Только на чтении файла. Пустой список от фронта — это осознанное «я закрыл
+/// последний проект», и воскрешать его нельзя: `ResolvedSettings::validate`
+/// этой поблажки не знает.
+fn adopt_last_project(settings: &mut Settings) {
+    if settings.open_projects.is_empty() {
+        if let Some(last) = settings.last_project.clone() {
+            settings.open_projects.push(last);
+        }
+    }
 }
 
 /// Что отдаём фронту: общее, список открытых и состояние активного проекта.
@@ -586,9 +609,44 @@ mod tests {
 
     #[test]
     fn an_empty_list_leaves_the_app_without_an_active_project() {
-        let settings = settings_of(r#"{"version":1,"openProjects":[],"lastProject":"/gone"}"#);
+        // Так выглядит файл, записанный после закрытия последнего проекта:
+        // список пуст и активного нет. Воскрешать нечего.
+        let settings = settings_of(r#"{"version":1,"openProjects":[],"lastProject":null}"#);
         assert_eq!(settings.last_project, None);
         assert!(settings.open_projects.is_empty());
+    }
+
+    #[test]
+    fn a_file_from_before_the_list_keeps_the_project_it_remembered() {
+        // Файл, написанный до этой ветки: lastProject есть, openProjects нет.
+        let settings = settings_of(r#"{"version":1,"lastProject":"/work/smetana"}"#);
+        assert_eq!(settings.open_projects, vec!["/work/smetana".to_string()], "иначе панель пуста");
+        assert_eq!(settings.last_project.as_deref(), Some("/work/smetana"));
+
+        // Тот же случай, но список записан пустым — по содержимому он
+        // неотличим, и версия схемы (тоже 1) здесь ничего не подсказывает.
+        let settings = settings_of(r#"{"version":1,"openProjects":[],"lastProject":"/work/smetana"}"#);
+        assert_eq!(settings.open_projects, vec!["/work/smetana".to_string()]);
+        assert_eq!(settings.last_project.as_deref(), Some("/work/smetana"));
+    }
+
+    #[test]
+    fn an_empty_list_from_the_front_end_is_not_resurrected() {
+        // Поблажка старым файлам живёт только на чтении файла. Фронт, закрывший
+        // последний проект, шлёт пустой список — и он обязан таким остаться,
+        // иначе удаление последней строки отменялось бы само.
+        let mut file = Settings::default();
+        let resolved = ResolvedSettings {
+            open_projects: Vec::new(),
+            active_project: Some("/work/smetana".into()),
+            ..ResolvedSettings::default()
+        };
+
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
+
+        assert!(file.open_projects.is_empty());
+        assert_eq!(file.last_project, None, "активного вне списка не бывает");
+        assert!(file.projects.is_empty(), "состояние писать некому");
     }
 
     #[test]
