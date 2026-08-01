@@ -25,7 +25,11 @@ const project = () => settings.project
 
 export const isDirty = (path) => {
   const buffer = buffers.get(path)
-  return !!buffer && !buffer.error && buffer.text !== buffer.original
+  /* Ошибка не делает буфер чистым. У файла, который не удалось открыть,
+     text и original пусты, и сравнение само даёт false; а вот текст, который
+     человек успел набрать до отказа чтения, обязан считаться несохранённым —
+     иначе вкладку закроют, не спросив, и он пропадёт молча. */
+  return !!buffer && buffer.text !== buffer.original
 }
 
 export const dirtyPaths = computed(() => project().openTabs.filter(isDirty))
