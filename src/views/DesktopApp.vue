@@ -382,7 +382,14 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
 
 <template>
   <div :style="rootStyle">
-    <ScopeIndicator v-bind="scope" :repo="activePath ? basename(activePath) : '—'" />
+    <!-- Both names come from the open project: a bar that is half true reads
+         worse than one that is honestly fixture. Branch and the counters are
+         still fixture — nothing in the app reads git yet. -->
+    <ScopeIndicator
+      v-bind="scope"
+      :repo="activePath ? basename(activePath) : '—'"
+      :worktree="activePath ? basename(activePath) : '—'"
+    />
 
     <div :style="bodyStyle">
       <!-- left: worktree files and the agents working in it -->
@@ -461,7 +468,12 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           @close="newTaskOpen = false"
           @submit="submitNewTask"
         />
-        <div v-if="trackerState.switching" :style="{ padding: 'var(--panel-pad)' }">
+        <!-- bd init is the one wait that keeps its EmptyState: the skeleton
+             would replace the very sentence that explains what is happening,
+             and the busy button says it better than six grey lines. Every
+             other switch shows the skeleton — there the board is what is
+             being replaced. -->
+        <div v-if="trackerState.switching && !initing" :style="{ padding: 'var(--panel-pad)' }">
           <Skeleton :lines="6" :height="12" />
         </div>
         <EmptyState v-else-if="healthNotice" v-bind="healthNotice">

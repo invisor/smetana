@@ -10,7 +10,6 @@ import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
-import { useInteractive } from '../core/interactive.js'
 
 const props = defineProps({
   projects: { type: Array, default: () => [] },
