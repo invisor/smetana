@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import Button from '../core/Button.vue'
 
 /* Простой текстовый редактор: моноширинный textarea на токенах редактора.
@@ -50,7 +50,6 @@ const areaStyle = computed(() => ({
   background: 'transparent',
   color: 'var(--syn-variable)',
   border: 'none',
-  outline: 'none',
   resize: 'none',
   whiteSpace: 'pre',
   overflow: 'auto',
@@ -60,9 +59,30 @@ const areaStyle = computed(() => ({
 
 /* Tab вставляет отступ, а не уводит фокус: иначе в редакторе нельзя было бы
    набрать ни строчки кода. Выход с клавиатуры остаётся — Escape, потом Tab;
-   так же ведёт себя CodeMirror, и это доступный выход, а не тупик. */
+   так же ведёт себя CodeMirror, и это доступный выход, а не тупик.
+
+   Режим взведён отдельным состоянием (tab-focus mode), а не проверкой «была
+   ли предыдущая клавиша Escape»: Escape ничего не делает с текстом и не
+   мешает набору, поэтому взвод должен пережить лишь одно точное нажатие
+   Tab следом. Любая другая клавиша снимает взвод — иначе человек, нажавший
+   Escape и передумавший продолжить печатать, потерял бы вставку отступа
+   на первом же Tab после случайной буквы. */
+const tabFocusArmed = ref(false)
+
 const onKeydown = (event) => {
-  if (event.key === 'Tab' && !event.shiftKey) {
+  if (event.key === 'Escape') {
+    tabFocusArmed.value = true
+    return
+  }
+  if (event.key === 'Tab' && tabFocusArmed.value) {
+    tabFocusArmed.value = false
+    // preventDefault здесь не нужен — фокус должен уйти по обычным правилам браузера.
+    return
+  }
+  if (event.key !== 'Tab') {
+    tabFocusArmed.value = false
+  }
+  if (event.key === 'Tab' && !event.shiftKey && !props.readOnly) {
     event.preventDefault()
     const el = event.target
     const { selectionStart: from, selectionEnd: to } = el
