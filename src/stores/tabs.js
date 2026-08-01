@@ -68,6 +68,15 @@ async function load(path, { force = false } = {}) {
     })
   } catch (error) {
     if (!buffers.has(path)) return
+    const current = buffers.get(path)
+    /* Тот же случай, что и в ветке успеха: пока файл читался, в буфер могли
+       напечатать. Отказ чтения — не повод выбросить набранное руками, поэтому
+       текст остаётся, а ошибка просто прикладывается к нему. force приходит от
+       reloadTab: там человек сам попросил забыть свои правки. */
+    if (!force && current.text !== current.original) {
+      buffers.set(path, { ...current, error })
+      return
+    }
     buffers.set(path, { text: '', original: '', mtime: 0, error, stale: false })
   }
 }
@@ -103,7 +112,10 @@ export function openFile(path, { permanent = false } = {}) {
     state.openTabs.push(path)
   }
 
-  state.previewTab = permanent ? null : path
+  /* Постоянная вкладка не отменяет чужое превью: если временной была вкладка
+     другого файла, она такой и остаётся. Обнулять `previewTab` тут значило бы
+     снимать курсив со вкладки, к которой человек не прикасался. */
+  if (!permanent) state.previewTab = path
   state.activeTab = path
   load(path)
 }
