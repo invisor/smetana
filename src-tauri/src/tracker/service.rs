@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
@@ -33,33 +33,6 @@ pub enum Request {
 
 #[derive(Clone)]
 pub struct TrackerHandle(pub mpsc::Sender<Request>);
-
-/// Каталог проекта — ближайший предок рабочего каталога, в котором лежит
-/// `.beads`.
-///
-/// Наивный вариант (просто `current_dir`) не работает ни в одном реальном
-/// запуске: под `npm run tauri dev` бинарник стартует из `src-tauri/`, где
-/// никакого `.beads` нет, а у собранного macOS-приложения, открытого из
-/// Finder, рабочий каталог вообще `/`. Поэтому идём вверх по предкам.
-///
-/// Это не выбор проекта: открытый проект по-прежнему один, а настоящий
-/// выбор каталога появится отдельно. Если `.beads` не нашёлся нигде,
-/// возвращаем исходный каталог — воркер честно сообщит `not-a-beads-repo`.
-///
-/// Функция не умеет падать намеренно. Если рабочий каталог прочитать не
-/// удалось (его удалили, песочница не пускает), берём `.`: отказаться
-/// запускаться хуже, чем запуститься и сказать, что не так.
-pub fn project_dir() -> PathBuf {
-    let start = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    nearest_beads_ancestor(&start).unwrap_or(start)
-}
-
-fn nearest_beads_ancestor(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find(|dir| dir.join(".beads").is_dir())
-        .map(Path::to_path_buf)
-}
 
 /// Единственное место с изменяемым состоянием — и оно однопоточное.
 /// Вызов bd стоит около двух секунд, поэтому очередь запросов даёт

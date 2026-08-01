@@ -1,3 +1,4 @@
+mod project;
 mod settings;
 mod tracker;
 
@@ -17,7 +18,10 @@ pub fn run() {
         )?;
       }
       // Проект один — тот, в котором лежит .beads. Выбор каталога появится позже.
-      let handle = tracker::service::start(app.handle().clone(), tracker::service::project_dir());
+      let handle = tracker::service::start(
+        app.handle().clone(),
+        crate::project::default_project().unwrap_or_else(|| std::path::PathBuf::from(".")),
+      );
       app.manage(handle);
       Ok(())
     })

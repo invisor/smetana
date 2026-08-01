@@ -15,7 +15,6 @@ use tauri::{AppHandle, Manager};
 
 use super::file;
 use super::model::{merge, resolve, ResolvedSettings};
-use crate::tracker::service::project_dir;
 
 /// Ошибок чтения у настроек почти нет: файла может не быть, он может быть
 /// сломан — это обычная жизнь, а не отказ. Настоящих бед две: некуда писать
@@ -45,7 +44,7 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, SettingsError> {
 /// Текущий проект — тот же каталог, который смотрит трекер. Функция чистая и
 /// в пределах запуска не меняется, поэтому её просто зовут, а не хранят.
 fn current_project() -> String {
-    project_dir().to_string_lossy().into_owned()
+    crate::project::default_project().unwrap_or_default().to_string_lossy().into_owned()
 }
 
 #[tauri::command]
