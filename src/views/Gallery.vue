@@ -158,27 +158,45 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
 
     <section :style="sectionStyle">
       <div :style="headStyle">Projects</div>
+      <!-- ProjectList carries no header of its own — the surrounding Panel owns
+           "Projects" and the "+" in its actions slot, so the demo wraps it the
+           same way DesktopApp.vue does, to catch the pairing breaking too. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
-        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
-          <ProjectList
-            :projects="[
-              { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
-              { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }
-            ]"
-            active-path="/Users/you/dev/smetana"
-          />
+        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="plus" label="Add project" size="sm" />
+            </template>
+            <ProjectList
+              :projects="[
+                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
+                { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }
+              ]"
+              active-path="/Users/you/dev/smetana"
+            />
+          </Panel>
         </div>
-        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
-          <ProjectList
-            :projects="[
-              { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
-              { path: '/Users/you/notes', name: 'notes', tracked: false }
-            ]"
-            active-path="/Users/you/notes"
-          />
+        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="plus" label="Add project" size="sm" />
+            </template>
+            <ProjectList
+              :projects="[
+                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
+                { path: '/Users/you/notes', name: 'notes', tracked: false }
+              ]"
+              active-path="/Users/you/notes"
+            />
+          </Panel>
         </div>
-        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
-          <ProjectList :projects="[]" />
+        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="plus" label="Add project" size="sm" />
+            </template>
+            <ProjectList :projects="[]" />
+          </Panel>
         </div>
       </div>
     </section>

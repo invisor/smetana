@@ -14,7 +14,7 @@ import { initBd, probeProjects, setProject } from './tracker.js'
    health, но про остальные строки узнать больше неоткуда. */
 const probes = reactive({})
 
-const basename = (path) => path.split('/').filter(Boolean).pop() ?? path
+export const basename = (path) => path.split('/').filter(Boolean).pop() ?? path
 
 export const projectRows = computed(() =>
   settings.openProjects.map((path) => ({
@@ -33,19 +33,43 @@ export async function refreshProbes() {
   for (const row of rows) probes[row.path] = row.tracked
 }
 
-/* Переезд. Порядок важен: сначала дописываем состояние уходящего проекта,
-   потом забираем раскладку нового, и только потом просим доску — она стоит
-   около двух секунд, и всё это время экран показывает скелет. */
-export async function switchTo(path) {
-  if (path === settings.activeProject) return
-  await flushPending()
+/* setProject стоит около двух секунд, и ничто не мешает щёлкнуть по второй
+   строке (или удалить проект), пока едет первая. Без этой метки победил бы
+   тот ответ, что вернулся последним, — не тот клик, что был последним, — и
+   общий finally снял бы trackerState.switching посреди чужого перелёта.
+   switchTo/addProject/removeProject проверяют её первым делом и молча ничего
+   не делают, если переезд уже идёт: доска на это время и так показывает
+   скелет, человеку видно, что работа идёт, а вторая попытка ничего не
+   добавляет. Поднимается и снимается через try/finally, чтобы отказ
+   (например, setProject упал) не запер список навсегда. */
+let moving = false
+
+/* Общая часть переезда: раскладку нового проекта приносит settings_load,
+   задачи — tracker_set_project. Вызывающие сами отвечают за флаг moving и за
+   flushPending() состояния уходящего проекта до вызова. */
+async function moveTo(path) {
   settings.activeProject = path
   await loadSettings(path)
   await setProject(path)
   refreshProbes()
 }
 
+/* Переезд. Порядок важен: сначала дописываем состояние уходящего проекта,
+   потом забираем раскладку нового, и только потом просим доску — она стоит
+   около двух секунд, и всё это время экран показывает скелет. */
+export async function switchTo(path) {
+  if (path === settings.activeProject || moving) return
+  moving = true
+  try {
+    await flushPending()
+    await moveTo(path)
+  } finally {
+    moving = false
+  }
+}
+
 export async function addProject() {
+  if (moving) return
   let picked = null
   try {
     picked = await open({ directory: true, multiple: false, title: 'Add project' })
@@ -55,8 +79,15 @@ export async function addProject() {
   }
   if (!picked) return
 
-  if (!settings.openProjects.includes(picked)) settings.openProjects.push(picked)
-  await switchTo(picked)
+  moving = true
+  try {
+    if (!settings.openProjects.includes(picked)) settings.openProjects.push(picked)
+    if (picked === settings.activeProject) return
+    await flushPending()
+    await moveTo(picked)
+  } finally {
+    moving = false
+  }
 }
 
 /* Удаление из списка. Состояние проекта остаётся в файле настроек и вернётся,
@@ -64,17 +95,25 @@ export async function addProject() {
    строки — предыдущий; опустевший список оставляет окно без проекта, и это
    нормальное состояние. */
 export async function removeProject(path) {
-  const at = settings.openProjects.indexOf(path)
-  if (at === -1) return
-  settings.openProjects.splice(at, 1)
-  delete probes[path]
+  if (moving) return
+  moving = true
+  try {
+    /* Как и в switchTo: состояние уходящего проекта обязано лечь на диск до
+       того, как список поменяется, иначе четырёхсотмиллисекундный дебаунс
+       перезапишет несохранённую правку уже урезанным списком. */
+    await flushPending()
+    const at = settings.openProjects.indexOf(path)
+    if (at === -1) return
+    settings.openProjects.splice(at, 1)
+    delete probes[path]
 
-  if (path !== settings.activeProject) return
+    if (path !== settings.activeProject) return
 
-  const next = settings.openProjects[at] ?? settings.openProjects[at - 1] ?? null
-  settings.activeProject = next
-  await loadSettings(next)
-  await setProject(next)
+    const next = settings.openProjects[at] ?? settings.openProjects[at - 1] ?? null
+    await moveTo(next)
+  } finally {
+    moving = false
+  }
 }
 
 /* bd init в активном каталоге. Ошибку глотаем: её уже показал Toast через

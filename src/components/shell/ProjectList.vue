@@ -1,7 +1,11 @@
 <script setup>
 /* The projects this window is working with: one is active, the rest are one
    click away. A folder with no bd tracker still belongs here — it is a
-   project you added, and the mark says what it is missing, quietly. */
+   project you added, and the mark says what it is missing, quietly.
+
+   No header of its own: the enclosing Panel already shows "Projects" and
+   carries the "+" in its actions slot, so a second copy here would print the
+   same word twice in a row. */
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
@@ -13,29 +17,12 @@ const props = defineProps({
   activePath: { type: String, default: null }
 })
 
-const emit = defineEmits(['select', 'add', 'remove'])
+const emit = defineEmits(['select', 'remove'])
 
 /* Hover has to be per row, and useInteractive tracks one control — so the
    list keeps the hovered path itself and asks useInteractive for nothing.
    Press is not tracked here: a row is not a button, it is a place. */
 const hovered = ref(null)
-
-/* 10px uppercase mono: a label, not a sentence — the same header the panel
-   used for the worktree line. */
-const headerStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 'var(--space-3)',
-  height: 'var(--tab-h)',
-  flex: '0 0 auto',
-  padding: '0 var(--space-3) 0 var(--space-5)',
-  borderBottom: 'var(--border-w) solid var(--border-subtle)',
-  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
-  letterSpacing: 'var(--tracking-caps)',
-  textTransform: 'uppercase',
-  color: 'var(--text-muted)'
-}
 
 /* Five rows and then it scrolls: the file tree under it must not be pushed
    off the bottom of the panel by a long list. */
@@ -86,11 +73,6 @@ const empty = computed(() => props.projects.length === 0)
 
 <template>
   <div :style="{ display: 'flex', flexDirection: 'column', minWidth: 0 }">
-    <div :style="headerStyle">
-      <span>Projects</span>
-      <IconButton icon="plus" label="Add project" size="sm" @click="emit('add')" />
-    </div>
-
     <div v-if="empty" :style="{ padding: 'var(--space-5)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }">
       No projects yet.
     </div>

@@ -21,6 +21,7 @@ import Toast from '../components/overlays/Toast.vue'
 import LogView from '../components/agent/LogView.vue'
 import ProjectList from '../components/shell/ProjectList.vue'
 import Skeleton from '../components/core/Skeleton.vue'
+import IconButton from '../components/core/IconButton.vue'
 import {
   boardColumns,
   closeIssue,
@@ -37,6 +38,7 @@ import {
   activePath,
   addProject,
   adoptInitialProject,
+  basename,
   initActive,
   projectRows,
   removeProject,
@@ -380,7 +382,7 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
 
 <template>
   <div :style="rootStyle">
-    <ScopeIndicator v-bind="scope" :repo="activePath ? activePath.split('/').filter(Boolean).pop() : '—'" />
+    <ScopeIndicator v-bind="scope" :repo="activePath ? basename(activePath) : '—'" />
 
     <div :style="bodyStyle">
       <!-- left: worktree files and the agents working in it -->
@@ -392,12 +394,14 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           :style="{ flex: 1, minWidth: 0 }"
           @toggle="layout.leftCollapsed = !layout.leftCollapsed"
         >
+          <template #actions>
+            <IconButton icon="plus" label="Add project" size="sm" @click="addProject" />
+          </template>
           <div :style="sidebarStyle">
             <ProjectList
               :projects="projectRows"
               :active-path="activePath"
               @select="switchTo"
-              @add="addProject"
               @remove="removeProject"
             />
             <div role="tablist" :style="sideTabBar">

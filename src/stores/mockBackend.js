@@ -75,11 +75,19 @@ export function installMockBackend() {
   })
   const snapshot = { generation: 1, columns, issues }
 
-  mockIPC((command) => {
+  mockIPC((command, payload) => {
     if (command === 'tracker_snapshot' || command === 'tracker_resync') return snapshot
     if (command === 'tracker_health') return { state: 'ok' }
     if (command === 'settings_load') {
-      return { ...settingsDefaults(), openProjects: MOCK_PROJECTS, activeProject: MOCK_PROJECTS[0] }
+      /* project — «прочитай состояние вот этого проекта»: настоящий бэкенд
+         отвечает на него, и заглушка обязана тоже, иначе переключение
+         в браузере нельзя было бы посмотреть — подсветка активной строки
+         откатывалась бы обратно после каждого клика. */
+      return {
+        ...settingsDefaults(),
+        openProjects: MOCK_PROJECTS,
+        activeProject: payload?.project ?? MOCK_PROJECTS[0]
+      }
     }
     /* Настройки — не данные трекера: в браузере им негде храниться, и это не
        обман, а отсутствие места. Ронять запись здесь значило бы сыпать
