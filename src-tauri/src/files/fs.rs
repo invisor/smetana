@@ -412,4 +412,52 @@ mod tests {
         assert!(leftovers.is_empty(), "остались временные файлы: {leftovers:?}");
         let _ = fs::remove_dir_all(&root);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn отказ_при_недостатке_прав_не_оставляет_мусора() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch("deny-create");
+        let subdir = root.join("sub");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("a.txt"), "x\n").unwrap();
+
+        let before = read_text(&root, "sub/a.txt").unwrap();
+
+        // Проверка что права действительно заблокируют операцию.
+        // Если мы под root, права игнорируются и тест молча пройдёт.
+        let test_file = subdir.join(".test");
+        if fs::write(&test_file, "test").is_ok() {
+            let _ = fs::remove_file(&test_file);
+            let _ = fs::remove_dir_all(&root);
+            return; // Под root права не работают, не тестируем.
+        }
+
+        // Снять право записи с подкаталога — это помешает File::create(&temp).
+        fs::set_permissions(&subdir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let err = write_text(&root, "sub/a.txt", "y\n", before.mtime);
+
+        // Вернуть права СРАЗУ, до уборки — иначе remove_dir_all не сможет удалить каталог.
+        fs::set_permissions(&subdir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Проверить отказ.
+        assert!(err.is_err(), "write_text должна вернуть ошибку при недостатке прав на запись");
+
+        // Проверить что temp файлов не осталось. На самом деле при ошибке File::create
+        // temp не создаётся вообще, но проверка гарантирует что нет мусора при любой ошибке.
+        let leftovers: Vec<_> = fs::read_dir(&subdir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "в каталоге не должно быть временных файлов при ошибке: {leftovers:?}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }
