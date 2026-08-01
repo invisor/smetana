@@ -6,7 +6,6 @@ import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
-import ContextMenu from '../overlays/ContextMenu.vue'
 import { useInteractive } from '../core/interactive.js'
 
 const props = defineProps({
@@ -20,25 +19,6 @@ const emit = defineEmits(['select', 'add', 'remove'])
    list keeps the hovered path itself and asks useInteractive for nothing.
    Press is not tracked here: a row is not a button, it is a place. */
 const hovered = ref(null)
-const menuFor = ref(null)
-
-const MENU = [{ label: 'Remove from list' }]
-
-const openMenu = (path) => {
-  menuFor.value = menuFor.value === path ? null : path
-}
-const onMenuSelect = (path) => {
-  menuFor.value = null
-  emit('remove', path)
-}
-
-/* A left click picks the project — and if some other row's menu was left
-   open, it should not go on hanging over a row that is no longer the one
-   the user is looking at. */
-const selectProject = (path) => {
-  menuFor.value = null
-  emit('select', path)
-}
 
 /* 10px uppercase mono: a label, not a sentence — the same header the panel
    used for the worktree line. */
@@ -91,17 +71,14 @@ const rowStyle = (project) => {
 
 const nameStyle = { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 
-/* The menu hangs off its own row — no DOM measuring, and the row is the
-   positioning context (rowStyle sets position: relative). The list itself
-   scrolls (listStyle), so the last row has no room below it: its menu opens
-   upward into the rows already on screen instead of running into the
-   scroll boundary. --z-overlay does not exist as a token; --z-dropdown is
-   what a popped-up menu over other content uses (see shape.css). */
-const menuStyle = (isLast) => ({
-  position: 'absolute',
-  [isLast ? 'bottom' : 'top']: '100%',
-  right: 0,
-  zIndex: 'var(--z-dropdown)'
+/* A context menu here would get clipped by the list's own scroll container
+   (overflow-y in listStyle) no matter which way it opened, and moving it
+   outside the list would mean measuring the DOM for the sake of one single
+   item — so removal is a button, not a menu. The button's box is always in
+   the layout (visibility, not v-if/display), so revealing it on hover or
+   active never shifts the row's own content. */
+const removeButtonStyle = (project) => ({
+  visibility: hovered.value === project.path || project.path === props.activePath ? 'visible' : 'hidden'
 })
 
 const empty = computed(() => props.projects.length === 0)
@@ -120,12 +97,11 @@ const empty = computed(() => props.projects.length === 0)
 
     <div v-else :style="listStyle">
       <div
-        v-for="(p, i) in projects"
+        v-for="p in projects"
         :key="p.path"
         :style="rowStyle(p)"
         :title="p.path"
-        @click="selectProject(p.path)"
-        @contextmenu.prevent="openMenu(p.path)"
+        @click="emit('select', p.path)"
         @mouseenter="hovered = p.path"
         @mouseleave="hovered = null"
       >
@@ -133,10 +109,13 @@ const empty = computed(() => props.projects.length === 0)
         <Tooltip v-if="!p.tracked" label="No bd tracker here" side="right">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
         </Tooltip>
-
-        <div v-if="menuFor === p.path" :style="menuStyle(i === projects.length - 1)">
-          <ContextMenu :items="MENU" :width="180" @select="onMenuSelect(p.path)" />
-        </div>
+        <IconButton
+          icon="x"
+          label="Remove from list"
+          size="sm"
+          :style="removeButtonStyle(p)"
+          @click.stop="emit('remove', p.path)"
+        />
       </div>
     </div>
   </div>
