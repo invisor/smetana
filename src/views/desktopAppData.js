@@ -8,13 +8,6 @@ export const agents = [
   { name: 'claude-3', task: 'bd-7f31', elapsed: '18m', state: 'running' }
 ]
 
-export const tabs = [
-  { id: 'chat', kind: 'pinned', label: 'Chat' },
-  { id: 'kanban', kind: 'pinned', label: 'Kanban' },
-  { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', dirty: true },
-  { id: 'agent.rs', kind: 'preview', label: 'agent.rs' }
-]
-
 export const columns = [
   /* bd always has an open status, so the mock has to as well: ready is the one
      column that takes new tasks, and without it the "+" is nowhere to be seen

@@ -8,7 +8,9 @@
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { listDir, setRoot } from './files.js'
 import { flushPending, loadProjectLayout, settings } from './settings.js'
+import { resetTabs, restoreTabs } from './tabs.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 
 /* Путь → есть ли в нём .beads. Про активный проект то же самое говорит
@@ -59,6 +61,16 @@ let moving = false
 async function moveTo(path) {
   settings.activeProject = path
   await loadProjectLayout(path)
+  /* Дерево и буферы старого проекта не должны пережить его ни на кадр.
+     Список вкладок при этом уже пришёл из настроек нового проекта — его и
+     восстанавливаем. */
+  resetTabs()
+  setRoot(path)
+  if (path) {
+    await listDir('')
+    await Promise.all(settings.project.expanded.map((dir) => listDir(dir)))
+    await restoreTabs()
+  }
   await setProject(path)
   refreshProbes()
 }

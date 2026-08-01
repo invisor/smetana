@@ -44,7 +44,19 @@ import {
   removeProject,
   switchTo
 } from '../stores/projects.js'
-import { agents, inspector, logLines, scope, tabs } from './desktopAppData.js'
+import { agents, inspector, logLines, scope } from './desktopAppData.js'
+import { fileErrorText, filesState, listDir, refreshDirs, setRoot, treeNodes } from '../stores/files.js'
+import {
+  activeBuffer,
+  closeTab,
+  openFile,
+  promote,
+  restoreTabs,
+  saveTab,
+  setText,
+  tabList
+} from '../stores/tabs.js'
+import FileEditor from '../components/files/FileEditor.vue'
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -66,13 +78,10 @@ const project = settings.project
 
 /* FileTree ждёт карту «путь → открыт», а на диске лежит список раскрытых
    каталогов: в файле, который читают глазами, список честнее карты из
-   одних true. */
+   одних true. Set нужен дереву, чтобы знать, куда спускаться. */
+const expandedSet = computed(() => new Set(project.expanded))
 const expanded = computed(() => Object.fromEntries(project.expanded.map((path) => [path, true])))
-
-/* Фикстурное дерево уехало из desktopAppData.js в Task 6 — настоящее дерево
-   приходит с диска через stores/files.js, но эта задача его ещё не подключает
-   (см. Task 7 и далее). До тех пор дерево пустое, а не выдуманное. */
-const tree = []
+const tree = computed(() => treeNodes(expandedSet.value))
 
 /* The sidebar holds three views of the same worktree, one at a time: its files,
    its git state, the agents working in it.
@@ -89,6 +98,17 @@ const SIDE_TABS = [
 const hoveredSideTab = ref(null)
 onMounted(initTracker)
 onMounted(adoptInitialProject)
+
+/* Дерево и вкладки открываются вместе с проектом. Активный проект к этому
+   моменту уже прочитан настройками — App.vue ждёт loadSettings до того, как
+   вообще нарисует этот вид. */
+onMounted(async () => {
+  if (!activePath.value) return
+  setRoot(activePath.value)
+  await listDir('')
+  await Promise.all(project.expanded.map((dir) => listDir(dir)))
+  await restoreTabs()
+})
 const initing = ref(false)
 const initHere = async () => {
   initing.value = true
@@ -247,11 +267,48 @@ const healthNotice = computed(() => {
   return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
 })
 
+/* Вкладка файла — это всё, что не chat и не kanban. Закрытого списка у центра
+   нет и не будет: вкладки приносит проект. */
+const fileTabActive = computed(
+  () => project.activeTab !== 'chat' && project.activeTab !== 'kanban'
+)
+
+const editorNotice = computed(() => {
+  const buffer = activeBuffer.value
+  if (!buffer) return null
+  if (buffer.error) return { tone: 'blocked', text: fileErrorText(buffer.error) }
+  if (buffer.stale) {
+    return { tone: 'stale', text: 'This file changed on disk since it was opened.' }
+  }
+  return null
+})
+
+/* Раскрытие читает каталог, если его ещё не читали. Сворачивание не забывает
+   прочитанное: раскрыть обратно должно быть мгновенно, а свежесть приносит
+   проход по фокусу. */
 const toggleDir = (path) => {
   const at = project.expanded.indexOf(path)
-  if (at === -1) project.expanded.push(path)
-  else project.expanded.splice(at, 1)
+  if (at === -1) {
+    project.expanded.push(path)
+    if (!filesState.dirs.has(path)) listDir(path)
+  } else {
+    project.expanded.splice(at, 1)
+  }
 }
+
+const onSelectFile = (path) => {
+  project.selectedPath = path
+  openFile(path)
+}
+const onOpenFile = (path) => {
+  project.selectedPath = path
+  openFile(path, { permanent: true })
+}
+
+/* Явное обновление дерева. Вотчера у файлов нет намеренно (см. спеку), и это
+   вторая половина ответа на вопрос «а что там сейчас на диске» — первая
+   срабатывает сама при возврате фокуса в окно. */
+const refreshTree = () => refreshDirs(['', ...project.expanded])
 const toggleStream = () => {
   streamState.value = streamState.value === 'streaming' ? 'paused' : 'streaming'
 }
@@ -409,6 +466,12 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           @toggle="layout.leftCollapsed = !layout.leftCollapsed"
         >
           <template #actions>
+            <IconButton
+              icon="refresh-cw"
+              label="Refresh files"
+              size="sm"
+              @click="refreshTree"
+            />
             <IconButton icon="plus" label="Add project" size="sm" @click="addProject" />
           </template>
           <div :style="sidebarStyle">
@@ -425,7 +488,8 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
                 :expanded="expanded"
                 :selected-path="project.selectedPath ?? undefined"
                 @toggle="toggleDir"
-                @select="project.selectedPath = $event"
+                @select="onSelectFile"
+                @open="onOpenFile"
               />
               <EmptyState
                 v-else-if="project.sideTab === 'git'"
@@ -467,7 +531,13 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
 
       <!-- centre: tabs over the board -->
       <div :style="centerStyle">
-        <TabBar :tabs="tabs" :active-id="project.activeTab" @select="project.activeTab = $event" />
+        <TabBar
+          :tabs="tabList"
+          :active-id="project.activeTab"
+          @select="project.activeTab = $event"
+          @close="closeTab"
+          @promote="promote"
+        />
         <NewTaskModal
           :open="newTaskOpen"
           :busy="creating"
@@ -475,12 +545,27 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           @close="newTaskOpen = false"
           @submit="submitNewTask"
         />
+        <!-- Вкладка файла: доска и чат к ней отношения не имеют. -->
+        <FileEditor
+          v-if="fileTabActive"
+          :model-value="activeBuffer?.text ?? ''"
+          :read-only="!!activeBuffer?.error"
+          :notice="editorNotice"
+          @update:model-value="setText(project.activeTab, $event)"
+          @save="saveTab(project.activeTab)"
+        />
+        <EmptyState
+          v-else-if="project.activeTab === 'chat'"
+          icon="message-circle-question-mark"
+          title="No chat yet"
+          description="Talking to an agent from this window is not built. The board and the log are."
+        />
         <!-- bd init is the one wait that keeps its EmptyState: the skeleton
              would replace the very sentence that explains what is happening,
              and the busy button says it better than six grey lines. Every
              other switch shows the skeleton — there the board is what is
              being replaced. -->
-        <div v-if="trackerState.switching && !initing" :style="{ padding: 'var(--panel-pad)' }">
+        <div v-else-if="trackerState.switching && !initing" :style="{ padding: 'var(--panel-pad)' }">
           <Skeleton :lines="6" :height="12" />
         </div>
         <EmptyState v-else-if="healthNotice" v-bind="healthNotice">

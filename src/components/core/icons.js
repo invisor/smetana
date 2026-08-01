@@ -38,6 +38,7 @@ import {
   Pause,
   Play,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Terminal,
@@ -87,6 +88,7 @@ export const iconNodes = {
   'arrow-down-to-line': ArrowDownToLine,
   wrench: Wrench,
   search: Search,
+  'refresh-cw': RefreshCw,
   copy: Copy,
 
   // shell

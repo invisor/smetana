@@ -34,7 +34,7 @@ import {
   ToolCall,
   Tooltip
 } from '../components/index.js'
-import { logLines, tabs } from './desktopAppData.js'
+import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 
 const props = defineProps({
@@ -53,6 +53,15 @@ const editorText = ref('fn main() {\n    println!("hello");\n}\n')
 const choice = ref('running')
 const checked = ref(true)
 const switched = ref(true)
+
+/* Ряд вкладок галереи — свой: в приложении он приходит из стора, а здесь
+   нужен неподвижный набор, показывающий все четыре вида сразу. */
+const tabs = [
+  { id: 'chat', kind: 'pinned', label: 'Chat' },
+  { id: 'kanban', kind: 'pinned', label: 'Kanban' },
+  { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', dirty: true },
+  { id: 'agent.rs', kind: 'preview', label: 'agent.rs' }
+]
 
 /* Reserved statuses plus generated ones, to show both halves of the algorithm. */
 const statuses = [
