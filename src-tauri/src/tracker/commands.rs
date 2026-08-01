@@ -106,6 +106,21 @@ pub async fn tracker_probe(paths: Vec<String>) -> Vec<ProjectProbe> {
         .collect()
 }
 
+/// Каталог, который на самом деле открывают. Ткнули в подкаталог
+/// отслеживаемого репозитория — проектом становится его корень: иначе доска
+/// сказала бы «здесь нет трекера» про репозиторий, у которого он есть, а
+/// кнопка рядом завела бы второй `.beads` внутри первого.
+///
+/// Вопрос к файловой системе, а не к bd, — воркер сюда не зовётся. Ничего
+/// отслеживаемого выше нет: возвращаем путь как есть, это законное «пока не
+/// репозиторий», и предложение `bd init` относится именно к нему.
+#[tauri::command]
+pub async fn project_root(path: String) -> String {
+    crate::project::nearest_tracked_ancestor(std::path::Path::new(&path))
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or(path)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectProbe {
