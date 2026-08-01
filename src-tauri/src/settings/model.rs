@@ -13,6 +13,9 @@ use serde_json::{Map, Value};
 pub const CURRENT_VERSION: u32 = 1;
 /// Сколько проектов помним: карта не должна расти вечно от разовых заходов.
 pub const MAX_PROJECTS: usize = 20;
+/// Сколько проектов можно держать открытыми. Предел не про вкус, а про то,
+/// чтобы список в панели оставался списком, а файл — читаемым.
+pub const MAX_OPEN: usize = 50;
 
 const THEMES: [&str; 2] = ["dark", "light"];
 const DENSITIES: [&str; 2] = ["comfortable", "compact"];
@@ -85,6 +88,9 @@ pub struct Settings {
     pub appearance: Appearance,
     pub layout: Layout,
     pub last_project: Option<String>,
+    /// Состав и порядок списка на экране — порядок добавления, а не свежести:
+    /// строки, прыгающие при каждом переключении, читать нельзя.
+    pub open_projects: Vec<String>,
     pub projects: BTreeMap<String, ProjectState>,
 }
 
@@ -95,6 +101,7 @@ impl Default for Settings {
             appearance: Appearance::default(),
             layout: Layout::default(),
             last_project: None,
+            open_projects: Vec::new(),
             projects: BTreeMap::new(),
         }
     }
@@ -108,6 +115,8 @@ pub struct ResolvedSettings {
     pub appearance: Appearance,
     pub layout: Layout,
     pub project: ProjectState,
+    pub open_projects: Vec<String>,
+    pub active_project: Option<String>,
 }
 
 /// Что вышло из файла.
@@ -139,34 +148,52 @@ pub fn parse(text: &str) -> Outcome {
         appearance: section(&object, "appearance"),
         layout: section(&object, "layout"),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
+        open_projects: section(&object, "openProjects"),
         projects: projects(&object),
     };
     settings.validate();
     Outcome::Ok(settings)
 }
 
-/// Что отдаём фронту: общее плюс запись текущего проекта или умолчания.
-pub fn resolve(file: &Settings, project: &str) -> ResolvedSettings {
+/// Что отдаём фронту: общее, список открытых и состояние активного проекта.
+/// `active` — это «покажи мне вот этот»: так фронт получает состояние другого
+/// проекта при переключении, не перезапуская приложение. Без аргумента берём
+/// активный из файла.
+pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
+    let active = active.map(str::to_owned).or_else(|| file.last_project.clone());
     ResolvedSettings {
         appearance: file.appearance.clone(),
         layout: file.layout.clone(),
-        project: file.projects.get(project).cloned().unwrap_or_default(),
+        project: active
+            .as_deref()
+            .and_then(|path| file.projects.get(path))
+            .cloned()
+            .unwrap_or_default(),
+        open_projects: file.open_projects.clone(),
+        active_project: active,
     }
 }
 
 /// Кладёт разрешённый вид обратно в файл. `now` приходит снаружи, чтобы
 /// функция осталась чистой и проверяемой.
-pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, project: &str, now: String) {
+pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     resolved.validate();
     file.version = CURRENT_VERSION;
     file.appearance = resolved.appearance;
     file.layout = resolved.layout;
-    file.last_project = Some(project.to_owned());
+    file.open_projects = resolved.open_projects;
+    file.last_project = resolved.active_project.clone();
 
-    let mut state = resolved.project;
-    state.used_at = Some(now);
-    file.projects.insert(project.to_owned(), state);
-    trim(&mut file.projects, project);
+    // Закрыли последний проект — состояние писать некому, но список и
+    // внешний вид сохранить всё равно надо.
+    if let Some(active) = resolved.active_project {
+        let mut state = resolved.project;
+        state.used_at = Some(now);
+        file.projects.insert(active.clone(), state);
+        trim(&mut file.projects, Some(&active), &file.open_projects);
+    } else {
+        trim(&mut file.projects, None, &file.open_projects);
+    }
 }
 
 /// Секция читается отдельно от соседей: сломанный тип в одной не должен
@@ -208,23 +235,30 @@ fn migrate(object: Map<String, Value>, from: u64) -> Map<String, Value> {
     }
 }
 
-/// Оставляем MAX_PROJECTS самых свежих. Запись без `usedAt` считается самой
-/// старой: она из файла, написанного руками, и ей нечем себя защитить.
+/// Оставляем MAX_PROJECTS самых свежих среди тех, кого можно выселять.
+/// Запись без `usedAt` считается самой старой: она из файла, написанного
+/// руками, и ей нечем себя защитить.
 ///
 /// `usedAt` сравнивается как момент времени, а не как строка: RFC 3339
 /// допускает и `Z`, и `+00:00`, и любое смещение, и лексикографически они
-/// выстраиваются не по возрасту ('Z' больше '.', `+03:00` вообще не на месте).
-/// Непонятная метка приравнивается к отсутствующей.
+/// выстраиваются не по возрасту. Непонятная метка приравнивается к
+/// отсутствующей.
 ///
-/// Текущий проект не выселяется никогда — не потому, что его метка самая
-/// свежая (это совпадение), а потому, что он исключён из отбора.
-fn trim(projects: &mut BTreeMap<String, ProjectState>, current: &str) {
+/// Не выселяются никогда двое: текущий проект и любой открытый. Из-за этого
+/// MAX_PROJECTS перестаёт быть жёстким размером карты — она держит всех
+/// открытых плюс закрытых, пока общее число не дойдёт до предела. Предел
+/// ставился против роста от разовых заходов, а не против того, что человек
+/// открыл сам.
+fn trim(projects: &mut BTreeMap<String, ProjectState>, current: Option<&str>, open: &[String]) {
     if projects.len() <= MAX_PROJECTS {
         return;
     }
+    let protected =
+        |path: &str| current == Some(path) || open.iter().any(|p| p == path);
+
     let mut ordered: Vec<(String, Option<DateTime<FixedOffset>>)> = projects
         .iter()
-        .filter(|(path, _)| path.as_str() != current)
+        .filter(|(path, _)| !protected(path))
         .map(|(path, state)| {
             let stamp =
                 state.used_at.as_deref().and_then(|text| DateTime::parse_from_rfc3339(text).ok());
@@ -233,12 +267,10 @@ fn trim(projects: &mut BTreeMap<String, ProjectState>, current: &str) {
         .collect();
     // None меньше любого Some, поэтому по убыванию свежие оказываются впереди.
     ordered.sort_by(|a, b| b.1.cmp(&a.1));
-    // Место под текущий проект уже занято, если он в карте есть.
-    let keep = if projects.contains_key(current) {
-        MAX_PROJECTS.saturating_sub(1)
-    } else {
-        MAX_PROJECTS
-    };
+
+    // Места, занятые неприкосновенными, уже потрачены.
+    let taken = projects.len() - ordered.len();
+    let keep = MAX_PROJECTS.saturating_sub(taken);
     for (path, _) in ordered.into_iter().skip(keep) {
         projects.remove(&path);
     }
@@ -252,9 +284,8 @@ impl Settings {
         for state in self.projects.values_mut() {
             state.validate();
         }
-        if self.last_project.as_deref() == Some("") {
-            self.last_project = None;
-        }
+        sane_paths(&mut self.open_projects, MAX_OPEN);
+        active_in(&mut self.last_project, &self.open_projects);
     }
 }
 
@@ -262,6 +293,8 @@ impl ResolvedSettings {
     pub fn validate(&mut self) {
         self.appearance.validate();
         self.project.validate();
+        sane_paths(&mut self.open_projects, MAX_OPEN);
+        active_in(&mut self.active_project, &self.open_projects);
     }
 }
 
@@ -281,10 +314,7 @@ impl ProjectState {
         forget_if_junk(&mut self.selected_task, MAX_ID_LEN);
         forget_if_junk(&mut self.selected_path, MAX_PATH_LEN);
 
-        let mut seen = HashSet::new();
-        self.expanded
-            .retain(|path| !path.is_empty() && path.len() <= MAX_PATH_LEN && seen.insert(path.clone()));
-        self.expanded.truncate(MAX_EXPANDED);
+        sane_paths(&mut self.expanded, MAX_EXPANDED);
     }
 }
 
@@ -301,6 +331,24 @@ fn forget_if_junk(value: &mut Option<String>, max: usize) {
         if text.is_empty() || text.len() > max {
             *value = None;
         }
+    }
+}
+
+/// Список путей — из файла или из фронта. Пустые строки и слишком длинные
+/// пути мусор, дубли бессмысленны, а длина ограничена.
+fn sane_paths(paths: &mut Vec<String>, max: usize) {
+    let mut seen = HashSet::new();
+    paths.retain(|path| !path.is_empty() && path.len() <= MAX_PATH_LEN && seen.insert(path.clone()));
+    paths.truncate(max);
+}
+
+/// Активный проект обязан быть в списке открытых: иначе доска показывала бы
+/// то, чего в списке нет, и ни одна строка не была бы подсвечена. Пустой
+/// список — это законное «проектов нет», а не поломка.
+fn active_in(active: &mut Option<String>, open: &[String]) {
+    let known = active.as_deref().is_some_and(|path| open.iter().any(|p| p == path));
+    if !known {
+        *active = open.first().cloned();
     }
 }
 
@@ -373,9 +421,11 @@ mod tests {
                 selected_task: Some("bd-a1b2".into()),
                 ..ProjectState::default()
             },
+            open_projects: vec!["/work/smetana".into()],
+            active_project: Some("/work/smetana".into()),
         };
 
-        merge(&mut file, resolved, "/work/smetana", "2026-08-01T09:12:00+00:00".into());
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
 
         assert_eq!(file.version, CURRENT_VERSION);
         assert_eq!(file.appearance.theme, "light");
@@ -393,9 +443,11 @@ mod tests {
             appearance: Appearance { theme: "neon".into(), density: "comfortable".into() },
             layout: Layout::default(),
             project: ProjectState { side_tab: "tarot".into(), ..ProjectState::default() },
+            open_projects: vec!["/p".into()],
+            active_project: Some("/p".into()),
         };
 
-        merge(&mut file, resolved, "/p", "2026-08-01T09:12:00+00:00".into());
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
 
         assert_eq!(file.appearance.theme, "dark", "проверка на входе, а не только на выходе");
         assert_eq!(file.projects["/p"].side_tab, "files");
@@ -432,7 +484,12 @@ mod tests {
             );
         }
 
-        merge(&mut file, ResolvedSettings::default(), "/p-new", "2026-08-01T00:00:00+00:00".into());
+        let resolved = ResolvedSettings {
+            open_projects: vec!["/p-new".into()],
+            active_project: Some("/p-new".into()),
+            ..ResolvedSettings::default()
+        };
+        merge(&mut file, resolved, "2026-08-01T00:00:00+00:00".into());
 
         assert_eq!(file.projects.len(), MAX_PROJECTS);
         assert!(file.projects.contains_key("/p-new"), "текущий проект остаётся всегда");
@@ -480,7 +537,7 @@ mod tests {
 
         assert_eq!(projects.len(), MAX_PROJECTS + 1, "проверка на входе: обрезка должна случиться");
 
-        trim(&mut projects, "/current");
+        trim(&mut projects, Some("/current"), &[]);
 
         assert_eq!(projects.len(), MAX_PROJECTS);
         assert!(projects.contains_key("/current"), "текущий проект не выселяется никогда");
@@ -501,6 +558,112 @@ mod tests {
     #[test]
     fn resolve_gives_defaults_for_an_unknown_project() {
         let file = settings_of(r#"{"version":1,"projects":{"/other":{"sideTab":"agents"}}}"#);
-        assert_eq!(resolve(&file, "/mine").project, ProjectState::default());
+        assert_eq!(resolve(&file, Some("/mine")).project, ProjectState::default());
+    }
+
+    #[test]
+    fn open_projects_lose_blanks_duplicates_and_overlong_paths() {
+        let long = "x".repeat(MAX_PATH_LEN + 1);
+        let text = serde_json::json!({
+            "version": 1,
+            "openProjects": ["/a", "/a", "", long, "/b"],
+            "lastProject": "/a"
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(settings.open_projects, vec!["/a".to_string(), "/b".to_string()]);
+    }
+
+    #[test]
+    fn the_active_project_has_to_be_in_the_list() {
+        let settings = settings_of(r#"{"version":1,"openProjects":["/a","/b"],"lastProject":"/gone"}"#);
+        assert_eq!(settings.last_project.as_deref(), Some("/a"), "чужой активный заменяется первым из списка");
+
+        let settings = settings_of(r#"{"version":1,"openProjects":["/a","/b"]}"#);
+        assert_eq!(settings.last_project.as_deref(), Some("/a"), "список есть, активного нет — берём первый");
+    }
+
+    #[test]
+    fn an_empty_list_leaves_the_app_without_an_active_project() {
+        let settings = settings_of(r#"{"version":1,"openProjects":[],"lastProject":"/gone"}"#);
+        assert_eq!(settings.last_project, None);
+        assert!(settings.open_projects.is_empty());
+    }
+
+    #[test]
+    fn merge_writes_the_list_and_the_active_project() {
+        let mut file = Settings::default();
+        let resolved = ResolvedSettings {
+            open_projects: vec!["/one".into(), "/two".into()],
+            active_project: Some("/two".into()),
+            project: ProjectState { selected_task: Some("bd-a1b2".into()), ..ProjectState::default() },
+            ..ResolvedSettings::default()
+        };
+
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
+
+        assert_eq!(file.open_projects, vec!["/one".to_string(), "/two".to_string()]);
+        assert_eq!(file.last_project.as_deref(), Some("/two"));
+        assert_eq!(file.projects["/two"].selected_task.as_deref(), Some("bd-a1b2"));
+        assert!(!file.projects.contains_key("/one"), "состояние пишется только для активного проекта");
+    }
+
+    #[test]
+    fn merge_without_an_active_project_writes_no_state() {
+        let mut file = Settings::default();
+
+        merge(&mut file, ResolvedSettings::default(), "2026-08-01T09:12:00+00:00".into());
+
+        assert_eq!(file.last_project, None);
+        assert!(file.projects.is_empty(), "закрыли последний проект — писать состояние некому");
+    }
+
+    #[test]
+    fn trim_never_evicts_an_open_project() {
+        let mut file = Settings::default();
+        // Самая старая запись из всех — и при этом открытая.
+        file.projects.insert(
+            "/open-and-ancient".into(),
+            ProjectState { used_at: Some("2000-01-01T00:00:00+00:00".into()), ..ProjectState::default() },
+        );
+        for i in 0..MAX_PROJECTS + 5 {
+            file.projects.insert(
+                format!("/p{i:02}"),
+                ProjectState {
+                    used_at: Some(format!("2026-01-{:02}T00:00:00+00:00", i + 1)),
+                    ..ProjectState::default()
+                },
+            );
+        }
+
+        let resolved = ResolvedSettings {
+            open_projects: vec!["/open-and-ancient".into(), "/current".into()],
+            active_project: Some("/current".into()),
+            ..ResolvedSettings::default()
+        };
+        merge(&mut file, resolved, "2026-08-01T00:00:00+00:00".into());
+
+        assert!(file.projects.contains_key("/open-and-ancient"), "открытый проект не выселяется, как бы стар ни был");
+        assert!(file.projects.contains_key("/current"));
+        assert!(!file.projects.contains_key("/p00"), "закрытые проекты уходят от самого старого");
+        assert!(file.projects.len() <= MAX_PROJECTS.max(2));
+    }
+
+    #[test]
+    fn resolve_carries_the_list_and_the_state_of_the_asked_project() {
+        let file = settings_of(
+            r#"{"version":1,"openProjects":["/a","/b"],"lastProject":"/a",
+                "projects":{"/b":{"sideTab":"agents"}}}"#,
+        );
+
+        let view = resolve(&file, Some("/b"));
+        assert_eq!(view.active_project.as_deref(), Some("/b"));
+        assert_eq!(view.project.side_tab, "agents");
+        assert_eq!(view.open_projects, vec!["/a".to_string(), "/b".to_string()]);
+
+        let view = resolve(&file, None);
+        assert_eq!(view.active_project.as_deref(), Some("/a"), "без аргумента — активный из файла");
+        assert_eq!(view.project, ProjectState::default());
     }
 }

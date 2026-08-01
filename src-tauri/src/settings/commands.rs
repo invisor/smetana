@@ -63,7 +63,7 @@ pub async fn settings_load(app: AppHandle) -> Result<ResolvedSettings, SettingsE
         }
         None => {}
     }
-    Ok(resolve(&settings, &current_project()))
+    Ok(resolve(&settings, Some(&current_project())))
 }
 
 /// Файл перечитывается на каждую запись: между двумя сохранениями его мог
@@ -85,6 +85,6 @@ pub async fn settings_save(app: AppHandle, settings: ResolvedSettings) -> Result
         )));
     }
 
-    merge(&mut stored, settings, &current_project(), chrono::Utc::now().to_rfc3339());
+    merge(&mut stored, settings, chrono::Utc::now().to_rfc3339());
     file::save(&path, &stored).map_err(SettingsError::Write)
 }
