@@ -61,7 +61,9 @@ function report(where, error) {
 export function setRoot(path) {
   filesState.root = path
   filesState.dirs = new Map()
-  filesState.loading = new Set()
+  /* Экземпляр не подменяется намеренно: иначе finally уже летящего чтения
+     снял бы пометку с чужого, только что начатого запроса на новом Set. */
+  filesState.loading.clear()
   filesState.lastError = null
 }
 
@@ -154,8 +156,7 @@ export function treeNodes(expandedSet) {
       nodes.push({
         path: `${dir}\u0000more`,
         name: `…${listing.truncated} more`,
-        kind: 'file',
-        readOnly: true
+        kind: 'file'
       })
     }
     return nodes
