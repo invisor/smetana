@@ -48,7 +48,7 @@ const rowStyle = (project) => {
       : hovered.value === project.path
         ? 'var(--surface-hover)'
         : 'transparent',
-    boxShadow: active ? 'inset 2px 0 0 0 var(--text-primary)' : 'none',
+    boxShadow: active ? 'inset var(--border-w-strong) 0 0 0 var(--text-primary)' : 'none',
     color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
     font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
     cursor: 'default',
