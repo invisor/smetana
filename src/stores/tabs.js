@@ -43,13 +43,22 @@ export const tabList = computed(() => [
 
 export const activeBuffer = computed(() => buffers.get(project().activeTab) ?? null)
 
-async function load(path) {
+async function load(path, { force = false } = {}) {
   buffers.set(path, { text: '', original: '', mtime: 0, error: null, stale: false })
   try {
     const file = await readFile(path)
     /* Пока файл читался, вкладку могли закрыть или сменить проект. Класть
        содержимое в буфер, которого уже нет, значило бы воскресить вкладку. */
     if (!buffers.has(path)) return
+    const current = buffers.get(path)
+    /* Пока файл читался, в буфер могли напечатать. Содержимое с диска не
+       должно стирать набранное: забираем только метку времени, текст остаётся
+       человеку, вкладка остаётся грязной. force приходит от reloadTab — там
+       перезапись и есть то, о чём попросили. */
+    if (!force && current.text !== current.original) {
+      buffers.set(path, { ...current, mtime: file.mtime })
+      return
+    }
     buffers.set(path, {
       text: file.text,
       original: file.text,
@@ -79,7 +88,11 @@ export function openFile(path, { permanent = false } = {}) {
     return
   }
 
-  const previewAt = state.previewTab ? state.openTabs.indexOf(state.previewTab) : -1
+  /* Место временной вкладки занимает только другая временная. Двойной клик
+     открывает постоянную рядом: слот превью принадлежит тому файлу, который
+     сейчас просматривают, и клик по третьему файлу не должен его выселять. */
+  const previewAt =
+    !permanent && state.previewTab ? state.openTabs.indexOf(state.previewTab) : -1
   if (previewAt !== -1) {
     /* Замена на том же месте: ряд не должен перестраиваться от того, что
        человек просматривает файлы один за другим. Временная вкладка никогда
@@ -138,8 +151,14 @@ export function saveTab(path) {
   if (!buffer || buffer.error || !isDirty(path)) return chain
   const text = buffer.text
   chain = chain.then(async () => {
+    /* Метку берём в момент выполнения, а не постановки в очередь: первая из
+       двух записей подряд уже сдвинула её на диске, и метка, захваченная при
+       постановке, дала бы `stale` на собственное сохранение. Текст, наоборот,
+       захвачен при постановке — сохраняем то, что человек попросил. */
+    const before = buffers.get(path)
+    if (!before || before.error) return
     try {
-      const mtime = await writeFile(path, text, buffer.mtime)
+      const mtime = await writeFile(path, text, before.mtime)
       const current = buffers.get(path)
       if (!current) return
       /* original ставим равным тому, что записали, а не текущему тексту:
@@ -171,7 +190,7 @@ export function markStale(path) {
 /* «Перечитать»: содержимое с диска побеждает, правки уходят. */
 export async function reloadTab(path) {
   if (!buffers.has(path)) return
-  await load(path)
+  await load(path, { force: true })
 }
 
 /* «Оставить моё»: полоска гаснет, но метка буфера догоняет диск — иначе
