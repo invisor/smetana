@@ -27,12 +27,7 @@ const OVERLAP_SECONDS: i64 = 5;
 pub enum Request {
     Health(oneshot::Sender<Health>),
     Snapshot(oneshot::Sender<Snapshot>),
-    // Ничто ещё не отправляет эти два варианта — command-обвязку строит
-    // задача 6. `handle` их уже разбирает; атрибут снимет задача 6 вместе с
-    // первой командой, которая их сконструирует.
-    #[allow(dead_code)]
     SetProject(Option<PathBuf>, oneshot::Sender<Snapshot>),
-    #[allow(dead_code)]
     InitTracker(oneshot::Sender<Result<Snapshot, TrackerError>>),
     Resync(oneshot::Sender<Result<Snapshot, TrackerError>>),
     Create(NewIssue, oneshot::Sender<Result<Issue, TrackerError>>),

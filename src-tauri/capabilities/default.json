@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
-    "window-state:default"
+    "window-state:default",
+    "dialog:allow-open"
   ]
 }

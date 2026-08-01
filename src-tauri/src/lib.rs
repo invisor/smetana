@@ -9,6 +9,7 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_window_state::Builder::default().build())
+    .plugin(tauri_plugin_dialog::init())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -17,11 +18,21 @@ pub fn run() {
             .build(),
         )?;
       }
-      // Проект один — тот, в котором лежит .beads. Выбор каталога появится позже.
-      let handle = tracker::service::start(
-        app.handle().clone(),
-        crate::project::default_project(),
-      );
+      // Чем открыться, знает файл настроек: там лежит активный проект прошлого
+      // запуска. Читаем его здесь, а не ждём фронт, — доска успевает
+      // загрузиться, пока поднимается вебвью. Файла нет или список пуст —
+      // берём каталог, из которого запустили, если он отслеживается; иначе
+      // проекта нет, и это нормальное состояние, а не сбой.
+      let initial = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("settings.json"))
+        .and_then(|path| settings::file::load(&path).0.last_project)
+        .map(std::path::PathBuf::from)
+        .or_else(project::default_project);
+
+      let handle = tracker::service::start(app.handle().clone(), initial);
       app.manage(handle);
       Ok(())
     })
@@ -33,6 +44,9 @@ pub fn run() {
       tracker::commands::tracker_update,
       tracker::commands::tracker_close,
       tracker::commands::tracker_reopen,
+      tracker::commands::tracker_set_project,
+      tracker::commands::tracker_init,
+      tracker::commands::tracker_probe,
       settings::commands::settings_load,
       settings::commands::settings_save,
     ])

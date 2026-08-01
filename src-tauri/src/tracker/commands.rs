@@ -71,3 +71,44 @@ pub async fn tracker_reopen(
 ) -> Result<Issue, TrackerError> {
     ask(&handle, |tx| Request::Reopen(id, tx)).await?
 }
+
+/// Переезд на другой каталог. `None` означает «проектов не осталось»:
+/// доска пустеет, а воркер продолжает жить и ждать следующего проекта.
+/// Ответ — снимок нового проекта целиком: дельты, пришедшие по дороге,
+/// фронт на время переключения не слушает.
+#[tauri::command]
+pub async fn tracker_set_project(
+    handle: State<'_, TrackerHandle>,
+    path: Option<String>,
+) -> Result<Snapshot, TrackerError> {
+    let dir = path.map(std::path::PathBuf::from);
+    ask(&handle, |tx| Request::SetProject(dir, tx)).await
+}
+
+/// `bd init` в каталоге активного проекта. Успех сразу возвращает доску:
+/// каталог стал репозиторием, и воркер уже перечитал его.
+#[tauri::command]
+pub async fn tracker_init(handle: State<'_, TrackerHandle>) -> Result<Snapshot, TrackerError> {
+    ask(&handle, Request::InitTracker).await?
+}
+
+/// Есть ли трекер в этих каталогах. Вопрос про файловую систему, а не про bd:
+/// воркер сюда не зовётся, вызов стоит один `is_dir` на путь. Без него про
+/// каталог без трекера человек узнавал бы, только кликнув по нему.
+#[tauri::command]
+pub async fn tracker_probe(paths: Vec<String>) -> Vec<ProjectProbe> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let tracked = crate::project::has_tracker(std::path::Path::new(&path));
+            ProjectProbe { path, tracked }
+        })
+        .collect()
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectProbe {
+    pub path: String,
+    pub tracked: bool,
+}

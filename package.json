@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2",
     "lucide": "^0.469.0",
     "vue": "^3.5.13"
   },
