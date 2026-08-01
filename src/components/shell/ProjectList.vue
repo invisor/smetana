@@ -91,16 +91,18 @@ const rowStyle = (project) => {
 
 const nameStyle = { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 
-/* The menu hangs off its own row — top: 100% needs nothing measured, and the
-   row is the positioning context (rowStyle sets position: relative). --z-overlay
-   does not exist as a token; --z-dropdown is what a popped-up menu over other
-   content uses (see shape.css). */
-const menuStyle = {
+/* The menu hangs off its own row — no DOM measuring, and the row is the
+   positioning context (rowStyle sets position: relative). The list itself
+   scrolls (listStyle), so the last row has no room below it: its menu opens
+   upward into the rows already on screen instead of running into the
+   scroll boundary. --z-overlay does not exist as a token; --z-dropdown is
+   what a popped-up menu over other content uses (see shape.css). */
+const menuStyle = (isLast) => ({
   position: 'absolute',
-  top: '100%',
+  [isLast ? 'bottom' : 'top']: '100%',
   right: 0,
   zIndex: 'var(--z-dropdown)'
-}
+})
 
 const empty = computed(() => props.projects.length === 0)
 </script>
@@ -118,7 +120,7 @@ const empty = computed(() => props.projects.length === 0)
 
     <div v-else :style="listStyle">
       <div
-        v-for="p in projects"
+        v-for="(p, i) in projects"
         :key="p.path"
         :style="rowStyle(p)"
         :title="p.path"
@@ -132,7 +134,7 @@ const empty = computed(() => props.projects.length === 0)
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
         </Tooltip>
 
-        <div v-if="menuFor === p.path" :style="menuStyle">
+        <div v-if="menuFor === p.path" :style="menuStyle(i === projects.length - 1)">
           <ContextMenu :items="MENU" :width="180" @select="onMenuSelect(p.path)" />
         </div>
       </div>
