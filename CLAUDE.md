@@ -48,10 +48,10 @@ screen — the file tree, the agents, the log — is still fixture state in `vie
 
 ### The tracker bridge
 
-The board shows the **bd** issue tracker of the directory the app was opened in, and follows it as
-it changes, no matter who changed it: this window, an agent, or a person in a terminal. bd has no
-daemon and no API — its CLI is the API, and one call costs about two seconds. Hence the shape of
-`src-tauri/src/tracker/`:
+The board shows the **bd** issue tracker of the active project's directory — chosen from the project
+list, and remembered between runs — and follows it as it changes, no matter who changed it: this
+window, an agent, or a person in a terminal. bd has no daemon and no API — its CLI is the API, and
+one call costs about two seconds. Hence the shape of `src-tauri/src/tracker/`:
 
 | file | what it does |
 |---|---|
@@ -69,7 +69,14 @@ out as a delta without waiting for the watcher. `generation` advances by exactly
 delta; the front end resyncs when it sees a gap. `store.rs` and the argument builders in `bd.rs` are
 pure and carry the unit tests.
 
-Health (`ok`, `not-a-beads-repo`, `bd-version-mismatch`, `error`) is both an event and a command:
+Which directory that is comes from `src-tauri/src/project.rs` — the vocabulary the tracker and the
+settings share: `has_tracker`, `nearest_tracked_ancestor` (a folder inside a tracked repository
+resolves to its root, so the list, the settings key and the worker all name the same directory) and
+`default_project` for the very first run. Picking a folder is the `tauri-plugin-dialog` open dialog,
+allowed by `dialog:allow-open` in `capabilities/default.json`; the picked path is normalized once,
+by the `project_root` command, before it reaches the list.
+
+Health (`ok`, `no-project`, `not-a-beads-repo`, `bd-version-mismatch`, `error`) is both an event and a command:
 the event fires microseconds after start, before the webview can subscribe, so the worker also
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
@@ -80,9 +87,10 @@ owns the two translations: bd's statuses to the design system's (`open → ready
 running`, `closed → done`; everything else, including custom statuses, passes through to
 `normalizeStatus` and gets a hash colour with a 2-letter code), and Rust's diagnostics to short
 English messages, with the raw text left in the console. `projects.js` owns the list of open
-projects, which one is active, and moving between them — settings hold the list's truth, bd holds the
-board's, so a switch reads the new layout with `settings_load` before it asks the tracker to point at
-the new directory — plus offering `bd init` in a folder that has none yet.
+projects, which one is active, and moving between them — the front end holds the list's truth, bd
+holds the board's, so a switch reads the new project's layout with `settings_load` (only the layout:
+the list on disk is already the past by then) before it asks the tracker to point at the new
+directory — plus offering `bd init` in a folder that has none yet.
 
 In a browser there is no back end, so `src/stores/mockBackend.js` installs the official `mockIPC`
 with the old fixtures: read commands answer, and writes to the tracker reject loudly — a "write"
@@ -128,8 +136,10 @@ for the debounce: the store holds the close through `onCloseRequested`, flushes 
 ceiling and then destroys the window itself — the window always closes, a slow back end costs the
 last edit rather than the app.
 
-Nothing about settings is reachable from the interface: there is no settings screen and no theme
-switch. `?theme=` and `?density=` still override both for one run and are deliberately **not**
+There is no settings screen and no theme switch: appearance and layout are only ever changed by
+using the app. The one part of `settings.json` the interface does edit directly is the project list —
+adding, switching and removing rows is what writes `openProjects` and `lastProject`.
+`?theme=` and `?density=` still override both for one run and are deliberately **not**
 written back — one visit to the dev server must not repaint the app forever. `?view=gallery`
 neither reads nor writes.
 
@@ -140,7 +150,10 @@ it is logged *and* `settings_save` refuses: overwriting a file nobody could read
 sight unseen. Damage is contained field by field where it can be: a single field whose *value* is
 outside its allowed set loses that field, while a section whose *type* is wrong
 (`{"layout": {"leftCollapsed": "yes"}}`) fails to deserialize and loses the whole section to its
-defaults — the same holds for one project entry among many.
+defaults — the same holds for one project entry among many. A file written before the list existed
+carries `lastProject` and no `openProjects`; reading it makes the list that one project, so an update
+does not open to an empty panel. That leniency lives on the file-reading side only — an empty list
+coming from the front end means the last project was closed on purpose and stays empty.
 
 The side-tab set is a closed list written out twice, in `model.rs` and in `views/DesktopApp.vue`.
 Changing one without the other is silent: the value survives the session and comes back as Files.
