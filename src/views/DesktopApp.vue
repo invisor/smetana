@@ -45,7 +45,15 @@ import {
   switchTo
 } from '../stores/projects.js'
 import { agents, inspector, logLines, scope } from './desktopAppData.js'
-import { fileErrorText, filesState, listDir, refreshDirs, setRoot, treeNodes } from '../stores/files.js'
+import {
+  fileErrorText,
+  filesState,
+  listDir,
+  refreshDirs,
+  saveErrorText,
+  setRoot,
+  treeNodes
+} from '../stores/files.js'
 import {
   activeBuffer,
   closeTab,
@@ -273,6 +281,11 @@ const fileTabActive = computed(
   () => project.activeTab !== 'chat' && project.activeTab !== 'kanban'
 )
 
+/* Порядок ветвей — от «файла нет как текста» к «файл есть, но с ним что-то
+   случилось»: `error` запирает поле и объясняет пустоту, `stale` спрашивает
+   решение и потому единственный несёт кнопки, `saveError` только сообщает.
+   Тон у отказа записи тихий, как у остальных: правки на месте, поле осталось
+   редактируемым, следующий Cmd+S — обычная попытка, а не восстановление. */
 const editorNotice = computed(() => {
   const buffer = activeBuffer.value
   if (!buffer) return null
@@ -280,6 +293,7 @@ const editorNotice = computed(() => {
   if (buffer.stale) {
     return { tone: 'stale', text: 'This file changed on disk since it was opened.' }
   }
+  if (buffer.saveError) return { tone: 'blocked', text: saveErrorText(buffer.saveError) }
   return null
 })
 

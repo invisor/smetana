@@ -186,7 +186,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       </div>
       <div :style="{ height: '120px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
         <FileEditor
-          model-value="локальные правки"
+          model-value="my local edits"
           :notice="{ tone: 'stale', text: 'This file changed on disk since it was opened.' }"
         />
       </div>

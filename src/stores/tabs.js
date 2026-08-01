@@ -14,9 +14,14 @@ export const PINNED = [
   { id: 'kanban', kind: 'pinned', label: 'Kanban' }
 ]
 
-/* Путь → { text, original, mtime, error, stale }.
+/* Путь → { text, original, mtime, error, saveError, stale }.
    text/original различаются ровно тогда, когда вкладка грязная.
    error — отказ чтения ({ kind, message }); тогда text пуст и правки нет.
+   saveError — отказ записи ({ kind, message }). Разделены намеренно: error
+   значит «файла нет как текста», и потому запирает поле (readOnly у вкладки и
+   у редактора), а отказ записи оставляет и текст, и право его править —
+   иначе набранное оказалось бы заперто ровно в тот момент, когда его не
+   удалось сохранить. Гаснет при первой удавшейся записи.
    stale — файл уехал на диске под грязной вкладкой; сама метка тут не нужна,
    нужен только факт, а свежую метку принесёт keepMine или reloadTab. */
 export const buffers = reactive(new Map())
@@ -48,7 +53,7 @@ export const tabList = computed(() => [
 export const activeBuffer = computed(() => buffers.get(project().activeTab) ?? null)
 
 async function load(path, { force = false } = {}) {
-  buffers.set(path, { text: '', original: '', mtime: 0, error: null, stale: false })
+  buffers.set(path, { text: '', original: '', mtime: 0, error: null, saveError: null, stale: false })
   try {
     const file = await readFile(path)
     /* Пока файл читался, вкладку могли закрыть или сменить проект. Класть
@@ -68,6 +73,7 @@ async function load(path, { force = false } = {}) {
       original: file.text,
       mtime: file.mtime,
       error: null,
+      saveError: null,
       stale: false
     })
   } catch (error) {
@@ -81,7 +87,7 @@ async function load(path, { force = false } = {}) {
       buffers.set(path, { ...current, error })
       return
     }
-    buffers.set(path, { text: '', original: '', mtime: 0, error, stale: false })
+    buffers.set(path, { text: '', original: '', mtime: 0, error, saveError: null, stale: false })
   }
 }
 
@@ -180,7 +186,7 @@ export function saveTab(path) {
       /* original ставим равным тому, что записали, а не текущему тексту:
          человек мог продолжить печатать, пока запись летела, и его новые
          правки обязаны остаться грязными. */
-      buffers.set(path, { ...current, original: text, mtime, stale: false })
+      buffers.set(path, { ...current, original: text, mtime, saveError: null, stale: false })
     } catch (error) {
       const current = buffers.get(path)
       if (!current) return
@@ -189,7 +195,11 @@ export function saveTab(path) {
            решения: перечитать или оставить своё. */
         buffers.set(path, { ...current, stale: true })
       } else {
-        buffers.set(path, { ...current, error })
+        /* Отказ записи — не отказ чтения. В `error` живёт «файл не удалось
+           открыть», и оно делает поле нередактируемым; для неудавшегося
+           сохранения это заперло бы набранный текст: ни поправить, ни
+           сохранить заново. */
+        buffers.set(path, { ...current, saveError: error })
       }
     }
   })

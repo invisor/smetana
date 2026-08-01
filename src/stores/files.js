@@ -43,6 +43,22 @@ export function fileErrorText(error) {
   return ERRORS[error?.kind] ?? ERRORS.io
 }
 
+/* Те же машинные виды ошибок, но про запись. Отдельная карта, а не общая:
+   фраза «No permission to read this file.» после отказавшегося Cmd+S говорит
+   не о том, что произошло, и человек ищет причину не там. Ключа `stale` здесь
+   нет намеренно — устаревшую метку разбирает своя ветка с кнопками. */
+const SAVE_ERRORS = {
+  notFound: 'This file is gone from disk — nothing was written.',
+  denied: 'No permission to write this file.',
+  notAFile: 'This is not a file — nothing was written.',
+  outside: 'That path is outside the project — nothing was written.',
+  io: 'Could not save this file.'
+}
+
+export function saveErrorText(error) {
+  return SAVE_ERRORS[error?.kind] ?? SAVE_ERRORS.io
+}
+
 /* Ошибка из Tauri приезжает объектом { kind, message }; ошибка доставки (мок
    бросил Error, IPC не поднялся) — чем угодно. Приводим к одной форме, чтобы
    вызывающие не разбирали два случая. */
