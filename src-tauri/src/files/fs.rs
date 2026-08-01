@@ -353,6 +353,17 @@ mod tests {
             "моё\n",
             "при отказе на диске не должно измениться ничего"
         );
+
+        // Проверка, что Stale отказ случился ДО создания temp файла.
+        // Если кто-нибудь переставит сверку mtime за File::create, этот тест упадёт.
+        let leftovers: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "Stale отказ должен случиться ДО создания temp файла: {leftovers:?}");
+
         let _ = fs::remove_dir_all(&root);
     }
 
