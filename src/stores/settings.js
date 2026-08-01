@@ -5,7 +5,7 @@
    Разница с трекером принципиальная: там истина снаружи, в bd, и хранилище
    догоняет её дельтами. Здесь истина в этом объекте — настройки меняет только
    этот интерфейс, а Rust отвечает за схему и диск. */
-import { reactive, watch } from 'vue'
+import { nextTick, reactive, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
@@ -67,8 +67,19 @@ function flush() {
 }
 
 /* Отправляет отложенное немедленно и отдаёт обещание, по которому видно,
-   когда диск догнал состояние. */
-export function flushPending() {
+   когда диск догнал состояние.
+
+   Ждать тик обязательно: вотчер настроек отложен на микрозадачу, поэтому тот,
+   кто поменял поле и тут же позвал нас в том же синхронном блоке (так делает
+   стор проектов перед сменой списка), застал бы timer ещё не заведённым.
+   Без ожидания "дожимать нечего" означало бы всего лишь "ещё не успело", и
+   правка уходящего проекта легла бы на диск позже — уже с чужим списком.
+
+   Обещание разрешается всегда: nextTick — микрозадача, а не поход наружу, так
+   что и обработчик закрытия окна с его двухсекундным потолком, и beforeunload
+   получают то же, что получали, только на тик позже. */
+export async function flushPending() {
+  await nextTick()
   if (timer) {
     clearTimeout(timer)
     return flush()
@@ -133,14 +144,29 @@ function watchClose() {
   }
 }
 
-/* `project` — «прочитай состояние вот этого проекта»: так стор проектов
-   забирает раскладку при переключении, не перезапуская приложение. */
-export async function loadSettings(project = null) {
+/* Секции сливаются на месте, а не подменяются целиком: вид захватывает
+   settings.layout и settings.project по ссылке один раз, при создании, и
+   подмена объекта оставила бы его читать и писать то, чего в настройках уже
+   нет — раскладка нового проекта не появилась бы на экране, а всё, что человек
+   поменял бы дальше, не попало бы на диск.
+
+   Порядок аргументов важен: умолчания идут перед сохранённым, поэтому проект,
+   которого нет в карте, начинается с чистого состояния, а не донашивает поля
+   предыдущего. */
+function applySection(target, fallback, stored) {
+  Object.assign(target, fallback, stored)
+}
+
+/* Чтение при старте: применяет всё — внешний вид, раскладку, список проектов
+   и активного. Зовётся один раз; переключение проектов ходит за раскладкой
+   через loadProjectLayout, потому что состав списка знает фронт, а не диск. */
+export async function loadSettings() {
   try {
-    const stored = await invoke('settings_load', { project })
-    settings.appearance = { ...settings.appearance, ...stored.appearance }
-    settings.layout = { ...settings.layout, ...stored.layout }
-    settings.project = { ...defaults().project, ...stored.project }
+    const stored = await invoke('settings_load', { project: null })
+    const base = defaults()
+    applySection(settings.appearance, base.appearance, stored.appearance)
+    applySection(settings.layout, base.layout, stored.layout)
+    applySection(settings.project, base.project, stored.project)
     settings.openProjects = stored.openProjects ?? []
     settings.activeProject = stored.activeProject ?? null
   } catch (err) {
@@ -156,4 +182,27 @@ export async function loadSettings(project = null) {
     watching = true
   }
   return settings
+}
+
+/* Раскладка одного проекта — и только она. Так стор проектов забирает
+   состояние нового проекта при переключении, не перезапуская приложение.
+   Список открытых, активный и внешний вид эта функция не трогает намеренно:
+   их истина живёт во фронте, и ответ с диска — заведомо прошлое (переезд
+   начинается раньше, чем дебаунс успевает дописать новый список). Взять
+   оттуда список значило бы вернуть только что удалённый проект или потерять
+   только что добавленный. */
+export async function loadProjectLayout(project) {
+  /* Проектов не осталось. Раскладке взяться неоткуда, а settings_load без
+     аргумента ответил бы про активного из файла, то есть про только что
+     закрытый проект: ставим умолчания. */
+  if (!project) {
+    Object.assign(settings.project, defaults().project)
+    return
+  }
+  try {
+    const stored = await invoke('settings_load', { project })
+    applySection(settings.project, defaults().project, stored.project)
+  } catch (err) {
+    console.error('[settings] раскладку проекта прочитать не удалось:', err)
+  }
 }

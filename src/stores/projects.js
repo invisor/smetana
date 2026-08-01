@@ -6,15 +6,19 @@
    интерфейс), истина по доске — в bd. Поэтому переключение и состоит из двух
    половин: раскладку приносит settings_load, задачи — tracker_set_project. */
 import { computed, reactive } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { flushPending, loadSettings, settings } from './settings.js'
+import { flushPending, loadProjectLayout, settings } from './settings.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 
 /* Путь → есть ли в нём .beads. Про активный проект то же самое говорит
    health, но про остальные строки узнать больше неоткуда. */
 const probes = reactive({})
 
-export const basename = (path) => path.split('/').filter(Boolean).pop() ?? path
+/* Разделитель у путей свой на каждой системе, а среди целевых вебвью есть и
+   WebView2: режем по обоим, иначе в Windows именем проекта стал бы весь путь
+   целиком. */
+export const basename = (path) => path.split(/[/\\]/).filter(Boolean).pop() ?? path
 
 export const projectRows = computed(() =>
   settings.openProjects.map((path) => ({
@@ -46,10 +50,15 @@ let moving = false
 
 /* Общая часть переезда: раскладку нового проекта приносит settings_load,
    задачи — tracker_set_project. Вызывающие сами отвечают за флаг moving и за
-   flushPending() состояния уходящего проекта до вызова. */
+   flushPending() состояния уходящего проекта до вызова.
+
+   С диска берётся только раскладка (loadProjectLayout). Список открытых и
+   активный остаются такими, какими их сделал этот файл: на диске в этот
+   момент лежит заведомо прошлое, и полный loadSettings вернул бы удалённый
+   проект обратно или стёр только что добавленный. */
 async function moveTo(path) {
   settings.activeProject = path
-  await loadSettings(path)
+  await loadProjectLayout(path)
   await setProject(path)
   refreshProbes()
 }
@@ -68,6 +77,20 @@ export async function switchTo(path) {
   }
 }
 
+/* Выбрали подкаталог отслеживаемого репозитория — открывается его корень.
+   Нормализуем ровно один раз, до того как путь попадёт в список: ключ в
+   настройках, строка в списке и каталог воркера обязаны быть одним и тем же
+   путём. Ничего отслеживаемого выше нет — путь остаётся как есть, и человеку
+   предложат bd init прямо в нём. */
+async function projectRoot(path) {
+  try {
+    return await invoke('project_root', { path })
+  } catch (err) {
+    console.error('[projects] корень проекта определить не удалось:', err)
+    return path
+  }
+}
+
 export async function addProject() {
   if (moving) return
   let picked = null
@@ -78,6 +101,7 @@ export async function addProject() {
     return
   }
   if (!picked) return
+  const path = await projectRoot(picked)
   /* Диалог сам стоит сколько угодно — переезд мог начаться и кончиться, пока
      человек выбирал папку, так что флаг проверяется заново после возврата,
      не только на входе в функцию. */
@@ -85,10 +109,15 @@ export async function addProject() {
 
   moving = true
   try {
-    if (!settings.openProjects.includes(picked)) settings.openProjects.push(picked)
-    if (picked === settings.activeProject) return
+    /* Сначала дописываем состояние уходящего проекта, и только потом меняем
+       список: запись, начатая после добавления строки, унесла бы состояние
+       старого проекта уже под новым списком. Порядок здесь не должен зависеть
+       от того, успел ли завестись таймер дебаунса, — за это отвечает сама
+       flushPending. */
     await flushPending()
-    await moveTo(picked)
+    if (!settings.openProjects.includes(path)) settings.openProjects.push(path)
+    if (path === settings.activeProject) return
+    await moveTo(path)
   } finally {
     moving = false
   }
