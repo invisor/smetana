@@ -1,4 +1,5 @@
 <script setup>
+import { nextTick, ref, watch } from 'vue'
 import IconButton from '../core/IconButton.vue'
 import Tab from './Tab.vue'
 
@@ -9,6 +10,26 @@ const props = defineProps({
 })
 
 defineEmits(['select', 'close', 'promote'])
+
+/* Полоса вкладок прокручивается, но её собственная полоса прокрутки скрыта
+   (sm-scroll-hidden), а меню переполнения (overflowCount) не подключено —
+   без этого активная вкладка может целиком уехать за край и стать
+   недостижимой без прокрутки, которую нечем даже нащупать. Поэтому при
+   смене активной вкладки контейнер сам подводит её в видимую часть.
+   nextTick обязателен: в момент срабатывания watch новая вкладка ещё может
+   быть не отрисована в DOM. block: 'nearest' — не менее важен, чем inline:
+   без него браузер заодно потянет вертикальную прокрутку страницы. Плавную
+   прокрутку не включаем — в этой системе движение не несёт смысла. */
+const scrollerRef = ref(null)
+
+watch(
+  () => props.activeId,
+  async () => {
+    await nextTick()
+    const el = scrollerRef.value?.querySelector('[aria-selected="true"]')
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+)
 
 const barStyle = {
   display: 'flex',
@@ -29,7 +50,11 @@ const overflowStyle = {
 
 <template>
   <div role="tablist" :style="barStyle">
-    <div class="sm-scroll-hidden" :style="{ display: 'flex', minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }">
+    <div
+      ref="scrollerRef"
+      class="sm-scroll-hidden"
+      :style="{ display: 'flex', minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }"
+    >
       <Tab
         v-for="t in props.tabs"
         :key="t.id"

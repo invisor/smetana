@@ -47,6 +47,11 @@ const areaStyle = computed(() => ({
   minHeight: 0,
   width: '100%',
   padding: 'var(--space-4) var(--space-5)',
+  // В проекте нет глобального box-sizing: border-box, а width: 100% в паре
+  // с padding по умолчанию считается content-box — поле оказывается шире
+  // своей колонки на сумму горизонтальных отступов. border-box держит его
+  // в границах панели вместе с отступами.
+  boxSizing: 'border-box',
   background: 'transparent',
   color: 'var(--syn-variable)',
   border: 'none',
