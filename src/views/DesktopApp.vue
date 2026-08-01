@@ -272,22 +272,24 @@ const leftStyle = computed(() => ({
   display: 'flex',
   minWidth: 0
 }))
-/* Panel scrolls its slot as one block; the worktree line and the tab row have
-   to stay put, so only what is under them scrolls. */
+/* Panel scrolls its slot as one block; the worktree line above and the tab row
+   below have to stay put, so only what is between them scrolls. */
 const sidebarStyle = {
   display: 'flex',
   flexDirection: 'column',
   height: '100%',
   minHeight: 0
 }
-/* The sidebar's own tab row: same height and top accent as the document tabs,
-   but micro type, because these are section names and not open files. */
+/* The sidebar's own tab row: same height as the document tabs but micro type,
+   because these are section names and not open files. It sits at the foot of
+   the column, so the accent and the rule are the document tabs' mirrored —
+   both on the outer edge, away from the content they reveal. */
 const sideTabBar = {
   display: 'flex',
   alignItems: 'stretch',
   height: 'var(--tab-h)',
   flex: '0 0 auto',
-  borderBottom: 'var(--border-w) solid var(--border-subtle)'
+  borderTop: 'var(--border-w) solid var(--border-subtle)'
 }
 const sideTabStyle = (tab, last) => {
   const active = project.sideTab === tab.id
@@ -306,7 +308,7 @@ const sideTabStyle = (tab, last) => {
       : hoveredSideTab.value === tab.id
         ? 'var(--surface-hover)'
         : 'transparent',
-    boxShadow: active ? 'inset 0 2px 0 0 var(--text-primary)' : 'none',
+    boxShadow: active ? 'inset 0 -2px 0 0 var(--text-primary)' : 'none',
     borderRight: last ? undefined : 'var(--border-w) solid var(--border-subtle)',
     cursor: 'default',
     transition: 'var(--transition-control)'
@@ -411,21 +413,6 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
               @select="switchTo"
               @remove="removeProject"
             />
-            <div role="tablist" :style="sideTabBar">
-              <div
-                v-for="(t, i) in SIDE_TABS"
-                :key="t.id"
-                role="tab"
-                :aria-selected="project.sideTab === t.id"
-                :tabindex="project.sideTab === t.id ? 0 : -1"
-                :style="sideTabStyle(t, i === SIDE_TABS.length - 1)"
-                @click="project.sideTab = t.id"
-                @mouseenter="hoveredSideTab = t.id"
-                @mouseleave="hoveredSideTab = null"
-              >
-                {{ t.label }}
-              </div>
-            </div>
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
                 v-if="project.sideTab === 'files'"
@@ -453,6 +440,21 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
                   </span>
                 </div>
               </template>
+            </div>
+            <div role="tablist" :style="sideTabBar">
+              <div
+                v-for="(t, i) in SIDE_TABS"
+                :key="t.id"
+                role="tab"
+                :aria-selected="project.sideTab === t.id"
+                :tabindex="project.sideTab === t.id ? 0 : -1"
+                :style="sideTabStyle(t, i === SIDE_TABS.length - 1)"
+                @click="project.sideTab = t.id"
+                @mouseenter="hoveredSideTab = t.id"
+                @mouseleave="hoveredSideTab = null"
+              >
+                {{ t.label }}
+              </div>
             </div>
           </div>
         </Panel>
