@@ -33,6 +33,15 @@ impl Store {
         }
     }
 
+    /// Смена проекта: снимок принадлежал прошлому каталогу и неверен целиком.
+    /// Поколение не сбрасывается — оно сквозное для окна, и откат назад фронт
+    /// прочитал бы как разрыв нумерации, то есть как потерянное событие.
+    pub fn reset(&mut self) {
+        self.issues.clear();
+        self.columns.clear();
+        self.last_seen.clear();
+    }
+
     /// Возвращает true, если набор колонок действительно изменился.
     pub fn set_columns(&mut self, columns: Vec<ColumnDef>) -> bool {
         if self.columns == columns {
@@ -199,5 +208,24 @@ mod tests {
 
         assert!(!store.set_columns(columns), "тот же набор дельты не порождает");
         assert_eq!(store.generation(), 1);
+    }
+
+    #[test]
+    fn сброс_чистит_снимок_но_не_поколение() {
+        let mut store = Store::default();
+        store.set_columns(vec![ColumnDef { name: "open".into(), category: "active".into() }]);
+        store.apply_full(vec![issue("a", "open", "2026-07-31T00:00:01Z")]);
+        let before = store.generation();
+
+        store.reset();
+
+        let snapshot = store.snapshot();
+        assert!(snapshot.issues.is_empty(), "задачи принадлежали прошлому проекту");
+        assert!(snapshot.columns.is_empty(), "колонки тоже: у другого трекера они свои");
+        assert_eq!(store.last_seen(), "", "иначе первая догрузка нового проекта попросит только свежее");
+        assert_eq!(
+            snapshot.generation, before,
+            "поколение сквозное: откат назад фронт прочитал бы как потерянное событие"
+        );
     }
 }

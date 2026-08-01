@@ -20,7 +20,7 @@ pub fn run() {
       // Проект один — тот, в котором лежит .beads. Выбор каталога появится позже.
       let handle = tracker::service::start(
         app.handle().clone(),
-        crate::project::default_project().unwrap_or_else(|| std::path::PathBuf::from(".")),
+        crate::project::default_project(),
       );
       app.manage(handle);
       Ok(())

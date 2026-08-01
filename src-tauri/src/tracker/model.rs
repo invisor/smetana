@@ -97,6 +97,9 @@ pub struct IssuePatch {
 #[serde(rename_all = "kebab-case")]
 pub enum HealthState {
     Ok,
+    /// Список проектов пуст. Это не «здесь нет .beads» — открывать пока
+    /// нечего, и сказать об этом надо иначе.
+    NoProject,
     NotABeadsRepo,
     BdVersionMismatch,
     Error,

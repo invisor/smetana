@@ -1,9 +1,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use notify::RecommendedWatcher;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
+
+use crate::project;
 
 use super::bd::Bd;
 use super::model::{Delta, Health, HealthState, Issue, IssuePatch, NewIssue, Snapshot, TrackerError};
@@ -24,6 +27,13 @@ const OVERLAP_SECONDS: i64 = 5;
 pub enum Request {
     Health(oneshot::Sender<Health>),
     Snapshot(oneshot::Sender<Snapshot>),
+    // Ничто ещё не отправляет эти два варианта — command-обвязку строит
+    // задача 6. `handle` их уже разбирает; атрибут снимет задача 6 вместе с
+    // первой командой, которая их сконструирует.
+    #[allow(dead_code)]
+    SetProject(Option<PathBuf>, oneshot::Sender<Snapshot>),
+    #[allow(dead_code)]
+    InitTracker(oneshot::Sender<Result<Snapshot, TrackerError>>),
     Resync(oneshot::Sender<Result<Snapshot, TrackerError>>),
     Create(NewIssue, oneshot::Sender<Result<Issue, TrackerError>>),
     Update(String, IssuePatch, oneshot::Sender<Result<Issue, TrackerError>>),
@@ -34,139 +44,64 @@ pub enum Request {
 #[derive(Clone)]
 pub struct TrackerHandle(pub mpsc::Sender<Request>);
 
-/// Единственное место с изменяемым состоянием — и оно однопоточное.
-/// Вызов bd стоит около двух секунд, поэтому очередь запросов даёт
-/// понятный порядок вместо непредсказуемых блокировок на мьютексе.
-pub fn start(app: AppHandle, project_dir: PathBuf) -> TrackerHandle {
-    let (tx_req, mut rx_req) = mpsc::channel::<Request>(32);
-    let (tx_tick, mut rx_tick) = mpsc::channel::<WatchEvent>(16);
-
-    tauri::async_runtime::spawn(async move {
-        let mut store = Store::default();
-        let mut health = HealthReporter::new(app.clone());
-
-        let beads_dir = project_dir.join(".beads");
-        if !beads_dir.is_dir() {
-            health.degrade(
-                HealthState::NotABeadsRepo,
-                format!("в {} нет каталога .beads", project_dir.display()),
-            );
-            // Событие уходит раньше, чем фронт успевает на него подписаться,
-            // поэтому воркер остаётся жив: tracker_health переспросит, а
-            // tracker_snapshot получит пустой снимок вместо ошибки «воркер не
-            // запущен». Ни bd, ни watcher здесь не трогаем и пересканов не
-            // делаем — смена каталога придёт вместе с пикером.
-            while let Some(request) = rx_req.recv().await {
-                handle(&app, None, &mut store, &mut health, request).await;
-            }
-            return;
-        }
-
-        let bd = Bd::new(app.clone(), project_dir.clone());
-
-        match bd.version().await {
-            Ok(Some(version)) if version == EXPECTED_BD_VERSION => {}
-            Ok(other) => health.degrade(
-                HealthState::BdVersionMismatch,
-                format!("ожидалась версия bd {EXPECTED_BD_VERSION}, получена {other:?}"),
-            ),
-            Err(e) => health.failed(&e),
-        }
-
-        // Держим watcher живым до конца работы воркера.
-        let _watcher = match watcher::spawn(beads_dir, tx_tick.clone()) {
-            Ok(w) => Some(w),
-            Err(e) => {
-                health.degrade(
-                    HealthState::Error,
-                    format!(
-                        "не удалось следить за .beads: {e}; остаётся только периодическая сверка"
-                    ),
-                );
-                None
-            }
-        };
-
-        // Первую сверку никто не ждёт: о неудаче уже рассказал health.
-        let _ = full_sync(&app, &bd, &mut store, &mut health).await;
-
-        let mut ticker = tokio::time::interval(FULL_RESYNC);
-        // По умолчанию пропущенные тики (машина спала, вызов bd затянулся)
-        // срабатывают подряд — несколько двухсекундных полных сверок одна за
-        // другой сразу после затыка. Delay сдвигает расписание вместо этого.
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        ticker.tick().await; // первый срабатывает мгновенно
-
-        // Срок отложенной догрузки — состояние цикла, а не await внутри ветки:
-        // пока идёт debounce, воркер обязан отвечать на команды. Каждая запись
-        // из интерфейса будит watcher, и раньше следующее действие
-        // пользователя ждало конца этой паузы.
-        let mut due: Option<Instant> = None;
-
-        loop {
-            tokio::select! {
-                request = rx_req.recv() => {
-                    // Отправители кончились — фронта больше нет, работать не для кого.
-                    let Some(request) = request else { break };
-                    handle(&app, Some(&bd), &mut store, &mut health, request).await;
-                }
-                Some(event) = rx_tick.recv() => match event {
-                    // Срок задаёт первое событие, остальные к нему прилипают:
-                    // пачка записей схлопывается в одну догрузку.
-                    WatchEvent::Changed => { due.get_or_insert_with(|| Instant::now() + DEBOUNCE); }
-                    WatchEvent::Failed(message) => health.degrade(
-                        HealthState::Error,
-                        format!(
-                            "слежение за .beads прекратилось: {message}; \
-                             остаётся только периодическая сверка"
-                        ),
-                    ),
-                },
-                // Значение по умолчанию не используется никогда: без срока
-                // ветка выключена, а условие select! вычисляет раньше выражения.
-                _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
-                    due = None;
-                    incremental_sync(&app, &bd, &mut store, &mut health).await;
-                }
-                _ = ticker.tick() => {
-                    // Периодическую сверку тоже никто не ждёт.
-                    let _ = full_sync(&app, &bd, &mut store, &mut health).await;
-                }
-            }
-        }
-    });
-
-    TrackerHandle(tx_req)
+/// Каталог, на который сейчас смотрит воркер.
+struct Project {
+    dir: PathBuf,
+    /// bd нужен и каталогу без трекера: именно им делается init.
+    bd: Bd,
+    /// Слежение живёт, только пока в каталоге есть трекер. Поле держит
+    /// watcher живым — при уничтожении слежение прекращается молча.
+    _watcher: Option<RecommendedWatcher>,
+    /// Был ли `.beads` в момент открытия каталога.
+    tracked: bool,
 }
 
-/// Health воркера: текущее значение (его же отдаёт `tracker_health`) и база —
-/// состояние, в которое health возвращается после удачного вызова bd.
+/// Читать и писать можно только там, где трекер есть.
+fn tracked(current: &Option<Project>) -> Option<&Bd> {
+    current.as_ref().filter(|p| p.tracked).map(|p| &p.bd)
+}
+
+/// Health воркера: текущее значение (его же отдаёт `tracker_health`) и две
+/// постоянные беды, из которых оно складывается.
 ///
-/// Разделение нужно потому, что беды бывают двух родов. Разовый сбой bd
-/// проходит сам: следующий удачный вызов и есть доказательство, что всё снова
-/// работает. А «не та версия bd», «нет каталога .beads» и «слежение умерло»
-/// удачным `bd list` не опровергаются и обязаны его пережить — иначе первая же
-/// успешная сверка стёрла бы предупреждение, которое остаётся верным.
+/// Беды бывают трёх родов, и путать их нельзя. Разовый сбой bd проходит сам:
+/// следующий удачный вызов и есть доказательство, что всё снова работает.
+/// «Не та версия bd» — про бинарник: она переживает и удачный `bd list`, и
+/// смену проекта. «Нет каталога .beads», «слежение умерло», «проект не
+/// выбран» — про открытый каталог: они обязаны пережить удачный вызов, но
+/// умереть вместе с проектом, к которому относились.
 struct HealthReporter {
     app: AppHandle,
     current: Health,
-    baseline: Health,
+    bd: Option<Health>,
+    project: Option<Health>,
 }
 
 impl HealthReporter {
     fn new(app: AppHandle) -> Self {
-        let ok = Health { state: HealthState::Ok, message: None };
-        Self { app, current: ok.clone(), baseline: ok }
+        Self { app, current: Health { state: HealthState::Ok, message: None }, bd: None, project: None }
     }
 
     fn current(&self) -> Health {
         self.current.clone()
     }
 
-    /// Постоянная беда: сама не пройдёт, поэтому становится и базой.
-    fn degrade(&mut self, state: HealthState, message: String) {
-        self.baseline = Health { state, message: Some(message) };
-        self.set(self.baseline.clone());
+    /// Постоянная беда бинарника: переживает всё, включая смену проекта.
+    fn degrade_bd(&mut self, state: HealthState, message: String) {
+        self.bd = Some(Health { state, message: Some(message) });
+        self.set(self.baseline());
+    }
+
+    /// Постоянная беда открытого каталога: живёт ровно пока открыт он.
+    fn degrade_project(&mut self, state: HealthState, message: String) {
+        self.project = Some(Health { state, message: Some(message) });
+        self.set(self.baseline());
+    }
+
+    /// Открыли другой каталог — беды прошлого к нему отношения не имеют.
+    fn clear_project(&mut self) {
+        self.project = None;
+        self.set(self.baseline());
     }
 
     /// Разовый сбой вызова bd.
@@ -176,7 +111,16 @@ impl HealthReporter {
 
     /// bd отработал: гасим разовый сбой, но не постоянную беду.
     fn recovered(&mut self) {
-        self.set(self.baseline.clone());
+        self.set(self.baseline());
+    }
+
+    /// Беда каталога важнее беды бинарника: она конкретнее и с ней человеку
+    /// есть что делать прямо сейчас.
+    fn baseline(&self) -> Health {
+        self.project
+            .clone()
+            .or_else(|| self.bd.clone())
+            .unwrap_or(Health { state: HealthState::Ok, message: None })
     }
 
     /// Health одновременно и запоминается, и рассылается: событие — быстрый
@@ -267,13 +211,146 @@ async fn incremental_sync(app: &AppHandle, bd: &Bd, store: &mut Store, health: &
     }
 }
 
-/// `bd` отсутствует ровно в одном случае — каталог без трекера. Тогда о
-/// состоянии рассказать по-прежнему можно, а изменить нечего.
-async fn handle(
+/// Открывает каталог: чистит снимок, поднимает bd и слежение, ставит health и
+/// делает первую сверку.
+///
+/// Дельты при этом уходят как обычно — снимок для того, кто позвал команду,
+/// собирается уже после. Фронт на время переключения перестаёт слушать
+/// дельты и берёт ответ команды целиком; иначе задачи нового проекта легли бы
+/// поверх задач старого.
+async fn open(
     app: &AppHandle,
-    bd: Option<&Bd>,
+    dir: Option<PathBuf>,
     store: &mut Store,
     health: &mut HealthReporter,
+    tx_tick: &mpsc::Sender<WatchEvent>,
+) -> Option<Project> {
+    store.reset();
+
+    let Some(dir) = dir else {
+        health.degrade_project(HealthState::NoProject, "проект не выбран".to_string());
+        return None;
+    };
+
+    let bd = Bd::new(app.clone(), dir.clone());
+
+    if !project::has_tracker(&dir) {
+        health.degrade_project(
+            HealthState::NotABeadsRepo,
+            format!("в {} нет каталога .beads", dir.display()),
+        );
+        // Каталог всё равно остаётся открытым: bd init делается в нём.
+        return Some(Project { dir, bd, _watcher: None, tracked: false });
+    }
+
+    health.clear_project();
+
+    // Слежение — не условие работы: без него остаётся сверка раз в минуту, и
+    // знать об этом должен не только лог.
+    let watcher = match watcher::spawn(dir.join(".beads"), tx_tick.clone()) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            health.degrade_project(
+                HealthState::Error,
+                format!("не удалось следить за .beads: {e}; остаётся только периодическая сверка"),
+            );
+            None
+        }
+    };
+
+    let project = Project { dir, bd, _watcher: watcher, tracked: true };
+    // Первую сверку никто не ждёт: о неудаче уже рассказал health.
+    let _ = full_sync(app, &project.bd, store, health).await;
+    Some(project)
+}
+
+/// Версия bd — свойство бинарника, а не каталога: спрашиваем один раз за
+/// запуск и любым рабочим каталогом, `bd --version` трекер не читает.
+async fn check_version(app: &AppHandle, health: &mut HealthReporter) {
+    let probe = Bd::new(app.clone(), std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    match probe.version().await {
+        Ok(Some(version)) if version == EXPECTED_BD_VERSION => {}
+        Ok(other) => health.degrade_bd(
+            HealthState::BdVersionMismatch,
+            format!("ожидалась версия bd {EXPECTED_BD_VERSION}, получена {other:?}"),
+        ),
+        Err(e) => health.failed(&e),
+    }
+}
+
+/// Единственное место с изменяемым состоянием — и оно однопоточное.
+/// Вызов bd стоит около двух секунд, поэтому очередь запросов даёт понятный
+/// порядок вместо непредсказуемых блокировок на мьютексе.
+pub fn start(app: AppHandle, initial: Option<PathBuf>) -> TrackerHandle {
+    let (tx_req, mut rx_req) = mpsc::channel::<Request>(32);
+    let (tx_tick, mut rx_tick) = mpsc::channel::<WatchEvent>(16);
+
+    tauri::async_runtime::spawn(async move {
+        let mut store = Store::default();
+        let mut health = HealthReporter::new(app.clone());
+
+        check_version(&app, &mut health).await;
+        let mut current = open(&app, initial, &mut store, &mut health, &tx_tick).await;
+
+        let mut ticker = tokio::time::interval(FULL_RESYNC);
+        // По умолчанию пропущенные тики (машина спала, вызов bd затянулся)
+        // срабатывают подряд — несколько двухсекундных полных сверок одна за
+        // другой сразу после затыка. Delay сдвигает расписание вместо этого.
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        ticker.tick().await; // первый срабатывает мгновенно
+
+        // Срок отложенной догрузки — состояние цикла, а не await внутри ветки:
+        // пока идёт debounce, воркер обязан отвечать на команды.
+        let mut due: Option<Instant> = None;
+
+        loop {
+            tokio::select! {
+                request = rx_req.recv() => {
+                    // Отправители кончились — фронта больше нет, работать не для кого.
+                    let Some(request) = request else { break };
+                    handle(&app, &mut current, &mut store, &mut health, &tx_tick, request).await;
+                }
+                Some(event) = rx_tick.recv() => match event {
+                    // Срок задаёт первое событие, остальные к нему прилипают:
+                    // пачка записей схлопывается в одну догрузку.
+                    WatchEvent::Changed => { due.get_or_insert_with(|| Instant::now() + DEBOUNCE); }
+                    WatchEvent::Failed(message) => health.degrade_project(
+                        HealthState::Error,
+                        format!(
+                            "слежение за .beads прекратилось: {message}; \
+                             остаётся только периодическая сверка"
+                        ),
+                    ),
+                },
+                // Значение по умолчанию не используется никогда: без срока
+                // ветка выключена, а условие select! вычисляет раньше выражения.
+                _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
+                    due = None;
+                    if let Some(bd) = tracked(&current) {
+                        incremental_sync(&app, bd, &mut store, &mut health).await;
+                    }
+                }
+                _ = ticker.tick() => {
+                    // Периодическую сверку тоже никто не ждёт.
+                    if let Some(bd) = tracked(&current) {
+                        let _ = full_sync(&app, bd, &mut store, &mut health).await;
+                    }
+                }
+            }
+        }
+    });
+
+    TrackerHandle(tx_req)
+}
+
+/// Трекера может не быть по двум причинам — проект не выбран или в каталоге
+/// нет `.beads`. Рассказать о состоянии можно и там, и там; изменить нечего.
+async fn handle(
+    app: &AppHandle,
+    current: &mut Option<Project>,
+    store: &mut Store,
+    health: &mut HealthReporter,
+    tx_tick: &mpsc::Sender<WatchEvent>,
     request: Request,
 ) {
     match request {
@@ -283,36 +360,60 @@ async fn handle(
         Request::Snapshot(reply) => {
             let _ = reply.send(store.snapshot());
         }
+        Request::SetProject(dir, reply) => {
+            *current = open(app, dir, store, health, tx_tick).await;
+            let _ = reply.send(store.snapshot());
+        }
+        Request::InitTracker(reply) => {
+            let result = match current.as_ref() {
+                Some(p) if !p.tracked => p.bd.init().await,
+                Some(_) => Err(TrackerError::NoTracker("в этом каталоге трекер уже есть".into())),
+                None => Err(TrackerError::NoTracker("проект не выбран".into())),
+            };
+            match result {
+                Ok(()) => {
+                    let dir = current.as_ref().map(|p| p.dir.clone());
+                    *current = open(app, dir, store, health, tx_tick).await;
+                    let _ = reply.send(Ok(store.snapshot()));
+                }
+                // Health намеренно не трогаем: «здесь нет трекера» осталось
+                // правдой, и на месте доски должна остаться кнопка, а не
+                // «bd ломается». О неудаче расскажет ответ команды.
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                }
+            }
+        }
         Request::Resync(reply) => {
-            let result = match bd {
+            let result = match tracked(current) {
                 Some(bd) => full_sync(app, bd, store, health).await,
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(result.map(|()| store.snapshot()));
         }
         Request::Create(new, reply) => {
-            let result = match bd {
+            let result = match tracked(current) {
                 Some(bd) => bd.create(&new).await,
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
         }
         Request::Update(id, patch, reply) => {
-            let result = match bd {
+            let result = match tracked(current) {
                 Some(bd) => bd.update(&id, &patch).await,
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
         }
         Request::Close(id, reason, reply) => {
-            let result = match bd {
+            let result = match tracked(current) {
                 Some(bd) => bd.close(&id, reason.as_deref()).await,
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
         }
         Request::Reopen(id, reply) => {
-            let result = match bd {
+            let result = match tracked(current) {
                 Some(bd) => bd.reopen(&id).await,
                 None => Err(no_tracker(health)),
             };
