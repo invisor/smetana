@@ -49,6 +49,10 @@ pub fn run() {
       tracker::commands::tracker_init,
       tracker::commands::tracker_probe,
       tracker::commands::project_root,
+      files::commands::files_list,
+      files::commands::files_read,
+      files::commands::files_write,
+      files::commands::files_stat,
       settings::commands::settings_load,
       settings::commands::settings_save,
     ])
