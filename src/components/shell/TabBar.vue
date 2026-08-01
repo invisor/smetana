@@ -8,7 +8,7 @@ const props = defineProps({
   overflowCount: { type: Number, default: 0 }
 })
 
-defineEmits(['select', 'close'])
+defineEmits(['select', 'close', 'promote'])
 
 const barStyle = {
   display: 'flex',
@@ -29,7 +29,7 @@ const overflowStyle = {
 
 <template>
   <div role="tablist" :style="barStyle">
-    <div :style="{ display: 'flex', minWidth: 0, overflow: 'hidden' }">
+    <div :style="{ display: 'flex', minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }">
       <Tab
         v-for="t in props.tabs"
         :key="t.id"
@@ -37,6 +37,7 @@ const overflowStyle = {
         :active="t.id === activeId"
         @select="$emit('select', t.id)"
         @close="$emit('close', t.id)"
+        @promote="$emit('promote', t.id)"
       />
     </div>
     <div v-if="overflowCount > 0" :style="overflowStyle">

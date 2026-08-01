@@ -7,9 +7,11 @@ import IconButton from '../core/IconButton.vue'
    pinned  - Chat and Kanban. Always first, no close affordance.
    file    - a normal opened file tab, closable, may be dirty or agent-locked.
    preview - single-click temporary tab, replaced by the next preview.
-             VS Code uses italics; here the tab label sits on a DOTTED baseline
-             rule and the tab has no top accent even when active, so "temporary"
-             reads as an unfinished edge rather than a different font. */
+             Italic, as in VS Code: the mechanic is VS Code's, and so is its
+             signal — muscle memory is the point. Отход от дизайн-системы,
+             которая выбирала здесь пунктирную линию; долг записан в спеке
+             docs/superpowers/specs/2026-08-01-file-tree-and-editor-design.md.
+             Двойной клик по вкладке снимает временность — отсюда `promote`. */
 const props = defineProps({
   kind: { type: String, default: 'file' },
   label: { type: String, required: true },
@@ -19,7 +21,7 @@ const props = defineProps({
   readOnly: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'close'])
+const emit = defineEmits(['select', 'close', 'promote'])
 
 const hover = ref(false)
 const preview = computed(() => props.kind === 'preview')
@@ -35,7 +37,7 @@ const style = computed(() => ({
   background: props.active ? 'var(--surface-raised)' : hover.value ? 'var(--surface-hover)' : 'transparent',
   color: props.active ? 'var(--text-primary)' : 'var(--text-secondary)',
   borderRight: 'var(--border-w) solid var(--border-subtle)',
-  boxShadow: props.active && !preview.value ? 'inset 0 2px 0 0 var(--text-primary)' : 'none',
+  boxShadow: props.active ? 'inset 0 2px 0 0 var(--text-primary)' : 'none',
   font: `var(--weight-regular) var(--text-sm)/1 ${props.kind === 'pinned' ? 'var(--font-sans)' : 'var(--font-mono)'}`,
   cursor: 'default',
   maxWidth: '200px',
@@ -47,9 +49,7 @@ const labelStyle = computed(() => ({
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
-  borderBottom: preview.value ? '1px dotted var(--text-muted)' : '1px solid transparent',
-  paddingBottom: '1px',
-  opacity: preview.value ? 0.85 : 1
+  fontStyle: preview.value ? 'italic' : 'normal'
 }))
 
 const onClose = (e) => {
@@ -66,6 +66,7 @@ const onClose = (e) => {
     :data-tab-kind="kind"
     :style="style"
     @click="emit('select')"
+    @dblclick="emit('promote')"
     @mouseenter="hover = true"
     @mouseleave="hover = false"
   >

@@ -4,4 +4,8 @@
    sans here (task ids bd-a1b2, paths, branches, diffs) and the system monos differ
    too much to design against: Menlo / Consolas / DejaVu Sans Mono have different
    widths, x-heights and zero shapes. Latin subset, 3 weights. */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+/* Курсив нужен ровно одному состоянию — временной вкладке файла (Tab.vue).
+   Без оси ital браузер синтезировал бы наклон, скашивая прямое начертание, а
+   в моноширинном это видно сразу. Один дополнительный woff2 латинского
+   сабсета. */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap');
