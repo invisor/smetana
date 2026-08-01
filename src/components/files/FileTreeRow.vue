@@ -21,7 +21,7 @@ const props = defineProps({
   readOnly: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['toggle', 'select'])
+const emit = defineEmits(['toggle', 'select', 'open'])
 
 const hover = ref(false)
 const g = computed(() => (props.git ? GIT[props.git] : null))
@@ -51,6 +51,14 @@ const nameStyle = computed(() => ({
 }))
 
 const onClick = () => emit(props.kind === 'dir' ? 'toggle' : 'select')
+
+/* Двойной клик по файлу открывает его постоянной вкладкой — так же, как в
+   VS Code. Задержки не нужно: первый клик уже открыл превью, второй его
+   закрепляет, и промежуточного состояния, которое надо было бы отменять, тут
+   не возникает. */
+const onDoubleClick = () => {
+  if (props.kind !== 'dir') emit('open')
+}
 </script>
 
 <template>
@@ -63,6 +71,7 @@ const onClick = () => emit(props.kind === 'dir' ? 'toggle' : 'select')
     @mouseenter="hover = true"
     @mouseleave="hover = false"
     @click="onClick"
+    @dblclick="onDoubleClick"
   >
     <span :style="{ width: '12px', display: 'flex', color: 'var(--text-muted)' }">
       <Icon v-if="kind === 'dir'" :name="expanded ? 'chevron-down' : 'chevron-right'" :size="12" />

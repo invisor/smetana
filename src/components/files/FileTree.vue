@@ -8,7 +8,7 @@ const props = defineProps({
   expanded: { type: Object, default: () => ({}) }
 })
 
-defineEmits(['toggle', 'select'])
+defineEmits(['toggle', 'select', 'open'])
 
 /* Flattened to a single list so the tree can be virtualised later without
    restructuring the markup. */
@@ -16,7 +16,7 @@ const rows = computed(() => {
   const out = []
   const walk = (list, depth) => {
     for (const n of list) {
-      const open = !!props.expanded[n.path]
+      const open = !!props.expanded[n.path] && Array.isArray(n.children)
       out.push({
         path: n.path,
         name: n.name,
@@ -43,6 +43,7 @@ const rows = computed(() => {
       v-bind="r"
       @toggle="$emit('toggle', r.path)"
       @select="$emit('select', r.path)"
+      @open="$emit('open', r.path)"
     />
   </div>
 </template>
