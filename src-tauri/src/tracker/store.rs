@@ -34,12 +34,32 @@ impl Store {
     }
 
     /// Смена проекта: снимок принадлежал прошлому каталогу и неверен целиком.
-    /// Поколение не сбрасывается — оно сквозное для окна, и откат назад фронт
-    /// прочитал бы как разрыв нумерации, то есть как потерянное событие.
-    pub fn reset(&mut self) {
+    /// Дельта несёт исчезновение всех прежних задач и колонок, а поколение
+    /// растёт вместе с ней — иначе слушатель, не успевший заглушить события
+    /// на время переключения, подмешал бы задачи нового проекта к задачам
+    /// старого, не заметив разрыва нумерации. Поколение по-прежнему не
+    /// откатывается назад: если сбрасывать нечего (снимок уже пуст), дельта
+    /// пуста и генерация остаётся прежней — рост без отправленной дельты
+    /// слушатель прочитал бы как пропущенное событие.
+    pub fn reset(&mut self) -> Delta {
+        let removed: Vec<String> = self.issues.keys().cloned().collect();
+        let had_columns = !self.columns.is_empty();
+
         self.issues.clear();
         self.columns.clear();
         self.last_seen.clear();
+
+        let mut delta = Delta {
+            removed,
+            columns: if had_columns { Some(Vec::new()) } else { None },
+            ..Default::default()
+        };
+
+        if !delta.is_empty() {
+            self.generation += 1;
+            delta.generation = self.generation;
+        }
+        delta
     }
 
     /// Возвращает true, если набор колонок действительно изменился.
@@ -211,21 +231,53 @@ mod tests {
     }
 
     #[test]
-    fn сброс_чистит_снимок_но_не_поколение() {
+    fn сброс_шлёт_дельту_с_разрывом_и_двигает_поколение() {
         let mut store = Store::default();
         store.set_columns(vec![ColumnDef { name: "open".into(), category: "active".into() }]);
-        store.apply_full(vec![issue("a", "open", "2026-07-31T00:00:01Z")]);
+        store.apply_full(vec![
+            issue("a", "open", "2026-07-31T00:00:01Z"),
+            issue("b", "open", "2026-07-31T00:00:01Z"),
+        ]);
         let before = store.generation();
 
-        store.reset();
+        let delta = store.reset();
+
+        let mut removed = delta.removed.clone();
+        removed.sort();
+        assert_eq!(
+            removed,
+            vec!["a".to_string(), "b".to_string()],
+            "фронт обязан узнать об уходе всех задач прошлого проекта"
+        );
+        assert_eq!(
+            delta.columns.as_deref(),
+            Some(&[][..]),
+            "колонки прошлого трекера тоже перестали существовать"
+        );
+        assert_eq!(delta.generation, before + 1, "дельта несёт новое поколение");
+        assert_eq!(
+            store.generation(),
+            before + 1,
+            "поколение выросло ровно на единицу — ни пропущено, ни задвоено"
+        );
 
         let snapshot = store.snapshot();
         assert!(snapshot.issues.is_empty(), "задачи принадлежали прошлому проекту");
         assert!(snapshot.columns.is_empty(), "колонки тоже: у другого трекера они свои");
         assert_eq!(store.last_seen(), "", "иначе первая догрузка нового проекта попросит только свежее");
+    }
+
+    #[test]
+    fn сброс_уже_пустого_снимка_поколение_не_двигает() {
+        let mut store = Store::default();
+        let before = store.generation();
+
+        let delta = store.reset();
+
+        assert!(delta.is_empty(), "сбрасывать было нечего — дельта пуста и уйти не должна");
         assert_eq!(
-            snapshot.generation, before,
-            "поколение сквозное: откат назад фронт прочитал бы как потерянное событие"
+            store.generation(), before,
+            "поколение, выросшее без отправленной дельты, слушатель прочитал бы как пропуск"
         );
     }
 }

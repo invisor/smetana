@@ -214,10 +214,10 @@ async fn incremental_sync(app: &AppHandle, bd: &Bd, store: &mut Store, health: &
 /// Открывает каталог: чистит снимок, поднимает bd и слежение, ставит health и
 /// делает первую сверку.
 ///
-/// Дельты при этом уходят как обычно — снимок для того, кто позвал команду,
-/// собирается уже после. Фронт на время переключения перестаёт слушать
-/// дельты и берёт ответ команды целиком; иначе задачи нового проекта легли бы
-/// поверх задач старого.
+/// Дельты при этом уходят как обычно, начиная с самого сброса — снимок для
+/// того, кто позвал команду, собирается уже после. Фронт на время
+/// переключения перестаёт слушать дельты и берёт ответ команды целиком; иначе
+/// задачи нового проекта легли бы поверх задач старого.
 async fn open(
     app: &AppHandle,
     dir: Option<PathBuf>,
@@ -225,7 +225,9 @@ async fn open(
     health: &mut HealthReporter,
     tx_tick: &mpsc::Sender<WatchEvent>,
 ) -> Option<Project> {
-    store.reset();
+    // Первым делом, до всего остального: сброс — тоже дельта, и её разрыв
+    // нумерации обязан уйти раньше любой другой.
+    emit_delta(app, store.reset());
 
     let Some(dir) = dir else {
         health.degrade_project(HealthState::NoProject, "проект не выбран".to_string());
@@ -308,7 +310,20 @@ pub fn start(app: AppHandle, initial: Option<PathBuf>) -> TrackerHandle {
                 request = rx_req.recv() => {
                     // Отправители кончились — фронта больше нет, работать не для кого.
                     let Some(request) = request else { break };
-                    handle(&app, &mut current, &mut store, &mut health, &tx_tick, request).await;
+                    let switched = handle(&app, &mut current, &mut store, &mut health, &tx_tick, request).await;
+                    if switched {
+                        // Каталог сменился: срок прошлого проекта недействителен, а
+                        // накопившиеся тики watcher относятся частью к каталогу,
+                        // которого уже нет, частью — к новому, но тот уже получил
+                        // свою полную сверку внутри open(). Вычерпываем здесь, а не
+                        // в handle: там нет доступа к rx_tick, он занят соседней
+                        // веткой этого select!. Цена: изменение, случившееся в
+                        // каталоге за те ~2 секунды, что шло открытие, может уйти
+                        // вместе с ними — его подберёт шестидесятисекундная
+                        // страховочная сверка.
+                        due = None;
+                        while rx_tick.try_recv().is_ok() {}
+                    }
                 }
                 Some(event) = rx_tick.recv() => match event {
                     // Срок задаёт первое событие, остальные к нему прилипают:
@@ -345,6 +360,10 @@ pub fn start(app: AppHandle, initial: Option<PathBuf>) -> TrackerHandle {
 
 /// Трекера может не быть по двум причинам — проект не выбран или в каталоге
 /// нет `.beads`. Рассказать о состоянии можно и там, и там; изменить нечего.
+///
+/// Возвращает `true`, если каталог сменился: тогда вызывающий цикл обязан
+/// забыть срок отложенной догрузки и вычерпать накопившиеся тики watcher —
+/// оба относятся к каталогу, которого, возможно, уже нет.
 async fn handle(
     app: &AppHandle,
     current: &mut Option<Project>,
@@ -352,17 +371,24 @@ async fn handle(
     health: &mut HealthReporter,
     tx_tick: &mpsc::Sender<WatchEvent>,
     request: Request,
-) {
+) -> bool {
     match request {
         Request::Health(reply) => {
             let _ = reply.send(health.current());
+            false
         }
         Request::Snapshot(reply) => {
             let _ = reply.send(store.snapshot());
+            false
         }
         Request::SetProject(dir, reply) => {
+            // Снимаем прежний проект до открытия нового: иначе его watcher
+            // (внутри Project) живёт все ~2 секунды, пока идёт open(), и
+            // событие от старого каталога попадёт уже в health нового.
+            *current = None;
             *current = open(app, dir, store, health, tx_tick).await;
             let _ = reply.send(store.snapshot());
+            true
         }
         Request::InitTracker(reply) => {
             let result = match current.as_ref() {
@@ -373,14 +399,20 @@ async fn handle(
             match result {
                 Ok(()) => {
                     let dir = current.as_ref().map(|p| p.dir.clone());
+                    // Тот же порядок, что и в SetProject: старый Project (без
+                    // трекера, watcher и не было) снимаем до open().
+                    *current = None;
                     *current = open(app, dir, store, health, tx_tick).await;
                     let _ = reply.send(Ok(store.snapshot()));
+                    true
                 }
                 // Health намеренно не трогаем: «здесь нет трекера» осталось
                 // правдой, и на месте доски должна остаться кнопка, а не
-                // «bd ломается». О неудаче расскажет ответ команды.
+                // «bd ломается». О неудаче расскажет ответ команды. Каталог
+                // не открывался заново — сигнала о смене нет.
                 Err(e) => {
                     let _ = reply.send(Err(e));
+                    false
                 }
             }
         }
@@ -390,6 +422,7 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(result.map(|()| store.snapshot()));
+            false
         }
         Request::Create(new, reply) => {
             let result = match tracked(current) {
@@ -397,6 +430,7 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
+            false
         }
         Request::Update(id, patch, reply) => {
             let result = match tracked(current) {
@@ -404,6 +438,7 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
+            false
         }
         Request::Close(id, reason, reply) => {
             let result = match tracked(current) {
@@ -411,6 +446,7 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
+            false
         }
         Request::Reopen(id, reply) => {
             let result = match tracked(current) {
@@ -418,6 +454,7 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
+            false
         }
     }
 }
