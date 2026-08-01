@@ -414,11 +414,12 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(unix)]
     #[test]
-    fn отказ_при_недостатке_прав_не_оставляет_мусора() {
+    fn недостаток_прав_блокирует_запись_в_каталог() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = scratch("deny-create");
+        let root = scratch("deny-write");
         let subdir = root.join("sub");
         fs::create_dir_all(&subdir).unwrap();
         fs::write(subdir.join("a.txt"), "x\n").unwrap();
@@ -434,7 +435,7 @@ mod tests {
             return; // Под root права не работают, не тестируем.
         }
 
-        // Снять право записи с подкаталога — это помешает File::create(&temp).
+        // Снять право записи с подкаталога.
         fs::set_permissions(&subdir, fs::Permissions::from_mode(0o555)).unwrap();
 
         let err = write_text(&root, "sub/a.txt", "y\n", before.mtime);
@@ -442,20 +443,14 @@ mod tests {
         // Вернуть права СРАЗУ, до уборки — иначе remove_dir_all не сможет удалить каталог.
         fs::set_permissions(&subdir, fs::Permissions::from_mode(0o755)).unwrap();
 
-        // Проверить отказ.
+        // Проверить отказ — write_text должна вернуть ошибку при недостатке прав.
         assert!(err.is_err(), "write_text должна вернуть ошибку при недостатке прав на запись");
 
-        // Проверить что temp файлов не осталось. На самом деле при ошибке File::create
-        // temp не создаётся вообще, но проверка гарантирует что нет мусора при любой ошибке.
-        let leftovers: Vec<_> = fs::read_dir(&subdir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|name| name.ends_with(".tmp"))
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "в каталоге не должно быть временных файлов при ошибке: {leftovers:?}"
+        // Оригинальный файл не должен измениться.
+        assert_eq!(
+            fs::read_to_string(subdir.join("a.txt")).unwrap(),
+            "x\n",
+            "при отказе оригинальный файл должен остаться неизменным"
         );
 
         let _ = fs::remove_dir_all(&root);
