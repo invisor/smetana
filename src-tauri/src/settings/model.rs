@@ -30,6 +30,9 @@ const SIDE_TABS: [&str; 3] = ["files", "git", "agents"];
 const MAX_ID_LEN: usize = 200;
 const MAX_PATH_LEN: usize = 4096;
 const MAX_EXPANDED: usize = 500;
+/// Сколько вкладок файлов помним. Предел не про вкус, а про то, чтобы ряд
+/// вкладок оставался рядом, а файл настроек — читаемым.
+pub const MAX_OPEN_TABS: usize = 50;
 
 /// Внешний вид — про человека и его экран, поэтому общий для всех проектов.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -63,6 +66,13 @@ pub struct ProjectState {
     pub selected_task: Option<String>,
     pub selected_path: Option<String>,
     pub expanded: Vec<String>,
+    /// Открытые файлы в порядке вкладок. Пути относительны корня проекта:
+    /// ключ проекта в карте уже абсолютный, и дублировать его в каждой
+    /// вкладке незачем — заодно переезд каталога не превращает список в мусор.
+    pub open_tabs: Vec<String>,
+    /// Какая из них временная. Временная всегда одна, и она никогда не грязная:
+    /// правка снимает временность в тот же момент, что и ставит точку.
+    pub preview_tab: Option<String>,
     /// RFC 3339, проставляется при записи. Нужен только для обрезки карты.
     pub used_at: Option<String>,
 }
@@ -75,6 +85,8 @@ impl Default for ProjectState {
             selected_task: None,
             selected_path: None,
             expanded: Vec::new(),
+            open_tabs: Vec::new(),
+            preview_tab: None,
             used_at: None,
         }
     }
@@ -331,13 +343,28 @@ impl Appearance {
 impl ProjectState {
     fn validate(&mut self) {
         one_of(&mut self.side_tab, &SIDE_TABS, "files");
-        if self.active_tab.is_empty() || self.active_tab.len() > MAX_ID_LEN {
-            self.active_tab = "kanban".into();
-        }
         forget_if_junk(&mut self.selected_task, MAX_ID_LEN);
         forget_if_junk(&mut self.selected_path, MAX_PATH_LEN);
-
         sane_paths(&mut self.expanded, MAX_EXPANDED);
+        sane_paths(&mut self.open_tabs, MAX_OPEN_TABS);
+
+        // Временной вкладки, которой нет среди открытых, не бывает: она
+        // рисовалась бы курсивом в пустоте или подставлялась бы на место,
+        // которого нет.
+        if self.preview_tab.as_deref().is_some_and(|p| !self.open_tabs.iter().any(|t| t == p)) {
+            self.preview_tab = None;
+        }
+
+        // Закрытого списка вкладок у центра нет: `chat` и `kanban` есть
+        // всегда, остальное — открытые файлы. Отсюда и предел по длине пути,
+        // а не по длине идентификатора: раньше вкладка-файл с длинным путём
+        // молча становилась доской при каждом перезапуске.
+        let known = self.active_tab == "chat"
+            || self.active_tab == "kanban"
+            || self.open_tabs.iter().any(|t| *t == self.active_tab);
+        if !known || self.active_tab.len() > MAX_PATH_LEN {
+            self.active_tab = "kanban".into();
+        }
     }
 }
 
@@ -723,5 +750,81 @@ mod tests {
         let view = resolve(&file, None);
         assert_eq!(view.active_project.as_deref(), Some("/a"), "без аргумента — активный из файла");
         assert_eq!(view.project, ProjectState::default());
+    }
+
+    #[test]
+    fn вкладки_читаются_и_пишутся() {
+        let settings = settings_of(
+            r#"{"version":1,"projects":{"/p":{
+                "openTabs":["src/App.vue","README.md"],
+                "previewTab":"README.md",
+                "activeTab":"src/App.vue"}}}"#,
+        );
+        let state = &settings.projects["/p"];
+        assert_eq!(state.open_tabs, vec!["src/App.vue".to_string(), "README.md".to_string()]);
+        assert_eq!(state.preview_tab.as_deref(), Some("README.md"));
+        assert_eq!(state.active_tab, "src/App.vue");
+    }
+
+    #[test]
+    fn временная_вкладка_обязана_быть_среди_открытых() {
+        let settings = settings_of(
+            r#"{"version":1,"projects":{"/p":{"openTabs":["a.txt"],"previewTab":"b.txt"}}}"#,
+        );
+        assert_eq!(settings.projects["/p"].preview_tab, None);
+    }
+
+    #[test]
+    fn активная_вкладка_это_chat_kanban_или_одна_из_открытых() {
+        let settings = settings_of(
+            r#"{"version":1,"projects":{
+                "/gone":{"openTabs":["a.txt"],"activeTab":"b.txt"},
+                "/chat":{"activeTab":"chat"},
+                "/file":{"openTabs":["a.txt"],"activeTab":"a.txt"}}}"#,
+        );
+        assert_eq!(settings.projects["/gone"].active_tab, "kanban", "вкладки нет — активной быть нечему");
+        assert_eq!(settings.projects["/chat"].active_tab, "chat");
+        assert_eq!(settings.projects["/file"].active_tab, "a.txt");
+    }
+
+    #[test]
+    fn активной_вкладкой_может_быть_длинный_путь() {
+        // Раньше active_tab резался по MAX_ID_LEN (200); путь бывает длиннее,
+        // и вкладка молча превращалась бы в kanban при каждом перезапуске.
+        let long = format!("src/{}/App.vue", "very-long-directory-name".repeat(12));
+        assert!(long.len() > MAX_ID_LEN && long.len() < MAX_PATH_LEN);
+        let text = serde_json::json!({
+            "version": 1,
+            "projects": {"/p": {"openTabs": [long.clone()], "activeTab": long.clone()}}
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(settings.projects["/p"].active_tab, long);
+    }
+
+    #[test]
+    fn список_вкладок_теряет_мусор_и_обрезается() {
+        let mut tabs = vec![String::from("a.txt"), String::from("a.txt"), String::new()];
+        for i in 0..MAX_OPEN_TABS {
+            tabs.push(format!("f{i:03}.txt"));
+        }
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {"openTabs": tabs}}});
+
+        let settings = settings_of(&text.to_string());
+
+        let open = &settings.projects["/p"].open_tabs;
+        assert_eq!(open.len(), MAX_OPEN_TABS);
+        assert_eq!(open[0], "a.txt");
+        assert_eq!(open[1], "f000.txt", "дубль и пустая строка выпали");
+    }
+
+    #[test]
+    fn файл_написанный_до_вкладок_читается_без_них() {
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"agents"}}}"#);
+        let state = &settings.projects["/p"];
+        assert!(state.open_tabs.is_empty());
+        assert_eq!(state.preview_tab, None);
+        assert_eq!(state.active_tab, "kanban");
     }
 }

@@ -22,6 +22,8 @@ const defaults = () => ({
     selectedTask: null,
     selectedPath: null,
     expanded: [],
+    openTabs: [],
+    previewTab: null,
     usedAt: null
   }
 })
