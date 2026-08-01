@@ -6,7 +6,9 @@
 //! не борется. Та же причина, по которой её нет у настроек.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use super::model::{
@@ -136,6 +138,67 @@ pub fn stat_many(root: &Path, rels: &[String]) -> Vec<Stat> {
         .collect()
 }
 
+/// Счётчик временных файлов. Вместе с pid даёт имя, которого нет ни у одной
+/// другой записи — ни в этом процессе, ни в соседнем. Тот же приём, что в
+/// `settings/file.rs`.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn temp_path(path: &Path) -> PathBuf {
+    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()))
+}
+
+/// Запись файла проекта.
+///
+/// Сверка `expected_mtime` — единственное, ради чего вся эта возня: без неё
+/// Cmd+S по вкладке, открытой час назад, молча стёр бы работу агента.
+/// Расхождение означает отказ и ноль изменений на диске.
+///
+/// Дальше — как в `settings/file.rs`: временный файл рядом, `sync_all`,
+/// `rename`. Плюс одно, чего там не нужно: перенос прав с оригинала.
+/// `rename` подменяет файл целиком, и без этого исполняемый скрипт после
+/// сохранения перестал бы запускаться.
+pub fn write_text(
+    root: &Path,
+    rel: &str,
+    text: &str,
+    expected_mtime: i64,
+) -> Result<i64, FilesError> {
+    let full = resolve_within(root, rel)?;
+    let meta = fs::metadata(&full).map_err(|err| io_error(rel, &err))?;
+    if !meta.is_file() {
+        return Err(FilesError::NotAFile(rel.to_owned()));
+    }
+    if mtime_of(&meta) != expected_mtime {
+        return Err(FilesError::Stale(rel.to_owned()));
+    }
+
+    let temp = temp_path(&full);
+    let written = (|| -> std::io::Result<()> {
+        let mut file = fs::File::create(&temp)?;
+        file.write_all(text.as_bytes())?;
+        // Без этого потеря питания может сделать долговечным переименование,
+        // но не то, что в файле.
+        file.sync_all()
+    })();
+    if let Err(err) = written {
+        let _ = fs::remove_file(&temp);
+        return Err(FilesError::Io(format!("{}: {err}", temp.display())));
+    }
+    if let Err(err) = fs::set_permissions(&temp, meta.permissions()) {
+        let _ = fs::remove_file(&temp);
+        return Err(FilesError::Io(format!("{}: {err}", temp.display())));
+    }
+    if let Err(err) = fs::rename(&temp, &full) {
+        let _ = fs::remove_file(&temp);
+        return Err(io_error(rel, &err));
+    }
+
+    let meta = fs::metadata(&full).map_err(|err| io_error(rel, &err))?;
+    Ok(mtime_of(&meta))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +322,83 @@ mod tests {
         assert_eq!(stats.len(), 2);
         assert!(stats[0].mtime.is_some());
         assert_eq!(stats[1].mtime, None, "исчезнувший файл — не ошибка, а состояние");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn запись_возвращает_новую_метку_и_меняет_файл() {
+        let root = scratch("write");
+        fs::write(root.join("a.txt"), "было\n").unwrap();
+        let before = read_text(&root, "a.txt").unwrap();
+
+        let after = write_text(&root, "a.txt", "стало\n", before.mtime).unwrap();
+
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "стало\n");
+        assert!(after >= before.mtime);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn чужая_запись_не_затирается() {
+        let root = scratch("stale");
+        fs::write(root.join("a.txt"), "моё\n").unwrap();
+        let mine = read_text(&root, "a.txt").unwrap();
+
+        // Так выглядит агент, переписавший файл, пока вкладка была открыта.
+        let err = write_text(&root, "a.txt", "мои правки\n", mine.mtime - 1);
+
+        assert!(matches!(err, Err(FilesError::Stale(_))));
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "моё\n",
+            "при отказе на диске не должно измениться ничего"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn запись_наружу_отвергается() {
+        let root = scratch("write-outside");
+        assert!(matches!(
+            write_text(&root, "../evil.txt", "x", 0),
+            Err(FilesError::Outside(_))
+        ));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn права_исполняемого_файла_переживают_запись() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch("perms");
+        let path = root.join("run.sh");
+        fs::write(&path, "#!/bin/sh\necho было\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let before = read_text(&root, "run.sh").unwrap();
+
+        write_text(&root, "run.sh", "#!/bin/sh\necho стало\n", before.mtime).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "rename подменил бы режим режимом временного файла");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn временный_файл_за_собой_не_остаётся() {
+        let root = scratch("no-litter");
+        fs::write(root.join("a.txt"), "x\n").unwrap();
+        let before = read_text(&root, "a.txt").unwrap();
+
+        write_text(&root, "a.txt", "y\n", before.mtime).unwrap();
+
+        let leftovers: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "остались временные файлы: {leftovers:?}");
         let _ = fs::remove_dir_all(&root);
     }
 }
