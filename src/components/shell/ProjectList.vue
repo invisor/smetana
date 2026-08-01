@@ -32,6 +32,14 @@ const onMenuSelect = (path) => {
   emit('remove', path)
 }
 
+/* A left click picks the project — and if some other row's menu was left
+   open, it should not go on hanging over a row that is no longer the one
+   the user is looking at. */
+const selectProject = (path) => {
+  menuFor.value = null
+  emit('select', path)
+}
+
 /* 10px uppercase mono: a label, not a sentence — the same header the panel
    used for the worktree line. */
 const headerStyle = {
@@ -62,6 +70,7 @@ const listStyle = {
 const rowStyle = (project) => {
   const active = project.path === props.activePath
   return {
+    position: 'relative',
     display: 'flex',
     alignItems: 'center',
     gap: 'var(--space-3)',
@@ -82,12 +91,14 @@ const rowStyle = (project) => {
 
 const nameStyle = { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 
-/* The menu is a plain surface — positioning is the caller's job, and here the
-   caller is this list. --z-overlay does not exist as a token; --z-dropdown is
-   what a popped-up menu over other content uses (see shape.css). */
+/* The menu hangs off its own row — top: 100% needs nothing measured, and the
+   row is the positioning context (rowStyle sets position: relative). --z-overlay
+   does not exist as a token; --z-dropdown is what a popped-up menu over other
+   content uses (see shape.css). */
 const menuStyle = {
   position: 'absolute',
-  right: 'var(--space-4)',
+  top: '100%',
+  right: 0,
   zIndex: 'var(--z-dropdown)'
 }
 
@@ -111,7 +122,7 @@ const empty = computed(() => props.projects.length === 0)
         :key="p.path"
         :style="rowStyle(p)"
         :title="p.path"
-        @click="emit('select', p.path)"
+        @click="selectProject(p.path)"
         @contextmenu.prevent="openMenu(p.path)"
         @mouseenter="hovered = p.path"
         @mouseleave="hovered = null"
@@ -120,10 +131,10 @@ const empty = computed(() => props.projects.length === 0)
         <Tooltip v-if="!p.tracked" label="No bd tracker here" side="right">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
         </Tooltip>
-      </div>
 
-      <div v-if="menuFor" :style="menuStyle">
-        <ContextMenu :items="MENU" :width="180" @select="onMenuSelect(menuFor)" />
+        <div v-if="menuFor === p.path" :style="menuStyle">
+          <ContextMenu :items="MENU" :width="180" @select="onMenuSelect(p.path)" />
+        </div>
       </div>
     </div>
   </div>
