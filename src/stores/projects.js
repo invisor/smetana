@@ -10,7 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listDir, setRoot } from './files.js'
 import { flushPending, loadProjectLayout, settings } from './settings.js'
-import { resetTabs, restoreTabs } from './tabs.js'
+import { confirmUnsaved, resetTabs, restoreTabs } from './tabs.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 
 /* Путь → есть ли в нём .beads. Про активный проект то же самое говорит
@@ -82,6 +82,7 @@ export async function switchTo(path) {
   if (path === settings.activeProject || moving) return
   moving = true
   try {
+    if (!(await confirmUnsaved())) return
     await flushPending()
     await moveTo(path)
   } finally {
@@ -121,6 +122,7 @@ export async function addProject() {
 
   moving = true
   try {
+    if (!(await confirmUnsaved())) return
     /* Сначала дописываем состояние уходящего проекта, и только потом меняем
        список: запись, начатая после добавления строки, унесла бы состояние
        старого проекта уже под новым списком. Порядок здесь не должен зависеть
@@ -143,6 +145,7 @@ export async function removeProject(path) {
   if (moving) return
   moving = true
   try {
+    if (!(await confirmUnsaved())) return
     /* Как и в switchTo: состояние уходящего проекта обязано лечь на диск до
        того, как список поменяется, иначе четырёхсотмиллисекундный дебаунс
        перезапишет несохранённую правку уже урезанным списком. */

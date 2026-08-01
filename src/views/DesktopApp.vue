@@ -17,6 +17,7 @@ import Input from '../components/core/Input.vue'
 import Select from '../components/core/Select.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import EmptyState from '../components/core/EmptyState.vue'
+import Modal from '../components/overlays/Modal.vue'
 import Toast from '../components/overlays/Toast.vue'
 import LogView from '../components/agent/LogView.vue'
 import ProjectList from '../components/shell/ProjectList.vue'
@@ -46,6 +47,7 @@ import {
 } from '../stores/projects.js'
 import { agents, inspector, logLines, scope } from './desktopAppData.js'
 import {
+  basenameOf,
   fileErrorText,
   filesState,
   listDir,
@@ -57,9 +59,14 @@ import {
 import {
   activeBuffer,
   closeTab,
+  confirmUnsaved,
+  discardAll,
+  isDirty,
+  onUnsaved,
   openFile,
   promote,
   restoreTabs,
+  saveAll,
   saveTab,
   setText,
   tabList
@@ -319,6 +326,34 @@ const onOpenFile = (path) => {
   openFile(path, { permanent: true })
 }
 
+/* Один вопрос на все несохранённые вкладки. Он встаёт в трёх местах, и во
+   всех трёх ответ один и тот же, поэтому и модалка одна. */
+const unsaved = ref(null)
+
+onMounted(() =>
+  onUnsaved(
+    (paths) =>
+      new Promise((resolve) => {
+        unsaved.value = { paths, resolve }
+      })
+  )
+)
+
+const answerUnsaved = async (answer) => {
+  const pending = unsaved.value
+  unsaved.value = null
+  if (!pending) return
+  if (answer === 'cancel') return pending.resolve(false)
+  if (answer === 'save') await saveAll()
+  else discardAll()
+  pending.resolve(true)
+}
+
+const onCloseTab = async (id) => {
+  if (isDirty(id) && !(await confirmUnsaved([id]))) return
+  closeTab(id)
+}
+
 /* Явное обновление дерева. Вотчера у файлов нет намеренно (см. спеку), и это
    вторая половина ответа на вопрос «а что там сейчас на диске» — первая
    срабатывает сама при возврате фокуса в окно. */
@@ -549,7 +584,7 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           :tabs="tabList"
           :active-id="project.activeTab"
           @select="project.activeTab = $event"
-          @close="closeTab"
+          @close="onCloseTab"
           @promote="promote"
         />
         <NewTaskModal
@@ -559,6 +594,21 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           @close="newTaskOpen = false"
           @submit="submitNewTask"
         />
+        <Modal
+          v-if="unsaved"
+          :open="true"
+          title="Save changes?"
+          :description="unsaved.paths.length === 1
+            ? `${basenameOf(unsaved.paths[0])} has unsaved changes.`
+            : `${unsaved.paths.length} files have unsaved changes.`"
+          :closable="false"
+        >
+          <template #footer>
+            <Button variant="secondary" size="sm" @click="answerUnsaved('cancel')">Cancel</Button>
+            <Button variant="secondary" size="sm" @click="answerUnsaved('discard')">Don't save</Button>
+            <Button variant="primary" size="sm" @click="answerUnsaved('save')">Save</Button>
+          </template>
+        </Modal>
         <!-- Вкладка файла: доска и чат к ней отношения не имеют. -->
         <FileEditor
           v-if="fileTabActive"

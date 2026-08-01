@@ -8,6 +8,10 @@
 import { nextTick, reactive, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+/* tabs.js импортирует settings.js, а мы — его: цикл замкнут, но безобиден.
+   Обе стороны трогают друг друга только внутри функций, и к моменту первого
+   вызова оба модуля уже вычислены. */
+import { confirmUnsaved } from './tabs.js'
 
 /* Умолчания повторяют умолчания в Rust. Если бэкенда нет (браузер) или чтение
    упало, приложение всё равно обязано открыться в известном виде. */
@@ -105,6 +109,13 @@ export async function flushPending() {
 async function closeAfterFlush() {
   if (closing) return
   closing = true
+  /* Вопрос про несохранённые файлы встаёт до дозаписи настроек, а не внутри
+     её двухсекундного потолка: настройки можно потерять, чужую работу — нет.
+     Ответ «Отмена» возвращает флаг и оставляет окно открытым. */
+  if (!(await confirmUnsaved())) {
+    closing = false
+    return
+  }
   try {
     await Promise.race([
       flushPending(),

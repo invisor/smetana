@@ -269,3 +269,26 @@ export async function restoreTabs() {
     if (state.activeTab === path) state.activeTab = 'kanban'
   }
 }
+
+/* Кто спрашивает про несохранённое.
+ *
+ * Вопрос задаёт вид (модалка живёт в DesktopApp.vue), а поводов для него три:
+ * закрытие вкладки, переключение проекта и закрытие окна. Два последних
+ * приходят из сторов, которые про интерфейс ничего не знают, — поэтому вид
+ * оставляет здесь свою функцию, а сторы её зовут.
+ *
+ * Обещание такое: вернуть true значит «можно продолжать», false — «человек
+ * передумал». Никто не поставил обработчик — продолжаем: молча терять правки
+ * плохо, но запирать приложение из-за незарегистрированного вида хуже.
+ */
+let ask = null
+
+export function onUnsaved(handler) {
+  ask = handler
+}
+
+export async function confirmUnsaved(paths = dirtyPaths.value) {
+  if (!paths.length) return true
+  if (!ask) return true
+  return ask(paths)
+}
