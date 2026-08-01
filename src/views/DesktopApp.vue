@@ -5,7 +5,7 @@
    The core moment this screen is built for: you come back after two hours and
    read, in three seconds, what finished, what stalled, and what is waiting for
    you. Hence the loud budget — exactly one card and one callout shout here. */
-import { computed, onMounted, ref, watch, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
 import TabBar from '../components/shell/TabBar.vue'
@@ -54,17 +54,22 @@ import {
   refreshDirs,
   saveErrorText,
   setRoot,
+  statFiles,
   treeNodes
 } from '../stores/files.js'
 import {
   activeBuffer,
+  buffers,
   closeTab,
   confirmUnsaved,
   discardTabs,
   isDirty,
+  keepMine,
+  markStale,
   onUnsaved,
   openFile,
   promote,
+  reloadTab,
   restoreTabs,
   saveTab,
   saveTabs,
@@ -124,6 +129,31 @@ onMounted(async () => {
   await Promise.all(project.expanded.map((dir) => listDir(dir)))
   await restoreTabs()
 })
+/* Приложение существует ради сценария «вернулся через два часа и смотрю, что
+   изменилось», — значит, момент возврата фокуса и есть тот момент, когда надо
+   догнать диск. Вотчера у файлов нет намеренно: вторая вотчер-подсистема в
+   Rust со своим жизненным циклом и отчётом об ошибках дороже, чем этот проход.
+
+   Чистая вкладка перечитывается молча: терять нечего, а показывать устаревший
+   текст часами — хуже. Грязная получает полоску и ждёт решения. */
+const catchUp = async () => {
+  if (!activePath.value) return
+  refreshDirs(['', ...project.expanded])
+
+  const open = [...project.openTabs]
+  if (!open.length) return
+  for (const stat of await statFiles(open)) {
+    const buffer = buffers.get(stat.path)
+    if (!buffer || buffer.error) continue
+    if (stat.mtime === null || stat.mtime === buffer.mtime) continue
+    if (isDirty(stat.path)) markStale(stat.path)
+    else reloadTab(stat.path)
+  }
+}
+
+onMounted(() => window.addEventListener('focus', catchUp))
+onUnmounted(() => window.removeEventListener('focus', catchUp))
+
 const initing = ref(false)
 const initHere = async () => {
   initing.value = true
@@ -638,6 +668,8 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           :notice="editorNotice"
           @update:model-value="setText(project.activeTab, $event)"
           @save="saveTab(project.activeTab)"
+          @reload="reloadTab(project.activeTab)"
+          @keep-mine="keepMine(project.activeTab)"
         />
         <EmptyState
           v-else-if="project.activeTab === 'chat'"
