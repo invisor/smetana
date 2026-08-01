@@ -16,3 +16,8 @@ code,kbd,pre,samp{font-family:var(--font-mono)}
 ::-webkit-scrollbar-corner{background:transparent}
 .sm-mono{font-family:var(--font-mono);font-variant-ligatures:none}
 .sm-hatch-blocked{background-image:repeating-linear-gradient(135deg,var(--hatch-blocked) 0 1px,transparent 1px 4px)}
+/* Скрыть полосу прокрутки для элемента фиксированной высоты, где полоса отнимала бы
+   высоту у содержимого (например, ряд вкладок). Инлайновым стилем не задать —
+   ::-webkit-scrollbar это псевдоэлемент. */
+.sm-scroll-hidden{scrollbar-width:none}
+.sm-scroll-hidden::-webkit-scrollbar{display:none}

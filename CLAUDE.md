@@ -172,8 +172,8 @@ bound with `:style`, and every value in it is a `var(--token)` reference (see `c
   need, that is a design-system question, not a licence to write `#hex` or `8px`.
 
 `styles/styles.css` is an `@import` list only; the tokens live in `styles/tokens/`. `tokens/base.css`
-holds element defaults (focus ring, selection, scrollbar) and the only two global classes in the
-system (`.sm-mono`, `.sm-hatch-blocked`).
+holds element defaults (focus ring, selection, scrollbar) and the only three global classes in the
+system (`.sm-mono`, `.sm-hatch-blocked`, `.sm-scroll-hidden`).
 
 ### Theme and density live on the document root
 

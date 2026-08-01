@@ -29,7 +29,7 @@ const overflowStyle = {
 
 <template>
   <div role="tablist" :style="barStyle">
-    <div :style="{ display: 'flex', minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }">
+    <div class="sm-scroll-hidden" :style="{ display: 'flex', minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }">
       <Tab
         v-for="t in props.tabs"
         :key="t.id"
