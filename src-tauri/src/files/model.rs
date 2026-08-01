@@ -231,8 +231,14 @@ mod tests {
     #[test]
     fn у_каждой_ошибки_есть_машинный_вид() {
         assert_eq!(FilesError::NotFound("a".into()).kind(), "notFound");
-        assert_eq!(FilesError::Stale("a".into()).kind(), "stale");
+        assert_eq!(FilesError::Denied("a".into()).kind(), "denied");
+        assert_eq!(FilesError::NotAFile("a".into()).kind(), "notAFile");
+        assert_eq!(FilesError::Binary("a".into()).kind(), "binary");
         assert_eq!(FilesError::TooLarge { path: "a".into(), bytes: 9 }.kind(), "tooLarge");
+        assert_eq!(FilesError::NotUtf8("a".into()).kind(), "notUtf8");
+        assert_eq!(FilesError::Outside("a".into()).kind(), "outside");
+        assert_eq!(FilesError::Stale("a".into()).kind(), "stale");
+        assert_eq!(FilesError::Io("a".into()).kind(), "io");
     }
 
     #[test]
