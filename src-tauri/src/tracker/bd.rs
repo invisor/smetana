@@ -129,6 +129,15 @@ pub fn update_args(id: &str, patch: &IssuePatch) -> Vec<String> {
     args
 }
 
+/// `bd init` в каталоге проекта.
+///
+/// `--non-interactive` обязателен: терминала у нас нет, а мастер, ждущий
+/// ответа на вопрос про роль, повесил бы вызов навсегда. Префикс задач не
+/// передаём — bd берёт имя каталога, и это ровно то, что человек и ожидает.
+pub fn init_args() -> Vec<String> {
+    vec!["init".to_string(), "--non-interactive".to_string()]
+}
+
 /// Обёртка над вшитым бинарником bd. Единственное место, которое знает,
 /// как выглядят аргументы CLI.
 #[derive(Clone)]
@@ -214,6 +223,12 @@ impl Bd {
 
     pub async fn create(&self, new: &NewIssue) -> Result<Issue, TrackerError> {
         self.one(create_args(new)).await
+    }
+
+    /// Заводит трекер в каталоге. Вывод не разбираем: важен только код
+    /// возврата — дальше воркер всё равно перечитывает каталог с нуля.
+    pub async fn init(&self) -> Result<(), TrackerError> {
+        self.run(init_args()).await.map(|_| ())
     }
 
     pub async fn update(&self, id: &str, patch: &IssuePatch) -> Result<Issue, TrackerError> {
@@ -325,5 +340,10 @@ mod tests {
             description: None };
         assert_eq!(create_args(&new),
             vec!["create", "--json", "--title", "-n 5", "-t", "task", "-p", "2"]);
+    }
+
+    #[test]
+    fn инициализация_идёт_без_вопросов() {
+        assert_eq!(init_args(), vec!["init".to_string(), "--non-interactive".to_string()]);
     }
 }
