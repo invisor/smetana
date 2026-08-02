@@ -745,6 +745,7 @@ const toastStackStyle = {
         <FileEditor
           v-if="fileTabActive"
           :key="project.activeTab"
+          :path="project.activeTab"
           :model-value="activeBuffer?.text ?? ''"
           :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
           :notice="editorNotice"

@@ -4,6 +4,7 @@ import { EditorView } from '@codemirror/view'
 import { Compartment, EditorState } from '@codemirror/state'
 import Button from '../core/Button.vue'
 import { editorExtensions } from './editor/extensions.js'
+import { languageFor } from './editor/languages.js'
 
 /* Редактор кода на CodeMirror 6. Вся видимая механика — подсветка, номера
    строк, поиск, история, множественная каретка — живёт в editor/extensions.js;
@@ -22,7 +23,9 @@ import { editorExtensions } from './editor/extensions.js'
 const props = defineProps({
   modelValue: { type: String, default: '' },
   notice: { type: Object, default: null },
-  readOnly: { type: Boolean, default: false }
+  readOnly: { type: Boolean, default: false },
+  /* Путь нужен ровно для одного: выбрать язык подсветки по расширению. */
+  path: { type: String, default: '' }
 })
 
 /* `save` тут нет намеренно: Cmd+S слушает окно (DesktopApp.vue), потому что
@@ -63,12 +66,18 @@ let view = null
    не прочитанного файла можно, менять — нет. */
 const readOnlyState = new Compartment()
 
+/* Язык обязан жить в Compartment: import() асинхронный, редактор к моменту
+   его прихода уже отрисован, и заменить язык на живом редакторе можно только
+   реконфигурацией отсека. */
+const languageState = new Compartment()
+
 const createState = (doc) =>
   EditorState.create({
     doc,
     extensions: [
       ...editorExtensions(),
       readOnlyState.of(EditorState.readOnly.of(props.readOnly)),
+      languageState.of([]),
       /* Наружу — только настоящая правка. Сравнение с modelValue гасит эхо:
          без него значение, пришедшее сверху, уезжает обратно и сбивает
          каретку. */
@@ -83,12 +92,23 @@ const createState = (doc) =>
 
 onMounted(() => {
   view = new EditorView({ state: createState(props.modelValue), parent: host.value })
+  applyLanguage(props.path)
 })
 
 onBeforeUnmount(() => {
   view?.destroy()
   view = null
 })
+
+/* Гонка здесь настоящая: пока грузится язык, вкладку могли переключить.
+   Ответ применяется, только если путь всё ещё тот, что запрашивали. */
+const applyLanguage = async (path) => {
+  const language = await languageFor(path)
+  if (!view || path !== props.path) return
+  view.dispatch({ effects: languageState.reconfigure(language ?? []) })
+}
+
+watch(() => props.path, applyLanguage)
 
 /* Внутрь — только когда пришедшее действительно отличается от документа.
    Правка снаружи (Reload после stale, Keep mine) идёт обычной транзакцией,
