@@ -73,8 +73,8 @@ let view = null
 /* Наружу — только настоящая правка. Сравнение с modelValue гасит эхо: без
    него значение, пришедшее сверху, уезжает обратно и сбивает каретку.
    Отдельная фабрика, а не инлайн: слушатель замыкается на props и emit
-   текущего экземпляра, и при усыновлении чужого состояния (onMounted) его
-   пересоздают заново тем же вызовом — см. compartments.js. */
+   текущего экземпляра, и при усыновлении чужого состояния (adoptState ниже)
+   его пересоздают заново тем же вызовом — см. compartments.js. */
 const changeListener = () =>
   EditorView.updateListener.of((update) => {
     if (!update.docChanged) return
@@ -98,35 +98,14 @@ onMounted(() => {
   /* Переключение на доску или в чат размонтирует поле (`v-if="fileTabActive"`
      в DesktopApp.vue), и следующее открытие файла — это уже новый экземпляр
      компонента. Без чтения takeState здесь сохранённое в onBeforeUnmount
-     состояние было бы мёртвым грузом: записывается, но никогда не читается. */
+     состояние было бы мёртвым грузом: записывается, но никогда не читается.
+
+     EditorView всегда строится с createState, даже когда есть сохранённое
+     состояние: конструктору нужно что-то валидное здесь и сейчас, а
+     усыновление — это отдельный, единый для всех вызывающих шаг, ниже. */
+  view = new EditorView({ state: createState(props.modelValue), parent: host.value })
   const saved = props.path ? takeState(props.path) : null
-  view = new EditorView({
-    state: saved ? saved.state : createState(props.modelValue),
-    parent: host.value
-  })
-  if (saved) {
-    /* Отсеки общие на все экземпляры (editor/compartments.js): readOnly с
-       момента сохранения мог измениться — например, файл дочитался, — так
-       что он выставляется заново, а не наследуется. updateListenerState
-       переставляется по той же причине, но по более серьёзной: слушатель,
-       унаследованный от прошлого (уничтоженного) экземпляра, эмитил бы в
-       никуда, и правки после возврата с доски молча терялись бы. */
-    view.dispatch({
-      effects: [
-        readOnlyState.reconfigure(EditorState.readOnly.of(props.readOnly)),
-        updateListenerState.reconfigure(changeListener())
-      ]
-    })
-    /* Пока поле было размонтировано, файл могли перечитать с диска. Тогда
-       сохранённый документ устарел, и правду говорит буфер. */
-    if (saved.state.doc.toString() !== props.modelValue) replaceDoc(props.modelValue)
-    /* Прокрутка восстанавливается после того, как состояние отрисовано: до
-       этого у scrollDOM ещё чужая высота. */
-    const { scrollTop } = saved
-    requestAnimationFrame(() => {
-      if (view) view.scrollDOM.scrollTop = scrollTop
-    })
-  }
+  if (saved) adoptState(saved, props.modelValue)
   applyLanguage(props.path)
 })
 
@@ -157,6 +136,38 @@ const replaceDoc = (text) => {
   })
 }
 
+/* Единственное место, где чужое состояние становится своим. Их было два, и
+   оба раза, когда они расходились, это стоило человеку набранного текста:
+   сначала не переставлялся слушатель, потом переставлялся только в одном из
+   двух путей. Состояние переживает экземпляр компонента, поэтому усыновление
+   обязано заново привязать к живому экземпляру ВСЁ, что замкнуто на
+   экземпляр, — и делать это одинаково, кто бы ни усыновлял: onMounted (файл
+   вернулся после доски) и watcher ниже (путь сменился внутри живого
+   экземпляра, но состояние вкладки могло быть записано прошлым). */
+const adoptState = (saved, text) => {
+  view.setState(saved.state)
+  /* readOnly с момента сохранения мог измениться — например, файл дочитался,
+     — поэтому он выставляется заново, а не наследуется. updateListenerState
+     переставляется по более серьёзной причине: унаследованный слушатель мог
+     принадлежать уже уничтоженному экземпляру и эмитить в никуда — тогда
+     правки молча не доходили бы до буфера. */
+  view.dispatch({
+    effects: [
+      readOnlyState.reconfigure(EditorState.readOnly.of(props.readOnly)),
+      updateListenerState.reconfigure(changeListener())
+    ]
+  })
+  /* Пока вкладка была не активна, файл могли перечитать с диска. Тогда
+     сохранённый документ устарел, и правду говорит буфер. */
+  if (saved.state.doc.toString() !== text) replaceDoc(text)
+  /* Прокрутка восстанавливается после того, как состояние отрисовано: до
+     этого у scrollDOM ещё чужая высота. */
+  const { scrollTop } = saved
+  requestAnimationFrame(() => {
+    if (view) view.scrollDOM.scrollTop = scrollTop
+  })
+}
+
 /* Один watcher на оба props вместо двух: при переключении вкладки path и
    modelValue меняются в один тик, и раздельные watcher'ы дерутся за порядок —
    текст нового файла успевал бы попасть в состояние старого. */
@@ -168,21 +179,10 @@ watch(
     if (path !== prevPath) {
       if (prevPath) putState(prevPath, view.state, view.scrollDOM.scrollTop)
       const saved = takeState(path)
-      view.setState(saved ? saved.state : createState(text))
-      /* Восстановленное состояние несёт отсеки такими, какими они были при
-         сохранении. readOnly с тех пор мог измениться — например, файл
-         дочитался, — поэтому он выставляется заново, а не наследуется. */
-      view.dispatch({ effects: readOnlyState.reconfigure(EditorState.readOnly.of(props.readOnly)) })
       if (saved) {
-        /* Прокрутка восстанавливается после того, как новое состояние
-           отрисовано: до этого у scrollDOM ещё чужая высота. */
-        const { scrollTop } = saved
-        requestAnimationFrame(() => {
-          if (view) view.scrollDOM.scrollTop = scrollTop
-        })
-        /* Пока вкладка была скрыта, файл могли перечитать с диска. Тогда
-           сохранённый документ устарел, и правду говорит буфер. */
-        if (saved.state.doc.toString() !== text) replaceDoc(text)
+        adoptState(saved, text)
+      } else {
+        view.setState(createState(text))
       }
       applyLanguage(path)
       return
