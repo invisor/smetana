@@ -1,11 +1,12 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { EditorView } from '@codemirror/view'
-import { Compartment, EditorState } from '@codemirror/state'
+import { EditorState, Transaction } from '@codemirror/state'
 import Button from '../core/Button.vue'
 import { editorExtensions } from './editor/extensions.js'
 import { languageFor } from './editor/languages.js'
 import { putState, takeState } from './editor/states.js'
+import { languageState, readOnlyState } from './editor/compartments.js'
 
 /* Редактор кода на CodeMirror 6. Вся видимая механика — подсветка, номера
    строк, поиск, история, множественная каретка — живёт в editor/extensions.js;
@@ -61,17 +62,13 @@ const hostStyle = { flex: 1, minHeight: 0, overflow: 'hidden' }
 const host = ref(null)
 let view = null
 
-/* readOnly живой: он снимается, когда первое чтение файла вернулось. Живое
-   значение в конфигурации CodeMirror — это Compartment, другого способа нет.
-   Именно readOnly, а не editable: выделять и копировать из двоичного или ещё
-   не прочитанного файла можно, менять — нет. */
-const readOnlyState = new Compartment()
-
-/* Язык обязан жить в Compartment: import() асинхронный, редактор к моменту
-   его прихода уже отрисован, и заменить язык на живом редакторе можно только
-   реконфигурацией отсека. */
-const languageState = new Compartment()
-
+/* readOnly живой: он снимается, когда первое чтение файла вернулось. Именно
+   readOnly, а не editable: выделять и копировать из двоичного или ещё не
+   прочитанного файла можно, менять — нет. Язык живёт в отсеке по похожей
+   причине — import() асинхронный, редактор к моменту его прихода уже
+   отрисован. Оба отсека — readOnlyState и languageState — объявлены в
+   editor/compartments.js, не здесь: см. комментарий там о том, почему они
+   общие на все экземпляры. */
 const createState = (doc) =>
   EditorState.create({
     doc,
@@ -92,7 +89,30 @@ const createState = (doc) =>
   })
 
 onMounted(() => {
-  view = new EditorView({ state: createState(props.modelValue), parent: host.value })
+  /* Переключение на доску или в чат размонтирует поле (`v-if="fileTabActive"`
+     в DesktopApp.vue), и следующее открытие файла — это уже новый экземпляр
+     компонента. Без чтения takeState здесь сохранённое в onBeforeUnmount
+     состояние было бы мёртвым грузом: записывается, но никогда не читается. */
+  const saved = props.path ? takeState(props.path) : null
+  view = new EditorView({
+    state: saved ? saved.state : createState(props.modelValue),
+    parent: host.value
+  })
+  if (saved) {
+    /* Отсеки общие на все экземпляры (editor/compartments.js), а readOnly с
+       момента сохранения мог измениться — например, файл дочитался, — так
+       что он выставляется заново, а не наследуется. */
+    view.dispatch({ effects: readOnlyState.reconfigure(EditorState.readOnly.of(props.readOnly)) })
+    /* Пока поле было размонтировано, файл могли перечитать с диска. Тогда
+       сохранённый документ устарел, и правду говорит буфер. */
+    if (saved.state.doc.toString() !== props.modelValue) replaceDoc(props.modelValue)
+    /* Прокрутка восстанавливается после того, как состояние отрисовано: до
+       этого у scrollDOM ещё чужая высота. */
+    const { scrollTop } = saved
+    requestAnimationFrame(() => {
+      if (view) view.scrollDOM.scrollTop = scrollTop
+    })
+  }
   applyLanguage(props.path)
 })
 
@@ -112,7 +132,15 @@ const applyLanguage = async (path) => {
 
 const replaceDoc = (text) => {
   if (!view || text === view.state.doc.toString()) return
-  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
+  /* Приход содержимого с диска — не правка человека, и в историю он не идёт:
+     иначе Cmd+Z на только что открытом файле откатывал бы его к пустому
+     документу, пустота уходила бы в буфер, и следующий Cmd+S записал бы её
+     поверх настоящего файла. То же для Reload после stale — отменять чужую
+     запись нечем, для этого есть Keep mine, который спрашивает заранее. */
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: text },
+    annotations: Transaction.addToHistory.of(false)
+  })
 }
 
 /* Один watcher на оба props вместо двух: при переключении вкладки path и
