@@ -6,3 +6,11 @@ import { Compartment } from '@codemirror/state'
    reconfigure по ним молча не сработал бы. */
 export const readOnlyState = new Compartment()
 export const languageState = new Compartment()
+
+/* Слушатель обновлений замыкается на props и emit своего экземпляра, а
+   состояние переживает экземпляр: после возврата с доски компонент новый,
+   а состояние — прежнее. Поэтому слушатель тоже отсек: при усыновлении
+   чужого состояния его переставляют на живой экземпляр. Иначе правки
+   уходили бы в emit уничтоженного компонента — молча, потому что для
+   CodeMirror это по-прежнему исправное расширение. */
+export const updateListenerState = new Compartment()

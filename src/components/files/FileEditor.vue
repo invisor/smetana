@@ -6,7 +6,7 @@ import Button from '../core/Button.vue'
 import { editorExtensions } from './editor/extensions.js'
 import { languageFor } from './editor/languages.js'
 import { putState, takeState } from './editor/states.js'
-import { languageState, readOnlyState } from './editor/compartments.js'
+import { languageState, readOnlyState, updateListenerState } from './editor/compartments.js'
 
 /* Редактор кода на CodeMirror 6. Вся видимая механика — подсветка, номера
    строк, поиск, история, множественная каретка — живёт в editor/extensions.js;
@@ -66,9 +66,23 @@ let view = null
    readOnly, а не editable: выделять и копировать из двоичного или ещё не
    прочитанного файла можно, менять — нет. Язык живёт в отсеке по похожей
    причине — import() асинхронный, редактор к моменту его прихода уже
-   отрисован. Оба отсека — readOnlyState и languageState — объявлены в
-   editor/compartments.js, не здесь: см. комментарий там о том, почему они
-   общие на все экземпляры. */
+   отрисован. Все три отсека — readOnlyState, languageState и
+   updateListenerState — объявлены в editor/compartments.js, не здесь: см.
+   комментарии там о том, почему они общие на все экземпляры. */
+
+/* Наружу — только настоящая правка. Сравнение с modelValue гасит эхо: без
+   него значение, пришедшее сверху, уезжает обратно и сбивает каретку.
+   Отдельная фабрика, а не инлайн: слушатель замыкается на props и emit
+   текущего экземпляра, и при усыновлении чужого состояния (onMounted) его
+   пересоздают заново тем же вызовом — см. compartments.js. */
+const changeListener = () =>
+  EditorView.updateListener.of((update) => {
+    if (!update.docChanged) return
+    const text = update.state.doc.toString()
+    if (text === props.modelValue) return
+    emit('update:modelValue', text)
+  })
+
 const createState = (doc) =>
   EditorState.create({
     doc,
@@ -76,15 +90,7 @@ const createState = (doc) =>
       ...editorExtensions(),
       readOnlyState.of(EditorState.readOnly.of(props.readOnly)),
       languageState.of([]),
-      /* Наружу — только настоящая правка. Сравнение с modelValue гасит эхо:
-         без него значение, пришедшее сверху, уезжает обратно и сбивает
-         каретку. */
-      EditorView.updateListener.of((update) => {
-        if (!update.docChanged) return
-        const text = update.state.doc.toString()
-        if (text === props.modelValue) return
-        emit('update:modelValue', text)
-      })
+      updateListenerState.of(changeListener())
     ]
   })
 
@@ -99,10 +105,18 @@ onMounted(() => {
     parent: host.value
   })
   if (saved) {
-    /* Отсеки общие на все экземпляры (editor/compartments.js), а readOnly с
+    /* Отсеки общие на все экземпляры (editor/compartments.js): readOnly с
        момента сохранения мог измениться — например, файл дочитался, — так
-       что он выставляется заново, а не наследуется. */
-    view.dispatch({ effects: readOnlyState.reconfigure(EditorState.readOnly.of(props.readOnly)) })
+       что он выставляется заново, а не наследуется. updateListenerState
+       переставляется по той же причине, но по более серьёзной: слушатель,
+       унаследованный от прошлого (уничтоженного) экземпляра, эмитил бы в
+       никуда, и правки после возврата с доски молча терялись бы. */
+    view.dispatch({
+      effects: [
+        readOnlyState.reconfigure(EditorState.readOnly.of(props.readOnly)),
+        updateListenerState.reconfigure(changeListener())
+      ]
+    })
     /* Пока поле было размонтировано, файл могли перечитать с диска. Тогда
        сохранённый документ устарел, и правду говорит буфер. */
     if (saved.state.doc.toString() !== props.modelValue) replaceDoc(props.modelValue)
