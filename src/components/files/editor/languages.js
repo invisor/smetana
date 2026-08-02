@@ -6,8 +6,15 @@
    Расширять набор — значит дописать строку сюда, больше ничего. */
 import { StreamLanguage } from '@codemirror/language'
 
-const legacy = (name) =>
-  import('@codemirror/legacy-modes/mode/' + name).then((m) => m)
+/* Каждый путь записан целиком: склеенный специфаер Rollup не анализирует,
+   чанк для него не создаётся, и импорт падает всегда — а не только когда
+   что-то не приехало по сети. */
+const LEGACY = {
+  toml: () => import('@codemirror/legacy-modes/mode/toml').then((m) => StreamLanguage.define(m.toml)),
+  shell: () => import('@codemirror/legacy-modes/mode/shell').then((m) => StreamLanguage.define(m.shell)),
+  properties: () => import('@codemirror/legacy-modes/mode/properties').then((m) => StreamLanguage.define(m.properties)),
+  dockerfile: () => import('@codemirror/legacy-modes/mode/dockerfile').then((m) => StreamLanguage.define(m.dockerFile))
+}
 
 const LANGUAGES = {
   js: () => import('@codemirror/lang-javascript').then((m) => m.javascript()),
@@ -36,18 +43,18 @@ const LANGUAGES = {
   cpp: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
   hpp: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
   java: () => import('@codemirror/lang-java').then((m) => m.java()),
-  toml: () => legacy('toml').then((m) => StreamLanguage.define(m.toml)),
-  sh: () => legacy('shell').then((m) => StreamLanguage.define(m.shell)),
-  bash: () => legacy('shell').then((m) => StreamLanguage.define(m.shell)),
-  zsh: () => legacy('shell').then((m) => StreamLanguage.define(m.shell)),
-  ini: () => legacy('properties').then((m) => StreamLanguage.define(m.properties)),
-  cfg: () => legacy('properties').then((m) => StreamLanguage.define(m.properties))
+  toml: LEGACY.toml,
+  sh: LEGACY.shell,
+  bash: LEGACY.shell,
+  zsh: LEGACY.shell,
+  ini: LEGACY.properties,
+  cfg: LEGACY.properties
 }
 
 /* Файлы, у которых имя важнее расширения. */
 const BY_NAME = {
-  dockerfile: () => legacy('dockerfile').then((m) => StreamLanguage.define(m.dockerFile)),
-  makefile: () => legacy('shell').then((m) => StreamLanguage.define(m.shell))
+  dockerfile: LEGACY.dockerfile,
+  makefile: LEGACY.shell
 }
 
 export async function languageFor(path) {
