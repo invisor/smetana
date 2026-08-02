@@ -77,13 +77,12 @@ const onClose = (e) => {
   >
     <Icon v-if="icon" :name="icon" :size="13" :style="{ color: readOnly ? 'var(--text-muted)' : undefined }" />
     <span :style="labelStyle">{{ label }}</span>
-    <Icon
-      v-if="readOnly"
-      name="lock"
-      :size="11"
-      :title="readOnlyHint"
-      :style="{ color: 'var(--status-blocked-fg)' }"
-    />
+    <!-- Подсказка висит на обёртке, а не на Icon: `title` у Icon становится
+         aria-label и до курсора не доходит — SVG остаётся без нативного
+         тултипа. Обёртка даёт его мышке, Icon оставляет причину читалке. -->
+    <span v-if="readOnly" :title="readOnlyHint" :style="{ display: 'flex', flex: '0 0 auto' }">
+      <Icon name="lock" :size="11" :title="readOnlyHint" :style="{ color: 'var(--status-blocked-fg)' }" />
+    </span>
     <span
       v-if="dirty"
       title="Unsaved changes"
