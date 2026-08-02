@@ -160,11 +160,13 @@ history and scroll position across being switched away from and back).
 The theme is one theme for both app themes and both densities. Every value in it is a token
 reference, so the browser repaints it on its own when `data-theme` changes — the editor is never
 rebuilt. `EditorView.theme()`'s `{ dark: true }` flag is deliberately not passed: it
-would raise the `EditorView.darkTheme` facet, which the base themes bundled with other extensions
-(the search panel, special-character rendering, bracket matching) watch for, and they would start
-substituting their own hardcoded colours through `&light`/`&dark` selectors. `theme.js` is written to
-be exhaustive instead — everything a base theme would otherwise paint is repainted with a token, so
-nothing is left for `darkTheme` to contribute.
+would raise the `EditorView.darkTheme` facet, which the base themes bundled with the search panel
+and special-character rendering watch for, and they would start substituting their own hardcoded
+colours through `&light`/`&dark` selectors. `theme.js` is written to be exhaustive instead —
+everything a base theme would otherwise paint is repainted with a token, so nothing is left for
+`darkTheme` to contribute. Bracket matching is repainted too, but not for that reason: its base
+theme in `@codemirror/language` is a flat, unconditional colour that never watches the `darkTheme`
+facet at all — it would need overriding whether or not the flag were passed.
 
 Three more decisions in that area look like they could be tidied away and are load-bearing, each
 paid for with a real defect during this work. The `tabList` watcher that prunes abandoned states

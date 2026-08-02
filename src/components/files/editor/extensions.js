@@ -16,19 +16,7 @@ import { EditorState } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, indentOnInput, indentUnit } from '@codemirror/language'
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search'
-import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { editorTheme } from './theme.js'
-
-/* Escape на две секунды открывает выход по Tab — иначе клавиатурный
-   пользователь заперт в поле, потому что Tab здесь занят отступом. Механизм
-   штатный (EditorView.setTabFocusMode), но в стандартный keymap не входит.
-
-   false, а не true: Escape должен доехать и до defaultKeymap, где он схлопывает
-   множественное выделение. Обработчик, вернувший true, обрывает цепочку. */
-const escapeOpensTabFocus = (view) => {
-  view.setTabFocusMode(2000)
-  return false
-}
 
 export function editorExtensions() {
   return [
@@ -47,25 +35,13 @@ export function editorExtensions() {
     indentUnit.of('  '),
     EditorState.tabSize.of(2),
     EditorState.allowMultipleSelections.of(true),
-    indentationMarkers({
-      hideFirstIndent: true,
-      colors: {
-        light: 'var(--editor-indent-guide)',
-        dark: 'var(--editor-indent-guide)',
-        activeLight: 'var(--editor-indent-guide)',
-        activeDark: 'var(--editor-indent-guide)'
-      }
-    }),
-    /* Порядок значим: наш Escape идёт первым, чтобы взвести режим до того,
-       как defaultKeymap схлопнет выделение; indentWithTab — до defaultKeymap,
-       иначе Tab уйдёт в поведение по умолчанию. */
-    keymap.of([
-      { key: 'Escape', run: escapeOpensTabFocus },
-      indentWithTab,
-      ...searchKeymap,
-      ...historyKeymap,
-      ...defaultKeymap
-    ]),
+    /* indentWithTab идёт первым в списке, чтобы Tab достался ему раньше, чем
+       defaultKeymap применит к нему своё поведение по умолчанию. Escape,
+       открывающий выход по Tab клавиатурному пользователю, отдельной записи
+       не требует: тот же EditorView.setTabFocusMode на те же два секунды уже
+       взводится всегда включённым keydown-хендлером самого @codemirror/view —
+       собственная запись здесь была двойником, ничего не менявшим. */
+    keymap.of([indentWithTab, ...searchKeymap, ...historyKeymap, ...defaultKeymap]),
     editorTheme
   ]
 }
