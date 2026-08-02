@@ -2,7 +2,6 @@
    автодополнение, линтер и свёртку — всё, от чего эта задача отказалась, —
    и молча растит бандл. */
 import {
-  EditorView,
   drawSelection,
   dropCursor,
   highlightActiveLine,
