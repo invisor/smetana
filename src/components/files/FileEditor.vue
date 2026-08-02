@@ -5,7 +5,7 @@ import { EditorState, Transaction } from '@codemirror/state'
 import Button from '../core/Button.vue'
 import { editorExtensions } from './editor/extensions.js'
 import { languageFor } from './editor/languages.js'
-import { putState, takeState } from './editor/states.js'
+import { peekState, putState } from './editor/states.js'
 import { languageState, readOnlyState, updateListenerState } from './editor/compartments.js'
 
 /* Редактор кода на CodeMirror 6. Вся видимая механика — подсветка, номера
@@ -26,7 +26,10 @@ const props = defineProps({
   modelValue: { type: String, default: '' },
   notice: { type: Object, default: null },
   readOnly: { type: Boolean, default: false },
-  /* Путь нужен ровно для одного: выбрать язык подсветки по расширению. */
+  /* Путь — два дела сразу: хвост после последнего "/" выбирает язык
+     подсветки, а путь целиком (в DesktopApp.vue уже склеенный с корнем
+     проекта) — это ключ, под которым editor/states.js хранит документ,
+     каретку, историю правок и прокрутку этой вкладки. */
   path: { type: String, default: '' }
 })
 
@@ -61,6 +64,15 @@ const hostStyle = { flex: 1, minHeight: 0, overflow: 'hidden' }
 
 const host = ref(null)
 let view = null
+
+/* adoptState пишет восстановленную прокрутку в scrollDOM не сразу, а в
+   следующем кадре (см. там, почему). Оба места, что сохраняют прокрутку,
+   читают scrollDOM.scrollTop синхронно, и если переключение случится быстрее
+   кадра — A→B→C короче одного requestAnimationFrame, — B сохранил бы
+   прокрутку, которая ещё не успела примениться, то есть чужую, оставшуюся от
+   A. pendingScrollTop держит то значение, что вот-вот станет настоящим, и обе
+   точки сохранения предпочитают его живому scrollDOM. */
+let pendingScrollTop = null
 
 /* readOnly живой: он снимается, когда первое чтение файла вернулось. Именно
    readOnly, а не editable: выделять и копировать из двоичного или ещё не
@@ -97,20 +109,20 @@ const createState = (doc) =>
 onMounted(() => {
   /* Переключение на доску или в чат размонтирует поле (`v-if="fileTabActive"`
      в DesktopApp.vue), и следующее открытие файла — это уже новый экземпляр
-     компонента. Без чтения takeState здесь сохранённое в onBeforeUnmount
+     компонента. Без чтения peekState здесь сохранённое в onBeforeUnmount
      состояние было бы мёртвым грузом: записывается, но никогда не читается.
 
      EditorView всегда строится с createState, даже когда есть сохранённое
      состояние: конструктору нужно что-то валидное здесь и сейчас, а
      усыновление — это отдельный, единый для всех вызывающих шаг, ниже. */
   view = new EditorView({ state: createState(props.modelValue), parent: host.value })
-  const saved = props.path ? takeState(props.path) : null
+  const saved = props.path ? peekState(props.path) : null
   if (saved) adoptState(saved, props.modelValue)
   applyLanguage(props.path)
 })
 
 onBeforeUnmount(() => {
-  if (view && props.path) putState(props.path, view.state, view.scrollDOM.scrollTop)
+  if (view && props.path) putState(props.path, view.state, pendingScrollTop ?? view.scrollDOM.scrollTop)
   view?.destroy()
   view = null
 })
@@ -161,10 +173,14 @@ const adoptState = (saved, text) => {
      сохранённый документ устарел, и правду говорит буфер. */
   if (saved.state.doc.toString() !== text) replaceDoc(text)
   /* Прокрутка восстанавливается после того, как состояние отрисовано: до
-     этого у scrollDOM ещё чужая высота. */
+     этого у scrollDOM ещё чужая высота. pendingScrollTop держит то же
+     значение синхронно, на случай если состояние сохранят раньше, чем этот
+     кадр наступит — см. комментарий у объявления. */
   const { scrollTop } = saved
+  pendingScrollTop = scrollTop
   requestAnimationFrame(() => {
     if (view) view.scrollDOM.scrollTop = scrollTop
+    pendingScrollTop = null
   })
 }
 
@@ -177,8 +193,8 @@ watch(
     if (!view) return
 
     if (path !== prevPath) {
-      if (prevPath) putState(prevPath, view.state, view.scrollDOM.scrollTop)
-      const saved = takeState(path)
+      if (prevPath) putState(prevPath, view.state, pendingScrollTop ?? view.scrollDOM.scrollTop)
+      const saved = peekState(path)
       if (saved) {
         adoptState(saved, text)
       } else {
