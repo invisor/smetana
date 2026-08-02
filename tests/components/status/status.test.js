@@ -35,6 +35,17 @@ describe('hashStatus', () => {
      перекрасила бы разом все пользовательские статусы во всех проектах.
      Значения сняты с текущей реализации и меняться не должны. */
   it('стабилен на фиксированной выборке', () => {
+    expect(hashStatus('awaiting-review')).toBe(2045313954)
+    expect(statusSlot('awaiting-review')).toBe(6)
+    expect(hashStatus('triage')).toBe(166983937)
+    expect(statusSlot('triage')).toBe(1)
+    expect(hashStatus('deploy')).toBe(1557350270)
+    expect(statusSlot('deploy')).toBe(2)
+    expect(hashStatus('needs-review')).toBe(1866091121)
+    expect(statusSlot('needs-review')).toBe(5)
+  })
+
+  it('нормализация не влияет на хеш', () => {
     expect(hashStatus('awaiting-review')).toBe(hashStatus('Awaiting Review'))
     expect(statusSlot('awaiting-review')).toBe(statusSlot('  awaiting__review '))
   })
