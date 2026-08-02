@@ -60,7 +60,14 @@ const tabs = [
   { id: 'chat', kind: 'pinned', label: 'Chat' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', dirty: true },
-  { id: 'agent.rs', kind: 'preview', label: 'agent.rs' }
+  { id: 'agent.rs', kind: 'preview', label: 'agent.rs' },
+  {
+    id: 'logo.png',
+    kind: 'file',
+    label: 'logo.png',
+    readOnly: true,
+    readOnlyHint: 'Binary file — not shown.'
+  }
 ]
 
 /* Reserved statuses plus generated ones, to show both halves of the algorithm. */

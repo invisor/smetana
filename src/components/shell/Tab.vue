@@ -5,7 +5,7 @@ import IconButton from '../core/IconButton.vue'
 
 /* Tab kinds
    pinned  - Chat and Kanban. Always first, no close affordance.
-   file    - a normal opened file tab, closable, may be dirty or agent-locked.
+   file    - a normal opened file tab, closable, may be dirty or read-only.
    preview - single-click temporary tab, replaced by the next preview.
              Italic, as in VS Code: the mechanic is VS Code's, and so is its
              signal — muscle memory is the point. Отход от дизайн-системы,
@@ -18,7 +18,12 @@ const props = defineProps({
   icon: { type: String, default: undefined },
   active: { type: Boolean, default: false },
   dirty: { type: Boolean, default: false },
-  readOnly: { type: Boolean, default: false }
+  readOnly: { type: Boolean, default: false },
+  /* Почему вкладка заперта, словами. Замок один, а причин у него несколько —
+     файл не открыть как текст, файл держит агент, — и подсказка обязана
+     называть ту, что случилась. Умолчание не называет ни одной: лучше сказать
+     мало, чем назвать не ту. */
+  readOnlyHint: { type: String, default: 'Read-only' }
 })
 
 const emit = defineEmits(['select', 'close', 'promote'])
@@ -76,7 +81,7 @@ const onClose = (e) => {
       v-if="readOnly"
       name="lock"
       :size="11"
-      title="Read-only while an agent is working"
+      :title="readOnlyHint"
       :style="{ color: 'var(--status-blocked-fg)' }"
     />
     <span

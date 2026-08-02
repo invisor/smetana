@@ -65,6 +65,7 @@ import {
   discardTabs,
   isDirty,
   keepMine,
+  markGone,
   markStale,
   onUnsaved,
   openFile,
@@ -135,17 +136,41 @@ onMounted(async () => {
    Rust со своим жизненным циклом и отчётом об ошибках дороже, чем этот проход.
 
    Чистая вкладка перечитывается молча: терять нечего, а показывать устаревший
-   текст часами — хуже. Грязная получает полоску и ждёт решения. */
+   текст часами — хуже. Грязная получает полоску и ждёт решения.
+
+   Вкладка с отказом чтения тоже проходит через этот проход, а не пропускается:
+   из `error` нет другого выхода — поле заперто, запись отказана, а кнопка
+   «Reload» живёт под полоской, которой у этой вкладки нет. Файл, который
+   удалили и тут же вернули (обычное дело рядом с агентом), иначе остался бы
+   мёртвым до перезапуска. */
 const catchUp = async () => {
   if (!activePath.value) return
   refreshDirs(['', ...project.expanded])
 
   const open = [...project.openTabs]
   if (!open.length) return
-  for (const stat of await statFiles(open)) {
+  /* Пока метки ехали, проект могли переключить: буферы уже чужие, и трогать их
+     нельзя. Тот же приём, что в listDir. */
+  const root = filesState.root
+  const stats = await statFiles(open)
+  if (filesState.root !== root) return
+
+  for (const stat of stats) {
     const buffer = buffers.get(stat.path)
-    if (!buffer || buffer.error) continue
-    if (stat.mtime === null || stat.mtime === buffer.mtime) continue
+    if (!buffer || buffer.loading) continue
+    if (stat.mtime === null) {
+      /* Файла нет. Под грязной вкладкой это ещё не приговор — набранное цело,
+         и решение за человеком; под чистой вкладка молча показывала бы
+         содержимое того, чего нет. */
+      if (isDirty(stat.path)) markStale(stat.path)
+      else markGone(stat.path)
+      continue
+    }
+    /* Файл на месте. Буфер с отказом чтения перечитывается в любом случае:
+       его метка осталась нулевой, и сравнивать её не с чем — но набранный до
+       отказа текст перезаписывать без спроса нельзя, поэтому грязная вкладка
+       получает полоску, а не диск. */
+    if (!buffer.error && stat.mtime === buffer.mtime) continue
     if (isDirty(stat.path)) markStale(stat.path)
     else reloadTab(stat.path)
   }
@@ -317,6 +342,28 @@ const healthNotice = computed(() => {
 const fileTabActive = computed(
   () => project.activeTab !== 'chat' && project.activeTab !== 'kanban'
 )
+
+/* Cmd+S ловит окно, а не поле редактора. Клик по вкладке, по строке дерева или
+   по любой кнопке уводит фокус из textarea, и обработчик на самом поле молча
+   переставал бы работать — а человек в этот момент как раз и тянется к Cmd+S.
+   Знает, есть ли что сохранять, вид, а не поле: сохранять есть что только на
+   вкладке файла.
+
+   Клавиша сверяется по `event.code` — это физическая клавиша, и она не зависит
+   ни от раскладки, ни от Caps Lock. `event.key` при русской раскладке равен
+   'ы', при Caps Lock — 'S', и сравнение с 's' промахивалось бы в обоих
+   случаях: сохранения просто не было бы. */
+const onSaveKey = (event) => {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+  if (event.code !== 'KeyS') return
+  /* Отменяем в любом случае: «сохранить страницу» вебвью здесь не к месту
+     ни на доске, ни в чате. */
+  event.preventDefault()
+  if (fileTabActive.value) saveTab(project.activeTab)
+}
+
+onMounted(() => window.addEventListener('keydown', onSaveKey))
+onUnmounted(() => window.removeEventListener('keydown', onSaveKey))
 
 /* Порядок ветвей — от «файла нет как текста» к «файл есть, но с ним что-то
    случилось»: `error` запирает поле и объясняет пустоту, `stale` спрашивает
@@ -542,6 +589,7 @@ const hatchSwatch = {
 }
 
 const questionParts = computed(() => inspector.question.split(inspector.collidesWith))
+
 </script>
 
 <template>
@@ -667,7 +715,6 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
           :notice="editorNotice"
           @update:model-value="setText(project.activeTab, $event)"
-          @save="saveTab(project.activeTab)"
           @reload="reloadTab(project.activeTab)"
           @keep-mine="keepMine(project.activeTab)"
         />

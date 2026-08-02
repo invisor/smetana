@@ -23,7 +23,9 @@ export const PINNED = [
    первый же Cmd+S заменил бы весь файл этим символом. Пока признак стоит,
    буфер не правится (setText) и не пишется (saveTab), а поле нередактируемо —
    так же ведёт себя VS Code.
-   error — отказ чтения ({ kind, message }); тогда text пуст и правки нет.
+   error — отказ чтения ({ kind, message }); правки нет, а text обычно пуст —
+   кроме вкладки, под которой файл исчез уже открытым: там остаётся то, что
+   успели прочитать.
    saveError — отказ записи ({ kind, message }). Разделены намеренно: error
    значит «файла нет как текста», и потому запирает поле (readOnly у вкладки и
    у редактора), а отказ записи оставляет и текст, и право его править —
@@ -48,15 +50,29 @@ export const isDirty = (path) => {
 
 export const dirtyPaths = computed(() => project().openTabs.filter(isDirty))
 
+/* Замок на вкладке говорит «править нельзя», и причину он обязан назвать свою:
+   агентов приложение пока не спрашивает ни о чём, а запирает вкладку отказ
+   чтения — двоичный файл, не UTF-8, слишком велик, исчез. Поэтому наружу едет
+   не голый флаг, а текст.
+
+   Первое чтение замка не получает, хотя поле на это время тоже не правится:
+   оно длится миллисекунды, и замок, мигающий на каждом открытии файла, врал бы
+   про постоянное свойство вкладки. */
+const readOnlyHint = (buffer) => (buffer?.error ? fileErrorText(buffer.error) : null)
+
 export const tabList = computed(() => [
   ...PINNED,
-  ...project().openTabs.map((path) => ({
-    id: path,
-    kind: path === project().previewTab ? 'preview' : 'file',
-    label: basenameOf(path),
-    dirty: isDirty(path),
-    readOnly: !!buffers.get(path)?.error
-  }))
+  ...project().openTabs.map((path) => {
+    const hint = readOnlyHint(buffers.get(path))
+    return {
+      id: path,
+      kind: path === project().previewTab ? 'preview' : 'file',
+      label: basenameOf(path),
+      dirty: isDirty(path),
+      readOnly: !!hint,
+      readOnlyHint: hint ?? undefined
+    }
+  })
 ])
 
 export const activeBuffer = computed(() => buffers.get(project().activeTab) ?? null)
@@ -246,11 +262,28 @@ export function saveTab(path) {
   return chain
 }
 
-/* Файл уехал под вкладкой — это заметил проход по фокусу окна. */
+/* Файл уехал под грязной вкладкой — это заметил проход по фокусу окна.
+   Решение за человеком, поэтому вкладка получает полоску с кнопками.
+
+   Отказ чтения при этом снимается, а не сохраняется: сюда приходят и те
+   буферы, у которых он был, — файл удалили и тут же вернули, права починили.
+   Файл на месте, набранный текст на месте, и оставлять поле запертым значило
+   бы заморозить его навсегда: из `error` больше ничего не выводит. */
 export function markStale(path) {
   const buffer = buffers.get(path)
-  if (!buffer || buffer.error) return
-  buffers.set(path, { ...buffer, stale: true })
+  if (!buffer || buffer.loading) return
+  buffers.set(path, { ...buffer, error: null, stale: true })
+}
+
+/* Файл исчез под чистой вкладкой. Терять нечего, и перечитывать нечего, но и
+   показывать содержимое того, чего нет, часами нельзя. Отказ чтения тут не
+   выдумка, а правда: следующее чтение вернуло бы ровно его, — а вместе с ним
+   приходят и объяснение под полоской, и замок на вкладке, и запертое поле.
+   Вернувшийся файл поднимет вкладку обратно — этим занят проход по фокусу. */
+export function markGone(path) {
+  const buffer = buffers.get(path)
+  if (!buffer || buffer.loading || buffer.error) return
+  buffers.set(path, { ...buffer, error: { kind: 'notFound' }, stale: false })
 }
 
 /* «Перечитать»: содержимое с диска побеждает, правки уходят. */
