@@ -50,6 +50,7 @@ import {
   basenameOf,
   fileErrorText,
   filesState,
+  isStubPath,
   listDir,
   refreshDirs,
   saveErrorText,
@@ -122,12 +123,21 @@ onMounted(adoptInitialProject)
 
 /* Дерево и вкладки открываются вместе с проектом. Активный проект к этому
    моменту уже прочитан настройками — App.vue ждёт loadSettings до того, как
-   вообще нарисует этот вид. */
+   вообще нарисует этот вид.
+
+   Переезд на другой проект делает ровно то же самое (moveTo в projects.js), и
+   он может начаться, пока этот проход ещё в awaitʼах — щелчком по строке
+   списка. Тогда доделывать нечего: сверяемся с активным проектом после каждого
+   ожидания и уходим, если он сменился. Побеждает переезд, а не тот, кто начал
+   раньше. */
 onMounted(async () => {
-  if (!activePath.value) return
-  setRoot(activePath.value)
+  const opened = activePath.value
+  if (!opened) return
+  setRoot(opened)
   await listDir('')
+  if (activePath.value !== opened) return
   await Promise.all(project.expanded.map((dir) => listDir(dir)))
+  if (activePath.value !== opened) return
   await restoreTabs()
 })
 /* Приложение существует ради сценария «вернулся через два часа и смотрю, что
@@ -394,11 +404,16 @@ const toggleDir = (path) => {
   }
 }
 
+/* Строка «…N more» — не файл: за ней нет пути на диске, и открытая по ней
+   вкладка попала бы в настройки и осталась бы там навсегда. Отсеиваем её здесь,
+   в обоих обработчиках: дерево про заглушку не знает и знать не должно. */
 const onSelectFile = (path) => {
+  if (isStubPath(path)) return
   project.selectedPath = path
   openFile(path)
 }
 const onOpenFile = (path) => {
+  if (isStubPath(path)) return
   project.selectedPath = path
   openFile(path, { permanent: true })
 }
@@ -590,6 +605,18 @@ const hatchSwatch = {
 
 const questionParts = computed(() => inspector.question.split(inspector.collidesWith))
 
+/* Столбец тостов в углу. Пустым он ничего не занимает и ничего не
+   перехватывает: без детей у него нулевой размер. */
+const toastStackStyle = {
+  position: 'fixed',
+  right: 'var(--space-6)',
+  bottom: 'var(--space-6)',
+  zIndex: 'var(--z-toast)',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-end',
+  gap: 'var(--space-4)'
+}
 </script>
 
 <template>
@@ -614,7 +641,10 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           @toggle="layout.leftCollapsed = !layout.leftCollapsed"
         >
           <template #actions>
+            <!-- Обновлять на вкладках Git и Agents нечего: там фикстура и
+                 пустое состояние, и кнопка обещала бы работу, которой нет. -->
             <IconButton
+              v-if="project.sideTab === 'files'"
               icon="refresh-cw"
               label="Refresh files"
               size="sm"
@@ -709,8 +739,12 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
           </template>
         </Modal>
         <!-- Вкладка файла: доска и чат к ней отношения не имеют. -->
+        <!-- :key — своё поле на каждый файл. Без него textarea переживает смену
+             вкладки вместе с прокруткой и кареткой прошлого файла, и открытый
+             файл показывается с чужого места. -->
         <FileEditor
           v-if="fileTabActive"
+          :key="project.activeTab"
           :model-value="activeBuffer?.text ?? ''"
           :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
           :notice="editorNotice"
@@ -829,9 +863,24 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
       </div>
     </div>
 
-    <div v-if="trackerState.lastError" :style="{ position: 'fixed', right: 'var(--space-6)', bottom: 'var(--space-6)', zIndex: 'var(--z-toast)' }">
-      <Toast tone="error" :title="trackerState.lastError.title" :description="trackerState.lastError.description"
-             @close="trackerState.lastError = null" />
+    <!-- Тосты живут в одном столбце: два фиксированных угла налезли бы друг на
+         друга, и отказ трекера скрыл бы отказ диска ровно тогда, когда сломано
+         и то, и другое. -->
+    <div :style="toastStackStyle">
+      <Toast
+        v-if="trackerState.lastError"
+        tone="error"
+        :title="trackerState.lastError.title"
+        :description="trackerState.lastError.description"
+        @close="trackerState.lastError = null"
+      />
+      <Toast
+        v-if="filesState.lastError"
+        tone="error"
+        title="Could not read the file tree"
+        :description="filesState.lastError"
+        @close="filesState.lastError = null"
+      />
     </div>
   </div>
 </template>

@@ -1,5 +1,6 @@
 /* Файлы проекта во фронте. Четвёртый и последний файл в src/, знающий про
-   Tauri, — вместе с tracker.js, settings.js и projects.js.
+   Tauri, — вместе с tracker.js, settings.js и projects.js. Стор вкладок
+   (tabs.js) ходит на диск через него и сам про Tauri не знает.
 
    Истина здесь снаружи, на диске, как у трекера, — но догонять её нечем:
    вотчера у дерева нет намеренно. Свежесть приносит проход по фокусу окна
@@ -59,6 +60,28 @@ export function saveErrorText(error) {
   return SAVE_ERRORS[error?.kind] ?? SAVE_ERRORS.io
 }
 
+/* И третья карта — про каталоги. Отказ чтения каталога человек видит тостом, и
+   фраза «This file is gone from disk.» под именем папки говорит не о том, что
+   случилось. */
+const DIR_ERRORS = {
+  notFound: 'This folder is gone from disk.',
+  denied: 'No permission to read this folder.',
+  notAFile: 'This is not a folder.',
+  outside: 'That path is outside the project.',
+  io: 'Could not read this folder.'
+}
+
+export function dirErrorText(error) {
+  return DIR_ERRORS[error?.kind] ?? DIR_ERRORS.io
+}
+
+/* Метка строки-заглушки «…N more» в путях дерева. Нулевой байт не бывает в
+   имени файла ни на одной файловой системе, поэтому настоящий путь с ним не
+   столкнётся. */
+const STUB_MARK = '\u0000'
+
+export const isStubPath = (path) => typeof path === 'string' && path.includes(STUB_MARK)
+
 /* Ошибка из Tauri приезжает объектом { kind, message }; ошибка доставки (мок
    бросил Error, IPC не поднялся) — чем угодно. Приводим к одной форме, чтобы
    вызывающие не разбирали два случая. */
@@ -67,9 +90,13 @@ function normalize(error) {
   return { kind: 'io', message: String(error?.message ?? error) }
 }
 
+/* Отказ чтения каталога виден человеку: дерево в этот момент показывает то,
+   что успело прочитаться, и без слов выглядит просто пустой папкой. Полный
+   текст ошибки остаётся в консоли, наружу едет короткая фраза — её показывает
+   тост в DesktopApp.vue. */
 function report(where, error) {
   console.error(`[files] ${where}:`, error)
-  filesState.lastError = fileErrorText(error)
+  filesState.lastError = dirErrorText(error)
 }
 
 /* Переезд на другой проект. Дерево сбрасывается целиком: показывать каталоги
@@ -155,9 +182,11 @@ export async function statFiles(paths) {
    идёт вглубь.
 
    Обрезанный каталог получает лишнюю запись-заглушку: молчаливая обрезка
-   читалась бы как «здесь больше нет файлов». Её kind — "file", а path
-   заведомо не совпадает ни с одним настоящим, так что кликом по ней ничего
-   не откроется. */
+   читалась бы как «здесь больше нет файлов». Её kind — "file", потому что
+   отдельного вида у строки-заглушки в дереве нет, а её путь помечен нулевым
+   байтом: имени файла такой символ не достаётся ни на одной файловой системе,
+   и `isStubPath` узнаёт заглушку по нему. Отсеивают её обработчики клика в
+   DesktopApp.vue — сама строка ничего про себя не знает. */
 export function treeNodes(expandedSet) {
   const build = (dir) => {
     const listing = filesState.dirs.get(dir)
@@ -170,7 +199,7 @@ export function treeNodes(expandedSet) {
     }))
     if (listing.truncated > 0) {
       nodes.push({
-        path: `${dir}\u0000more`,
+        path: `${dir}${STUB_MARK}more`,
         name: `…${listing.truncated} more`,
         kind: 'file'
       })
