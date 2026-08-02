@@ -111,12 +111,19 @@ describe('дельты', () => {
     expect(tracker.trackerState.generation).toBe(6)
   })
 
-  it('разрыв поколения означает потерянное событие — берётся снимок целиком', async () => {
-    await start(snapshot({ generation: 5 }))
+  it('разрыв поколения означает потерянное событие — доска берётся целиком через resync', async () => {
+    await start(snapshot({ generation: 5, issues: [issue({ id: 'bd-1' })] }))
+    ipc.on('tracker_resync', snapshot({ generation: 9, issues: [issue({ id: 'bd-9' })] }))
 
     await emit('tracker:delta', delta({ generation: 8, upserted: [issue({ id: 'bd-8' })] }))
 
-    await vi.waitFor(() => expect(ipc.calls('tracker_snapshot')).toHaveLength(2))
+    await vi.waitFor(() => expect(ipc.calls('tracker_resync')).toHaveLength(1))
+    /* Снимок заменяет состояние целиком: прежняя задача ушла, пришедшая с ним — на месте. */
+    expect(tracker.trackerState.generation).toBe(9)
+    expect(tracker.trackerState.issues.has('bd-9')).toBe(true)
+    expect(tracker.trackerState.issues.has('bd-1')).toBe(false)
+    /* Дельта с разрывом не применяется вовсе — её задача до доски не доехала. */
+    expect(tracker.trackerState.issues.has('bd-8')).toBe(false)
   })
 
   it('во время переезда дельты игнорируются: они могут быть про старый каталог', async () => {
