@@ -102,6 +102,20 @@ pub fn list_dir(root: &Path, rel: &str) -> Result<Listing, FilesError> {
 }
 
 pub fn read_text(root: &Path, rel: &str) -> Result<FileText, FilesError> {
+    read_text_reading_with(root, rel, |full| fs::read(full))
+}
+
+/// Тело `read_text` с подменяемым чтением байтов.
+///
+/// Подмена существует ради одного теста, и другого способа его написать нет:
+/// порядок «сначала метка, потом байты» виден только тому, кто успевает
+/// переписать файл ровно между этими двумя шагами, а из теста в этот
+/// промежуток не попасть ничем, кроме гонки. Замыкание и есть этот промежуток.
+fn read_text_reading_with(
+    root: &Path,
+    rel: &str,
+    read_bytes: impl FnOnce(&Path) -> std::io::Result<Vec<u8>>,
+) -> Result<FileText, FilesError> {
     let full = resolve_within(root, rel)?;
     let meta = fs::metadata(&full).map_err(|err| io_error(rel, &err))?;
     if !meta.is_file() {
@@ -110,18 +124,30 @@ pub fn read_text(root: &Path, rel: &str) -> Result<FileText, FilesError> {
     if meta.len() > MAX_FILE_BYTES {
         return Err(FilesError::TooLarge { path: rel.to_owned(), bytes: meta.len() });
     }
+    // Метку берём ДО чтения байтов, и второй раз её не снимаем.
+    //
+    // Атомарно прочитать содержимое вместе с меткой нельзя, а между двумя
+    // вызовами файл могут переписать — значит, выбирать приходится не между
+    // «верно» и «неверно», а между двумя способами ошибиться:
+    //
+    //   метка до чтения  — во фронт уедет новое содержимое со старой меткой,
+    //                      и следующая запись отказом `Stale` спросит человека;
+    //   метка после      — уедет старое содержимое с новой меткой, и следующая
+    //                      запись пройдёт сверку и молча затрёт чужую правку.
+    //
+    // Ошибаться мы обязаны в сторону ложного отказа: он стоит одного вопроса,
+    // а молчаливая перезапись стоит чужой работы. Сверка `expected_mtime` в
+    // `write_text` существует ровно ради этого, и порядок «метка после» лишал
+    // бы её смысла.
+    let mtime = mtime_of(&meta);
 
-    let bytes = fs::read(&full).map_err(|err| io_error(rel, &err))?;
+    let bytes = read_bytes(&full).map_err(|err| io_error(rel, &err))?;
     if looks_binary(&bytes[..bytes.len().min(BINARY_SNIFF_BYTES)]) {
         return Err(FilesError::Binary(rel.to_owned()));
     }
     let text = String::from_utf8(bytes).map_err(|_| FilesError::NotUtf8(rel.to_owned()))?;
 
-    // Метку берём после чтения: файл, переписанный ровно между `metadata` и
-    // `read`, иначе уехал бы во фронт с меткой прошлой версии, и следующая
-    // запись затёрла бы чужую правку, считая её своей.
-    let meta = fs::metadata(&full).map_err(|err| io_error(rel, &err))?;
-    Ok(FileText { path: rel.to_owned(), text, mtime: mtime_of(&meta) })
+    Ok(FileText { path: rel.to_owned(), text, mtime })
 }
 
 /// Метки времени пачкой. Отказов здесь нет: «файла нет» — это состояние
@@ -206,6 +232,17 @@ mod tests {
 
     /// Свой каталог на каждый тест: имя несёт pid, поэтому параллельные
     /// прогоны не мешают друг другу. Тот же приём, что в `project.rs`.
+    /// Явная метка времени вместо паузы. Разрешение `mtime` на некоторых
+    /// файловых системах грубее, чем расстояние между двумя записями подряд, и
+    /// тест «метка изменилась» без этого бывает ложно-зелёным. `sleep` дал бы
+    /// то же самое, но замедлял бы весь прогон и всё равно зависел бы от
+    /// разрешения; выставленная метка не зависит ни от того, ни от другого.
+    fn set_mtime(path: &Path, secs: u64) {
+        let file = fs::File::options().write(true).open(path).expect("открыть файл ради метки");
+        file.set_modified(UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .expect("выставить метку времени");
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("smetana-files-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -273,6 +310,78 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Держит порядок из `read_text`: метка снимается с файла до чтения байтов
+    /// и наружу уходит именно она. Стоит вернуть снятие метки после чтения —
+    /// и сверка в `write_text` перестанет защищать: во фронт уедет содержимое
+    /// одной версии с меткой другой, и следующая запись пройдёт молча.
+    #[test]
+    fn чужая_правка_после_чтения_отказывает_записи() {
+        let root = scratch("read-then-clobber");
+        let path = root.join("a.txt");
+        fs::write(&path, "работа агента\n").unwrap();
+        set_mtime(&path, 1_700_000_000);
+
+        let file = read_text(&root, "a.txt").unwrap();
+
+        assert_eq!(file.text, "работа агента\n");
+        assert_eq!(file.mtime, 1_700_000_000_000, "наружу уходит метка прочитанного файла");
+
+        // Так выглядит агент, переписавший файл, пока вкладка была открыта.
+        fs::write(&path, "новая работа агента\n").unwrap();
+        set_mtime(&path, 1_700_000_060);
+
+        let err = write_text(&root, "a.txt", "мои правки\n", file.mtime);
+
+        assert!(
+            matches!(err, Err(FilesError::Stale(_))),
+            "запись по метке из read_text обязана отказать, а не затирать чужое: {err:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "новая работа агента\n",
+            "при отказе на диске не должно измениться ничего"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Тот же случай, но пойманный в его настоящий момент: файл переписывают
+    /// ровно между снятием метки и чтением байтов. Метка, снятая ДО чтения,
+    /// уезжает старой — и следующая запись отказывает `Stale`, то есть
+    /// спрашивает человека. Метка, снятая ПОСЛЕ, уехала бы новой, сверка в
+    /// `write_text` прошла бы, и работа агента исчезла бы молча. Этот тест
+    /// падает ровно на такой перестановке.
+    #[test]
+    fn метка_снимается_до_чтения_и_потому_не_обгоняет_содержимое() {
+        let root = scratch("mtime-before-read");
+        let path = root.join("a.txt");
+        fs::write(&path, "моё\n").unwrap();
+        set_mtime(&path, 1_700_000_000);
+
+        let file = read_text_reading_with(&root, "a.txt", |full| {
+            let bytes = fs::read(full)?;
+            // Агент переписал файл, пока мы читали его байты.
+            fs::write(full, "работа агента\n")?;
+            set_mtime(full, 1_700_000_060);
+            Ok(bytes)
+        })
+        .unwrap();
+
+        assert_eq!(file.text, "моё\n");
+        assert_eq!(
+            file.mtime, 1_700_000_000_000,
+            "наружу обязана уйти метка прочитанной версии, а не той, что легла после"
+        );
+
+        let err = write_text(&root, "a.txt", "мои правки\n", file.mtime);
+
+        assert!(
+            matches!(err, Err(FilesError::Stale(_))),
+            "ошибаться надо в сторону ложного отказа, а не молчаливой перезаписи: {err:?}"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "работа агента\n");
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn двоичный_и_слишком_большой_файл_не_читаются() {
         let root = scratch("refuse");
@@ -296,16 +405,17 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    // Симлинки создаются по-разному, и на не-unix этого теста просто нет —
+    // как у соседей ниже. Раньше здесь стоял `#[cfg(not(unix))] return;`
+    // посреди тела, и весь остаток теста был недостижим для компилятора.
+    #[cfg(unix)]
     #[test]
     fn симлинк_наружу_не_проходит_хотя_путь_выглядит_невинно() {
         let root = scratch("escape");
         let outside = scratch("escape-target");
         fs::write(outside.join("secret.txt"), "не для чтения").unwrap();
         // `reject_traversal` тут бессилен: в пути нет ни "..", ни корня.
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
-        #[cfg(not(unix))]
-        return;
 
         assert!(matches!(read_text(&root, "link/secret.txt"), Err(FilesError::Outside(_))));
         let _ = fs::remove_dir_all(&root);
@@ -413,7 +523,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(unix)]
     #[cfg(unix)]
     #[test]
     fn недостаток_прав_блокирует_запись_в_каталог() {
