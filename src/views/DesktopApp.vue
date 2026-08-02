@@ -79,6 +79,7 @@ import {
   tabList
 } from '../stores/tabs.js'
 import FileEditor from '../components/files/FileEditor.vue'
+import { keepOnly } from '../components/files/editor/states.js'
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -467,6 +468,11 @@ const onCloseTab = async (id) => {
   closeTab(id)
 }
 
+/* Состояние редактора живёт ровно столько, сколько вкладка. Уборка идёт от
+   списка, а не от кнопки закрытия: тот же watcher покрывает переключение
+   проекта и путь, выпавший потому, что файл перестал читаться. */
+watch(tabList, (tabs) => keepOnly(tabs.map((tab) => tab.id)), { deep: false })
+
 /* Явное обновление дерева. Вотчера у файлов нет намеренно (см. спеку), и это
    вторая половина ответа на вопрос «а что там сейчас на диске» — первая
    срабатывает сама при возврате фокуса в окно. */
@@ -739,12 +745,11 @@ const toastStackStyle = {
           </template>
         </Modal>
         <!-- Вкладка файла: доска и чат к ней отношения не имеют. -->
-        <!-- :key — своё поле на каждый файл. Без него textarea переживает смену
-             вкладки вместе с прокруткой и кареткой прошлого файла, и открытый
-             файл показывается с чужого места. -->
+        <!-- :key здесь больше нет: поле переживает смену вкладки намеренно.
+             Каретку, прокрутку и историю правок на вкладку хранит
+             editor/states.js, а FileEditor переключает состояние по :path. -->
         <FileEditor
           v-if="fileTabActive"
-          :key="project.activeTab"
           :path="project.activeTab"
           :model-value="activeBuffer?.text ?? ''"
           :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"

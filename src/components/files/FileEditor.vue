@@ -5,6 +5,7 @@ import { Compartment, EditorState } from '@codemirror/state'
 import Button from '../core/Button.vue'
 import { editorExtensions } from './editor/extensions.js'
 import { languageFor } from './editor/languages.js'
+import { putState, takeState } from './editor/states.js'
 
 /* Редактор кода на CodeMirror 6. Вся видимая механика — подсветка, номера
    строк, поиск, история, множественная каретка — живёт в editor/extensions.js;
@@ -96,6 +97,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (view && props.path) putState(props.path, view.state, view.scrollDOM.scrollTop)
   view?.destroy()
   view = null
 })
@@ -108,16 +110,43 @@ const applyLanguage = async (path) => {
   view.dispatch({ effects: languageState.reconfigure(language ?? []) })
 }
 
-watch(() => props.path, applyLanguage)
+const replaceDoc = (text) => {
+  if (!view || text === view.state.doc.toString()) return
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } })
+}
 
-/* Внутрь — только когда пришедшее действительно отличается от документа.
-   Правка снаружи (Reload после stale, Keep mine) идёт обычной транзакцией,
-   а не пересозданием состояния: история правок переживает подмену. */
+/* Один watcher на оба props вместо двух: при переключении вкладки path и
+   modelValue меняются в один тик, и раздельные watcher'ы дерутся за порядок —
+   текст нового файла успевал бы попасть в состояние старого. */
 watch(
-  () => props.modelValue,
-  (next) => {
-    if (!view || next === view.state.doc.toString()) return
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } })
+  () => [props.path, props.modelValue],
+  ([path, text], [prevPath] = []) => {
+    if (!view) return
+
+    if (path !== prevPath) {
+      if (prevPath) putState(prevPath, view.state, view.scrollDOM.scrollTop)
+      const saved = takeState(path)
+      view.setState(saved ? saved.state : createState(text))
+      /* Восстановленное состояние несёт отсеки такими, какими они были при
+         сохранении. readOnly с тех пор мог измениться — например, файл
+         дочитался, — поэтому он выставляется заново, а не наследуется. */
+      view.dispatch({ effects: readOnlyState.reconfigure(EditorState.readOnly.of(props.readOnly)) })
+      if (saved) {
+        /* Прокрутка восстанавливается после того, как новое состояние
+           отрисовано: до этого у scrollDOM ещё чужая высота. */
+        const { scrollTop } = saved
+        requestAnimationFrame(() => {
+          if (view) view.scrollDOM.scrollTop = scrollTop
+        })
+        /* Пока вкладка была скрыта, файл могли перечитать с диска. Тогда
+           сохранённый документ устарел, и правду говорит буфер. */
+        if (saved.state.doc.toString() !== text) replaceDoc(text)
+      }
+      applyLanguage(path)
+      return
+    }
+
+    replaceDoc(text)
   }
 )
 
