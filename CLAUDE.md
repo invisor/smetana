@@ -149,6 +149,54 @@ character typed into a not-yet-read buffer would become the whole file on the ne
 asks instead of choosing when the file moved under a dirty tab, and `error` locks the field without
 throwing away anything already typed.
 
+The field itself is CodeMirror 6, assembled by hand under `src/components/files/editor/`: `theme.js`
+(chrome and syntax highlighting, entirely on tokens — see the styling exception above), `extensions.js`
+(an explicit extension list instead of `basic-setup`, which would have pulled in autocomplete, a
+linter and code folding), `languages.js` (a map from file extension to a dynamic `import()`, one
+chunk per language, loaded the first time a file of that type opens and cached after) and `states.js`
+(a non-reactive `Map` from path to `{ state, scrollTop }`, so a tab keeps its caret, selection, undo
+history and scroll position across being switched away from and back).
+
+The theme is one theme for both app themes and both densities. Every value in it is a token
+reference, so the browser repaints it on its own when `data-theme` changes — the editor is never
+rebuilt. `EditorView.theme()`'s `{ dark: true }` flag is deliberately not passed: it
+would raise the `EditorView.darkTheme` facet, which the base themes bundled with other extensions
+(the search panel, special-character rendering, bracket matching) watch for, and they would start
+substituting their own hardcoded colours through `&light`/`&dark` selectors. `theme.js` is written to
+be exhaustive instead — everything a base theme would otherwise paint is repainted with a token, so
+nothing is left for `darkTheme` to contribute.
+
+Three more decisions in that area look like they could be tidied away and are load-bearing, each
+paid for with a real defect during this work. The `tabList` watcher that prunes abandoned states
+(`DesktopApp.vue`) runs with `flush: 'post'`, not the default `pre`: with `pre` the cleanup runs
+before `FileEditor` has reacted to the outgoing tab's path change and saved its state via `putState`,
+so the save re-inserts the entry the cleanup had just removed. The closed file then reopens carrying
+the caret, scroll position and undo history of its previous life while looking perfectly fresh — the
+first Cmd+Z is what gives it away. The compartments (`editor/compartments.js`) live at module scope,
+not inside `FileEditor.vue`: a compartment is a key, not a value — the value lives in the
+`EditorState`, which outlives the component instance that created it — so per-instance compartments
+would mean a state restored by a later instance carries keys that instance never registered, and
+`reconfigure` against them would silently do nothing. And `replaceDoc`'s
+`Transaction.addToHistory.of(false)`: content arriving from disk is not a person's edit, and skipping
+this would let it enter the undo history, so one Cmd+Z on a freshly opened file would empty the
+document, the emptiness would land in the buffer, and the next save would write it to disk. This
+deliberately makes Reload after `stale` non-undoable too — the choice between a person's text and the
+file's is offered up front by the Keep mine button, not recoverable afterward by undo.
+
+`adoptState` in `FileEditor.vue` is the single place a cached state is installed, and it earned that
+by being two places first: `onMounted` (a file tab returning after the board or chat unmounted it)
+and the watcher's path-change branch (a live editor switching to a different open tab) each decided
+independently what "adopt" meant. Both times they disagreed, a person's edits went missing: once
+because neither re-pointed the update listener at the live instance, once because only one of the
+two did. Anything a saved state closes over that belongs to a component instance — today the update listener
+that turns CodeMirror transactions into `emit('update:modelValue')`, itself kept in a compartment for
+exactly this reason — has to be re-pointed at the live instance on adoption, and doing that in one
+function is what stops the two call sites from drifting apart again.
+
+An unknown file extension and a language chunk that fails to load (offline, a broken deploy) are both
+ordinary outcomes in `languages.js`, not errors: the file opens as plain text either way, because
+losing syntax highlighting is not a reason to break the editor.
+
 ### Settings
 
 What the app remembers between runs lives in one JSON file in `app_config_dir()`
@@ -210,6 +258,14 @@ bound with `:style`, and every value in it is a `var(--token)` reference (see `c
   introduce a `<style>` block or a class-based approach.
 - Never hardcode a colour, radius, spacing or font value. If a token does not exist for what you
   need, that is a design-system question, not a licence to write `#hex` or `8px`.
+
+One exception, and exactly one: `components/files/editor/theme.js`. CodeMirror renders its own DOM,
+and the only way to reach it is CSS rules, so this one file is allowed to produce them, through
+`EditorView.theme()`. The rule is narrowed, not lifted — every value inside is still a `var(--token)`
+reference, and no `#hex`, no `px` and no gradient belongs there. `@codemirror/search`'s own theme
+paints a `linear-gradient` onto its panel buttons; `theme.js` suppresses it explicitly
+(`backgroundImage: 'none'`), because gradients are forbidden everywhere in this system, including
+inside a third-party stylesheet that ships its own opinion.
 
 `styles/styles.css` is an `@import` list only; the tokens live in `styles/tokens/`. `tokens/base.css`
 holds element defaults (focus ring, selection, scrollbar) and the only three global classes in the
