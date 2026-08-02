@@ -664,7 +664,7 @@ const questionParts = computed(() => inspector.question.split(inspector.collides
         <FileEditor
           v-if="fileTabActive"
           :model-value="activeBuffer?.text ?? ''"
-          :read-only="!!activeBuffer?.error"
+          :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
           :notice="editorNotice"
           @update:model-value="setText(project.activeTab, $event)"
           @save="saveTab(project.activeTab)"

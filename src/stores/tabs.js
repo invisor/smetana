@@ -14,8 +14,15 @@ export const PINNED = [
   { id: 'kanban', kind: 'pinned', label: 'Kanban' }
 ]
 
-/* Путь → { text, original, mtime, error, saveError, stale }.
+/* Путь → { text, original, mtime, error, saveError, stale, loading }.
    text/original различаются ровно тогда, когда вкладка грязная.
+   loading — первое чтение ещё не вернулось. Буфер уже отрисован, поле уже на
+   экране, и без этого признака набранный до возврата чтения символ выглядел
+   бы как правка поверх содержимого, которого никто не видел: пришедший с
+   диска текст ушёл бы в мусор, а его метка легла бы в буфер как своя, и
+   первый же Cmd+S заменил бы весь файл этим символом. Пока признак стоит,
+   буфер не правится (setText) и не пишется (saveTab), а поле нередактируемо —
+   так же ведёт себя VS Code.
    error — отказ чтения ({ kind, message }); тогда text пуст и правки нет.
    saveError — отказ записи ({ kind, message }). Разделены намеренно: error
    значит «файла нет как текста», и потому запирает поле (readOnly у вкладки и
@@ -33,7 +40,9 @@ export const isDirty = (path) => {
   /* Ошибка не делает буфер чистым. У файла, который не удалось открыть,
      text и original пусты, и сравнение само даёт false; а вот текст, который
      человек успел набрать до отказа чтения, обязан считаться несохранённым —
-     иначе вкладку закроют, не спросив, и он пропадёт молча. */
+     иначе вкладку закроют, не спросив, и он пропадёт молча.
+     Загружающийся буфер по той же причине чист: text и original у него оба
+     пусты, а править его до возврата чтения всё равно нельзя. */
   return !!buffer && buffer.text !== buffer.original
 }
 
@@ -53,19 +62,30 @@ export const tabList = computed(() => [
 export const activeBuffer = computed(() => buffers.get(project().activeTab) ?? null)
 
 async function load(path, { force = false } = {}) {
-  buffers.set(path, { text: '', original: '', mtime: 0, error: null, saveError: null, stale: false })
+  buffers.set(path, {
+    text: '',
+    original: '',
+    mtime: 0,
+    error: null,
+    saveError: null,
+    stale: false,
+    loading: true
+  })
   try {
     const file = await readFile(path)
     /* Пока файл читался, вкладку могли закрыть или сменить проект. Класть
        содержимое в буфер, которого уже нет, значило бы воскресить вкладку. */
     if (!buffers.has(path)) return
     const current = buffers.get(path)
-    /* Пока файл читался, в буфер могли напечатать. Содержимое с диска не
-       должно стирать набранное: забираем только метку времени, текст остаётся
-       человеку, вкладка остаётся грязной. force приходит от reloadTab — там
-       перезапись и есть то, о чём попросили. */
+    /* Ветка сторожит перечитывание, а не первичную загрузку: правки, набранной
+       во время первого чтения, взяться неоткуда — `loading` не пускает её в
+       буфер. Сюда попадает буфер, который уже жил и был грязным, когда его
+       позвали читать заново. Содержимое с диска не должно стирать набранное:
+       забираем только метку времени, текст остаётся человеку, вкладка остаётся
+       грязной. force приходит от reloadTab — там перезапись и есть то, о чём
+       попросили. */
     if (!force && current.text !== current.original) {
-      buffers.set(path, { ...current, mtime: file.mtime })
+      buffers.set(path, { ...current, mtime: file.mtime, loading: false })
       return
     }
     buffers.set(path, {
@@ -74,20 +94,29 @@ async function load(path, { force = false } = {}) {
       mtime: file.mtime,
       error: null,
       saveError: null,
-      stale: false
+      stale: false,
+      loading: false
     })
   } catch (error) {
     if (!buffers.has(path)) return
     const current = buffers.get(path)
-    /* Тот же случай, что и в ветке успеха: пока файл читался, в буфер могли
-       напечатать. Отказ чтения — не повод выбросить набранное руками, поэтому
+    /* Тот же случай, что и в ветке успеха, и сторожит она то же самое —
+       перечитывание. Отказ чтения не повод выбросить набранное руками, поэтому
        текст остаётся, а ошибка просто прикладывается к нему. force приходит от
        reloadTab: там человек сам попросил забыть свои правки. */
     if (!force && current.text !== current.original) {
-      buffers.set(path, { ...current, error })
+      buffers.set(path, { ...current, error, loading: false })
       return
     }
-    buffers.set(path, { text: '', original: '', mtime: 0, error, saveError: null, stale: false })
+    buffers.set(path, {
+      text: '',
+      original: '',
+      mtime: 0,
+      error,
+      saveError: null,
+      stale: false,
+      loading: false
+    })
   }
 }
 
@@ -157,7 +186,9 @@ export function closeTab(path) {
    истинным. */
 export function setText(path, text) {
   const buffer = buffers.get(path)
-  if (!buffer || buffer.error) return
+  /* Пока первое чтение не вернулось, править нечего: буфер пуст не потому,
+     что файл пуст. Правка в него стала бы правкой поверх невидимого. */
+  if (!buffer || buffer.error || buffer.loading) return
   buffers.set(path, { ...buffer, text })
   const state = project()
   if (state.previewTab === path) state.previewTab = null
@@ -170,7 +201,8 @@ let chain = Promise.resolve()
 
 export function saveTab(path) {
   const buffer = buffers.get(path)
-  if (!buffer || buffer.error || !isDirty(path)) return chain
+  /* loading: писать содержимое, которого никто не читал, нечем и незачем. */
+  if (!buffer || buffer.error || buffer.loading || !isDirty(path)) return chain
   const text = buffer.text
   chain = chain
     .then(async () => {
@@ -179,7 +211,7 @@ export function saveTab(path) {
          постановке, дала бы `stale` на собственное сохранение. Текст, наоборот,
          захвачен при постановке — сохраняем то, что человек попросил. */
       const before = buffers.get(path)
-      if (!before || before.error) return
+      if (!before || before.error || before.loading) return
       try {
         const mtime = await writeFile(path, text, before.mtime)
         const current = buffers.get(path)
