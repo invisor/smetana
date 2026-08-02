@@ -43,8 +43,9 @@ something looks odd, the design system is the source of truth — match it rathe
 
 `src/main.js` → `src/App.vue` → either `views/DesktopApp.vue` (the three-column shell: worktree
 files + agents, tab bar over the kanban, task inspector with live log) or `views/Gallery.vue`
-(code-split, never in the app bundle). The board is live tracker data. Everything else on the
-screen — the file tree, the agents, the log — is still fixture state in `views/desktopAppData.js`.
+(code-split, never in the app bundle). The board is live tracker data, and so are the file tree and
+the file tabs. What is left on the screen — the agents, the log, the git state — is still fixture
+state in `views/desktopAppData.js`.
 
 ### The tracker bridge
 
@@ -81,7 +82,8 @@ the event fires microseconds after start, before the webview can subscribe, so t
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
 
-`src/stores/tracker.js`, `src/stores/settings.js` and `src/stores/projects.js` are the **only** files
+`src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js` and `src/stores/files.js`
+are the **only** files
 in `src/` that know Tauri exists — components see reactive stores and nothing else. `tracker.js` also
 owns the two translations: bd's statuses to the design system's (`open → ready`, `in_progress →
 running`, `closed → done`; everything else, including custom statuses, passes through to
@@ -111,6 +113,42 @@ front end alone should not need a Rust toolchain and a 43 MB download. `npm run 
 fail hard instead. `EXPECTED_BD_VERSION` in `service.rs` must stay in step with `BD_VERSION` in the
 script; a mismatch surfaces as `bd-version-mismatch` in health, not as a crash.
 
+### Files: the tree and the editor
+
+The left panel's tree and the file tabs in the centre read the active project's directory through
+`src-tauri/src/files/`, and it is deliberately the opposite of the tracker: no worker, no queue, no
+watcher. `read_dir` costs milliseconds and holds no state, so there is nothing for a queue to guard —
+the same reasoning that keeps settings out of a worker. `model.rs` is the vocabulary and the pure
+logic (entry sorting, the `..` check, the binary sniff, the ceilings: 1000 entries per directory,
+2 MB per file) and carries most of the tests; `fs.rs` is the disk; `commands.rs` is four thin
+commands — `files_list`, `files_read`, `files_write`, `files_stat`.
+
+Two rules in `fs.rs` are load-bearing. Every path is resolved with `resolve_within`, which
+canonicalizes and refuses anything that lands outside the root — without it a symlink inside the
+project would open the whole disk. And a write only happens when the file's `mtime` still equals the
+one the front end was given; otherwise it is refused as `stale` and nothing is touched, because
+Cmd+S on a tab opened an hour ago would otherwise erase an agent's work. That is also why
+`read_text` takes the `mtime` **before** it reads the bytes: content and time cannot be read
+atomically, and of the two ways to be wrong, a false `stale` costs one question while a stale mtime
+sent forward as fresh costs somebody's work.
+
+Freshness comes from window focus, not from a watcher: a second watcher subsystem in Rust, with its
+own lifecycle and error reporting, costs more than the sweep in `catchUp` (`DesktopApp.vue`), which
+re-lists the open directories and re-stats the open tabs whenever the window is focused — plus the
+refresh button next to the project list.
+
+`src/stores/tabs.js` owns the centre's tabs — order, which one is temporary, which is active, the
+buffers and their dirtiness — and knows nothing about Tauri; the disk is `files.js`. The split is by
+lifetime: the list of open tabs survives a restart and therefore lives in settings, the buffers do
+not and therefore live here. The mechanics are VS Code's: a single click opens a preview tab that
+the next single click replaces in place, a double click makes it permanent, and so does the first
+edit — which is what makes "a preview tab is never dirty" true. A buffer is
+`{ text, original, mtime, error, saveError, stale, loading }`, and three of those exist to keep a
+person's text safe: `loading` refuses edits and writes until the first read comes back (otherwise a
+character typed into a not-yet-read buffer would become the whole file on the next save), `stale`
+asks instead of choosing when the file moved under a dirty tab, and `error` locks the field without
+throwing away anything already typed.
+
 ### Settings
 
 What the app remembers between runs lives in one JSON file in `app_config_dir()`
@@ -122,8 +160,10 @@ thin commands.
 
 The file keeps appearance and panel layout at the root; below that, `openProjects` is the list of
 projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
-a map from each project's absolute path to its content state (side tab, active tab, selection,
-expanded folders, `usedAt`). The map never crosses the IPC boundary: `settings_load` returns the
+a map from each project's absolute path to its content state (side tab, active tab, selected task,
+selected path, expanded folders, `openTabs`, `previewTab`, `usedAt`). The open tabs are paths
+relative to the project root — the key already carries the absolute part, and a moved folder does
+not turn the list into rubbish. The map never crosses the IPC boundary: `settings_load` returns the
 resolved view for one project (`{ appearance, layout, project, openProjects, activeProject }`) and
 `settings_save` puts it back, stamps `usedAt` on the active project and trims `projects` toward the
 20 most recently used — but never evicts the current project or anything still in `openProjects`, so
