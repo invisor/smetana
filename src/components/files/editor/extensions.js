@@ -17,6 +17,28 @@ import { bracketMatching, indentOnInput, indentUnit } from '@codemirror/language
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search'
 import { editorTheme } from './theme.js'
 
+/* Escape на две секунды открывает выход по Tab — иначе клавиатурный
+   пользователь заперт в поле, потому что Tab здесь занят отступом.
+
+   @codemirror/view действительно ставит для этого свой always-on keydown-
+   хендлер на contentDOM (тот же setTabFocusMode(2000)) — но он подключён
+   последним в цепочке обработчиков клавиши, после всех keymap-биндингов.
+   Любой обработчик, который для Escape вернёт true, или биндинг с флагом
+   preventDefault, обрывает цепочку раньше, чем очередь дойдёт до него, — и
+   тогда режим не взводится, хотя внешне ничего не сообщает об отказе. Сейчас
+   ни defaultKeymap, ни searchKeymap на Escape так не поступают, но это
+   свойство набора биндингов целиком, а не самого механизма, и оно способно
+   тихо перестать быть верным при следующем добавленном сюда Escape-биндинге.
+   Собственная запись первой в списке не зависит от того, кто и что вернёт
+   после неё: она — часть той же цепочки dispatch'а, что и любой будущий
+   Escape-биндинг, и выполняется раньше него безусловно. false, а не true:
+   Escape должен доехать и до defaultKeymap, где он схлопывает множественное
+   выделение; обработчик, вернувший true, оборвал бы цепочку сам. */
+const escapeOpensTabFocus = (view) => {
+  view.setTabFocusMode(2000)
+  return false
+}
+
 export function editorExtensions() {
   return [
     lineNumbers(),
@@ -34,13 +56,16 @@ export function editorExtensions() {
     indentUnit.of('  '),
     EditorState.tabSize.of(2),
     EditorState.allowMultipleSelections.of(true),
-    /* indentWithTab идёт первым в списке, чтобы Tab достался ему раньше, чем
-       defaultKeymap применит к нему своё поведение по умолчанию. Escape,
-       открывающий выход по Tab клавиатурному пользователю, отдельной записи
-       не требует: тот же EditorView.setTabFocusMode на те же два секунды уже
-       взводится всегда включённым keydown-хендлером самого @codemirror/view —
-       собственная запись здесь была двойником, ничего не менявшим. */
-    keymap.of([indentWithTab, ...searchKeymap, ...historyKeymap, ...defaultKeymap]),
+    /* Порядок значим: наш Escape идёт первым, чтобы взвести режим до того,
+       как defaultKeymap схлопнет выделение; indentWithTab — до defaultKeymap,
+       иначе Tab уйдёт в поведение по умолчанию. */
+    keymap.of([
+      { key: 'Escape', run: escapeOpensTabFocus },
+      indentWithTab,
+      ...searchKeymap,
+      ...historyKeymap,
+      ...defaultKeymap
+    ]),
     editorTheme
   ]
 }
