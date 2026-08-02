@@ -14,10 +14,25 @@ afterEach(() => {
 })
 
 describe('languageFor', () => {
-  it('узнаёт язык по расширению', async () => {
+  it('распознаёт основные расширения файлов', async () => {
+    /* Проверяет маппинг расширений в языки из таблицы рецензии:
+       это исключает необнаруженные опечатки типа rs→python или vue→java. */
     expect(await nameOf('main.rs')).toBe('rust')
     expect(await nameOf('index.js')).toBe('javascript')
     expect(await nameOf('data.json')).toBe('json')
+    expect(await nameOf('a.py')).toBe('python')
+    expect(await nameOf('app.ts')).toBe('typescript')
+    expect(await nameOf('page.html')).toBe('html')
+    expect(await nameOf('style.css')).toBe('css')
+    expect(await nameOf('conf.yaml')).toBe('yaml')
+    expect(await nameOf('main.go')).toBe('go')
+    expect(await nameOf('Main.java')).toBe('java')
+    expect(await nameOf('main.c')).toBe('cpp')
+    expect(await nameOf('App.vue')).toBe('vue')
+    expect(await nameOf('Cargo.toml')).toBe('toml')
+    expect(await nameOf('run.sh')).toBe('shell')
+    expect(await nameOf('app.ini')).toBe('properties')
+    expect(await nameOf('Makefile')).toBe('shell')
   })
 
   it('узнаёт файлы, у которых имя важнее расширения', async () => {
