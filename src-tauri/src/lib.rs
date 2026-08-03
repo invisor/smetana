@@ -36,6 +36,12 @@ pub fn run() {
 
       let handle = tracker::service::start(app.handle().clone(), initial);
       app.manage(handle);
+
+      // The terminal worker knows no project of its own: a session carries
+      // the directory it was created in, and the front end asks for the list
+      // by that directory.
+      let terminal = terminal::service::start(app.handle().clone());
+      app.manage(terminal);
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
@@ -56,6 +62,14 @@ pub fn run() {
       files::commands::files_stat,
       settings::commands::settings_load,
       settings::commands::settings_save,
+      terminal::commands::terminal_list,
+      terminal::commands::terminal_create,
+      terminal::commands::terminal_remove,
+      terminal::commands::terminal_attach,
+      terminal::commands::terminal_detach,
+      terminal::commands::terminal_resize,
+      terminal::commands::terminal_write,
+      terminal::commands::terminal_run_capture,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
