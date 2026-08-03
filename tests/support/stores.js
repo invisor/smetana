@@ -8,8 +8,8 @@ import { installIpc } from './ipc.js'
    ask в tabs.js, moving в projects.js. Vitest даёт свежий реестр модулей на
    файл, но не на тест, поэтому граф пересобирается здесь.
 
-   Все пять сторов берутся из одного графа намеренно: projects.js импортирует
-   остальные четыре, и стор из другого экземпляра смотрел бы на другой
+   Все шесть сторов берутся из одного графа намеренно: projects.js импортирует
+   остальные, и стор из другого экземпляра смотрел бы на другой
    settings.settings.
 
    nextTick отдаётся отсюда, а не импортируется тестом статически: resetModules
@@ -19,20 +19,21 @@ export async function loadStores() {
   vi.resetModules()
   const ipc = installIpc()
 
-  const [vue, event, files, settings, tabs, tracker, projects] = await Promise.all([
+  const [vue, event, files, settings, tabs, tracker, projects, terminals] = await Promise.all([
     import('vue'),
     import('@tauri-apps/api/event'),
     import('../../src/stores/files.js'),
     import('../../src/stores/settings.js'),
     import('../../src/stores/tabs.js'),
     import('../../src/stores/tracker.js'),
-    import('../../src/stores/projects.js')
+    import('../../src/stores/projects.js'),
+    import('../../src/stores/terminals.js')
   ])
 
   return {
     ipc,
     emit: event.emit,
     nextTick: vue.nextTick,
-    stores: { files, settings, tabs, tracker, projects }
+    stores: { files, settings, tabs, tracker, projects, terminals }
   }
 }
