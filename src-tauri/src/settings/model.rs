@@ -363,7 +363,12 @@ impl ProjectState {
         // `chat` was this tab's name before it grew a terminal. Files with that
         // name already sit on people's disks, and without the substitution the
         // tab would fail the check below and silently become the board.
-        if self.active_tab == "chat" {
+        //
+        // Only when nothing open is called `chat`, though: a project with a
+        // file of that name at its root has an active tab that means exactly
+        // what it says, and migrating it would take a person off their own
+        // file. An open tab is evidence; the old name is only a guess.
+        if self.active_tab == "chat" && !self.open_tabs.iter().any(|t| t == "chat") {
             self.active_tab = "terminal".into();
         }
         let known = self.active_tab == "terminal"
@@ -798,6 +803,16 @@ mod tests {
     fn вкладка_chat_из_старого_файла_становится_terminal() {
         let settings = settings_of(r#"{"version":1,"projects":{"/p":{"activeTab":"chat"}}}"#);
         assert_eq!(settings.projects["/p"].active_tab, "terminal");
+    }
+
+    #[test]
+    fn открытый_файл_chat_не_мигрирует_в_terminal() {
+        // Файл с таким именем в корне проекта — обычное дело, и он старше
+        // переименования вкладки: миграция не должна уводить человека с его
+        // собственного файла.
+        let settings =
+            settings_of(r#"{"version":1,"projects":{"/p":{"openTabs":["chat"],"activeTab":"chat"}}}"#);
+        assert_eq!(settings.projects["/p"].active_tab, "chat");
     }
 
     #[test]
