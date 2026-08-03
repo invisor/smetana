@@ -200,7 +200,7 @@ deliberately makes Reload after `stale` non-undoable too — the choice between 
 file's is offered up front by the Keep mine button, not recoverable afterward by undo.
 
 `adoptState` in `FileEditor.vue` is the single place a cached state is installed, and it earned that
-by being two places first: `onMounted` (a file tab returning after the board or chat unmounted it)
+by being two places first: `onMounted` (a file tab returning after the board or terminal unmounted it)
 and the watcher's path-change branch (a live editor switching to a different open tab) each decided
 independently what "adopt" meant. Both times they disagreed, a person's edits went missing: once
 because neither re-pointed the update listener at the live instance, once because only one of the
@@ -212,6 +212,121 @@ function is what stops the two call sites from drifting apart again.
 An unknown file extension and a language chunk that fails to load (offline, a broken deploy) are both
 ordinary outcomes in `languages.js`, not errors: the file opens as plain text either way, because
 losing syntax highlighting is not a reason to break the editor.
+
+### The terminal: agent sessions
+
+The centre's `terminal` tab (`chat` before it grew a terminal — `ProjectState::validate` in
+`src-tauri/src/settings/model.rs` migrates the old name on load, because files on people's disks
+already carry it, and without the substitution that tab would fail the closed-list check and silently
+become the board) runs CLI coding agents — Claude Code and, eventually, others — under real PTYs, one
+per session, listed in the sidebar's Agents view (`src/components/agent/AgentList.vue`) and started
+from its "+ New agent" row. The reason the subsystem exists at all is the second half of that
+sentence: it notices when an agent is waiting on a human, including one in a tab nobody is currently
+looking at.
+
+| file | what it does |
+|---|---|
+| `model.rs` | `Session`, `SessionState`, `Question`, `TerminalError` — the vocabulary, and the pure rules for entering and leaving each state (`Session::apply`, `finish`) |
+| `ring.rs` | the raw-byte scrollback ring, trimmed on overflow to a line boundary |
+| `screen.rs` | a `vt100` grid built from the same bytes — the text a person would actually see |
+| `detect.rs` | layer A: bell and silence, a pure function of the screen, the bell flag and the timings |
+| `profiles.rs` | layer B: screen-scrapes Claude Code's permission dialog for its question and options |
+| `pty.rs` | the only file that touches the OS: spawns, reads, writes, resizes, kills |
+| `service.rs` | the worker: one owner of mutable state, request queue, output and state events |
+| `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
+
+`service.rs` is a single tokio task, the same shape as the tracker's worker and for the same reason:
+commands, PTY output arriving from per-session reader threads, and a 16 ms flush tick all meet in one
+`select!`, so nothing shares mutable state with it. A session starts at a fixed 120×30 before any
+view has attached to it; the first `TerminalView.vue` that does replaces that with the pane's real
+geometry through `terminal_resize`, which also feeds the new size into `screen.rs` — the app is
+obliged to read the screen the size a person actually sees.
+
+**One stream, two models.** Every chunk from a PTY goes into `ring.rs`, a raw byte buffer for the
+human — this is exactly what xterm.js repaints itself from on attach — and, separately, into
+`screen.rs`, a `vt100` grid for the app. The raw stream is cursor moves and repaints with nothing
+findable in it; a `\r` overwriting "thinking..." with "done" is two writes in the ring and one line on
+the screen. Detection reads the screen, never the ring. xterm.js in the front end is a third,
+independent emulation fed the very same bytes on attach, so the person's picture and the app's
+picture agree by construction, not because two implementations were kept in sync by hand.
+
+`seq` plays the part `generation` plays for the tracker. Every flushed output event carries a
+monotonic number; `terminal_attach` hands back the ring's snapshot plus the `seq` it should continue
+from, and `terminals.js` re-attaches the moment an event arrives out of sequence, the same as the
+tracker resyncing on a generation gap. Attaching clears whatever that session had queued to flush:
+it is already in the ring snapshot just handed over, and sending it again would show it twice.
+
+Output only flows to the front end for the **active** session — `flush()` drops a background
+session's pending bytes on the floor every tick, because nobody is rendering them. **State flows for
+every session, active or not** — `reassess()` walks all of them — and that asymmetry is the entire
+point: a background agent's row can turn `needs-you` while its bytes never leave the worker.
+
+Detection is two layers that degrade in one direction only. Layer A (`detect.rs`) is agent-independent
+— a bell, or three seconds of silence — and has nothing in it to break. Layer B (`profiles.rs`) reads
+Claude Code's own interface: a framed dialog, a question paragraph, numbered options — and a version
+bump to that CLI can break it. When it does not match, layer A is still there underneath, so the
+worst case is the app saying "someone is waiting" instead of showing the question — a broken profile
+costs one line in a panel, not the tab. Layer B is also trusted only once the screen has held still
+for `SETTLE` (150 ms), so a half-drawn frame is never read as a truncated question. And `idle` is
+deliberately quiet: a finished agent and a waiting agent both simply stop producing output, so layer A
+must not guess between them — loudness comes only from the bell or from a layer B match, never from
+silence alone.
+
+`terminal_run_capture` — the call an automated flow uses to drive a session and read back its
+settled screen — refuses with `busy` when the session is `needs-you`, and also when a bell is still
+unrung even if state hasn't caught up yet (state lags the fact by up to `SETTLE` plus a tick; the bell
+flag is that same fact arriving sooner). Writing into an open permission dialog would answer, on a
+human's behalf, a question the app never read and the human never saw.
+
+Sessions do not survive a restart, and nothing about them is written to `settings.json` — a session
+row with a dead process behind it is worse than an empty list. `RunEvent::Exit` calls
+`terminal::service::shutdown`, which kills every live PTY and waits up to two seconds for the worker
+to confirm — the same ceiling `settings.js` puts on its own close-time flush, and for the same reason:
+the window always closes, and a wedged worker costs the cleanup, not the app. Anything that outruns
+that wait, or that the app never got a chance to kill, is an orphan in the process list.
+
+`src/stores/terminals.js` is the fifth and last file in `src/` that knows Tauri exists. It keeps the
+same cost-driven split as the worker: `sessions` and `agentRows` hold every session's state, cheap and
+needed for a background row's colour; output bytes are handed to whichever callback last called
+`subscribeOutput` — in practice, the one live `TerminalView.vue` — and nowhere else, because nothing
+else renders them.
+
+`activeId` looks like it names one thing and actually names two, and conflating them was a real
+defect: "which agent the human has selected" has to survive leaving the terminal tab, because
+`AgentList.vue` highlights its row from this same field; "which session the worker is currently
+streaming output to" has to end the moment that view unmounts, or a background session keeps eating
+flush cycles for nobody. While a single field served both, leaving the tab cleared the selection, and
+the terminal came back permanently blank. `detach(id)` now takes the id it is leaving: switching
+agents is two IPC calls — detach the old, attach the new — with no ordering guarantee at the worker,
+so a nameless detach arriving after the new attach would silence the session the human just switched
+to, with no error anywhere. `detach` never touches `activeId` — selection is not the transport's to
+forget.
+
+`loadSessions` guards against its own stale response the same way `files.js`'s `stale` guards a
+buffer: it can be called twice in flight with no ordering guarantee on which `invoke` resolves first,
+and without the guard the *last response* would win rather than the *last call* — the list could end
+up showing one project's sessions under another project's name, after which the remove button in
+`AgentList.vue` would kill the wrong project's agent, silently. A test in `tests/stores/terminals.test.js`
+pins this.
+
+`TerminalView.vue` hosts one `Terminal` instance per view, not per session — switching agents calls
+`reset()` and refills from the new ring snapshot, so returning to an agent lands at the end of its
+output rather than wherever it was scrolled to. An instance per session, the way `editor/states.js`
+keeps one `EditorState` per file, would fix that; it is not built because the lack has not yet been
+shown to matter. `AgentList.vue` reads `attentionLevel` the same as the board's status badges, but
+draws it with a triangle for `needs-you` against a dot for everything else — colour is never the only
+signal here either. The question and its answer buttons live in `DesktopApp.vue`'s right panel, keyed
+off the *selected* agent, not the selected task, since it is the agent doing the asking; submitting is
+tracked by the answering session's id, the same in-flight pattern as `creating` and `initing`
+elsewhere in that file, so a second click cannot resend the same answer into whatever now occupies
+the screen.
+
+In a browser, `mockBackend.js` answers `terminal_list` with one fixture session already sitting in
+`needs-you` with a real permission question attached — the only way `?view=gallery` and `npm run dev`
+can show that panel with no Rust worker behind them — and `terminal_attach` replays a canned
+transcript. Every write (`terminal_create`, `terminal_remove`, `terminal_write`, `terminal_run_capture`)
+falls through to the same loud rejection the tracker's writes get, for the same reason: a "write"
+that looked like it worked would be worse than none.
 
 ### Settings
 
@@ -283,7 +398,8 @@ another instance's `nextTick` drives another scheduler, so a test awaiting it wo
 that never comes.
 
 Not covered, deliberately: `.vue` files and the CodeMirror wiring (`editor/theme.js`,
-`extensions.js`, `compartments.js`) — that is DOM, and it is checked by eye through `?view=gallery`.
+`extensions.js`, `compartments.js`), and, for the same reason, `TerminalView.vue` and
+`terminal/theme.js` — all of it is DOM, and it is checked by eye through `?view=gallery`.
 
 ### Styling: inline style objects, never CSS classes
 
@@ -296,13 +412,22 @@ bound with `:style`, and every value in it is a `var(--token)` reference (see `c
 - Never hardcode a colour, radius, spacing or font value. If a token does not exist for what you
   need, that is a design-system question, not a licence to write `#hex` or `8px`.
 
-One exception, and exactly one: `components/files/editor/theme.js`. CodeMirror renders its own DOM,
-and the only way to reach it is CSS rules, so this one file is allowed to produce them, through
-`EditorView.theme()`. The rule is narrowed, not lifted — every value inside is still a `var(--token)`
-reference, and no `#hex`, no `px` and no gradient belongs there. `@codemirror/search`'s own theme
-paints a `linear-gradient` onto its panel buttons; `theme.js` suppresses it explicitly
+Two exceptions, and exactly two. The first is `components/files/editor/theme.js`. CodeMirror renders
+its own DOM, and the only way to reach it is CSS rules, so this one file is allowed to produce them,
+through `EditorView.theme()`. The rule is narrowed, not lifted — every value inside is still a
+`var(--token)` reference, and no `#hex`, no `px` and no gradient belongs there. `@codemirror/search`'s
+own theme paints a `linear-gradient` onto its panel buttons; `theme.js` suppresses it explicitly
 (`backgroundImage: 'none'`), because gradients are forbidden everywhere in this system, including
 inside a third-party stylesheet that ships its own opinion.
+
+The second is `components/terminal/theme.js`. xterm.js renders its own DOM too, but its API differs
+from CodeMirror's in a way that matters: `EditorView.theme()` takes CSS, so `var(--token)` works there
+and the browser repaints on its own; xterm.js takes an `ITheme` of **resolved colour strings**, so
+tokens have to be read with `getComputedStyle` and handed over as values. The consequence has no
+parallel in the editor — flipping `data-theme` does **not** repaint the terminal for free, which is
+why `TerminalView.vue` carries a `MutationObserver` on the root's attributes. The rule is narrowed the
+same way: every value still comes from a token, and no `#hex`, `px` or font literal belongs in that
+file.
 
 `styles/styles.css` is an `@import` list only; the tokens live in `styles/tokens/`. `tokens/base.css`
 holds element defaults (focus ring, selection, scrollbar) and the only three global classes in the
