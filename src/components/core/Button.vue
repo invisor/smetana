@@ -63,7 +63,7 @@ const style = computed(() => ({
     :disabled="disabled"
     :aria-pressed="selected || undefined"
     :style="style"
-    v-on="handlers"
+    v-bind="handlers"
   >
     <Icon v-if="icon" :name="icon" :size="iconSize" />
     <span v-if="$slots.default"><slot /></span>

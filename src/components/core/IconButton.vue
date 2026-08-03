@@ -52,7 +52,7 @@ const style = computed(() => ({
     :title="label"
     :aria-pressed="selected || undefined"
     :style="style"
-    v-on="handlers"
+    v-bind="handlers"
   >
     <Icon :name="icon" :size="glyphSize" />
   </button>
