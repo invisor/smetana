@@ -49,6 +49,7 @@ export { default as NewTaskModal } from './kanban/NewTaskModal.vue'
 export { default as TaskCard } from './kanban/TaskCard.vue'
 
 // agent
+export { default as AgentList } from './agent/AgentList.vue'
 export { default as AnsiText } from './agent/AnsiText.vue'
 export { default as ChatMessage } from './agent/ChatMessage.vue'
 export { default as CodeBlock } from './agent/CodeBlock.vue'

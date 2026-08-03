@@ -4,6 +4,7 @@
    reachable at ?view=gallery. */
 import { ref, watchEffect } from 'vue'
 import {
+  AgentList,
   AppShell,
   Assignee,
   Button,
@@ -73,6 +74,14 @@ const tabs = [
     readOnly: true,
     readOnlyHint: 'Binary file — not shown.'
   }
+]
+
+/* AgentList reads rows and activeId as props, unlike TerminalView below,
+   which reads the store directly — so a plain local fixture is enough here. */
+const agentRows = [
+  { id: 1, name: 'claude-1', state: 'needs-you', elapsed: '2h 14m' },
+  { id: 2, name: 'claude-2', state: 'running', elapsed: '1h 02m' },
+  { id: 3, name: 'claude-3', state: 'done', elapsed: '18m' }
 ]
 
 /* Reserved statuses plus generated ones, to show both halves of the algorithm. */
@@ -236,6 +245,13 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         }"
       >
         <TerminalView />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Agents</div>
+      <div :style="{ width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
+        <AgentList :rows="agentRows" :active-id="2" />
       </div>
     </section>
 

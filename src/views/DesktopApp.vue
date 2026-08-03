@@ -24,6 +24,15 @@ import ProjectList from '../components/shell/ProjectList.vue'
 import Skeleton from '../components/core/Skeleton.vue'
 import IconButton from '../components/core/IconButton.vue'
 import { TerminalView } from '../components/index.js'
+import AgentList from '../components/agent/AgentList.vue'
+import {
+  agentRows,
+  createSession,
+  initTerminals,
+  loadSessions,
+  removeSession,
+  terminalState
+} from '../stores/terminals.js'
 import {
   boardColumns,
   closeIssue,
@@ -46,7 +55,7 @@ import {
   removeProject,
   switchTo
 } from '../stores/projects.js'
-import { agents, inspector, logLines, scope } from './desktopAppData.js'
+import { inspector, logLines, scope } from './desktopAppData.js'
 import {
   basenameOf,
   fileErrorText,
@@ -122,6 +131,16 @@ const SIDE_TABS = [
 const hoveredSideTab = ref(null)
 onMounted(initTracker)
 onMounted(adoptInitialProject)
+onMounted(initTerminals)
+
+/* A new agent becomes the one you're looking at right away: that is what it
+   was created for. The rejection (agent binary not on PATH) is left to
+   propagate as-is — the row never appears, and the human needs to know
+   why. */
+async function newAgent() {
+  await createSession(activePath.value)
+  project.activeTab = 'terminal'
+}
 
 /* Дерево и вкладки открываются вместе с проектом. Активный проект к этому
    моменту уже прочитан настройками — App.vue ждёт loadSettings до того, как
@@ -136,6 +155,7 @@ onMounted(async () => {
   const opened = activePath.value
   if (!opened) return
   setRoot(opened)
+  await loadSessions(opened)
   await listDir('')
   if (activePath.value !== opened) return
   await Promise.all(project.expanded.map((dir) => listDir(dir)))
@@ -514,6 +534,14 @@ watch(
   { flush: 'post' }
 )
 
+/* Sessions belong to the project. Someone else's keep running in the
+   background and are not killed — a project switch that killed another
+   project's work would be the same class of loss that `stale` guards
+   against in the files layer. */
+watch(activePath, (path) => {
+  loadSessions(path)
+})
+
 /* Явное обновление дерева. Вотчера у файлов нет намеренно (см. спеку), и это
    вторая половина ответа на вопрос «а что там сейчас на диске» — первая
    срабатывает сама при возврате фокуса в окно. */
@@ -585,24 +613,6 @@ const sideTabStyle = (tab, last) => {
     transition: 'var(--transition-control)'
   }
 }
-const agentRow = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-3)',
-  height: 'var(--row-h)',
-  padding: '0 var(--space-5)',
-  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
-}
-/* needs-you keeps its triangle silhouette here too — colour is never alone */
-const needsYouMark = {
-  width: 0,
-  height: 0,
-  borderLeft: '5px solid transparent',
-  borderRight: '5px solid transparent',
-  borderBottom: '8px solid var(--attn-loud)'
-}
-const runningMark = { width: '8px', height: '8px', borderRadius: '50%', background: 'var(--attn-live)' }
-
 const centerStyle = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }
 
 /* Collapsed, the column is the same 32px rail AppShell reserves for one. */
@@ -723,17 +733,14 @@ const toastStackStyle = {
                 title="Git is not connected"
                 description="Changes and branch state will live here. Nothing in the app reads git yet."
               />
-              <template v-else>
-                <div v-for="a in agents" :key="a.name" :style="agentRow">
-                  <span :style="a.state === 'needs-you' ? needsYouMark : runningMark" />
-                  <span>{{ a.name }}</span>
-                  <span :style="{ color: 'var(--text-muted)' }">{{ a.task }}</span>
-                  <span :style="{ flex: 1 }" />
-                  <span :style="{ color: a.state === 'needs-you' ? 'var(--attn-loud)' : 'var(--text-muted)' }">
-                    {{ a.elapsed }}
-                  </span>
-                </div>
-              </template>
+              <AgentList
+                v-else
+                :rows="agentRows"
+                :active-id="terminalState.activeId"
+                @select="terminalState.activeId = $event"
+                @create="newAgent"
+                @remove="removeSession"
+              />
             </div>
             <div role="tablist" :style="sideTabBar">
               <div

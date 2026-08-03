@@ -2,12 +2,6 @@
    DesktopApp template renders with. Replace with real tracker / agent data. */
 const E = '\u001b'
 
-export const agents = [
-  { name: 'claude-1', task: 'bd-a1b2', elapsed: '2h 14m', state: 'needs-you' },
-  { name: 'claude-2', task: 'bd-3c9d', elapsed: '1h 02m', state: 'running' },
-  { name: 'claude-3', task: 'bd-7f31', elapsed: '18m', state: 'running' }
-]
-
 export const columns = [
   /* bd always has an open status, so the mock has to as well: ready is the one
      column that takes new tasks, and without it the "+" is nowhere to be seen
