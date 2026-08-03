@@ -201,4 +201,14 @@ describe('время работы', () => {
     expect(stores.terminals.formatElapsed(2 * 3600_000 + 14 * 60_000)).toBe('2h 14m')
     expect(stores.terminals.formatElapsed(5_000)).toBe('0m')
   })
+
+  /* Часы строки тикают раз в тридцать секунд, а сессия рождается между
+     тиками: до следующего её startedAt лежит в будущем относительно
+     последнего снятого времени. Без зажима floor от отрицательного даёт
+     минус час и минус минуту — «-1h -1m» в свежесозданной строке. */
+  it('только что созданный агент не уходит в минус', async () => {
+    const { stores } = await loadStores()
+    expect(stores.terminals.formatElapsed(-1_000)).toBe('0m')
+    expect(stores.terminals.formatElapsed(-90 * 60_000)).toBe('0m')
+  })
 })

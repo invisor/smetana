@@ -28,8 +28,13 @@ export function toUiState(session) {
   return session.state
 }
 
+/* Negative input is ordinary, not a bug to let through: the clock below
+   ticks every thirty seconds, so a session created between ticks has a
+   startedAt in the future of the time this row is measured against. Floor of
+   a negative number rounds away from zero, which is how a fresh agent
+   showed "-1h -1m". An agent's age is never less than nothing. */
 export function formatElapsed(ms) {
-  const minutes = Math.floor(ms / 60000)
+  const minutes = Math.max(0, Math.floor(ms / 60000))
   const hours = Math.floor(minutes / 60)
   return hours ? `${hours}h ${String(minutes % 60).padStart(2, '0')}m` : `${minutes}m`
 }

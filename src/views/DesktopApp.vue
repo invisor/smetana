@@ -150,6 +150,15 @@ async function newAgent() {
   }
 }
 
+/* Picking an agent's row is a request to look at it, not just to select it:
+   the terminal tab comes forward the same way it does for a freshly created
+   agent. No await here — selection is local state, and TerminalView attaches
+   to whatever activeId names once it is on screen. */
+function selectAgent(id) {
+  terminalState.activeId = id
+  project.activeTab = 'terminal'
+}
+
 /* Дерево и вкладки открываются вместе с проектом. Активный проект к этому
    моменту уже прочитан настройками — App.vue ждёт loadSettings до того, как
    вообще нарисует этот вид.
@@ -784,7 +793,7 @@ const toastStackStyle = {
                 :rows="agentRows"
                 :active-id="terminalState.activeId"
                 :can-create="Boolean(activePath)"
-                @select="terminalState.activeId = $event"
+                @select="selectAgent"
                 @create="newAgent"
                 @remove="removeSession"
               />

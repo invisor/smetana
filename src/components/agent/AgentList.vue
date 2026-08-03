@@ -3,13 +3,13 @@
    already past nine hundred lines, and a live list with a button and
    removal would have made it unreadable.
 
-   Colour is never the only signal here: needs-you is a triangle,
-   everything else is a dot. */
+   Colour is never the only signal here: needs-you is the status system's
+   warning triangle, everything else is a dot. */
 import { computed, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import { useInteractive } from '../core/interactive.js'
-import { attentionLevel } from '../status/status.js'
+import { STATUS_GLYPH, attentionLevel } from '../status/status.js'
 
 const props = defineProps({
   rows: { type: Array, default: () => [] },
@@ -69,24 +69,27 @@ const rowStyle = (row) => ({
   transition: 'var(--transition-control)'
 })
 
-/* Triangle geometry has no token — there is no "--radius" for the side of a
-   triangle — so these stay literal by deliberate exception; everything else
-   in this file is a token reference. */
-const needsYouMark = {
-  width: 0,
-  height: 0,
-  borderLeft: '5px solid transparent',
-  borderRight: '5px solid transparent',
-  borderBottom: '8px solid var(--attn-loud)'
+/* needs-you draws STATUS_GLYPH's own glyph — the same triangle-with-a-bang
+   the badges use — rather than a shape built here: one status, one picture
+   across the app. Everything else stays a dot, so the loud row is still
+   distinguishable by silhouette alone.
+
+   The mark's box is fixed at the icon's size, and the dots sit centred
+   inside it: the two marks differ in shape, and a row must not shift by
+   four pixels when an agent starts waiting. */
+const MARK = 12
+const markBox = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: `${MARK}px`,
+  height: `${MARK}px`,
+  flex: 'none'
 }
 const runningMark = { width: '8px', height: '8px', borderRadius: '50%', background: 'var(--attn-live)' }
 const quietMark = { width: '8px', height: '8px', borderRadius: '50%', background: 'var(--text-muted)' }
 
-const markOf = (state) => {
-  if (state === 'needs-you') return needsYouMark
-  if (state === 'running') return runningMark
-  return quietMark
-}
+const dotOf = (state) => (state === 'running' ? runningMark : quietMark)
 
 const disabled = computed(() => !props.canCreate)
 /* The one control here that really is a button in spirit — the panel's only
@@ -104,7 +107,7 @@ const addRow = computed(() => ({
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)',
   color: 'var(--text-muted)',
   background: addInteractive.hover.value ? 'var(--surface-hover)' : 'transparent',
-  borderTop: 'var(--border-w) solid var(--border-subtle)',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)',
   cursor: disabled.value ? 'not-allowed' : 'default',
   opacity: disabled.value ? 0.7 : 1,
   transition: 'var(--transition-control)'
@@ -115,6 +118,15 @@ const empty = computed(() => props.rows.length === 0)
 
 <template>
   <div :style="{ display: 'flex', flexDirection: 'column', height: '100%' }">
+    <div
+      :style="addRow"
+      :aria-disabled="disabled || undefined"
+      v-bind="addInteractive.handlers"
+      @click="!disabled && $emit('create')"
+    >
+      <Icon name="plus" :size="14" />
+      <span>New agent</span>
+    </div>
     <div :style="body">
       <div
         v-for="row in rows"
@@ -124,7 +136,16 @@ const empty = computed(() => props.rows.length === 0)
         v-bind="interactiveFor(row.id).handlers"
         @click="$emit('select', row.id)"
       >
-        <span :style="markOf(row.state)" />
+        <span :style="markBox">
+          <Icon
+            v-if="row.state === 'needs-you'"
+            :name="STATUS_GLYPH['needs-you']"
+            :size="MARK"
+            :stroke-width="2.25"
+            :style="{ color: 'var(--attn-loud)' }"
+          />
+          <span v-else :style="dotOf(row.state)" />
+        </span>
         <span>{{ row.name }}</span>
         <span :style="{ flex: 1 }" />
         <span :style="{ color: row.state === 'needs-you' ? 'var(--attn-loud)' : 'var(--text-muted)' }">
@@ -135,15 +156,6 @@ const empty = computed(() => props.rows.length === 0)
       <div v-if="empty" :style="{ padding: 'var(--space-5)', color: 'var(--text-muted)', font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)' }">
         No agents running.
       </div>
-    </div>
-    <div
-      :style="addRow"
-      :aria-disabled="disabled || undefined"
-      v-bind="addInteractive.handlers"
-      @click="!disabled && $emit('create')"
-    >
-      <Icon name="plus" :size="14" />
-      <span>New agent</span>
     </div>
   </div>
 </template>
