@@ -57,8 +57,8 @@ something looks odd, the design system is the source of truth — match it rathe
 
 `src/main.js` → `src/App.vue` → either `views/DesktopApp.vue` (the three-column shell: worktree
 files + agents, tab bar over the kanban, task inspector with live log) or `views/Gallery.vue`
-(code-split, never in the app bundle). The board is live tracker data, and so are the file tree and
-the file tabs. What is left on the screen — the agents, the log, the git state — is still fixture
+(code-split, never in the app bundle). The board is live tracker data, and so are the file tree, the
+file tabs and the agents. What is left on the screen — the log and the git state — is still fixture
 state in `views/desktopAppData.js`.
 
 ### The tracker bridge
@@ -96,8 +96,8 @@ the event fires microseconds after start, before the webview can subscribe, so t
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
 
-`src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js` and `src/stores/files.js`
-are the **only** files
+`src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`
+and `src/stores/terminals.js` are the **only** files
 in `src/` that know Tauri exists — components see reactive stores and nothing else. `tracker.js` also
 owns the two translations: bd's statuses to the design system's (`open → ready`, `in_progress →
 running`, `closed → done`; everything else, including custom statuses, passes through to
@@ -280,16 +280,22 @@ human's behalf, a question the app never read and the human never saw.
 
 Sessions do not survive a restart, and nothing about them is written to `settings.json` — a session
 row with a dead process behind it is worse than an empty list. `RunEvent::Exit` calls
-`terminal::service::shutdown`, which kills every live PTY and waits up to two seconds for the worker
-to confirm — the same ceiling `settings.js` puts on its own close-time flush, and for the same reason:
-the window always closes, and a wedged worker costs the cleanup, not the app. Anything that outruns
-that wait, or that the app never got a chance to kill, is an orphan in the process list.
+`terminal::service::shutdown`, and the worker ends every session the way closing a terminal window
+does: `SIGHUP` to the session's process group — which reaches whatever the agent itself started, as
+`SIGKILL` to the direct child would not — then a short wait for them to go, then a kill for whatever
+is left. The wait is bounded because the window is already closing. The two seconds `shutdown` itself
+waits are a different thing again, and deliberately longer: they are the ceiling on a *wedged worker*,
+the same one `settings.js` puts on its close-time flush, and for the same reason — the window always
+closes, and a worker that never answers costs the cleanup, not the app. Anything that outruns all
+that, or that the app never got a chance to signal, is an orphan in the process list.
 
-`src/stores/terminals.js` is the fifth and last file in `src/` that knows Tauri exists. It keeps the
+`src/stores/terminals.js` is the fifth of those files, and it keeps the
 same cost-driven split as the worker: `sessions` and `agentRows` hold every session's state, cheap and
-needed for a background row's colour; output bytes are handed to whichever callback last called
-`subscribeOutput` — in practice, the one live `TerminalView.vue` — and nowhere else, because nothing
-else renders them.
+needed for a background row's colour; output bytes go only to the callbacks registered through
+`subscribeOutput` — in practice the one live `TerminalView.vue`, and nothing else, because nothing
+else renders them. That register is a `Set` and every subscriber gets every chunk: a single field
+would tie unsubscribing to who mounted last, which is exactly the ordering the rest of this
+subsystem refuses to depend on.
 
 `activeId` looks like it names one thing and actually names two, and conflating them was a real
 defect: "which agent the human has selected" has to survive leaving the terminal tab, because
