@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseAnsi } from '../../../src/components/agent/ansi.js'
 
-const ESC = ''
+const ESC = '\u001b'
 
 describe('parseAnsi', () => {
   it('текст без escape отдаётся одним куском без оформления', () => {

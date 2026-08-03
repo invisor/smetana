@@ -141,6 +141,24 @@ describe('что не пишется никогда', () => {
     expect(ipc.calls('files_write')).toHaveLength(0)
   })
 
+  /* Буфер из openFile ещё не грязный: text === original === '', и saveTab
+     выходит по !isDirty, а не по buffer.loading — проверка замка вообще не
+     срабатывает. Чтобы застать именно её, нужен буфер одновременно
+     загружающийся и грязный. Через публичный API такого состояния не
+     получить (setText не пускает правки, пока стоит loading) — оно
+     синтетическое, приложение его не порождает. Тест стережёт сам замок в
+     saveTab, а не достижимое состояние. */
+  it('буфер, одновременно загружающийся и грязный, не пишется — стережём саму проверку loading', async () => {
+    tabs.buffers.set(
+      'a.txt',
+      buffer({ loading: true, text: 'набрано', original: 'исходное' })
+    )
+
+    await tabs.saveTab('a.txt')
+
+    expect(ipc.calls('files_write')).toHaveLength(0)
+  })
+
   it('буфер с отказом чтения', async () => {
     tabs.buffers.set('a.txt', buffer({ text: 'что-то', original: '', error: { kind: 'binary' } }))
 

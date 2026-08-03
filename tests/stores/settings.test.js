@@ -189,6 +189,9 @@ describe('закрытие окна', () => {
     await vi.waitFor(() => expect(ipc.commands()).toContain('plugin:window|destroy'))
 
     const commands = ipc.commands()
+    /* Без этого indexOf на несостоявшемся settings_save дал бы -1, и -1 < N
+       было бы истинно при любом порядке — ассерт ниже прошёл бы вхолостую. */
+    expect(commands).toContain('settings_save')
     expect(commands.indexOf('settings_save')).toBeLessThan(
       commands.indexOf('plugin:window|destroy')
     )
