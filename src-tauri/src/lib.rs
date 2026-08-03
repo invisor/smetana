@@ -1,6 +1,7 @@
 mod files;
 mod project;
 mod settings;
+mod terminal;
 mod tracker;
 
 use tauri::Manager;
