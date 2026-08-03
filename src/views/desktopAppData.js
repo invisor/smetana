@@ -76,8 +76,5 @@ export const inspector = {
   id: 'bd-a1b2',
   status: 'needs-you',
   title: 'Rename worktree when the branch changes',
-  waitingFor: '4m',
-  question: 'Worktree name collides with wt/bd-77e1. Overwrite?',
-  collidesWith: 'wt/bd-77e1',
   blocksDownstream: 5
 }

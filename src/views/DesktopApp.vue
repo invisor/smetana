@@ -27,6 +27,7 @@ import { TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import {
   agentRows,
+  answer,
   createSession,
   initTerminals,
   loadSessions,
@@ -239,6 +240,13 @@ const newTaskOpen = ref(false)
 const creating = ref(false)
 
 const selectedIssue = computed(() => (project.selectedTask ? issueById(project.selectedTask) : null))
+
+/* The question is shown for the selected agent, not the selected task: it is
+   the agent that is asking. The task stays whatever it was — the panel just
+   hands the top to whichever is louder. */
+const askingAgent = computed(() =>
+  agentRows.value.find((row) => row.id === terminalState.activeId && row.question)
+)
 
 const submitNewTask = async (issue) => {
   creating.value = true
@@ -637,21 +645,6 @@ const inspectorBody = {
   padding: 'var(--panel-pad)',
   minWidth: 0
 }
-const calloutStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 'var(--space-4)',
-  padding: 'var(--card-pad)',
-  background: 'var(--status-needs-you-bg)',
-  border: 'var(--border-w) solid var(--attn-loud)',
-  borderRadius: 'var(--radius-3)'
-}
-const calloutLabel = {
-  font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-mono)',
-  letterSpacing: 'var(--tracking-caps)',
-  textTransform: 'uppercase',
-  color: 'var(--status-needs-you-fg)'
-}
 const blocksLine = {
   display: 'flex',
   alignItems: 'center',
@@ -667,7 +660,13 @@ const hatchSwatch = {
   backgroundImage: 'repeating-linear-gradient(135deg,var(--hatch-blocked) 0 1.5px,transparent 1.5px 4px)'
 }
 
-const questionParts = computed(() => inspector.question.split(inspector.collidesWith))
+const questionBlock = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-4)',
+  padding: 'var(--panel-pad)',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)'
+}
 
 /* Столбец тостов в углу. Пустым он ничего не занимает и ничего не
    перехватывает: без детей у него нулевой размер. */
@@ -852,6 +851,23 @@ const toastStackStyle = {
           @toggle="layout.rightCollapsed = !layout.rightCollapsed"
         >
           <div :style="inspectorBody">
+            <div v-if="askingAgent" :style="questionBlock">
+              <div :style="{ font: 'var(--weight-medium) var(--text-sm)/1.4 var(--font-sans)', color: 'var(--text-primary)' }">
+                {{ askingAgent.question.text }}
+              </div>
+              <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }">
+                <Button
+                  v-for="(option, i) in askingAgent.question.options"
+                  :key="option.send"
+                  :variant="i === 0 ? 'primary' : 'secondary'"
+                  size="sm"
+                  @click="answer(askingAgent.id, option)"
+                >
+                  {{ option.label }}
+                </Button>
+              </div>
+            </div>
+
             <template v-if="selectedIssue">
               <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
                 <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
@@ -884,19 +900,6 @@ const toastStackStyle = {
 
               <div :style="{ fontSize: 'var(--text-md)', lineHeight: 'var(--leading-snug)', textWrap: 'pretty' }">
                 {{ inspector.title }}
-              </div>
-
-              <div :style="calloutStyle">
-                <div :style="calloutLabel">waiting on you · {{ inspector.waitingFor }}</div>
-                <div :style="{ fontSize: 'var(--text-sm)' }">
-                  {{ questionParts[0]
-                  }}<span :style="{ fontFamily: 'var(--font-mono)' }">{{ inspector.collidesWith }}</span
-                  >{{ questionParts[1] }}
-                </div>
-                <div :style="{ display: 'flex', gap: 'var(--space-4)' }">
-                  <Button variant="primary" size="sm">Overwrite</Button>
-                  <Button variant="secondary" size="sm">Pick new name</Button>
-                </div>
               </div>
 
               <div :style="blocksLine">
