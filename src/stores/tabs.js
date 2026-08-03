@@ -10,7 +10,7 @@ import { basenameOf, fileErrorText, readFile, writeFile } from './files.js'
 /* Закреплённые вкладки в настройках не хранятся: они есть всегда, стоят
    первыми и не закрываются. */
 export const PINNED = [
-  { id: 'chat', kind: 'pinned', label: 'Chat' },
+  { id: 'terminal', kind: 'pinned', label: 'Terminal' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' }
 ]
 

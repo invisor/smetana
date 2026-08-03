@@ -183,7 +183,7 @@ describe('tabList', () => {
 
     const list = tabs.tabList.value
 
-    expect(list.slice(0, 2).map((tab) => tab.id)).toEqual(['chat', 'kanban'])
+    expect(list.slice(0, 2).map((tab) => tab.id)).toEqual(['terminal', 'kanban'])
     expect(list[0].kind).toBe('pinned')
   })
 
@@ -218,6 +218,12 @@ describe('tabList', () => {
     await opened('src/stores/tabs.js')
 
     expect(tabs.tabList.value[2].label).toBe('tabs.js')
+  })
+
+  it('закреплённая вкладка называется terminal, а не chat', async () => {
+    const { stores } = await loadStores()
+    expect(stores.tabs.PINNED.map((t) => t.id)).toEqual(['terminal', 'kanban'])
+    expect(stores.tabs.PINNED[0].label).toBe('Terminal')
   })
 })
 

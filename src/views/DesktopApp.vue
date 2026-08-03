@@ -348,10 +348,10 @@ const healthNotice = computed(() => {
   return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
 })
 
-/* Вкладка файла — это всё, что не chat и не kanban. Закрытого списка у центра
-   нет и не будет: вкладки приносит проект. */
+/* Вкладка файла — это всё, что не terminal и не kanban. Закрытого списка у
+   центра нет и не будет: вкладки приносит проект. */
 const fileTabActive = computed(
-  () => project.activeTab !== 'chat' && project.activeTab !== 'kanban'
+  () => project.activeTab !== 'terminal' && project.activeTab !== 'kanban'
 )
 
 /* Cmd+S ловит окно, а не поле редактора. Клик по вкладке, по строке дерева или
@@ -491,7 +491,7 @@ const absoluteEditorPath = (relPath) => (filesState.root ? `${filesState.root}/$
 
 /* Состояние редактора живёт ровно столько, сколько вкладка. Уборка идёт от
    списка, а не от кнопки закрытия: тот же watcher покрывает переключение
-   проекта и путь, выпавший потому, что файл перестал читаться. Пины (chat,
+   проекта и путь, выпавший потому, что файл перестал читаться. Пины (terminal,
    kanban) отфильтрованы: у них нет файла на диске, и строить для них
    составной путь незачем — под их id ничего никогда не сохраняется.
 
@@ -797,10 +797,10 @@ const toastStackStyle = {
           @keep-mine="keepMine(project.activeTab)"
         />
         <EmptyState
-          v-else-if="project.activeTab === 'chat'"
-          icon="message-circle-question-mark"
-          title="No chat yet"
-          description="Talking to an agent from this window is not built. The board and the log are."
+          v-else-if="project.activeTab === 'terminal'"
+          icon="terminal"
+          title="No terminal yet"
+          description="Agent sessions will run here."
         />
         <!-- bd init is the one wait that keeps its EmptyState: the skeleton
              would replace the very sentence that explains what is happening,

@@ -60,7 +60,7 @@ const switched = ref(true)
 /* Ряд вкладок галереи — свой: в приложении он приходит из стора, а здесь
    нужен неподвижный набор, показывающий все четыре вида сразу. */
 const tabs = [
-  { id: 'chat', kind: 'pinned', label: 'Chat' },
+  { id: 'terminal', kind: 'pinned', label: 'Terminal' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', dirty: true },
   { id: 'agent.rs', kind: 'preview', label: 'agent.rs' },

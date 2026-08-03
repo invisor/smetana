@@ -4,7 +4,7 @@ import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 
 /* Tab kinds
-   pinned  - Chat and Kanban. Always first, no close affordance.
+   pinned  - Terminal and Kanban. Always first, no close affordance.
    file    - a normal opened file tab, closable, may be dirty or read-only.
    preview - single-click temporary tab, replaced by the next preview.
              Italic, as in VS Code: the mechanic is VS Code's, and so is its

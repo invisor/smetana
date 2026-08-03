@@ -355,11 +355,18 @@ impl ProjectState {
             self.preview_tab = None;
         }
 
-        // Закрытого списка вкладок у центра нет: `chat` и `kanban` есть
+        // Закрытого списка вкладок у центра нет: `terminal` и `kanban` есть
         // всегда, остальное — открытые файлы. Отсюда и предел по длине пути,
         // а не по длине идентификатора: раньше вкладка-файл с длинным путём
         // молча становилась доской при каждом перезапуске.
-        let known = self.active_tab == "chat"
+        //
+        // `chat` — имя этой вкладки до того, как в ней появился терминал.
+        // Файлы с ним уже лежат у людей на дисках, и без подмены вкладка
+        // не прошла бы проверку ниже и молча стала бы доской.
+        if self.active_tab == "chat" {
+            self.active_tab = "terminal".into();
+        }
+        let known = self.active_tab == "terminal"
             || self.active_tab == "kanban"
             || self.open_tabs.iter().any(|t| *t == self.active_tab);
         if !known || self.active_tab.len() > MAX_PATH_LEN {
@@ -448,10 +455,10 @@ mod tests {
 
     #[test]
     fn unknown_side_tab_falls_back_to_files() {
-        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"tarot","activeTab":"chat"}}}"#);
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"tarot","activeTab":"terminal"}}}"#);
         let state = &settings.projects["/p"];
         assert_eq!(state.side_tab, "files");
-        assert_eq!(state.active_tab, "chat", "своя вкладка не из закрытого списка остаётся");
+        assert_eq!(state.active_tab, "terminal", "своя вкладка не из закрытого списка остаётся");
     }
 
     #[test]
@@ -775,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn активная_вкладка_это_chat_kanban_или_одна_из_открытых() {
+    fn активная_вкладка_это_terminal_kanban_или_одна_из_открытых() {
         let settings = settings_of(
             r#"{"version":1,"projects":{
                 "/gone":{"openTabs":["a.txt"],"activeTab":"b.txt"},
@@ -783,8 +790,20 @@ mod tests {
                 "/file":{"openTabs":["a.txt"],"activeTab":"a.txt"}}}"#,
         );
         assert_eq!(settings.projects["/gone"].active_tab, "kanban", "вкладки нет — активной быть нечему");
-        assert_eq!(settings.projects["/chat"].active_tab, "chat");
+        assert_eq!(settings.projects["/chat"].active_tab, "terminal", "старое имя вкладки мигрирует");
         assert_eq!(settings.projects["/file"].active_tab, "a.txt");
+    }
+
+    #[test]
+    fn вкладка_chat_из_старого_файла_становится_terminal() {
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"activeTab":"chat"}}}"#);
+        assert_eq!(settings.projects["/p"].active_tab, "terminal");
+    }
+
+    #[test]
+    fn вкладка_terminal_проходит_валидацию() {
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"activeTab":"terminal"}}}"#);
+        assert_eq!(settings.projects["/p"].active_tab, "terminal");
     }
 
     #[test]
