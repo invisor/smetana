@@ -348,8 +348,8 @@ const healthNotice = computed(() => {
   return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
 })
 
-/* Вкладка файла — это всё, что не terminal и не kanban. Закрытого списка у
-   центра нет и не будет: вкладки приносит проект. */
+/* A file tab is anything that isn't terminal or kanban. There is no closed
+   list in the centre and there won't be: the project brings the tabs. */
 const fileTabActive = computed(
   () => project.activeTab !== 'terminal' && project.activeTab !== 'kanban'
 )
@@ -489,19 +489,21 @@ const onCloseTab = async (id) => {
    их только вместе. */
 const absoluteEditorPath = (relPath) => (filesState.root ? `${filesState.root}/${relPath}` : relPath)
 
-/* Состояние редактора живёт ровно столько, сколько вкладка. Уборка идёт от
-   списка, а не от кнопки закрытия: тот же watcher покрывает переключение
-   проекта и путь, выпавший потому, что файл перестал читаться. Пины (terminal,
-   kanban) отфильтрованы: у них нет файла на диске, и строить для них
-   составной путь незачем — под их id ничего никогда не сохраняется.
+/* Editor state lives exactly as long as the tab. Cleanup follows the tab
+   list, not the close button: the same watcher covers switching projects and
+   a path that fell out because the file stopped being readable. Pinned tabs
+   (terminal, kanban) are filtered out: they have no file on disk, and there
+   is no reason to build a composite path for them — nothing is ever saved
+   under their id.
 
-   flush: 'post' обязателен, а не косметика. closeTab режет openTabs, этот
-   watcher по умолчанию (flush: 'pre') сработал бы до того, как FileEditor
-   успеет отреагировать на новый props.path своим onBeforeUnmount или своим
-   watcher'ом, — keepOnly вычистил бы путь раньше, чем FileEditor положит его
-   состояние через putState, и следующий putState тут же воскресил бы только
-   что вычищенную запись. post ждёт, пока весь patch — включая реакцию
-   FileEditor — отработает, и тогда уборка видит уже сохранённое состояние. */
+   flush: 'post' is required, not cosmetic. closeTab trims openTabs; this
+   watcher at the default (flush: 'pre') would fire before FileEditor gets a
+   chance to react to the new props.path in its onBeforeUnmount or its own
+   watcher — keepOnly would clear the path before FileEditor saves its state
+   through putState, and the very next putState would immediately resurrect
+   the entry just cleared. post waits for the whole patch — including
+   FileEditor's reaction — to finish, so cleanup sees the already-saved
+   state. */
 watch(
   tabList,
   (tabs) =>

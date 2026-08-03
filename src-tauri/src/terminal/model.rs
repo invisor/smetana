@@ -1,11 +1,12 @@
-//! Словарь терминала и чистые правила переходов. Ввода-вывода здесь нет —
-//! он в pty.rs, планирование в service.rs.
+//! Terminal vocabulary and pure transition rules. No I/O here — that lives in
+//! pty.rs, scheduling lives in service.rs.
 
 pub type SessionId = u64;
 
-/// Состояния сессии. Наружу, во фронт, едет перевод в статусы дизайн-системы,
-/// и делает его стор: `running` → running, `needs-you` → needs-you,
-/// `idle` → ready, `exited` → done или failed по коду возврата.
+/// Session states. What goes out to the front end is a translation to the
+/// design system's statuses, done by the store: `running` → running,
+/// `needs-you` → needs-you, `idle` → ready, `exited` → done or failed
+/// depending on the exit code.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SessionState {
@@ -16,9 +17,10 @@ pub enum SessionState {
     Exited,
 }
 
-/// Вариант ответа. `send` — то, что уйдёт в PTY: у одного CLI это цифра с
-/// переводом строки, у другого стрелки и Enter. Знает это профиль, а не
-/// панель, иначе панели пришлось бы выбирать между ними.
+/// One answer option. `send` is what goes into the PTY: for one CLI that's a
+/// digit followed by a newline, for another it's arrow keys and Enter. The
+/// profile knows which, not the panel — otherwise the panel would have to
+/// choose between them.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionOption {
@@ -31,7 +33,7 @@ pub struct QuestionOption {
 pub struct Question {
     pub text: String,
     pub options: Vec<QuestionOption>,
-    /// Что подсвечено на экране прямо сейчас.
+    /// What is highlighted on screen right now.
     pub selected: Option<usize>,
 }
 
@@ -41,8 +43,8 @@ pub struct Session {
     pub id: SessionId,
     pub agent: String,
     pub cwd: String,
-    /// Каталог проекта, которому принадлежит сессия. Совпадает с cwd, пока
-    /// агент запускается в корне, и разойдётся, когда появятся worktree.
+    /// The project directory the session belongs to. Matches cwd for as long
+    /// as agents spawn at the root, and will diverge once worktrees exist.
     pub project: String,
     pub state: SessionState,
     pub question: Option<Question>,
@@ -77,8 +79,9 @@ impl Session {
         }
     }
 
-    /// Выход финален: процесса больше нет, и никакое распознавание не вправе
-    /// вернуть строку в работу — иначе список показал бы живым того, кто умер.
+    /// Exit is final: the process is gone, and no detection logic is entitled
+    /// to bring the row back to life — otherwise the list would show as alive
+    /// something that has died.
     pub fn finish(&mut self, code: Option<i32>) {
         self.state = SessionState::Exited;
         self.exit_code = code;
@@ -90,9 +93,10 @@ impl Session {
             return;
         }
         self.state = state;
-        // Вопрос живёт ровно столько, сколько состояние needs-you: агент,
-        // вернувшийся к работе, на прошлый вопрос уже получил ответ, а
-        // застрявшая в панели фраза предлагала бы отвечать второй раз.
+        // A question lives exactly as long as the needs-you state: an agent
+        // that went back to work already got its answer to the previous
+        // question, and a phrase stuck in the panel would offer to answer it
+        // a second time.
         self.question = if state == SessionState::NeedsYou { question } else { None };
     }
 }

@@ -355,14 +355,14 @@ impl ProjectState {
             self.preview_tab = None;
         }
 
-        // Закрытого списка вкладок у центра нет: `terminal` и `kanban` есть
-        // всегда, остальное — открытые файлы. Отсюда и предел по длине пути,
-        // а не по длине идентификатора: раньше вкладка-файл с длинным путём
-        // молча становилась доской при каждом перезапуске.
+        // There is no closed list of tabs in the centre: `terminal` and `kanban`
+        // always exist, everything else is an open file. Hence the limit is on
+        // path length, not identifier length — a file tab with a long path used
+        // to silently become the board on every restart.
         //
-        // `chat` — имя этой вкладки до того, как в ней появился терминал.
-        // Файлы с ним уже лежат у людей на дисках, и без подмены вкладка
-        // не прошла бы проверку ниже и молча стала бы доской.
+        // `chat` was this tab's name before it grew a terminal. Files with that
+        // name already sit on people's disks, and without the substitution the
+        // tab would fail the check below and silently become the board.
         if self.active_tab == "chat" {
             self.active_tab = "terminal".into();
         }

@@ -1,14 +1,15 @@
-//! Кольцо сырых байтов: то, что видел человек, и то, чем перерисовывается
-//! xterm.js при подключении к сессии. Разбор экрана к нему отношения не имеет
-//! — это screen.rs, и он читает тот же поток независимо.
+//! The raw-byte ring: what the person saw, and what xterm.js repaints from
+//! when it attaches to a session. Screen parsing is not its concern — that's
+//! screen.rs, and it reads the same stream independently.
 
 use std::collections::VecDeque;
 
 pub struct Ring {
     buf: VecDeque<u8>,
     cap: usize,
-    /// Что-то уже выпало из начала — значит снимок начинается с середины
-    /// сессии, и открытые в выпавшем куске атрибуты надо погасить.
+    /// Something has already fallen off the front — the snapshot now starts
+    /// mid-session, so any attributes left open in the dropped chunk need
+    /// to be reset.
     dropped: bool,
 }
 
@@ -25,23 +26,24 @@ impl Ring {
         self.dropped = true;
         let excess = self.buf.len() - self.cap;
         self.buf.drain(..excess);
-        // Дорезаем до ближайшего перевода строки. Без этого снимок начинался
-        // бы с середины escape-последовательности, и первая строка после
-        // долгой сессии приезжала бы мусором — выглядит как сломанный
-        // терминал, а сломан один байт.
+        // Trim further, up to the nearest newline. Without this the snapshot
+        // could start mid escape sequence, and the first line after a long
+        // session would arrive as garbage — looks like a broken terminal,
+        // but only one byte is broken.
         if let Some(nl) = self.buf.iter().position(|b| *b == b'\n') {
             self.buf.drain(..=nl);
         } else if let Some(cr) = self.buf.iter().position(|b| *b == b'\r') {
-            // Возврат каретки — тоже безопасная граница: 0x0D не может быть
-            // внутри CSI-последовательности, параметры которой занимают 0x20–0x3F,
-            // финальный байт 0x40–0x7E.
+            // A carriage return is also a safe boundary: 0x0D cannot appear
+            // inside a CSI sequence, whose parameter bytes occupy 0x20-0x3F
+            // and whose final byte occupies 0x40-0x7E.
             self.buf.drain(..=cr);
         }
-        // Если ни перевода строки, ни возврата каретки нет, оставляем буфер
-        // как есть. dropped=true уже установлен, поэтому snapshot() всё равно
-        // выпустит сброс атрибутов. Несколько мусорных символов с обрезанной
-        // последовательности в начале прокрутки — приемлемая цена за сохранение
-        // выхода, вместо очистки буфера целиком и потери контекста сессии.
+        // If there is neither a newline nor a carriage return, leave the
+        // buffer as is. dropped=true is already set, so snapshot() will
+        // still emit the attribute reset. A few garbage characters from a
+        // truncated sequence at the start of the scrollback are an
+        // acceptable price for keeping the output, versus clearing the
+        // whole buffer and losing the session's context.
     }
 
     pub fn snapshot(&self) -> Vec<u8> {
@@ -68,13 +70,14 @@ mod tests {
     #[test]
     fn переполнение_режет_по_переводу_строки() {
         let mut ring = Ring::new(16);
-        // 20 байт при потолке 16: лишние четыре уходят, и обрезка доводит
-        // начало до перевода строки — целая строка теряется целиком, а не
-        // наполовину.
+        // 20 bytes against a 16 cap: the extra four go, and the trim carries
+        // the start forward to a newline — a whole line is lost, not half a
+        // line.
         ring.push(b"aaaa\nbbbb\ncccc\ndddd\n");
         let text = String::from_utf8(ring.snapshot()).unwrap();
-        // Сброс атрибутов впереди — открытая последовательность цвета
-        // осталась в выпавшей части, и без сброса она красила бы всё дальше.
+        // The attribute reset comes first — an open colour sequence stayed
+        // in the dropped part, and without the reset it would keep colouring
+        // everything after it.
         assert!(text.starts_with("\u{1b}[0m"), "нет сброса атрибутов: {text:?}");
         assert_eq!(text.trim_start_matches("\u{1b}[0m"), "bbbb\ncccc\ndddd\n");
     }
@@ -91,31 +94,32 @@ mod tests {
     #[test]
     fn переполнение_без_перевода_строки_режет_по_возврату_каретки() {
         let mut ring = Ring::new(16);
-        // Нет перевода строки, но есть возврат каретки: обрезка по нему.
+        // No newline, but there is a carriage return: trim against that.
         ring.push(b"aaaa\rbbbb\rcccc\rdddd\r");
         let text = String::from_utf8(ring.snapshot()).unwrap();
-        // Сброс атрибутов впереди.
+        // The attribute reset comes first.
         assert!(text.starts_with("\u{1b}[0m"), "нет сброса атрибутов: {text:?}");
-        // После сброса снимок должен начинаться со второй строки (после первого \r).
+        // After the reset, the snapshot should start at the second line (after the first \r).
         assert_eq!(text.trim_start_matches("\u{1b}[0m"), "bbbb\rcccc\rdddd\r");
     }
 
     #[test]
     fn переполнение_без_границ_сохраняет_буфер() {
         let mut ring = Ring::new(10);
-        // Заполняем ровно до потолка.
+        // Fill exactly to the cap.
         ring.push(b"aaaaaaaaaa");
         assert_eq!(ring.snapshot().len(), 10, "буфер должен быть полным");
-        // Добавляем ещё один байт — переполнение. Излишних 1 байт дренируется,
-        // в оставшихся 10 байтах нет ни \n, ни \r. Буфер не должен очищаться.
+        // Push one more byte — overflow. The excess 1 byte is drained, and
+        // the remaining 10 bytes have neither \n nor \r. The buffer must not
+        // be cleared.
         ring.push(b"b");
         let text = String::from_utf8(ring.snapshot()).unwrap();
-        // Проверяем, что буфер не пуст и включает сброс атрибутов.
+        // Check that the buffer is non-empty and includes the attribute reset.
         assert!(text.starts_with("\u{1b}[0m"), "нет сброса атрибутов: {text:?}");
         let body = text.trim_start_matches("\u{1b}[0m");
-        // Тело должно иметь ровно 10 байт — ёмкость, не менее.
+        // The body should be exactly 10 bytes — the capacity, not less.
         assert_eq!(body.len(), 10, "буфер должен сохранить 10 байт, а сохранил: {body:?}");
-        // Смысл теста в том, что буфер не очищен и не пуст.
+        // The point of the test is that the buffer is not cleared and not empty.
         assert!(!body.is_empty(), "буфер не должен быть пуст после переполнения без границ");
     }
 }

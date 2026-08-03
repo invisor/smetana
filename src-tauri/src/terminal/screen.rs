@@ -1,6 +1,6 @@
-//! Экран сессии: то, что приложение читает, чтобы понять происходящее.
-//! Сырой поток агента — каша из перемещений курсора и перерисовок, в ней
-//! нечего искать; экран — это текст, который видит человек.
+//! The session's screen: what the app reads to understand what's happening.
+//! The agent's raw stream is a mess of cursor moves and redraws, with nothing
+//! in it worth searching; the screen is the text a person actually sees.
 
 pub struct Screen {
     parser: vt100::Parser,
@@ -8,29 +8,32 @@ pub struct Screen {
 
 impl Screen {
     pub fn new(cols: u16, rows: u16) -> Self {
-        // Прокрутка назад здесь не нужна: для человека её держит кольцо,
-        // а распознаванию хватает видимого экрана.
+        // No scrollback needed here: the ring holds that for a person, and
+        // detection only needs the visible screen.
         Self { parser: vt100::Parser::new(rows, cols, 0) }
     }
 
-    /// Скормить кусок вывода. Возвращает `true`, если в куске был звонок:
-    /// парсер его поглощает, а слою A он нужен.
+    /// Feed a chunk of output. Returns `true` if the chunk contained a bell:
+    /// the parser swallows it, but layer A — the detection logic that reads
+    /// this screen to decide session state, landing in a later task — needs
+    /// to know.
     pub fn feed(&mut self, bytes: &[u8]) -> bool {
         self.parser.process(bytes);
         bytes.contains(&0x07)
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        // set_size живёт на vt100::Screen, а не на Parser.
+        // set_size lives on vt100::Screen, not on Parser.
         self.parser.screen_mut().set_size(rows, cols);
     }
 
     pub fn lines(&self) -> Vec<String> {
         let screen = self.parser.screen();
         let (_, cols) = screen.size();
-        // rows(start_col, width) — вопреки имени, это не индекс строки, а окно
-        // по столбцам: итератор уже проходит по всем видимым строкам целиком,
-        // отдавая для каждой её текст в столбцах [start_col, start_col+width).
+        // rows(start_col, width) — despite the name, this is not a row index
+        // but a column window: the iterator already walks every visible row
+        // in full, yielding for each one its text within columns
+        // [start_col, start_col+width).
         screen.rows(0, cols).collect()
     }
 }
@@ -51,9 +54,9 @@ mod tests {
     #[test]
     fn перерисовка_курсором_видна_как_итог() {
         let mut screen = Screen::new(20, 4);
-        // Напечатали, вернулись в начало строки, перепечатали — на экране
-        // должно остаться только второе. Именно из-за этого сырой поток
-        // регуляркой не читается, а экран читается.
+        // Printed, returned to the start of the line, printed over it — only
+        // the second thing should remain on screen. This is exactly why the
+        // raw stream can't be read with a regex, and the screen can.
         screen.feed(b"thinking...\r");
         screen.feed(b"done       ");
         assert_eq!(screen.lines()[0].trim_end(), "done");
