@@ -46,6 +46,13 @@ impl Pty {
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| TerminalError::Spawn(e.to_string()))?;
 
+        // Both come from the master, not from the child, so grab them before
+        // spawning: if either fails there is no process yet to leak. Doing
+        // this after spawn_command would mean an early `?` return drops the
+        // already-running child without killing or reaping it.
+        let writer = pair.master.take_writer().map_err(|e| TerminalError::Spawn(e.to_string()))?;
+        let mut reader = pair.master.try_clone_reader().map_err(|e| TerminalError::Spawn(e.to_string()))?;
+
         let child = pair
             .slave
             .spawn_command(build_command(agent, cwd))
@@ -58,9 +65,6 @@ impl Pty {
         // reader below would block forever after the child exits instead of
         // seeing end-of-stream.
         drop(pair.slave);
-
-        let writer = pair.master.take_writer().map_err(|e| TerminalError::Spawn(e.to_string()))?;
-        let mut reader = pair.master.try_clone_reader().map_err(|e| TerminalError::Spawn(e.to_string()))?;
 
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
@@ -84,6 +88,10 @@ impl Pty {
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
+        // A write error here means the pipe is already broken, i.e. the
+        // agent is already gone — liveness is discovered through
+        // `Chunk::Gone` and `exit_code()`, not through write results, so
+        // there is nothing further to do with the error at this call site.
         use std::io::Write;
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();
