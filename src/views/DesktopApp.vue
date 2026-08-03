@@ -248,6 +248,23 @@ const askingAgent = computed(() =>
   agentRows.value.find((row) => row.id === terminalState.activeId && row.question)
 )
 
+/* answer() is a round trip, and the question only clears once the next
+   terminal:state event lands — nothing else stops a second click from
+   writing the same payload again, into whatever now occupies the screen.
+   Tracked by id, not a bare boolean, the same shape as `creating` and
+   `initing` above: the buttons for the in-flight agent disable, and come
+   back on failure too, since the store already reports the error and the
+   human may want to try again. */
+const answeringId = ref(null)
+const submitAnswer = async (id, option) => {
+  answeringId.value = id
+  try {
+    await answer(id, option)
+  } finally {
+    answeringId.value = null
+  }
+}
+
 const submitNewTask = async (issue) => {
   creating.value = true
   try {
@@ -660,11 +677,15 @@ const hatchSwatch = {
   backgroundImage: 'repeating-linear-gradient(135deg,var(--hatch-blocked) 0 1.5px,transparent 1.5px 4px)'
 }
 
+/* Horizontal padding is deliberately left out: inspectorBody already pads the
+   whole column, and adding it again here would indent this block's text and
+   buttons past the left edge everything else in the panel sits on. Only the
+   bottom padding is this block's own — the gap it needs before its rule. */
 const questionBlock = {
   display: 'flex',
   flexDirection: 'column',
   gap: 'var(--space-4)',
-  padding: 'var(--panel-pad)',
+  paddingBottom: 'var(--panel-pad)',
   borderBottom: 'var(--border-w) solid var(--border-subtle)'
 }
 
@@ -852,6 +873,9 @@ const toastStackStyle = {
         >
           <div :style="inspectorBody">
             <div v-if="askingAgent" :style="questionBlock">
+              <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+                {{ askingAgent.name }} asks
+              </span>
               <div :style="{ font: 'var(--weight-medium) var(--text-sm)/1.4 var(--font-sans)', color: 'var(--text-primary)' }">
                 {{ askingAgent.question.text }}
               </div>
@@ -860,8 +884,10 @@ const toastStackStyle = {
                   v-for="(option, i) in askingAgent.question.options"
                   :key="option.send"
                   :variant="i === 0 ? 'primary' : 'secondary'"
+                  :selected="i === askingAgent.question.selected"
+                  :disabled="answeringId === askingAgent.id"
                   size="sm"
-                  @click="answer(askingAgent.id, option)"
+                  @click="submitAnswer(askingAgent.id, option)"
                 >
                   {{ option.label }}
                 </Button>
