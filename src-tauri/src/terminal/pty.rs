@@ -13,7 +13,9 @@ use super::model::{SessionId, TerminalError};
 /// One piece of a session's life, arriving at the worker from the reader thread.
 pub enum Chunk {
     Data(SessionId, Vec<u8>),
-    Gone(SessionId, Option<i32>),
+    /// End of stream, and nothing else: the exit code is not carried here
+    /// because it is not known here — see the comment at the send site.
+    Gone(SessionId),
 }
 
 /// The pure part of spawning: exactly what we run and where. Pulled out for
@@ -81,7 +83,7 @@ impl Pty {
             // The worker learns the exit code through its own wait: this is
             // only the end of the stream, and it arrives before the process
             // has necessarily been reaped.
-            let _ = out.send(Chunk::Gone(id, None));
+            let _ = out.send(Chunk::Gone(id));
         });
 
         Ok(Self { master: pair.master, writer, child })

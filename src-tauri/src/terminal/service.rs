@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use base64::Engine;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -27,6 +27,11 @@ const DEFAULT_ROWS: u16 = 30;
 /// Output is coalesced into this tick, so that one event does not go out per
 /// chunk.
 const FLUSH: Duration = Duration::from_millis(16);
+/// How long the exit path waits for the worker to kill its PTYs. The same
+/// ceiling the settings store puts on its own flush when the window closes,
+/// for the same reason: the app always exits, and a wedged worker costs a
+/// cleanup rather than the app.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
 /// The answer to `terminal_attach`: everything the session has said so far,
 /// plus the sequence number that output arriving after it will continue from.
@@ -48,7 +53,10 @@ pub enum Request {
     Resize(SessionId, u16, u16),
     Write(SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
     RunCapture(SessionId, String, u64, u64, oneshot::Sender<Result<Vec<String>, TerminalError>>),
-    ShutDown(oneshot::Sender<()>),
+    /// The one reply that is not a `oneshot`: it is awaited from the exit
+    /// event, on a synchronous thread, and only `std::sync::mpsc` can put a
+    /// ceiling on a blocking receive.
+    ShutDown(std::sync::mpsc::Sender<()>),
 }
 
 #[derive(Clone)]
@@ -128,6 +136,28 @@ fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
     }
 }
 
+/// The exit path. Called from `RunEvent::Exit` — the event loop is already
+/// leaving and nothing can prevent it — on the main thread, outside async;
+/// hence the blocking send and the timed receive rather than `.await`.
+///
+/// The wait is worth having because an agent left alive is an orphan in the
+/// process list. It is worth exactly two seconds because the window has to
+/// close either way.
+///
+/// The blocking send cannot hang: the queue is only full while the worker is
+/// not draining it, the worker never awaits inside its loop, and the global
+/// async runtime is a process-lifetime static that outlives this callback. If
+/// the worker has already stopped, its receiver is gone and the send returns
+/// an error at once instead of blocking.
+pub fn shutdown(app: &AppHandle) {
+    let Some(handle) = app.try_state::<TerminalHandle>() else { return };
+    let (tx, rx) = std::sync::mpsc::channel();
+    if handle.0.blocking_send(Request::ShutDown(tx)).is_err() {
+        return;
+    }
+    let _ = rx.recv_timeout(SHUTDOWN_WAIT);
+}
+
 fn emit_state(app: &AppHandle, session: &Session) {
     let _ = app.emit("terminal:state", session);
 }
@@ -144,13 +174,14 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
             }
             live.pending.extend_from_slice(&bytes);
             live.last_output = Instant::now();
-            if live.session.state == SessionState::Starting {
-                live.session.apply(SessionState::Running, None);
-                emit_state(app, &live.session);
-            }
+            // Leaving `Starting` is the tick's business, not this function's:
+            // `reassess` reaches a new session before its first byte does.
         }
-        Chunk::Gone(id, _) => {
+        Chunk::Gone(id) => {
             let Some(live) = sessions.get_mut(&id) else { return };
+            // The chunk carries no exit code — end of stream arrives before
+            // the child has necessarily been reaped, so the code is asked for
+            // separately, here, where the wait lives.
             let code = live.pty.exit_code();
             live.session.finish(code);
             // The process is gone: there is nobody left to call for.
@@ -187,6 +218,12 @@ fn flush(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, active: Optio
 /// Recomputing state from the screen and the timings. The event goes out only
 /// on a change — a row that repaints sixty times a second is of no use to
 /// anyone.
+///
+/// This is also where a session stops being `Starting`: detection knows only
+/// `Running`, `Idle` and `NeedsYou`, so the first tick after creation moves
+/// it on. `Starting` is therefore brief, which is right — it means "created,
+/// nothing seen yet", and a session that failed to spawn never gets here to
+/// be called running.
 fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
     for live in sessions.values_mut() {
         if live.session.state == SessionState::Exited {
@@ -197,8 +234,6 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             bell_pending: live.bell_pending,
             quiet_for: live.last_output.elapsed(),
             screen: &lines,
-            // An exited session never gets here — it was skipped above.
-            alive: true,
         });
         let before = (live.session.state, live.session.question.clone());
         live.session.apply(out.state, out.question);

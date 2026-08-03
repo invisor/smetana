@@ -71,6 +71,16 @@ pub fn run() {
       terminal::commands::terminal_write,
       terminal::commands::terminal_run_capture,
     ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    // build + run instead of .run(context): we need the exit event. This is
+    // exactly what Builder::run does — build, then run — plus our callback.
+    .build(tauri::generate_context!())
+    .expect("error while running tauri application")
+    .run(|app_handle, event| {
+      // Exit, not ExitRequested: the latter only reports an intention and can
+      // be prevented, while agents must be killed once leaving is settled.
+      // The callback runs before cleanup_before_exit, so the app is still whole.
+      if let tauri::RunEvent::Exit = event {
+        terminal::service::shutdown(app_handle);
+      }
+    });
 }

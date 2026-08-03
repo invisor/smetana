@@ -24,7 +24,6 @@ pub struct DetectInput<'a> {
     pub bell_pending: bool,
     pub quiet_for: Duration,
     pub screen: &'a [String],
-    pub alive: bool,
 }
 
 pub struct Detected {
@@ -65,7 +64,6 @@ mod tests {
             bell_pending: bell,
             quiet_for: Duration::from_millis(quiet_ms),
             screen: Box::leak(lines.into_boxed_slice()),
-            alive: true,
         }
     }
 
@@ -116,7 +114,6 @@ mod tests {
             bell_pending: false,
             quiet_for: Duration::from_millis(500),
             screen: dialog(),
-            alive: true,
         });
         assert_eq!(out.state, SessionState::NeedsYou);
         assert!(out.question.expect("вопроса нет").text.ends_with('?'));
@@ -128,7 +125,6 @@ mod tests {
             bell_pending: false,
             quiet_for: Duration::from_millis(20),
             screen: dialog(),
-            alive: true,
         });
         assert!(out.question.is_none(), "профиль поверил недорисованному экрану");
         assert_eq!(out.state, SessionState::Running);
@@ -140,7 +136,6 @@ mod tests {
             bell_pending: false,
             quiet_for: Duration::from_secs(30),
             screen: dialog(),
-            alive: true,
         });
         assert_eq!(out.state, SessionState::NeedsYou);
     }
