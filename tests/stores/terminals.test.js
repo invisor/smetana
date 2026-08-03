@@ -69,6 +69,34 @@ describe('список сессий', () => {
   })
 })
 
+describe('смена проекта', () => {
+  it('устаревший ответ из старого проекта не переживает переключение', async () => {
+    const { ipc, stores } = await loadStores()
+    /* terminal_list here resolves on demand, not immediately, so the test
+       — not the event loop — decides which of the two calls lands first. */
+    const pending = new Map()
+    ipc.on('terminal_list', ({ project }) => new Promise((resolve) => pending.set(project, resolve)))
+
+    const first = stores.terminals.loadSessions('/p1')
+    const second = stores.terminals.loadSessions('/p2')
+
+    // The ordering that produced the defect: the newer call's response is
+    // let all the way through first — awaited here, not just resolved, so
+    // the ordering is real and not an accident of unrelated microtask
+    // depth — and only afterwards does the older, now-stale response for
+    // the project that is no longer open arrive.
+    pending.get('/p2')([session({ id: 2, project: '/p2' })])
+    await second
+    pending.get('/p1')([session({ id: 1, project: '/p1' })])
+    await first
+
+    // Both assertions matter together: project alone would pass even if
+    // sessions still held /p1's stale rows under /p2's name.
+    expect(stores.terminals.terminalState.project).toBe('/p2')
+    expect(stores.terminals.terminalState.sessions.map((s) => s.id)).toEqual([2])
+  })
+})
+
 describe('строки агентов', () => {
   it('строка собирает имя, переведённый статус, вопрос и время работы', async () => {
     vi.useFakeTimers({ now: new Date('2026-08-03T10:18:00Z') })
