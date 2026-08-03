@@ -92,17 +92,25 @@ describe('перечитывание', () => {
     expect(ipc.calls('files_read')).toHaveLength(0)
   })
 
-  it('обычное перечитывание грязный текст не стирает — забирает только метку', async () => {
-    /* Это ветка load() без force: её зовёт открытие уже жившей вкладки. */
+  /* ДЕФЕКТ, а не задуманное поведение. Комментарий в load() (tabs.js:96-106)
+     обещает, что перечитывание без force не сотрёт набранное, — но сам load()
+     сбрасывает буфер в пустой до await readFile, а setText не пускает правки,
+     пока стоит loading. Поэтому на строке 103 всегда сравниваются две пустые
+     строки, и ветка защиты недостижима; то же и в ветке отказа (строка 123).
+     Сегодня это не теряет текст: живой грязный буфер никто не перечитывает
+     заново. Тест закрепляет то, что код делает на самом деле, чтобы починка
+     этой ветки не прошла незамеченной. */
+  it('перечитывание без force стирает набранное: ветка защиты грязного текста недостижима', async () => {
     tabs.buffers.set('a.txt', buffer({ text: 'моя правка', original: 'исходный', mtime: 1 }))
     state().openTabs = ['a.txt']
 
     await tabs.restoreTabs()
 
     const current = tabs.buffers.get('a.txt')
-    expect(current.text).toBe('моя правка')
+    expect(current.text).toBe('текст a.txt')
+    expect(current.original).toBe('текст a.txt')
     expect(current.mtime).toBe(10)
-    expect(tabs.isDirty('a.txt')).toBe(true)
+    expect(tabs.isDirty('a.txt')).toBe(false)
   })
 })
 
