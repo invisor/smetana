@@ -116,20 +116,27 @@ impl Pty {
     /// that group unless it asked for one of its own. `kill()` reaches the
     /// agent alone and leaves those behind as orphans, which is the very
     /// thing the exit path exists to prevent.
+    ///
+    /// Answers whether a signal actually went out, so the caller knows
+    /// whether there is anything to wait for. The caller is also the one that
+    /// must check the process is still alive: `process_id` keeps answering
+    /// after the child has been reaped, and a pid that has been reused names
+    /// somebody else's process group.
     #[cfg(unix)]
-    pub fn hangup(&mut self) {
-        if let Some(pid) = self.child.process_id() {
-            // SIGHUP rather than SIGTERM because it is what the kernel itself
-            // delivers when a terminal window closes — the case every CLI
-            // already handles.
-            let _ = unsafe { libc::killpg(pid as libc::pid_t, libc::SIGHUP) };
-        }
+    pub fn hangup(&mut self) -> bool {
+        let Some(pid) = self.child.process_id() else { return false };
+        // SIGHUP rather than SIGTERM because it is what the kernel itself
+        // delivers when a terminal window closes — the case every CLI
+        // already handles.
+        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGHUP) == 0 }
     }
 
-    /// Windows has no signal to send here, so the grace wait simply expires
-    /// and `kill` does the whole job — the same outcome as before.
+    /// Windows has no signal to send here, and saying so is what lets the
+    /// caller skip a grace period that could not help anyone.
     #[cfg(not(unix))]
-    pub fn hangup(&mut self) {}
+    pub fn hangup(&mut self) -> bool {
+        false
+    }
 
     pub fn kill(&mut self) {
         let _ = self.child.kill();

@@ -132,11 +132,14 @@ pub fn start(app: AppHandle) -> TerminalHandle {
                     // inside `handle`: killing gracefully means waiting, and
                     // waiting means `.await`. The reply goes back only once
                     // the PTYs are gone, because that is what the caller is
-                    // holding the exit for.
+                    // holding the exit for. Then `return`, not `break`: the
+                    // sweep below is for the other ways out of this loop, and
+                    // running it here would be a second grace period spent on
+                    // sessions this one has already dealt with.
                     if let Request::ShutDown(tx) = request {
                         kill_all(&mut sessions).await;
                         let _ = tx.send(());
-                        break;
+                        return;
                     }
                     handle(&app, &mut sessions, &mut captures, &mut active, &mut next_id, &chunks_tx, request);
                 }
@@ -163,8 +166,10 @@ pub fn start(app: AppHandle) -> TerminalHandle {
             }
         }
 
-        // Closing the worker: an agent left alive is an orphan in the process
-        // list.
+        // The worker lost its senders or its chunk channel rather than being
+        // asked to stop — nobody is waiting on this, but an agent left alive
+        // is an orphan in the process list all the same. The requested exit
+        // returns above and does not come through here.
         kill_all(&mut sessions).await;
     });
 
@@ -182,17 +187,29 @@ pub fn start(app: AppHandle) -> TerminalHandle {
 /// a worker that never reaches this function at all, which is why the grace
 /// period here has to stay well under it.
 async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
+    // Only the living are signalled. A session that has already exited sits
+    // in the map until `Request::Remove` takes it out, and its pid can by
+    // then belong to somebody else — signalling a process group that is not
+    // ours is not a thing to do on the way out, however unlikely.
+    let mut signalled = false;
     for live in sessions.values_mut() {
-        live.pty.hangup();
-    }
-    let deadline = Instant::now() + KILL_GRACE;
-    while Instant::now() < deadline {
-        // `exit_code` is the same non-blocking `try_wait` the rest of the
-        // worker uses, so this also reaps whoever has already left.
-        if sessions.values_mut().all(|live| live.pty.exit_code().is_some()) {
-            return;
+        if live.pty.exit_code().is_none() {
+            signalled |= live.pty.hangup();
         }
-        tokio::time::sleep(KILL_POLL).await;
+    }
+    // Nothing was asked to leave — on a platform with no such signal, or
+    // because everything here is already gone — so there is nothing to wait
+    // for, and waiting would only make closing the window slower.
+    if signalled {
+        let deadline = Instant::now() + KILL_GRACE;
+        while Instant::now() < deadline {
+            // `exit_code` is the same non-blocking `try_wait` the rest of the
+            // worker uses, so this also reaps whoever has already left.
+            if sessions.values_mut().all(|live| live.pty.exit_code().is_some()) {
+                return;
+            }
+            tokio::time::sleep(KILL_POLL).await;
+        }
     }
     for live in sessions.values_mut() {
         if live.pty.exit_code().is_none() {

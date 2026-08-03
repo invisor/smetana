@@ -19,7 +19,8 @@ pub const SETTLE: Duration = Duration::from_millis(150);
 
 pub struct DetectInput<'a> {
     /// A bell rang and hasn't been cleared yet. It's cleared by a human
-    /// writing into the session — from the keyboard or a button — and by the
+    /// writing into the session — from the keyboard or a button — by a view
+    /// attaching to it, which is a human looking at what rang, and by the
     /// process exiting.
     pub bell_pending: bool,
     pub quiet_for: Duration,
