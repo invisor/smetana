@@ -69,6 +69,22 @@ describe('список сессий', () => {
   })
 })
 
+describe('строки агентов', () => {
+  it('строка собирает имя, переведённый статус, вопрос и время работы', async () => {
+    vi.useFakeTimers({ now: new Date('2026-08-03T10:18:00Z') })
+    try {
+      const { stores } = await ready()
+      const [row] = stores.terminals.agentRows.value
+      expect(row.name).toBe('claude-1')
+      expect(row.state).toBe('running')
+      expect(row.question).toBeNull()
+      expect(row.elapsed).toBe('18m')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('поток вывода', () => {
   it('подключение отдаёт снимок кольца подписчику', async () => {
     const { stores } = await ready()
@@ -114,6 +130,18 @@ describe('поток вывода', () => {
     await emit('terminal:output', { id: 99, seq: 1, data: b64('чужое') })
     await nextTick()
     expect(seen).toEqual(['hello'])
+  })
+})
+
+describe('ошибки бэкенда', () => {
+  it('отказ terminal_attach не бросает, а оседает в lastError', async () => {
+    const { ipc, stores } = await ready()
+    ipc.fail('terminal_attach', new Error('boom'))
+    await expect(stores.terminals.attach(1)).resolves.toBeUndefined()
+    expect(stores.terminals.terminalState.lastError).toEqual({
+      title: 'Could not read the terminal',
+      description: 'The session list may be out of date. It will catch up on the next change.'
+    })
   })
 })
 

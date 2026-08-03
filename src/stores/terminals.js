@@ -14,7 +14,8 @@ export const terminalState = reactive({
   sessions: [],
   activeId: null,
   ready: false,
-  project: null
+  project: null,
+  lastError: null
 })
 
 /* The session's internal state and the design system's status are different
@@ -34,9 +35,19 @@ export function formatElapsed(ms) {
 }
 
 /* Ticks once every thirty seconds: the time in an agent's row is measured in
-   tens of minutes, and second-level precision would serve nobody there. */
+   tens of minutes, and second-level precision would serve nobody there.
+   Started lazily from initTerminals(), not at module scope: the module
+   loads once for a window's lifetime in the app, but the test harness
+   reloads it per test, and an interval nobody clears would outlive every
+   test that started one. */
 const now = ref(Date.now())
-setInterval(() => (now.value = Date.now()), 30000)
+let clockStarted = false
+
+function startClock() {
+  if (clockStarted) return
+  clockStarted = true
+  setInterval(() => (now.value = Date.now()), 30000)
+}
 
 export const agentRows = computed(() =>
   terminalState.sessions.map((session) => ({
@@ -68,6 +79,28 @@ function decode(base64) {
   return bytes
 }
 
+/* Worker errors are diagnostics: their text speaks the worker's language and
+   is meant for whoever fixes things, not whoever is waiting on a session.
+   The interface gets a short explanation of what didn't work; the raw text
+   stays in the console — the same split tracker.js makes between its read
+   and write errors. Two kinds are enough here too: reading (list, attach,
+   detach, resize) and writing (create, remove, write). */
+const ERRORS = {
+  read: {
+    title: 'Could not read the terminal',
+    description: 'The session list may be out of date. It will catch up on the next change.'
+  },
+  write: {
+    title: 'Could not complete the action',
+    description: 'Nothing was created, removed, or sent.'
+  }
+}
+
+function report(kind, error) {
+  console.error(`[terminal] ${kind} failed:`, error)
+  terminalState.lastError = ERRORS[kind]
+}
+
 /* The number of the last chunk delivered for the active session. A gap means
    a lost event — then we take the truth whole, the way the tracker takes a
    snapshot on a generation gap. */
@@ -86,12 +119,17 @@ function upsert(session) {
 }
 
 export async function initTerminals() {
+  startClock()
   await listen('terminal:state', (event) => upsert(event.payload))
   await listen('terminal:output', (event) => {
     const { id, seq: next, data } = event.payload
     if (id !== terminalState.activeId) return
     if (next !== seq + 1) {
-      attach(id)
+      // Fired from an event listener, not awaited by anyone: attach() no
+      // longer throws (it reports instead), but the .catch() stays as a
+      // second line of defence — a lost event must never surface as an
+      // unhandled rejection, whatever else about this function changes.
+      attach(id).catch(() => {})
       return
     }
     seq = next
@@ -102,23 +140,43 @@ export async function initTerminals() {
 
 export async function loadSessions(project) {
   terminalState.project = project
-  terminalState.sessions = project ? await invoke('terminal_list', { project }) : []
-  if (!terminalState.sessions.some((s) => s.id === terminalState.activeId)) {
-    terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
+  try {
+    terminalState.sessions = project ? await invoke('terminal_list', { project }) : []
+    if (!terminalState.sessions.some((s) => s.id === terminalState.activeId)) {
+      terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
+    }
+    terminalState.lastError = null
+  } catch (err) {
+    report('read', err)
   }
 }
 
+/* The one write that still rejects: its caller is a later task turning a
+   failed spawn into something the human sees, and an agent asked for that
+   never appeared needs to say why — swallowing the error here would leave
+   nothing to show. */
 export async function createSession(project) {
-  const session = await invoke('terminal_create', { project })
-  upsert(session)
-  terminalState.activeId = session.id
-  return session
+  try {
+    const session = await invoke('terminal_create', { project })
+    upsert(session)
+    terminalState.activeId = session.id
+    terminalState.lastError = null
+    return session
+  } catch (err) {
+    report('write', err)
+    throw err
+  }
 }
 
 export async function removeSession(id) {
-  await invoke('terminal_remove', { id })
-  terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
-  if (terminalState.activeId === id) terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
+  try {
+    await invoke('terminal_remove', { id })
+    terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
+    if (terminalState.activeId === id) terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
+    terminalState.lastError = null
+  } catch (err) {
+    report('write', err)
+  }
 }
 
 /* Attaching hands back the whole ring, and the subscriber must repaint from
@@ -128,10 +186,18 @@ export async function attach(id) {
   terminalState.activeId = id
   const current = invoke('terminal_attach', { id })
   attaching = current
-  const { data, seq: at } = await current
-  if (attaching !== current) return
-  seq = at
-  push(decode(data), { reset: true })
+  try {
+    const { data, seq: at } = await current
+    if (attaching !== current) return
+    seq = at
+    push(decode(data), { reset: true })
+    terminalState.lastError = null
+  } catch (err) {
+    // A newer attach already overtook this one; its outcome, not this
+    // rejection, is what the store and the screen should reflect.
+    if (attaching !== current) return
+    report('read', err)
+  }
 }
 
 /* Detach names the session it is leaving. Without a name it would clear the
@@ -144,11 +210,21 @@ export async function attach(id) {
 export async function detach(id) {
   if (id == null) return
   if (terminalState.activeId === id) terminalState.activeId = null
-  await invoke('terminal_detach', { id })
+  try {
+    await invoke('terminal_detach', { id })
+    terminalState.lastError = null
+  } catch (err) {
+    report('read', err)
+  }
 }
 
-export function send(id, data) {
-  return invoke('terminal_write', { id, data })
+export async function send(id, data) {
+  try {
+    await invoke('terminal_write', { id, data })
+    terminalState.lastError = null
+  } catch (err) {
+    report('write', err)
+  }
 }
 
 /* What to send is the profile's knowledge, not the panel's: one CLI wants a
@@ -157,6 +233,11 @@ export function answer(id, option) {
   return send(id, option.send)
 }
 
-export function resize(id, cols, rows) {
-  return invoke('terminal_resize', { id, cols, rows })
+export async function resize(id, cols, rows) {
+  try {
+    await invoke('terminal_resize', { id, cols, rows })
+    terminalState.lastError = null
+  } catch (err) {
+    report('read', err)
+  }
 }
