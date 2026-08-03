@@ -7,9 +7,9 @@ import EmptyState from '../core/EmptyState.vue'
 defineProps({
   columns: { type: Array, default: () => [] },
   selectedId: { type: String, default: undefined },
-  /* Статус единственной колонки, которая принимает новые задачи — только у неё
-     есть "+". null: доска ничего не создаёт. Какой это статус, решает продукт:
-     фиксированного набора колонок здесь нет и быть не может. */
+  /* The status of the one column that accepts new issues — it alone has a "+".
+     null: the board creates nothing. Which status that is, is the product's
+     decision: there is no fixed set of columns here and there cannot be. */
   addTo: { type: String, default: null }
 })
 

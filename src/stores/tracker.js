@@ -1,23 +1,24 @@
-/* Состояние трекера во фронте. Компоненты знают только это хранилище;
-   про Tauri знает лишь оно само. */
+/* The tracker's state in the front end. Components know only this store; it
+   alone knows about Tauri. */
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
-/* bd и дизайн-система называют одно и то же по-разному. RESERVED в status.js —
-   ready/running/done, в bd — open/in_progress/closed. Пересечение только по
-   blocked. Без перевода карточки потеряли бы глифы и уехали бы в
-   генерируемые хэш-цвета. Всё остальное, включая кастомные статусы,
-   уходит в normalizeStatus как есть — это и есть задуманное поведение. */
+/* bd and the design system call the same thing by different names. RESERVED in
+   status.js is ready/running/done, in bd it is open/in_progress/closed. The only
+   overlap is blocked. Without the translation cards would lose their glyphs and
+   drift into generated hash colours. Everything else, including custom
+   statuses, goes into normalizeStatus as is — and that is the intended
+   behaviour. */
 const UI_STATUS = { open: 'ready', in_progress: 'running', closed: 'done' }
 
 export const toUiStatus = (name) => UI_STATUS[name] ?? name
 
 export const trackerState = reactive({
   ready: false,
-  /* Идёт смена проекта. Пока она идёт, дельты игнорируются: они могут
-     относиться и к старому каталогу, и к новому, а истина придёт ответом
-     команды — снимком целиком. */
+  /* A project switch is under way. While it is, deltas are ignored: they may
+     belong to the old folder or to the new one, and the truth arrives as the
+     command's answer — a snapshot in full. */
   switching: false,
   generation: 0,
   columns: [],
@@ -28,11 +29,10 @@ export const trackerState = reactive({
 
 export const issueById = (id) => trackerState.issues.get(id)
 
-/* Родство в bd выражено зависимостью parent-child, и она попадает в
-   dependency_count. Считать блокировки по счётчикам нельзя — у каждой
-   дочерней задачи появилось бы ложное "заблокировано 1". Считаем по
-   рёбрам с типом blocks; bd отдаёт только исходящие, поэтому обратную
-   сторону собираем сами. */
+/* Parentage in bd is expressed as a parent-child dependency, and that lands in
+   dependency_count. Blockers cannot be counted from the counters — every child
+   issue would get a false "blocked by 1". We count edges of type blocks; bd
+   gives only the outgoing ones, so we assemble the reverse side ourselves. */
 const dependencyCounts = computed(() => {
   const blockedBy = new Map()
   const blocks = new Map()
@@ -51,7 +51,7 @@ export const boardColumns = computed(() => {
   const buckets = new Map(trackerState.columns.map((c) => [c.name, []]))
 
   for (const issue of trackerState.issues.values()) {
-    // Статус, которого нет в наборе bd, всё равно должен быть виден.
+    // A status that is not in bd's set still has to be visible.
     if (!buckets.has(issue.status)) buckets.set(issue.status, [])
     buckets.get(issue.status).push({
       id: issue.id,
@@ -73,11 +73,11 @@ function applyDelta(delta) {
   trackerState.generation = delta.generation
 }
 
-/* Ошибки бэкенда — диагностика: их текст говорит языком bd и адресован тому,
-   кто чинит, а не тому, кто работает. Пользователю показываем короткое
-   объяснение, что именно не получилось, полный текст оставляем в консоли.
-   Заодно чтение и запись перестали делить одну подпись: read-ошибка под
-   заголовком "не удалось записать" врала о происходящем. */
+/* Back-end errors are diagnostics: their text speaks bd's language and is
+   addressed to whoever fixes things, not to whoever works. The user is shown a
+   short explanation of what exactly did not work, and the full text stays in
+   the console. Reads and writes also stopped sharing one caption: a read error
+   under a "could not save" heading lied about what was happening. */
 const ERRORS = {
   read: {
     title: 'Could not read the tracker',
@@ -102,9 +102,9 @@ function applySnapshot(snapshot) {
   trackerState.ready = true
 }
 
-/* tracker_resync теперь может отклониться (bd упал) — в этом случае нельзя
-   считать это успехом и стирать состояние: оставляем доску как была и
-   запоминаем ошибку. */
+/* tracker_resync can now reject (bd failed) — in that case it must not be
+   treated as a success and the state must not be wiped: we leave the board as
+   it was and remember the error. */
 export async function resync() {
   try {
     applySnapshot(await invoke('tracker_resync'))
@@ -114,9 +114,9 @@ export async function resync() {
   }
 }
 
-/* Смена проекта. Ответ команды — снимок нового каталога целиком, поэтому
-   раскатываем его так же, как resync(): с очисткой, иначе задачи прошлого
-   проекта остались бы на доске. */
+/* A project switch. The command's answer is the new folder's snapshot in full,
+   so we roll it out the way resync() does: with a clear, otherwise the previous
+   project's issues would stay on the board. */
 export async function setProject(path) {
   trackerState.switching = true
   try {
@@ -129,8 +129,8 @@ export async function setProject(path) {
   }
 }
 
-/* bd init в каталоге активного проекта. Успех приносит доску; отказ уходит
-   наверх — вызывающему есть что показать человеку. */
+/* bd init in the active project's directory. Success brings the board; a
+   refusal goes upwards — the caller has something to show the person. */
 export async function initBd() {
   trackerState.switching = true
   try {
@@ -144,7 +144,8 @@ export async function initBd() {
   }
 }
 
-/* Есть ли трекер в этих каталогах — вопрос к файловой системе, не к bd. */
+/* Whether these folders have a tracker is a question for the filesystem, not
+   for bd. */
 export async function probeProjects(paths) {
   try {
     return await invoke('tracker_probe', { paths })
@@ -154,9 +155,9 @@ export async function probeProjects(paths) {
   }
 }
 
-/* message в health — диагностика: она по-русски и говорит языком bd. В
-   интерфейс идёт короткий текст по одному лишь state, а подробность остаётся
-   там, где её ищут при отладке. */
+/* health's message is diagnostics: it speaks bd's language. What goes to the
+   interface is a short text derived from `state` alone, and the detail stays
+   where it is looked for while debugging. */
 function setHealth(health) {
   trackerState.health = health
   if (health.state !== 'ok') console.warn('[tracker] health:', health.state, health.message ?? '')
@@ -166,8 +167,8 @@ export async function initTracker() {
   await listen('tracker:health', (event) => {
     setHealth(event.payload)
   })
-  /* Поколение растёт на единицу с каждой дельтой. Разрыв означает, что
-     событие потеряно — берём снимок целиком. */
+  /* The generation grows by one with every delta. A gap means an event was
+     lost — we take a snapshot in full. */
   await listen('tracker:delta', (event) => {
     if (trackerState.switching) return
     const delta = event.payload
@@ -178,49 +179,50 @@ export async function initTracker() {
     applyDelta(delta)
   })
 
-  /* tracker:health уходит за микросекунды после старта — раньше, чем веб-вью
-     успевает подписаться. Слушатель выше ловит всё, что случится после;
-     эта команда — единственный способ узнать состояние, отправленное до
-     подписки. */
+  /* tracker:health fires microseconds after start — before the webview manages
+     to subscribe. The listener above catches everything that happens
+     afterwards; this command is the only way to learn the state that was sent
+     before the subscription. */
   try {
     setHealth(await invoke('tracker_health'))
   } catch (err) {
     report('read', err)
   }
 
-  /* Снимок и дельты идут разными путями: пока ответ команды летит обратно в
-     веб-вью, вотчер успевает прислать дельту и продвинуть поколение. Тогда
-     снимок — это прошлое, и раскатывать его нельзя. Он вернул бы старые
-     значения поверх новых, потерял бы удаления, которые дельта уже
-     применила, и откатил бы счётчик поколений назад; следующая дельта
-     обычно чинит это разрывом нумерации, но если трекер затих, её не будет,
-     а в Rust уже лежит новое значение — его полная сверка не увидит
-     расхождения и ничего не пришлёт. Доска осталась бы неправильной молча.
-     Поэтому устаревший снимок игнорируем целиком, а свежий заменяет
-     состояние так же, как в resync(): с очисткой, иначе те же удаления
-     потеряются. */
+  /* The snapshot and the deltas travel by different routes: while the
+     command's answer flies back to the webview, the watcher manages to send a
+     delta and advance the generation. The snapshot is then the past, and it
+     must not be rolled out. It would put old values over new ones, lose
+     deletions the delta had already applied, and roll the generation counter
+     back; the next delta usually fixes that with a gap in the numbering, but if
+     the tracker has gone quiet there will not be one, and Rust already holds
+     the new value — its full sweep will see no discrepancy and send nothing.
+     The board would stay wrong, silently. So a stale snapshot is ignored
+     entirely, and a fresh one replaces the state the way resync() does: with a
+     clear, otherwise those same deletions are lost. */
   const snapshot = await invoke('tracker_snapshot')
   if (snapshot.generation >= trackerState.generation) applySnapshot(snapshot)
   trackerState.ready = true
 }
 
-/* Записи в Map заменяются целиком, а не мутируются, поэтому сравнение по
-   ссылке ничего не говорит о содержимом — только JSON-по-значению отличает
-   "то же самое" от "кто-то успел изменить". */
+/* Entries in the Map are replaced wholesale rather than mutated, so a
+   reference comparison says nothing about the contents — only a JSON-by-value
+   comparison tells "the same thing" from "somebody changed it". */
 function sameIssue(a, b) {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-/* Запись занимает около двух секунд. Оптимистичное значение применяется
-   сразу — пользователь видит свою правку без ожидания, и это единственная
-   индикация происходящего: отдельной пометки "в полёте" на карточке нет и не
-   должно быть, цвет в этой системе принадлежит статусу, а не факту записи.
+/* A write takes about two seconds. The optimistic value is applied at once —
+   the user sees their edit without waiting, and that is the only indication of
+   what is happening: there is no separate "in flight" mark on a card and there
+   should not be, colour in this system belongs to status, not to the fact of a
+   write.
 
-   Если запись упала, откатывать нужно с оглядкой: за эти две секунды карточку
-   мог обновить вотчер или другая запись. Откатываем, только если текущее
-   значение всё ещё равно тому, что записал именно этот вызов, — сравнение по
-   значению, а не по ссылке. Если оно уже другое, чужие изменения важнее
-   нашего отката, и мы просто запоминаем ошибку. */
+   If the write fails, rolling back needs care: over those two seconds the card
+   may have been updated by the watcher or by another write. We roll back only
+   if the current value still equals what this very call wrote — a comparison by
+   value, not by reference. If it is already different, somebody else's changes
+   matter more than our rollback, and we simply remember the error. */
 async function write(id, optimistic, run) {
   const before = id ? trackerState.issues.get(id) : null
   const optimisticValue = before && optimistic ? { ...before, ...optimistic } : null

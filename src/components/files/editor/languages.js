@@ -1,14 +1,14 @@
-/* Карта «расширение файла → язык». Каждое значение — динамический import,
-   поэтому каждый язык становится отдельным chunk'ом: стартовый бандл не
-   растёт, язык грузится при открытии первого файла своего типа и дальше
-   берётся из кэша модулей.
+/* A "file extension → language" map. Every value is a dynamic import, so every
+   language becomes its own chunk: the startup bundle does not grow, a language
+   loads when the first file of its type is opened, and after that it comes from
+   the module cache.
 
-   Расширять набор — значит дописать строку сюда, больше ничего. */
+   Extending the set means adding a line here, nothing else. */
 import { StreamLanguage } from '@codemirror/language'
 
-/* Каждый путь записан целиком: склеенный специфаер Rollup не анализирует,
-   чанк для него не создаётся, и импорт падает всегда — а не только когда
-   что-то не приехало по сети. */
+/* Every path is written out in full: Rollup does not analyse a concatenated
+   specifier, no chunk is created for it, and the import fails always — not only
+   when something did not arrive over the network. */
 const LEGACY = {
   toml: () => import('@codemirror/legacy-modes/mode/toml').then((m) => StreamLanguage.define(m.toml)),
   shell: () => import('@codemirror/legacy-modes/mode/shell').then((m) => StreamLanguage.define(m.shell)),
@@ -51,7 +51,7 @@ const LANGUAGES = {
   cfg: LEGACY.properties
 }
 
-/* Файлы, у которых имя важнее расширения. */
+/* Files whose name matters more than their extension. */
 const BY_NAME = {
   dockerfile: LEGACY.dockerfile,
   makefile: LEGACY.shell
@@ -61,13 +61,15 @@ export async function languageFor(path) {
   const name = String(path || '').split('/').pop()?.toLowerCase() ?? ''
   const dot = name.lastIndexOf('.')
   const load = BY_NAME[name] ?? (dot > 0 ? LANGUAGES[name.slice(dot + 1)] : undefined)
-  /* Неизвестное расширение — нормальный исход: файл открывается без подсветки. */
+  /* An unknown extension is a normal outcome: the file opens without
+     highlighting. */
   if (!load) return null
   try {
     return await load()
   } catch (error) {
-    /* Chunk не приехал — offline, битая сборка. Файл остаётся простым текстом:
-       редактор не должен ломаться из-за того, что не привезли раскраску. */
+    /* The chunk did not arrive — offline, a broken build. The file stays plain
+       text: the editor must not break because the colouring was not
+       delivered. */
     console.warn('[editor] language failed to load for', path, error)
     return null
   }

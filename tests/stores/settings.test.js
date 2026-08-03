@@ -18,8 +18,8 @@ beforeEach(async () => {
   tabs = loaded.stores.tabs
 })
 
-describe('загрузка', () => {
-  it('пустой ответ оставляет умолчания', async () => {
+describe('loading', () => {
+  it('an empty answer leaves the defaults', async () => {
     ipc.on('settings_load', {})
 
     await settings.loadSettings()
@@ -29,7 +29,7 @@ describe('загрузка', () => {
     expect(settings.settings.project.activeTab).toBe('kanban')
   })
 
-  it('сохранённое накрывает умолчания по полям, а не по секциям', async () => {
+  it('stored values cover the defaults field by field, not section by section', async () => {
     ipc.on('settings_load', { appearance: { theme: 'light' } })
 
     await settings.loadSettings()
@@ -38,16 +38,16 @@ describe('загрузка', () => {
     expect(settings.settings.appearance.density).toBe('comfortable')
   })
 
-  it('отказ чтения оставляет умолчания и не роняет запуск', async () => {
-    ipc.fail('settings_load', new Error('файл не читается'))
+  it('a read refusal leaves the defaults and does not break startup', async () => {
+    ipc.fail('settings_load', new Error('the file does not read'))
 
     await expect(settings.loadSettings()).resolves.toBeTruthy()
     expect(settings.settings.appearance.theme).toBe('dark')
   })
 })
 
-describe('раскладка проекта', () => {
-  it('проект, которого нет в карте, начинается с чистого, а не донашивает чужое', async () => {
+describe('a project\'s layout', () => {
+  it('a project absent from the map starts clean rather than wearing somebody else\'s fields', async () => {
     ipc.on('settings_load', {
       project: { sideTab: 'agents', openTabs: ['a.txt'], expanded: ['src'] }
     })
@@ -55,14 +55,14 @@ describe('раскладка проекта', () => {
     expect(settings.settings.project.openTabs).toEqual(['a.txt'])
 
     ipc.on('settings_load', { project: { sideTab: 'files' } })
-    await settings.loadProjectLayout('/новый')
+    await settings.loadProjectLayout('/new')
 
     expect(settings.settings.project.sideTab).toBe('files')
     expect(settings.settings.project.openTabs).toEqual([])
     expect(settings.settings.project.expanded).toEqual([])
   })
 
-  it('без проекта ставит умолчания и на диск не ходит', async () => {
+  it('with no project it sets the defaults and does not go to the disk', async () => {
     ipc.on('settings_load', { project: { sideTab: 'agents' } })
     await settings.loadSettings()
     const before = ipc.calls('settings_load').length
@@ -73,33 +73,33 @@ describe('раскладка проекта', () => {
     expect(ipc.calls('settings_load')).toHaveLength(before)
   })
 
-  it('секция сливается на месте: ссылка на объект остаётся прежней', async () => {
+  it('a section is merged in place: the reference to the object stays the same', async () => {
     ipc.on('settings_load', {})
     await settings.loadSettings()
     const held = settings.settings.project
 
     ipc.on('settings_load', { project: { sideTab: 'agents' } })
-    await settings.loadProjectLayout('/новый')
+    await settings.loadProjectLayout('/new')
 
     expect(settings.settings.project).toBe(held)
     expect(held.sideTab).toBe('agents')
   })
 })
 
-describe('запись', () => {
+describe('writes', () => {
   beforeEach(async () => {
     ipc.on('settings_load', {})
     ipc.on('settings_save', null)
     await settings.loadSettings()
   })
 
-  it('поток правок схлопывается в одну запись', async () => {
-    /* Три правки в одном синхронном блоке сворачивает планировщик Vue —
-       вотчер срабатывает единожды на весь тик независимо от SAVE_DELAY (тест
-       остаётся зелёным даже при SAVE_DELAY = 0). Чтобы застать именно
-       дебаунс, две правки разнесены по разным тикам: между ними время
-       продвинуто меньше SAVE_DELAY, поэтому первый таймер обязан устоять и
-       вторая правка обязана лечь в ту же, ещё не отправленную запись. */
+  it('a stream of edits collapses into one write', async () => {
+    /* Three edits in one synchronous block are collapsed by Vue's scheduler —
+       the watcher fires once per tick regardless of SAVE_DELAY (the test stays
+       green even with SAVE_DELAY = 0). To catch the debounce itself, two edits
+       are spread across different ticks: time is advanced by less than
+       SAVE_DELAY between them, so the first timer has to survive and the second
+       edit has to land in the same, not-yet-sent write. */
     vi.useFakeTimers()
 
     settings.settings.layout.leftCollapsed = true
@@ -110,8 +110,8 @@ describe('запись', () => {
     settings.settings.layout.rightCollapsed = true
     await nextTick()
     vi.advanceTimersByTime(200)
-    /* Первый таймер (400 мс от первой правки) успел бы сработать здесь, не
-       будь он передвинут второй правкой: 200 + 200 = 400 мс от начала. */
+    /* The first timer (400 ms from the first edit) would have fired here had
+       the second edit not moved it: 200 + 200 = 400 ms from the start. */
     expect(ipc.calls('settings_save')).toHaveLength(0)
 
     vi.advanceTimersByTime(200)
@@ -123,86 +123,88 @@ describe('запись', () => {
     expect(ipc.calls('settings_save')[0].settings.layout.rightCollapsed).toBe(true)
   })
 
-  it('flushPending видит таймер, заведённый в том же синхронном блоке', async () => {
+  it('flushPending sees a timer set in the same synchronous block', async () => {
     settings.settings.layout.leftCollapsed = true
     await settings.flushPending()
 
     expect(ipc.calls('settings_save')).toHaveLength(1)
   })
 
-  it('два flushPending в одном тике дают одну запись с последним значением', async () => {
+  it('two flushPending calls in one tick give one write with the last value', async () => {
     settings.settings.layout.leftCollapsed = true
     const first = settings.flushPending()
     settings.settings.layout.leftCollapsed = false
     const second = settings.flushPending()
     await Promise.all([first, second])
 
-    /* Вотчер отложен на микрозадачу и за один тик срабатывает один раз, поэтому
-       таймер заводится один. Первая flush его снимает и отправляет снимок, взятый
-       уже после обеих правок; второй звать нечего — она отдаёт ту же цепочку. */
+    /* The watcher is deferred to a microtask and fires once per tick, so only
+       one timer is set. The first flush clears it and sends a snapshot taken
+       after both edits; there is nothing for the second to call — it returns the
+       same chain. */
     expect(ipc.calls('settings_save')).toHaveLength(1)
     expect(ipc.calls('settings_save')[0].settings.layout.leftCollapsed).toBe(false)
   })
 
-  it('две записи не летят внахлёст', async () => {
+  it('two writes never overlap', async () => {
     const order = []
     ipc.on('settings_save', async (args) => {
       const mark = `${args.settings.layout.leftCollapsed}/${args.settings.layout.rightCollapsed}`
-      order.push(`начало:${mark}`)
+      order.push(`start:${mark}`)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      order.push(`конец:${mark}`)
+      order.push(`end:${mark}`)
       return null
     })
 
     settings.settings.layout.leftCollapsed = true
     const first = settings.flushPending()
-    /* Тик отдаёт управление первой записи: её flush уже стоит в цепочке, и
-       только теперь вторая правка становится отдельной записью, а не частью той же. */
+    /* The tick yields to the first write: its flush is already in the chain,
+       and only now does the second edit become a separate write rather than
+       part of the same one. */
     await nextTick()
     settings.settings.layout.rightCollapsed = true
     const second = settings.flushPending()
     await Promise.all([first, second])
 
-    /* Rust пишет через временный файл и переименование: две записи внахлёст
-       спорили бы за порядок, и вторая могла бы лечь на диск раньше первой. */
+    /* Rust writes through a temp file and a rename: two overlapping writes
+       would race for order, and the second could land on disk before the
+       first. */
     expect(order).toEqual([
-      'начало:true/false',
-      'конец:true/false',
-      'начало:true/true',
-      'конец:true/true'
+      'start:true/false',
+      'end:true/false',
+      'start:true/true',
+      'end:true/true'
     ])
   })
 
-  it('на диск уходит простой объект, а не реактивный прокси', async () => {
+  it('a plain object goes to the disk, not a reactive proxy', async () => {
     settings.settings.layout.leftCollapsed = true
     await settings.flushPending()
 
     const sent = ipc.calls('settings_save')[0].settings
-    /* Прокси структурно равен своему JSON-клону — toEqual(JSON.parse(JSON.
-       stringify(sent))) истинно всегда, реактивный он или нет, и потому
-       ничего не стережёт. isReactive работает между экземплярами vue: флаг
-       реактивности читается прокси-геттером по строковому ключу
-       ('__v_isReactive'), а не по Symbol, который был бы приписан к
-       конкретному модулю. */
+    /* A proxy is structurally equal to its JSON clone — toEqual(JSON.parse(JSON.
+       stringify(sent))) is always true, reactive or not, and so guards nothing.
+       isReactive works across vue instances: the reactivity flag is read by a
+       proxy getter on a string key ('__v_isReactive') rather than on a Symbol,
+       which would be tied to a particular module. */
     expect(isReactive(sent)).toBe(false)
   })
 
-  it('отказ записи не роняет ожидающего', async () => {
-    ipc.fail('settings_save', new Error('диск полон'))
+  it('a write refusal does not break whoever is awaiting it', async () => {
+    ipc.fail('settings_save', new Error('the disk is full'))
 
     settings.settings.layout.leftCollapsed = true
     await expect(settings.flushPending()).resolves.toBeUndefined()
   })
 })
 
-describe('закрытие окна', () => {
+describe('closing the window', () => {
   beforeEach(async () => {
     ipc.on('settings_load', {})
     ipc.on('settings_save', null)
     await settings.loadSettings()
   })
 
-  it('дожимает запись и только потом разрушает окно', async () => {
+  it('flushes the write and only then destroys the window', async () => {
     ipc.on('plugin:window|destroy', null)
     settings.settings.layout.leftCollapsed = true
     await nextTick()
@@ -211,18 +213,19 @@ describe('закрытие окна', () => {
     await vi.waitFor(() => expect(ipc.commands()).toContain('plugin:window|destroy'))
 
     const commands = ipc.commands()
-    /* Без этого indexOf на несостоявшемся settings_save дал бы -1, и -1 < N
-       было бы истинно при любом порядке — ассерт ниже прошёл бы вхолостую. */
+    /* Without this, indexOf on a settings_save that never happened would give
+       -1, and -1 < N would be true in any order — the assert below would pass
+       for nothing. */
     expect(commands).toContain('settings_save')
     expect(commands.indexOf('settings_save')).toBeLessThan(
       commands.indexOf('plugin:window|destroy')
     )
   })
 
-  it('«человек передумал» не закрывает окно', async () => {
+  it('"the person changed their mind" does not close the window', async () => {
     ipc.on('plugin:window|destroy', null)
     settings.settings.project.openTabs = ['a.txt']
-    tabs.buffers.set('a.txt', buffer({ text: 'правка' }))
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
     tabs.onUnsaved(() => false)
 
     await emit('tauri://close-requested', {})
@@ -231,8 +234,9 @@ describe('закрытие окна', () => {
     expect(ipc.commands()).not.toContain('plugin:window|destroy')
   })
 
-  it('окно закрывается и тогда, когда запись не отвечает', async () => {
-    /* Обещано, что окно закроется. Не обещано, что правка успеет на диск. */
+  it('the window closes even when the write does not answer', async () => {
+    /* What is promised is that the window closes. What is not promised is that
+       the edit reaches the disk. */
     ipc.on('plugin:window|destroy', null)
     ipc.on('settings_save', () => new Promise(() => {}))
     settings.settings.layout.leftCollapsed = true
@@ -245,23 +249,23 @@ describe('закрытие окна', () => {
     )
   })
 
-  it('отказавший destroy сбрасывает closing: следующий запрос снова доходит до destroy', async () => {
-    ipc.fail('plugin:window|destroy', new Error('окно занято'))
+  it('a failed destroy clears closing: the next request reaches destroy again', async () => {
+    ipc.fail('plugin:window|destroy', new Error('the window is busy'))
 
     await emit('tauri://close-requested', {})
     await vi.waitFor(() => expect(ipc.calls('plugin:window|destroy')).toHaveLength(1))
 
-    /* Без сброса closing повторный запрос молча проглотился бы re-entrancy
-       guard'ом, и окно осталось бы незакрываемым навсегда. */
+    /* Without clearing closing, a repeat request would be silently swallowed by
+       the re-entrancy guard, and the window would stay unclosable forever. */
     await emit('tauri://close-requested', {})
     await vi.waitFor(() => expect(ipc.calls('plugin:window|destroy')).toHaveLength(2))
   })
 
-  it('вопрос о несохранённом задаётся до записи настроек, а не внутри её потолка', async () => {
+  it('the unsaved-work question is asked before the settings write, not inside its ceiling', async () => {
     ipc.on('plugin:window|destroy', null)
     const asked = []
     settings.settings.project.openTabs = ['a.txt']
-    tabs.buffers.set('a.txt', buffer({ text: 'правка' }))
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
     tabs.onUnsaved(() => {
       asked.push(ipc.commands().includes('settings_save'))
       return true

@@ -5,8 +5,8 @@ use tauri_plugin_shell::ShellExt;
 
 use super::model::{ColumnDef, Issue, IssuePatch, NewIssue, TrackerError};
 
-/// Порядок колонок задают категории bd: сначала доступное, потом в работе,
-/// потом отложенное, потом завершённое.
+/// The column order comes from bd's categories: available first, then in
+/// progress, then frozen, then done.
 fn category_rank(category: &str) -> u8 {
     match category {
         "active" => 0,
@@ -17,8 +17,8 @@ fn category_rank(category: &str) -> u8 {
     }
 }
 
-/// Предупреждения bd уходят в stderr, но полагаться на это целиком не стоит:
-/// отрезаем всё до первой скобки.
+/// bd's warnings go to stderr, but relying on that entirely is unwise: we cut
+/// off everything before the first bracket.
 fn slice_json(stdout: &str) -> Result<&str, TrackerError> {
     stdout
         .find(['[', '{'])
@@ -26,8 +26,8 @@ fn slice_json(stdout: &str) -> Result<&str, TrackerError> {
         .ok_or(TrackerError::NoJson)
 }
 
-/// bd create отдаёт объект, а update и close — массив, потому что принимают
-/// несколько идентификаторов. Приводим обе формы к вектору.
+/// bd create returns an object, while update and close return an array because
+/// they take several identifiers. Both forms are reduced to a vector.
 pub fn parse_issues(stdout: &str) -> Result<Vec<Issue>, TrackerError> {
     let value: serde_json::Value =
         serde_json::from_str(slice_json(stdout)?).map_err(|e| TrackerError::Parse(e.to_string()))?;
@@ -40,7 +40,7 @@ pub fn parse_issues(stdout: &str) -> Result<Vec<Issue>, TrackerError> {
             };
             serde_json::from_value(wrapped).map_err(|e| TrackerError::Parse(e.to_string()))
         }
-        _ => Err(TrackerError::Parse("ожидался объект или массив".into())),
+        _ => Err(TrackerError::Parse("expected an object or an array".into())),
     }
 }
 
@@ -68,12 +68,12 @@ pub fn parse_version(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Заголовок уезжает во флаг `--title`, а не в позиционный аргумент.
-/// Оболочки здесь нет, инъекция невозможна, но задача с именем «-n 5» —
-/// вполне достижимая: bd проверяет позиционный заголовок на ведущий дефис и
-/// отказывается его создавать, причём даже после `--` (проверено на bd 1.1.2:
-/// `title "-n 5" looks like a flag`). Значение флага такой проверки не
-/// проходит и берётся как есть.
+/// The title travels in the `--title` flag, not as a positional argument.
+/// There is no shell here and injection is impossible, but an issue named
+/// "-n 5" is entirely reachable: bd checks a positional title for a leading
+/// dash and refuses to create it, even after `--` (verified on bd 1.1.2:
+/// `title "-n 5" looks like a flag`). A flag's value goes through no such check
+/// and is taken as is.
 pub fn create_args(new: &NewIssue) -> Vec<String> {
     let mut args = vec![
         "create".to_string(),
@@ -92,8 +92,8 @@ pub fn create_args(new: &NewIssue) -> Vec<String> {
     args
 }
 
-/// `--` перед идентификатором: всё, что после него, bd разбирает как
-/// позиционный аргумент, а не как флаг.
+/// `--` before the identifier: bd parses everything after it as a positional
+/// argument rather than a flag.
 pub fn update_args(id: &str, patch: &IssuePatch) -> Vec<String> {
     let mut args = vec!["update".to_string(), "--json".to_string()];
     let mut push = |flag: &str, value: String| {
@@ -129,17 +129,18 @@ pub fn update_args(id: &str, patch: &IssuePatch) -> Vec<String> {
     args
 }
 
-/// `bd init` в каталоге проекта.
+/// `bd init` in the project's directory.
 ///
-/// `--non-interactive` обязателен: терминала у нас нет, а мастер, ждущий
-/// ответа на вопрос про роль, повесил бы вызов навсегда. Префикс задач не
-/// передаём — bd берёт имя каталога, и это ровно то, что человек и ожидает.
+/// `--non-interactive` is mandatory: we have no terminal, and a wizard waiting
+/// for an answer about the role would hang the call forever. We do not pass an
+/// issue prefix — bd takes the directory name, and that is exactly what a
+/// person expects.
 pub fn init_args() -> Vec<String> {
     vec!["init".to_string(), "--non-interactive".to_string()]
 }
 
-/// Обёртка над вшитым бинарником bd. Единственное место, которое знает,
-/// как выглядят аргументы CLI.
+/// A wrapper around the bundled bd binary. The only place that knows what the
+/// CLI arguments look like.
 #[derive(Clone)]
 pub struct Bd {
     app: AppHandle,
@@ -151,9 +152,9 @@ impl Bd {
         Self { app, cwd }
     }
 
-    /// Ошибкой считается только ненулевой код возврата. Предупреждения bd
-    /// ("dolt auto-push failed", "beads.role not configured") идут в stderr
-    /// постоянно и ошибкой не являются.
+    /// Only a non-zero exit code counts as an error. bd's warnings
+    /// ("dolt auto-push failed", "beads.role not configured") go to stderr all
+    /// the time and are not errors.
     async fn run(&self, args: Vec<String>) -> Result<String, TrackerError> {
         let output = self
             .app
@@ -190,7 +191,7 @@ impl Bd {
         parse_columns(&self.run(vec!["statuses".into(), "--json".into()]).await?)
     }
 
-    /// -n 0 обязателен: по умолчанию bd list отдаёт только 50 записей.
+    /// -n 0 is mandatory: by default bd list returns only 50 entries.
     pub async fn list_all(&self) -> Result<Vec<Issue>, TrackerError> {
         parse_issues(
             &self
@@ -225,8 +226,8 @@ impl Bd {
         self.one(create_args(new)).await
     }
 
-    /// Заводит трекер в каталоге. Вывод не разбираем: важен только код
-    /// возврата — дальше воркер всё равно перечитывает каталог с нуля.
+    /// Sets up a tracker in the directory. We do not parse the output: only
+    /// the exit code matters — the worker re-reads the folder from scratch anyway.
     pub async fn init(&self) -> Result<(), TrackerError> {
         self.run(init_args()).await.map(|_| ())
     }
@@ -256,12 +257,13 @@ impl Bd {
 mod tests {
     use super::*;
 
-    /// Так выглядит выдача bd list --json: пустые поля отсутствуют целиком.
+    /// This is what bd list --json output looks like: empty fields are absent
+    /// altogether.
     const LIST: &str = r#"[
-      {"id":"smetana-29j","title":"Живая синхронизация","status":"open","priority":1,
+      {"id":"smetana-29j","title":"Live synchronization","status":"open","priority":1,
        "issue_type":"feature","created_at":"2026-07-30T21:31:27Z","updated_at":"2026-07-30T21:31:27Z",
        "dependency_count":0,"dependent_count":0,"comment_count":0},
-      {"id":"smetana-3km","title":"проверка контракта","status":"open","priority":2,
+      {"id":"smetana-3km","title":"contract check","status":"open","priority":2,
        "issue_type":"task","assignee":"flexo","labels":["alpha"],"parent":"smetana-29j",
        "updated_at":"2026-07-31T00:58:55Z",
        "dependencies":[
@@ -271,8 +273,8 @@ mod tests {
           "created_at":"2026-07-31T00:58:55Z","created_by":"flexo","metadata":"{}"}]}
     ]"#;
 
-    /// bd create отдаёт объект, а не массив.
-    const CREATED: &str = r#"{"id":"smetana-3km","title":"проверка контракта","status":"open",
+    /// bd create returns an object, not an array.
+    const CREATED: &str = r#"{"id":"smetana-3km","title":"contract check","status":"open",
       "priority":2,"issue_type":"task","updated_at":"2026-07-30T21:57:07Z"}"#;
 
     const STATUSES: &str = r#"{"built_in_statuses":[
@@ -283,7 +285,7 @@ mod tests {
       "schema_version":1}"#;
 
     #[test]
-    fn разбирает_массив_задач() {
+    fn parses_an_array_of_issues() {
         let issues = parse_issues(LIST).unwrap();
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].id, "smetana-29j");
@@ -292,50 +294,50 @@ mod tests {
     }
 
     #[test]
-    fn разбирает_одиночный_объект() {
+    fn parses_a_single_object() {
         let issues = parse_issues(CREATED).unwrap();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].id, "smetana-3km");
     }
 
     #[test]
-    fn сохраняет_тип_зависимости() {
+    fn keeps_the_dependency_kind() {
         let issues = parse_issues(LIST).unwrap();
         let kinds: Vec<&str> = issues[1].dependencies.iter().map(|d| d.kind.as_str()).collect();
         assert_eq!(kinds, vec!["blocks", "parent-child"]);
     }
 
     #[test]
-    fn пропускает_баннер_перед_json() {
+    fn skips_the_banner_before_the_json() {
         let issues = parse_issues("warning: beads.role not configured\n[]").unwrap();
         assert!(issues.is_empty());
     }
 
     #[test]
-    fn колонки_идут_встроенные_и_кастомные_в_порядке_категорий() {
+    fn columns_come_built_in_and_custom_in_category_order() {
         let cols = parse_columns(STATUSES).unwrap();
         let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["open", "in_progress", "awaiting-review", "closed"]);
     }
 
     #[test]
-    fn достаёт_версию() {
+    fn extracts_the_version() {
         assert_eq!(parse_version("bd version 1.1.2 (20e493e5)").as_deref(), Some("1.1.2"));
-        assert_eq!(parse_version("чепуха"), None);
+        assert_eq!(parse_version("nonsense"), None);
     }
 
     #[test]
-    fn аргументы_обновления_содержат_только_заданные_поля() {
-        let patch = IssuePatch { status: Some("in_progress".into()), title: Some("новое".into()),
+    fn the_update_arguments_carry_only_the_fields_that_were_set() {
+        let patch = IssuePatch { status: Some("in_progress".into()), title: Some("new one".into()),
             ..Default::default() };
         assert_eq!(update_args("smetana-1", &patch),
-            vec!["update", "--json", "-s", "in_progress", "--title", "новое", "--", "smetana-1"]);
+            vec!["update", "--json", "-s", "in_progress", "--title", "new one", "--", "smetana-1"]);
     }
 
-    /// Заголовок с ведущим дефисом bd обязан принять как заголовок, а не
-    /// как флаг: позиционным аргументом он этого не умеет даже после `--`.
+    /// bd has to take a title with a leading dash as a title, not as a flag:
+    /// as a positional argument it cannot do that even after `--`.
     #[test]
-    fn заголовок_уходит_флагом_а_не_позиционным_аргументом() {
+    fn the_title_travels_as_a_flag_not_as_a_positional_argument() {
         let new = NewIssue { title: "-n 5".into(), issue_type: "task".into(), priority: 2,
             description: None };
         assert_eq!(create_args(&new),
@@ -343,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn инициализация_идёт_без_вопросов() {
+    fn initialization_asks_no_questions() {
         assert_eq!(init_args(), vec!["init".to_string(), "--non-interactive".to_string()]);
     }
 }

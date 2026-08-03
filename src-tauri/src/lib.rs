@@ -1,8 +1,10 @@
 mod files;
+mod git;
 mod project;
 mod settings;
 mod terminal;
 mod tracker;
+mod window;
 
 use tauri::Manager;
 
@@ -20,11 +22,12 @@ pub fn run() {
             .build(),
         )?;
       }
-      // Чем открыться, знает файл настроек: там лежит активный проект прошлого
-      // запуска. Читаем его здесь, а не ждём фронт, — доска успевает
-      // загрузиться, пока поднимается вебвью. Файла нет или список пуст —
-      // берём каталог, из которого запустили, если он отслеживается; иначе
-      // проекта нет, и это нормальное состояние, а не сбой.
+      // The settings file knows what to open with: the last run's active
+      // project lives there. We read it here rather than waiting for the front
+      // end — the board gets to load while the webview comes up. No file, or an
+      // empty list, means we take the directory the app was launched from if it
+      // is tracked; otherwise there is no project, and that is a normal state,
+      // not a failure.
       let initial = app
         .path()
         .app_config_dir()
@@ -42,6 +45,11 @@ pub fn run() {
       // by that directory.
       let terminal = terminal::service::start(app.handle().clone());
       app.manage(terminal);
+
+      // The plugin writes the window geometry only on exit; here it starts
+      // being written along the way too, so that a run cut short without a
+      // clean exit does not open at the size from the run before last.
+      window::persist_geometry(app.handle());
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
@@ -60,6 +68,7 @@ pub fn run() {
       files::commands::files_read,
       files::commands::files_write,
       files::commands::files_stat,
+      git::git_head,
       settings::commands::settings_load,
       settings::commands::settings_save,
       terminal::commands::terminal_list,

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use super::model::{ColumnDef, Delta, Issue, Snapshot};
 
-/// Снимок трекера в памяти. Владеет им единственный воркер, поэтому
-/// синхронизация здесь не нужна.
+/// The tracker's in-memory snapshot. A single worker owns it, so no
+/// synchronization is needed here.
 #[derive(Default)]
 pub struct Store {
     issues: BTreeMap<String, Issue>,
@@ -13,14 +13,15 @@ pub struct Store {
 }
 
 impl Store {
-    /// Поколение фронт читает из снимка и дельты, поэтому в самом приложении
-    /// этот доступ не нужен — он остаётся ради утверждений в тестах ниже.
+    /// The front end reads the generation from the snapshot and the delta, so
+    /// the app itself does not need this accessor — it stays for the assertions
+    /// in the tests below.
     #[allow(dead_code)]
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
-    /// Метка времени для следующей инкрементальной догрузки.
+    /// The timestamp for the next incremental catch-up.
     pub fn last_seen(&self) -> &str {
         &self.last_seen
     }
@@ -33,14 +34,15 @@ impl Store {
         }
     }
 
-    /// Смена проекта: снимок принадлежал прошлому каталогу и неверен целиком.
-    /// Дельта несёт исчезновение всех прежних задач и колонок, а поколение
-    /// растёт вместе с ней — иначе слушатель, не успевший заглушить события
-    /// на время переключения, подмешал бы задачи нового проекта к задачам
-    /// старого, не заметив разрыва нумерации. Поколение по-прежнему не
-    /// откатывается назад: если сбрасывать нечего (снимок уже пуст), дельта
-    /// пуста и генерация остаётся прежней — рост без отправленной дельты
-    /// слушатель прочитал бы как пропущенное событие.
+    /// A project switch: the snapshot belonged to the previous folder and is
+    /// wrong in its entirety. The delta carries the disappearance of every
+    /// former issue and column, and the generation grows with it — otherwise a
+    /// listener that did not manage to mute events for the duration of the
+    /// switch would mix the new project's issues into the old project's without
+    /// noticing a gap in the numbering. The generation still never rolls back:
+    /// if there is nothing to reset (the snapshot is already empty), the delta
+    /// is empty and the generation stays as it was — growth with no delta sent
+    /// would read to a listener as a missed event.
     pub fn reset(&mut self) -> Delta {
         let removed: Vec<String> = self.issues.keys().cloned().collect();
         let had_columns = !self.columns.is_empty();
@@ -62,7 +64,7 @@ impl Store {
         delta
     }
 
-    /// Возвращает true, если набор колонок действительно изменился.
+    /// Returns true if the set of columns really did change.
     pub fn set_columns(&mut self, columns: Vec<ColumnDef>) -> bool {
         if self.columns == columns {
             return false;
@@ -75,8 +77,8 @@ impl Store {
         self.apply(fetched, false)
     }
 
-    /// Полная сверка: всё, чего нет в выборке, считается удалённым.
-    /// Инкремент так делать не может — он по определению видит не всё.
+    /// A full sweep: anything absent from the batch counts as deleted. An
+    /// incremental one cannot do that — by definition it does not see everything.
     pub fn apply_full(&mut self, fetched: Vec<Issue>) -> Delta {
         self.apply(fetched, true)
     }
@@ -114,7 +116,7 @@ impl Store {
         delta
     }
 
-    /// Кладёт результат собственной записи, не дожидаясь watcher.
+    /// Puts the result of our own write in, without waiting for the watcher.
     pub fn upsert_one(&mut self, issue: Issue) -> Delta {
         self.apply_incremental(vec![issue])
     }
@@ -137,7 +139,7 @@ mod tests {
     fn issue(id: &str, status: &str, updated: &str) -> Issue {
         Issue {
             id: id.into(),
-            title: format!("задача {id}"),
+            title: format!("issue {id}"),
             status: status.into(),
             updated_at: updated.into(),
             priority: None,
@@ -150,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn новая_задача_попадает_в_дельту() {
+    fn a_new_issue_lands_in_the_delta() {
         let mut store = Store::default();
         let delta = store.apply_incremental(vec![issue("a", "open", "2026-07-31T00:00:01Z")]);
         assert_eq!(delta.upserted.len(), 1);
@@ -158,16 +160,16 @@ mod tests {
     }
 
     #[test]
-    fn неизменившаяся_задача_дельту_не_порождает() {
+    fn an_unchanged_issue_produces_no_delta() {
         let mut store = Store::default();
         store.apply_incremental(vec![issue("a", "open", "2026-07-31T00:00:01Z")]);
         let delta = store.apply_incremental(vec![issue("a", "open", "2026-07-31T00:00:01Z")]);
         assert!(delta.is_empty());
-        assert_eq!(store.generation(), 1, "поколение растёт только при непустой дельте");
+        assert_eq!(store.generation(), 1, "the generation grows only on a non-empty delta");
     }
 
     #[test]
-    fn смена_статуса_попадает_в_дельту() {
+    fn a_status_change_lands_in_the_delta() {
         let mut store = Store::default();
         store.apply_incremental(vec![issue("a", "open", "2026-07-31T00:00:01Z")]);
         let delta = store.apply_incremental(vec![issue("a", "closed", "2026-07-31T00:00:02Z")]);
@@ -176,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn инкремент_не_удаляет_отсутствующее() {
+    fn an_incremental_sweep_deletes_nothing_that_is_absent() {
         let mut store = Store::default();
         store.apply_incremental(vec![
             issue("a", "open", "2026-07-31T00:00:01Z"),
@@ -187,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn полная_сверка_убирает_пропавшее() {
+    fn a_full_sweep_removes_what_vanished() {
         let mut store = Store::default();
         store.apply_incremental(vec![
             issue("a", "open", "2026-07-31T00:00:01Z"),
@@ -198,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn запоминает_наибольшую_метку_времени() {
+    fn remembers_the_largest_timestamp() {
         let mut store = Store::default();
         store.apply_incremental(vec![
             issue("a", "open", "2026-07-31T00:00:05Z"),
@@ -207,12 +209,12 @@ mod tests {
         assert_eq!(store.last_seen(), "2026-07-31T00:00:05Z");
     }
 
-    /// columns_delta корректна ровно тогда, когда её зовут после
-    /// set_columns, вернувшего true, — поэтому проверяем связку целиком, а не
-    /// один только флаг: и что дельта несёт новый набор, и что поколение
-    /// сдвинулось на единицу, и что задач в ней нет.
+    /// columns_delta is correct exactly when it is called after a set_columns
+    /// that returned true — so we check the pair as a whole rather than the flag
+    /// alone: that the delta carries the new set, that the generation moved by
+    /// one, and that there are no issues in it.
     #[test]
-    fn смена_набора_колонок_попадает_в_дельту() {
+    fn a_change_to_the_column_set_lands_in_the_delta() {
         let columns = vec![
             ColumnDef { name: "open".into(), category: "active".into() },
             ColumnDef { name: "closed".into(), category: "done".into() },
@@ -226,12 +228,12 @@ mod tests {
         assert!(delta.upserted.is_empty() && delta.removed.is_empty());
         assert!(!delta.is_empty());
 
-        assert!(!store.set_columns(columns), "тот же набор дельты не порождает");
+        assert!(!store.set_columns(columns), "the same set produces no delta");
         assert_eq!(store.generation(), 1);
     }
 
     #[test]
-    fn сброс_шлёт_дельту_с_разрывом_и_двигает_поколение() {
+    fn a_reset_sends_a_delta_with_a_gap_and_moves_the_generation() {
         let mut store = Store::default();
         store.set_columns(vec![ColumnDef { name: "open".into(), category: "active".into() }]);
         store.apply_full(vec![
@@ -247,37 +249,37 @@ mod tests {
         assert_eq!(
             removed,
             vec!["a".to_string(), "b".to_string()],
-            "фронт обязан узнать об уходе всех задач прошлого проекта"
+            "the front end has to learn that every issue of the previous project is gone"
         );
         assert_eq!(
             delta.columns.as_deref(),
             Some(&[][..]),
-            "колонки прошлого трекера тоже перестали существовать"
+            "the previous tracker's columns stopped existing too"
         );
-        assert_eq!(delta.generation, before + 1, "дельта несёт новое поколение");
+        assert_eq!(delta.generation, before + 1, "the delta carries the new generation");
         assert_eq!(
             store.generation(),
             before + 1,
-            "поколение выросло ровно на единицу — ни пропущено, ни задвоено"
+            "the generation grew by exactly one — neither skipped nor doubled"
         );
 
         let snapshot = store.snapshot();
-        assert!(snapshot.issues.is_empty(), "задачи принадлежали прошлому проекту");
-        assert!(snapshot.columns.is_empty(), "колонки тоже: у другого трекера они свои");
-        assert_eq!(store.last_seen(), "", "иначе первая догрузка нового проекта попросит только свежее");
+        assert!(snapshot.issues.is_empty(), "the issues belonged to the previous project");
+        assert!(snapshot.columns.is_empty(), "the columns too: another tracker has its own");
+        assert_eq!(store.last_seen(), "", "otherwise the new project's first catch-up would ask only for recent changes");
     }
 
     #[test]
-    fn сброс_уже_пустого_снимка_поколение_не_двигает() {
+    fn resetting_an_already_empty_snapshot_does_not_move_the_generation() {
         let mut store = Store::default();
         let before = store.generation();
 
         let delta = store.reset();
 
-        assert!(delta.is_empty(), "сбрасывать было нечего — дельта пуста и уйти не должна");
+        assert!(delta.is_empty(), "there was nothing to reset — the delta is empty and must not be sent");
         assert_eq!(
             store.generation(), before,
-            "поколение, выросшее без отправленной дельты, слушатель прочитал бы как пропуск"
+            "a generation that grew with no delta sent would read to a listener as a miss"
         );
     }
 }

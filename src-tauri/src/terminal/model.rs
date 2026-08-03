@@ -55,13 +55,13 @@ pub struct Session {
 #[derive(Debug, thiserror::Error, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "message")]
 pub enum TerminalError {
-    #[error("агент не запустился: {0}")]
+    #[error("the agent did not start: {0}")]
     Spawn(String),
-    #[error("сессии {0} нет")]
+    #[error("no session {0}")]
     NoSession(SessionId),
-    #[error("сессия ждёт ответа человека")]
+    #[error("the session is waiting for a person's answer")]
     Busy,
-    #[error("сессия не ответила за отведённое время")]
+    #[error("the session did not answer in the time allowed")]
     Timeout,
 }
 
@@ -110,12 +110,12 @@ mod tests {
     }
 
     #[test]
-    fn новая_сессия_запускается() {
+    fn a_new_session_starts() {
         assert_eq!(session().state, SessionState::Starting);
     }
 
     #[test]
-    fn вышедшую_сессию_ничто_не_оживляет() {
+    fn nothing_revives_a_session_that_has_exited() {
         let mut s = session();
         s.finish(Some(0));
         s.apply(SessionState::Running, None);
@@ -124,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn ответ_гасит_вопрос() {
+    fn an_answer_clears_the_question() {
         let mut s = session();
         let q = Question {
             text: "Do you want to proceed?".into(),
@@ -134,6 +134,6 @@ mod tests {
         s.apply(SessionState::NeedsYou, Some(q));
         assert!(s.question.is_some());
         s.apply(SessionState::Running, None);
-        assert!(s.question.is_none(), "вопрос не переживает возврат в работу");
+        assert!(s.question.is_none(), "the question does not survive the return to work");
     }
 }

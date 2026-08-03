@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-/* Кладёт релизный бинарник bd в src-tauri/binaries под именем, которого ждёт Tauri:
-   bd-<target-triple>[.exe]. Бинарник весит 128 МБ и в git не коммитится.
+/* Puts the released bd binary into src-tauri/binaries under the name Tauri
+   expects: bd-<target-triple>[.exe]. The binary is 128 MB and is not committed
+   to git.
 
-   Сборка bd из Homebrew непереносима — она линкуется на icu4c из /opt/homebrew.
-   Официальный релиз зависит только от системных библиотек, поэтому берём именно его. */
+   A Homebrew build of bd is not portable — it links against icu4c from
+   /opt/homebrew. The official release depends only on system libraries, so that
+   is the one we take. */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -24,15 +26,16 @@ const ASSET_BY_TRIPLE = {
   'x86_64-pc-windows-msvc': `beads_${BD_VERSION}_windows_amd64.zip`
 }
 
-/* Здесь авторитет. Тег в релизе можно перезалить: подменённый архив вместе с
-   подменённым checksums.txt сойдётся сам с собой и проверку пройдёт. А
-   приложение запускает этот бинарник с правами пользователя, и вся идея
-   самодостаточности держится на том, что версия зафиксирована. Поэтому
-   ожидаемые суммы лежат рядом с BD_VERSION, в git, и меняются только вместе с
-   ней. checksums.txt из релиза остаётся перекрёстной сверкой: он ловит
-   опечатку в этой таблице и рассинхрон таблицы с версией.
+/* This is the authority. A release tag can be re-uploaded: a substituted
+   archive together with a substituted checksums.txt would agree with itself and
+   pass the check. And the app runs this binary with the user's permissions,
+   while the whole idea of being self-contained rests on the version being
+   pinned. So the expected sums sit next to BD_VERSION, in git, and change only
+   together with it. The release's checksums.txt stays as a cross-check: it
+   catches a typo in this table and a table that has drifted out of step with
+   the version.
 
-   Снято с https://github.com/gastownhall/beads/releases/download/v1.1.2/checksums.txt
+   Taken from https://github.com/gastownhall/beads/releases/download/v1.1.2/checksums.txt
    2026-07-31. */
 const SHA256_BY_ASSET = {
   [`beads_${BD_VERSION}_darwin_arm64.tar.gz`]:
@@ -49,12 +52,13 @@ const SHA256_BY_ASSET = {
     '4591b07bf82b3203a1dc7db17a7e4962d86338e6c3d34a8a857cc11a57f9c159'
 }
 
-/* postinstall не имеет права ронять npm install. Тому, кто пришёл поправить
-   компонент, нужны только npm run dev и ?view=gallery — bd там не участвует
-   вовсе, за него отвечает mockBackend. Требовать ради этого тулчейн Rust и
-   43 МБ по сети нельзя. Поэтому postinstall зовёт скрипт с --optional:
-   сорвалось — предупреждаем и выходим нулём. Явный запуск (npm run fetch-bd)
-   и CI обязаны падать: там отсутствие бинарника — настоящая поломка. */
+/* postinstall has no right to fail npm install. Somebody who came to fix a
+   component needs only npm run dev and ?view=gallery — bd takes no part there
+   at all, mockBackend stands in for it. Demanding a Rust toolchain and 43 MB
+   over the network for that is not on. So postinstall calls this script with
+   --optional: if it fails, we warn and exit zero. An explicit run
+   (npm run fetch-bd) and CI have to fail: there a missing binary is a real
+   breakage. */
 const OPTIONAL = process.argv.includes('--optional') && !process.env.CI
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -85,7 +89,7 @@ async function checksums() {
 
 async function install(triple, sums) {
   const asset = ASSET_BY_TRIPLE[triple]
-  if (!asset) throw new Error(`нет релиза bd для ${triple}`)
+  if (!asset) throw new Error(`no bd release for ${triple}`)
 
   const windows = triple.includes('windows')
   const target = targetPath(triple)
@@ -96,19 +100,19 @@ async function install(triple, sums) {
     console.log(`↓ ${asset}`)
     await download(`${BASE}/${asset}`, archive)
 
-    // Главная проверка — по вкомиченной сумме.
+    // The main check is against the committed sum.
     const expected = SHA256_BY_ASSET[asset]
-    if (!expected) throw new Error(`нет ожидаемой sha256 для ${asset}`)
+    if (!expected) throw new Error(`no expected sha256 for ${asset}`)
     const actual = createHash('sha256').update(await readFile(archive)).digest('hex')
-    if (actual !== expected) throw new Error(`sha256 не совпал: ${actual} вместо ${expected}`)
+    if (actual !== expected) throw new Error(`sha256 mismatch: ${actual} instead of ${expected}`)
 
-    // Перекрёстная: расхождение здесь означает, что таблица в этом файле
-    // разъехалась с релизом, а не что архив побился по дороге.
+    // The cross-check: a mismatch here means the table in this file has drifted
+    // out of step with the release, not that the archive was damaged on the way.
     const published = sums.get(asset)
-    if (!published) throw new Error(`${asset} отсутствует в checksums.txt релиза`)
+    if (!published) throw new Error(`${asset} is missing from the release's checksums.txt`)
     if (published !== expected) {
       throw new Error(
-        `checksums.txt релиза расходится с ожидаемой суммой: ${published} вместо ${expected}`
+        `the release's checksums.txt disagrees with the expected sum: ${published} instead of ${expected}`
       )
     }
 
@@ -126,12 +130,12 @@ async function main() {
   const triples = process.argv.includes('--all') ? Object.keys(ASSET_BY_TRIPLE) : [hostTriple()]
   const missing = []
   for (const triple of triples) {
-    if (existsSync(targetPath(triple))) console.log(`✓ ${triple} уже на месте`)
+    if (existsSync(targetPath(triple))) console.log(`✓ ${triple} is already in place`)
     else missing.push(triple)
   }
 
-  /* В сеть выходим, только если действительно есть что качать: postinstall
-     на машине с уже загруженным бинарником обязан работать офлайн. */
+  /* We go to the network only if there is really something to download:
+     postinstall on a machine that already has the binary must work offline. */
   if (missing.length) {
     const sums = await checksums()
     for (const triple of missing) await install(triple, sums)
@@ -146,6 +150,6 @@ try {
     process.exit(1)
   }
   console.warn(`fetch-bd: ${e.message}`)
-  console.warn('bd не установлен — это нужно только для сборки Tauri.')
-  console.warn('npm run dev и ?view=gallery работают и без него; когда понадобится: npm run fetch-bd')
+  console.warn('bd is not installed — this is only needed for a Tauri build.')
+  console.warn('npm run dev and ?view=gallery work without it; when you need it: npm run fetch-bd')
 }

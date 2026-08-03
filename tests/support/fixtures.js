@@ -1,10 +1,10 @@
-/* Формы повторяют модели Rust дословно: src-tauri/src/tracker/model.rs и
-   src-tauri/src/files/model.rs. Поля задачи — snake_case (updated_at,
-   issue_type): rename_all на структуре нет. */
+/* The shapes mirror the Rust models word for word: src-tauri/src/tracker/model.rs
+   and src-tauri/src/files/model.rs. An issue's fields are snake_case
+   (updated_at, issue_type): the struct has no rename_all. */
 
 export const issue = (over = {}) => ({
   id: 'bd-1',
-  title: 'Задача',
+  title: 'An issue',
   status: 'open',
   updated_at: '2026-08-03T10:00:00Z',
   priority: 2,
@@ -16,7 +16,7 @@ export const issue = (over = {}) => ({
   ...over
 })
 
-/* Ребро зависимости. bd отдаёт только исходящие: issue_id зависит от
+/* A dependency edge. bd gives only the outgoing ones: issue_id depends on
    depends_on_id. */
 export const edge = (over = {}) => ({
   issue_id: 'bd-2',
@@ -59,16 +59,16 @@ export const listing = (over = {}) => ({
 
 export const fileText = (over = {}) => ({
   path: 'a.txt',
-  text: 'исходный',
+  text: 'original',
   mtime: 10,
   ...over
 })
 
-/* Буфер вкладки в том виде, в каком его держит tabs.js. Нужен там, где тест
-   ставит буфер напрямую, не проходя через чтение с диска. */
+/* A tab's buffer in the shape tabs.js holds it. Needed where a test sets a
+   buffer directly rather than going through a read from disk. */
 export const buffer = (over = {}) => ({
-  text: 'исходный',
-  original: 'исходный',
+  text: 'original',
+  original: 'original',
   mtime: 10,
   error: null,
   saveError: null,

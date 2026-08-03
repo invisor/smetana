@@ -4,9 +4,9 @@ use tokio::sync::oneshot;
 use super::model::{Health, Issue, IssuePatch, NewIssue, Snapshot, TrackerError};
 use super::service::{Request, TrackerHandle};
 
-/// Команды намеренно тонкие: всё, что они делают, — кладут запрос в очередь
-/// воркера и ждут ответ. Внешний Result — про доставку до воркера, внутренний
-/// (там, где он есть) — про сам вызов bd.
+/// The commands are deliberately thin: all they do is put a request on the
+/// worker's queue and await the answer. The outer Result is about delivery to
+/// the worker, the inner one (where there is one) is about the bd call itself.
 async fn ask<T>(
     handle: &TrackerHandle,
     make: impl FnOnce(oneshot::Sender<T>) -> Request,
@@ -16,13 +16,13 @@ async fn ask<T>(
         .0
         .send(make(tx))
         .await
-        .map_err(|_| TrackerError::Spawn("воркер трекера не запущен".into()))?;
+        .map_err(|_| TrackerError::Spawn("the tracker worker is not running".into()))?;
     rx.await
-        .map_err(|_| TrackerError::Spawn("воркер трекера не ответил".into()))
+        .map_err(|_| TrackerError::Spawn("the tracker worker did not answer".into()))
 }
 
-/// Событие tracker:health может уйти раньше, чем фронт подпишется, — эта
-/// команда отдаёт последнее состояние тому, кто его пропустил.
+/// The tracker:health event may fire before the front end subscribes — this
+/// command hands the last state to whoever missed it.
 #[tauri::command]
 pub async fn tracker_health(handle: State<'_, TrackerHandle>) -> Result<Health, TrackerError> {
     ask(&handle, Request::Health).await
@@ -72,10 +72,10 @@ pub async fn tracker_reopen(
     ask(&handle, |tx| Request::Reopen(id, tx)).await?
 }
 
-/// Переезд на другой каталог. `None` означает «проектов не осталось»:
-/// доска пустеет, а воркер продолжает жить и ждать следующего проекта.
-/// Ответ — снимок нового проекта целиком: дельты, пришедшие по дороге,
-/// фронт на время переключения не слушает.
+/// Moving to another directory. `None` means "no projects are left": the board
+/// empties while the worker stays alive and waits for the next project. The
+/// answer is the new project's snapshot in full: the front end does not listen
+/// to deltas arriving on the way for the duration of the switch.
 #[tauri::command]
 pub async fn tracker_set_project(
     handle: State<'_, TrackerHandle>,
@@ -85,16 +85,18 @@ pub async fn tracker_set_project(
     ask(&handle, |tx| Request::SetProject(dir, tx)).await
 }
 
-/// `bd init` в каталоге активного проекта. Успех сразу возвращает доску:
-/// каталог стал репозиторием, и воркер уже перечитал его.
+/// `bd init` in the active project's directory. Success returns the board
+/// right away: the folder became a repository and the worker has already
+/// re-read it.
 #[tauri::command]
 pub async fn tracker_init(handle: State<'_, TrackerHandle>) -> Result<Snapshot, TrackerError> {
     ask(&handle, Request::InitTracker).await?
 }
 
-/// Есть ли трекер в этих каталогах. Вопрос про файловую систему, а не про bd:
-/// воркер сюда не зовётся, вызов стоит один `is_dir` на путь. Без него про
-/// каталог без трекера человек узнавал бы, только кликнув по нему.
+/// Whether these folders have a tracker. A question about the filesystem, not
+/// about bd: the worker is not called here and the call costs one `is_dir` per
+/// path. Without it a person would only learn that a folder has no tracker by
+/// clicking on it.
 #[tauri::command]
 pub async fn tracker_probe(paths: Vec<String>) -> Vec<ProjectProbe> {
     paths
@@ -106,14 +108,14 @@ pub async fn tracker_probe(paths: Vec<String>) -> Vec<ProjectProbe> {
         .collect()
 }
 
-/// Каталог, который на самом деле открывают. Ткнули в подкаталог
-/// отслеживаемого репозитория — проектом становится его корень: иначе доска
-/// сказала бы «здесь нет трекера» про репозиторий, у которого он есть, а
-/// кнопка рядом завела бы второй `.beads` внутри первого.
+/// The folder that is actually being opened. Point at a subfolder of a tracked
+/// repository and its root becomes the project: otherwise the board would say
+/// "there is no tracker here" about a repository that has one, and the button
+/// next to it would create a second `.beads` inside the first.
 ///
-/// Вопрос к файловой системе, а не к bd, — воркер сюда не зовётся. Ничего
-/// отслеживаемого выше нет: возвращаем путь как есть, это законное «пока не
-/// репозиторий», и предложение `bd init` относится именно к нему.
+/// A question for the filesystem, not for bd — the worker is not called here.
+/// If there is nothing tracked above, we return the path as is: that is a
+/// legitimate "not a repository yet", and the `bd init` offer refers to it.
 #[tauri::command]
 pub async fn project_root(path: String) -> String {
     crate::project::nearest_tracked_ancestor(std::path::Path::new(&path))

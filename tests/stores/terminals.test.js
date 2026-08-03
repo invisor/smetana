@@ -15,7 +15,8 @@ const session = (over = {}) => ({
 
 // PTY output is arbitrary bytes; btoa() alone only accepts Latin1, so route
 // through TextEncoder first — same path the Rust side takes for anything
-// outside ASCII (see 'вывод чужой сессии подписчику не идёт' below).
+// outside ASCII (see "another session's output does not reach the subscriber"
+// below).
 const b64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 
 async function ready() {
@@ -30,14 +31,14 @@ async function ready() {
   return loaded
 }
 
-describe('перевод состояний', () => {
-  it('exited с нулём — done, с ненулём — failed', async () => {
+describe('state translation', () => {
+  it('exited with zero is done, with non-zero it is failed', async () => {
     const { stores } = await loadStores()
     expect(stores.terminals.toUiState(session({ state: 'exited', exitCode: 0 }))).toBe('done')
     expect(stores.terminals.toUiState(session({ state: 'exited', exitCode: 1 }))).toBe('failed')
   })
 
-  it('простой тихий, а не готовый к работе агент', async () => {
+  it('idle is a quiet agent, not one ready for work', async () => {
     const { stores } = await loadStores()
     expect(stores.terminals.toUiState(session({ state: 'idle' }))).toBe('ready')
     expect(stores.terminals.toUiState(session({ state: 'needs-you' }))).toBe('needs-you')
@@ -45,8 +46,8 @@ describe('перевод состояний', () => {
   })
 })
 
-describe('список сессий', () => {
-  it('событие состояния обновляет строку на месте', async () => {
+describe('the session list', () => {
+  it('a state event updates the row in place', async () => {
     const { stores, emit, nextTick } = await ready()
     await emit('terminal:state', session({ state: 'needs-you' }))
     await nextTick()
@@ -54,14 +55,14 @@ describe('список сессий', () => {
     expect(stores.terminals.terminalState.sessions).toHaveLength(1)
   })
 
-  it('событие про незнакомую сессию добавляет её', async () => {
+  it('an event about an unknown session adds it', async () => {
     const { stores, emit, nextTick } = await ready()
     await emit('terminal:state', session({ id: 2 }))
     await nextTick()
     expect(stores.terminals.terminalState.sessions.map((s) => s.id)).toEqual([1, 2])
   })
 
-  it('сессии чужого проекта в список не попадают', async () => {
+  it('another project\'s sessions do not reach the list', async () => {
     const { stores, emit, nextTick } = await ready()
     await emit('terminal:state', session({ id: 3, project: '/other' }))
     await nextTick()
@@ -69,8 +70,8 @@ describe('список сессий', () => {
   })
 })
 
-describe('смена проекта', () => {
-  it('устаревший ответ из старого проекта не переживает переключение', async () => {
+describe('switching project', () => {
+  it('a stale answer from the old project does not survive the switch', async () => {
     const { ipc, stores } = await loadStores()
     /* terminal_list here resolves on demand, not immediately, so the test
        — not the event loop — decides which of the two calls lands first. */
@@ -97,8 +98,8 @@ describe('смена проекта', () => {
   })
 })
 
-describe('строки агентов', () => {
-  it('строка собирает имя, переведённый статус, вопрос и время работы', async () => {
+describe('agent rows', () => {
+  it('a row assembles the name, the translated status, the question and the elapsed time', async () => {
     vi.useFakeTimers({ now: new Date('2026-08-03T10:18:00Z') })
     try {
       const { stores } = await ready()
@@ -113,8 +114,8 @@ describe('строки агентов', () => {
   })
 })
 
-describe('поток вывода', () => {
-  it('подключение отдаёт снимок кольца подписчику', async () => {
+describe('the output stream', () => {
+  it('attaching hands the ring snapshot to the subscriber', async () => {
     const { stores } = await ready()
     const seen = []
     stores.terminals.subscribeOutput((bytes, meta) => seen.push({ text: new TextDecoder().decode(bytes), meta }))
@@ -124,7 +125,7 @@ describe('поток вывода', () => {
     expect(seen[0].meta.reset).toBe(true)
   })
 
-  it('события вывода доходят до подписчика по порядку', async () => {
+  it('output events reach the subscriber in order', async () => {
     const { stores, emit, nextTick } = await ready()
     const seen = []
     stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
@@ -135,7 +136,7 @@ describe('поток вывода', () => {
     expect(seen.slice(1)).toEqual(['a', 'b'])
   })
 
-  it('разрыв seq переподключает, а не показывает дыру', async () => {
+  it('a gap in seq reattaches rather than showing a hole', async () => {
     const { ipc, stores, emit } = await ready()
     const seen = []
     stores.terminals.subscribeOutput((bytes, meta) => seen.push({ text: new TextDecoder().decode(bytes), meta }))
@@ -150,19 +151,19 @@ describe('поток вывода', () => {
     expect(seen.map((s) => s.text)).not.toContain('lost')
   })
 
-  it('вывод чужой сессии подписчику не идёт', async () => {
+  it("another session's output does not reach the subscriber", async () => {
     const { stores, emit, nextTick } = await ready()
     const seen = []
     stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
     await stores.terminals.attach(1)
-    await emit('terminal:output', { id: 99, seq: 1, data: b64('чужое') })
+    await emit('terminal:output', { id: 99, seq: 1, data: b64("somebody else's") })
     await nextTick()
     expect(seen).toEqual(['hello'])
   })
 })
 
-describe('отключение', () => {
-  it('останавливает поток, но не забывает выбор агента', async () => {
+describe('detaching', () => {
+  it('stops the stream but does not forget the selected agent', async () => {
     const { stores } = await ready()
     await stores.terminals.attach(1)
     expect(stores.terminals.terminalState.activeId).toBe(1)
@@ -174,8 +175,8 @@ describe('отключение', () => {
   })
 })
 
-describe('ошибки бэкенда', () => {
-  it('отказ terminal_attach не бросает, а оседает в lastError', async () => {
+describe('back-end errors', () => {
+  it('a terminal_attach refusal does not throw but settles into lastError', async () => {
     const { ipc, stores } = await ready()
     ipc.fail('terminal_attach', new Error('boom'))
     await expect(stores.terminals.attach(1)).resolves.toBeUndefined()
@@ -186,27 +187,27 @@ describe('ошибки бэкенда', () => {
   })
 })
 
-describe('ответ на вопрос', () => {
-  it('кнопка шлёт то, что назвал профиль', async () => {
+describe('answering the question', () => {
+  it('the button sends what the profile named', async () => {
     const { ipc, stores } = await ready()
     await stores.terminals.answer(1, { label: 'Yes', send: '1\r' })
     expect(ipc.calls('terminal_write')).toEqual([{ id: 1, data: '1\r' }])
   })
 })
 
-describe('время работы', () => {
-  it('читается человеком, а не машиной', async () => {
+describe('elapsed time', () => {
+  it('reads for a human, not for a machine', async () => {
     const { stores } = await loadStores()
     expect(stores.terminals.formatElapsed(18 * 60 * 1000)).toBe('18m')
     expect(stores.terminals.formatElapsed(2 * 3600_000 + 14 * 60_000)).toBe('2h 14m')
     expect(stores.terminals.formatElapsed(5_000)).toBe('0m')
   })
 
-  /* Часы строки тикают раз в тридцать секунд, а сессия рождается между
-     тиками: до следующего её startedAt лежит в будущем относительно
-     последнего снятого времени. Без зажима floor от отрицательного даёт
-     минус час и минус минуту — «-1h -1m» в свежесозданной строке. */
-  it('только что созданный агент не уходит в минус', async () => {
+  /* The row's clock ticks once every thirty seconds, and a session is born
+     between ticks: until the next one its startedAt lies in the future relative
+     to the last time taken. Without the clamp, floor of a negative gives minus
+     an hour and minus a minute — "-1h -1m" in a freshly created row. */
+  it('a just-created agent does not go negative', async () => {
     const { stores } = await loadStores()
     expect(stores.terminals.formatElapsed(-1_000)).toBe('0m')
     expect(stores.terminals.formatElapsed(-90 * 60_000)).toBe('0m')

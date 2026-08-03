@@ -5,13 +5,14 @@
    it was scrolled to. An instance per session would fix that, but that is
    editor/states.js territory, and building it before the lack is shown to
    matter is premature. */
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 // xterm ships its own stylesheet, and without it the terminal does not
 // render at all — this import is part of the same sanctioned exception
 // theme.js explains, not an oversight of the "no CSS" rule.
 import '@xterm/xterm/css/xterm.css'
+import EmptyState from '../core/EmptyState.vue'
 import { terminalFont, terminalTheme } from './theme.js'
 import { attach, detach, resize, send, subscribeOutput, terminalState } from '../../stores/terminals.js'
 
@@ -25,7 +26,45 @@ let sizes = null
    unmount too. Deliberately not reactive: nothing displays it. */
 let attached = null
 
-const style = { flex: 1, minHeight: 0, background: 'var(--editor-bg)', padding: 'var(--space-3)' }
+/* `minWidth: 0` on both, and it is load-bearing in a way `minHeight: 0` next to
+   it is not. A flex item defaults to `min-width: auto`, which means it refuses
+   to shrink below its own content — and this item's content is xterm.js, whose
+   width comes from the cols it was last fitted to. Narrow the column and the
+   pane cannot follow: it stays as wide as the terminal used to be and hangs
+   over the task panel, painted on top of it because this wrapper is positioned
+   and that column is not.
+
+   It looked animated because it converged: ResizeObserver → fit() → new cols →
+   xterm re-renders a frame later → the floor drops a little → the observer
+   fires again. fit() was measuring a pane sized by its own last answer instead
+   of by the column. `KanbanBoard` and `FileEditor` never showed this because
+   `overflow: auto`/`hidden` zeroes that automatic minimum for them already. */
+const wrapStyle = { position: 'relative', flex: 1, minWidth: 0, minHeight: 0, display: 'flex' }
+const style = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  background: 'var(--editor-bg)',
+  padding: 'var(--space-3)'
+}
+
+/* With no session attached the pane was simply black, which reads as a
+   terminal that has not printed anything yet rather than as one with nothing
+   behind it. The explanation is drawn over the host, not in place of it: the
+   host has to keep its real geometry, because that is what fit() measures and
+   what the first resize() sends to the PTY — a hidden host would size the
+   session to nothing and the first frame would arrive wrapped wrong. */
+const overlayStyle = {
+  position: 'absolute',
+  inset: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'var(--editor-bg)'
+}
+
+const idle = computed(() => !terminalState.activeId)
+const noSessions = computed(() => terminalState.sessions.length === 0)
 
 /* Fitting the terminal to its pane has nothing to do with whether a session
    is attached — an empty terminal still has to fill the space it is given.
@@ -118,5 +157,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="host" :style="style" />
+  <div :style="wrapStyle">
+    <div ref="host" :style="style" />
+    <div v-if="idle" :style="overlayStyle">
+      <EmptyState
+        icon="bot"
+        :title="noSessions ? 'No agents in this project' : 'No agent selected'"
+        :description="noSessions
+          ? 'Start one with + on the project row, in the Agents tab of the left panel.'
+          : 'Pick an agent in the Agents tab of the left panel.'"
+      />
+    </div>
+  </div>
 </template>

@@ -1,9 +1,9 @@
-//! Диск: чтение каталогов и файлов проекта.
+//! The disk: reading the project's directories and files.
 //!
-//! Воркера здесь нет намеренно. У трекера он есть потому, что вызов bd стоит
-//! около двух секунд и снимком должен владеть кто-то один; `read_dir` стоит
-//! миллисекунды и состояния не держит — очередь сторожила бы то, за что никто
-//! не борется. Та же причина, по которой её нет у настроек.
+//! There is deliberately no worker here. The tracker has one because a bd call
+//! costs about two seconds and someone has to own the snapshot; `read_dir`
+//! costs milliseconds and holds no state — a queue would be guarding something
+//! nobody contends for. The same reason settings have none.
 
 use std::fs;
 use std::io::Write;
@@ -16,7 +16,7 @@ use super::model::{
     Stat, BINARY_SNIFF_BYTES, MAX_ENTRIES, MAX_FILE_BYTES,
 };
 
-/// Ошибка ввода-вывода в термины, которые понимает фронт.
+/// An I/O error in terms the front end understands.
 fn io_error(path: &str, err: &std::io::Error) -> FilesError {
     match err.kind() {
         std::io::ErrorKind::NotFound => FilesError::NotFound(path.to_owned()),
@@ -25,8 +25,8 @@ fn io_error(path: &str, err: &std::io::Error) -> FilesError {
     }
 }
 
-/// Миллисекунды от эпохи. Файл со временем до 1970-го — не наш случай, но и
-/// падать на нём незачем: ноль честнее паники.
+/// Milliseconds since the epoch. A file dated before 1970 is not our case, but
+/// there is no reason to panic on it either: a zero is more honest than a panic.
 pub fn mtime_of(meta: &fs::Metadata) -> i64 {
     meta.modified()
         .ok()
@@ -35,16 +35,17 @@ pub fn mtime_of(meta: &fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-/// Абсолютный путь внутри корня — или отказ.
+/// An absolute path inside the root — or a refusal.
 ///
-/// Два рубежа. Первый, `reject_traversal`, бесплатен и ловит `..` и абсолютный
-/// путь. Второй — `canonicalize`: он разворачивает симлинки, и без него ссылка
-/// внутри проекта, ведущая наружу, открыла бы что угодно на диске. `root`
-/// канонизируется тоже: иначе на macOS `/var/...` против `/private/var/...`
-/// не совпало бы никогда.
+/// Two lines of defence. The first, `reject_traversal`, is free and catches `..`
+/// and absolute paths. The second is `canonicalize`: it unwinds symlinks, and
+/// without it a link inside the project pointing outward would open anything on
+/// the disk. `root` is canonicalized too: otherwise on macOS `/var/...` against
+/// `/private/var/...` would never match.
 ///
-/// Честно про назначение: это ловушка от собственных ошибок и странных имён,
-/// а не рубеж от злоумышленника — `root` присылает фронт, и он свой.
+/// To be honest about the purpose: this is a trap for our own mistakes and odd
+/// names, not a barrier against an attacker — `root` comes from the front end,
+/// and the front end is ours.
 pub fn resolve_within(root: &Path, rel: &str) -> Result<PathBuf, FilesError> {
     reject_traversal(rel)?;
     let root = root.canonicalize().map_err(|err| io_error(&root.to_string_lossy(), &err))?;
@@ -56,9 +57,9 @@ pub fn resolve_within(root: &Path, rel: &str) -> Result<PathBuf, FilesError> {
     Ok(full)
 }
 
-/// Путь записи относительно корня, всегда через `/`. На Windows `read_dir`
-/// вернёт обратный слэш, а ключом в настройках и в карте дерева служит одна и
-/// та же строка — разъезжаться ей нельзя.
+/// An entry's path relative to the root, always with `/`. On Windows `read_dir`
+/// returns a backslash, and the very same string serves as the key in settings
+/// and in the tree map — it must not diverge.
 fn child_path(dir: &str, name: &str) -> String {
     if dir.is_empty() {
         name.to_owned()
@@ -76,16 +77,16 @@ pub fn list_dir(root: &Path, rel: &str) -> Result<Listing, FilesError> {
 
     let mut entries = Vec::new();
     for item in reader {
-        // Запись, исчезнувшая между `read_dir` и `next`, — не повод ронять
-        // весь каталог: пропускаем её и читаем дальше.
+        // An entry that vanished between `read_dir` and `next` is no reason to
+        // drop the whole directory: skip it and keep reading.
         let Ok(item) = item else { continue };
         let name = item.file_name().to_string_lossy().into_owned();
         if super::model::skip_in_tree(&name) {
             continue;
         }
-        // `file_type` не ходит по симлинкам — каталогом здесь считается то,
-        // что каталог само по себе; ссылку раскроет `resolve_within`, когда
-        // по ней кликнут, и там же откажет, если она ведёт наружу.
+        // `file_type` does not follow symlinks — a directory here is what is a
+        // directory in itself; `resolve_within` unwinds the link when it is
+        // clicked, and refuses there if it leads outside.
         let Ok(kind) = item.file_type() else { continue };
         entries.push(Entry {
             path: child_path(rel, &name),
@@ -105,12 +106,12 @@ pub fn read_text(root: &Path, rel: &str) -> Result<FileText, FilesError> {
     read_text_reading_with(root, rel, |full| fs::read(full))
 }
 
-/// Тело `read_text` с подменяемым чтением байтов.
+/// The body of `read_text` with the byte read swappable.
 ///
-/// Подмена существует ради одного теста, и другого способа его написать нет:
-/// порядок «сначала метка, потом байты» виден только тому, кто успевает
-/// переписать файл ровно между этими двумя шагами, а из теста в этот
-/// промежуток не попасть ничем, кроме гонки. Замыкание и есть этот промежуток.
+/// The substitution exists for exactly one test, and there is no other way to
+/// write it: the "mtime first, bytes second" order is visible only to someone
+/// who manages to rewrite the file precisely between those two steps, and
+/// nothing but a race can get a test into that gap. The closure *is* that gap.
 fn read_text_reading_with(
     root: &Path,
     rel: &str,
@@ -124,21 +125,23 @@ fn read_text_reading_with(
     if meta.len() > MAX_FILE_BYTES {
         return Err(FilesError::TooLarge { path: rel.to_owned(), bytes: meta.len() });
     }
-    // Метку берём ДО чтения байтов, и второй раз её не снимаем.
+    // The mtime is taken BEFORE the bytes are read, and never taken a second time.
     //
-    // Атомарно прочитать содержимое вместе с меткой нельзя, а между двумя
-    // вызовами файл могут переписать — значит, выбирать приходится не между
-    // «верно» и «неверно», а между двумя способами ошибиться:
+    // Content and mtime cannot be read atomically, and the file may be rewritten
+    // between the two calls — so the choice is not between "right" and "wrong"
+    // but between two ways of being wrong:
     //
-    //   метка до чтения  — во фронт уедет новое содержимое со старой меткой,
-    //                      и следующая запись отказом `Stale` спросит человека;
-    //   метка после      — уедет старое содержимое с новой меткой, и следующая
-    //                      запись пройдёт сверку и молча затрёт чужую правку.
+    //   mtime before the read — new content leaves for the front end with an old
+    //                           mtime, and the next write asks the person with a
+    //                           `Stale` refusal;
+    //   mtime after           — old content leaves with a new mtime, the next
+    //                           write passes the check and silently erases
+    //                           somebody else's edit.
     //
-    // Ошибаться мы обязаны в сторону ложного отказа: он стоит одного вопроса,
-    // а молчаливая перезапись стоит чужой работы. Сверка `expected_mtime` в
-    // `write_text` существует ровно ради этого, и порядок «метка после» лишал
-    // бы её смысла.
+    // We are obliged to err towards a false refusal: it costs one question,
+    // while a silent overwrite costs somebody's work. The `expected_mtime` check
+    // in `write_text` exists for exactly this, and the "mtime after" order would
+    // rob it of its meaning.
     let mtime = mtime_of(&meta);
 
     let bytes = read_bytes(&full).map_err(|err| io_error(rel, &err))?;
@@ -150,8 +153,9 @@ fn read_text_reading_with(
     Ok(FileText { path: rel.to_owned(), text, mtime })
 }
 
-/// Метки времени пачкой. Отказов здесь нет: «файла нет» — это состояние
-/// вкладки, а не сбой команды, и ронять из-за него весь проход нельзя.
+/// Timestamps in a batch. There are no refusals here: "the file is gone" is a
+/// tab's state, not a command failure, and the whole sweep must not be dropped
+/// because of it.
 pub fn stat_many(root: &Path, rels: &[String]) -> Vec<Stat> {
     rels.iter()
         .map(|rel| {
@@ -164,9 +168,9 @@ pub fn stat_many(root: &Path, rels: &[String]) -> Vec<Stat> {
         .collect()
 }
 
-/// Счётчик временных файлов. Вместе с pid даёт имя, которого нет ни у одной
-/// другой записи — ни в этом процессе, ни в соседнем. Тот же приём, что в
-/// `settings/file.rs`.
+/// A counter for temp files. Together with the pid it gives a name no other
+/// entry has — neither in this process nor in a neighbouring one. The same
+/// trick as in `settings/file.rs`.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temp_path(path: &Path) -> PathBuf {
@@ -175,16 +179,16 @@ fn temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()))
 }
 
-/// Запись файла проекта.
+/// Writing a project file.
 ///
-/// Сверка `expected_mtime` — единственное, ради чего вся эта возня: без неё
-/// Cmd+S по вкладке, открытой час назад, молча стёр бы работу агента.
-/// Расхождение означает отказ и ноль изменений на диске.
+/// The `expected_mtime` check is the one thing all this fuss is for: without it
+/// Cmd+S on a tab opened an hour ago would silently erase an agent's work. A
+/// mismatch means a refusal and zero changes on disk.
 ///
-/// Дальше — как в `settings/file.rs`: временный файл рядом, `sync_all`,
-/// `rename`. Плюс одно, чего там не нужно: перенос прав с оригинала.
-/// `rename` подменяет файл целиком, и без этого исполняемый скрипт после
-/// сохранения перестал бы запускаться.
+/// The rest is as in `settings/file.rs`: a temp file next to it, `sync_all`,
+/// `rename`. Plus one thing that is not needed there: carrying the original's
+/// permissions over. `rename` replaces the file wholesale, and without this an
+/// executable script would stop running after being saved.
 pub fn write_text(
     root: &Path,
     rel: &str,
@@ -204,8 +208,8 @@ pub fn write_text(
     let written = (|| -> std::io::Result<()> {
         let mut file = fs::File::create(&temp)?;
         file.write_all(text.as_bytes())?;
-        // Без этого потеря питания может сделать долговечным переименование,
-        // но не то, что в файле.
+        // Without this a power loss could make the rename durable but not what
+        // is in the file.
         file.sync_all()
     })();
     if let Err(err) = written {
@@ -230,30 +234,30 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Свой каталог на каждый тест: имя несёт pid, поэтому параллельные
-    /// прогоны не мешают друг другу. Тот же приём, что в `project.rs`.
-    /// Явная метка времени вместо паузы. Разрешение `mtime` на некоторых
-    /// файловых системах грубее, чем расстояние между двумя записями подряд, и
-    /// тест «метка изменилась» без этого бывает ложно-зелёным. `sleep` дал бы
-    /// то же самое, но замедлял бы весь прогон и всё равно зависел бы от
-    /// разрешения; выставленная метка не зависит ни от того, ни от другого.
+    /// An explicit timestamp instead of a pause. On some filesystems the `mtime`
+    /// resolution is coarser than the gap between two consecutive writes, and
+    /// the "the mtime changed" test is falsely green without this. A `sleep`
+    /// would do the same, but it would slow the whole run down and still depend
+    /// on the resolution; a timestamp we set depends on neither.
     fn set_mtime(path: &Path, secs: u64) {
-        let file = fs::File::options().write(true).open(path).expect("открыть файл ради метки");
+        let file = fs::File::options().write(true).open(path).expect("open the file to set its mtime");
         file.set_modified(UNIX_EPOCH + std::time::Duration::from_secs(secs))
-            .expect("выставить метку времени");
+            .expect("set the timestamp");
     }
 
+    /// A directory of its own per test: the name carries the pid, so parallel
+    /// runs do not get in each other's way. The same trick as in `project.rs`.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("smetana-files-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("создать временный каталог");
-        // Каноничный путь: на macOS /var — симлинк на /private/var, и без
-        // этого корень и разрешённый путь никогда не совпали бы.
-        dir.canonicalize().expect("канонизировать временный каталог")
+        fs::create_dir_all(&dir).expect("create the temp directory");
+        // The canonical path: on macOS /var is a symlink to /private/var, and
+        // without this the root and the resolved path would never match.
+        dir.canonicalize().expect("canonicalize the temp directory")
     }
 
     #[test]
-    fn каталог_читается_отсортированным_и_без_git() {
+    fn a_directory_reads_sorted_and_without_git() {
         let root = scratch("listing");
         fs::create_dir_all(root.join(".git")).unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
@@ -270,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn вложенный_каталог_отдаёт_пути_от_корня_через_слэш() {
+    fn a_nested_directory_gives_paths_from_the_root_with_slashes() {
         let root = scratch("nested");
         fs::create_dir_all(root.join("src/components")).unwrap();
         fs::write(root.join("src/App.vue"), "x").unwrap();
@@ -284,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn слишком_длинный_каталог_обрезается_и_говорит_насколько() {
+    fn an_overlong_directory_is_truncated_and_says_by_how_much() {
         let root = scratch("truncate");
         for i in 0..MAX_ENTRIES + 7 {
             fs::write(root.join(format!("f{i:05}.txt")), "x").unwrap();
@@ -293,97 +297,98 @@ mod tests {
         let listing = list_dir(&root, "").unwrap();
 
         assert_eq!(listing.entries.len(), MAX_ENTRIES);
-        assert_eq!(listing.truncated, 7, "молчаливая обрезка читалась бы как «файлов больше нет»");
+        assert_eq!(listing.truncated, 7, "silent truncation would read as \"there are no more files\"");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn текст_читается_вместе_с_меткой_времени() {
+    fn text_is_read_together_with_its_timestamp() {
         let root = scratch("read");
-        fs::write(root.join("a.txt"), "привет\n").unwrap();
+        fs::write(root.join("a.txt"), "hello\n").unwrap();
 
         let file = read_text(&root, "a.txt").unwrap();
 
         assert_eq!(file.path, "a.txt");
-        assert_eq!(file.text, "привет\n");
+        assert_eq!(file.text, "hello\n");
         assert!(file.mtime > 0);
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Держит порядок из `read_text`: метка снимается с файла до чтения байтов
-    /// и наружу уходит именно она. Стоит вернуть снятие метки после чтения —
-    /// и сверка в `write_text` перестанет защищать: во фронт уедет содержимое
-    /// одной версии с меткой другой, и следующая запись пройдёт молча.
+    /// Pins the order from `read_text`: the mtime is taken from the file before
+    /// the bytes are read, and that is the one that leaves. Move the mtime read
+    /// back after the byte read and the check in `write_text` stops protecting
+    /// anything: content of one version leaves with the mtime of another, and
+    /// the next write passes silently.
     #[test]
-    fn чужая_правка_после_чтения_отказывает_записи() {
+    fn someone_elses_edit_after_a_read_refuses_the_write() {
         let root = scratch("read-then-clobber");
         let path = root.join("a.txt");
-        fs::write(&path, "работа агента\n").unwrap();
+        fs::write(&path, "the agent's work\n").unwrap();
         set_mtime(&path, 1_700_000_000);
 
         let file = read_text(&root, "a.txt").unwrap();
 
-        assert_eq!(file.text, "работа агента\n");
-        assert_eq!(file.mtime, 1_700_000_000_000, "наружу уходит метка прочитанного файла");
+        assert_eq!(file.text, "the agent's work\n");
+        assert_eq!(file.mtime, 1_700_000_000_000, "the mtime of the file that was read is the one that leaves");
 
-        // Так выглядит агент, переписавший файл, пока вкладка была открыта.
-        fs::write(&path, "новая работа агента\n").unwrap();
+        // This is what an agent rewriting the file while the tab was open looks like.
+        fs::write(&path, "the agent's new work\n").unwrap();
         set_mtime(&path, 1_700_000_060);
 
-        let err = write_text(&root, "a.txt", "мои правки\n", file.mtime);
+        let err = write_text(&root, "a.txt", "my edits\n", file.mtime);
 
         assert!(
             matches!(err, Err(FilesError::Stale(_))),
-            "запись по метке из read_text обязана отказать, а не затирать чужое: {err:?}"
+            "a write with the mtime from read_text has to refuse rather than clobber: {err:?}"
         );
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            "новая работа агента\n",
-            "при отказе на диске не должно измениться ничего"
+            "the agent's new work\n",
+            "on a refusal nothing on disk must change"
         );
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Тот же случай, но пойманный в его настоящий момент: файл переписывают
-    /// ровно между снятием метки и чтением байтов. Метка, снятая ДО чтения,
-    /// уезжает старой — и следующая запись отказывает `Stale`, то есть
-    /// спрашивает человека. Метка, снятая ПОСЛЕ, уехала бы новой, сверка в
-    /// `write_text` прошла бы, и работа агента исчезла бы молча. Этот тест
-    /// падает ровно на такой перестановке.
+    /// The same case, caught at its actual moment: the file is rewritten
+    /// precisely between taking the mtime and reading the bytes. An mtime taken
+    /// BEFORE the read leaves stale — and the next write refuses with `Stale`,
+    /// that is, asks the person. An mtime taken AFTER would leave fresh, the
+    /// check in `write_text` would pass, and the agent's work would vanish
+    /// silently. This test fails on exactly that reordering.
     #[test]
-    fn метка_снимается_до_чтения_и_потому_не_обгоняет_содержимое() {
+    fn the_mtime_is_taken_before_the_read_and_so_never_outruns_the_content() {
         let root = scratch("mtime-before-read");
         let path = root.join("a.txt");
-        fs::write(&path, "моё\n").unwrap();
+        fs::write(&path, "mine\n").unwrap();
         set_mtime(&path, 1_700_000_000);
 
         let file = read_text_reading_with(&root, "a.txt", |full| {
             let bytes = fs::read(full)?;
-            // Агент переписал файл, пока мы читали его байты.
-            fs::write(full, "работа агента\n")?;
+            // The agent rewrote the file while we were reading its bytes.
+            fs::write(full, "the agent's work\n")?;
             set_mtime(full, 1_700_000_060);
             Ok(bytes)
         })
         .unwrap();
 
-        assert_eq!(file.text, "моё\n");
+        assert_eq!(file.text, "mine\n");
         assert_eq!(
             file.mtime, 1_700_000_000_000,
-            "наружу обязана уйти метка прочитанной версии, а не той, что легла после"
+            "the mtime of the version that was read has to leave, not the one that landed afterwards"
         );
 
-        let err = write_text(&root, "a.txt", "мои правки\n", file.mtime);
+        let err = write_text(&root, "a.txt", "my edits\n", file.mtime);
 
         assert!(
             matches!(err, Err(FilesError::Stale(_))),
-            "ошибаться надо в сторону ложного отказа, а не молчаливой перезаписи: {err:?}"
+            "err towards a false refusal, not a silent overwrite: {err:?}"
         );
-        assert_eq!(fs::read_to_string(&path).unwrap(), "работа агента\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "the agent's work\n");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn двоичный_и_слишком_большой_файл_не_читаются() {
+    fn a_binary_and_an_oversized_file_are_not_read() {
         let root = scratch("refuse");
         fs::write(root.join("a.bin"), [0x4d, 0x5a, 0x00, 0x90]).unwrap();
         fs::write(root.join("big.txt"), vec![b'x'; (MAX_FILE_BYTES + 1) as usize]).unwrap();
@@ -396,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn отсутствующий_файл_и_каталог_вместо_файла_различаются() {
+    fn a_missing_file_and_a_directory_in_its_place_are_told_apart() {
         let root = scratch("missing");
         fs::create_dir_all(root.join("src")).unwrap();
 
@@ -405,16 +410,17 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    // Симлинки создаются по-разному, и на не-unix этого теста просто нет —
-    // как у соседей ниже. Раньше здесь стоял `#[cfg(not(unix))] return;`
-    // посреди тела, и весь остаток теста был недостижим для компилятора.
+    // Symlinks are created differently per platform, and on non-unix this test
+    // simply does not exist — same as its neighbours below. There used to be a
+    // `#[cfg(not(unix))] return;` in the middle of the body here, which left the
+    // whole remainder of the test unreachable for the compiler.
     #[cfg(unix)]
     #[test]
-    fn симлинк_наружу_не_проходит_хотя_путь_выглядит_невинно() {
+    fn a_symlink_leading_outside_does_not_pass_though_the_path_looks_innocent() {
         let root = scratch("escape");
         let outside = scratch("escape-target");
-        fs::write(outside.join("secret.txt"), "не для чтения").unwrap();
-        // `reject_traversal` тут бессилен: в пути нет ни "..", ни корня.
+        fs::write(outside.join("secret.txt"), "not for reading").unwrap();
+        // `reject_traversal` is powerless here: the path holds neither ".." nor a root.
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
 
         assert!(matches!(read_text(&root, "link/secret.txt"), Err(FilesError::Outside(_))));
@@ -423,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn метки_времени_отдаются_пачкой_и_исчезнувший_файл_виден() {
+    fn timestamps_come_in_a_batch_and_a_vanished_file_is_visible() {
         let root = scratch("stat");
         fs::write(root.join("a.txt"), "x").unwrap();
 
@@ -431,54 +437,54 @@ mod tests {
 
         assert_eq!(stats.len(), 2);
         assert!(stats[0].mtime.is_some());
-        assert_eq!(stats[1].mtime, None, "исчезнувший файл — не ошибка, а состояние");
+        assert_eq!(stats[1].mtime, None, "a vanished file is a state, not an error");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn запись_возвращает_новую_метку_и_меняет_файл() {
+    fn a_write_returns_the_new_mtime_and_changes_the_file() {
         let root = scratch("write");
-        fs::write(root.join("a.txt"), "было\n").unwrap();
+        fs::write(root.join("a.txt"), "before\n").unwrap();
         let before = read_text(&root, "a.txt").unwrap();
 
-        let after = write_text(&root, "a.txt", "стало\n", before.mtime).unwrap();
+        let after = write_text(&root, "a.txt", "after\n", before.mtime).unwrap();
 
-        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "стало\n");
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "after\n");
         assert!(after >= before.mtime);
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn чужая_запись_не_затирается() {
+    fn someone_elses_write_is_not_clobbered() {
         let root = scratch("stale");
-        fs::write(root.join("a.txt"), "моё\n").unwrap();
+        fs::write(root.join("a.txt"), "mine\n").unwrap();
         let mine = read_text(&root, "a.txt").unwrap();
 
-        // Так выглядит агент, переписавший файл, пока вкладка была открыта.
-        let err = write_text(&root, "a.txt", "мои правки\n", mine.mtime - 1);
+        // This is what an agent rewriting the file while the tab was open looks like.
+        let err = write_text(&root, "a.txt", "my edits\n", mine.mtime - 1);
 
         assert!(matches!(err, Err(FilesError::Stale(_))));
         assert_eq!(
             fs::read_to_string(root.join("a.txt")).unwrap(),
-            "моё\n",
-            "при отказе на диске не должно измениться ничего"
+            "mine\n",
+            "on a refusal nothing on disk must change"
         );
 
-        // Проверка, что Stale отказ случился ДО создания temp файла.
-        // Если кто-нибудь переставит сверку mtime за File::create, этот тест упадёт.
+        // A check that the Stale refusal happened BEFORE the temp file was created.
+        // If anyone moves the mtime check past File::create, this test fails.
         let leftovers: Vec<_> = fs::read_dir(&root)
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|name| name.ends_with(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "Stale отказ должен случиться ДО создания temp файла: {leftovers:?}");
+        assert!(leftovers.is_empty(), "the Stale refusal must happen BEFORE the temp file is created: {leftovers:?}");
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn запись_наружу_отвергается() {
+    fn a_write_outside_the_root_is_rejected() {
         let root = scratch("write-outside");
         assert!(matches!(
             write_text(&root, "../evil.txt", "x", 0),
@@ -489,24 +495,24 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn права_исполняемого_файла_переживают_запись() {
+    fn an_executable_files_permissions_survive_a_write() {
         use std::os::unix::fs::PermissionsExt;
         let root = scratch("perms");
         let path = root.join("run.sh");
-        fs::write(&path, "#!/bin/sh\necho было\n").unwrap();
+        fs::write(&path, "#!/bin/sh\necho before\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         let before = read_text(&root, "run.sh").unwrap();
 
-        write_text(&root, "run.sh", "#!/bin/sh\necho стало\n", before.mtime).unwrap();
+        write_text(&root, "run.sh", "#!/bin/sh\necho after\n", before.mtime).unwrap();
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o755, "rename подменил бы режим режимом временного файла");
+        assert_eq!(mode, 0o755, "rename would have swapped the mode for the temp file's");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
     #[test]
-    fn временный_файл_за_собой_не_остаётся() {
+    fn no_temp_file_is_left_behind() {
         let root = scratch("no-litter");
         fs::write(root.join("a.txt"), "x\n").unwrap();
         let before = read_text(&root, "a.txt").unwrap();
@@ -519,13 +525,13 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|name| name.ends_with(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "остались временные файлы: {leftovers:?}");
+        assert!(leftovers.is_empty(), "temp files were left behind: {leftovers:?}");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
     #[test]
-    fn недостаток_прав_блокирует_запись_в_каталог() {
+    fn missing_permissions_block_a_write_into_the_directory() {
         use std::os::unix::fs::PermissionsExt;
 
         let root = scratch("deny-write");
@@ -535,31 +541,33 @@ mod tests {
 
         let before = read_text(&root, "sub/a.txt").unwrap();
 
-        // Проверка что права действительно заблокируют операцию.
-        // Если мы под root, права игнорируются и тест молча пройдёт.
+        // Check that the permissions really do block the operation.
+        // Running as root ignores them and the test would pass silently.
         let test_file = subdir.join(".test");
         if fs::write(&test_file, "test").is_ok() {
             let _ = fs::remove_file(&test_file);
             let _ = fs::remove_dir_all(&root);
-            return; // Под root права не работают, не тестируем.
+            return; // Permissions do not apply under root, so there is nothing to test.
         }
 
-        // Снять право записи с подкаталога.
+        // Take the write permission off the subdirectory.
         fs::set_permissions(&subdir, fs::Permissions::from_mode(0o555)).unwrap();
 
         let err = write_text(&root, "sub/a.txt", "y\n", before.mtime);
 
-        // Вернуть права СРАЗУ, до уборки — иначе remove_dir_all не сможет удалить каталог.
+        // Restore the permissions IMMEDIATELY, before the cleanup — otherwise
+        // remove_dir_all cannot delete the directory.
         fs::set_permissions(&subdir, fs::Permissions::from_mode(0o755)).unwrap();
 
-        // Проверить отказ — write_text должна вернуть ошибку при недостатке прав.
-        assert!(err.is_err(), "write_text должна вернуть ошибку при недостатке прав на запись");
+        // Check the refusal — write_text must return an error when it lacks
+        // write permission.
+        assert!(err.is_err(), "write_text must return an error when it lacks write permission");
 
-        // Оригинальный файл не должен измениться.
+        // The original file must not have changed.
         assert_eq!(
             fs::read_to_string(subdir.join("a.txt")).unwrap(),
             "x\n",
-            "при отказе оригинальный файл должен остаться неизменным"
+            "on a refusal the original file must be left untouched"
         );
 
         let _ = fs::remove_dir_all(&root);

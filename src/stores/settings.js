@@ -1,23 +1,34 @@
-/* Настройки приложения во фронте. Компоненты видят обычный реактивный объект;
-   про Tauri, диск и версию схемы знает только этот файл — как tracker.js
-   знает про трекер.
+/* The app's settings in the front end. Components see an ordinary reactive
+   object; this file is the only one that knows about Tauri, the disk and the
+   schema version — the way tracker.js is the only one that knows about the
+   tracker.
 
-   Разница с трекером принципиальная: там истина снаружи, в bd, и хранилище
-   догоняет её дельтами. Здесь истина в этом объекте — настройки меняет только
-   этот интерфейс, а Rust отвечает за схему и диск. */
+   The difference from the tracker is fundamental: there the truth is outside,
+   in bd, and the store catches up with it through deltas. Here the truth is in
+   this object — only this interface changes the settings, and Rust is
+   responsible for the schema and the disk. */
 import { nextTick, reactive, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-/* tabs.js импортирует settings.js, а мы — его: цикл замкнут, но безобиден.
-   Обе стороны трогают друг друга только внутри функций, и к моменту первого
-   вызова оба модуля уже вычислены. */
+/* tabs.js imports settings.js and we import it back: the cycle is closed but
+   harmless. Both sides touch each other only inside functions, and by the time
+   of the first call both modules have been evaluated. */
 import { confirmUnsaved } from './tabs.js'
+/* A pure module with no Vue and no DOM — the panel width rules and their
+   defaults. Imported so that these two numbers do not end up with two copies in
+   the front end. */
+import { LEFT_DEFAULT, RIGHT_DEFAULT } from '../views/panelWidths.js'
 
-/* Умолчания повторяют умолчания в Rust. Если бэкенда нет (браузер) или чтение
-   упало, приложение всё равно обязано открыться в известном виде. */
+/* The defaults mirror the ones in Rust. With no back end (a browser) or after
+   a failed read, the app still has to open looking a known way. */
 const defaults = () => ({
   appearance: { theme: 'dark', density: 'comfortable' },
-  layout: { leftCollapsed: false, rightCollapsed: false },
+  layout: {
+    leftCollapsed: false,
+    rightCollapsed: false,
+    leftWidth: LEFT_DEFAULT,
+    rightWidth: RIGHT_DEFAULT
+  },
   openProjects: [],
   activeProject: null,
   project: {
@@ -32,25 +43,25 @@ const defaults = () => ({
   }
 })
 
-/* Экспортируется ради браузерной заглушки: она отвечает теми же умолчаниями,
-   и второй их копии в проекте быть не должно. */
+/* Exported for the browser mock: it answers with these same defaults, and a
+   second copy of them must not exist in the project. */
 export { defaults }
 
 export const settings = reactive(defaults())
 
-/* Запись стоит похода на диск, а панель за одно перетаскивание меняется
-   десятки раз. Копим и пишем один раз, когда поток утих. */
+/* A write costs a trip to the disk, and a panel changes dozens of times during
+   one drag. We accumulate and write once, when the stream settles. */
 const SAVE_DELAY = 400
-/* Сколько ждём запись при закрытии. Больше — и зависший IPC превратится в
-   окно, которое не закрывается; это хуже потерянной последней правки. */
+/* How long we wait for the write while closing. Longer, and a wedged IPC turns
+   into a window that will not close; that is worse than one lost last edit. */
 const CLOSE_FLUSH_LIMIT = 2000
 let timer = null
 let watching = false
 let closing = false
 
-/* Записи выстроены в цепочку: одновременно в полёте всегда не больше одной.
-   Rust пишет через временный файл и переименование, и две записи внахлёст
-   спорили бы за порядок — вторая могла бы лечь на диск раньше первой. */
+/* Writes are chained: there is never more than one in flight at a time. Rust
+   writes through a temp file and a rename, and two overlapping writes would
+   race for order — the second could land on disk before the first. */
 let chain = Promise.resolve()
 
 function scheduleSave() {
@@ -60,30 +71,32 @@ function scheduleSave() {
 
 function flush() {
   timer = null
-  /* Реактивный прокси не переживает переход через IPC: отправляем простой
-     объект. structuredClone здесь нельзя — цель сборки es2021. Снимок берём
-     сейчас, а не в момент отправки: в очереди состояние успеет уехать. */
+  /* A reactive proxy does not survive the trip across the IPC: we send a plain
+     object. structuredClone is not allowed here — the build target is es2021.
+     The snapshot is taken now rather than at send time: the state would move on
+     while sitting in the queue. */
   const snapshot = JSON.parse(JSON.stringify(settings))
   chain = chain.then(() =>
     invoke('settings_save', { settings: snapshot }).catch((err) => {
-      console.error('[settings] сохранить не удалось:', err)
+      console.error('[settings] save failed:', err)
     })
   )
   return chain
 }
 
-/* Отправляет отложенное немедленно и отдаёт обещание, по которому видно,
-   когда диск догнал состояние.
+/* Sends what is pending right away and returns a promise that shows when the
+   disk has caught up with the state.
 
-   Ждать тик обязательно: вотчер настроек отложен на микрозадачу, поэтому тот,
-   кто поменял поле и тут же позвал нас в том же синхронном блоке (так делает
-   стор проектов перед сменой списка), застал бы timer ещё не заведённым.
-   Без ожидания "дожимать нечего" означало бы всего лишь "ещё не успело", и
-   правка уходящего проекта легла бы на диск позже — уже с чужим списком.
+   Awaiting a tick is mandatory: the settings watcher is deferred to a
+   microtask, so whoever changed a field and called us in the same synchronous
+   block (as the projects store does before changing the list) would find the
+   timer not yet set. Without the wait, "there is nothing to flush" would merely
+   mean "it has not happened yet", and the departing project's edit would land
+   on disk later — already carrying somebody else's list.
 
-   Обещание разрешается всегда: nextTick — микрозадача, а не поход наружу, так
-   что и обработчик закрытия окна с его двухсекундным потолком, и beforeunload
-   получают то же, что получали, только на тик позже. */
+   The promise always resolves: nextTick is a microtask, not a trip outwards, so
+   both the window-close handler with its two-second ceiling and beforeunload
+   get what they used to get, only one tick later. */
 export async function flushPending() {
   await nextTick()
   if (timer) {
@@ -93,31 +106,32 @@ export async function flushPending() {
   return chain
 }
 
-/* Закрытие окна — крестиком, Cmd+W, системным меню «закрыть окно» — идёт
-   через этот обработчик. Выход через Cmd+Q — другое дело: на macOS так можно
-   завершить процесс, вовсе не доведя per-window close request до вебвью, и
-   здесь это никем не проверено. За этот случай отвечает только дебаунс
-   SAVE_DELAY (400 мс) — если правка внутри него, а Cmd+Q обработчик не
-   увидел, она может не успеть на диск. Для того закрытия, что до нас
-   доходит, просим Tauri его придержать: дожимаем запись и закрываем окно
-   сами.
+/* Closing the window — the close button, Cmd+W, the system "close window"
+   menu — goes through this handler. Quitting with Cmd+Q is a different matter:
+   on macOS that can end the process without ever delivering a per-window close
+   request to the webview, and nobody has verified this case here. Only the
+   SAVE_DELAY debounce (400 ms) covers it — if an edit falls inside it and the
+   handler never saw the Cmd+Q, it may not reach the disk. For the closes that
+   do reach us we ask Tauri to hold them: we flush the write and destroy the
+   window ourselves.
 
-   Что здесь обещано: окно закроется. Повторный запрос игнорируем, ожидание
-   записи ограничено CLOSE_FLUSH_LIMIT, destroy зовём и после отказа записи.
-   Чего не обещано: что правка успеет лечь на диск — если бэкенд молчит две
-   секунды, окно всё равно закроется, и правка будет потеряна. */
+   What is promised here: the window will close. A repeat request is ignored,
+   the wait for the write is capped by CLOSE_FLUSH_LIMIT, and destroy is called
+   even after a failed write. What is not promised: that the edit reaches the
+   disk — if the back end stays silent for two seconds the window closes anyway
+   and the edit is lost. */
 async function closeAfterFlush() {
   if (closing) return
   closing = true
-  /* Вопрос про несохранённые файлы встаёт до дозаписи настроек, а не внутри
-     её двухсекундного потолка: настройки можно потерять, чужую работу — нет.
-     Отказ обработчика не имеет права запереть окно: считаем, что закрывать
-     можно, и идём дальше. */
+  /* The question about unsaved files comes before the settings flush, not
+     inside its two-second ceiling: settings may be lost, somebody's work may
+     not. A failing handler has no right to lock the window: we assume closing
+     is allowed and carry on. */
   let mayClose = true
   try {
     mayClose = await confirmUnsaved()
   } catch (err) {
-    console.error('[settings] вопрос о несохранённом не отработал:', err)
+    console.error('[settings] the unsaved-work question did not work out:', err)
   }
   if (!mayClose) {
     closing = false
@@ -129,28 +143,29 @@ async function closeAfterFlush() {
       new Promise((resolve) => setTimeout(resolve, CLOSE_FLUSH_LIMIT))
     ])
   } catch (err) {
-    console.error('[settings] запись при закрытии не удалась:', err)
+    console.error('[settings] the write on close failed:', err)
   }
   try {
     await getCurrentWindow().destroy()
   } catch (err) {
-    /* Отказ здесь не должен запереть окно навсегда: сбрасываем флаг, чтобы
-       следующий запрос на закрытие снова попал в этот обработчик, а не был
-       молча проглочен re-entrancy guard'ом. Запись к этому моменту уже
-       завершена (успешно или нет), так что повторный заход не повторит flush. */
+    /* A failure here must not lock the window forever: we clear the flag so
+       the next close request reaches this handler again instead of being
+       silently swallowed by the re-entrancy guard. The write has finished by
+       now (successfully or not), so a second pass will not repeat the flush. */
     closing = false
-    console.error('[settings] закрыть окно не удалось:', err)
+    console.error('[settings] closing the window failed:', err)
   }
 }
 
-/* В браузере окна Tauri нет: getCurrentWindow падает синхронно, раньше, чем
-   дело доходит до подписки. Это нормальный режим, а не поломка — перехватывать
-   в браузере нечего, окна для этого попросту нет, а то немногое, что там
-   можно сохранить, уже покрыто запасным beforeunload; поэтому здесь debug, а
-   не error — красная строка на каждой загрузке страницы прятала бы настоящие
-   ошибки. Подписка (второй catch) — другое дело: это уже настоящий Tauri, и
-   если onCloseRequested отклонит (например, ACL), это сигнал, а не норма, —
-   там уровень остаётся прежним. */
+/* In a browser there is no Tauri window: getCurrentWindow throws synchronously,
+   before it even gets to the subscription. That is a normal mode, not a
+   breakage — there is nothing to intercept in a browser, the window simply does
+   not exist for it, and the little that can be saved there is already covered
+   by the fallback beforeunload; hence debug rather than error here — a red line
+   on every page load would hide real errors. The subscription (the second
+   catch) is a different matter: that is real Tauri, and if onCloseRequested
+   rejects (an ACL, say) that is a signal, not the norm — so the level there
+   stays as it was. */
 function watchClose() {
   try {
     getCurrentWindow()
@@ -158,28 +173,30 @@ function watchClose() {
         event.preventDefault()
         closeAfterFlush()
       })
-      .catch((err) => console.warn('[settings] закрытие окна не перехвачено:', err))
+      .catch((err) => console.warn('[settings] window close not intercepted:', err))
   } catch (err) {
-    console.debug('[settings] закрытие окна не перехвачено (браузер, окна нет):', err)
+    console.debug('[settings] window close not intercepted (a browser, there is no window):', err)
   }
 }
 
-/* Секции сливаются на месте, а не подменяются целиком: вид захватывает
-   settings.layout и settings.project по ссылке один раз, при создании, и
-   подмена объекта оставила бы его читать и писать то, чего в настройках уже
-   нет — раскладка нового проекта не появилась бы на экране, а всё, что человек
-   поменял бы дальше, не попало бы на диск.
+/* Sections are merged in place rather than replaced wholesale: the view
+   captures settings.layout and settings.project by reference once, at creation,
+   and replacing the object would leave it reading and writing something the
+   settings no longer hold — the new project's layout would never appear on
+   screen, and everything the person changed afterwards would never reach the
+   disk.
 
-   Порядок аргументов важен: умолчания идут перед сохранённым, поэтому проект,
-   которого нет в карте, начинается с чистого состояния, а не донашивает поля
-   предыдущего. */
+   The argument order matters: the defaults come before the stored values, so a
+   project that is not in the map starts from a clean state instead of wearing
+   the previous one's fields. */
 function applySection(target, fallback, stored) {
   Object.assign(target, fallback, stored)
 }
 
-/* Чтение при старте: применяет всё — внешний вид, раскладку, список проектов
-   и активного. Зовётся один раз; переключение проектов ходит за раскладкой
-   через loadProjectLayout, потому что состав списка знает фронт, а не диск. */
+/* The read at startup: it applies everything — appearance, layout, the project
+   list and the active project. Called once; switching projects goes for the
+   layout through loadProjectLayout, because the front end knows the list's
+   contents, not the disk. */
 export async function loadSettings() {
   try {
     const stored = await invoke('settings_load', { project: null })
@@ -190,11 +207,11 @@ export async function loadSettings() {
     settings.openProjects = stored.openProjects ?? []
     settings.activeProject = stored.activeProject ?? null
   } catch (err) {
-    console.error('[settings] прочитать не удалось, берём умолчания:', err)
+    console.error('[settings] the read failed, taking the defaults:', err)
   }
 
-  /* Слежение включаем только после загрузки: иначе раскладка прочитанных
-     значений сама вернулась бы на диск как «изменение». */
+  /* Watching starts only after the load: otherwise the layout of the values
+     just read would go back to disk on its own as a "change". */
   if (!watching) {
     watch(settings, scheduleSave, { deep: true })
     window.addEventListener('beforeunload', flushPending)
@@ -204,17 +221,18 @@ export async function loadSettings() {
   return settings
 }
 
-/* Раскладка одного проекта — и только она. Так стор проектов забирает
-   состояние нового проекта при переключении, не перезапуская приложение.
-   Список открытых, активный и внешний вид эта функция не трогает намеренно:
-   их истина живёт во фронте, и ответ с диска — заведомо прошлое (переезд
-   начинается раньше, чем дебаунс успевает дописать новый список). Взять
-   оттуда список значило бы вернуть только что удалённый проект или потерять
-   только что добавленный. */
+/* One project's layout — and only that. This is how the projects store picks
+   up a new project's state on a switch, without restarting the app. This
+   function deliberately does not touch the open list, the active project or the
+   appearance: their truth lives in the front end, and an answer from the disk
+   is certainly the past (the move starts before the debounce manages to write
+   the new list). Taking the list from there would bring back a project that was
+   just removed, or lose one that was just added. */
 export async function loadProjectLayout(project) {
-  /* Проектов не осталось. Раскладке взяться неоткуда, а settings_load без
-     аргумента ответил бы про активного из файла, то есть про только что
-     закрытый проект: ставим умолчания. */
+  /* No projects are left. There is nowhere for a layout to come from, and
+     settings_load with no argument would answer about the active project from
+     the file, that is, about the project that was just closed: we set the
+     defaults. */
   if (!project) {
     Object.assign(settings.project, defaults().project)
     return
@@ -223,6 +241,6 @@ export async function loadProjectLayout(project) {
     const stored = await invoke('settings_load', { project })
     applySection(settings.project, defaults().project, stored.project)
   } catch (err) {
-    console.error('[settings] раскладку проекта прочитать не удалось:', err)
+    console.error('[settings] reading the project layout failed:', err)
   }
 }

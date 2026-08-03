@@ -1,34 +1,32 @@
-//! Где искать трекер.
+//! Where to look for a tracker.
 //!
-//! Общий словарь трекера и настроек. Раньше поиск каталога жил в
-//! `tracker::service`, и настройки ходили за ним туда — зависимость, которую
-//! их собственный комментарий называл подпоркой. Теперь оба зависят отсюда, а
-//! не друг от друга.
+//! The vocabulary shared by the tracker and settings. The directory search used
+//! to live in `tracker::service`, and settings went there for it — a dependency
+//! their own comment called a crutch. Now both depend on this, not on each other.
 
 use std::path::{Path, PathBuf};
 
-/// В каталоге есть трекер, если в нём лежит каталог `.beads`. Файл с таким
-/// именем трекером не делает.
+/// A folder has a tracker if it holds a `.beads` directory. A file with that
+/// name does not make one.
 pub fn has_tracker(dir: &Path) -> bool {
     dir.join(".beads").is_dir()
 }
 
-/// Ближайший предок, в котором есть трекер. Сам каталог тоже предок.
+/// The nearest ancestor that has a tracker. The folder itself is an ancestor too.
 pub fn nearest_tracked_ancestor(start: &Path) -> Option<PathBuf> {
     start.ancestors().find(|dir| has_tracker(dir)).map(Path::to_path_buf)
 }
 
-/// Чем открыться в самый первый раз, когда список проектов ещё пуст.
+/// What to open with on the very first run, when the project list is still empty.
 ///
-/// Просто `current_dir` не годится ни в одном настоящем запуске: под
-/// `npm run tauri dev` бинарник стартует из `src-tauri/`, а собранное
-/// macOS-приложение, открытое из Finder, — вообще из `/`. Поэтому идём вверх
-/// по предкам.
+/// Plain `current_dir` is no good in any real launch: under `npm run tauri dev`
+/// the binary starts from `src-tauri/`, and a built macOS app opened from
+/// Finder starts from `/` altogether. Hence the walk up the ancestors.
 ///
-/// Не нашлось ничего — проекта нет, и это не беда: список пуст, человек
-/// выберет каталог сам. Раньше здесь возвращался рабочий каталог, и
-/// приложение говорило «здесь нет .beads» про каталог, который никто не
-/// выбирал.
+/// Nothing found means there is no project, and that is no trouble: the list is
+/// empty and a person will pick a folder themselves. This used to return the
+/// working directory, and the app said "there is no .beads here" about a folder
+/// nobody had chosen.
 pub fn default_project() -> Option<PathBuf> {
     nearest_tracked_ancestor(&std::env::current_dir().ok()?)
 }
@@ -38,49 +36,49 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Свой каталог на каждый тест: имя несёт pid, поэтому параллельные
-    /// прогоны не мешают друг другу.
+    /// A directory of its own per test: the name carries the pid, so parallel
+    /// runs do not get in each other's way.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("smetana-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("создать временный каталог");
+        fs::create_dir_all(&dir).expect("create the temp directory");
         dir
     }
 
     #[test]
-    fn каталог_с_beads_отслеживается() {
+    fn a_folder_with_beads_is_tracked() {
         let root = scratch("has-tracker");
-        assert!(!has_tracker(&root), "пустой каталог трекером не считается");
+        assert!(!has_tracker(&root), "an empty folder does not count as a tracker");
         fs::create_dir_all(root.join(".beads")).unwrap();
         assert!(has_tracker(&root));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn файл_с_именем_beads_не_считается_трекером() {
+    fn a_file_named_beads_does_not_count_as_a_tracker() {
         let root = scratch("beads-file");
-        fs::write(root.join(".beads"), "не каталог").unwrap();
+        fs::write(root.join(".beads"), "not a directory").unwrap();
         assert!(!has_tracker(&root));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn поиск_поднимается_до_ближайшего_предка() {
+    fn the_search_climbs_to_the_nearest_ancestor() {
         let root = scratch("ancestor");
         let deep = root.join("a/b/c");
         fs::create_dir_all(&deep).unwrap();
         fs::create_dir_all(root.join(".beads")).unwrap();
         assert_eq!(nearest_tracked_ancestor(&deep).as_deref(), Some(root.as_path()));
-        assert_eq!(nearest_tracked_ancestor(&root).as_deref(), Some(root.as_path()), "сам каталог тоже предок");
+        assert_eq!(nearest_tracked_ancestor(&root).as_deref(), Some(root.as_path()), "the folder itself is an ancestor too");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn без_beads_нигде_выше_поиск_ничего_не_находит() {
+    fn with_no_beads_anywhere_above_the_search_finds_nothing() {
         let root = scratch("nothing");
         let deep = root.join("x/y");
         fs::create_dir_all(&deep).unwrap();
-        assert_eq!(nearest_tracked_ancestor(&deep), None, "во временном каталоге и над ним трекера быть не должно");
+        assert_eq!(nearest_tracked_ancestor(&deep), None, "there must be no tracker in the temp directory or above it");
         let _ = fs::remove_dir_all(&root);
     }
 }

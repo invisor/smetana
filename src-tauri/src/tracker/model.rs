@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Ребро графа зависимостей. bd отдаёт у задачи только исходящие связи:
-/// issue_id зависит от depends_on_id.
+/// An edge of the dependency graph. bd gives an issue only its outgoing links:
+/// issue_id depends on depends_on_id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Dependency {
     pub issue_id: String,
@@ -11,8 +11,8 @@ pub struct Dependency {
     pub kind: String,
 }
 
-/// Задача в том виде, в каком её отдаёт bd. Пустые поля bd опускает целиком,
-/// поэтому всё необязательное — Option или коллекция со значением по умолчанию.
+/// An issue in the shape bd hands it over. bd omits empty fields altogether,
+/// so everything optional is either an Option or a collection with a default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
@@ -33,8 +33,8 @@ pub struct Issue {
     pub dependencies: Vec<Dependency>,
 }
 
-/// Колонка доски. Из bd берём только имя и категорию: глиф и цвет
-/// принадлежат status.js, свои иконки bd мы намеренно игнорируем.
+/// A board column. We take only the name and the category from bd: the glyph
+/// and the colour belong to status.js, and bd's own icons are deliberately ignored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColumnDef {
     pub name: String,
@@ -97,17 +97,16 @@ pub struct IssuePatch {
 #[serde(rename_all = "kebab-case")]
 pub enum HealthState {
     Ok,
-    /// Список проектов пуст. Это не «здесь нет .beads» — открывать пока
-    /// нечего, и сказать об этом надо иначе.
+    /// The project list is empty. This is not "there is no .beads here" —
+    /// there is nothing to open yet, and that has to be said differently.
     NoProject,
     NotABeadsRepo,
     BdVersionMismatch,
     Error,
 }
 
-/// Сравнение нужно, чтобы событие уходило только на настоящую смену
-/// состояния: health на каждом удачном тике — это шум, за которым не видно
-/// настоящей беды.
+/// The comparison exists so the event fires only on a real change of state:
+/// health on every successful tick is noise that hides the real trouble.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Health {
     pub state: HealthState,
@@ -117,21 +116,21 @@ pub struct Health {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrackerError {
-    #[error("bd завершился с кодом {code}: {stderr}")]
+    #[error("bd exited with code {code}: {stderr}")]
     Command { code: i32, stderr: String },
-    #[error("в выводе bd нет JSON")]
+    #[error("no JSON in bd's output")]
     NoJson,
-    #[error("не удалось разобрать вывод bd: {0}")]
+    #[error("could not parse bd's output: {0}")]
     Parse(String),
-    #[error("не удалось запустить bd: {0}")]
+    #[error("could not launch bd: {0}")]
     Spawn(String),
-    #[error("bd вернул пустой результат")]
+    #[error("bd returned an empty result")]
     Empty,
-    #[error("в каталоге нет трекера: {0}")]
+    #[error("no tracker in this folder: {0}")]
     NoTracker(String),
 }
 
-// Tauri требует, чтобы ошибка команды умела сериализоваться.
+// Tauri requires a command's error to be serializable.
 impl Serialize for TrackerError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&self.to_string())

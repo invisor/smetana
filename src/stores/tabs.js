@@ -1,63 +1,72 @@
-/* Вкладки центра: порядок, временная, активная, буферы и грязнота.
-   Про Tauri этот файл не знает — за диск отвечает files.js.
+/* The centre's tabs: order, which one is temporary, which is active, the
+   buffers and their dirtiness. This file knows nothing about Tauri — the disk
+   is files.js's job.
 
-   Разделение проведено по сроку жизни: список вкладок переживает перезапуск и
-   потому живёт в настройках, буферы не переживают и потому живут здесь. */
+   The split is by lifetime: the list of open tabs survives a restart and
+   therefore lives in settings, the buffers do not and therefore live here. */
 import { computed, reactive } from 'vue'
 import { settings } from './settings.js'
 import { basenameOf, fileErrorText, readFile, writeFile } from './files.js'
 
-/* Закреплённые вкладки в настройках не хранятся: они есть всегда, стоят
-   первыми и не закрываются. */
+/* Pinned tabs are not stored in settings: they always exist, come first and
+   cannot be closed. */
 export const PINNED = [
-  { id: 'terminal', kind: 'pinned', label: 'Terminal' },
+  /* The id and the label diverge deliberately: the label says the tab holds an
+     agent, while the id 'terminal' sits in settings.json on people's disks and
+     in ProjectState::validate's closed list, and renaming it would break both
+     sides for the sake of one word. */
+  { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' }
 ]
 
-/* Путь → { text, original, mtime, error, saveError, stale, loading }.
-   text/original различаются ровно тогда, когда вкладка грязная.
-   loading — первое чтение ещё не вернулось. Буфер уже отрисован, поле уже на
-   экране, и без этого признака набранный до возврата чтения символ выглядел
-   бы как правка поверх содержимого, которого никто не видел: пришедший с
-   диска текст ушёл бы в мусор, а его метка легла бы в буфер как своя, и
-   первый же Cmd+S заменил бы весь файл этим символом. Пока признак стоит,
-   буфер не правится (setText) и не пишется (saveTab), а поле нередактируемо —
-   так же ведёт себя VS Code.
-   error — отказ чтения ({ kind, message }); правки нет, а text обычно пуст —
-   кроме вкладки, под которой файл исчез уже открытым: там остаётся то, что
-   успели прочитать.
-   saveError — отказ записи ({ kind, message }). Разделены намеренно: error
-   значит «файла нет как текста», и потому запирает поле (readOnly у вкладки и
-   у редактора), а отказ записи оставляет и текст, и право его править —
-   иначе набранное оказалось бы заперто ровно в тот момент, когда его не
-   удалось сохранить. Гаснет при первой удавшейся записи.
-   stale — файл уехал на диске под грязной вкладкой; сама метка тут не нужна,
-   нужен только факт, а свежую метку принесёт keepMine или reloadTab. */
+/* Path → { text, original, mtime, error, saveError, stale, loading }.
+   text/original differ exactly when the tab is dirty.
+   loading — the first read has not come back yet. The buffer is already
+   rendered and the field is already on screen, and without this flag a
+   character typed before the read returns would look like an edit on top of
+   content nobody has seen: the text arriving from disk would go in the bin, its
+   mtime would settle into the buffer as the buffer's own, and the very first
+   Cmd+S would replace the whole file with that character. While the flag is
+   set, the buffer is not edited (setText) and not written (saveTab), and the
+   field is read-only — VS Code behaves the same way.
+   error — a read refusal ({ kind, message }); there is no edit and text is
+   usually empty — except on a tab whose file vanished while already open, where
+   whatever was read stays.
+   saveError — a write refusal ({ kind, message }). They are separate
+   deliberately: error means "the file does not exist as text" and so locks the
+   field (readOnly on the tab and in the editor), while a write refusal leaves
+   both the text and the right to edit it — otherwise what was typed would be
+   locked away at exactly the moment it could not be saved. It clears on the
+   first successful write.
+   stale — the file moved on disk under a dirty tab; the mtime itself is not
+   needed here, only the fact, and keepMine or reloadTab will bring the fresh
+   one. */
 export const buffers = reactive(new Map())
 
 const project = () => settings.project
 
 export const isDirty = (path) => {
   const buffer = buffers.get(path)
-  /* Ошибка не делает буфер чистым. У файла, который не удалось открыть,
-     text и original пусты, и сравнение само даёт false; а вот текст, который
-     человек успел набрать до отказа чтения, обязан считаться несохранённым —
-     иначе вкладку закроют, не спросив, и он пропадёт молча.
-     Загружающийся буфер по той же причине чист: text и original у него оба
-     пусты, а править его до возврата чтения всё равно нельзя. */
+  /* An error does not make a buffer clean. For a file that could not be
+     opened, text and original are both empty and the comparison gives false on
+     its own; but text a person managed to type before the read refused has to
+     count as unsaved — otherwise the tab is closed without asking and it
+     disappears silently.
+     A loading buffer is clean for the same reason: its text and original are
+     both empty, and it cannot be edited before the read returns anyway. */
   return !!buffer && buffer.text !== buffer.original
 }
 
 export const dirtyPaths = computed(() => project().openTabs.filter(isDirty))
 
-/* Замок на вкладке говорит «править нельзя», и причину он обязан назвать свою:
-   агентов приложение пока не спрашивает ни о чём, а запирает вкладку отказ
-   чтения — двоичный файл, не UTF-8, слишком велик, исчез. Поэтому наружу едет
-   не голый флаг, а текст.
+/* The lock on a tab says "this cannot be edited", and it has to name its own
+   reason: the app asks agents nothing yet, and what locks a tab is a read
+   refusal — a binary file, not UTF-8, too large, gone. So what travels outwards
+   is text, not a bare flag.
 
-   Первое чтение замка не получает, хотя поле на это время тоже не правится:
-   оно длится миллисекунды, и замок, мигающий на каждом открытии файла, врал бы
-   про постоянное свойство вкладки. */
+   The first read gets no lock, even though the field is not editable for its
+   duration either: it lasts milliseconds, and a lock blinking on every file
+   open would lie about a permanent property of the tab. */
 const readOnlyHint = (buffer) => (buffer?.error ? fileErrorText(buffer.error) : null)
 
 export const tabList = computed(() => [
@@ -89,17 +98,18 @@ async function load(path, { force = false } = {}) {
   })
   try {
     const file = await readFile(path)
-    /* Пока файл читался, вкладку могли закрыть или сменить проект. Класть
-       содержимое в буфер, которого уже нет, значило бы воскресить вкладку. */
+    /* While the file was being read, the tab may have been closed or the
+       project switched. Putting content into a buffer that is already gone
+       would resurrect the tab. */
     if (!buffers.has(path)) return
     const current = buffers.get(path)
-    /* Ветка сторожит перечитывание, а не первичную загрузку: правки, набранной
-       во время первого чтения, взяться неоткуда — `loading` не пускает её в
-       буфер. Сюда попадает буфер, который уже жил и был грязным, когда его
-       позвали читать заново. Содержимое с диска не должно стирать набранное:
-       забираем только метку времени, текст остаётся человеку, вкладка остаётся
-       грязной. force приходит от reloadTab — там перезапись и есть то, о чём
-       попросили. */
+    /* This branch guards a re-read, not the first load: an edit typed during
+       the first read cannot exist — `loading` keeps it out of the buffer. What
+       lands here is a buffer that already lived and was dirty when it was told
+       to read again. Content from disk must not erase what was typed: we take
+       only the timestamp, the text stays with the person and the tab stays
+       dirty. force comes from reloadTab — there the overwrite is exactly what
+       was asked for. */
     if (!force && current.text !== current.original) {
       buffers.set(path, { ...current, mtime: file.mtime, loading: false })
       return
@@ -116,10 +126,11 @@ async function load(path, { force = false } = {}) {
   } catch (error) {
     if (!buffers.has(path)) return
     const current = buffers.get(path)
-    /* Тот же случай, что и в ветке успеха, и сторожит она то же самое —
-       перечитывание. Отказ чтения не повод выбросить набранное руками, поэтому
-       текст остаётся, а ошибка просто прикладывается к нему. force приходит от
-       reloadTab: там человек сам попросил забыть свои правки. */
+    /* The same case as in the success branch, guarding the same thing — a
+       re-read. A read refusal is no reason to throw away what was typed by
+       hand, so the text stays and the error is simply attached to it. force
+       comes from reloadTab: there the person asked to forget their edits
+       themselves. */
     if (!force && current.text !== current.original) {
       buffers.set(path, { ...current, error, loading: false })
       return
@@ -136,12 +147,12 @@ async function load(path, { force = false } = {}) {
   }
 }
 
-/* Открытие файла из дерева. Вся механика VS Code — здесь.
+/* Opening a file from the tree. All of VS Code's mechanics live here.
 
-   Одиночный клик открывает временной вкладкой; следующий одиночный клик по
-   другому файлу подставляется на её место, а не растит ряд. Двойной клик
-   (permanent) открывает сразу постоянной — и закрепляет ту, что уже открыта
-   временной. */
+   A single click opens a preview tab; the next single click on another file
+   replaces it in place rather than growing the row. A double click (permanent)
+   opens a permanent tab straight away — and makes permanent the one already
+   open as a preview. */
 export function openFile(path, { permanent = false } = {}) {
   const state = project()
   const at = state.openTabs.indexOf(path)
@@ -152,30 +163,30 @@ export function openFile(path, { permanent = false } = {}) {
     return
   }
 
-  /* Место временной вкладки занимает только другая временная. Двойной клик
-     открывает постоянную рядом: слот превью принадлежит тому файлу, который
-     сейчас просматривают, и клик по третьему файлу не должен его выселять. */
+  /* Only another preview tab takes a preview tab's place. A double click opens
+     a permanent tab next to it: the preview slot belongs to the file currently
+     being previewed, and a click on a third file must not evict it. */
   const previewAt =
     !permanent && state.previewTab ? state.openTabs.indexOf(state.previewTab) : -1
   if (previewAt !== -1) {
-    /* Замена на том же месте: ряд не должен перестраиваться от того, что
-       человек просматривает файлы один за другим. Временная вкладка никогда
-       не бывает грязной, поэтому спрашивать не о чем. */
+    /* Replacement in place: the row must not rearrange itself just because a
+       person is previewing files one after another. A preview tab is never
+       dirty, so there is nothing to ask about. */
     buffers.delete(state.openTabs[previewAt])
     state.openTabs.splice(previewAt, 1, path)
   } else {
     state.openTabs.push(path)
   }
 
-  /* Постоянная вкладка не отменяет чужое превью: если временной была вкладка
-     другого файла, она такой и остаётся. Обнулять `previewTab` тут значило бы
-     снимать курсив со вкладки, к которой человек не прикасался. */
+  /* A permanent tab does not cancel somebody else's preview: if another
+     file's tab was the preview, it stays one. Clearing `previewTab` here would
+     take the italics off a tab the person never touched. */
   if (!permanent) state.previewTab = path
   state.activeTab = path
   load(path)
 }
 
-/* Двойной клик по вкладке. */
+/* A double click on a tab. */
 export function promote(path) {
   const state = project()
   if (state.previewTab === path) state.previewTab = null
@@ -190,110 +201,116 @@ export function closeTab(path) {
   buffers.delete(path)
   if (state.previewTab === path) state.previewTab = null
   if (state.activeTab === path) {
-    /* Активной становится соседняя справа, а для последней — слева; вкладок
-       не осталось — доска. Так же ведёт себя removeProject со списком
-       проектов. */
+    /* The neighbour on the right becomes active, or the one on the left for
+       the last tab; with no tabs left, the board. removeProject behaves the
+       same way with the project list. */
     state.activeTab = state.openTabs[at] ?? state.openTabs[at - 1] ?? 'kanban'
   }
 }
 
-/* Правка. Она же снимает временность — второй из двух способов закрепить
-   вкладку, и именно он делает инвариант «временная никогда не грязная»
-   истинным. */
+/* An edit. It also drops the temporary flag — the second of the two ways to
+   make a tab permanent, and the one that makes the "a preview tab is never
+   dirty" invariant true. */
 export function setText(path, text) {
   const buffer = buffers.get(path)
-  /* Пока первое чтение не вернулось, править нечего: буфер пуст не потому,
-     что файл пуст. Правка в него стала бы правкой поверх невидимого. */
+  /* Until the first read comes back there is nothing to edit: the buffer is
+     empty not because the file is empty. An edit into it would be an edit on
+     top of the invisible. */
   if (!buffer || buffer.error || buffer.loading) return
   buffers.set(path, { ...buffer, text })
   const state = project()
   if (state.previewTab === path) state.previewTab = null
 }
 
-/* Записи выстроены в цепочку: одновременно в полёте всегда не больше одной.
-   Два Cmd+S подряд иначе спорили бы за порядок, и вторая запись могла бы лечь
-   на диск раньше первой. Тот же приём, что в settings.js. */
+/* Writes are chained: there is never more than one in flight at a time.
+   Otherwise two Cmd+S in a row would race for order, and the second write could
+   land on disk before the first. The same trick as in settings.js. */
 let chain = Promise.resolve()
 
 export function saveTab(path) {
   const buffer = buffers.get(path)
-  /* loading: писать содержимое, которого никто не читал, нечем и незачем. */
+  /* loading: there is nothing to write and no reason to write content nobody
+     has read. */
   if (!buffer || buffer.error || buffer.loading || !isDirty(path)) return chain
   const text = buffer.text
   chain = chain
     .then(async () => {
-      /* Метку берём в момент выполнения, а не постановки в очередь: первая из
-         двух записей подряд уже сдвинула её на диске, и метка, захваченная при
-         постановке, дала бы `stale` на собственное сохранение. Текст, наоборот,
-         захвачен при постановке — сохраняем то, что человек попросил. */
+      /* The mtime is taken at execution time, not when the write is queued:
+         the first of two consecutive writes has already moved it on disk, and
+         an mtime captured at queue time would produce a `stale` on our own
+         save. The text, by contrast, is captured at queue time — we save what
+         the person asked for. */
       const before = buffers.get(path)
       if (!before || before.error || before.loading) return
       try {
         const mtime = await writeFile(path, text, before.mtime)
         const current = buffers.get(path)
         if (!current) return
-        /* original ставим равным тому, что записали, а не текущему тексту:
-           человек мог продолжить печатать, пока запись летела, и его новые
-           правки обязаны остаться грязными. */
+        /* original is set to what was written, not to the current text: the
+           person may have kept typing while the write was in flight, and their
+           new edits have to stay dirty. */
         buffers.set(path, { ...current, original: text, mtime, saveError: null, stale: false })
       } catch (error) {
         const current = buffers.get(path)
         if (!current) return
         if (error.kind === 'stale') {
-          /* Ничего не записано и ничего не потеряно. Показываем полоску и ждём
-             решения: перечитать или оставить своё. */
+          /* Nothing was written and nothing was lost. We show the strip and
+             wait for a decision: reload, or keep mine. */
           buffers.set(path, { ...current, stale: true })
         } else {
-          /* Отказ записи — не отказ чтения. В `error` живёт «файл не удалось
-             открыть», и оно делает поле нередактируемым; для неудавшегося
-             сохранения это заперло бы набранный текст: ни поправить, ни
-             сохранить заново. */
+          /* A write refusal is not a read refusal. `error` holds "the file
+             could not be opened" and makes the field read-only; for a failed
+             save that would lock away the typed text: neither editable nor
+             saveable again. */
           buffers.set(path, { ...current, saveError: error })
         }
       }
     })
-    /* Отвергнутое обещание, оставленное в цепочке, отравило бы все следующие
-       записи: их `.then` молча пропустил бы тело, и Cmd+S перестал бы что-либо
-       делать до перезапуска. Отказ самой записи разобран выше, сюда попадает
-       только неожиданное — но и оно не имеет права остановить очередь. */
+    /* A rejected promise left in the chain would poison every write that
+       follows: their `.then` would silently skip its body, and Cmd+S would stop
+       doing anything until a restart. The write's own refusal is handled above;
+       only the unexpected lands here — and even that has no right to stop the
+       queue. */
     .catch((err) => {
-      console.error('[tabs] запись не удалась:', err)
+      console.error('[tabs] write failed:', err)
     })
   return chain
 }
 
-/* Файл уехал под грязной вкладкой — это заметил проход по фокусу окна.
-   Решение за человеком, поэтому вкладка получает полоску с кнопками.
+/* The file moved under a dirty tab — the window-focus sweep noticed it. The
+   decision is the person's, so the tab gets a strip with buttons.
 
-   Отказ чтения при этом снимается, а не сохраняется: сюда приходят и те
-   буферы, у которых он был, — файл удалили и тут же вернули, права починили.
-   Файл на месте, набранный текст на месте, и оставлять поле запертым значило
-   бы заморозить его навсегда: из `error` больше ничего не выводит. */
+   The read refusal is cleared rather than kept: buffers that had one arrive
+   here too — the file was deleted and put straight back, the permissions were
+   fixed. The file is there, the typed text is there, and leaving the field
+   locked would freeze it forever: nothing else leads out of `error`. */
 export function markStale(path) {
   const buffer = buffers.get(path)
   if (!buffer || buffer.loading) return
   buffers.set(path, { ...buffer, error: null, stale: true })
 }
 
-/* Файл исчез под чистой вкладкой. Терять нечего, и перечитывать нечего, но и
-   показывать содержимое того, чего нет, часами нельзя. Отказ чтения тут не
-   выдумка, а правда: следующее чтение вернуло бы ровно его, — а вместе с ним
-   приходят и объяснение под полоской, и замок на вкладке, и запертое поле.
-   Вернувшийся файл поднимет вкладку обратно — этим занят проход по фокусу. */
+/* The file vanished under a clean tab. There is nothing to lose and nothing to
+   re-read, but showing the contents of something that does not exist for hours
+   is not on either. The read refusal here is not an invention but the truth:
+   the next read would return exactly it — and with it come the explanation
+   under the strip, the lock on the tab and the locked field. A file that comes
+   back lifts the tab back up — that is the focus sweep's job. */
 export function markGone(path) {
   const buffer = buffers.get(path)
   if (!buffer || buffer.loading || buffer.error) return
   buffers.set(path, { ...buffer, error: { kind: 'notFound' }, stale: false })
 }
 
-/* «Перечитать»: содержимое с диска побеждает, правки уходят. */
+/* "Reload": the content from disk wins, the edits go. */
 export async function reloadTab(path) {
   if (!buffers.has(path)) return
   await load(path, { force: true })
 }
 
-/* «Оставить моё»: полоска гаснет, но метка буфера догоняет диск — иначе
-   следующий Cmd+S снова отказал бы `stale`, и выйти из этого было бы нельзя. */
+/* "Keep mine": the strip goes away, but the buffer's mtime catches up with the
+   disk — otherwise the next Cmd+S would refuse with `stale` again, and there
+   would be no way out of it. */
 export async function keepMine(path) {
   const buffer = buffers.get(path)
   if (!buffer) return
@@ -309,8 +326,8 @@ export function saveTabs(paths) {
   return Promise.all(paths.filter(isDirty).map(saveTab))
 }
 
-/* Отказ от несохранённого в перечисленных вкладках — ответ «Не сохранять».
-   Список обязателен: спросили про одну вкладку — трогаем только её. */
+/* Discarding the unsaved content of the listed tabs — the "Don't save" answer.
+   The list is mandatory: if one tab was asked about, only that one is touched. */
 export function discardTabs(paths) {
   for (const path of paths) {
     const buffer = buffers.get(path)
@@ -318,16 +335,16 @@ export function discardTabs(paths) {
   }
 }
 
-/* Переезд на другой проект: буферы старого проекта не должны пережить его
-   ни на кадр. Список вкладок при этом не трогаем — он придёт из настроек
-   нового проекта. */
+/* Moving to another project: the old project's buffers must not outlive it by
+   a single frame. The tab list is left alone — it will come from the new
+   project's settings. */
 export function resetTabs() {
   buffers.clear()
 }
 
-/* Восстановление после перезапуска или переключения проекта. Читаем всё, что
-   было открыто; путь, чей файл не читается, выпадает из списка молча — ровно
-   как выпадает задача, которой больше нет в трекере. */
+/* Restoring after a restart or a project switch. We read everything that was
+   open; a path whose file does not read falls out of the list silently —
+   exactly as an issue that is no longer in the tracker falls out. */
 export async function restoreTabs() {
   const state = project()
   const paths = [...state.openTabs]
@@ -344,16 +361,17 @@ export async function restoreTabs() {
   }
 }
 
-/* Кто спрашивает про несохранённое.
+/* Who asks about unsaved work.
  *
- * Вопрос задаёт вид (модалка живёт в DesktopApp.vue), а поводов для него три:
- * закрытие вкладки, переключение проекта и закрытие окна. Два последних
- * приходят из сторов, которые про интерфейс ничего не знают, — поэтому вид
- * оставляет здесь свою функцию, а сторы её зовут.
+ * The view asks the question (the modal lives in DesktopApp.vue), and there are
+ * three occasions for it: closing a tab, switching project and closing the
+ * window. The last two come from stores that know nothing about the interface —
+ * so the view leaves its function here and the stores call it.
  *
- * Обещание такое: вернуть true значит «можно продолжать», false — «человек
- * передумал». Никто не поставил обработчик — продолжаем: молча терять правки
- * плохо, но запирать приложение из-за незарегистрированного вида хуже.
+ * The contract is this: returning true means "carry on", false means "the
+ * person changed their mind". If nobody registered a handler, we carry on:
+ * losing edits silently is bad, but locking up the app because of an
+ * unregistered view is worse.
  */
 let ask = null
 

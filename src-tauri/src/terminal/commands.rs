@@ -18,9 +18,9 @@ async fn ask<T>(
         .0
         .send(make(tx))
         .await
-        .map_err(|_| TerminalError::Spawn("воркер терминала не запущен".into()))?;
+        .map_err(|_| TerminalError::Spawn("the terminal worker is not running".into()))?;
     rx.await
-        .map_err(|_| TerminalError::Spawn("воркер терминала не ответил".into()))
+        .map_err(|_| TerminalError::Spawn("the terminal worker did not answer".into()))
 }
 
 /// The requests that carry no reply channel: nothing to wait for, so only
@@ -30,7 +30,7 @@ async fn tell(handle: &TerminalHandle, request: Request) -> Result<(), TerminalE
         .0
         .send(request)
         .await
-        .map_err(|_| TerminalError::Spawn("воркер терминала не запущен".into()))
+        .map_err(|_| TerminalError::Spawn("the terminal worker is not running".into()))
 }
 
 #[tauri::command]

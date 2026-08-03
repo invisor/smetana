@@ -21,29 +21,29 @@ beforeEach(async () => {
   ipc.on('tracker_set_project', snapshot())
   ipc.on('tracker_probe', (args) => args.paths.map((path) => ({ path, tracked: true })))
 
-  /* Обязательно: вотчер настроек встаёт только внутри loadSettings. Без него
-     flushPending нечего дожимать, settings_save не случается никогда, и
-     проверка порядка «запись до доски» сравнивала бы два -1, то есть
-     проходила бы вхолостую. */
+  /* Mandatory: the settings watcher is installed only inside loadSettings.
+     Without it flushPending has nothing to flush, settings_save never happens,
+     and the "write before the board" ordering check would compare two -1s, that
+     is, pass for nothing. */
   await settings.loadSettings()
 })
 
 describe('basename', () => {
-  it('режет по обоим разделителям: среди целевых вебвью есть WebView2', () => {
-    expect(projects.basename('/home/кто-то/проект')).toBe('проект')
-    expect(projects.basename('C:\\Users\\кто-то\\проект')).toBe('проект')
-    expect(projects.basename('/проект/')).toBe('проект')
+  it('splits on both separators: WebView2 is among the target webviews', () => {
+    expect(projects.basename('/home/someone/project')).toBe('project')
+    expect(projects.basename('C:\\Users\\someone\\project')).toBe('project')
+    expect(projects.basename('/project/')).toBe('project')
   })
 })
 
 describe('projectRows', () => {
-  it('до ответа проверки строка считается отслеживаемой', () => {
+  it('before the probe answers a row counts as tracked', () => {
     settings.settings.openProjects = ['/a']
 
     expect(projects.projectRows.value).toEqual([{ path: '/a', name: 'a', tracked: true }])
   })
 
-  it('ответ проверки опускает флаг там, где трекера нет', async () => {
+  it('the probe\'s answer lowers the flag where there is no tracker', async () => {
     settings.settings.openProjects = ['/a', '/b']
     ipc.on('tracker_probe', (args) =>
       args.paths.map((path) => ({ path, tracked: path === '/a' }))
@@ -56,7 +56,7 @@ describe('projectRows', () => {
 })
 
 describe('switchTo', () => {
-  it('переезжает: раскладка, дерево, вкладки, доска', async () => {
+  it('moves: layout, tree, tabs, board', async () => {
     settings.settings.openProjects = ['/a', '/b']
     settings.settings.activeProject = '/a'
 
@@ -67,22 +67,23 @@ describe('switchTo', () => {
     expect(ipc.calls('files_list').some((call) => call.dir === '')).toBe(true)
   })
 
-  it('состояние уходящего проекта ложится на диск до того, как поменяется доска', async () => {
+  it('the departing project\'s state lands on disk before the board changes', async () => {
     settings.settings.activeProject = '/a'
     settings.settings.project.sideTab = 'agents'
 
     await projects.switchTo('/b')
 
     const commands = ipc.commands()
-    /* Без этого indexOf на несостоявшемся settings_save дал бы -1, и -1 < N
-       было бы истинно при любом порядке — ассерт ниже прошёл бы вхолостую. */
+    /* Without this, indexOf on a settings_save that never happened would give
+       -1, and -1 < N would be true in any order — the assert below would pass
+       for nothing. */
     expect(commands).toContain('settings_save')
     expect(commands.indexOf('settings_save')).toBeLessThan(
       commands.indexOf('tracker_set_project')
     )
   })
 
-  it('переезд на текущий проект ничего не делает', async () => {
+  it('moving to the current project does nothing', async () => {
     settings.settings.activeProject = '/a'
 
     await projects.switchTo('/a')
@@ -90,7 +91,7 @@ describe('switchTo', () => {
     expect(ipc.calls('tracker_set_project')).toHaveLength(0)
   })
 
-  it('второй клик во время переезда игнорируется — победить должен не последний ответ', async () => {
+  it('a second click during a move is ignored — the last answer must not win', async () => {
     settings.settings.activeProject = '/a'
 
     const first = projects.switchTo('/b')
@@ -101,10 +102,10 @@ describe('switchTo', () => {
     expect(settings.settings.activeProject).toBe('/b')
   })
 
-  it('«человек передумал» отменяет переезд целиком', async () => {
+  it('"the person changed their mind" cancels the move entirely', async () => {
     settings.settings.activeProject = '/a'
     settings.settings.project.openTabs = ['a.txt']
-    tabs.buffers.set('a.txt', buffer({ text: 'правка' }))
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
     tabs.onUnsaved(() => false)
 
     await projects.switchTo('/b')
@@ -113,14 +114,14 @@ describe('switchTo', () => {
     expect(ipc.calls('tracker_set_project')).toHaveLength(0)
   })
 
-  /* Название шире, чем проверка: switchTo не содержит catch, а
-     tracker.setProject глотает ошибку сама (см. tracker.js) — ветки с
-     настоящим броском в самом switchTo в коде нет. Тест реально закрепляет
-     только то, что moving снимается в finally и второй переезд после
-     отказавшего первого не заблокирован. */
-  it('переезд после отказавшего setProject не заблокирован — moving снимается в finally', async () => {
+  /* The name is broader than the check: switchTo holds no catch, and
+     tracker.setProject swallows the error itself (see tracker.js) — there is no
+     branch with a real throw inside switchTo in the code. What the test really
+     pins is only that moving is cleared in finally and that a second move after
+     a failed first one is not blocked. */
+  it('a move after a failed setProject is not blocked — moving is cleared in finally', async () => {
     settings.settings.activeProject = '/a'
-    ipc.fail('tracker_set_project', new Error('каталога нет'))
+    ipc.fail('tracker_set_project', new Error('no such folder'))
     await projects.switchTo('/b')
 
     ipc.on('tracker_set_project', snapshot())
@@ -131,26 +132,26 @@ describe('switchTo', () => {
 })
 
 describe('addProject', () => {
-  it('добавляет выбранную папку и переезжает в неё', async () => {
-    ipc.on('plugin:dialog|open', '/новый')
+  it('adds the chosen folder and moves into it', async () => {
+    ipc.on('plugin:dialog|open', '/new')
 
     await projects.addProject()
 
-    expect(settings.settings.openProjects).toEqual(['/новый'])
-    expect(settings.settings.activeProject).toBe('/новый')
+    expect(settings.settings.openProjects).toEqual(['/new'])
+    expect(settings.settings.activeProject).toBe('/new')
   })
 
-  it('подкаталог отслеживаемого репозитория нормализуется в корень один раз', async () => {
-    ipc.on('plugin:dialog|open', '/репозиторий/src/stores')
-    ipc.on('project_root', '/репозиторий')
+  it('a subfolder of a tracked repository is normalized to its root once', async () => {
+    ipc.on('plugin:dialog|open', '/repository/src/stores')
+    ipc.on('project_root', '/repository')
 
     await projects.addProject()
 
-    expect(settings.settings.openProjects).toEqual(['/репозиторий'])
-    expect(ipc.calls('project_root')).toEqual([{ path: '/репозиторий/src/stores' }])
+    expect(settings.settings.openProjects).toEqual(['/repository'])
+    expect(ipc.calls('project_root')).toEqual([{ path: '/repository/src/stores' }])
   })
 
-  it('отмена диалога не трогает ничего', async () => {
+  it('cancelling the dialog touches nothing', async () => {
     ipc.on('plugin:dialog|open', null)
 
     await projects.addProject()
@@ -159,18 +160,18 @@ describe('addProject', () => {
     expect(ipc.calls('tracker_set_project')).toHaveLength(0)
   })
 
-  it('упавший диалог не роняет стор', async () => {
-    ipc.fail('plugin:dialog|open', new Error('диалог не открылся'))
+  it('a failed dialog does not break the store', async () => {
+    ipc.fail('plugin:dialog|open', new Error('the dialog did not open'))
 
     await expect(projects.addProject()).resolves.toBeUndefined()
     expect(settings.settings.openProjects).toEqual([])
   })
 
-  it('выбор уже активного проекта не устраивает переезд и не спрашивает про вкладки', async () => {
+  it('choosing the already-active project stages no move and asks nothing about tabs', async () => {
     settings.settings.activeProject = '/a'
     settings.settings.openProjects = ['/a']
     settings.settings.project.openTabs = ['a.txt']
-    tabs.buffers.set('a.txt', buffer({ text: 'правка' }))
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
     const asked = vi.fn(() => true)
     tabs.onUnsaved(asked)
     ipc.on('plugin:dialog|open', '/a')
@@ -182,15 +183,15 @@ describe('addProject', () => {
     expect(settings.settings.openProjects).toEqual(['/a'])
   })
 
-  /* Диалог сам стоит сколько угодно (комментарий в addProject): переезд мог
-     начаться и кончиться, пока человек выбирал папку, поэтому moving
-     проверяется заново после возврата, а не только на входе в функцию.
-     Гонка собрана детерминированно тем же приёмом, что и гонка keepMine в
-     tests/stores/tabs/freshness.test.js: диалог держится на управляемом
-     промисе, за это время switchTo успевает поднять moving и застрять на
-     своём собственном held-промисе (tracker_set_project) — так moving
-     гарантированно ещё стоит, когда диалог отпускают. */
-  it('переезд, начавшийся, пока стоял диалог, отменяет добавление — повторная проверка moving после возврата', async () => {
+  /* The dialog itself takes as long as it takes (the comment in addProject): a
+     move may have started and finished while the person was picking a folder,
+     so moving is checked again after it returns, not only on the way into the
+     function. The race is assembled deterministically with the same trick as
+     the keepMine race in tests/stores/tabs/freshness.test.js: the dialog is held
+     on a controlled promise, and in that time switchTo manages to raise moving
+     and get stuck on its own held promise (tracker_set_project) — so moving is
+     guaranteed to still be up when the dialog is released. */
+  it('a move that started while the dialog was open cancels the addition — moving is checked again after it returns', async () => {
     settings.settings.openProjects = ['/a']
     settings.settings.activeProject = '/a'
 
@@ -198,7 +199,7 @@ describe('addProject', () => {
     const dialogHeld = new Promise((resolve) => {
       releaseDialog = resolve
     })
-    ipc.on('plugin:dialog|open', () => dialogHeld.then(() => '/новый'))
+    ipc.on('plugin:dialog|open', () => dialogHeld.then(() => '/new'))
 
     let releaseSetProject
     const setProjectHeld = new Promise((resolve) => {
@@ -207,15 +208,15 @@ describe('addProject', () => {
     ipc.on('tracker_set_project', () => setProjectHeld.then(() => snapshot()))
 
     const addPromise = projects.addProject()
-    /* switchTo поднимает moving синхронно, ещё до первого await, — вызов
-       ниже гарантированно застаёт addProject внутри await open(...). */
+    /* switchTo raises moving synchronously, before its first await — the call
+       below is guaranteed to catch addProject inside await open(...). */
     const switchPromise = projects.switchTo('/b')
 
     releaseDialog()
     await addPromise
 
-    /* moving всё ещё стоит (switchTo застрял на held tracker_set_project):
-       повторная проверка обязана была отменить добавление. */
+    /* moving is still up (switchTo is stuck on the held tracker_set_project):
+       the repeat check must have cancelled the addition. */
     expect(settings.settings.openProjects).toEqual(['/a'])
 
     releaseSetProject()
@@ -224,7 +225,7 @@ describe('addProject', () => {
     expect(settings.settings.activeProject).toBe('/b')
   })
 
-  it('уже открытый, но неактивный проект в списке не задваивается', async () => {
+  it('a project that is already open but inactive is not duplicated in the list', async () => {
     settings.settings.openProjects = ['/a', '/b']
     settings.settings.activeProject = '/a'
     ipc.on('plugin:dialog|open', '/b')
@@ -237,7 +238,7 @@ describe('addProject', () => {
 })
 
 describe('removeProject', () => {
-  it('активным становится следующий', async () => {
+  it('the next project becomes active', async () => {
     settings.settings.openProjects = ['/a', '/b', '/c']
     settings.settings.activeProject = '/b'
 
@@ -247,7 +248,7 @@ describe('removeProject', () => {
     expect(settings.settings.activeProject).toBe('/c')
   })
 
-  it('для последней строки — предыдущий', async () => {
+  it('for the last row it is the previous one', async () => {
     settings.settings.openProjects = ['/a', '/b']
     settings.settings.activeProject = '/b'
 
@@ -256,7 +257,7 @@ describe('removeProject', () => {
     expect(settings.settings.activeProject).toBe('/a')
   })
 
-  it('опустевший список оставляет окно без проекта — это нормальное состояние', async () => {
+  it('an emptied list leaves the window without a project — that is a normal state', async () => {
     settings.settings.openProjects = ['/a']
     settings.settings.activeProject = '/a'
 
@@ -266,11 +267,11 @@ describe('removeProject', () => {
     expect(settings.settings.activeProject).toBe(null)
   })
 
-  it('про неактивную строку не спрашивает: «не сохранять» стёрло бы правки ни за что', async () => {
+  it('it does not ask about an inactive row: "don\'t save" would erase edits for nothing', async () => {
     settings.settings.openProjects = ['/a', '/b']
     settings.settings.activeProject = '/a'
     settings.settings.project.openTabs = ['a.txt']
-    tabs.buffers.set('a.txt', buffer({ text: 'правка' }))
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
     const asked = vi.fn(() => true)
     tabs.onUnsaved(asked)
 
@@ -281,11 +282,11 @@ describe('removeProject', () => {
     expect(settings.settings.activeProject).toBe('/a')
   })
 
-  it('строки, которой нет, не касается', async () => {
+  it('it does not touch a row that is not there', async () => {
     settings.settings.openProjects = ['/a']
     settings.settings.activeProject = '/a'
 
-    await projects.removeProject('/нет')
+    await projects.removeProject('/nope')
 
     expect(settings.settings.openProjects).toEqual(['/a'])
     expect(settings.settings.activeProject).toBe('/a')
@@ -293,17 +294,17 @@ describe('removeProject', () => {
   })
 })
 
-describe('первый запуск', () => {
-  it('активный проект, которого нет в списке, попадает в него', () => {
-    settings.settings.activeProject = '/найденный'
+describe('the first run', () => {
+  it('an active project that is not in the list gets into it', () => {
+    settings.settings.activeProject = '/found'
     settings.settings.openProjects = []
 
     projects.adoptInitialProject()
 
-    expect(settings.settings.openProjects).toEqual(['/найденный'])
+    expect(settings.settings.openProjects).toEqual(['/found'])
   })
 
-  it('пустой активный список пустым и оставляет', () => {
+  it('an empty list with no active project is left empty', () => {
     settings.settings.activeProject = null
 
     projects.adoptInitialProject()
@@ -313,7 +314,7 @@ describe('первый запуск', () => {
 })
 
 describe('bd init', () => {
-  it('успех обновляет доску и проверку каталогов', async () => {
+  it('success refreshes the board and the folder probe', async () => {
     ipc.on('tracker_init', snapshot({ generation: 3 }))
     settings.settings.openProjects = ['/a']
 
@@ -323,8 +324,8 @@ describe('bd init', () => {
     expect(ipc.calls('tracker_probe').length).toBeGreaterThan(0)
   })
 
-  it('отказ проглочен: сообщение человеку уже показал тост', async () => {
-    ipc.fail('tracker_init', new Error('bd init не отработал'))
+  it('the refusal is swallowed: the toast has already shown the message', async () => {
+    ipc.fail('tracker_init', new Error('bd init did not work out'))
 
     await expect(projects.initActive()).resolves.toBeUndefined()
   })

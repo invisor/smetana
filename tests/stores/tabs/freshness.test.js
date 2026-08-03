@@ -15,21 +15,21 @@ beforeEach(async () => {
   files = loaded.stores.files
   settings = loaded.stores.settings
   tabs = loaded.stores.tabs
-  files.setRoot('/проект')
-  ipc.on('files_read', (args) => fileText({ path: args.path, text: `текст ${args.path}` }))
+  files.setRoot('/project')
+  ipc.on('files_read', (args) => fileText({ path: args.path, text: `text of ${args.path}` }))
 })
 
 describe('markStale', () => {
-  it('поднимает полоску', () => {
-    tabs.buffers.set('a.txt', buffer({ text: 'правка' }))
+  it('raises the strip', () => {
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
 
     tabs.markStale('a.txt')
 
     expect(tabs.buffers.get('a.txt').stale).toBe(true)
   })
 
-  it('снимает прежний отказ чтения: файл вернулся, запирать поле навсегда нельзя', () => {
-    tabs.buffers.set('a.txt', buffer({ text: 'правка', error: { kind: 'notFound' } }))
+  it('clears a previous read refusal: the file is back, locking the field forever is not on', () => {
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit', error: { kind: 'notFound' } }))
 
     tabs.markStale('a.txt')
 
@@ -37,7 +37,7 @@ describe('markStale', () => {
     expect(tabs.buffers.get('a.txt').stale).toBe(true)
   })
 
-  it('загружающийся буфер не трогает', () => {
+  it('does not touch a loading buffer', () => {
     tabs.buffers.set('a.txt', buffer({ loading: true }))
 
     tabs.markStale('a.txt')
@@ -47,7 +47,7 @@ describe('markStale', () => {
 })
 
 describe('markGone', () => {
-  it('вешает отказ чтения — вместе с ним приходят и замок, и объяснение', () => {
+  it('attaches a read refusal — the lock and the explanation come with it', () => {
     tabs.buffers.set('a.txt', buffer())
 
     tabs.markGone('a.txt')
@@ -56,7 +56,7 @@ describe('markGone', () => {
     expect(tabs.buffers.get('a.txt').stale).toBe(false)
   })
 
-  it('не перезаписывает уже стоящий отказ', () => {
+  it('does not overwrite a refusal that is already set', () => {
     tabs.buffers.set('a.txt', buffer({ error: { kind: 'binary' } }))
 
     tabs.markGone('a.txt')
@@ -64,7 +64,7 @@ describe('markGone', () => {
     expect(tabs.buffers.get('a.txt').error).toEqual({ kind: 'binary' })
   })
 
-  it('загружающийся буфер не трогает', () => {
+  it('does not touch a loading buffer', () => {
     tabs.buffers.set('a.txt', buffer({ loading: true }))
 
     tabs.markGone('a.txt')
@@ -73,62 +73,65 @@ describe('markGone', () => {
   })
 })
 
-describe('перечитывание', () => {
-  it('reloadTab отдаёт победу диску: правки уходят', async () => {
-    tabs.buffers.set('a.txt', buffer({ text: 'моя правка', original: 'исходный', stale: true }))
+describe('re-reading', () => {
+  it('reloadTab gives the win to the disk: the edits go', async () => {
+    tabs.buffers.set('a.txt', buffer({ text: 'my edit', original: 'original', stale: true }))
 
     await tabs.reloadTab('a.txt')
 
     const current = tabs.buffers.get('a.txt')
-    expect(current.text).toBe('текст a.txt')
-    expect(current.original).toBe('текст a.txt')
+    expect(current.text).toBe('text of a.txt')
+    expect(current.original).toBe('text of a.txt')
     expect(current.stale).toBe(false)
     expect(tabs.isDirty('a.txt')).toBe(false)
   })
 
-  it('reloadTab вкладки, которой нет, на диск не ходит', async () => {
-    await tabs.reloadTab('нет-такой.txt')
+  it('reloadTab of a tab that is not there does not go to the disk', async () => {
+    await tabs.reloadTab('no-such-file.txt')
 
     expect(ipc.calls('files_read')).toHaveLength(0)
   })
 
-  /* ДЕФЕКТ, а не задуманное поведение. Комментарий в load() (tabs.js:96-106)
-     обещает, что перечитывание без force не сотрёт набранное, — но сам load()
-     сбрасывает буфер в пустой до await readFile, а setText не пускает правки,
-     пока стоит loading. Поэтому на строке 103 всегда сравниваются две пустые
-     строки, и на прямых последовательных путях (restoreTabs → load без force,
-     ни с чем не гоняясь) ветка защиты не срабатывает; то же и в ветке отказа
-     (строка 123). Это не значит, что ветка мертва совсем: она достижима через
-     гонку с keepMine, который захватывает буфер до своего await и переписывает
-     его захваченным — см. тест ниже. Тест здесь закрепляет то, что код делает
-     на прямом пути, чтобы починка не прошла незамеченной. */
-  it('перечитывание без force стирает набранное: на прямых путях ветка защиты не срабатывает', async () => {
-    tabs.buffers.set('a.txt', buffer({ text: 'моя правка', original: 'исходный', mtime: 1 }))
+  /* A DEFECT, not the intended behaviour. The comment in load() (tabs.js:96-106)
+     promises that a re-read without force will not erase what was typed — but
+     load() itself resets the buffer to empty before await readFile, and setText
+     lets no edits in while loading is set. So line 103 always compares two empty
+     strings, and on straight sequential paths (restoreTabs → load without force,
+     racing nothing) the protective branch never fires; the same goes for the
+     refusal branch (line 123). That does not mean the branch is entirely dead:
+     it is reachable through the race with keepMine, which captures the buffer
+     before its await and writes the captured one back — see the test below. The
+     test here pins what the code does on the straight path, so a fix does not
+     pass unnoticed. */
+  it('a re-read without force erases what was typed: the protective branch never fires on straight paths', async () => {
+    tabs.buffers.set('a.txt', buffer({ text: 'my edit', original: 'original', mtime: 1 }))
     state().openTabs = ['a.txt']
 
     await tabs.restoreTabs()
 
     const current = tabs.buffers.get('a.txt')
-    expect(current.text).toBe('текст a.txt')
-    expect(current.original).toBe('текст a.txt')
+    expect(current.text).toBe('text of a.txt')
+    expect(current.original).toBe('text of a.txt')
     expect(current.mtime).toBe(10)
     expect(tabs.isDirty('a.txt')).toBe(false)
   })
 
-  /* ДЕФЕКТ. keepMine захватывает буфер в переменную ДО своего await readFile
-     и после возврата пишет обратно этот захваченный буфер (только mtime и
-     stale берутся из ответа). Если между захватом и возвратом load() успел
-     сбросить и перечитать буфер (диск победил), keepMine затирает свежее
-     содержимое диска захваченным старым — воскрешает уже вытесненный текст.
-     При смене проекта (projects.js moveTo: resetTabs() и следом restoreTabs())
-     это может протащить грязный буфер одного проекта в одноимённый файл
-     другого (README.md, package.json — обычное совпадение путей).
+  /* A DEFECT. keepMine captures the buffer into a variable BEFORE its await
+     readFile and writes that captured buffer back afterwards (only mtime and
+     stale are taken from the answer). If between the capture and the return
+     load() managed to reset and re-read the buffer (the disk won), keepMine
+     clobbers the fresh disk content with the captured old one — resurrecting
+     text that had already been displaced. On a project switch (projects.js
+     moveTo: resetTabs() followed by restoreTabs()) this can drag one project's
+     dirty buffer into another project's identically named file (README.md,
+     package.json — an ordinary path collision).
 
-     Гонка собрана детерминированно: первый вызов files_read (из keepMine)
-     держится на управляемом промисе и не отпускается, пока не завершится
-     второй вызов (из reloadTab, эмулирующего load() без гонки) — порядок
-     завершения задаётся явно, а не порядком разрешения промисов. */
-  it('гонка keepMine с параллельным load воскрешает текст, уже вытесненный диском', async () => {
+     The race is assembled deterministically: the first files_read call (from
+     keepMine) is held on a controlled promise and is not released until the
+     second call (from reloadTab, standing in for load() with no race) has
+     finished — the completion order is set explicitly, not by the order in
+     which promises resolve. */
+  it('a keepMine race with a parallel load resurrects text the disk had already displaced', async () => {
     let releaseKeepMineRead
     const keepMineRead = new Promise((resolve) => {
       releaseKeepMineRead = resolve
@@ -137,84 +140,84 @@ describe('перечитывание', () => {
     ipc.on('files_read', (args) => {
       calls += 1
       if (calls === 1) {
-        /* Ответ на чтение, запущенное keepMine: отпускается вручную ниже,
-           после того как reloadTab уже победил диском. */
-        return keepMineRead.then(() => fileText({ path: args.path, text: `текст ${args.path}`, mtime: 20 }))
+        /* The answer to the read started by keepMine: released by hand below,
+           after reloadTab has already won with the disk. */
+        return keepMineRead.then(() => fileText({ path: args.path, text: `text of ${args.path}`, mtime: 20 }))
       }
-      /* Ответ на чтение, запущенное reloadTab: отдаётся сразу. */
-      return fileText({ path: args.path, text: `текст ${args.path}`, mtime: 10 })
+      /* The answer to the read started by reloadTab: returned at once. */
+      return fileText({ path: args.path, text: `text of ${args.path}`, mtime: 10 })
     })
-    tabs.buffers.set('a.txt', buffer({ text: 'моя правка', original: 'исходный', stale: true, mtime: 1 }))
+    tabs.buffers.set('a.txt', buffer({ text: 'my edit', original: 'original', stale: true, mtime: 1 }))
 
     const keepMinePromise = tabs.keepMine('a.txt')
     await tabs.reloadTab('a.txt')
-    /* Диск победил: буфер уже чист и несёт содержимое с диска. */
+    /* The disk won: the buffer is already clean and carries the disk's content. */
     expect(tabs.isDirty('a.txt')).toBe(false)
 
     releaseKeepMineRead()
     await keepMinePromise
 
     const current = tabs.buffers.get('a.txt')
-    expect(current.text).toBe('моя правка')
-    expect(current.original).toBe('исходный')
+    expect(current.text).toBe('my edit')
+    expect(current.original).toBe('original')
     expect(current.mtime).toBe(20)
     expect(tabs.isDirty('a.txt')).toBe(true)
   })
 })
 
 describe('keepMine', () => {
-  it('гасит полоску и догоняет метку, иначе следующий Cmd+S снова отказал бы', async () => {
-    tabs.buffers.set('a.txt', buffer({ text: 'моя правка', original: 'исходный', stale: true, mtime: 1 }))
+  it('clears the strip and catches the mtime up, otherwise the next Cmd+S would refuse again', async () => {
+    tabs.buffers.set('a.txt', buffer({ text: 'my edit', original: 'original', stale: true, mtime: 1 }))
 
     await tabs.keepMine('a.txt')
 
     const current = tabs.buffers.get('a.txt')
     expect(current.stale).toBe(false)
     expect(current.mtime).toBe(10)
-    expect(current.text).toBe('моя правка')
+    expect(current.text).toBe('my edit')
   })
 
-  it('отказ чтения при этом прикладывается к буферу, а текст остаётся', async () => {
-    ipc.fail('files_read', { kind: 'notFound', message: 'нет файла' })
-    tabs.buffers.set('a.txt', buffer({ text: 'моя правка', stale: true }))
+  it('a read refusal is attached to the buffer while the text stays', async () => {
+    ipc.fail('files_read', { kind: 'notFound', message: 'no such file' })
+    tabs.buffers.set('a.txt', buffer({ text: 'my edit', stale: true }))
 
     await tabs.keepMine('a.txt')
 
-    expect(tabs.buffers.get('a.txt').error).toEqual({ kind: 'notFound', message: 'нет файла' })
-    expect(tabs.buffers.get('a.txt').text).toBe('моя правка')
+    expect(tabs.buffers.get('a.txt').error).toEqual({ kind: 'notFound', message: 'no such file' })
+    expect(tabs.buffers.get('a.txt').text).toBe('my edit')
   })
 })
 
 describe('restoreTabs', () => {
-  it('читает всё, что было открыто', async () => {
+  it('reads everything that was open', async () => {
     state().openTabs = ['a.txt', 'b.txt']
 
     await tabs.restoreTabs()
 
-    expect(tabs.buffers.get('a.txt').text).toBe('текст a.txt')
-    expect(tabs.buffers.get('b.txt').text).toBe('текст b.txt')
+    expect(tabs.buffers.get('a.txt').text).toBe('text of a.txt')
+    expect(tabs.buffers.get('b.txt').text).toBe('text of b.txt')
   })
 
-  it('исчезнувший путь молча выпадает из списка', async () => {
+  it('a vanished path silently falls out of the list', async () => {
     ipc.on('files_read', (args) => {
-      if (args.path === 'нет.txt') throw { kind: 'notFound', message: 'нет' }
+      if (args.path === 'gone.txt') throw { kind: 'notFound', message: 'gone' }
       return fileText({ path: args.path })
     })
-    state().openTabs = ['a.txt', 'нет.txt']
-    state().activeTab = 'нет.txt'
-    state().previewTab = 'нет.txt'
+    state().openTabs = ['a.txt', 'gone.txt']
+    state().activeTab = 'gone.txt'
+    state().previewTab = 'gone.txt'
 
     await tabs.restoreTabs()
 
     expect(state().openTabs).toEqual(['a.txt'])
     expect(state().activeTab).toBe('kanban')
     expect(state().previewTab).toBe(null)
-    expect(tabs.buffers.has('нет.txt')).toBe(false)
+    expect(tabs.buffers.has('gone.txt')).toBe(false)
   })
 
-  it('нечитаемый по другой причине путь остаётся: пропадает только исчезнувший', async () => {
+  it('a path unreadable for another reason stays: only the vanished one disappears', async () => {
     ipc.on('files_read', (args) => {
-      if (args.path === 'big.log') throw { kind: 'tooLarge', message: 'велик' }
+      if (args.path === 'big.log') throw { kind: 'tooLarge', message: 'too large' }
       return fileText({ path: args.path })
     })
     state().openTabs = ['big.log']
@@ -225,10 +228,10 @@ describe('restoreTabs', () => {
   })
 })
 
-describe('отказ от несохранённого', () => {
-  it('discardTabs трогает только перечисленное', () => {
-    tabs.buffers.set('a.txt', buffer({ text: 'правка a', original: 'исходный' }))
-    tabs.buffers.set('b.txt', buffer({ text: 'правка b', original: 'исходный' }))
+describe('discarding unsaved work', () => {
+  it('discardTabs touches only what was listed', () => {
+    tabs.buffers.set('a.txt', buffer({ text: 'edit a', original: 'original' }))
+    tabs.buffers.set('b.txt', buffer({ text: 'edit b', original: 'original' }))
 
     tabs.discardTabs(['a.txt'])
 
@@ -236,7 +239,7 @@ describe('отказ от несохранённого', () => {
     expect(tabs.isDirty('b.txt')).toBe(true)
   })
 
-  it('resetTabs чистит буферы, но список вкладок не трогает', () => {
+  it('resetTabs clears the buffers but does not touch the tab list', () => {
     tabs.buffers.set('a.txt', buffer())
     state().openTabs = ['a.txt']
 
@@ -248,7 +251,7 @@ describe('отказ от несохранённого', () => {
 })
 
 describe('confirmUnsaved', () => {
-  it('без грязных вкладок разрешает не спрашивая', async () => {
+  it('with no dirty tabs it allows without asking', async () => {
     const asked = vi.fn(() => false)
     tabs.onUnsaved(asked)
 
@@ -256,16 +259,16 @@ describe('confirmUnsaved', () => {
     expect(asked).not.toHaveBeenCalled()
   })
 
-  it('без зарегистрированного вида разрешает: запереть приложение хуже', async () => {
+  it('with no registered view it allows: locking up the app is worse', async () => {
     state().openTabs = ['a.txt']
-    tabs.buffers.set('a.txt', buffer({ text: 'правка' }))
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
 
     await expect(tabs.confirmUnsaved()).resolves.toBe(true)
   })
 
-  it('передаёт виду список грязных и возвращает его ответ', async () => {
+  it('passes the list of dirty tabs to the view and returns its answer', async () => {
     state().openTabs = ['a.txt']
-    tabs.buffers.set('a.txt', buffer({ text: 'правка' }))
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit' }))
     const asked = vi.fn(() => false)
     tabs.onUnsaved(asked)
 
@@ -273,10 +276,10 @@ describe('confirmUnsaved', () => {
     expect(asked).toHaveBeenCalledWith(['a.txt'])
   })
 
-  it('спрошенный про одну вкладку трогает только её', async () => {
+  it('asked about one tab, it touches only that one', async () => {
     state().openTabs = ['a.txt', 'b.txt']
-    tabs.buffers.set('a.txt', buffer({ text: 'правка a' }))
-    tabs.buffers.set('b.txt', buffer({ text: 'правка b' }))
+    tabs.buffers.set('a.txt', buffer({ text: 'edit a' }))
+    tabs.buffers.set('b.txt', buffer({ text: 'edit b' }))
     const asked = vi.fn(() => true)
     tabs.onUnsaved(asked)
 

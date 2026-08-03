@@ -13,10 +13,16 @@ import Tooltip from '../core/Tooltip.vue'
 
 const props = defineProps({
   projects: { type: Array, default: () => [] },
-  activePath: { type: String, default: null }
+  activePath: { type: String, default: null },
+  /* Starting an agent is an action on a project, so it is offered on the
+     project's own row — and only on the active one: a session belongs to the
+     directory the window is pointed at, and the list below shows that
+     project's sessions only. Off by default, since the row means the same
+     thing whether or not anything can be started from it. */
+  canAddAgent: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'remove'])
+const emit = defineEmits(['select', 'remove', 'add-agent'])
 
 /* Hover has to be per row, and useInteractive tracks one control — so the
    list keeps the hovered path itself and asks useInteractive for nothing.
@@ -90,6 +96,16 @@ const empty = computed(() => props.projects.length === 0)
         <Tooltip v-if="!p.tracked" label="No bd tracker here" side="right">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
         </Tooltip>
+        <!-- Before the remove button, not after it: removal keeps the row's
+             last position wherever it appears, so a click aimed at it never
+             lands on something that moved in. -->
+        <IconButton
+          v-if="canAddAgent && p.path === activePath"
+          icon="plus"
+          label="New agent"
+          size="sm"
+          @click.stop="emit('add-agent', p.path)"
+        />
         <IconButton
           icon="x"
           label="Remove from list"

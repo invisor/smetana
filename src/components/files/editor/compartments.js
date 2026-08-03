@@ -1,16 +1,16 @@
 import { Compartment } from '@codemirror/state'
 
-/* Отсеки — это ключи, а не данные: значение каждого живёт в EditorState.
-   Поэтому они одни на все экземпляры редактора. Будь они внутри компонента,
-   состояние, сохранённое прошлым экземпляром, несло бы чужие ключи, и
-   reconfigure по ним молча не сработал бы. */
+/* Compartments are keys, not data: each one's value lives in the EditorState.
+   That is why they are shared by every editor instance. Were they inside the
+   component, a state saved by a previous instance would carry foreign keys, and
+   a reconfigure against them would silently do nothing. */
 export const readOnlyState = new Compartment()
 export const languageState = new Compartment()
 
-/* Слушатель обновлений замыкается на props и emit своего экземпляра, а
-   состояние переживает экземпляр: после возврата с доски компонент новый,
-   а состояние — прежнее. Поэтому слушатель тоже отсек: при усыновлении
-   чужого состояния его переставляют на живой экземпляр. Иначе правки
-   уходили бы в emit уничтоженного компонента — молча, потому что для
-   CodeMirror это по-прежнему исправное расширение. */
+/* The update listener closes over its own instance's props and emit, while
+   the state outlives the instance: after a return from the board the component
+   is new and the state is the old one. So the listener is a compartment too:
+   adopting somebody else's state re-points it at the live instance. Otherwise
+   edits would go into a destroyed component's emit — silently, because as far
+   as CodeMirror is concerned it is still a working extension. */
 export const updateListenerState = new Compartment()

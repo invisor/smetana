@@ -8,10 +8,12 @@ import IconButton from '../core/IconButton.vue'
    file    - a normal opened file tab, closable, may be dirty or read-only.
    preview - single-click temporary tab, replaced by the next preview.
              Italic, as in VS Code: the mechanic is VS Code's, and so is its
-             signal — muscle memory is the point. Отход от дизайн-системы,
-             которая выбирала здесь пунктирную линию; долг записан в спеке
+             signal — muscle memory is the point. A departure from the design
+             system, which chose a dashed line here; the debt is recorded in the
+             spec
              docs/superpowers/specs/2026-08-01-file-tree-and-editor-design.md.
-             Двойной клик по вкладке снимает временность — отсюда `promote`. */
+             A double click on a tab drops the temporary flag — hence
+             `promote`. */
 const props = defineProps({
   kind: { type: String, default: 'file' },
   label: { type: String, required: true },
@@ -19,10 +21,10 @@ const props = defineProps({
   active: { type: Boolean, default: false },
   dirty: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
-  /* Почему вкладка заперта, словами. Замок один, а причин у него несколько —
-     файл не открыть как текст, файл держит агент, — и подсказка обязана
-     называть ту, что случилась. Умолчание не называет ни одной: лучше сказать
-     мало, чем назвать не ту. */
+  /* Why the tab is locked, in words. There is one lock but several reasons for
+     it — the file cannot be opened as text, an agent holds the file — and the
+     hint has to name the one that happened. The default names none of them:
+     better to say little than to name the wrong one. */
   readOnlyHint: { type: String, default: 'Read-only' }
 })
 
@@ -77,9 +79,10 @@ const onClose = (e) => {
   >
     <Icon v-if="icon" :name="icon" :size="13" :style="{ color: readOnly ? 'var(--text-muted)' : undefined }" />
     <span :style="labelStyle">{{ label }}</span>
-    <!-- Подсказка висит на обёртке, а не на Icon: `title` у Icon становится
-         aria-label и до курсора не доходит — SVG остаётся без нативного
-         тултипа. Обёртка даёт его мышке, Icon оставляет причину читалке. -->
+    <!-- The hint hangs on the wrapper rather than on Icon: Icon's `title`
+         becomes an aria-label and never reaches the pointer — the SVG is left
+         with no native tooltip. The wrapper gives it to the mouse, Icon leaves
+         the reason to the screen reader. -->
     <span v-if="readOnly" :title="readOnlyHint" :style="{ display: 'flex', flex: '0 0 auto' }">
       <Icon name="lock" :size="11" :title="readOnlyHint" :style="{ color: 'var(--status-blocked-fg)' }" />
     </span>

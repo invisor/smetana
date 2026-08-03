@@ -8,6 +8,7 @@
 import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
+import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
@@ -56,7 +57,9 @@ import {
   removeProject,
   switchTo
 } from '../stores/projects.js'
+import { gitState, loadHead } from '../stores/git.js'
 import { inspector, logLines, scope } from './desktopAppData.js'
+import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
   basenameOf,
   fileErrorText,
@@ -104,15 +107,85 @@ watchEffect(() => {
   el.setAttribute('data-density', props.density)
 })
 
-/* Всё, что переживает перезапуск, живёт в настройках: панели — в layout,
-   выбор внутри проекта — в project. Локальные ref остались только у того,
-   что относится к текущему моменту: лог, модалка, черновик заголовка. */
+/* Everything that survives a restart lives in settings: the panels in layout,
+   the selection inside a project in project. Local refs are left only for what
+   belongs to the current moment: the log, the modal, the title draft. */
 const layout = settings.layout
 const project = settings.project
 
-/* FileTree ждёт карту «путь → открыт», а на диске лежит список раскрытых
-   каталогов: в файле, который читают глазами, список честнее карты из
-   одних true. Set нужен дереву, чтобы знать, куда спускаться. */
+/* ---- panel widths ------------------------------------------------------ */
+/* `panelWidths.js` holds the rules and the reasons; what belongs here is the
+   part that needs a window and a pointer. Two things:
+
+   The viewport width has to be reactive, or the clamp would only ever be
+   recomputed by a drag and a narrowed window would leave a panel sticking out
+   over the board until someone touched a separator.
+
+   And a drag remembers the width it began at. Every delta a Resizer emits is
+   measured from its own start, so clamping against the previous frame instead
+   would let the panel drift away from the pointer — each clamped move would
+   quietly become the new origin. */
+const viewport = ref(window.innerWidth)
+const onViewport = () => {
+  viewport.value = window.innerWidth
+}
+onMounted(() => window.addEventListener('resize', onViewport))
+onUnmounted(() => window.removeEventListener('resize', onViewport))
+
+const dragBase = { left: 0, right: 0 }
+
+/* The neighbour's *stored* width, not its drawn one: the drawn one is itself a
+   clamp against this panel, and the two computeds would chase each other. In a
+   window narrow enough for the difference to show, the stored number is the
+   larger of the two, so the error is on the side of offering less room — which
+   is the harmless direction. */
+const geometry = (side) => ({
+  side,
+  other: side === 'left' ? layout.rightWidth : layout.leftWidth,
+  otherCollapsed: side === 'left' ? layout.rightCollapsed : layout.leftCollapsed,
+  viewport: viewport.value
+})
+
+const leftWidth = computed(() => clampWidth(layout.leftWidth, geometry('left')))
+const rightWidth = computed(() => clampWidth(layout.rightWidth, geometry('right')))
+
+const startDrag = (side) => {
+  dragBase[side] = side === 'left' ? layout.leftWidth : layout.rightWidth
+}
+
+const onDrag = (side, delta) => {
+  const next = resolveDrag(side, {
+    ...geometry(side),
+    base: dragBase[side],
+    delta,
+    collapsed: side === 'left' ? layout.leftCollapsed : layout.rightCollapsed
+  })
+  if (side === 'left') {
+    layout.leftWidth = next.width
+    layout.leftCollapsed = next.collapsed
+  } else {
+    layout.rightWidth = next.width
+    layout.rightCollapsed = next.collapsed
+  }
+}
+
+/* Double click on a separator is the way back to the shipped proportions —
+   including out of the rail, since a panel folded by a drag is reopened by the
+   same control that folded it. */
+const resetWidth = (side) => {
+  if (side === 'left') {
+    layout.leftWidth = LEFT_DEFAULT
+    layout.leftCollapsed = false
+  } else {
+    layout.rightWidth = RIGHT_DEFAULT
+    layout.rightCollapsed = false
+  }
+}
+
+/* FileTree expects a "path → expanded" map, while what lies on disk is a list
+   of expanded directories: in a file people read with their eyes, a list is
+   more honest than a map of nothing but true. The tree needs the Set to know
+   where to descend. */
 const expandedSet = computed(() => new Set(project.expanded))
 const expanded = computed(() => Object.fromEntries(project.expanded.map((path) => [path, true])))
 const tree = computed(() => treeNodes(expandedSet.value))
@@ -159,19 +232,20 @@ function selectAgent(id) {
   project.activeTab = 'terminal'
 }
 
-/* Дерево и вкладки открываются вместе с проектом. Активный проект к этому
-   моменту уже прочитан настройками — App.vue ждёт loadSettings до того, как
-   вообще нарисует этот вид.
+/* The tree and the tabs open together with the project. By this point settings
+   have already read the active project — App.vue awaits loadSettings before it
+   renders this view at all.
 
-   Переезд на другой проект делает ровно то же самое (moveTo в projects.js), и
-   он может начаться, пока этот проход ещё в awaitʼах — щелчком по строке
-   списка. Тогда доделывать нечего: сверяемся с активным проектом после каждого
-   ожидания и уходим, если он сменился. Побеждает переезд, а не тот, кто начал
-   раньше. */
+   Moving to another project does exactly the same thing (moveTo in
+   projects.js), and it can start while this pass is still in its awaits — with
+   a click on a row of the list. There is then nothing left to finish: we check
+   against the active project after every await and leave if it changed. The
+   move wins, not whoever started earlier. */
 onMounted(async () => {
   const opened = activePath.value
   if (!opened) return
   setRoot(opened)
+  loadHead(opened)
   await loadSessions(opened)
   await listDir('')
   if (activePath.value !== opened) return
@@ -179,27 +253,34 @@ onMounted(async () => {
   if (activePath.value !== opened) return
   await restoreTabs()
 })
-/* Приложение существует ради сценария «вернулся через два часа и смотрю, что
-   изменилось», — значит, момент возврата фокуса и есть тот момент, когда надо
-   догнать диск. Вотчера у файлов нет намеренно: вторая вотчер-подсистема в
-   Rust со своим жизненным циклом и отчётом об ошибках дороже, чем этот проход.
+/* The app exists for the "came back two hours later and I'm looking at what
+   changed" scenario — which means the moment focus returns is exactly the
+   moment to catch up with the disk. Files deliberately have no watcher: a
+   second watcher subsystem in Rust, with its own lifecycle and error reporting,
+   costs more than this sweep.
 
-   Чистая вкладка перечитывается молча: терять нечего, а показывать устаревший
-   текст часами — хуже. Грязная получает полоску и ждёт решения.
+   A clean tab is re-read silently: there is nothing to lose, and showing stale
+   text for hours is worse. A dirty one gets a strip and waits for a decision.
 
-   Вкладка с отказом чтения тоже проходит через этот проход, а не пропускается:
-   из `error` нет другого выхода — поле заперто, запись отказана, а кнопка
-   «Reload» живёт под полоской, которой у этой вкладки нет. Файл, который
-   удалили и тут же вернули (обычное дело рядом с агентом), иначе остался бы
-   мёртвым до перезапуска. */
+   A tab with a read refusal goes through this sweep too rather than being
+   skipped: there is no other way out of `error` — the field is locked, writing
+   is refused, and the "Reload" button lives under a strip this tab does not
+   have. A file that was deleted and put straight back (an ordinary thing next
+   to an agent) would otherwise stay dead until a restart. */
 const catchUp = async () => {
   if (!activePath.value) return
   refreshDirs(['', ...project.expanded])
+  /* Anyone can change the project's branch — an agent in the next tab, a
+     person in a terminal — and we learn about it in the same place as about
+     files: when focus returns. We do not await it: the bar updates on its own,
+     and the pass over the tabs is not tied to it. */
+  loadHead(activePath.value)
 
   const open = [...project.openTabs]
   if (!open.length) return
-  /* Пока метки ехали, проект могли переключить: буферы уже чужие, и трогать их
-     нельзя. Тот же приём, что в listDir. */
+  /* While the timestamps were travelling, the project may have been switched:
+     the buffers belong to somebody else now and must not be touched. The same
+     trick as in listDir. */
   const root = filesState.root
   const stats = await statFiles(open)
   if (filesState.root !== root) return
@@ -208,17 +289,18 @@ const catchUp = async () => {
     const buffer = buffers.get(stat.path)
     if (!buffer || buffer.loading) continue
     if (stat.mtime === null) {
-      /* Файла нет. Под грязной вкладкой это ещё не приговор — набранное цело,
-         и решение за человеком; под чистой вкладка молча показывала бы
-         содержимое того, чего нет. */
+      /* The file is gone. Under a dirty tab that is not yet a verdict — what
+         was typed is intact and the decision is the person's; under a clean one
+         the tab would silently show the contents of something that does not
+         exist. */
       if (isDirty(stat.path)) markStale(stat.path)
       else markGone(stat.path)
       continue
     }
-    /* Файл на месте. Буфер с отказом чтения перечитывается в любом случае:
-       его метка осталась нулевой, и сравнивать её не с чем — но набранный до
-       отказа текст перезаписывать без спроса нельзя, поэтому грязная вкладка
-       получает полоску, а не диск. */
+    /* The file is there. A buffer with a read refusal is re-read in any case:
+       its mtime stayed at zero and there is nothing to compare it with — but
+       text typed before the refusal must not be overwritten without asking, so
+       a dirty tab gets the strip rather than the disk. */
     if (!buffer.error && stat.mtime === buffer.mtime) continue
     if (isDirty(stat.path)) markStale(stat.path)
     else reloadTab(stat.path)
@@ -300,7 +382,7 @@ const submitNewTask = async (issue) => {
     newTaskOpen.value = false
     project.selectedTask = created.id
   } catch {
-    // сообщение уже лежит в trackerState.lastError
+    // the message already sits in trackerState.lastError
   } finally {
     creating.value = false
   }
@@ -329,17 +411,18 @@ watch(
   }
 )
 
-/* Пока приложение было закрыто, задачу могли закрыть и убрать из трекера.
-   Восстанавливать выбор, которого больше нет, нельзя: инспектор показал бы
-   пустоту, а файл продолжал бы хранить мусор. Ждём готовности трекера —
-   до неё "не нашлось" ничего не значит.
+/* While the app was closed, the issue may have been closed and removed from
+   the tracker. Restoring a selection that no longer exists is not on: the
+   inspector would show emptiness while the file kept holding rubbish. We wait
+   for the tracker to be ready — before that, "not found" means nothing.
 
-   Одной готовности мало: ready означает лишь "снимок пришёл", а снимок
-   приходит и пустым — когда bd не нашлось, когда в каталоге нет .beads,
-   когда первая синхронизация упала. В этих случаях "не нашлось" говорит не
-   про задачу, а про трекер, и стирать выбор нельзя: дебаунс тут же унёс бы
-   null на диск, и один запуск со сломанным bd — из Finder, например —
-   потерял бы запомненную задачу навсегда. Поэтому спрашиваем и здоровье. */
+   Readiness alone is not enough: ready only means "a snapshot arrived", and a
+   snapshot arrives empty too — when bd was not found, when the folder has no
+   .beads, when the first sync failed. In those cases "not found" speaks about
+   the tracker rather than the issue, and the selection must not be wiped: the
+   debounce would carry a null to disk at once, and one launch with a broken bd
+   — from Finder, say — would lose the remembered issue forever. So we ask about
+   health too. */
 watch(
   () => [trackerState.ready, trackerState.health.state, trackerState.issues.size],
   () => {
@@ -435,21 +518,22 @@ const fileTabActive = computed(
   () => project.activeTab !== 'terminal' && project.activeTab !== 'kanban'
 )
 
-/* Cmd+S ловит окно, а не поле редактора. Клик по вкладке, по строке дерева или
-   по любой кнопке уводит фокус из поля, и обработчик на самом поле молча
-   переставал бы работать — а человек в этот момент как раз и тянется к Cmd+S.
-   Знает, есть ли что сохранять, вид, а не поле: сохранять есть что только на
-   вкладке файла.
+/* Cmd+S is caught by the window, not by the editor field. A click on a tab, on
+   a tree row or on any button takes focus out of the field, and a handler on
+   the field itself would silently stop working — precisely when a person
+   reaches for Cmd+S. The view knows whether there is anything to save, not the
+   field: there is something to save only on a file tab.
 
-   Клавиша сверяется по `event.code` — это физическая клавиша, и она не зависит
-   ни от раскладки, ни от Caps Lock. `event.key` при русской раскладке равен
-   'ы', при Caps Lock — 'S', и сравнение с 's' промахивалось бы в обоих
-   случаях: сохранения просто не было бы. */
+   The key is checked through `event.code` — that is the physical key, and it
+   depends neither on the keyboard layout nor on Caps Lock. `event.key` is a
+   non-Latin character under a non-Latin layout and 'S' under Caps Lock, and a
+   comparison with 's' would miss in both cases: there simply would be no
+   save. */
 const onSaveKey = (event) => {
   if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
   if (event.code !== 'KeyS') return
-  /* Отменяем в любом случае: «сохранить страницу» вебвью здесь не к месту
-     ни на доске, ни в чате. */
+  /* We cancel in any case: the webview's "save page" is out of place here,
+     both on the board and in the chat. */
   event.preventDefault()
   if (fileTabActive.value) saveTab(project.activeTab)
 }
@@ -457,11 +541,12 @@ const onSaveKey = (event) => {
 onMounted(() => window.addEventListener('keydown', onSaveKey))
 onUnmounted(() => window.removeEventListener('keydown', onSaveKey))
 
-/* Порядок ветвей — от «файла нет как текста» к «файл есть, но с ним что-то
-   случилось»: `error` запирает поле и объясняет пустоту, `stale` спрашивает
-   решение и потому единственный несёт кнопки, `saveError` только сообщает.
-   Тон у отказа записи тихий, как у остальных: правки на месте, поле осталось
-   редактируемым, следующий Cmd+S — обычная попытка, а не восстановление. */
+/* The order of the branches runs from "the file does not exist as text" to
+   "the file is there but something happened to it": `error` locks the field and
+   explains the emptiness, `stale` asks for a decision and is therefore the only
+   one carrying buttons, `saveError` merely reports. The tone of a write refusal
+   is as quiet as the others': the edits are intact, the field stayed editable,
+   and the next Cmd+S is an ordinary attempt rather than a recovery. */
 const editorNotice = computed(() => {
   const buffer = activeBuffer.value
   if (!buffer) return null
@@ -473,9 +558,9 @@ const editorNotice = computed(() => {
   return null
 })
 
-/* Раскрытие читает каталог, если его ещё не читали. Сворачивание не забывает
-   прочитанное: раскрыть обратно должно быть мгновенно, а свежесть приносит
-   проход по фокусу. */
+/* Expanding reads a directory if it has not been read yet. Collapsing does not
+   forget what was read: expanding it back has to be instant, and the focus
+   sweep brings the freshness. */
 const toggleDir = (path) => {
   const at = project.expanded.indexOf(path)
   if (at === -1) {
@@ -486,9 +571,10 @@ const toggleDir = (path) => {
   }
 }
 
-/* Строка «…N more» — не файл: за ней нет пути на диске, и открытая по ней
-   вкладка попала бы в настройки и осталась бы там навсегда. Отсеиваем её здесь,
-   в обоих обработчиках: дерево про заглушку не знает и знать не должно. */
+/* The "…N more" row is not a file: there is no path on disk behind it, and a
+   tab opened from it would reach settings and stay there forever. We filter it
+   out here, in both handlers: the tree knows nothing about the stub and should
+   not. */
 const onSelectFile = (path) => {
   if (isStubPath(path)) return
   project.selectedPath = path
@@ -500,27 +586,28 @@ const onOpenFile = (path) => {
   openFile(path, { permanent: true })
 }
 
-/* Один вопрос на все несохранённые вкладки. Он встаёт в трёх местах, и во
-   всех трёх ответ один и тот же, поэтому и модалка одна. */
+/* One question for all unsaved tabs. It comes up in three places and the
+   answer is the same in all three, hence a single modal. */
 const unsaved = ref(null)
 
 onMounted(() =>
   onUnsaved(
     (paths) =>
       new Promise((resolve) => {
-        /* Второй вопрос не имеет права осиротить первый: тот, кто ждёт ответа,
-           получит «нет» и свернёт свою работу штатно, сняв свои флаги. Иначе
-           `moving` в projects.js остался бы взведённым навсегда. */
+        /* A second question has no right to orphan the first: whoever is
+           awaiting an answer gets a "no" and winds their work down cleanly,
+           clearing their own flags. Otherwise `moving` in projects.js would stay
+           raised forever. */
         if (unsaved.value) unsaved.value.resolve(false)
         unsaved.value = { paths, resolve }
       })
   )
 )
 
-/* Ответ обязан разрешить обещание при любом исходе: модалки на экране уже нет,
-   а тот, кто ждёт, держит взведённым свой флаг — `closing` в настройках,
-   `moving` в проектах. Неразрешённое обещание здесь означает окно, которое не
-   закрыть, и список проектов, который не переключить. */
+/* The answer has to resolve the promise whatever the outcome: the modal is
+   already off the screen, while whoever is waiting keeps their flag raised —
+   `closing` in settings, `moving` in projects. An unresolved promise here means
+   a window that cannot be closed and a project list that cannot be switched. */
 const answerUnsaved = async (answer) => {
   const pending = unsaved.value
   unsaved.value = null
@@ -529,17 +616,18 @@ const answerUnsaved = async (answer) => {
     if (answer === 'cancel') return pending.resolve(false)
     if (answer === 'save') {
       await saveTabs(pending.paths)
-      /* Запись могла не удаться — тогда вкладки остались грязными, и пропускать
-         дальше нельзя: закрытие уничтожило бы текст, который просили сохранить.
-         Полоска с причиной отказа уже на экране, человек решит сам. */
+      /* The write may have failed — the tabs are then still dirty, and letting
+         things through is not on: closing would destroy the text we were asked
+         to save. The strip with the reason for the refusal is already on
+         screen; the person will decide. */
       if (pending.paths.some(isDirty)) return pending.resolve(false)
     } else {
       discardTabs(pending.paths)
     }
     pending.resolve(true)
   } catch (err) {
-    /* Повторный resolve безвреден: обещание разрешается один раз. */
-    console.error('[desktop] ответ о несохранённом не отработал:', err)
+    /* A repeat resolve is harmless: a promise resolves once. */
+    console.error('[desktop] the unsaved-work answer did not work out:', err)
     pending.resolve(false)
   }
 }
@@ -549,25 +637,25 @@ const onCloseTab = async (id) => {
   closeTab(id)
 }
 
-/* editor/states.js хранит состояние по пути, а путь вкладки — относительный
-   (tabs.js так и держит его, чтобы переезд проекта не превращал список в
-   мусор). Один и тот же README.md, package.json или CLAUDE.md может быть
-   открыт в двух разных проектах одновременно, и относительный путь у них
-   один — без корня это был бы один ключ на два разных файла: история правок
-   одного репозитория тихо перетекала бы в другой при простом Cmd+Z.
-   absoluteEditorPath склеивает корень с относительным путём, и это делает
-   ключи разных проектов различными без явной очистки при переезде — старый
-   корень просто перестаёт попадать в живой набор ниже.
+/* editor/states.js keys state by path, and a tab's path is relative (tabs.js
+   keeps it that way so a project move does not turn the list into rubbish). The
+   same README.md, package.json or CLAUDE.md can be open in two different
+   projects at once, and their relative path is identical — without the root
+   that would be one key for two different files: one repository's edit history
+   would quietly flow into another's on a plain Cmd+Z. absoluteEditorPath joins
+   the root to the relative path, and that makes different projects' keys
+   distinct without an explicit purge on a move — the old root simply stops
+   appearing in the live set below.
 
-   Корень берём из filesState.root, а не из activePath (stores/projects.js):
-   при переезде activeProject меняется в самом начале moveTo, до первого
-   await, а filesState.root — только после него, синхронно вместе с
-   project.activeTab и tabList (resetTabs/setRoot идут сразу за
-   applySection). Возьми мы activePath, между этими двумя моментами
-   случился бы лишний проход реактивности с новым корнем при ещё старом
-   activeTab — составной путь на мгновение указывал бы в никуда. Так оба
-   меняются в один приём, и watcher ниже, и watcher внутри FileEditor видят
-   их только вместе. */
+   The root comes from filesState.root, not from activePath
+   (stores/projects.js): during a move activeProject changes at the very start
+   of moveTo, before the first await, while filesState.root changes only after
+   it, synchronously together with project.activeTab and tabList
+   (resetTabs/setRoot come right after applySection). Had we taken activePath,
+   an extra reactivity pass would happen between those two moments with the new
+   root and the still-old activeTab — the composite path would point nowhere for
+   an instant. This way both change in one go, and the watcher below and the
+   watcher inside FileEditor see them only together. */
 const absoluteEditorPath = (relPath) => (filesState.root ? `${filesState.root}/${relPath}` : relPath)
 
 /* Editor state lives exactly as long as the tab. Cleanup follows the tab
@@ -600,11 +688,24 @@ watch(
    against in the files layer. */
 watch(activePath, (path) => {
   loadSessions(path)
+  loadHead(path)
 })
 
-/* Явное обновление дерева. Вотчера у файлов нет намеренно (см. спеку), и это
-   вторая половина ответа на вопрос «а что там сейчас на диске» — первая
-   срабатывает сама при возврате фокуса в окно. */
+/* What stands in the scope bar: the chosen project's name and its branch. A
+   detached HEAD is not a branch, and it is labelled as plainly as it looks: a
+   short hash with a word. A dash means "there is nothing to show" — a folder
+   without git, an unreadable .git, a HEAD in an unfamiliar shape: all of them
+   ordinary states rather than failures, and what explains them is the absence
+   of a branch, not an error message. */
+const branchLabel = computed(() => {
+  if (gitState.branch) return gitState.branch
+  if (gitState.detached) return `${gitState.detached} (detached)`
+  return '—'
+})
+
+/* An explicit refresh of the tree. Files deliberately have no watcher (see the
+   spec), and this is the second half of the answer to "what is on disk right
+   now" — the first half fires on its own when focus returns to the window. */
 const refreshTree = () => refreshDirs(['', ...project.expanded])
 const toggleStream = () => {
   streamState.value = streamState.value === 'streaming' ? 'paused' : 'streaming'
@@ -624,10 +725,12 @@ const rootStyle = {
 const bodyStyle = { flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch' }
 
 /* Either side folds away to a 32px rail so the board gets the width; the rail
-   keeps the panel's name and the button that brings it back. */
+   keeps the panel's name and the button that brings it back. Open, the width is
+   the clamped one — what was stored is what a person dragged to, not what fits
+   the window they are in now. */
 const leftStyle = computed(() => ({
   flex: '0 0 auto',
-  width: layout.leftCollapsed ? '32px' : '252px',
+  width: layout.leftCollapsed ? `${RAIL}px` : `${leftWidth.value}px`,
   display: 'flex',
   minWidth: 0
 }))
@@ -675,10 +778,10 @@ const sideTabStyle = (tab, last) => {
 }
 const centerStyle = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }
 
-/* Collapsed, the column is the same 32px rail AppShell reserves for one. */
+/* Collapsed, the column is the same rail AppShell reserves for one. */
 const rightStyle = computed(() => ({
   flex: '0 0 auto',
-  width: layout.rightCollapsed ? '32px' : '340px',
+  width: layout.rightCollapsed ? `${RAIL}px` : `${rightWidth.value}px`,
   display: 'flex',
   minWidth: 0
 }))
@@ -717,8 +820,8 @@ const questionBlock = {
   borderBottom: 'var(--border-w) solid var(--border-subtle)'
 }
 
-/* Столбец тостов в углу. Пустым он ничего не занимает и ничего не
-   перехватывает: без детей у него нулевой размер. */
+/* The column of toasts in the corner. When empty it takes up nothing and
+   intercepts nothing: with no children its size is zero. */
 const toastStackStyle = {
   position: 'fixed',
   right: 'var(--space-6)',
@@ -733,13 +836,16 @@ const toastStackStyle = {
 
 <template>
   <div :style="rootStyle">
-    <!-- Both names come from the open project: a bar that is half true reads
-         worse than one that is honestly fixture. Branch and the counters are
-         still fixture — nothing in the app reads git yet. -->
+    <!-- The project's name and the branch it is on, both live. `worktree` is
+         left empty on purpose: the component shows worktree-or-branch in that
+         slot and appends "@branch" only when both are set, so passing the
+         branch alone is what puts it there once, undecorated. The counters
+         are still fixture — nothing in the app reads git's status yet. -->
     <ScopeIndicator
       v-bind="scope"
       :repo="activePath ? basename(activePath) : '—'"
-      :worktree="activePath ? basename(activePath) : '—'"
+      worktree=""
+      :branch="branchLabel"
     />
 
     <div :style="bodyStyle">
@@ -753,8 +859,9 @@ const toastStackStyle = {
           @toggle="layout.leftCollapsed = !layout.leftCollapsed"
         >
           <template #actions>
-            <!-- Обновлять на вкладках Git и Agents нечего: там фикстура и
-                 пустое состояние, и кнопка обещала бы работу, которой нет. -->
+            <!-- There is nothing to refresh on the Git and Agents tabs: they
+                 hold a fixture and an empty state, and the button would promise
+                 work that does not exist. -->
             <IconButton
               v-if="project.sideTab === 'files'"
               icon="refresh-cw"
@@ -768,8 +875,10 @@ const toastStackStyle = {
             <ProjectList
               :projects="projectRows"
               :active-path="activePath"
+              :can-add-agent="project.sideTab === 'agents'"
               @select="switchTo"
               @remove="removeProject"
+              @add-agent="newAgent"
             />
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
@@ -792,9 +901,7 @@ const toastStackStyle = {
                 v-else
                 :rows="agentRows"
                 :active-id="terminalState.activeId"
-                :can-create="Boolean(activePath)"
                 @select="selectAgent"
-                @create="newAgent"
                 @remove="removeSession"
               />
             </div>
@@ -816,6 +923,14 @@ const toastStackStyle = {
           </div>
         </Panel>
       </div>
+
+      <Resizer
+        label="Resize projects panel"
+        :step="STEP"
+        @dragstart="startDrag('left')"
+        @drag="onDrag('left', $event)"
+        @reset="resetWidth('left')"
+      />
 
       <!-- centre: tabs over the board -->
       <div :style="centerStyle">
@@ -848,10 +963,11 @@ const toastStackStyle = {
             <Button variant="primary" size="sm" @click="answerUnsaved('save')">Save</Button>
           </template>
         </Modal>
-        <!-- Вкладка файла: доска и чат к ней отношения не имеют. -->
-        <!-- :key здесь больше нет: поле переживает смену вкладки намеренно.
-             Каретку, прокрутку и историю правок на вкладку хранит
-             editor/states.js, а FileEditor переключает состояние по :path. -->
+        <!-- A file tab: the board and the chat have nothing to do with it. -->
+        <!-- There is no :key here any more: the field survives a tab switch
+             deliberately. editor/states.js keeps the caret, the scroll position
+             and the edit history per tab, and FileEditor switches state by
+             :path. -->
         <FileEditor
           v-if="fileTabActive"
           :path="absoluteEditorPath(project.activeTab)"
@@ -890,6 +1006,14 @@ const toastStackStyle = {
           @add="newTaskOpen = true"
         />
       </div>
+
+      <Resizer
+        label="Resize task panel"
+        :step="STEP"
+        @dragstart="startDrag('right')"
+        @drag="onDrag('right', $event)"
+        @reset="resetWidth('right')"
+      />
 
       <!-- right: the task that is waiting on you, and its live output -->
       <div :style="rightStyle">
@@ -976,9 +1100,9 @@ const toastStackStyle = {
       </div>
     </div>
 
-    <!-- Тосты живут в одном столбце: два фиксированных угла налезли бы друг на
-         друга, и отказ трекера скрыл бы отказ диска ровно тогда, когда сломано
-         и то, и другое. -->
+    <!-- The toasts live in one column: two fixed corners would overlap each
+         other, and a tracker failure would hide a disk failure exactly when
+         both are broken. -->
     <div :style="toastStackStyle">
       <Toast
         v-if="trackerState.lastError"

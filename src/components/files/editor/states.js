@@ -1,20 +1,20 @@
-/* Состояние редактора на вкладку: документ, каретка, история правок и
-   прокрутка. Обычная Map, намеренно вне реактивности Vue — reactive() обернул
-   бы EditorState в Proxy, а CodeMirror сравнивает свои объекты по
-   идентичности, и подменённый объект сломал бы ему транзакции.
+/* The editor's state per tab: the document, the caret, the edit history and
+   the scroll position. A plain Map, deliberately outside Vue's reactivity —
+   reactive() would wrap the EditorState in a Proxy, and CodeMirror compares its
+   objects by identity, so a substituted object would break its transactions.
 
-   Прокрутка хранится отдельным числом: EditorState её не содержит — это
-   свойство DOM, а не документа.
+   The scroll position is stored as a separate number: EditorState does not hold
+   it — it is a property of the DOM, not of the document.
 
-   Цена решения — третья копия текста в памяти на открытую вкладку (tabs.js
-   уже держит text и original). Она принята сознательно: терять историю
-   правок на каждом переключении вкладки редактор кода не может. */
+   The price of this decision is a third copy of the text in memory per open tab
+   (tabs.js already holds text and original). It is accepted knowingly: a code
+   editor cannot lose the edit history on every tab switch. */
 const states = new Map()
 
-/* Имя, а не take: запись переживает чтение. Тот же путь читают дважды за
-   переключение — сначала watcher в FileEditor.vue, потом, если состояние
-   снова уйдёт в кэш, следующий переход — и обоим нужна одна и та же запись,
-   не то, что от неё осталось после первого чтения. */
+/* Named peek, not take: the entry survives being read. The same path is read
+   twice per switch — first by the watcher in FileEditor.vue, then, if the state
+   goes back into the cache, by the next transition — and both need the same
+   entry, not what was left of it after the first read. */
 export function peekState(path) {
   return states.get(path) ?? null
 }
@@ -23,9 +23,9 @@ export function putState(path, state, scrollTop) {
   states.set(path, { state, scrollTop })
 }
 
-/* Уборка идёт от списка вкладок, а не от события закрытия: так одно правило
-   покрывает и закрытие вкладки, и переключение проекта, и путь, выпавший из
-   списка потому, что файл больше не читается. */
+/* The cleanup follows the tab list rather than a close event: that way one
+   rule covers closing a tab, switching project, and a path that fell out of the
+   list because the file no longer reads. */
 export function keepOnly(paths) {
   const live = new Set(paths)
   for (const path of states.keys()) {

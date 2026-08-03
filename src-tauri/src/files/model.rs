@@ -1,19 +1,20 @@
-//! Файлы проекта: типы, которые видит фронт, и чистая логика вокруг них.
+//! Project files: the types the front end sees, and the pure logic around them.
 //!
-//! Здесь нет ввода-вывода: всё, что зависит от диска, живёт в `fs.rs`.
-//! Поэтому именно этот файл покрыт тестами — как `settings/model.rs`.
+//! No I/O here: everything that depends on the disk lives in `fs.rs`.
+//! That is why this file is the one carrying the tests — same as `settings/model.rs`.
 
 use serde::Serialize;
 
-/// Сколько записей одного каталога отдаём. `FileTree` не виртуализирован (он
-/// сам это признаёт), и один клик по `node_modules` без потолка вешает рендер.
+/// How many entries of one directory we hand over. `FileTree` is not
+/// virtualized (it admits as much itself), and one click on `node_modules`
+/// without a ceiling wedges the render.
 pub const MAX_ENTRIES: usize = 1000;
 
-/// Потолок размера файла. `textarea` на 50 МБ — это зависшее окно; честнее
-/// сказать «слишком велик», чем показать половину.
+/// The file size ceiling. A 50 MB `textarea` is a frozen window; saying "too
+/// large" is more honest than showing half of it.
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Сколько байт нюхаем на предмет двоичности.
+/// How many bytes we sniff for binariness.
 pub const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -23,8 +24,9 @@ pub enum EntryKind {
     File,
 }
 
-/// Запись каталога. `path` относителен корня проекта, разделитель всегда `/` —
-/// он же ключ в настройках и в карте дерева, и разъезжаться им нельзя.
+/// A directory entry. `path` is relative to the project root and the separator
+/// is always `/` — it is also the key in settings and in the tree map, and the
+/// two must not diverge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -33,9 +35,9 @@ pub struct Entry {
     pub kind: EntryKind,
 }
 
-/// Содержимое одного каталога. `truncated` — сколько записей не поместилось;
-/// ноль значит «все». Молчаливая обрезка читалась бы как «здесь больше нет
-/// файлов», поэтому число едет во фронт, а не только в лог.
+/// The contents of one directory. `truncated` is how many entries did not fit;
+/// zero means "all of them". Silent truncation would read as "there are no more
+/// files here", so the number travels to the front end, not only into the log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Listing {
@@ -44,8 +46,8 @@ pub struct Listing {
     pub truncated: usize,
 }
 
-/// `mtime` — миллисекунды от эпохи. Именно он возвращается после записи и
-/// именно его фронт присылает обратно как `expectedMtime`.
+/// `mtime` is milliseconds since the epoch. It is what a write returns and what
+/// the front end sends back as `expectedMtime`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileText {
@@ -54,7 +56,7 @@ pub struct FileText {
     pub mtime: i64,
 }
 
-/// `mtime: None` — файла на месте больше нет.
+/// `mtime: None` — the file is no longer where it was.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stat {
@@ -64,30 +66,30 @@ pub struct Stat {
 
 #[derive(Debug, thiserror::Error)]
 pub enum FilesError {
-    #[error("файла нет: {0}")]
+    #[error("no such file: {0}")]
     NotFound(String),
-    #[error("нет доступа: {0}")]
+    #[error("access denied: {0}")]
     Denied(String),
-    #[error("это не файл: {0}")]
+    #[error("not a file: {0}")]
     NotAFile(String),
-    #[error("двоичный файл: {0}")]
+    #[error("binary file: {0}")]
     Binary(String),
-    #[error("файл слишком велик: {path} ({bytes} байт)")]
+    #[error("file too large: {path} ({bytes} bytes)")]
     TooLarge { path: String, bytes: u64 },
-    #[error("не текст в UTF-8: {0}")]
+    #[error("not UTF-8 text: {0}")]
     NotUtf8(String),
-    #[error("путь вне проекта: {0}")]
+    #[error("path outside the project: {0}")]
     Outside(String),
-    #[error("файл изменился на диске: {0}")]
+    #[error("the file changed on disk: {0}")]
     Stale(String),
     #[error("{0}")]
     Io(String),
 }
 
 impl FilesError {
-    /// Машинный вид для фронта. Текст сообщения — диагностика и говорит
-    /// языком файловой системы; решение, что показать человеку, принимается
-    /// по этому полю, а не разбором строки.
+    /// The machine-readable form for the front end. The message text is
+    /// diagnostics and speaks the filesystem's language; the decision about what
+    /// to show a person is made from this field, not by parsing a string.
     pub fn kind(&self) -> &'static str {
         match self {
             Self::NotFound(_) => "notFound",
@@ -103,9 +105,9 @@ impl FilesError {
     }
 }
 
-// Tauri требует, чтобы ошибка команды умела сериализоваться. В отличие от
-// `SettingsError`, одной строкой тут не обойтись: фронту нужно отличать
-// `stale` от `binary`, чтобы показать разную полоску.
+// Tauri requires a command's error to be serializable. Unlike `SettingsError`,
+// one string will not do here: the front end has to tell `stale` from `binary`
+// to show a different strip.
 impl Serialize for FilesError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
@@ -116,9 +118,9 @@ impl Serialize for FilesError {
     }
 }
 
-/// Каталоги первыми, внутри группы — по имени без учёта регистра. Порядок
-/// `read_dir` зависит от файловой системы, и полагаться на него нельзя:
-/// на APFS он один, на ext4 другой, и дерево прыгало бы между машинами.
+/// Directories first, and inside a group by name case-insensitively. The
+/// `read_dir` order depends on the filesystem and cannot be relied upon: it is
+/// one thing on APFS and another on ext4, and the tree would jump between machines.
 pub fn sort_entries(entries: &mut [Entry]) {
     entries.sort_by(|a, b| {
         let dirs_first = (a.kind != EntryKind::Dir).cmp(&(b.kind != EntryKind::Dir));
@@ -126,26 +128,26 @@ pub fn sort_entries(entries: &mut [Entry]) {
     });
 }
 
-/// Единственное, чего в дереве не видно. Точечные файлы показываем: `.beads` —
-/// каталог, вокруг которого построено приложение, а `node_modules` при ленивом
-/// чтении не стоит ничего, пока по нему не кликнули.
+/// The only thing the tree does not show. Dotfiles are shown: `.beads` is the
+/// directory the whole app is built around, and `node_modules` costs nothing
+/// under lazy reading until it is clicked.
 pub fn skip_in_tree(name: &str) -> bool {
     name == ".git"
 }
 
-/// Нулевой байт в начале — общепринятая проба на двоичность и единственная,
-/// которая не ошибается на UTF-8.
+/// A leading zero byte is the common probe for binariness and the only one that
+/// does not get UTF-8 wrong.
 pub fn looks_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(BINARY_SNIFF_BYTES).any(|b| *b == 0)
 }
 
-/// Дешёвый первый рубеж: относительный путь не имеет права быть абсолютным и
-/// содержать компонент `..`. Настоящую проверку (симлинк, указывающий наружу)
-/// делает `fs::resolve_within` через `canonicalize` — но она стоит обращения к
-/// диску, а этот отказ бесплатен и покрыт тестами.
+/// A cheap first line of defence: a relative path has no business being
+/// absolute or containing a `..` component. The real check (a symlink pointing
+/// outside) is done by `fs::resolve_within` through `canonicalize` — but that
+/// one costs a trip to the disk, while this refusal is free and covered by tests.
 ///
-/// Разделители режем оба: среди целевых вебвью есть WebView2, и путь оттуда
-/// может прийти с обратным слэшем.
+/// Both separators are cut: WebView2 is among the target webviews, and a path
+/// from there may arrive with a backslash.
 pub fn reject_traversal(rel: &str) -> Result<(), FilesError> {
     let looks_absolute = rel.starts_with('/')
         || rel.starts_with('\\')
@@ -166,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn каталоги_идут_первыми_потом_по_имени_без_учёта_регистра() {
+    fn directories_come_first_then_by_name_case_insensitively() {
         let mut list = vec![
             entry("README.md", EntryKind::File),
             entry("src", EntryKind::Dir),
@@ -182,8 +184,8 @@ mod tests {
     }
 
     #[test]
-    fn порядок_read_dir_не_должен_просачиваться() {
-        // Одни и те же записи в обратном порядке дают тот же результат.
+    fn the_read_dir_order_must_not_leak_through() {
+        // The same entries in reverse order give the same result.
         let mut a = vec![entry("b.txt", EntryKind::File), entry("a.txt", EntryKind::File)];
         let mut b = vec![entry("a.txt", EntryKind::File), entry("b.txt", EntryKind::File)];
         sort_entries(&mut a);
@@ -192,44 +194,44 @@ mod tests {
     }
 
     #[test]
-    fn в_дереве_прячется_только_git() {
+    fn only_git_hides_in_the_tree() {
         assert!(skip_in_tree(".git"));
-        assert!(!skip_in_tree(".beads"), ".beads — сердце приложения, он обязан быть виден");
+        assert!(!skip_in_tree(".beads"), ".beads is the heart of the app, it has to be visible");
         assert!(!skip_in_tree(".gitignore"));
-        assert!(!skip_in_tree("node_modules"), "ленивое чтение делает его бесплатным");
+        assert!(!skip_in_tree("node_modules"), "lazy reading makes it free");
         assert!(!skip_in_tree("src"));
     }
 
     #[test]
-    fn двоичным_считается_файл_с_нулевым_байтом_в_начале() {
+    fn a_file_with_a_leading_zero_byte_counts_as_binary() {
         assert!(!looks_binary(b"fn main() {}\n"));
-        assert!(!looks_binary(&[]), "пустой файл — законный текст");
+        assert!(!looks_binary(&[]), "an empty file is legitimate text");
         assert!(looks_binary(b"MZ\x00\x90"));
     }
 
     #[test]
-    fn нулевой_байт_за_пределами_пробы_не_считается() {
+    fn a_zero_byte_past_the_probe_does_not_count() {
         let mut bytes = vec![b'a'; BINARY_SNIFF_BYTES];
         bytes.push(0);
-        assert!(!looks_binary(&bytes), "смотрим только первые BINARY_SNIFF_BYTES");
+        assert!(!looks_binary(&bytes), "we only look at the first BINARY_SNIFF_BYTES");
     }
 
     #[test]
-    fn путь_наружу_отвергается_до_всякого_обращения_к_диску() {
+    fn a_path_leading_outside_is_rejected_before_any_trip_to_the_disk() {
         assert!(reject_traversal("src/App.vue").is_ok());
-        assert!(reject_traversal("").is_ok(), "пустая строка — это сам корень");
+        assert!(reject_traversal("").is_ok(), "an empty string is the root itself");
         assert!(matches!(reject_traversal("../secrets"), Err(FilesError::Outside(_))));
         assert!(matches!(reject_traversal("src/../../etc/passwd"), Err(FilesError::Outside(_))));
         assert!(matches!(reject_traversal("/etc/passwd"), Err(FilesError::Outside(_))));
         assert!(matches!(reject_traversal("C:\\Windows"), Err(FilesError::Outside(_))));
         assert!(
             reject_traversal("src/..hidden").is_ok(),
-            "две точки внутри имени — не выход наверх"
+            "two dots inside a name are not a climb upwards"
         );
     }
 
     #[test]
-    fn у_каждой_ошибки_есть_машинный_вид() {
+    fn every_error_has_a_machine_readable_form() {
         assert_eq!(FilesError::NotFound("a".into()).kind(), "notFound");
         assert_eq!(FilesError::Denied("a".into()).kind(), "denied");
         assert_eq!(FilesError::NotAFile("a".into()).kind(), "notAFile");
@@ -242,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn ошибка_едет_во_фронт_парой_вид_и_текст() {
+    fn an_error_travels_to_the_front_end_as_a_kind_and_text_pair() {
         let json = serde_json::to_value(FilesError::Binary("a.png".into())).unwrap();
         assert_eq!(json["kind"], "binary");
         assert!(json["message"].as_str().unwrap().contains("a.png"));

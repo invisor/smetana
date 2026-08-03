@@ -9,8 +9,8 @@ const props = defineProps({
   status: { type: String, required: true },
   count: { type: Number, default: 0 },
   wipLimit: { type: Number, default: null },
-  /* Не всякая колонка принимает новые задачи: в bd задача рождается только
-     в одном статусе, и "+" стоит там, где нажатие действительно сработает. */
+  /* Not every column accepts new issues: in bd an issue is born in one status
+     only, and the "+" stands where pressing it actually works. */
   addable: { type: Boolean, default: true }
 })
 

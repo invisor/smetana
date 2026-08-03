@@ -42,8 +42,9 @@ const headerStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
-  /* Одна высота с рядом вкладок: заголовки колонок стоят с ним в один ряд,
-     и разница в пару пикселей читается как перекос, а не как акцент. */
+  /* The same height as the tab row: the column headers line up with it, and a
+     couple of pixels' difference reads as a misalignment rather than an
+     accent. */
   height: 'var(--tab-h)',
   flex: '0 0 auto',
   padding: '0 var(--space-3) 0 var(--space-5)',

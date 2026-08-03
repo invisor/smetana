@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { languageFor } from '../../../../src/components/files/editor/languages.js'
 
-/* Имя языка достаётся из LanguageSupport (.language.name) или из самого
-   StreamLanguage (.name): legacy-режимы приходят вторым видом. */
+/* The language's name comes from the LanguageSupport (.language.name) or from
+   the StreamLanguage itself (.name): legacy modes arrive in the second form. */
 const nameOf = async (path) => {
   const support = await languageFor(path)
   return support ? (support.language ?? support).name : null
@@ -14,9 +14,9 @@ afterEach(() => {
 })
 
 describe('languageFor', () => {
-  it('распознаёт основные расширения файлов', async () => {
-    /* Проверяет маппинг расширений в языки из таблицы рецензии:
-       это исключает необнаруженные опечатки типа rs→python или vue→java. */
+  it('recognises the main file extensions', async () => {
+    /* Checks the extension-to-language mapping from the review table: this rules
+       out undetected typos such as rs→python or vue→java. */
     expect(await nameOf('main.rs')).toBe('rust')
     expect(await nameOf('index.js')).toBe('javascript')
     expect(await nameOf('data.json')).toBe('json')
@@ -35,49 +35,49 @@ describe('languageFor', () => {
     expect(await nameOf('Makefile')).toBe('shell')
   })
 
-  it('узнаёт файлы, у которых имя важнее расширения', async () => {
+  it('recognises files whose name matters more than their extension', async () => {
     const dockerfile = await languageFor('Dockerfile')
     expect(dockerfile).not.toBe(null)
     expect(typeof dockerfile.streamParser?.token).toBe('function')
     expect(await nameOf('Makefile')).toBe('shell')
   })
 
-  it('регистр в имени не мешает', async () => {
+  it('the case of the name does not get in the way', async () => {
     expect(await nameOf('MAIN.RS')).toBe('rust')
-    const dockerfile = await languageFor('/путь/DOCKERFILE')
+    const dockerfile = await languageFor('/path/DOCKERFILE')
     expect(dockerfile).not.toBe(null)
     expect(typeof dockerfile.streamParser?.token).toBe('function')
   })
 
-  it('берёт имя из конца пути, а не весь путь', async () => {
+  it('takes the name from the end of the path rather than the whole path', async () => {
     expect(await nameOf('src/stores/tabs.js')).toBe('javascript')
   })
 
-  it('файл без расширения — обычный текст, а не ошибка', async () => {
+  it('a file with no extension is plain text, not an error', async () => {
     expect(await languageFor('README')).toBe(null)
     expect(await languageFor('')).toBe(null)
     expect(await languageFor(null)).toBe(null)
   })
 
-  it('точка в начале имени не считается расширением', async () => {
-    /* dot > 0 в исходнике: у ".gitignore" точка нулевая, расширения нет. */
+  it('a leading dot in a name does not count as an extension', async () => {
+    /* dot > 0 in the source: ".gitignore" has its dot at zero, so no extension. */
     expect(await languageFor('.gitignore')).toBe(null)
   })
 
-  it('незнакомое расширение — обычный текст', async () => {
-    expect(await languageFor('файл.неизвестное')).toBe(null)
+  it('an unknown extension is plain text', async () => {
+    expect(await languageFor('file.unknown')).toBe(null)
   })
 
-  it('Dockerfile загружает свой режим, у которого нет имени', async () => {
-    const support = await languageFor('/путь/Dockerfile')
+  it('Dockerfile loads its own mode, which has no name', async () => {
+    const support = await languageFor('/path/Dockerfile')
     expect(support).not.toBe(null)
     expect(typeof support.streamParser?.token).toBe('function')
   })
 
-  it('непривезённый чанк даёт текст без подсветки, а не бросок', async () => {
+  it('a chunk that did not arrive gives text without highlighting rather than a throw', async () => {
     vi.resetModules()
     vi.doMock('@codemirror/lang-json', () => {
-      throw new Error('чанк не приехал')
+      throw new Error('the chunk did not arrive')
     })
     const fresh = await import('../../../../src/components/files/editor/languages.js')
 

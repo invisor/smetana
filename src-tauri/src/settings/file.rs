@@ -1,4 +1,4 @@
-//! Диск: где лежит файл настроек, как он читается и как пишется.
+//! The disk: where the settings file lives, how it is read and how it is written.
 
 use std::fs;
 use std::io::Write;
@@ -7,26 +7,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::model::{parse, Outcome, Settings};
 
-/// Счётчик временных файлов. Вместе с pid даёт имя, которого нет ни у одной
-/// другой записи — ни в этом процессе, ни в соседнем.
+/// A counter for temp files. Together with the pid it gives a name no other
+/// write has — neither in this process nor in a neighbouring one.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Почему файл не прочитался. Диагностика для лога, не для интерфейса.
+/// Why the file did not read. Diagnostics for the log, not for the interface.
 #[derive(Debug)]
 pub enum Problem {
     Broken,
     TooNew,
-    /// Файл есть, но прочитать его не вышло: не хватило прав, это каталог,
-    /// сбойнул диск. От испорченного файла это отличается тем, что копировать
-    /// нечего — `fs::copy` того же файла упадёт по той же причине.
+    /// The file is there but could not be read: not enough permissions, it is
+    /// a directory, the disk failed. It differs from a corrupted file in that
+    /// there is nothing to copy — `fs::copy` of that same file would fail for
+    /// the same reason.
     Unreadable,
 }
 
-/// Читает настройки. Отсутствие файла — не ошибка, а первый запуск.
-/// Испорченный и слишком новый файл не выбрасываем: он мог быть чьей-то
-/// работой, поэтому уезжает в `.bak`, а приложение стартует с умолчаний.
-/// Файл, который есть, но не читается (нет прав, это каталог и т.п.), —
-/// не первый запуск: копию снять нельзя, поэтому просто сообщаем о проблеме.
+/// Reads the settings. A missing file is the first run, not an error. A broken
+/// or too-new file is not thrown away: it may have been somebody's work, so it
+/// goes to `.bak` and the app starts from defaults. A file that exists but does
+/// not read (no permissions, a directory in its place and so on) is not a first
+/// run: no copy can be taken, so we simply report the problem.
 pub fn load(path: &Path) -> (Settings, Option<Problem>) {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
@@ -34,7 +35,7 @@ pub fn load(path: &Path) -> (Settings, Option<Problem>) {
             return (Settings::default(), None);
         }
         Err(err) => {
-            log::warn!("настройки: не удалось прочитать {}: {err}", path.display());
+            log::warn!("settings: could not read {}: {err}", path.display());
             return (Settings::default(), Some(Problem::Unreadable));
         }
     };
@@ -51,12 +52,12 @@ pub fn load(path: &Path) -> (Settings, Option<Problem>) {
     }
 }
 
-/// Запись атомарна: сначала соседний файл, потом переименование. Иначе обрыв
-/// на середине оставил бы половину JSON, и следующий запуск потерял бы всё.
-/// Содержимое сбрасывается на диск до переименования — без этого потеря
-/// питания может сделать долговечным переименование, но не то, что в файле.
-/// Имя временного файла своё на каждый вызов: одно общее имя две записи
-/// внахлёст поделили бы, и первая переименовала бы недописанное второй.
+/// The write is atomic: a neighbouring file first, then a rename. Otherwise a
+/// break halfway through would leave half a JSON and the next launch would lose
+/// everything. The content is flushed to disk before the rename — without that
+/// a power loss could make the rename durable but not what is in the file. The
+/// temp file's name is its own per call: two overlapping writes would share one
+/// common name, and the first would rename what the second had not finished writing.
 pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
@@ -64,8 +65,8 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     let text = serde_json::to_string_pretty(settings).map_err(|err| err.to_string())?;
     let temp = temp_path(path);
     if let Err(err) = write_all(&temp, &text) {
-        // Мусор за собой убираем сами: имя уникальное, и переиспользовать
-        // недописанный файл всё равно некому.
+        // We clean up after ourselves: the name is unique, and there is nobody
+        // to reuse a half-written file anyway.
         let _ = fs::remove_file(&temp);
         return Err(format!("{}: {err}", temp.display()));
     }
@@ -75,8 +76,8 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
     })
 }
 
-/// `settings.<pid>.<n>.tmp` рядом с целью: переименование внутри одного
-/// каталога — единственное, что файловая система обещает делать атомарно.
+/// `settings.<pid>.<n>.tmp` next to the target: a rename within a single
+/// directory is the only thing the filesystem promises to do atomically.
 fn temp_path(path: &Path) -> PathBuf {
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let name = format!("settings.{}.{n}.tmp", std::process::id());
@@ -95,7 +96,7 @@ fn write_all(temp: &Path, text: &str) -> std::io::Result<()> {
 fn back_up(path: &Path) {
     let backup = path.with_extension("json.bak");
     if let Err(err) = fs::copy(path, &backup) {
-        log::warn!("настройки: не удалось сохранить копию в {}: {err}", backup.display());
+        log::warn!("settings: could not save a copy to {}: {err}", backup.display());
     }
 }
 
@@ -107,12 +108,12 @@ mod tests {
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    /// Свой каталог на каждый тест: cargo гоняет их параллельно в одном процессе.
+    /// A directory of its own per test: cargo runs them in parallel in one process.
     fn temp_dir() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("smetana-settings-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("каталог для теста");
+        fs::create_dir_all(&dir).expect("the test's directory");
         dir
     }
 
@@ -123,7 +124,7 @@ mod tests {
         let (settings, problem) = load(&dir.join("settings.json"));
 
         assert_eq!(settings, Settings::default());
-        assert!(problem.is_none(), "отсутствие файла — не проблема");
+        assert!(problem.is_none(), "a missing file is not a problem");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -131,15 +132,16 @@ mod tests {
     fn an_unreadable_file_is_reported_without_a_backup() {
         let dir = temp_dir();
         let path = dir.join("settings.json");
-        // Каталог на месте файла — портируемый способ получить ошибку чтения,
-        // отличную от NotFound, без chmod (тот под root ведёт себя иначе).
-        fs::create_dir_all(&path).expect("подготовка");
+        // A directory in the file's place is the portable way to get a read
+        // error other than NotFound without chmod (which behaves differently
+        // under root).
+        fs::create_dir_all(&path).expect("setup");
 
         let (settings, problem) = load(&path);
 
         assert_eq!(settings, Settings::default());
         assert!(matches!(problem, Some(Problem::Unreadable)));
-        assert!(!dir.join("settings.json.bak").exists(), "копировать нечего — файла не было");
+        assert!(!dir.join("settings.json.bak").exists(), "nothing to copy — there was no file");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -147,15 +149,15 @@ mod tests {
     fn a_broken_file_is_kept_as_a_backup() {
         let dir = temp_dir();
         let path = dir.join("settings.json");
-        fs::write(&path, "{не json").expect("подготовка");
+        fs::write(&path, "{not json").expect("setup");
 
         let (settings, problem) = load(&path);
 
         assert_eq!(settings, Settings::default());
         assert!(matches!(problem, Some(Problem::Broken)));
         assert_eq!(
-            fs::read_to_string(dir.join("settings.json.bak")).expect("копия рядом"),
-            "{не json"
+            fs::read_to_string(dir.join("settings.json.bak")).expect("a copy next to it"),
+            "{not json"
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -164,7 +166,7 @@ mod tests {
     fn a_newer_file_is_kept_as_a_backup_too() {
         let dir = temp_dir();
         let path = dir.join("settings.json");
-        fs::write(&path, r#"{"version":99,"appearance":{"theme":"light"}}"#).expect("подготовка");
+        fs::write(&path, r#"{"version":99,"appearance":{"theme":"light"}}"#).expect("setup");
 
         let (settings, problem) = load(&path);
 
@@ -177,25 +179,25 @@ mod tests {
     #[test]
     fn what_was_saved_is_what_is_read_back() {
         let dir = temp_dir();
-        // Каталога настроек может ещё не быть — запись создаёт его сама.
+        // The settings directory may not exist yet — the write creates it itself.
         let path = dir.join("nested").join("settings.json");
         let mut settings = Settings::default();
         settings.appearance.theme = "light".into();
         settings.layout.right_collapsed = true;
 
-        save(&path, &settings).expect("запись");
+        save(&path, &settings).expect("write");
         let (read_back, problem) = load(&path);
 
         assert_eq!(read_back, settings);
         assert!(problem.is_none());
-        // Имя временного файла теперь своё на каждый вызов, поэтому смотрим
-        // не на конкретное имя, а на то, что в каталоге не осталось ни одного.
-        let leftovers: Vec<_> = fs::read_dir(path.parent().expect("каталог"))
-            .expect("обход каталога")
+        // The temp file's name is its own per call now, so we look not for a
+        // particular name but for none being left in the directory at all.
+        let leftovers: Vec<_> = fs::read_dir(path.parent().expect("the directory"))
+            .expect("walking the directory")
             .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
             .filter(|name| name.to_string_lossy().ends_with(".tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "временный файл не остаётся: {leftovers:?}");
+        assert!(leftovers.is_empty(), "no temp file is left behind: {leftovers:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

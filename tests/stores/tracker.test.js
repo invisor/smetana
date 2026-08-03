@@ -13,29 +13,29 @@ beforeEach(async () => {
   tracker = loaded.stores.tracker
 })
 
-/* Пустить трекер с заданным снимком. Возвращает управление, когда initTracker
-   отработал целиком. */
+/* Start the tracker with a given snapshot. Returns once initTracker has run to
+   completion. */
 const start = async (snap = snapshot()) => {
   ipc.on('tracker_health', { state: 'ok' })
   ipc.on('tracker_snapshot', snap)
   await tracker.initTracker()
 }
 
-describe('перевод статусов', () => {
-  it('три статуса bd превращаются в статусы дизайн-системы', () => {
+describe('status translation', () => {
+  it('three bd statuses turn into design system statuses', () => {
     expect(tracker.toUiStatus('open')).toBe('ready')
     expect(tracker.toUiStatus('in_progress')).toBe('running')
     expect(tracker.toUiStatus('closed')).toBe('done')
   })
 
-  it('всё остальное проходит насквозь — это и есть задуманное', () => {
+  it('everything else passes through — and that is the intent', () => {
     expect(tracker.toUiStatus('blocked')).toBe('blocked')
     expect(tracker.toUiStatus('awaiting-review')).toBe('awaiting-review')
   })
 })
 
 describe('boardColumns', () => {
-  it('раскладывает задачи по колонкам снимка', async () => {
+  it('lays the issues out into the snapshot\'s columns', async () => {
     await start(
       snapshot({
         issues: [issue({ id: 'bd-1' }), issue({ id: 'bd-2', status: 'in_progress' })]
@@ -49,7 +49,7 @@ describe('boardColumns', () => {
     expect(board[1].tasks.map((task) => task.id)).toEqual(['bd-2'])
   })
 
-  it('статус, которого нет в наборе bd, получает свою колонку, а не пропадает', async () => {
+  it('a status absent from bd\'s set gets its own column rather than vanishing', async () => {
     await start(snapshot({ issues: [issue({ id: 'bd-9', status: 'awaiting-review' })] }))
 
     const board = tracker.boardColumns.value
@@ -57,7 +57,7 @@ describe('boardColumns', () => {
     expect(board.map((column) => column.status)).toContain('awaiting-review')
   })
 
-  it('считает блокировки по рёбрам с обеих сторон', async () => {
+  it('counts blockers from the edges on both sides', async () => {
     await start(
       snapshot({
         issues: [
@@ -76,7 +76,7 @@ describe('boardColumns', () => {
     expect(first.blockedBy).toBe(0)
   })
 
-  it('родство не считается блокировкой: иначе у каждой дочерней было бы ложное «заблокировано»', async () => {
+  it('parentage does not count as a blocker: otherwise every child would get a false "blocked"', async () => {
     await start(
       snapshot({
         issues: [
@@ -96,8 +96,8 @@ describe('boardColumns', () => {
   })
 })
 
-describe('дельты', () => {
-  it('добавляют и удаляют задачи и двигают поколение', async () => {
+describe('deltas', () => {
+  it('add and remove issues and move the generation', async () => {
     await start(snapshot({ generation: 5, issues: [issue({ id: 'bd-1' })] }))
 
     await emit('tracker:delta', delta({
@@ -111,22 +111,22 @@ describe('дельты', () => {
     expect(tracker.trackerState.generation).toBe(6)
   })
 
-  it('разрыв поколения означает потерянное событие — доска берётся целиком через resync', async () => {
+  it('a gap in the generation means a lost event — the board is taken in full through resync', async () => {
     await start(snapshot({ generation: 5, issues: [issue({ id: 'bd-1' })] }))
     ipc.on('tracker_resync', snapshot({ generation: 9, issues: [issue({ id: 'bd-9' })] }))
 
     await emit('tracker:delta', delta({ generation: 8, upserted: [issue({ id: 'bd-8' })] }))
 
     await vi.waitFor(() => expect(ipc.calls('tracker_resync')).toHaveLength(1))
-    /* Снимок заменяет состояние целиком: прежняя задача ушла, пришедшая с ним — на месте. */
+    /* The snapshot replaces the state in full: the former issue is gone, the one it brought is there. */
     expect(tracker.trackerState.generation).toBe(9)
     expect(tracker.trackerState.issues.has('bd-9')).toBe(true)
     expect(tracker.trackerState.issues.has('bd-1')).toBe(false)
-    /* Дельта с разрывом не применяется вовсе — её задача до доски не доехала. */
+    /* A delta with a gap is not applied at all — its issue never reached the board. */
     expect(tracker.trackerState.issues.has('bd-8')).toBe(false)
   })
 
-  it('во время переезда дельты игнорируются: они могут быть про старый каталог', async () => {
+  it('during a move deltas are ignored: they may be about the old folder', async () => {
     await start(snapshot({ generation: 5 }))
     tracker.trackerState.switching = true
 
@@ -136,25 +136,26 @@ describe('дельты', () => {
     expect(tracker.trackerState.generation).toBe(5)
   })
 
-  it('снимок, устаревший за время полёта, не раскатывается', async () => {
+  it('a snapshot that went stale in flight is not rolled out', async () => {
     ipc.on('tracker_health', { state: 'ok' })
-    /* Пока ответ на tracker_snapshot летит обратно, вотчер успевает прислать
-       дельту и продвинуть поколение. Снимок в этот момент — прошлое. */
+    /* While the answer to tracker_snapshot flies back, the watcher manages to
+       send a delta and advance the generation. The snapshot is the past by
+       then. */
     ipc.on('tracker_snapshot', async () => {
       await emit('tracker:delta', delta({ generation: 9, upserted: [issue({ id: 'bd-9' })] }))
-      return snapshot({ generation: 5, issues: [issue({ id: 'bd-старая' })] })
+      return snapshot({ generation: 5, issues: [issue({ id: 'bd-old' })] })
     })
 
     await tracker.initTracker()
 
     expect(tracker.trackerState.generation).toBe(9)
     expect(tracker.trackerState.issues.has('bd-9')).toBe(true)
-    expect(tracker.trackerState.issues.has('bd-старая')).toBe(false)
+    expect(tracker.trackerState.issues.has('bd-old')).toBe(false)
   })
 })
 
-describe('resync и смена проекта', () => {
-  it('resync заменяет состояние целиком, а не дополняет его', async () => {
+describe('resync and switching project', () => {
+  it('resync replaces the state in full rather than adding to it', async () => {
     await start(snapshot({ generation: 5, issues: [issue({ id: 'bd-1' })] }))
     ipc.on('tracker_resync', snapshot({ generation: 7, issues: [issue({ id: 'bd-2' })] }))
 
@@ -164,9 +165,9 @@ describe('resync и смена проекта', () => {
     expect(tracker.trackerState.generation).toBe(7)
   })
 
-  it('упавший resync оставляет доску как была и запоминает ошибку чтения', async () => {
+  it('a failed resync leaves the board as it was and remembers the read error', async () => {
     await start(snapshot({ generation: 5, issues: [issue({ id: 'bd-1' })] }))
-    ipc.fail('tracker_resync', new Error('bd не запустился'))
+    ipc.fail('tracker_resync', new Error('bd did not start'))
 
     await tracker.resync()
 
@@ -174,59 +175,59 @@ describe('resync и смена проекта', () => {
     expect(tracker.trackerState.lastError.title).toBe('Could not read the tracker')
   })
 
-  it('setProject снимает признак переезда даже после отказа', async () => {
+  it('setProject clears the switching flag even after a refusal', async () => {
     await start()
-    ipc.fail('tracker_set_project', new Error('каталога нет'))
+    ipc.fail('tracker_set_project', new Error('no such folder'))
 
-    await tracker.setProject('/другой')
+    await tracker.setProject('/another')
 
     expect(tracker.trackerState.switching).toBe(false)
     expect(tracker.trackerState.lastError.title).toBe('Could not read the tracker')
   })
 })
 
-describe('запись', () => {
-  it('оптимистичное значение видно сразу, до ответа бэкенда', async () => {
-    await start(snapshot({ issues: [issue({ id: 'bd-1', title: 'старое' })] }))
-    ipc.on('tracker_update', () => issue({ id: 'bd-1', title: 'новое' }))
+describe('writes', () => {
+  it('the optimistic value shows at once, before the back end answers', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', title: 'the old one' })] }))
+    ipc.on('tracker_update', () => issue({ id: 'bd-1', title: 'the new one' }))
 
-    const pending = tracker.updateIssue('bd-1', { title: 'новое' })
-    expect(tracker.trackerState.issues.get('bd-1').title).toBe('новое')
+    const pending = tracker.updateIssue('bd-1', { title: 'the new one' })
+    expect(tracker.trackerState.issues.get('bd-1').title).toBe('the new one')
 
     await pending
-    expect(tracker.trackerState.issues.get('bd-1').title).toBe('новое')
+    expect(tracker.trackerState.issues.get('bd-1').title).toBe('the new one')
   })
 
-  it('отказ откатывает правку, если её никто не трогал', async () => {
-    await start(snapshot({ issues: [issue({ id: 'bd-1', title: 'старое' })] }))
-    ipc.fail('tracker_update', new Error('bd упал'))
+  it('a refusal rolls the edit back if nobody touched it', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', title: 'the old one' })] }))
+    ipc.fail('tracker_update', new Error('bd failed'))
 
-    await expect(tracker.updateIssue('bd-1', { title: 'новое' })).rejects.toThrow()
+    await expect(tracker.updateIssue('bd-1', { title: 'the new one' })).rejects.toThrow()
 
-    expect(tracker.trackerState.issues.get('bd-1').title).toBe('старое')
+    expect(tracker.trackerState.issues.get('bd-1').title).toBe('the old one')
     expect(tracker.trackerState.lastError.title).toBe('Could not save to the tracker')
   })
 
-  it('отказ не откатывает, если за время полёта значение изменил кто-то ещё', async () => {
-    await start(snapshot({ issues: [issue({ id: 'bd-1', title: 'старое' })] }))
+  it('a refusal does not roll back if somebody else changed the value in flight', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', title: 'the old one' })] }))
     ipc.on('tracker_update', () => {
-      /* Вотчер принёс чужую правку, пока наша запись была в полёте. */
-      tracker.trackerState.issues.set('bd-1', issue({ id: 'bd-1', title: 'чужое' }))
-      throw new Error('bd упал')
+      /* The watcher brought somebody else's edit while our write was in flight. */
+      tracker.trackerState.issues.set('bd-1', issue({ id: 'bd-1', title: "somebody else's" }))
+      throw new Error('bd failed')
     })
 
-    await expect(tracker.updateIssue('bd-1', { title: 'новое' })).rejects.toThrow()
+    await expect(tracker.updateIssue('bd-1', { title: 'the new one' })).rejects.toThrow()
 
-    expect(tracker.trackerState.issues.get('bd-1').title).toBe('чужое')
+    expect(tracker.trackerState.issues.get('bd-1').title).toBe("somebody else's")
   })
 
-  it('close и reopen шлют свои команды и оптимистично двигают статус', async () => {
+  it('close and reopen send their commands and move the status optimistically', async () => {
     await start(snapshot({ issues: [issue({ id: 'bd-1' })] }))
     ipc.on('tracker_close', () => issue({ id: 'bd-1', status: 'closed' }))
     ipc.on('tracker_reopen', () => issue({ id: 'bd-1', status: 'open' }))
 
-    await tracker.closeIssue('bd-1', 'сделано')
-    expect(ipc.calls('tracker_close')).toEqual([{ id: 'bd-1', reason: 'сделано' }])
+    await tracker.closeIssue('bd-1', 'done')
+    expect(ipc.calls('tracker_close')).toEqual([{ id: 'bd-1', reason: 'done' }])
     expect(tracker.trackerState.issues.get('bd-1').status).toBe('closed')
 
     await tracker.reopenIssue('bd-1')
@@ -234,8 +235,8 @@ describe('запись', () => {
   })
 })
 
-describe('здоровье и проверка каталогов', () => {
-  it('health приходит и событием, и ответом команды', async () => {
+describe('health and probing folders', () => {
+  it('health arrives both as an event and as a command\'s answer', async () => {
     ipc.on('tracker_health', { state: 'not-a-beads-repo' })
     ipc.on('tracker_snapshot', snapshot())
 
@@ -246,8 +247,8 @@ describe('здоровье и проверка каталогов', () => {
     expect(tracker.trackerState.health.state).toBe('ok')
   })
 
-  it('упавшая проверка каталогов считает их отслеживаемыми: предупреждение хуже молчания', async () => {
-    ipc.fail('tracker_probe', new Error('не смогли'))
+  it('a failed folder probe counts them as tracked: a warning is worse than silence', async () => {
+    ipc.fail('tracker_probe', new Error('could not do it'))
 
     await expect(tracker.probeProjects(['/a', '/b'])).resolves.toEqual([
       { path: '/a', tracked: true },

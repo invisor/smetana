@@ -1,6 +1,6 @@
-/* Набор расширений собирается явно, а не через basic-setup: тот приносит
-   автодополнение, линтер и свёртку — всё, от чего эта задача отказалась, —
-   и молча растит бандл. */
+/* The extension list is assembled explicitly rather than through basic-setup:
+   that would bring autocomplete, a linter and code folding — everything this
+   task declined — and silently grow the bundle. */
 import {
   drawSelection,
   dropCursor,
@@ -17,23 +17,23 @@ import { bracketMatching, indentOnInput, indentUnit } from '@codemirror/language
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search'
 import { editorTheme } from './theme.js'
 
-/* Escape на две секунды открывает выход по Tab — иначе клавиатурный
-   пользователь заперт в поле, потому что Tab здесь занят отступом.
+/* Escape opens the Tab exit for two seconds — otherwise a keyboard user is
+   trapped in the field, because Tab is taken by indentation here.
 
-   @codemirror/view действительно ставит для этого свой always-on keydown-
-   хендлер на contentDOM (тот же setTabFocusMode(2000)) — но он подключён
-   последним в цепочке обработчиков клавиши, после всех keymap-биндингов.
-   Любой обработчик, который для Escape вернёт true, или биндинг с флагом
-   preventDefault, обрывает цепочку раньше, чем очередь дойдёт до него, — и
-   тогда режим не взводится, хотя внешне ничего не сообщает об отказе. Сейчас
-   ни defaultKeymap, ни searchKeymap на Escape так не поступают, но это
-   свойство набора биндингов целиком, а не самого механизма, и оно способно
-   тихо перестать быть верным при следующем добавленном сюда Escape-биндинге.
-   Собственная запись первой в списке не зависит от того, кто и что вернёт
-   после неё: она — часть той же цепочки dispatch'а, что и любой будущий
-   Escape-биндинг, и выполняется раньше него безусловно. false, а не true:
-   Escape должен доехать и до defaultKeymap, где он схлопывает множественное
-   выделение; обработчик, вернувший true, оборвал бы цепочку сам. */
+   @codemirror/view does install its own always-on keydown handler on
+   contentDOM for this (the same setTabFocusMode(2000)) — but it is attached
+   last in the key's handler chain, after every keymap binding. Any handler that
+   returns true for Escape, or a binding with the preventDefault flag, breaks
+   the chain before the turn reaches it — and then the mode is never armed,
+   while nothing outwardly reports the refusal. Neither defaultKeymap nor
+   searchKeymap does that for Escape today, but that is a property of the set of
+   bindings as a whole rather than of the mechanism itself, and it can quietly
+   stop being true with the next Escape binding added here. Our own entry, first
+   in the list, does not depend on who returns what after it: it is part of the
+   same dispatch chain as any future Escape binding, and it runs before that one
+   unconditionally. false, not true: Escape has to reach defaultKeymap too,
+   where it collapses a multiple selection; a handler returning true would break
+   the chain itself. */
 const escapeOpensTabFocus = (view) => {
   view.setTabFocusMode(2000)
   return false
@@ -56,9 +56,9 @@ export function editorExtensions() {
     indentUnit.of('  '),
     EditorState.tabSize.of(2),
     EditorState.allowMultipleSelections.of(true),
-    /* Порядок значим: наш Escape идёт первым, чтобы взвести режим до того,
-       как defaultKeymap схлопнет выделение; indentWithTab — до defaultKeymap,
-       иначе Tab уйдёт в поведение по умолчанию. */
+    /* The order matters: our Escape comes first so the mode is armed before
+       defaultKeymap collapses the selection; indentWithTab comes before
+       defaultKeymap, otherwise Tab falls through to the default behaviour. */
     keymap.of([
       { key: 'Escape', run: escapeOpensTabFocus },
       indentWithTab,

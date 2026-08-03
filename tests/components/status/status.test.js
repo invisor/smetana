@@ -11,19 +11,19 @@ import {
 } from '../../../src/components/status/status.js'
 
 describe('normalizeStatus', () => {
-  it('опускает регистр и обрезает края', () => {
+  it('lowercases and trims the edges', () => {
     expect(normalizeStatus('  Needs You  ')).toBe('needs-you')
   })
 
-  it('схлопывает любую серию не-буквенно-цифровых в один дефис', () => {
+  it('collapses any run of non-alphanumerics into one dash', () => {
     expect(normalizeStatus('in___progress // now')).toBe('in-progress-now')
   })
 
-  it('снимает ведущие и хвостовые дефисы', () => {
+  it('strips leading and trailing dashes', () => {
     expect(normalizeStatus('--ready--')).toBe('ready')
   })
 
-  it('пустое и отсутствующее дают пустую строку', () => {
+  it('empty and missing give an empty string', () => {
     expect(normalizeStatus('')).toBe('')
     expect(normalizeStatus(null)).toBe('')
     expect(normalizeStatus(undefined)).toBe('')
@@ -31,10 +31,10 @@ describe('normalizeStatus', () => {
 })
 
 describe('hashStatus', () => {
-  /* Этот тест защищает не хеш, а пользователей: «безобидная» правка FNV-1a
-     перекрасила бы разом все пользовательские статусы во всех проектах.
-     Значения сняты с текущей реализации и меняться не должны. */
-  it('стабилен на фиксированной выборке', () => {
+  /* This test protects users rather than the hash: an "innocuous" edit to
+     FNV-1a would recolour every user-defined status in every project at once.
+     The values are taken from the current implementation and must not change. */
+  it('is stable on a fixed sample', () => {
     expect(hashStatus('awaiting-review')).toBe(2045313954)
     expect(statusSlot('awaiting-review')).toBe(6)
     expect(hashStatus('triage')).toBe(166983937)
@@ -45,13 +45,13 @@ describe('hashStatus', () => {
     expect(statusSlot('needs-review')).toBe(5)
   })
 
-  it('нормализация не влияет на хеш', () => {
+  it('normalization does not affect the hash', () => {
     expect(hashStatus('awaiting-review')).toBe(hashStatus('Awaiting Review'))
     expect(statusSlot('awaiting-review')).toBe(statusSlot('  awaiting__review '))
   })
 
-  it('слот всегда в пределах двенадцати', () => {
-    const names = ['triage', 'awaiting-review', 'на-проверке', 'x', 'deploy', 'qa', 'спринт-3']
+  it('the slot is always within twelve', () => {
+    const names = ['triage', 'awaiting-review', 'under-review', 'x', 'deploy', 'qa', 'sprint-3']
     for (const name of names) {
       const slot = statusSlot(name)
       expect(slot).toBeGreaterThanOrEqual(0)
@@ -62,7 +62,7 @@ describe('hashStatus', () => {
 })
 
 describe('statusColors', () => {
-  it('зарезервированный получает свои токены и признак reserved', () => {
+  it('a reserved status gets its own tokens and the reserved flag', () => {
     expect(statusColors('needs-you')).toEqual({
       reserved: true,
       key: 'needs-you',
@@ -72,20 +72,21 @@ describe('statusColors', () => {
     })
   })
 
-  it('все шесть зарезервированных узнаются', () => {
+  it('all six reserved statuses are recognised', () => {
     for (const name of RESERVED) {
       expect(statusColors(name).reserved).toBe(true)
       expect(STATUS_GLYPH[name]).toBeTruthy()
     }
   })
 
-  it('пользовательский получает генерируемый слот', () => {
+  it('a user-defined status gets a generated slot', () => {
     const colors = statusColors('Awaiting Review')
     expect(colors.reserved).toBe(false)
     expect(colors.key).toBe('awaiting-review')
-    /* Без этого fg/bg/border сравнивались бы с самими собой через colors.slot
-       и были бы истинны при любом slot — значение уже закреплено соседним
-       тестом стабильности хеша (hashStatus: statusSlot('awaiting-review') === 6). */
+    /* Without this, fg/bg/border would be compared with themselves through
+       colors.slot and would be true for any slot — the value is already pinned
+       by the neighbouring hash stability test (hashStatus:
+       statusSlot('awaiting-review') === 6). */
     expect(colors.slot).toBe(6)
     expect(colors.fg).toBe(`var(--status-gen-${colors.slot}-fg)`)
     expect(colors.bg).toBe(`var(--status-gen-${colors.slot}-bg)`)
@@ -94,31 +95,31 @@ describe('statusColors', () => {
 })
 
 describe('statusCode', () => {
-  it('из двух слов берёт по первой букве каждого', () => {
+  it('from two words it takes the first letter of each', () => {
     expect(statusCode('awaiting-review')).toBe('AR')
   })
 
-  it('из одного слова берёт две первые буквы', () => {
+  it('from one word it takes the first two letters', () => {
     expect(statusCode('triage')).toBe('TR')
   })
 
-  it('из трёх слов берёт первые два', () => {
+  it('from three words it takes the first two', () => {
     expect(statusCode('waiting-for-review')).toBe('WF')
   })
 })
 
 describe('attentionLevel', () => {
-  it('needs-you и failed кричат', () => {
+  it('needs-you and failed shout', () => {
     expect(attentionLevel('needs-you')).toBe('loud')
     expect(attentionLevel('failed')).toBe('loud')
   })
 
-  it('running живой, done тихий', () => {
+  it('running is live, done is quiet', () => {
     expect(attentionLevel('running')).toBe('live')
     expect(attentionLevel('done')).toBe('quiet')
   })
 
-  it('незнакомый статус живой, а не тихий: спрятать неизвестное хуже, чем показать', () => {
+  it('an unknown status is live rather than quiet: hiding the unknown is worse than showing it', () => {
     expect(attentionLevel('awaiting-review')).toBe('live')
     expect(attentionLevel('')).toBe('live')
   })

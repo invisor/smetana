@@ -89,8 +89,8 @@ mod tests {
     }
 
     #[test]
-    fn узнаёт_диалог_разрешений() {
-        let q = claude(&fixture("claude-permission-dialog.txt")).expect("диалог не узнан");
+    fn recognises_the_permission_dialog() {
+        let q = claude(&fixture("claude-permission-dialog.txt")).expect("the dialog went unrecognised");
         assert_eq!(q.text, "Do you want to make this edit to tabs.js?");
         assert_eq!(q.options.len(), 3);
         assert_eq!(q.options[0].label, "Yes");
@@ -99,19 +99,19 @@ mod tests {
     }
 
     #[test]
-    fn обычная_работа_не_диалог() {
+    fn ordinary_work_is_not_a_dialog() {
         let screen: Vec<String> = ["Reading tabs.js", "  1. checked", "Done"].iter().map(|s| (*s).to_owned()).collect();
-        assert!(claude(&screen).is_none(), "пронумерованный список принят за вопрос");
+        assert!(claude(&screen).is_none(), "a numbered list was taken for a question");
     }
 
     #[test]
-    fn наполовину_дорисованная_рамка_не_диалог() {
+    fn a_half_drawn_frame_is_not_a_dialog() {
         let screen: Vec<String> = ["╭───────────╮", "│ Edit file │"].iter().map(|s| (*s).to_owned()).collect();
-        assert!(claude(&screen).is_none(), "рамка без вариантов принята за вопрос");
+        assert!(claude(&screen).is_none(), "a frame with no options was taken for a question");
     }
 
     #[test]
-    fn перенесённый_вопрос_склеивается_в_одну_строку() {
+    fn a_wrapped_question_is_joined_into_one_line() {
         // Title plus a blank line above the wrapped question on purpose:
         // proves paragraphs and wrapping work together, not just wrapping
         // in isolation — the title lives in its own, earlier paragraph and
@@ -131,12 +131,12 @@ mod tests {
         .iter()
         .map(|s| (*s).to_owned())
         .collect();
-        let q = claude(&screen).expect("перенесённый вопрос не узнан");
+        let q = claude(&screen).expect("the wrapped question went unrecognised");
         assert_eq!(q.text, "Do you want to make this edit to some/very/long/path/to/file.js?");
     }
 
     #[test]
-    fn превью_над_вопросом_не_попадает_в_текст() {
+    fn a_preview_above_the_question_does_not_reach_the_text() {
         // A real permission dialog carries a diff preview between the
         // title and the question, all inside the same frame. Only the
         // last paragraph before the options — the question — must survive.
@@ -158,12 +158,12 @@ mod tests {
         .iter()
         .map(|s| (*s).to_owned())
         .collect();
-        let q = claude(&screen).expect("диалог не узнан");
+        let q = claude(&screen).expect("the dialog went unrecognised");
         assert_eq!(q.text, "Do you want to make this edit to tabs.js?");
     }
 
     #[test]
-    fn вариант_с_вопросом_в_ярлыке_не_путают_с_вопросом() {
+    fn an_option_whose_label_holds_a_question_is_not_mistaken_for_the_question() {
         let screen: Vec<String> = [
             "╭──────────────────────────────────────────────────────╮",
             "│ Do you want to make this edit to tabs.js?             │",
@@ -176,7 +176,7 @@ mod tests {
         .iter()
         .map(|s| (*s).to_owned())
         .collect();
-        let q = claude(&screen).expect("диалог не узнан");
+        let q = claude(&screen).expect("the dialog went unrecognised");
         assert_eq!(q.text, "Do you want to make this edit to tabs.js?");
     }
 }

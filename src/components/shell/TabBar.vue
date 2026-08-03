@@ -11,17 +11,17 @@ const props = defineProps({
 
 defineEmits(['select', 'close', 'promote'])
 
-/* Полоса вкладок прокручивается, но её собственная полоса прокрутки скрыта
-   (sm-scroll-hidden), а меню переполнения (overflowCount) не подключено —
-   без этого активная вкладка может целиком уехать за край и стать
-   недостижимой без прокрутки, которую нечем даже нащупать. Поэтому контейнер
-   сам подводит активную вкладку в видимую часть — и не только при смене
-   активной вкладки, но и всякий раз, когда меняется ширина самого
-   контейнера (свернули/развернули соседнюю панель, изменили окно): ширина
-   могла измениться без единого клика по вкладке, а старое положение
-   прокрутки остаётся тем же. block: 'nearest' важен не менее inline: без
-   него браузер заодно потянет вертикальную прокрутку страницы. Плавную
-   прокрутку не включаем — в этой системе движение не несёт смысла. */
+/* The tab strip scrolls, but its own scrollbar is hidden (sm-scroll-hidden)
+   and the overflow menu (overflowCount) is not wired up — without this the
+   active tab can slide entirely past the edge and become unreachable, behind a
+   scrollbar there is no way even to feel for. So the container brings the
+   active tab into view itself — and not only when the active tab changes, but
+   whenever the container's own width changes (a neighbouring panel was
+   collapsed or expanded, the window was resized): the width may have changed
+   without a single click on a tab, while the old scroll position stays the
+   same. block: 'nearest' matters no less than inline: without it the browser
+   would drag the page's vertical scroll along too. Smooth scrolling is not
+   enabled — in this system movement carries no meaning. */
 const scrollerRef = ref(null)
 
 const revealActiveTab = () => {
@@ -32,8 +32,8 @@ const revealActiveTab = () => {
 watch(
   () => props.activeId,
   async () => {
-    // nextTick обязателен: в момент срабатывания watch новая вкладка ещё
-    // может быть не отрисована в DOM.
+    // nextTick is mandatory: at the moment the watch fires the new tab may not
+    // be rendered in the DOM yet.
     await nextTick()
     revealActiveTab()
   }
@@ -42,10 +42,10 @@ watch(
 let resizeObserver = null
 
 onMounted(() => {
-  // Восстановленная при старте активная вкладка (из settings.json) могла
-  // оказаться за краем ещё до первого клика по вкладкам — watch на activeId
-  // в этот момент ещё не срабатывал. immediate: true у watch не подошёл бы:
-  // он выполнился бы до отрисовки, когда искать нечего.
+  // An active tab restored at startup (from settings.json) may have ended up
+  // past the edge before the first click on any tab — the watch on activeId has
+  // not fired at that point. immediate: true on the watch would not do: it would
+  // run before the render, when there is nothing to look for.
   revealActiveTab()
 
   resizeObserver = new ResizeObserver(revealActiveTab)
@@ -55,8 +55,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  // Неотключённый ResizeObserver переживает размонтирование компонента и
-  // держит ссылку на узел — отключаем явно, а не полагаемся на сборку мусора.
+  // A ResizeObserver left connected survives the component's unmount and keeps
+  // a reference to the node — we disconnect explicitly rather than relying on
+  // garbage collection.
   resizeObserver?.disconnect()
   resizeObserver = null
 })

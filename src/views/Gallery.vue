@@ -53,17 +53,17 @@ watchEffect(() => {
 
 const text = ref('wt/bd-a1b2')
 const editorText = ref('fn main() {\n    println!("hello");\n}\n')
-const editorJs = ref('export function openFile(path, { permanent = false } = {}) {\n  // Одиночный клик открывает временную вкладку.\n  const state = project()\n  return state.openTabs.includes(path)\n}\n')
-const editorMd = ref('# Заголовок\n\nАбзац со **strong** и *emphasis*, плюс [ссылка](https://example.com).\n\n- пункт\n- ещё пункт\n')
+const editorJs = ref('export function openFile(path, { permanent = false } = {}) {\n  // A single click opens a preview tab.\n  const state = project()\n  return state.openTabs.includes(path)\n}\n')
+const editorMd = ref('# Heading\n\nA paragraph with **strong** and *emphasis*, plus a [link](https://example.com).\n\n- an item\n- another item\n')
 const editorPlain = ref('no language for this extension\nplain text, no colour\n')
 const choice = ref('running')
 const checked = ref(true)
 const switched = ref(true)
 
-/* Ряд вкладок галереи — свой: в приложении он приходит из стора, а здесь
-   нужен неподвижный набор, показывающий все четыре вида сразу. */
+/* The gallery's tab row is its own: in the app it comes from a store, while
+   here we need a fixed set showing all four kinds at once. */
 const tabs = [
-  { id: 'terminal', kind: 'pinned', label: 'Terminal' },
+  { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', dirty: true },
   { id: 'agent.rs', kind: 'preview', label: 'agent.rs' },
@@ -272,6 +272,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
                 { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }
               ]"
               active-path="/Users/you/dev/smetana"
+              can-add-agent
             />
           </Panel>
         </div>

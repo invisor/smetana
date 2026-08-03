@@ -1,7 +1,11 @@
 <script setup>
 /* The project's agent list. Split out of DesktopApp.vue: that file is
-   already past nine hundred lines, and a live list with a button and
-   removal would have made it unreadable.
+   already past nine hundred lines, and a live list with removal would have
+   made it unreadable.
+
+   Starting an agent is not here: it belongs to a project, and it is offered
+   on the project's own row in ProjectList.vue. This component is the
+   sessions and nothing else.
 
    Colour is never the only signal here: needs-you is the status system's
    warning triangle, everything else is a dot. */
@@ -13,13 +17,9 @@ import { STATUS_GLYPH, attentionLevel } from '../status/status.js'
 
 const props = defineProps({
   rows: { type: Array, default: () => [] },
-  activeId: { type: [Number, String], default: null },
-  /* There is nowhere to start an agent without a project: the call would
-     reach the worker and come back as a generic failure toast. An
-     affordance that cannot work says so before it is clicked. */
-  canCreate: { type: Boolean, default: true }
+  activeId: { type: [Number, String], default: null }
 })
-defineEmits(['select', 'create', 'remove'])
+defineEmits(['select', 'remove'])
 
 const body = { flex: 1, minHeight: 0, overflow: 'auto' }
 
@@ -91,42 +91,11 @@ const quietMark = { width: '8px', height: '8px', borderRadius: '50%', background
 
 const dotOf = (state) => (state === 'running' ? runningMark : quietMark)
 
-const disabled = computed(() => !props.canCreate)
-/* The one control here that really is a button in spirit — the panel's only
-   action — so it gets its own single useInteractive() instance, same as
-   Button.vue and IconButton.vue use for themselves, and its disabled state
-   reads the same as Button.vue's: no hover, the not-allowed cursor and the
-   same dimming. One control should not be a second dialect of the other. */
-const addInteractive = useInteractive(disabled)
-const addRow = computed(() => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-3)',
-  height: 'var(--row-h)',
-  padding: '0 var(--space-5)',
-  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)',
-  color: 'var(--text-muted)',
-  background: addInteractive.hover.value ? 'var(--surface-hover)' : 'transparent',
-  borderBottom: 'var(--border-w) solid var(--border-subtle)',
-  cursor: disabled.value ? 'not-allowed' : 'default',
-  opacity: disabled.value ? 0.7 : 1,
-  transition: 'var(--transition-control)'
-}))
-
 const empty = computed(() => props.rows.length === 0)
 </script>
 
 <template>
   <div :style="{ display: 'flex', flexDirection: 'column', height: '100%' }">
-    <div
-      :style="addRow"
-      :aria-disabled="disabled || undefined"
-      v-bind="addInteractive.handlers"
-      @click="!disabled && $emit('create')"
-    >
-      <Icon name="plus" :size="14" />
-      <span>New agent</span>
-    </div>
     <div :style="body">
       <div
         v-for="row in rows"
@@ -154,7 +123,7 @@ const empty = computed(() => props.rows.length === 0)
         <IconButton icon="x" size="sm" label="Remove agent" @click.stop="$emit('remove', row.id)" />
       </div>
       <div v-if="empty" :style="{ padding: 'var(--space-5)', color: 'var(--text-muted)', font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)' }">
-        No agents running.
+        No agents running. Start one with + on the project row.
       </div>
     </div>
   </div>

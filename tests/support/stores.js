@@ -1,25 +1,26 @@
 import { vi } from 'vitest'
 import { installIpc } from './ipc.js'
 
-/* Свежий граф сторов на каждый тест.
+/* A fresh store graph per test.
 
-   Сторы — модульные синглтоны, и состояния в них больше, чем экспортированные
-   реактивные объекты: timer, chain, watching, closing в settings.js, chain и
-   ask в tabs.js, moving в projects.js. Vitest даёт свежий реестр модулей на
-   файл, но не на тест, поэтому граф пересобирается здесь.
+   Stores are module singletons, and they hold more state than the reactive
+   objects they export: timer, chain, watching, closing in settings.js, chain
+   and ask in tabs.js, moving in projects.js. Vitest gives a fresh module
+   registry per file but not per test, so the graph is rebuilt here.
 
-   Все шесть сторов берутся из одного графа намеренно: projects.js импортирует
-   остальные, и стор из другого экземпляра смотрел бы на другой
+   Every store comes from one graph deliberately: projects.js imports the
+   others, and a store from another instance would look at a different
    settings.settings.
 
-   nextTick отдаётся отсюда, а не импортируется тестом статически: resetModules
-   пересоздаёт и vue, а nextTick чужого экземпляра дёргает чужой планировщик —
-   тест ждал бы тик, который в свежем графе не наступит. */
+   nextTick is handed out from here rather than imported statically by the test:
+   resetModules recreates vue too, and another instance's nextTick drives
+   another scheduler — the test would wait for a tick that never comes in the
+   fresh graph. */
 export async function loadStores() {
   vi.resetModules()
   const ipc = installIpc()
 
-  const [vue, event, files, settings, tabs, tracker, projects, terminals] = await Promise.all([
+  const [vue, event, files, settings, tabs, tracker, projects, terminals, git] = await Promise.all([
     import('vue'),
     import('@tauri-apps/api/event'),
     import('../../src/stores/files.js'),
@@ -27,13 +28,14 @@ export async function loadStores() {
     import('../../src/stores/tabs.js'),
     import('../../src/stores/tracker.js'),
     import('../../src/stores/projects.js'),
-    import('../../src/stores/terminals.js')
+    import('../../src/stores/terminals.js'),
+    import('../../src/stores/git.js')
   ])
 
   return {
     ipc,
     emit: event.emit,
     nextTick: vue.nextTick,
-    stores: { files, settings, tabs, tracker, projects, terminals }
+    stores: { files, settings, tabs, tracker, projects, terminals, git }
   }
 }

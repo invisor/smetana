@@ -148,14 +148,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn команда_это_агент_в_каталоге_проекта() {
+    fn the_command_is_the_agent_in_the_projects_directory() {
         let cmd = build_command("claude", std::path::Path::new("/tmp/project"));
         assert_eq!(cmd.get_argv()[0], "claude");
         assert_eq!(cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()), Some("/tmp/project".to_owned()));
     }
 
     #[test]
-    fn терминал_объявлен_цветным() {
+    fn the_terminal_is_declared_colour_capable() {
         // Without TERM the agent decides colours are unsupported and sends
         // plain text — and then there is nothing for screen.rs to parse and
         // nothing for the profile to recognise.

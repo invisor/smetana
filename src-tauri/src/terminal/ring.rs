@@ -61,14 +61,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn пока_влезает_отдаёт_всё_как_есть() {
+    fn while_it_fits_everything_comes_back_as_is() {
         let mut ring = Ring::new(64);
         ring.push(b"hello\nworld\n");
         assert_eq!(ring.snapshot(), b"hello\nworld\n");
     }
 
     #[test]
-    fn переполнение_режет_по_переводу_строки() {
+    fn an_overflow_cuts_at_a_line_break() {
         let mut ring = Ring::new(16);
         // 20 bytes against a 16 cap: the extra four go, and the trim carries
         // the start forward to a newline — a whole line is lost, not half a
@@ -78,48 +78,48 @@ mod tests {
         // The attribute reset comes first — an open colour sequence stayed
         // in the dropped part, and without the reset it would keep colouring
         // everything after it.
-        assert!(text.starts_with("\u{1b}[0m"), "нет сброса атрибутов: {text:?}");
+        assert!(text.starts_with("\u{1b}[0m"), "no attribute reset: {text:?}");
         assert_eq!(text.trim_start_matches("\u{1b}[0m"), "bbbb\ncccc\ndddd\n");
     }
 
     #[test]
-    fn обрезка_не_рвёт_escape_последовательность() {
+    fn trimming_does_not_tear_an_escape_sequence() {
         let mut ring = Ring::new(12);
         ring.push(b"\x1b[31mred text here\nplain\n");
         let text = String::from_utf8(ring.snapshot()).unwrap();
         let body = text.trim_start_matches("\u{1b}[0m");
-        assert!(!body.contains("[31"), "хвост escape-последовательности уехал в снимок: {body:?}");
+        assert!(!body.contains("[31"), "the tail of an escape sequence made it into the snapshot: {body:?}");
     }
 
     #[test]
-    fn переполнение_без_перевода_строки_режет_по_возврату_каретки() {
+    fn an_overflow_with_no_line_break_cuts_at_a_carriage_return() {
         let mut ring = Ring::new(16);
         // No newline, but there is a carriage return: trim against that.
         ring.push(b"aaaa\rbbbb\rcccc\rdddd\r");
         let text = String::from_utf8(ring.snapshot()).unwrap();
         // The attribute reset comes first.
-        assert!(text.starts_with("\u{1b}[0m"), "нет сброса атрибутов: {text:?}");
+        assert!(text.starts_with("\u{1b}[0m"), "no attribute reset: {text:?}");
         // After the reset, the snapshot should start at the second line (after the first \r).
         assert_eq!(text.trim_start_matches("\u{1b}[0m"), "bbbb\rcccc\rdddd\r");
     }
 
     #[test]
-    fn переполнение_без_границ_сохраняет_буфер() {
+    fn an_overflow_with_no_boundaries_keeps_the_buffer() {
         let mut ring = Ring::new(10);
         // Fill exactly to the cap.
         ring.push(b"aaaaaaaaaa");
-        assert_eq!(ring.snapshot().len(), 10, "буфер должен быть полным");
+        assert_eq!(ring.snapshot().len(), 10, "the buffer must be full");
         // Push one more byte — overflow. The excess 1 byte is drained, and
         // the remaining 10 bytes have neither \n nor \r. The buffer must not
         // be cleared.
         ring.push(b"b");
         let text = String::from_utf8(ring.snapshot()).unwrap();
         // Check that the buffer is non-empty and includes the attribute reset.
-        assert!(text.starts_with("\u{1b}[0m"), "нет сброса атрибутов: {text:?}");
+        assert!(text.starts_with("\u{1b}[0m"), "no attribute reset: {text:?}");
         let body = text.trim_start_matches("\u{1b}[0m");
         // The body should be exactly 10 bytes — the capacity, not less.
-        assert_eq!(body.len(), 10, "буфер должен сохранить 10 байт, а сохранил: {body:?}");
+        assert_eq!(body.len(), 10, "the buffer had to keep 10 bytes, and kept: {body:?}");
         // The point of the test is that the buffer is not cleared and not empty.
-        assert!(!body.is_empty(), "буфер не должен быть пуст после переполнения без границ");
+        assert!(!body.is_empty(), "the buffer must not be empty after an overflow with no boundaries");
     }
 }

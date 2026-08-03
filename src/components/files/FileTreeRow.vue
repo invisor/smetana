@@ -52,10 +52,10 @@ const nameStyle = computed(() => ({
 
 const onClick = () => emit(props.kind === 'dir' ? 'toggle' : 'select')
 
-/* Двойной клик по файлу открывает его постоянной вкладкой — так же, как в
-   VS Code. Задержки не нужно: первый клик уже открыл превью, второй его
-   закрепляет, и промежуточного состояния, которое надо было бы отменять, тут
-   не возникает. */
+/* A double click on a file opens it as a permanent tab — the same as in VS
+   Code. No delay is needed: the first click has already opened the preview and
+   the second makes it permanent, and no intermediate state that would have to
+   be undone arises here. */
 const onDoubleClick = () => {
   if (props.kind !== 'dir') emit('open')
 }

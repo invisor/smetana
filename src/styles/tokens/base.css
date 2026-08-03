@@ -1,4 +1,18 @@
-/* ELEMENT DEFAULTS: focus ring, selection, scrollbar, links. */
+/* ELEMENT DEFAULTS: box model, focus ring, selection, scrollbar, links. */
+
+/* Every component in this system declares its size as a token and then adds
+   padding and a border on top — `width:100%` with `padding:0 var(--space-4)`,
+   `height:var(--control-h)` with `border:var(--border-w)`, `width:8px` with a
+   1.5px ring. That is only correct under border-box, which the React design
+   system gets from its own reset and this port did not carry over.
+
+   Without it every such element renders exactly its padding and border too
+   large: the Input inside a Modal overflowed the card by 2×--space-4 + 2×
+   --border-w, and StatusDot's one `size` prop drew three different glyph sizes
+   — 8px unbordered, 11px bordered — when the whole point is one family at one
+   size. Removing this line brings all of that back. */
+*,*::before,*::after{box-sizing:border-box}
+
 html{color-scheme:light}
 [data-theme="dark"]{color-scheme:dark}
 body{margin:0;background:var(--canvas);color:var(--text-primary);font-family:var(--font-sans);font-size:var(--text-body-size);line-height:var(--leading-normal);-webkit-font-smoothing:antialiased}
@@ -16,8 +30,8 @@ code,kbd,pre,samp{font-family:var(--font-mono)}
 ::-webkit-scrollbar-corner{background:transparent}
 .sm-mono{font-family:var(--font-mono);font-variant-ligatures:none}
 .sm-hatch-blocked{background-image:repeating-linear-gradient(135deg,var(--hatch-blocked) 0 1px,transparent 1px 4px)}
-/* Скрыть полосу прокрутки для элемента фиксированной высоты, где полоса отнимала бы
-   высоту у содержимого (например, ряд вкладок). Инлайновым стилем не задать —
-   ::-webkit-scrollbar это псевдоэлемент. */
+/* Hide the scrollbar on a fixed-height element where it would steal height from
+   the content (a tab row, for instance). It cannot be set with an inline style —
+   ::-webkit-scrollbar is a pseudo-element. */
 .sm-scroll-hidden{scrollbar-width:none}
 .sm-scroll-hidden::-webkit-scrollbar{display:none}

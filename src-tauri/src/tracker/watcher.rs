@@ -3,39 +3,40 @@ use std::path::{Path, PathBuf};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc::Sender;
 
-/// Значимых путей ровно три. Всё остальное в .beads — конфиги, бэкапы и
-/// кэш git-ремоута — шумит, но к содержимому трекера отношения не имеет.
+/// There are exactly three paths that matter. Everything else in .beads —
+/// configs, backups and the git-remote cache — makes noise but has nothing to
+/// do with the tracker's contents.
 pub fn is_relevant(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let in_noms = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("noms");
     (in_noms && (name == "manifest" || name == "journal.idx")) || name == "last-touched"
 }
 
-/// Что watcher сообщает воркеру.
+/// What the watcher tells the worker.
 pub enum WatchEvent {
-    /// В `.beads` что-то записали — пора догружать.
+    /// Something was written in `.beads` — time to catch up.
     Changed,
-    /// Слежение сломалось на ходу. Дальше остаётся только периодическая
-    /// сверка раз в минуту, и знать об этом должен не только лог.
+    /// The watching broke mid-flight. All that remains is the periodic
+    /// once-a-minute sweep, and more than the log should know about that.
     Failed(String),
 }
 
-/// Возвращённый watcher нужно держать живым: при его уничтожении слежение
-/// прекращается молча.
+/// The returned watcher has to be kept alive: dropping it stops the watching
+/// silently.
 pub fn spawn(beads_dir: PathBuf, tx: Sender<WatchEvent>) -> notify::Result<RecommendedWatcher> {
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         match res {
             Ok(event) => {
                 if event.paths.iter().any(|p| is_relevant(p)) {
-                    // Схлопывание частых событий делает воркер; здесь достаточно
-                    // не блокироваться, если очередь уже полна.
+                    // The worker collapses frequent events; all that matters
+                    // here is not to block when the queue is already full.
                     let _ = tx.try_send(WatchEvent::Changed);
                 }
             }
-            // Проглоченная здесь ошибка означала бы приложение, которое до
-            // перезапуска живёт на одной шестидесятисекундной сверке и молчит
-            // об этом. Переполненная очередь потерей не грозит: она полна
-            // ровно тогда, когда события идут потоком, то есть слежение живо.
+            // An error swallowed here would mean an app that lives on the
+            // sixty-second sweep alone until a restart and says nothing about
+            // it. An overflowing queue threatens no loss: it is full exactly
+            // when events are streaming, that is, when the watching is alive.
             Err(e) => {
                 let _ = tx.try_send(WatchEvent::Failed(e.to_string()));
             }
@@ -51,7 +52,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn ловит_запись_dolt() {
+    fn catches_a_dolt_write() {
         assert!(is_relevant(Path::new(
             "/p/.beads/embeddeddolt/smetana/.dolt/noms/manifest"
         )));
@@ -61,12 +62,12 @@ mod tests {
     }
 
     #[test]
-    fn ловит_last_touched() {
+    fn catches_last_touched() {
         assert!(is_relevant(Path::new("/p/.beads/last-touched")));
     }
 
     #[test]
-    fn игнорирует_шум() {
+    fn ignores_the_noise() {
         assert!(!is_relevant(Path::new("/p/.beads/config.yaml")));
         assert!(!is_relevant(Path::new("/p/.beads/backup/LOCK")));
         assert!(!is_relevant(Path::new(

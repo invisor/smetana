@@ -1,7 +1,7 @@
-//! Настройки приложения: типы, умолчания, разбор файла и слияние.
+//! App settings: types, defaults, file parsing and merging.
 //!
-//! Здесь нет ввода-вывода: всё, что зависит от диска, живёт в `file.rs`.
-//! Поэтому именно этот файл покрыт тестами — как `tracker/store.rs`.
+//! No I/O here: everything that depends on the disk lives in `file.rs`.
+//! That is why this file is the one carrying the tests — same as `tracker/store.rs`.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -9,32 +9,32 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// Версия схемы файла. Растёт тогда, когда старый файл нельзя прочитать как есть.
+/// The file's schema version. It grows when an old file can no longer be read as is.
 pub const CURRENT_VERSION: u32 = 1;
-/// Сколько проектов помним: карта не должна расти вечно от разовых заходов.
+/// How many projects we remember: the map must not grow forever from one-off visits.
 pub const MAX_PROJECTS: usize = 20;
-/// Сколько проектов можно держать открытыми. Предел не про вкус, а про то,
-/// чтобы список в панели оставался списком, а файл — читаемым.
+/// How many projects may stay open. The limit is not about taste but about
+/// keeping the list in the panel a list, and the file readable.
 pub const MAX_OPEN: usize = 50;
 
 const THEMES: [&str; 2] = ["dark", "light"];
 const DENSITIES: [&str; 2] = ["comfortable", "compact"];
-/// Закрытый список — и он продублирован по ту сторону IPC: те же три вкладки
-/// перечислены в `src/views/DesktopApp.vue` (константа `SIDE_TABS`). Меняя
-/// один список, меняйте и второй: значение, которого здесь нет, по дороге на
-/// диск молча станет "files", и после перезапуска человек увидит не то, что
-/// оставил.
+/// A closed list — and it is duplicated on the other side of the IPC: the same
+/// three tabs are listed in `src/views/DesktopApp.vue` (the `SIDE_TABS`
+/// constant). Change one list and you must change the other: a value missing
+/// here silently becomes "files" on its way to disk, and after a restart a
+/// person sees something other than what they left.
 const SIDE_TABS: [&str; 3] = ["files", "git", "agents"];
-/// Закрытого списка вкладок у центра нет и не будет: вкладки файлов приходят
-/// из проекта. Поэтому проверяем не принадлежность списку, а вменяемость.
+/// The centre has no closed list of tabs and never will: file tabs come from
+/// the project. So we check sanity rather than membership.
 const MAX_ID_LEN: usize = 200;
 const MAX_PATH_LEN: usize = 4096;
 const MAX_EXPANDED: usize = 500;
-/// Сколько вкладок файлов помним. Предел не про вкус, а про то, чтобы ряд
-/// вкладок оставался рядом, а файл настроек — читаемым.
+/// How many file tabs we remember. The limit is not about taste but about
+/// keeping the tab row a row, and the settings file readable.
 pub const MAX_OPEN_TABS: usize = 50;
 
-/// Внешний вид — про человека и его экран, поэтому общий для всех проектов.
+/// Appearance is about the person and their screen, hence shared by all projects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Appearance {
@@ -48,16 +48,47 @@ impl Default for Appearance {
     }
 }
 
-/// Свёрнутость боковых панелей — тоже про экран, а не про содержимое.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// Collapsed state and width of the side panels — also about the screen, not
+/// about content.
+///
+/// The stored width is the one a person dragged to, not the one that fitted the
+/// window: fitting it to the current window is the front end's job
+/// (`src/views/panelWidths.js`), and a narrow window must not rewrite a
+/// preference. Hence the generous ceiling in the check below: it catches
+/// garbage, not tightness.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Layout {
     pub left_collapsed: bool,
     pub right_collapsed: bool,
+    pub left_width: u32,
+    pub right_width: u32,
 }
 
-/// Всё, что относится к содержимому, — под путём проекта. Мультипроекта ещё
-/// нет, и запись всегда одна, но форма уже та, в которую он ляжет.
+/// The defaults are repeated in the front end (`LEFT_DEFAULT`, `RIGHT_DEFAULT`
+/// in `panelWidths.js`): with no back end the app must still open looking the same.
+pub const LEFT_WIDTH_DEFAULT: u32 = 252;
+pub const RIGHT_WIDTH_DEFAULT: u32 = 340;
+/// Sanity bounds, not layout ones. A zero would come from a panel collapsed
+/// into a rail, and after a restart it would expand into nothing; the upper
+/// bound cuts off accidental garbage without getting in a wide monitor's way.
+const MIN_PANEL_WIDTH: u32 = 120;
+const MAX_PANEL_WIDTH: u32 = 4000;
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            left_collapsed: false,
+            right_collapsed: false,
+            left_width: LEFT_WIDTH_DEFAULT,
+            right_width: RIGHT_WIDTH_DEFAULT,
+        }
+    }
+}
+
+/// Everything to do with content sits under the project's path. There is no
+/// multi-project yet and the entry is always one, but the shape is already the
+/// one it will take.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProjectState {
@@ -66,14 +97,15 @@ pub struct ProjectState {
     pub selected_task: Option<String>,
     pub selected_path: Option<String>,
     pub expanded: Vec<String>,
-    /// Открытые файлы в порядке вкладок. Пути относительны корня проекта:
-    /// ключ проекта в карте уже абсолютный, и дублировать его в каждой
-    /// вкладке незачем — заодно переезд каталога не превращает список в мусор.
+    /// Open files in tab order. Paths are relative to the project root: the
+    /// project's key in the map is already absolute, and duplicating it in
+    /// every tab is pointless — it also means a moved folder does not turn the
+    /// list into rubbish.
     pub open_tabs: Vec<String>,
-    /// Какая из них временная. Временная всегда одна, и она никогда не грязная:
-    /// правка снимает временность в тот же момент, что и ставит точку.
+    /// Which of them is temporary. There is always exactly one, and it is never
+    /// dirty: an edit drops the temporary flag at the same moment it adds the dot.
     pub preview_tab: Option<String>,
-    /// RFC 3339, проставляется при записи. Нужен только для обрезки карты.
+    /// RFC 3339, stamped on write. Needed only for trimming the map.
     pub used_at: Option<String>,
 }
 
@@ -92,7 +124,7 @@ impl Default for ProjectState {
     }
 }
 
-/// Файл целиком.
+/// The whole file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -100,8 +132,9 @@ pub struct Settings {
     pub appearance: Appearance,
     pub layout: Layout,
     pub last_project: Option<String>,
-    /// Состав и порядок списка на экране — порядок добавления, а не свежести:
-    /// строки, прыгающие при каждом переключении, читать нельзя.
+    /// The contents and order of the on-screen list — the order things were
+    /// added, not how recent they are: rows that jump on every switch are
+    /// unreadable.
     pub open_projects: Vec<String>,
     pub projects: BTreeMap<String, ProjectState>,
 }
@@ -119,13 +152,13 @@ impl Default for Settings {
     }
 }
 
-/// То, что видит фронт: общее (`appearance`, `layout`), состояние одного
-/// проекта (`project`), состав списка открытых (`open_projects`) и то, какой
-/// из них активен (`active_project`). Последние два — половина того, что
-/// пересекает IPC: список на экране и подсветка строки берутся из них, и они
-/// же приходят обратно в `settings_save`, потому что истина по составу списка
-/// живёт во фронте. Карта остальных проектов за границу не выходит — фронт
-/// про неё не знает.
+/// What the front end sees: the shared parts (`appearance`, `layout`), one
+/// project's state (`project`), the contents of the open list (`open_projects`)
+/// and which of them is active (`active_project`). The last two are half of
+/// what crosses the IPC: the on-screen list and the highlighted row come from
+/// them, and they come back through `settings_save`, because the truth about
+/// the list's contents lives in the front end. The map of the remaining
+/// projects never crosses the boundary — the front end knows nothing about it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ResolvedSettings {
@@ -136,13 +169,14 @@ pub struct ResolvedSettings {
     pub active_project: Option<String>,
 }
 
-/// Что вышло из файла.
+/// What came out of the file.
 #[derive(Debug, PartialEq)]
 pub enum Outcome {
     Ok(Settings),
-    /// Не JSON или не объект — читать нечего.
+    /// Not JSON, or not an object — there is nothing to read.
     Broken,
-    /// Файл новее этой сборки: молча уронить чужие поля нельзя.
+    /// The file is newer than this build: silently dropping someone else's
+    /// fields is not allowed.
     TooNew,
 }
 
@@ -173,15 +207,15 @@ pub fn parse(text: &str) -> Outcome {
     Outcome::Ok(settings)
 }
 
-/// Файл, написанный до появления списка, знает только `lastProject`. Без этого
-/// шага `validate` увидела бы активного вне пустого списка и обнулила его —
-/// человек, обновивший приложение, встретил бы пустую панель вместо своего
-/// проекта. Версия схемы здесь не помогает: те файлы тоже несут `version: 1`,
-/// поэтому решаем по содержимому.
+/// A file written before the list existed knows only `lastProject`. Without
+/// this step `validate` would see an active project outside an empty list and
+/// clear it — someone who just updated the app would meet an empty panel
+/// instead of their project. The schema version does not help here: those files
+/// carry `version: 1` too, so the decision goes by content.
 ///
-/// Только на чтении файла. Пустой список от фронта — это осознанное «я закрыл
-/// последний проект», и воскрешать его нельзя: `ResolvedSettings::validate`
-/// этой поблажки не знает.
+/// On file reads only. An empty list from the front end is a deliberate "I
+/// closed the last project", and it must not be resurrected:
+/// `ResolvedSettings::validate` knows nothing of this leniency.
 fn adopt_last_project(settings: &mut Settings) {
     if settings.open_projects.is_empty() {
         if let Some(last) = settings.last_project.clone() {
@@ -190,10 +224,10 @@ fn adopt_last_project(settings: &mut Settings) {
     }
 }
 
-/// Что отдаём фронту: общее, список открытых и состояние активного проекта.
-/// `active` — это «покажи мне вот этот»: так фронт получает состояние другого
-/// проекта при переключении, не перезапуская приложение. Без аргумента берём
-/// активный из файла.
+/// What we hand the front end: the shared parts, the open list and the active
+/// project's state. `active` means "show me this one": that is how the front
+/// end gets another project's state when switching, without restarting the app.
+/// With no argument we take the active project from the file.
 pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
     let active = active.map(str::to_owned).or_else(|| file.last_project.clone());
     ResolvedSettings {
@@ -209,8 +243,8 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
     }
 }
 
-/// Кладёт разрешённый вид обратно в файл. `now` приходит снаружи, чтобы
-/// функция осталась чистой и проверяемой.
+/// Puts the resolved view back into the file. `now` comes from outside so the
+/// function stays pure and testable.
 pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     resolved.validate();
     file.version = CURRENT_VERSION;
@@ -219,8 +253,8 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
 
-    // Закрыли последний проект — состояние писать некому, но список и
-    // внешний вид сохранить всё равно надо.
+    // The last project was closed — there is nobody to write state for, but the
+    // list and the appearance still have to be saved.
     if let Some(active) = resolved.active_project {
         let mut state = resolved.project;
         state.used_at = Some(now);
@@ -231,8 +265,8 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     }
 }
 
-/// Секция читается отдельно от соседей: сломанный тип в одной не должен
-/// уносить весь файл.
+/// A section is read independently of its neighbours: a broken type in one must
+/// not take the whole file down.
 fn section<T: Default + serde::de::DeserializeOwned>(object: &Map<String, Value>, key: &str) -> T {
     object
         .get(key)
@@ -245,7 +279,7 @@ fn projects(object: &Map<String, Value>) -> BTreeMap<String, ProjectState> {
     let Some(map) = object.get("projects").and_then(Value::as_object) else {
         return BTreeMap::new();
     };
-    // И каждая запись — тоже сама по себе.
+    // And every entry stands on its own too.
     map.iter()
         .filter_map(|(path, value)| {
             serde_json::from_value::<ProjectState>(value.clone())
@@ -255,35 +289,34 @@ fn projects(object: &Map<String, Value>) -> BTreeMap<String, ProjectState> {
         .collect()
 }
 
-/// Шов для миграций, а не миграция.
+/// A seam for migrations, not a migration.
 ///
-/// `parse` читает `version`, зовёт эту функцию и сам проставляет
-/// `CURRENT_VERSION`. Сегодня обе ветки возвращают объект как есть: файл без
-/// версии — это и есть первая схема, полей в нём столько же, и он читается
-/// без переделки. Когда схема разойдётся со старой, переписывание полей
-/// появится здесь; цепочки шагов пока нет, и делать вид, что она есть, незачем.
+/// `parse` reads `version`, calls this function and stamps `CURRENT_VERSION`
+/// itself. Today both arms return the object as is: a file with no version is
+/// the first schema, it has the same fields, and it reads without rework. When
+/// the schema does diverge from the old one, the field rewriting will appear
+/// here; there is no chain of steps yet, and pretending there is would be idle.
 fn migrate(object: Map<String, Value>, from: u64) -> Map<String, Value> {
     match from {
         0 | 1 => object,
-        // Версии новее текущей `parse` сюда не пускает.
+        // `parse` never lets versions newer than the current one reach here.
         _ => object,
     }
 }
 
-/// Оставляем MAX_PROJECTS самых свежих среди тех, кого можно выселять.
-/// Запись без `usedAt` считается самой старой: она из файла, написанного
-/// руками, и ей нечем себя защитить.
+/// Keeps the MAX_PROJECTS most recent among those that may be evicted. An entry
+/// with no `usedAt` counts as the oldest: it comes from a hand-written file and
+/// has nothing to defend itself with.
 ///
-/// `usedAt` сравнивается как момент времени, а не как строка: RFC 3339
-/// допускает и `Z`, и `+00:00`, и любое смещение, и лексикографически они
-/// выстраиваются не по возрасту. Непонятная метка приравнивается к
-/// отсутствующей.
+/// `usedAt` is compared as an instant, not as a string: RFC 3339 allows `Z`,
+/// `+00:00` and any offset, and lexicographically they do not line up by age.
+/// A mark that cannot be parsed is treated as missing.
 ///
-/// Не выселяются никогда двое: текущий проект и любой открытый. Из-за этого
-/// MAX_PROJECTS перестаёт быть жёстким размером карты — она держит всех
-/// открытых плюс закрытых, пока общее число не дойдёт до предела. Предел
-/// ставился против роста от разовых заходов, а не против того, что человек
-/// открыл сам.
+/// Two kinds are never evicted: the current project and any open one. Because
+/// of that MAX_PROJECTS stops being a hard size for the map — it holds every
+/// open project plus closed ones until the total reaches the limit. The limit
+/// was put there against growth from one-off visits, not against what a person
+/// opened themselves.
 fn trim(projects: &mut BTreeMap<String, ProjectState>, current: Option<&str>, open: &[String]) {
     if projects.len() <= MAX_PROJECTS {
         return;
@@ -300,10 +333,10 @@ fn trim(projects: &mut BTreeMap<String, ProjectState>, current: Option<&str>, op
             (path.clone(), stamp)
         })
         .collect();
-    // None меньше любого Some, поэтому по убыванию свежие оказываются впереди.
+    // None is less than any Some, so sorting descending puts the recent ones first.
     ordered.sort_by(|a, b| b.1.cmp(&a.1));
 
-    // Места, занятые неприкосновенными, уже потрачены.
+    // The slots taken by the untouchable entries are already spent.
     let taken = projects.len() - ordered.len();
     let keep = MAX_PROJECTS.saturating_sub(taken);
     for (path, _) in ordered.into_iter().skip(keep) {
@@ -312,10 +345,11 @@ fn trim(projects: &mut BTreeMap<String, ProjectState>, current: Option<&str>, op
 }
 
 impl Settings {
-    /// Значение вне допустимого множества — это не повод выбросить файл:
-    /// теряет только само поле.
+    /// A value outside the allowed set is no reason to throw the file away:
+    /// only the field itself is lost.
     pub fn validate(&mut self) {
         self.appearance.validate();
+        self.layout.validate();
         for state in self.projects.values_mut() {
             state.validate();
         }
@@ -327,6 +361,7 @@ impl Settings {
 impl ResolvedSettings {
     pub fn validate(&mut self) {
         self.appearance.validate();
+        self.layout.validate();
         self.project.validate();
         sane_paths(&mut self.open_projects, MAX_OPEN);
         active_in(&mut self.active_project, &self.open_projects);
@@ -340,6 +375,21 @@ impl Appearance {
     }
 }
 
+impl Layout {
+    fn validate(&mut self) {
+        in_range(&mut self.left_width, LEFT_WIDTH_DEFAULT);
+        in_range(&mut self.right_width, RIGHT_WIDTH_DEFAULT);
+    }
+}
+
+/// A value out of range loses the field and takes the default — the same rule
+/// as `one_of`: one field is damaged, not the whole section.
+fn in_range(value: &mut u32, fallback: u32) {
+    if !(MIN_PANEL_WIDTH..=MAX_PANEL_WIDTH).contains(value) {
+        *value = fallback;
+    }
+}
+
 impl ProjectState {
     fn validate(&mut self) {
         one_of(&mut self.side_tab, &SIDE_TABS, "files");
@@ -348,9 +398,8 @@ impl ProjectState {
         sane_paths(&mut self.expanded, MAX_EXPANDED);
         sane_paths(&mut self.open_tabs, MAX_OPEN_TABS);
 
-        // Временной вкладки, которой нет среди открытых, не бывает: она
-        // рисовалась бы курсивом в пустоте или подставлялась бы на место,
-        // которого нет.
+        // A preview tab that is not among the open ones cannot exist: it would
+        // be drawn in italics over nothing, or replaced in a slot that is not there.
         if self.preview_tab.as_deref().is_some_and(|p| !self.open_tabs.iter().any(|t| t == p)) {
             self.preview_tab = None;
         }
@@ -386,8 +435,8 @@ fn one_of(value: &mut String, allowed: &[&str], fallback: &str) {
     }
 }
 
-/// Пустая строка приходит из фронта как «ничего не выбрано», слишком длинная —
-/// как мусор. И то и другое лучше забыть, чем хранить.
+/// An empty string arrives from the front end as "nothing is selected", an
+/// overlong one as garbage. Both are better forgotten than kept.
 fn forget_if_junk(value: &mut Option<String>, max: usize) {
     if let Some(text) = value {
         if text.is_empty() || text.len() > max {
@@ -396,17 +445,17 @@ fn forget_if_junk(value: &mut Option<String>, max: usize) {
     }
 }
 
-/// Список путей — из файла или из фронта. Пустые строки и слишком длинные
-/// пути мусор, дубли бессмысленны, а длина ограничена.
+/// A list of paths — from the file or from the front end. Empty strings and
+/// overlong paths are garbage, duplicates are pointless, and the length is capped.
 fn sane_paths(paths: &mut Vec<String>, max: usize) {
     let mut seen = HashSet::new();
     paths.retain(|path| !path.is_empty() && path.len() <= MAX_PATH_LEN && seen.insert(path.clone()));
     paths.truncate(max);
 }
 
-/// Активный проект обязан быть в списке открытых: иначе доска показывала бы
-/// то, чего в списке нет, и ни одна строка не была бы подсвечена. Пустой
-/// список — это законное «проектов нет», а не поломка.
+/// The active project must be in the open list: otherwise the board would show
+/// something the list does not contain, and no row would be highlighted. An
+/// empty list is a legitimate "there are no projects", not a breakage.
 fn active_in(active: &mut Option<String>, open: &[String]) {
     let known = active.as_deref().is_some_and(|path| open.iter().any(|p| p == path));
     if !known {
@@ -421,7 +470,7 @@ mod tests {
     fn settings_of(text: &str) -> Settings {
         match parse(text) {
             Outcome::Ok(settings) => settings,
-            other => panic!("ожидали Ok, получили {other:?}"),
+            other => panic!("expected Ok, got {other:?}"),
         }
     }
 
@@ -440,7 +489,7 @@ mod tests {
 
     #[test]
     fn broken_json_is_not_settings() {
-        assert_eq!(parse("{не json"), Outcome::Broken);
+        assert_eq!(parse("{not json"), Outcome::Broken);
         assert_eq!(parse("[1,2,3]"), Outcome::Broken);
     }
 
@@ -448,7 +497,7 @@ mod tests {
     fn unknown_value_falls_back_field_by_field() {
         let settings = settings_of(r#"{"version":1,"appearance":{"theme":"neon","density":"compact"}}"#);
         assert_eq!(settings.appearance.theme, "dark");
-        assert_eq!(settings.appearance.density, "compact", "соседнее поле должно уцелеть");
+        assert_eq!(settings.appearance.density, "compact", "the neighbouring field must survive");
     }
 
     #[test]
@@ -459,11 +508,39 @@ mod tests {
     }
 
     #[test]
+    fn a_file_without_widths_opens_at_the_shipped_ones() {
+        // A file written before the panels learned to be dragged.
+        let settings = settings_of(r#"{"version":1,"layout":{"leftCollapsed":true}}"#);
+        assert!(settings.layout.left_collapsed);
+        assert_eq!(settings.layout.left_width, LEFT_WIDTH_DEFAULT);
+        assert_eq!(settings.layout.right_width, RIGHT_WIDTH_DEFAULT);
+    }
+
+    #[test]
+    fn a_width_out_of_range_loses_only_itself() {
+        let settings = settings_of(r#"{"version":1,"layout":{"leftWidth":0,"rightWidth":300}}"#);
+        assert_eq!(settings.layout.left_width, LEFT_WIDTH_DEFAULT);
+        assert_eq!(settings.layout.right_width, 300, "the neighbouring field must survive");
+
+        let huge = settings_of(r#"{"version":1,"layout":{"leftWidth":999999}}"#);
+        assert_eq!(huge.layout.left_width, LEFT_WIDTH_DEFAULT);
+    }
+
+    #[test]
+    fn a_width_wider_than_any_window_survives_the_trip() {
+        // The check catches garbage, not tightness: the front end fits the width
+        // to the window, and a number that does not fit today must survive to
+        // reach a wide monitor.
+        let settings = settings_of(r#"{"version":1,"layout":{"leftWidth":1200}}"#);
+        assert_eq!(settings.layout.left_width, 1200);
+    }
+
+    #[test]
     fn unknown_side_tab_falls_back_to_files() {
         let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"tarot","activeTab":"terminal"}}}"#);
         let state = &settings.projects["/p"];
         assert_eq!(state.side_tab, "files");
-        assert_eq!(state.active_tab, "terminal", "своя вкладка не из закрытого списка остаётся");
+        assert_eq!(state.active_tab, "terminal", "a tab outside the closed list stays");
     }
 
     #[test]
@@ -478,7 +555,7 @@ mod tests {
         let mut file = Settings::default();
         let resolved = ResolvedSettings {
             appearance: Appearance { theme: "light".into(), density: "comfortable".into() },
-            layout: Layout { left_collapsed: true, right_collapsed: false },
+            layout: Layout { left_collapsed: true, left_width: 420, ..Layout::default() },
             project: ProjectState {
                 selected_task: Some("bd-a1b2".into()),
                 ..ProjectState::default()
@@ -492,6 +569,7 @@ mod tests {
         assert_eq!(file.version, CURRENT_VERSION);
         assert_eq!(file.appearance.theme, "light");
         assert!(file.layout.left_collapsed);
+        assert_eq!(file.layout.left_width, 420);
         assert_eq!(file.last_project.as_deref(), Some("/work/smetana"));
         let state = &file.projects["/work/smetana"];
         assert_eq!(state.selected_task.as_deref(), Some("bd-a1b2"));
@@ -511,7 +589,7 @@ mod tests {
 
         merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
 
-        assert_eq!(file.appearance.theme, "dark", "проверка на входе, а не только на выходе");
+        assert_eq!(file.appearance.theme, "dark", "validated on the way in, not only on the way out");
         assert_eq!(file.projects["/p"].side_tab, "files");
     }
 
@@ -527,10 +605,10 @@ mod tests {
 
         let expanded = &settings.projects["/p"].expanded;
         let last_kept = format!("/dir{:04}", MAX_EXPANDED - 2);
-        assert_eq!(expanded.len(), MAX_EXPANDED, "длиннее предела список не хранится");
+        assert_eq!(expanded.len(), MAX_EXPANDED, "the list is not stored past the limit");
         assert_eq!(expanded[0], "/a");
-        assert_eq!(expanded[1], "/dir0000", "дубль, пустая строка и слишком длинный путь выпали");
-        assert_eq!(expanded.last(), Some(&last_kept), "обрезается хвост, а не начало");
+        assert_eq!(expanded[1], "/dir0000", "the duplicate, the empty string and the overlong path fell out");
+        assert_eq!(expanded.last(), Some(&last_kept), "the tail is trimmed, not the head");
     }
 
     #[test]
@@ -554,24 +632,24 @@ mod tests {
         merge(&mut file, resolved, "2026-08-01T00:00:00+00:00".into());
 
         assert_eq!(file.projects.len(), MAX_PROJECTS);
-        assert!(file.projects.contains_key("/p-new"), "текущий проект остаётся всегда");
-        assert!(!file.projects.contains_key("/p00"), "самый старый уходит первым");
+        assert!(file.projects.contains_key("/p-new"), "the current project always stays");
+        assert!(!file.projects.contains_key("/p00"), "the oldest goes first");
     }
 
     #[test]
     fn trim_compares_instants_not_strings_and_never_evicts_the_current_project() {
         let mut projects: BTreeMap<String, ProjectState> = BTreeMap::new();
 
-        // Текущий проект несёт самую старую метку из всех — и всё равно
-        // обязан остаться: он исключён из отбора структурно, а не потому,
-        // что его дата оказалась наибольшей (как было в старом тесте).
+        // The current project carries the oldest mark of all — and still has to
+        // stay: it is excluded from the selection structurally, not because its
+        // date happened to be the largest (as it was in the old test).
         projects.insert(
             "/current".into(),
             ProjectState { used_at: Some("2000-01-01T00:00:00+00:00".into()), ..ProjectState::default() },
         );
 
-        // Наполнитель — заведомо самые свежие записи, отбору не подлежат
-        // при любом способе сравнения; занимают все места, кроме одного.
+        // Filler — deliberately the most recent entries, not eligible for
+        // eviction under any comparison; they take every slot but one.
         let filler_count = MAX_PROJECTS - 2;
         for i in 0..filler_count {
             projects.insert(
@@ -583,11 +661,11 @@ mod tests {
             );
         }
 
-        // Momент "/newer-instant" на самом деле позже "/older-instant" —
-        // 23:00Z против 22:00Z того же дня по UTC (01:00+03:00 — это и есть
-        // 22:00Z). Но как *строка* "2026-05-01..." больше "2026-04-30..." —
-        // сравниваются цифры дня, "05" > "04" — и лексикографический
-        // порядок расставил бы их наоборот.
+        // The instant "/newer-instant" really is later than "/older-instant" —
+        // 23:00Z against 22:00Z of the same UTC day (01:00+03:00 is exactly
+        // 22:00Z). But as a *string* "2026-05-01..." is greater than
+        // "2026-04-30..." — the day digits compare, "05" > "04" — and
+        // lexicographic order would line them up the other way round.
         projects.insert(
             "/older-instant".into(),
             ProjectState { used_at: Some("2026-05-01T01:00:00+03:00".into()), ..ProjectState::default() },
@@ -597,23 +675,23 @@ mod tests {
             ProjectState { used_at: Some("2026-04-30T23:00:00Z".into()), ..ProjectState::default() },
         );
 
-        assert_eq!(projects.len(), MAX_PROJECTS + 1, "проверка на входе: обрезка должна случиться");
+        assert_eq!(projects.len(), MAX_PROJECTS + 1, "check on the way in: trimming must happen");
 
         trim(&mut projects, Some("/current"), &[]);
 
         assert_eq!(projects.len(), MAX_PROJECTS);
-        assert!(projects.contains_key("/current"), "текущий проект не выселяется никогда");
+        assert!(projects.contains_key("/current"), "the current project is never evicted");
         assert!(
             projects.contains_key("/newer-instant"),
-            "более поздний момент остаётся, даже когда его строка лексикографически меньше"
+            "the later instant stays even when its string is lexicographically smaller"
         );
         assert!(
             !projects.contains_key("/older-instant"),
-            "более ранний момент уходит, даже когда его строка лексикографически больше"
+            "the earlier instant goes even when its string is lexicographically larger"
         );
         for i in 0..filler_count {
             let path = format!("/filler{i:02}");
-            assert!(projects.contains_key(&path), "заведомо свежие записи не должны были попасть под обрезку");
+            assert!(projects.contains_key(&path), "deliberately recent entries should not have been trimmed");
         }
     }
 
@@ -640,16 +718,16 @@ mod tests {
     #[test]
     fn the_active_project_has_to_be_in_the_list() {
         let settings = settings_of(r#"{"version":1,"openProjects":["/a","/b"],"lastProject":"/gone"}"#);
-        assert_eq!(settings.last_project.as_deref(), Some("/a"), "чужой активный заменяется первым из списка");
+        assert_eq!(settings.last_project.as_deref(), Some("/a"), "an active project outside the list is replaced by the first one");
 
         let settings = settings_of(r#"{"version":1,"openProjects":["/a","/b"]}"#);
-        assert_eq!(settings.last_project.as_deref(), Some("/a"), "список есть, активного нет — берём первый");
+        assert_eq!(settings.last_project.as_deref(), Some("/a"), "a list with no active project — take the first");
     }
 
     #[test]
     fn an_empty_list_leaves_the_app_without_an_active_project() {
-        // Так выглядит файл, записанный после закрытия последнего проекта:
-        // список пуст и активного нет. Воскрешать нечего.
+        // This is what a file written after the last project was closed looks
+        // like: the list is empty and there is no active project. Nothing to resurrect.
         let settings = settings_of(r#"{"version":1,"openProjects":[],"lastProject":null}"#);
         assert_eq!(settings.last_project, None);
         assert!(settings.open_projects.is_empty());
@@ -657,13 +735,13 @@ mod tests {
 
     #[test]
     fn a_file_from_before_the_list_keeps_the_project_it_remembered() {
-        // Файл, написанный до этой ветки: lastProject есть, openProjects нет.
+        // A file written before this branch: lastProject is there, openProjects is not.
         let settings = settings_of(r#"{"version":1,"lastProject":"/work/smetana"}"#);
-        assert_eq!(settings.open_projects, vec!["/work/smetana".to_string()], "иначе панель пуста");
+        assert_eq!(settings.open_projects, vec!["/work/smetana".to_string()], "otherwise the panel is empty");
         assert_eq!(settings.last_project.as_deref(), Some("/work/smetana"));
 
-        // Тот же случай, но список записан пустым — по содержимому он
-        // неотличим, и версия схемы (тоже 1) здесь ничего не подсказывает.
+        // The same case, but the list was written empty — by content it is
+        // indistinguishable, and the schema version (also 1) says nothing here.
         let settings = settings_of(r#"{"version":1,"openProjects":[],"lastProject":"/work/smetana"}"#);
         assert_eq!(settings.open_projects, vec!["/work/smetana".to_string()]);
         assert_eq!(settings.last_project.as_deref(), Some("/work/smetana"));
@@ -671,9 +749,9 @@ mod tests {
 
     #[test]
     fn an_empty_list_from_the_front_end_is_not_resurrected() {
-        // Поблажка старым файлам живёт только на чтении файла. Фронт, закрывший
-        // последний проект, шлёт пустой список — и он обязан таким остаться,
-        // иначе удаление последней строки отменялось бы само.
+        // The leniency towards old files lives on the file-reading side only. A
+        // front end that closed the last project sends an empty list — and it
+        // has to stay that way, otherwise removing the last row would undo itself.
         let mut file = Settings::default();
         let resolved = ResolvedSettings {
             open_projects: Vec::new(),
@@ -684,8 +762,8 @@ mod tests {
         merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
 
         assert!(file.open_projects.is_empty());
-        assert_eq!(file.last_project, None, "активного вне списка не бывает");
-        assert!(file.projects.is_empty(), "состояние писать некому");
+        assert_eq!(file.last_project, None, "there is no active project outside the list");
+        assert!(file.projects.is_empty(), "there is nobody to write state for");
     }
 
     #[test]
@@ -703,7 +781,7 @@ mod tests {
         assert_eq!(file.open_projects, vec!["/one".to_string(), "/two".to_string()]);
         assert_eq!(file.last_project.as_deref(), Some("/two"));
         assert_eq!(file.projects["/two"].selected_task.as_deref(), Some("bd-a1b2"));
-        assert!(!file.projects.contains_key("/one"), "состояние пишется только для активного проекта");
+        assert!(!file.projects.contains_key("/one"), "state is written only for the active project");
     }
 
     #[test]
@@ -713,13 +791,13 @@ mod tests {
         merge(&mut file, ResolvedSettings::default(), "2026-08-01T09:12:00+00:00".into());
 
         assert_eq!(file.last_project, None);
-        assert!(file.projects.is_empty(), "закрыли последний проект — писать состояние некому");
+        assert!(file.projects.is_empty(), "the last project was closed — there is nobody to write state for");
     }
 
     #[test]
     fn trim_never_evicts_an_open_project() {
         let mut file = Settings::default();
-        // Самая старая запись из всех — и при этом открытая.
+        // The oldest entry of all — and an open one at that.
         file.projects.insert(
             "/open-and-ancient".into(),
             ProjectState { used_at: Some("2000-01-01T00:00:00+00:00".into()), ..ProjectState::default() },
@@ -741,9 +819,9 @@ mod tests {
         };
         merge(&mut file, resolved, "2026-08-01T00:00:00+00:00".into());
 
-        assert!(file.projects.contains_key("/open-and-ancient"), "открытый проект не выселяется, как бы стар ни был");
+        assert!(file.projects.contains_key("/open-and-ancient"), "an open project is never evicted, however old");
         assert!(file.projects.contains_key("/current"));
-        assert!(!file.projects.contains_key("/p00"), "закрытые проекты уходят от самого старого");
+        assert!(!file.projects.contains_key("/p00"), "closed projects go oldest first");
         assert!(file.projects.len() <= MAX_PROJECTS.max(2));
     }
 
@@ -760,12 +838,12 @@ mod tests {
         assert_eq!(view.open_projects, vec!["/a".to_string(), "/b".to_string()]);
 
         let view = resolve(&file, None);
-        assert_eq!(view.active_project.as_deref(), Some("/a"), "без аргумента — активный из файла");
+        assert_eq!(view.active_project.as_deref(), Some("/a"), "with no argument — the active project from the file");
         assert_eq!(view.project, ProjectState::default());
     }
 
     #[test]
-    fn вкладки_читаются_и_пишутся() {
+    fn tabs_are_read_and_written() {
         let settings = settings_of(
             r#"{"version":1,"projects":{"/p":{
                 "openTabs":["src/App.vue","README.md"],
@@ -779,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn временная_вкладка_обязана_быть_среди_открытых() {
+    fn the_preview_tab_has_to_be_among_the_open_ones() {
         let settings = settings_of(
             r#"{"version":1,"projects":{"/p":{"openTabs":["a.txt"],"previewTab":"b.txt"}}}"#,
         );
@@ -787,44 +865,44 @@ mod tests {
     }
 
     #[test]
-    fn активная_вкладка_это_terminal_kanban_или_одна_из_открытых() {
+    fn the_active_tab_is_terminal_kanban_or_one_of_the_open_files() {
         let settings = settings_of(
             r#"{"version":1,"projects":{
                 "/gone":{"openTabs":["a.txt"],"activeTab":"b.txt"},
                 "/chat":{"activeTab":"chat"},
                 "/file":{"openTabs":["a.txt"],"activeTab":"a.txt"}}}"#,
         );
-        assert_eq!(settings.projects["/gone"].active_tab, "kanban", "вкладки нет — активной быть нечему");
-        assert_eq!(settings.projects["/chat"].active_tab, "terminal", "старое имя вкладки мигрирует");
+        assert_eq!(settings.projects["/gone"].active_tab, "kanban", "no such tab — nothing to be active");
+        assert_eq!(settings.projects["/chat"].active_tab, "terminal", "the old tab name migrates");
         assert_eq!(settings.projects["/file"].active_tab, "a.txt");
     }
 
     #[test]
-    fn вкладка_chat_из_старого_файла_становится_terminal() {
+    fn a_chat_tab_from_an_old_file_becomes_terminal() {
         let settings = settings_of(r#"{"version":1,"projects":{"/p":{"activeTab":"chat"}}}"#);
         assert_eq!(settings.projects["/p"].active_tab, "terminal");
     }
 
     #[test]
-    fn открытый_файл_chat_не_мигрирует_в_terminal() {
-        // Файл с таким именем в корне проекта — обычное дело, и он старше
-        // переименования вкладки: миграция не должна уводить человека с его
-        // собственного файла.
+    fn an_open_file_named_chat_does_not_migrate_to_terminal() {
+        // A file with that name at the project root is an ordinary thing, and it
+        // predates the tab's rename: the migration must not take a person off
+        // their own file.
         let settings =
             settings_of(r#"{"version":1,"projects":{"/p":{"openTabs":["chat"],"activeTab":"chat"}}}"#);
         assert_eq!(settings.projects["/p"].active_tab, "chat");
     }
 
     #[test]
-    fn вкладка_terminal_проходит_валидацию() {
+    fn the_terminal_tab_passes_validation() {
         let settings = settings_of(r#"{"version":1,"projects":{"/p":{"activeTab":"terminal"}}}"#);
         assert_eq!(settings.projects["/p"].active_tab, "terminal");
     }
 
     #[test]
-    fn активной_вкладкой_может_быть_длинный_путь() {
-        // Раньше active_tab резался по MAX_ID_LEN (200); путь бывает длиннее,
-        // и вкладка молча превращалась бы в kanban при каждом перезапуске.
+    fn a_long_path_can_be_the_active_tab() {
+        // active_tab used to be cut at MAX_ID_LEN (200); a path can be longer,
+        // and the tab would silently become the board on every restart.
         let long = format!("src/{}/App.vue", "very-long-directory-name".repeat(12));
         assert!(long.len() > MAX_ID_LEN && long.len() < MAX_PATH_LEN);
         let text = serde_json::json!({
@@ -838,7 +916,7 @@ mod tests {
     }
 
     #[test]
-    fn список_вкладок_теряет_мусор_и_обрезается() {
+    fn the_tab_list_loses_junk_and_is_trimmed() {
         let mut tabs = vec![String::from("a.txt"), String::from("a.txt"), String::new()];
         for i in 0..MAX_OPEN_TABS {
             tabs.push(format!("f{i:03}.txt"));
@@ -850,11 +928,11 @@ mod tests {
         let open = &settings.projects["/p"].open_tabs;
         assert_eq!(open.len(), MAX_OPEN_TABS);
         assert_eq!(open[0], "a.txt");
-        assert_eq!(open[1], "f000.txt", "дубль и пустая строка выпали");
+        assert_eq!(open[1], "f000.txt", "the duplicate and the empty string fell out");
     }
 
     #[test]
-    fn файл_написанный_до_вкладок_читается_без_них() {
+    fn a_file_written_before_tabs_reads_without_them() {
         let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"agents"}}}"#);
         let state = &settings.projects["/p"];
         assert!(state.open_tabs.is_empty());

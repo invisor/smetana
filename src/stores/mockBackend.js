@@ -1,20 +1,20 @@
-/* В браузере бэкенда нет, а проверять компоненты нужно (npm run dev,
-   ?view=gallery). Ставим официальный mockIPC, чтобы компоненты знали
-   только invoke и listen и нигде не ветвились.
+/* In a browser there is no back end, and components still have to be checked
+   (npm run dev, ?view=gallery). We install the official mockIPC so components
+   know only invoke and listen and branch nowhere.
 
-   Это заглушка для браузерного режима, а не второй бэкенд: она отвечает на
-   команды чтения (snapshot/resync/health, настройки) и ничего не хранит между
-   вызовами. Команды записи в трекер (tracker_create/update/close/reopen и
-   любая другая, которой здесь нет) должны с треском проваливаться, а не
-   отвечать правдоподобной, но вымышленной задачей — иначе в браузере "запись"
-   выглядела бы рабочей, молча не делая ничего. */
+   This is a stub for browser mode, not a second back end: it answers read
+   commands (snapshot/resync/health, settings) and stores nothing between calls.
+   Writes to the tracker (tracker_create/update/close/reopen and anything else
+   not listed here) have to fail loudly rather than answer with a plausible but
+   invented issue — otherwise a "write" in the browser would look like it worked
+   while silently doing nothing. */
 import { mockIPC } from '@tauri-apps/api/mocks'
 import { columns as fixtureColumns } from '../views/desktopAppData.js'
 import { defaults as settingsDefaults } from './settings.js'
 import { MOCK_SESSION_OUTPUT } from './terminalFixture.js'
 
-/* Обратный перевод: фикстуры написаны в терминах дизайн-системы,
-   а бэкенд отдаёт статусы bd. */
+/* The reverse translation: the fixtures are written in the design system's
+   terms, while the back end returns bd's statuses. */
 const BD_STATUS = { ready: 'open', running: 'in_progress', done: 'closed' }
 
 const COLUMN_CATEGORY = {
@@ -26,28 +26,30 @@ const COLUMN_CATEGORY = {
   closed: 'done'
 }
 
-/* Фикстура в desktopAppData.js задаёт blockedBy/blocks как независимые числа
-   на карточку — так их и рисовал React-прототип, но это не согласованный
-   граф: сумма всех "blocks" (5+1+2=8) не равна сумме всех "blockedBy" (2),
-   а в реальном графе зависимостей они обязаны совпадать (это одни и те же
-   рёбра, посчитанные с двух concов). Здесь единственная пара, которую можно
-   выразить рёбрами между существующими карточками, не заводя фиктивную
-   задачу и не приписывая чужой карточке лишний blockedBy, — то, что bd-77e1
-   заблокирована bd-a1b2 и bd-7f31 (это же и её spawnedFrom-родитель).
-   Остальные "blocks" со стороны bd-a1b2/bd-3c9d/bd-7f31 в моке недостижимы:
-   см. task-8-report.md. */
+/* The fixture in desktopAppData.js sets blockedBy/blocks as independent
+   numbers per card — that is how the React prototype drew them, but it is not a
+   consistent graph: the sum of all "blocks" (5+1+2=8) does not equal the sum of
+   all "blockedBy" (2), while in a real dependency graph they have to match
+   (they are the same edges counted from both ends). The only pair expressible
+   as edges between existing cards here, without inventing a fictional issue or
+   attributing an extra blockedBy to somebody else's card, is that bd-77e1 is
+   blocked by bd-a1b2 and bd-7f31 (the latter being its spawnedFrom parent too).
+   The remaining "blocks" on the bd-a1b2/bd-3c9d/bd-7f31 side are unreachable in
+   the mock: see task-8-report.md. */
 const DEPENDENCY_EDGES = {
   'bd-77e1': ['bd-a1b2', 'bd-7f31']
 }
 
-/* В браузере проектов два, чтобы список в панели было на чём смотреть.
-   Первый — «настоящий», второй — без трекера: без него пометку
-   «здесь нет bd» негде увидеть в npm run dev. */
+/* There are two projects in the browser so that the list in the panel has
+   something to show. The first is the "real" one, the second has no tracker:
+   without it there is nowhere to see the "no bd here" mark under
+   npm run dev. */
 const MOCK_PROJECTS = ['/Users/you/dev/smetana', '/Users/you/dev/notes']
 
-/* Дерево, которое раньше лежало в views/desktopAppData.js. Настоящее дерево
-   приходит с диска, но в браузере диска нет, а Gallery нужно на чём-то
-   показывать FileTree. Форма — ответы files_list: путь каталога → его записи. */
+/* The tree that used to live in views/desktopAppData.js. The real tree comes
+   from disk, but a browser has no disk and Gallery needs something to show
+   FileTree with. The shape is files_list's answers: a directory's path → its
+   entries. */
 export const MOCK_TREE = {
   '': [
     { name: 'src', path: 'src', kind: 'dir' },
@@ -107,49 +109,57 @@ export function installMockBackend() {
     if (command === 'tracker_snapshot' || command === 'tracker_resync') return snapshot
     if (command === 'tracker_health') return { state: 'ok' }
     if (command === 'settings_load') {
-      /* project — «прочитай состояние вот этого проекта»: настоящий бэкенд
-         отвечает на него, и заглушка обязана тоже, иначе переключение
-         в браузере нельзя было бы посмотреть — подсветка активной строки
-         откатывалась бы обратно после каждого клика. */
+      /* project means "read this project's state": the real back end answers
+         it, and the stub has to as well, otherwise switching could not be seen
+         in the browser — the active row's highlight would roll back after every
+         click. */
       return {
         ...settingsDefaults(),
         openProjects: MOCK_PROJECTS,
         activeProject: payload?.project ?? MOCK_PROJECTS[0]
       }
     }
-    /* Настройки — не данные трекера: в браузере им негде храниться, и это не
-       обман, а отсутствие места. Ронять запись здесь значило бы сыпать
-       ошибками на каждое движение панели ради того, что и так очевидно:
-       в браузере состояние не переживает перезагрузку. */
+    /* Settings are not tracker data: there is nowhere for them to live in a
+       browser, and that is an absence of somewhere to put them, not a
+       deception. Failing the write here would mean spraying errors on every
+       panel movement over something already obvious: state does not survive a
+       reload in a browser. */
     if (command === 'settings_save') return null
     if (command === 'tracker_set_project') return snapshot
     if (command === 'tracker_probe') {
       return MOCK_PROJECTS.map((path) => ({ path, tracked: path === MOCK_PROJECTS[0] }))
     }
-    /* Про файловую систему заглушка не знает ничего и выдумывать не станет:
-       путь возвращается как есть. Настоящий бэкенд поднялся бы отсюда до
-       корня отслеживаемого репозитория, и это единственное, чем ответ в
-       браузере отличается от ответа в приложении. */
+    /* The stub knows nothing about the filesystem and will not invent
+       anything: the path comes back as is. The real back end would climb from
+       here to the tracked repository's root, and that is the only way the
+       browser's answer differs from the app's. */
     if (command === 'project_root') return payload?.path ?? null
-    /* Выбрать папку в браузере нечем. Отвечаем как отменённый диалог: это
-       отказ, а не выдуманный путь — тем же правилом, по которому здесь
-       отклоняются записи в трекер. */
+    /* There is nothing to pick a folder with in a browser. We answer as a
+       cancelled dialog would: a refusal, not an invented path — by the same
+       rule that rejects writes to the tracker here. */
     if (command === 'plugin:dialog|open') {
-      console.info('[mockBackend] выбор папки в браузере недоступен — диалог считается отменённым')
+      console.info('[mockBackend] picking a folder is unavailable in a browser — the dialog counts as cancelled')
       return null
     }
     if (command === 'files_list') {
       const dir = payload?.dir ?? ''
-      /* Каталога, которого нет в фикстуре, в браузере не бывает: отвечаем
-         пустым списком, а не отказом — так дерево остаётся кликабельным. */
+      /* A directory absent from the fixture does not exist in the browser: we
+         answer with an empty list rather than a refusal — that keeps the tree
+         clickable. */
       return { dir, entries: MOCK_TREE[dir] ?? [], truncated: 0 }
     }
     if (command === 'files_read') {
       return { path: payload?.path ?? '', text: MOCK_FILE, mtime: MOCK_MTIME }
     }
-    /* Ничего не менялось: в браузере файлам меняться неоткуда. */
+    /* Nothing changed: there is nowhere for files to change in a browser. */
     if (command === 'files_stat') {
       return (payload?.paths ?? []).map((path) => ({ path, mtime: MOCK_MTIME }))
+    }
+    /* The branch is a read, and in a browser there is nowhere for it to come
+       from but a fixture. The answer's shape is the real command's: a branch or
+       a detached HEAD. */
+    if (command === 'git_head') {
+      return { branch: 'feat/worktree-rename', detached: null }
     }
     if (command === 'terminal_list') {
       return [
@@ -179,10 +189,10 @@ export function installMockBackend() {
     /* Detach and resize change nothing on disk and have nothing to lie
        about. */
     if (command === 'terminal_detach' || command === 'terminal_resize') return null
-    // Любая команда записи (tracker_create/update/close/reopen, files_write,
-    // и всё, что появится позже) должна отклониться явно, а не молча вернуть
-    // похожую на правду, но чужую задачу — иначе в браузере "запись"
-    // выглядела бы рабочей, ничего не делая.
+    // Any write command (tracker_create/update/close/reopen, files_write, and
+    // whatever appears later) has to reject explicitly rather than silently
+    // return a plausible but foreign issue — otherwise a "write" in the browser
+    // would look like it worked while doing nothing.
     throw new Error(
       `mockBackend: "${command}" is not implemented — this is a read-only stub for browser ` +
         'dev mode; writes to the tracker require the real Tauri backend (npm run tauri dev).'

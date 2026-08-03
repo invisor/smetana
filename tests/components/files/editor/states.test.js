@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-/* Модуль держит обычную Map на уровне модуля — между тестами её надо
-   пересоздавать, иначе записи предыдущего теста доживут до следующего. */
+/* The module keeps a plain Map at module scope — it has to be recreated between
+   tests, otherwise the previous test's entries survive into the next one. */
 let states
 
 beforeEach(async () => {
@@ -9,33 +9,33 @@ beforeEach(async () => {
   states = await import('../../../../src/components/files/editor/states.js')
 })
 
-describe('кэш состояний редактора', () => {
-  it('неизвестный путь даёт null, а не undefined', () => {
-    expect(states.peekState('нет-такого.txt')).toBe(null)
+describe('the editor state cache', () => {
+  it('an unknown path gives null, not undefined', () => {
+    expect(states.peekState('no-such-file.txt')).toBe(null)
   })
 
-  it('положенное состояние читается вместе с прокруткой', () => {
-    const state = { фиктивное: 'состояние' }
+  it('a stored state reads back together with its scroll position', () => {
+    const state = { dummy: 'state' }
     states.putState('a.txt', state, 120)
 
     expect(states.peekState('a.txt')).toEqual({ state, scrollTop: 120 })
   })
 
-  it('чтение не удаляет запись: за одно переключение её читают дважды', () => {
-    states.putState('a.txt', { раз: 1 }, 0)
+  it('reading does not remove the entry: it is read twice per switch', () => {
+    states.putState('a.txt', { one: 1 }, 0)
 
     states.peekState('a.txt')
     expect(states.peekState('a.txt')).not.toBe(null)
   })
 
-  it('повторная запись заменяет прежнюю', () => {
-    states.putState('a.txt', { раз: 1 }, 10)
-    states.putState('a.txt', { два: 2 }, 20)
+  it('a repeat write replaces the previous one', () => {
+    states.putState('a.txt', { one: 1 }, 10)
+    states.putState('a.txt', { two: 2 }, 20)
 
-    expect(states.peekState('a.txt')).toEqual({ state: { два: 2 }, scrollTop: 20 })
+    expect(states.peekState('a.txt')).toEqual({ state: { two: 2 }, scrollTop: 20 })
   })
 
-  it('keepOnly выбрасывает пути вне списка и сохраняет живые', () => {
+  it('keepOnly drops paths outside the list and keeps the live ones', () => {
     states.putState('a.txt', { a: 1 }, 0)
     states.putState('b.txt', { b: 2 }, 0)
     states.putState('c.txt', { c: 3 }, 0)
@@ -47,7 +47,7 @@ describe('кэш состояний редактора', () => {
     expect(states.peekState('c.txt')).not.toBe(null)
   })
 
-  it('пустой список чистит всё', () => {
+  it('an empty list clears everything', () => {
     states.putState('a.txt', { a: 1 }, 0)
     states.keepOnly([])
 

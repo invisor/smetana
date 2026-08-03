@@ -1,22 +1,24 @@
-/* Тема редактора — единственный файл в src/, которому разрешено порождать
-   CSS-правила: CodeMirror рисует свой DOM сам, и повлиять на него можно только
-   правилами. Правило дизайн-системы при этом сохраняется целиком — каждое
-   значение здесь var(--token), ни одного #hex и ни одного px.
+/* The editor theme is the one file in src/ allowed to produce CSS rules:
+   CodeMirror renders its own DOM, and rules are the only way to reach it. The
+   design system's rule is kept in full even so — every value here is a
+   var(--token), with no #hex and no px anywhere.
 
-   Отсюда следует главное: тема одна на обе темы приложения и обе плотности.
-   Значения — ссылки, и браузер пересчитывает их сам при смене data-theme и
-   data-density; редактор не пересоздаётся и не мигает.
+   The main consequence: one theme covers both app themes and both densities.
+   The values are references, and the browser recomputes them on its own when
+   data-theme and data-density change; the editor is never rebuilt and never
+   flashes.
 
-   Флаг { dark: true } намеренно не передаётся. Он поднял бы фасет
-   EditorView.darkTheme, а на него смотрят базовые темы панели поиска и
-   спецсимволов — и начали бы подставлять собственные захардкоженные цвета
-   через плейсхолдеры &light / &dark. Поэтому тема ниже исчерпывающая: всё,
-   что базовые темы красят сами, перекрашено токеном.
+   The { dark: true } flag is deliberately not passed. It would raise the
+   EditorView.darkTheme facet, which the base themes of the search panel and of
+   special-character rendering watch — and they would start substituting their
+   own hardcoded colours through the &light / &dark placeholders. So the theme
+   below is exhaustive: everything the base themes would paint themselves is
+   repainted with a token.
 
-   Парные скобки перекрашены по другой причине: их база в @codemirror/language
-   — плоский, безусловный цвет, который на фасет darkTheme вообще не смотрит,
-   — так что её пришлось бы перекрывать в любом случае, вне зависимости от
-   этого флага. */
+   Bracket matching is repainted for a different reason: its base in
+   @codemirror/language is a flat, unconditional colour that never looks at the
+   darkTheme facet at all — so it would have to be overridden in any case,
+   regardless of this flag. */
 import { EditorView } from '@codemirror/view'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
@@ -30,8 +32,8 @@ const chrome = EditorView.theme({
     fontSize: 'var(--text-code-size)',
     fontWeight: 'var(--weight-regular)'
   },
-  /* Своей рамки фокуса у поля нет: она принадлежит панели вокруг, а обводка
-     по периметру текста в дерганом списке вкладок только шумит. */
+  /* The field has no focus ring of its own: that belongs to the panel around
+     it, and an outline around the text in a jumpy tab row is only noise. */
   '&.cm-focused': { outline: 'none' },
   '.cm-scroller': {
     fontFamily: 'inherit',
@@ -43,8 +45,9 @@ const chrome = EditorView.theme({
   },
   '.cm-line': { padding: '0 var(--space-5)' },
 
-  /* Гаттер. Отступ справа оставлен намеренно: git-полоса встанет отдельным
-     гаттером слева от номеров и этот блок не тронет. */
+  /* The gutter. The padding on the right is deliberate: the git strip will
+     stand as its own gutter to the left of the numbers and will not touch this
+     block. */
   '.cm-gutters': {
     backgroundColor: 'var(--editor-gutter-bg)',
     color: 'var(--editor-line-number)',
@@ -58,8 +61,9 @@ const chrome = EditorView.theme({
   },
   '.cm-activeLine': { backgroundColor: 'var(--editor-active-line)' },
 
-  /* Каретку и выделение рисует drawSelection, а не браузер: без него нет
-     множественной каретки. Нативный ::selection в поле не участвует. */
+  /* drawSelection paints the caret and the selection, not the browser: without
+     it there is no multiple caret. The native ::selection takes no part in the
+     field. */
   '.cm-cursor, .cm-dropCursor': {
     borderLeftColor: 'var(--editor-cursor)',
     borderLeftWidth: 'var(--border-w-strong)'
@@ -80,8 +84,9 @@ const chrome = EditorView.theme({
   '&.cm-focused .cm-nonmatchingBracket': { color: 'var(--syn-invalid)' },
   '.cm-specialChar': { color: 'var(--syn-invalid)' },
 
-  /* Панель поиска. Базовая тема @codemirror/search красит её сама, включая
-     linear-gradient на кнопках — а градиенты в этой системе запрещены. */
+  /* The search panel. @codemirror/search's base theme paints it itself,
+     including a linear-gradient on the buttons — and gradients are forbidden in
+     this system. */
   '.cm-panels': {
     backgroundColor: 'var(--surface)',
     color: 'var(--text-primary)',
@@ -137,9 +142,9 @@ const chrome = EditorView.theme({
   '.cm-panel.cm-search [name="close"]:hover': { color: 'var(--text-primary)' }
 })
 
-/* Курсив только там, где он несёт смысл разметки (markdown emphasis).
-   Комментарии курсивом не выделяются: в системе нет токена начертания под
-   это, а выдумывать значение — ровно то, что запрещено. */
+/* Italics only where they carry markup meaning (markdown emphasis). Comments
+   are not italicised: the system has no type-style token for it, and inventing
+   a value is exactly what is forbidden. */
 const syntax = HighlightStyle.define([
   { tag: [t.keyword, t.modifier, t.controlKeyword, t.operatorKeyword], color: 'var(--syn-keyword)' },
   { tag: [t.string, t.special(t.string), t.regexp], color: 'var(--syn-string)' },

@@ -23,7 +23,7 @@ npm run test:watch   # the same, in watch mode
 cd src-tauri && cargo test
 ```
 
-Two test runners: `npm test` covers the front end's pure logic — the five plain modules and the five
+Two test runners: `npm test` covers the front end's pure logic — the five plain modules and the
 stores — and `cargo test` covers the Rust side. Neither covers components: there is no component test
 runner and no linter or formatter, so do not invent one, and do not claim a change is "tested" on the
 basis of a build succeeding.
@@ -58,8 +58,9 @@ something looks odd, the design system is the source of truth — match it rathe
 `src/main.js` → `src/App.vue` → either `views/DesktopApp.vue` (the three-column shell: worktree
 files + agents, tab bar over the kanban, task inspector with live log) or `views/Gallery.vue`
 (code-split, never in the app bundle). The board is live tracker data, and so are the file tree, the
-file tabs and the agents. What is left on the screen — the log and the git state — is still fixture
-state in `views/desktopAppData.js`.
+file tabs, the agents and the branch in the scope bar. What is left on the screen — the log and the
+rest of the git state, the dirty-file and agent counters among it — is still fixture state in
+`views/desktopAppData.js`.
 
 ### The tracker bridge
 
@@ -96,8 +97,8 @@ the event fires microseconds after start, before the webview can subscribe, so t
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
 
-`src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`
-and `src/stores/terminals.js` are the **only** files
+`src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`,
+`src/stores/terminals.js` and `src/stores/git.js` are the **only** files
 in `src/` that know Tauri exists — components see reactive stores and nothing else. `tracker.js` also
 owns the two translations: bd's statuses to the design system's (`open → ready`, `in_progress →
 running`, `closed → done`; everything else, including custom statuses, passes through to
@@ -213,6 +214,23 @@ An unknown file extension and a language chunk that fails to load (offline, a br
 ordinary outcomes in `languages.js`, not errors: the file opens as plain text either way, because
 losing syntax highlighting is not a reason to break the editor.
 
+### The branch in the scope bar
+
+The bar over everything names the active project and the branch it is on. The branch comes from
+`src-tauri/src/git.rs` — one file, the same no-worker shape as `files/` and for a stronger version of
+the same reason: `git rev-parse` would spawn a process for one line git already keeps in plain form
+on disk. So `.git/HEAD` is read directly, and a `.git` that is a file rather than a directory is
+followed to the linked worktree's own HEAD, which is where a worktree's branch actually lives.
+
+Nothing in that file is an error. A folder outside git, an unreadable `.git`, a HEAD in an
+unrecognised shape all mean the same thing to the bar — no branch to show, drawn as `—`. A detached
+HEAD is not silently dressed up as a branch: `Head` keeps `branch` and `detached` apart, and
+`DesktopApp.vue` labels the short hash as detached. Freshness is window focus and switching projects,
+the same answer the file tree gives; `src/stores/git.js` guards against its own stale response the
+way `terminals.js` does, so the bar cannot name one project's branch under another project's name.
+
+The counters next to it — uncommitted files, running agents — are still fixture.
+
 ### The terminal: agent sessions
 
 The centre's `terminal` tab (`chat` before it grew a terminal — `ProjectState::validate` in
@@ -315,6 +333,16 @@ up showing one project's sessions under another project's name, after which the 
 `AgentList.vue` would kill the wrong project's agent, silently. A test in `tests/stores/terminals.test.js`
 pins this.
 
+`TerminalView.vue`'s pane and its host both carry `minWidth: 0`, and that is not decoration next to
+the `minHeight: 0` beside it. A flex item defaults to `min-width: auto` and so refuses to shrink below
+its own content — here, xterm.js at whatever width it was last fitted to. Without it, narrowing the
+centre column left the pane as wide as the terminal used to be, hanging over the task panel and
+painted on top of it, since the pane is positioned and that column is not. It even looked animated,
+because it converged: `ResizeObserver` → `fit()` → new cols → xterm redraws a frame later → the floor
+drops a little → the observer fires again, with `fit()` measuring a pane sized by its own last answer
+instead of by the column. `KanbanBoard` and `FileEditor` never showed it only because `overflow:
+auto`/`hidden` zeroes that automatic minimum for them already.
+
 `TerminalView.vue` hosts one `Terminal` instance per view, not per session — switching agents calls
 `reset()` and refills from the new ring snapshot, so returning to an agent lands at the end of its
 output rather than wherever it was scrolled to. An instance per session, the way `editor/states.js`
@@ -334,6 +362,33 @@ transcript. Every write (`terminal_create`, `terminal_remove`, `terminal_write`,
 falls through to the same loud rejection the tracker's writes get, for the same reason: a "write"
 that looked like it worked would be worse than none.
 
+### Panel widths
+
+Either side column is dragged by the `Resizer` between it and the board, and the rules for how wide
+it may get live in `src/views/panelWidths.js` — pure, no Vue and no DOM, which is what makes them the
+one part of this that a test can reach at all. A panel takes at most a third of the window and never
+so much that the board drops below `CENTER_MIN`; the neighbour is part of that sum, costing its own
+width open and a rail collapsed.
+
+The stored width and the drawn width are different numbers, and conflating them would be the defect
+here. What `settings.json` keeps is what a person dragged to; what `leftStyle` draws is that number
+clamped against the window it is in now. Only a drag writes back — narrowing the window squeezes the
+panel and widening it restores what was asked for, because a resized window must not silently rewrite
+a preference. Every delta a `Resizer` emits is likewise measured from a width snapshotted at
+`dragstart`, not from the previous frame: clamping against the last frame would make each clamped
+move the new origin and the panel would drift away from the pointer.
+
+Dragging a panel past `COLLAPSE_SLACK` below its minimum folds it into the same 32px rail the header
+button gives, keeping the stored width so it comes back where it left; pulling out of the rail past
+`EXPAND_PULL` reopens it. Double click resets to the shipped 252/340. When the window is too narrow to
+honour both a panel's minimum and the board's floor, the panel keeps its minimum and the board takes
+the squeeze — the board's content scrolls, a file tree at 90px does not.
+
+`Resizer` itself diverges from the design system in behaviour, not in styling — pointer capture so a
+release outside the window still ends the drag, `user-select: none` on the body for the duration, and
+arrow keys, which its `role="separator"` and `tabindex` had been promising with nothing behind them.
+Those belong back upstream.
+
 ### Settings
 
 What the app remembers between runs lives in one JSON file in `app_config_dir()`
@@ -343,7 +398,8 @@ and where the tests are; `file.rs` is the disk (atomic write through a per-call 
 `sync_all`ed and renamed, a `.bak` copy of anything unparseable or too new); `commands.rs` is two
 thin commands.
 
-The file keeps appearance and panel layout at the root; below that, `openProjects` is the list of
+The file keeps appearance and panel layout — collapsed state and width for each side — at the root;
+below that, `openProjects` is the list of
 projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
 a map from each project's absolute path to its content state (side tab, active tab, selected task,
 selected path, expanded folders, `openTabs`, `previewTab`, `usedAt`). The open tabs are paths
@@ -383,7 +439,16 @@ coming from the front end means the last project was closed on purpose and stays
 The side-tab set is a closed list written out twice, in `model.rs` and in `views/DesktopApp.vue`.
 Changing one without the other is silent: the value survives the session and comes back as Files.
 
-Window size and position are not in this file: `tauri-plugin-window-state` handles them.
+Window size and position are not in this file: `tauri-plugin-window-state` handles them, and
+`src-tauri/src/window.rs` is the one thing added on top. The plugin keeps geometry in memory and
+writes it to disk in exactly one place — `RunEvent::Exit` — so any run that does not reach a clean
+exit leaves the last run's geometry behind: a crash, a force quit, and in development every Rust
+rebuild, which kills the process outright. The symptom is a window that opens at the configured
+1440×900 no matter what size it was left at, and it is invisible from the front end, since
+`settings.json` keeps saving on its own debounce the whole time. So `persist_geometry` subscribes to
+`Resized`/`Moved` and saves 500 ms after the last one. The debounce is not only about disk traffic:
+it also settles the question of handler order, because the plugin's own listener has long since
+updated the cache by the time the write runs.
 
 ### Tests
 
@@ -438,6 +503,15 @@ file.
 `styles/styles.css` is an `@import` list only; the tokens live in `styles/tokens/`. `tokens/base.css`
 holds element defaults (focus ring, selection, scrollbar) and the only three global classes in the
 system (`.sm-mono`, `.sm-hatch-blocked`, `.sm-scroll-hidden`).
+
+The first line of `base.css` is `box-sizing: border-box` on everything, and the whole system rests on
+it. Components declare a size as a token and add padding and a border on top — `width:100%` with
+`padding:0 var(--space-4)`, `height:var(--control-h)` with a border, `width:8px` with a 1.5px ring —
+which only comes out right under border-box. The React design system gets it from its own reset; the
+port did not carry it over at first, and the cost was `Input` overflowing `Modal` by exactly
+`2×--space-4 + 2×--border-w` and `StatusDot` drawing its single `size` prop as three different glyph
+sizes depending on whether that silhouette happened to have a border. Both vanished with the one
+line. Do not remove it, and do not "fix" a component by subtracting its own padding from its width.
 
 ### Theme and density live on the document root
 

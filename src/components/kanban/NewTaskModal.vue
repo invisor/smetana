@@ -8,13 +8,13 @@ import Select from '../core/Select.vue'
 const props = defineProps({
   open: { type: Boolean, default: false },
   busy: { type: Boolean, default: false },
-  /* Колонка, из которой открыли диалог: она и решает, где окажется карточка. */
+  /* The column the dialog was opened from: it decides where the card lands. */
   status: { type: String, default: null }
 })
 
 const emit = defineEmits(['close', 'submit'])
 
-// Типы и приоритеты — те, что понимает bd.
+// The types and priorities are the ones bd understands.
 const TYPES = ['task', 'bug', 'feature', 'chore', 'epic', 'decision']
 const PRIORITIES = [
   { value: '0', label: 'P0 · highest' },
@@ -47,11 +47,11 @@ const submit = () => {
   })
 }
 
-/* Не очищаем в submit(): если запись упала, пользователь должен увидеть свой
-   текст, а не пустое поле — сброс идёт от исхода, а не от факта отправки.
-   Родитель закрывает диалог и при успехе, и при отмене; при упавшей записи
-   он остаётся открытым, так что сброс по "open -> false" покрывает оба
-   случая, которые должны очищать форму, и ни разу — тот, что не должен. */
+/* We do not clear in submit(): if the write fails, the user has to see their
+   own text rather than an empty field — the reset follows the outcome, not the
+   fact of submitting. The parent closes the dialog both on success and on
+   cancel; on a failed write it stays open, so a reset on "open -> false" covers
+   both cases that should clear the form and never the one that should not. */
 watch(
   () => props.open,
   (isOpen) => {

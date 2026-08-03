@@ -12,7 +12,19 @@ const props = defineProps({
   height: { type: [Number, String], default: '100vh' }
 })
 
-defineEmits(['resize-left', 'resize-right'])
+/* A resize is three events, not one: the consumer snapshots a width on start,
+   clamps every delta against it, and persists on end. Forwarding only `drag`
+   would leave it no way to know which drag a delta belongs to. */
+defineEmits([
+  'resize-left-start',
+  'resize-left',
+  'resize-left-end',
+  'reset-left',
+  'resize-right-start',
+  'resize-right',
+  'resize-right-end',
+  'reset-right'
+])
 
 const style = computed(() => ({
   display: 'flex',
@@ -44,11 +56,23 @@ const rightStyle = computed(() => ({
     <slot name="scope" />
     <div :style="{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch' }">
       <div :style="leftStyle"><slot name="left" /></div>
-      <Resizer @drag="(d, e) => $emit('resize-left', d, e)" />
+      <Resizer
+        label="Resize left panel"
+        @dragstart="$emit('resize-left-start')"
+        @drag="(d, e) => $emit('resize-left', d, e)"
+        @dragend="$emit('resize-left-end')"
+        @reset="$emit('reset-left')"
+      />
       <div :style="{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--canvas)' }">
         <slot name="center" />
       </div>
-      <Resizer @drag="(d, e) => $emit('resize-right', d, e)" />
+      <Resizer
+        label="Resize right panel"
+        @dragstart="$emit('resize-right-start')"
+        @drag="(d, e) => $emit('resize-right', d, e)"
+        @dragend="$emit('resize-right-end')"
+        @reset="$emit('reset-right')"
+      />
       <div :style="rightStyle"><slot name="right" /></div>
     </div>
   </div>

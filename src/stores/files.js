@@ -1,33 +1,34 @@
-/* Файлы проекта во фронте. Четвёртый и последний файл в src/, знающий про
-   Tauri, — вместе с tracker.js, settings.js и projects.js. Стор вкладок
-   (tabs.js) ходит на диск через него и сам про Tauri не знает.
+/* The project's files in the front end. One of the files in src/ that know
+   about Tauri — along with tracker.js, settings.js and projects.js. The tabs
+   store (tabs.js) goes to the disk through this one and knows nothing about
+   Tauri itself.
 
-   Истина здесь снаружи, на диске, как у трекера, — но догонять её нечем:
-   вотчера у дерева нет намеренно. Свежесть приносит проход по фокусу окна
-   (см. DesktopApp.vue) и кнопка обновления. */
+   The truth here is outside, on disk, as it is for the tracker — but there is
+   nothing to catch up with it: the tree deliberately has no watcher. Freshness
+   comes from the window-focus sweep (see DesktopApp.vue) and the refresh
+   button. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 export const filesState = reactive({
-  /* Абсолютный путь активного проекта. Все остальные пути в этом сторе —
-     относительные, и разделитель у них всегда "/". */
+  /* The active project's absolute path. Every other path in this store is
+     relative, and their separator is always "/". */
   root: null,
-  /* Путь каталога → { entries, truncated }. Пустая строка — корень.
-     Заполняется лениво: каталог появляется здесь только после того, как его
-     раскрыли. */
+  /* A directory's path → { entries, truncated }. The empty string is the root.
+     Filled lazily: a directory appears here only after it has been expanded. */
   dirs: new Map(),
-  /* Каталоги, которые сейчас читаются. Второе чтение того же каталога не
-     начинается: раскрыть-свернуть-раскрыть не должно давать три запроса. */
+  /* The directories currently being read. A second read of the same directory
+     does not start: expand-collapse-expand must not produce three requests. */
   loading: new Set(),
   lastError: null
 })
 
 export const basenameOf = (path) => path.split('/').filter(Boolean).pop() ?? path
 
-/* Ошибки бэкенда — диагностика: их текст говорит языком файловой системы и
-   адресован тому, кто чинит. Человеку показываем короткую фразу, выбранную по
-   машинному виду ошибки, а полный текст оставляем в консоли. Тот же приём, что
-   в tracker.js. */
+/* Back-end errors are diagnostics: their text speaks the filesystem's language
+   and is addressed to whoever fixes things. The person is shown a short phrase
+   chosen by the error's machine-readable kind, and the full text stays in the
+   console. The same trick as in tracker.js. */
 const ERRORS = {
   notFound: 'This file is gone from disk.',
   denied: 'No permission to read this file.',
@@ -44,10 +45,11 @@ export function fileErrorText(error) {
   return ERRORS[error?.kind] ?? ERRORS.io
 }
 
-/* Те же машинные виды ошибок, но про запись. Отдельная карта, а не общая:
-   фраза «No permission to read this file.» после отказавшегося Cmd+S говорит
-   не о том, что произошло, и человек ищет причину не там. Ключа `stale` здесь
-   нет намеренно — устаревшую метку разбирает своя ветка с кнопками. */
+/* The same error kinds, but for writes. A separate map rather than a shared
+   one: "No permission to read this file." after a refused Cmd+S describes
+   something other than what happened, and the person looks for the cause in the
+   wrong place. There is deliberately no `stale` key here — a stale mtime is
+   handled by its own branch with buttons. */
 const SAVE_ERRORS = {
   notFound: 'This file is gone from disk — nothing was written.',
   denied: 'No permission to write this file.',
@@ -60,9 +62,9 @@ export function saveErrorText(error) {
   return SAVE_ERRORS[error?.kind] ?? SAVE_ERRORS.io
 }
 
-/* И третья карта — про каталоги. Отказ чтения каталога человек видит тостом, и
-   фраза «This file is gone from disk.» под именем папки говорит не о том, что
-   случилось. */
+/* And a third map, for directories. A person sees a directory read refusal as
+   a toast, and "This file is gone from disk." under a folder's name describes
+   something other than what happened. */
 const DIR_ERRORS = {
   notFound: 'This folder is gone from disk.',
   denied: 'No permission to read this folder.',
@@ -75,37 +77,39 @@ export function dirErrorText(error) {
   return DIR_ERRORS[error?.kind] ?? DIR_ERRORS.io
 }
 
-/* Метка строки-заглушки «…N more» в путях дерева. Нулевой байт не бывает в
-   имени файла ни на одной файловой системе, поэтому настоящий путь с ним не
-   столкнётся. */
+/* The marker for the "…N more" stub row in tree paths. A zero byte never
+   appears in a file name on any filesystem, so a real path will not collide
+   with it. */
 const STUB_MARK = '\u0000'
 
 export const isStubPath = (path) => typeof path === 'string' && path.includes(STUB_MARK)
 
-/* Ошибка из Tauri приезжает объектом { kind, message }; ошибка доставки (мок
-   бросил Error, IPC не поднялся) — чем угодно. Приводим к одной форме, чтобы
-   вызывающие не разбирали два случая. */
+/* An error from Tauri arrives as a { kind, message } object; a delivery error
+   (the mock threw an Error, the IPC did not come up) arrives as anything at
+   all. We reduce both to one shape so callers do not have to handle two
+   cases. */
 function normalize(error) {
   if (error && typeof error === 'object' && typeof error.kind === 'string') return error
   return { kind: 'io', message: String(error?.message ?? error) }
 }
 
-/* Отказ чтения каталога виден человеку: дерево в этот момент показывает то,
-   что успело прочитаться, и без слов выглядит просто пустой папкой. Полный
-   текст ошибки остаётся в консоли, наружу едет короткая фраза — её показывает
-   тост в DesktopApp.vue. */
+/* A directory read refusal is visible to the person: at that moment the tree
+   shows whatever it managed to read, and with no words it simply looks like an
+   empty folder. The full error text stays in the console; a short phrase
+   travels outwards — the toast in DesktopApp.vue shows it. */
 function report(where, error) {
   console.error(`[files] ${where}:`, error)
   filesState.lastError = dirErrorText(error)
 }
 
-/* Переезд на другой проект. Дерево сбрасывается целиком: показывать каталоги
-   старого проекта под именем нового нельзя ни секунды. */
+/* Moving to another project. The tree is reset entirely: showing the old
+   project's directories under the new one's name is not on for a second. */
 export function setRoot(path) {
   filesState.root = path
   filesState.dirs = new Map()
-  /* Экземпляр не подменяется намеренно: иначе finally уже летящего чтения
-     снял бы пометку с чужого, только что начатого запроса на новом Set. */
+  /* The instance is deliberately not replaced: otherwise the finally of a read
+     already in flight would clear the mark of somebody else's just-started
+     request on the new Set. */
   filesState.loading.clear()
   filesState.lastError = null
 }
@@ -116,24 +120,24 @@ export async function listDir(dir = '') {
   filesState.loading.add(dir)
   try {
     const listing = await invoke('files_list', { root, dir })
-    /* Пока каталог читался, проект могли переключить: ответ относится к
-       прошлому корню, и класть его в новое дерево нельзя. Побеждает последний
-       переезд, а не последний ответ. */
+    /* While the directory was being read, the project may have been switched:
+       the answer belongs to the previous root and must not go into the new
+       tree. The last move wins, not the last answer. */
     if (filesState.root !== root) return
     filesState.dirs.set(listing.dir, {
       entries: listing.entries,
       truncated: listing.truncated
     })
   } catch (err) {
-    report(`не удалось прочитать каталог ${dir || '(корень)'}`, normalize(err))
+    report(`could not read the directory ${dir || '(root)'}`, normalize(err))
   } finally {
     filesState.loading.delete(dir)
   }
 }
 
-/* Перечитывание уже известных каталогов — проход по фокусу окна и кнопка
-   обновления. Каталоги, которых в карте нет, не читаются: раскрывать их
-   никто не просил. */
+/* Re-reading directories that are already known — the window-focus sweep and
+   the refresh button. Directories absent from the map are not read: nobody
+   asked to expand them. */
 export async function refreshDirs(dirs) {
   const known = dirs.filter((dir) => filesState.dirs.has(dir))
   await Promise.all(known.map((dir) => listDir(dir)))
@@ -144,7 +148,7 @@ export async function readFile(path) {
     return await invoke('files_read', { root: filesState.root, path })
   } catch (err) {
     const error = normalize(err)
-    console.error(`[files] не удалось прочитать ${path}:`, error)
+    console.error(`[files] could not read ${path}:`, error)
     throw error
   }
 }
@@ -159,34 +163,34 @@ export async function writeFile(path, text, expectedMtime) {
     })
   } catch (err) {
     const error = normalize(err)
-    console.error(`[files] не удалось записать ${path}:`, error)
+    console.error(`[files] could not write ${path}:`, error)
     throw error
   }
 }
 
-/* Метки времени пачкой. Отказ здесь ничего не значит: проход по фокусу — это
-   удобство, и ронять из-за него интерфейс незачем. */
+/* Timestamps in a batch. A refusal here means nothing: the focus sweep is a
+   convenience, and there is no reason to drop the interface over it. */
 export async function statFiles(paths) {
   if (!filesState.root || !paths.length) return []
   try {
     return await invoke('files_stat', { root: filesState.root, paths })
   } catch (err) {
-    console.error('[files] не удалось сверить метки времени:', normalize(err))
+    console.error('[files] could not check the timestamps:', normalize(err))
     return []
   }
 }
 
-/* FileTree ждёт вложенные узлы с children, а стор держит плоскую карту
-   каталогов. Собираем дерево на лету и спускаемся только в раскрытые: узел,
-   чьих детей ещё не читали, отдаёт children: undefined, и FileTree просто не
-   идёт вглубь.
+/* FileTree expects nested nodes with children, while the store holds a flat
+   map of directories. We build the tree on the fly and descend only into the
+   expanded ones: a node whose children have not been read yet returns
+   children: undefined, and FileTree simply does not go deeper.
 
-   Обрезанный каталог получает лишнюю запись-заглушку: молчаливая обрезка
-   читалась бы как «здесь больше нет файлов». Её kind — "file", потому что
-   отдельного вида у строки-заглушки в дереве нет, а её путь помечен нулевым
-   байтом: имени файла такой символ не достаётся ни на одной файловой системе,
-   и `isStubPath` узнаёт заглушку по нему. Отсеивают её обработчики клика в
-   DesktopApp.vue — сама строка ничего про себя не знает. */
+   A truncated directory gets one extra stub entry: silent truncation would read
+   as "there are no more files here". Its kind is "file", because a stub row has
+   no kind of its own in the tree, and its path is marked with a zero byte: no
+   filesystem lets that character into a file name, and `isStubPath` recognises
+   a stub by it. The click handlers in DesktopApp.vue filter it out — the row
+   itself knows nothing about being one. */
 export function treeNodes(expandedSet) {
   const build = (dir) => {
     const listing = filesState.dirs.get(dir)

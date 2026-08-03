@@ -12,7 +12,7 @@ beforeEach(async () => {
   ipc = loaded.ipc
   files = loaded.stores.files
   tabs = loaded.stores.tabs
-  files.setRoot('/проект')
+  files.setRoot('/project')
   mtime = 10
   ipc.on('files_read', (args) => fileText({ path: args.path, mtime }))
   ipc.on('files_write', () => {
@@ -26,21 +26,21 @@ const opened = async (path = 'a.txt') => {
   await vi.waitFor(() => expect(tabs.buffers.get(path).loading).toBe(false))
 }
 
-describe('удачное сохранение', () => {
-  it('несёт метку времени, полученную при чтении, и снимает грязноту', async () => {
+describe('a successful save', () => {
+  it('carries the timestamp received on read and clears the dirtiness', async () => {
     await opened()
-    tabs.setText('a.txt', 'правленый')
+    tabs.setText('a.txt', 'edited')
 
     await tabs.saveTab('a.txt')
 
     expect(ipc.calls('files_write')).toEqual([
-      { root: '/проект', path: 'a.txt', text: 'правленый', expectedMtime: 10 }
+      { root: '/project', path: 'a.txt', text: 'edited', expectedMtime: 10 }
     ])
     expect(tabs.isDirty('a.txt')).toBe(false)
     expect(tabs.buffers.get('a.txt').mtime).toBe(11)
   })
 
-  it('чистая вкладка на диск не ходит', async () => {
+  it('a clean tab does not go to the disk', async () => {
     await opened()
 
     await tabs.saveTab('a.txt')
@@ -48,12 +48,12 @@ describe('удачное сохранение', () => {
     expect(ipc.calls('files_write')).toHaveLength(0)
   })
 
-  it('вторая запись подряд берёт метку, сдвинутую первой, а не захваченную при постановке', async () => {
+  it('the second consecutive write takes the mtime the first moved, not the one captured at queue time', async () => {
     await opened()
 
-    tabs.setText('a.txt', 'первая')
+    tabs.setText('a.txt', 'the first')
     const first = tabs.saveTab('a.txt')
-    tabs.setText('a.txt', 'вторая')
+    tabs.setText('a.txt', 'the second')
     const second = tabs.saveTab('a.txt')
     await Promise.all([first, second])
 
@@ -64,22 +64,22 @@ describe('удачное сохранение', () => {
     expect(tabs.isDirty('a.txt')).toBe(false)
   })
 
-  it('набранное во время полёта остаётся грязным', async () => {
+  it('what was typed in flight stays dirty', async () => {
     await opened()
-    tabs.setText('a.txt', 'первая правка')
+    tabs.setText('a.txt', 'the first edit')
 
     const pending = tabs.saveTab('a.txt')
-    tabs.setText('a.txt', 'первая правка и ещё')
+    tabs.setText('a.txt', 'the first edit and more')
     await pending
 
-    expect(tabs.buffers.get('a.txt').original).toBe('первая правка')
-    expect(tabs.buffers.get('a.txt').text).toBe('первая правка и ещё')
+    expect(tabs.buffers.get('a.txt').original).toBe('the first edit')
+    expect(tabs.buffers.get('a.txt').text).toBe('the first edit and more')
     expect(tabs.isDirty('a.txt')).toBe(true)
   })
 
-  it('удачная запись гасит прежний отказ записи', async () => {
+  it('a successful write clears a previous write refusal', async () => {
     await opened()
-    tabs.buffers.set('a.txt', buffer({ text: 'правка', saveError: { kind: 'denied' } }))
+    tabs.buffers.set('a.txt', buffer({ text: 'an edit', saveError: { kind: 'denied' } }))
 
     await tabs.saveTab('a.txt')
 
@@ -87,44 +87,44 @@ describe('удачное сохранение', () => {
   })
 })
 
-describe('отказы', () => {
-  it('stale поднимает полоску, ничего не теряя', async () => {
+describe('refusals', () => {
+  it('stale raises the strip without losing anything', async () => {
     await opened()
-    tabs.setText('a.txt', 'моя правка')
-    ipc.fail('files_write', { kind: 'stale', message: 'файл уехал' })
+    tabs.setText('a.txt', 'my edit')
+    ipc.fail('files_write', { kind: 'stale', message: 'the file moved' })
 
     await tabs.saveTab('a.txt')
 
     const current = tabs.buffers.get('a.txt')
     expect(current.stale).toBe(true)
-    expect(current.text).toBe('моя правка')
+    expect(current.text).toBe('my edit')
     expect(current.error).toBe(null)
     expect(current.saveError).toBe(null)
   })
 
-  it('отказ записи не запирает поле: править и сохранять заново можно', async () => {
+  it('a write refusal does not lock the field: editing and saving again are allowed', async () => {
     await opened()
-    tabs.setText('a.txt', 'моя правка')
-    ipc.fail('files_write', { kind: 'denied', message: 'нет прав' })
+    tabs.setText('a.txt', 'my edit')
+    ipc.fail('files_write', { kind: 'denied', message: 'no permission' })
 
     await tabs.saveTab('a.txt')
 
     const current = tabs.buffers.get('a.txt')
-    expect(current.saveError).toEqual({ kind: 'denied', message: 'нет прав' })
+    expect(current.saveError).toEqual({ kind: 'denied', message: 'no permission' })
     expect(current.error).toBe(null)
 
-    tabs.setText('a.txt', 'ещё правка')
-    expect(tabs.buffers.get('a.txt').text).toBe('ещё правка')
+    tabs.setText('a.txt', 'another edit')
+    expect(tabs.buffers.get('a.txt').text).toBe('another edit')
   })
 
-  it('отказ не останавливает очередь: следующая запись проходит', async () => {
+  it('a refusal does not stop the queue: the next write goes through', async () => {
     await opened()
-    tabs.setText('a.txt', 'первая')
-    ipc.fail('files_write', { kind: 'denied', message: 'нет прав' })
+    tabs.setText('a.txt', 'the first')
+    ipc.fail('files_write', { kind: 'denied', message: 'no permission' })
     await tabs.saveTab('a.txt')
 
     ipc.on('files_write', () => 12)
-    tabs.setText('a.txt', 'вторая')
+    tabs.setText('a.txt', 'the second')
     await tabs.saveTab('a.txt')
 
     expect(tabs.buffers.get('a.txt').mtime).toBe(12)
@@ -132,8 +132,8 @@ describe('отказы', () => {
   })
 })
 
-describe('что не пишется никогда', () => {
-  it('буфер, чьё первое чтение не вернулось', async () => {
+describe('what is never written', () => {
+  it('a buffer whose first read has not returned', async () => {
     tabs.openFile('a.txt', { permanent: true })
 
     await tabs.saveTab('a.txt')
@@ -141,17 +141,17 @@ describe('что не пишется никогда', () => {
     expect(ipc.calls('files_write')).toHaveLength(0)
   })
 
-  /* Буфер из openFile ещё не грязный: text === original === '', и saveTab
-     выходит по !isDirty, а не по buffer.loading — проверка замка вообще не
-     срабатывает. Чтобы застать именно её, нужен буфер одновременно
-     загружающийся и грязный. Через публичный API такого состояния не
-     получить (setText не пускает правки, пока стоит loading) — оно
-     синтетическое, приложение его не порождает. Тест стережёт сам замок в
-     saveTab, а не достижимое состояние. */
-  it('буфер, одновременно загружающийся и грязный, не пишется — стережём саму проверку loading', async () => {
+  /* A buffer from openFile is not dirty yet: text === original === '', and
+     saveTab returns on !isDirty rather than on buffer.loading — the guard is
+     never reached. To catch the guard itself we need a buffer that is loading
+     and dirty at the same time. Such a state cannot be produced through the
+     public API (setText lets no edits in while loading is set) — it is
+     synthetic, and the app never produces it. The test guards the check in
+     saveTab itself, not a reachable state. */
+  it('a buffer that is loading and dirty at once is not written — this guards the loading check itself', async () => {
     tabs.buffers.set(
       'a.txt',
-      buffer({ loading: true, text: 'набрано', original: 'исходное' })
+      buffer({ loading: true, text: 'typed', original: 'original' })
     )
 
     await tabs.saveTab('a.txt')
@@ -159,27 +159,27 @@ describe('что не пишется никогда', () => {
     expect(ipc.calls('files_write')).toHaveLength(0)
   })
 
-  it('буфер с отказом чтения', async () => {
-    tabs.buffers.set('a.txt', buffer({ text: 'что-то', original: '', error: { kind: 'binary' } }))
+  it('a buffer with a read refusal', async () => {
+    tabs.buffers.set('a.txt', buffer({ text: 'something', original: '', error: { kind: 'binary' } }))
 
     await tabs.saveTab('a.txt')
 
     expect(ipc.calls('files_write')).toHaveLength(0)
   })
 
-  it('вкладка, которой нет', async () => {
-    await tabs.saveTab('нет-такой.txt')
+  it('a tab that is not there', async () => {
+    await tabs.saveTab('no-such-file.txt')
 
     expect(ipc.calls('files_write')).toHaveLength(0)
   })
 })
 
 describe('saveTabs', () => {
-  it('пишет только грязные из перечисленных', async () => {
+  it('writes only the dirty ones among those listed', async () => {
     await opened('a.txt')
     tabs.openFile('b.txt', { permanent: true })
     await vi.waitFor(() => expect(tabs.buffers.get('b.txt').loading).toBe(false))
-    tabs.setText('b.txt', 'правка')
+    tabs.setText('b.txt', 'an edit')
 
     await tabs.saveTabs(['a.txt', 'b.txt'])
 

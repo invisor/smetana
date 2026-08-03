@@ -69,17 +69,17 @@ mod tests {
     }
 
     #[test]
-    fn пока_сыплет_вывод_это_работа() {
+    fn while_output_keeps_coming_it_is_work() {
         assert_eq!(detect(input(false, 100, &["building..."])).state, SessionState::Running);
     }
 
     #[test]
-    fn затих_надолго_это_простой() {
+    fn a_long_silence_is_idle() {
         assert_eq!(detect(input(false, 5_000, &["$ "])).state, SessionState::Idle);
     }
 
     #[test]
-    fn простой_тихий_а_не_громкий() {
+    fn idle_is_quiet_not_loud() {
         // An agent that has finished and an agent that is waiting for an
         // answer look identical from outside — both simply stop producing
         // output. Shouting on every pause would make loudness unreadable
@@ -88,17 +88,17 @@ mod tests {
     }
 
     #[test]
-    fn звонок_громкий_даже_посреди_вывода() {
+    fn a_bell_is_loud_even_in_the_middle_of_output() {
         assert_eq!(detect(input(true, 10, &["working"])).state, SessionState::NeedsYou);
     }
 
     #[test]
-    fn звонок_громкий_и_в_простое() {
+    fn a_bell_is_loud_when_idle_too() {
         assert_eq!(detect(input(true, 9_000, &["waiting"])).state, SessionState::NeedsYou);
     }
 
     #[test]
-    fn слой_a_вопроса_не_знает() {
+    fn layer_a_knows_nothing_of_the_question() {
         assert!(detect(input(true, 10, &["working"])).question.is_none());
     }
 
@@ -110,29 +110,29 @@ mod tests {
     }
 
     #[test]
-    fn устоявшийся_диалог_это_вопрос_с_текстом() {
+    fn a_settled_dialog_is_a_question_with_text() {
         let out = detect(DetectInput {
             bell_pending: false,
             quiet_for: Duration::from_millis(500),
             screen: dialog(),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
-        assert!(out.question.expect("вопроса нет").text.ends_with('?'));
+        assert!(out.question.expect("there is no question").text.ends_with('?'));
     }
 
     #[test]
-    fn ещё_рисующийся_диалог_профилю_не_верят() {
+    fn a_dialog_still_being_drawn_is_not_trusted_to_the_profile() {
         let out = detect(DetectInput {
             bell_pending: false,
             quiet_for: Duration::from_millis(20),
             screen: dialog(),
         });
-        assert!(out.question.is_none(), "профиль поверил недорисованному экрану");
+        assert!(out.question.is_none(), "the profile believed a half-drawn screen");
         assert_eq!(out.state, SessionState::Running);
     }
 
     #[test]
-    fn профиль_громче_простоя() {
+    fn the_profile_is_louder_than_idle() {
         let out = detect(DetectInput {
             bell_pending: false,
             quiet_for: Duration::from_secs(30),

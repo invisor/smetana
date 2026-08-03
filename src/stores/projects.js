@@ -1,10 +1,11 @@
-/* Проекты окна: состав списка, активный и переезд между ними.
-   Один из четырёх файлов во фронте, знающих про Tauri, — вместе с tracker.js,
-   settings.js и files.js.
+/* The window's projects: the list's contents, which one is active, and moving
+   between them. One of the front end's files that know about Tauri — along with
+   tracker.js, settings.js and files.js.
 
-   Истина по составу списка живёт в настройках (их пишет только этот
-   интерфейс), истина по доске — в bd. Поэтому переключение и состоит из двух
-   половин: раскладку приносит settings_load, задачи — tracker_set_project. */
+   The truth about the list's contents lives in settings (only this interface
+   writes them), the truth about the board lives in bd. Hence a switch has two
+   halves: settings_load brings the layout, tracker_set_project brings the
+   issues. */
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -13,21 +14,22 @@ import { flushPending, loadProjectLayout, settings } from './settings.js'
 import { confirmUnsaved, resetTabs, restoreTabs } from './tabs.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
 
-/* Путь → есть ли в нём .beads. Про активный проект то же самое говорит
-   health, но про остальные строки узнать больше неоткуда. */
+/* Path → whether it holds a .beads. health says the same thing about the
+   active project, but there is nowhere else to learn it about the other rows. */
 const probes = reactive({})
 
-/* Разделитель у путей свой на каждой системе, а среди целевых вебвью есть и
-   WebView2: режем по обоим, иначе в Windows именем проекта стал бы весь путь
-   целиком. */
+/* The path separator differs per system, and WebView2 is among the target
+   webviews: we split on both, otherwise on Windows the whole path would become
+   the project's name. */
 export const basename = (path) => path.split(/[/\\]/).filter(Boolean).pop() ?? path
 
 export const projectRows = computed(() =>
   settings.openProjects.map((path) => ({
     path,
     name: basename(path),
-    /* Пока проверка не вернулась, считаем, что трекер есть: показать и убрать
-       предупреждение хуже, чем показать его на полсекунды позже. */
+    /* Until the probe comes back we assume a tracker is there: showing a
+       warning and then taking it away is worse than showing it half a second
+       later. */
     tracked: probes[path] ?? true
   }))
 )
@@ -39,31 +41,32 @@ export async function refreshProbes() {
   for (const row of rows) probes[row.path] = row.tracked
 }
 
-/* setProject стоит около двух секунд, и ничто не мешает щёлкнуть по второй
-   строке (или удалить проект), пока едет первая. Без этой метки победил бы
-   тот ответ, что вернулся последним, — не тот клик, что был последним, — и
-   общий finally снял бы trackerState.switching посреди чужого перелёта.
-   switchTo/addProject/removeProject проверяют её первым делом и молча ничего
-   не делают, если переезд уже идёт: доска на это время и так показывает
-   скелет, человеку видно, что работа идёт, а вторая попытка ничего не
-   добавляет. Поднимается и снимается через try/finally, чтобы отказ
-   (например, setProject упал) не запер список навсегда. */
+/* setProject costs about two seconds, and nothing stops a person clicking a
+   second row (or removing a project) while the first is in flight. Without this
+   flag the answer that came back last would win — not the click that was last —
+   and a shared finally would clear trackerState.switching in the middle of
+   somebody else's trip. switchTo/addProject/removeProject check it first thing
+   and silently do nothing if a move is already under way: the board shows a
+   skeleton for that time anyway, the person can see work is happening, and a
+   second attempt adds nothing. It is raised and cleared through try/finally so
+   a failure (setProject throwing, say) does not lock the list forever. */
 let moving = false
 
-/* Общая часть переезда: раскладку нового проекта приносит settings_load,
-   задачи — tracker_set_project. Вызывающие сами отвечают за флаг moving и за
-   flushPending() состояния уходящего проекта до вызова.
+/* The shared part of a move: settings_load brings the new project's layout,
+   tracker_set_project brings the issues. Callers are responsible for the moving
+   flag themselves, and for flushPending() of the departing project's state
+   before the call.
 
-   С диска берётся только раскладка (loadProjectLayout). Список открытых и
-   активный остаются такими, какими их сделал этот файл: на диске в этот
-   момент лежит заведомо прошлое, и полный loadSettings вернул бы удалённый
-   проект обратно или стёр только что добавленный. */
+   Only the layout is taken from the disk (loadProjectLayout). The open list and
+   the active project stay as this file made them: what lies on the disk at that
+   moment is certainly the past, and a full loadSettings would bring a removed
+   project back or erase one that was just added. */
 async function moveTo(path) {
   settings.activeProject = path
   await loadProjectLayout(path)
-  /* Дерево и буферы старого проекта не должны пережить его ни на кадр.
-     Список вкладок при этом уже пришёл из настроек нового проекта — его и
-     восстанавливаем. */
+  /* The old project's tree and buffers must not outlive it by a single frame.
+     The tab list has already arrived from the new project's settings — that is
+     what we restore. */
   resetTabs()
   setRoot(path)
   if (path) {
@@ -75,9 +78,9 @@ async function moveTo(path) {
   refreshProbes()
 }
 
-/* Переезд. Порядок важен: сначала дописываем состояние уходящего проекта,
-   потом забираем раскладку нового, и только потом просим доску — она стоит
-   около двух секунд, и всё это время экран показывает скелет. */
+/* The move. The order matters: first we flush the departing project's state,
+   then we fetch the new one's layout, and only then do we ask for the board —
+   that costs about two seconds, and the screen shows a skeleton all the while. */
 export async function switchTo(path) {
   if (path === settings.activeProject || moving) return
   moving = true
@@ -90,16 +93,16 @@ export async function switchTo(path) {
   }
 }
 
-/* Выбрали подкаталог отслеживаемого репозитория — открывается его корень.
-   Нормализуем ровно один раз, до того как путь попадёт в список: ключ в
-   настройках, строка в списке и каталог воркера обязаны быть одним и тем же
-   путём. Ничего отслеживаемого выше нет — путь остаётся как есть, и человеку
-   предложат bd init прямо в нём. */
+/* Pick a subfolder of a tracked repository and its root is what opens. We
+   normalize exactly once, before the path reaches the list: the key in
+   settings, the row in the list and the worker's directory have to be one and
+   the same path. If there is nothing tracked above, the path stays as it is and
+   the person is offered bd init right in it. */
 async function projectRoot(path) {
   try {
     return await invoke('project_root', { path })
   } catch (err) {
-    console.error('[projects] корень проекта определить не удалось:', err)
+    console.error('[projects] could not determine the project root:', err)
     return path
   }
 }
@@ -110,28 +113,28 @@ export async function addProject() {
   try {
     picked = await open({ directory: true, multiple: false, title: 'Add project' })
   } catch (err) {
-    console.error('[projects] выбрать папку не удалось:', err)
+    console.error('[projects] picking a folder failed:', err)
     return
   }
   if (!picked) return
   const path = await projectRoot(picked)
-  /* Диалог сам стоит сколько угодно — переезд мог начаться и кончиться, пока
-     человек выбирал папку, так что флаг проверяется заново после возврата,
-     не только на входе в функцию. */
+  /* The dialog itself takes as long as it takes — a move may have started and
+     finished while the person was picking a folder, so the flag is checked
+     again after it returns, not only on the way into the function. */
   if (moving) return
 
   moving = true
   try {
-    /* Спрашиваем только там, где будет переезд: выбранный проект уже активен —
-       вкладки остаются на месте, и вопрос был бы вопросом ни о чём. Он всё так
-       же стоит до flushPending: состояние уходящего проекта не должно лечь на
-       диск раньше, чем человек решил, ехать ли вообще. */
+    /* We only ask where there will be a move: if the chosen project is already
+       active, the tabs stay put and the question would be about nothing. It
+       still comes before flushPending: the departing project's state must not
+       land on disk before the person has decided whether to move at all. */
     if (path !== settings.activeProject && !(await confirmUnsaved())) return
-    /* Сначала дописываем состояние уходящего проекта, и только потом меняем
-       список: запись, начатая после добавления строки, унесла бы состояние
-       старого проекта уже под новым списком. Порядок здесь не должен зависеть
-       от того, успел ли завестись таймер дебаунса, — за это отвечает сама
-       flushPending. */
+    /* First we flush the departing project's state and only then change the
+       list: a write started after the row was added would carry the old
+       project's state under the new list. The order here must not depend on
+       whether the debounce timer managed to start — flushPending is responsible
+       for that itself. */
     await flushPending()
     if (!settings.openProjects.includes(path)) settings.openProjects.push(path)
     if (path === settings.activeProject) return
@@ -141,26 +144,27 @@ export async function addProject() {
   }
 }
 
-/* Удаление из списка. Состояние проекта остаётся в файле настроек и вернётся,
-   если открыть его снова. Активным становится следующий, а для последней
-   строки — предыдущий; опустевший список оставляет окно без проекта, и это
-   нормальное состояние. */
+/* Removal from the list. The project's state stays in the settings file and
+   comes back if it is opened again. The next project becomes active, or the
+   previous one for the last row; an emptied list leaves the window without a
+   project, and that is a normal state. */
 export async function removeProject(path) {
   if (moving) return
   moving = true
   try {
-    /* Строки уже нет — ни спрашивать, ни писать не о чем. */
+    /* The row is already gone — nothing to ask about and nothing to write. */
     if (!settings.openProjects.includes(path)) return
-    /* Вопрос — только про переезд. Удаление неактивной строки вкладок не
-       касается вовсе, и «Не сохранять» стёрло бы правки текущего проекта ни за
-       что. И по-прежнему до flushPending — по той же причине, что в switchTo. */
+    /* The question is only about a move. Removing an inactive row does not
+       touch the tabs at all, and "Don't save" would erase the current project's
+       edits for nothing. And still before flushPending — for the same reason as
+       in switchTo. */
     if (path === settings.activeProject && !(await confirmUnsaved())) return
-    /* Как и в switchTo: состояние уходящего проекта обязано лечь на диск до
-       того, как список поменяется, иначе четырёхсотмиллисекундный дебаунс
-       перезапишет несохранённую правку уже урезанным списком. */
+    /* As in switchTo: the departing project's state has to land on disk before
+       the list changes, otherwise the four-hundred-millisecond debounce would
+       overwrite an unsaved edit with an already-shortened list. */
     await flushPending()
-    /* Индекс берём после ожиданий: вопрос стоит сколько угодно, и место строки
-       за это время могло уехать. */
+    /* The index is taken after the awaits: the question takes as long as it
+       takes, and the row's position may have moved by then. */
     const at = settings.openProjects.indexOf(path)
     if (at === -1) return
     settings.openProjects.splice(at, 1)
@@ -175,20 +179,20 @@ export async function removeProject(path) {
   }
 }
 
-/* bd init в активном каталоге. Ошибку глотаем: её уже показал Toast через
-   trackerState.lastError. */
+/* bd init in the active folder. We swallow the error: Toast has already shown
+   it through trackerState.lastError. */
 export async function initActive() {
   try {
     await initBd()
     await refreshProbes()
   } catch {
-    /* сообщение уже лежит в trackerState.lastError */
+    /* the message already sits in trackerState.lastError */
   }
 }
 
-/* Первый запуск: настройки принесли активный проект, которого ещё нет в
-   списке (его нашли по рабочему каталогу). Кладём — и список перестаёт быть
-   пустым навсегда. */
+/* The first run: settings brought an active project that is not in the list
+   yet (it was found from the working directory). We put it in — and the list
+   stops being empty for good. */
 export function adoptInitialProject() {
   const active = settings.activeProject
   if (active && !settings.openProjects.includes(active)) settings.openProjects.push(active)

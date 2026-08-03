@@ -1,9 +1,9 @@
-//! Команды файлов: тонкие, без собственного состояния — как у настроек.
+//! File commands: thin, with no state of their own — same as the settings ones.
 //!
-//! `root` приходит от фронта: он и так знает активный проект, а держать здесь
-//! вторую копию этого знания значило бы завести зависимость от трекера ради
-//! значения, которое ему не принадлежит. Каждая команда проверяет, что путь
-//! лежит внутри присланного корня.
+//! `root` comes from the front end: it knows the active project anyway, and
+//! keeping a second copy of that knowledge here would mean taking a dependency
+//! on the tracker for a value that is not its own. Every command checks that the
+//! path lies inside the root it was sent.
 
 use std::path::PathBuf;
 
@@ -20,8 +20,8 @@ pub async fn files_read(root: String, path: String) -> Result<FileText, FilesErr
     fs::read_text(&PathBuf::from(root), &path)
 }
 
-/// Отвечает новой меткой времени: фронт кладёт её в буфер и присылает
-/// следующей записью.
+/// Answers with the new timestamp: the front end puts it in the buffer and
+/// sends it back with the next write.
 #[tauri::command]
 pub async fn files_write(
     root: String,
@@ -32,7 +32,7 @@ pub async fn files_write(
     fs::write_text(&PathBuf::from(root), &path, &text, expected_mtime)
 }
 
-/// Отказов нет: исчезнувший файл приезжает как `mtime: null`.
+/// No refusals: a vanished file arrives as `mtime: null`.
 #[tauri::command]
 pub async fn files_stat(root: String, paths: Vec<String>) -> Vec<Stat> {
     fs::stat_many(&PathBuf::from(root), &paths)

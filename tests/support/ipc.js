@@ -1,12 +1,12 @@
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 
-/* Маршрутизатор поверх официального mockIPC. Существует ради читаемости: без
-   него каждый тест писал бы свой switch по имени команды.
+/* A router on top of the official mockIPC. It exists for readability: without
+   it every test would write its own switch on the command name.
 
-   mockWindows обязателен и стоит здесь, а не в тестах. Без него
-   getCurrentWindow() бросает, а settings.js трактует этот бросок как «мы в
-   браузере, окна нет» и молча не подписывается на закрытие — тесты закрытия
-   проверяли бы пустоту. */
+   mockWindows is mandatory and belongs here rather than in the tests. Without
+   it getCurrentWindow() throws, and settings.js reads that throw as "we are in
+   a browser, there is no window" and silently never subscribes to the close —
+   the close tests would be checking emptiness. */
 export function installIpc() {
   const handlers = new Map()
   const recorded = []
@@ -25,12 +25,12 @@ export function installIpc() {
     calls(cmd) {
       return recorded.filter((call) => call.cmd === cmd).map((call) => call.args)
     },
-    /* recorded пишется до вызова обработчика, поэтому commands()/calls() не
-       отличают «команда выполнена» от «команда бросила, а вызывающий поймал
-       отказ». Тест на порядок команд, построенный только на этом списке, не
-       проверяет, что команда случилась успешно, — см. правки 2 и 3
-       (settings_save мог не произойти вовсе, а indexOf всё равно дал бы
-       сравнимое число: -1). */
+    /* recorded is written before the handler is called, so commands()/calls()
+       do not tell "the command ran" from "the command threw and the caller
+       caught the refusal". A test of command ordering built on this list alone
+       does not check that a command succeeded — see fixes 2 and 3
+       (settings_save may not have happened at all, and indexOf would still give
+       a comparable number: -1). */
     commands() {
       return recorded.map((call) => call.cmd)
     }
@@ -41,10 +41,10 @@ export function installIpc() {
     (cmd, args) => {
       recorded.push({ cmd, args })
       const handler = handlers.get(cmd)
-      /* Команда, о которой тест не думал, обязана падать с именем команды.
-         Молчаливый undefined развалил бы тест тремя строками ниже, и виноватым
-         выглядел бы стор. */
-      if (!handler) throw new Error(`[тест] команда ${cmd} не заведена: добавьте ipc.on('${cmd}', …)`)
+      /* A command the test did not think about has to fail with the command's
+         name. A silent undefined would break the test three lines later, and
+         the store would look like the culprit. */
+      if (!handler) throw new Error(`[test] command ${cmd} is not registered: add ipc.on('${cmd}', …)`)
       return handler(args)
     },
     { shouldMockEvents: true }

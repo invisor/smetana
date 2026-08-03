@@ -1,12 +1,13 @@
-//! Команды настроек: тонкие, без собственного состояния.
+//! Settings commands: thin, with no state of their own.
 //!
-//! В отличие от трекера, воркер здесь не нужен: истина по настройкам живёт во
-//! фронте, снаружи их никто не меняет, а файл читается и пишется за
-//! миллисекунды — очередь запросов сторожила бы то, за что никто не борется.
+//! Unlike the tracker, no worker is needed here: the truth about settings lives
+//! in the front end, nobody changes them from outside, and the file is read and
+//! written in milliseconds — a request queue would be guarding something nobody
+//! contends for.
 //!
-//! Активный проект приходит от фронта и лежит в самом файле. Раньше он
-//! добывался у трекера, и это была подпорка: настройки зависели от трекера
-//! ради значения, которое им же и принадлежит.
+//! The active project comes from the front end and sits in the file itself. It
+//! used to be fetched from the tracker, and that was a crutch: settings depended
+//! on the tracker for a value that belongs to settings.
 
 use std::path::PathBuf;
 
@@ -16,18 +17,18 @@ use super::file;
 use super::model::{merge, resolve, ResolvedSettings};
 use crate::project;
 
-/// Ошибок чтения у настроек почти нет: файла может не быть, он может быть
-/// сломан — это обычная жизнь, а не отказ. Настоящих бед две: некуда писать
-/// и не получилось записать.
+/// Settings have almost no read errors: the file may be missing, it may be
+/// broken — that is ordinary life, not a failure. There are two real troubles:
+/// nowhere to write, and the write did not go through.
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
-    #[error("не удалось определить каталог настроек: {0}")]
+    #[error("could not determine the settings directory: {0}")]
     Dir(String),
-    #[error("не удалось сохранить настройки: {0}")]
+    #[error("could not save the settings: {0}")]
     Write(String),
 }
 
-// Tauri требует, чтобы ошибка команды умела сериализоваться.
+// Tauri requires a command's error to be serializable.
 impl serde::Serialize for SettingsError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&self.to_string())
@@ -41,9 +42,9 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, SettingsError> {
         .map_err(|err| SettingsError::Dir(err.to_string()))
 }
 
-/// `project` — «покажи состояние вот этого проекта»: так фронт получает
-/// раскладку другого проекта при переключении. Без аргумента отвечаем про
-/// активный из файла.
+/// `project` means "show me this project's state": that is how the front end
+/// gets another project's layout when switching. With no argument we answer
+/// about the active project from the file.
 #[tauri::command]
 pub async fn settings_load(
     app: AppHandle,
@@ -53,21 +54,21 @@ pub async fn settings_load(
     let (settings, problem) = file::load(&path);
     match problem {
         Some(file::Problem::Broken) => {
-            log::warn!("настройки: {} не прочитался, копия рядом в .bak", path.display())
+            log::warn!("settings: {} did not read, a copy is next to it in .bak", path.display())
         }
         Some(file::Problem::TooNew) => {
-            log::warn!("настройки: {} новее этой сборки, копия рядом в .bak", path.display())
+            log::warn!("settings: {} is newer than this build, a copy is next to it in .bak", path.display())
         }
         Some(file::Problem::Unreadable) => {
-            log::warn!("настройки: {} не удалось прочитать, настройки начались с умолчаний", path.display())
+            log::warn!("settings: {} could not be read, the settings started from defaults", path.display())
         }
         None => {}
     }
 
     let mut view = resolve(&settings, project.as_deref());
-    // Первый запуск: списка ещё нет. Открываемся тем каталогом, из которого
-    // запустили, если он отслеживается; в список его положит фронт — файл
-    // чтением не меняется.
+    // The first run: there is no list yet. We open with the directory the app
+    // was launched from, if it is tracked; the front end puts it in the list —
+    // reading does not change the file.
     if view.open_projects.is_empty() && view.active_project.is_none() {
         view.active_project =
             project::default_project().map(|dir| dir.to_string_lossy().into_owned());
@@ -75,21 +76,22 @@ pub async fn settings_load(
     Ok(view)
 }
 
-/// Файл перечитывается на каждую запись: между двумя сохранениями его мог
-/// поправить человек, и записи других проектов в нём терять нельзя.
+/// The file is re-read on every write: a person may have edited it between two
+/// saves, and other projects' entries in it must not be lost.
 #[tauri::command]
 pub async fn settings_save(app: AppHandle, settings: ResolvedSettings) -> Result<(), SettingsError> {
     let path = settings_path(&app)?;
     let (mut stored, problem) = file::load(&path);
 
-    /* Асимметрия намеренная. Сломанный и слишком новый файл уже уехали в
-       .bak — там записывать поверх безопасно, а отказ оставил бы человека
-       навсегда без возможности сохраниться. С нечитаемым файлом наоборот:
-       копию снять было нечем, а `rename` спрашивает права только у каталога,
-       так что запись молча стёрла бы то, что мы даже не смогли прочесть. */
+    /* The asymmetry is deliberate. A broken or too-new file has already gone
+       to .bak — writing over it there is safe, while a refusal would leave a
+       person permanently unable to save. With an unreadable file it is the
+       other way round: there was nothing to take a copy from, and `rename` asks
+       the directory for permissions only, so a write would silently erase
+       something we could not even read. */
     if matches!(problem, Some(file::Problem::Unreadable)) {
         return Err(SettingsError::Write(format!(
-            "{}: существующий файл не удалось прочитать, поэтому он не был перезаписан",
+            "{}: the existing file could not be read, so it was not overwritten",
             path.display()
         )));
     }
