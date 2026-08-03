@@ -11,6 +11,7 @@
 import { mockIPC } from '@tauri-apps/api/mocks'
 import { columns as fixtureColumns } from '../views/desktopAppData.js'
 import { defaults as settingsDefaults } from './settings.js'
+import { MOCK_SESSION_OUTPUT } from './terminalFixture.js'
 
 /* Обратный перевод: фикстуры написаны в терминах дизайн-системы,
    а бэкенд отдаёт статусы bd. */
@@ -62,6 +63,11 @@ export const MOCK_TREE = {
 
 const MOCK_FILE = `fn main() {\n    println!("hello from the mock backend");\n}\n`
 const MOCK_MTIME = 1754006400000
+
+/* PTY output is arbitrary bytes; the fixture's box-drawing characters sit
+   outside Latin-1, so plain btoa() would throw. Route through TextEncoder
+   first — the same path the Rust side takes for anything outside ASCII. */
+const toBase64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 
 function fixtureIssues() {
   return fixtureColumns.flatMap((column) =>
@@ -142,6 +148,34 @@ export function installMockBackend() {
     if (command === 'files_stat') {
       return (payload?.paths ?? []).map((path) => ({ path, mtime: MOCK_MTIME }))
     }
+    if (command === 'terminal_list') {
+      return [
+        {
+          id: 1,
+          agent: 'claude',
+          cwd: MOCK_PROJECTS[0],
+          project: payload?.project ?? MOCK_PROJECTS[0],
+          state: 'needs-you',
+          question: {
+            text: 'Do you want to make this edit to tabs.js?',
+            options: [
+              { label: 'Yes', send: '1\r' },
+              { label: "Yes, and don't ask again this session", send: '2\r' },
+              { label: 'No, and tell Claude what to do differently', send: '3\r' }
+            ],
+            selected: 0
+          },
+          startedAt: new Date(Date.now() - 134 * 60000).toISOString(),
+          exitCode: null
+        }
+      ]
+    }
+    if (command === 'terminal_attach') {
+      return { data: toBase64(MOCK_SESSION_OUTPUT), seq: 0 }
+    }
+    /* Detach and resize change nothing on disk and have nothing to lie
+       about. */
+    if (command === 'terminal_detach' || command === 'terminal_resize') return null
     // Любая команда записи (tracker_create/update/close/reopen, files_write,
     // и всё, что появится позже) должна отклониться явно, а не молча вернуть
     // похожую на правду, но чужую задачу — иначе в браузере "запись"
