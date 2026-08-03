@@ -33,6 +33,15 @@ pub struct Detected {
 }
 
 pub fn detect(input: DetectInput) -> Detected {
+    // Layer B: the profile knows exactly what is being asked, so it takes
+    // precedence. Trusted only once the screen has settled — see SETTLE.
+    if input.quiet_for >= SETTLE {
+        if let Some(question) = super::profiles::claude(input.screen) {
+            return Detected { state: SessionState::NeedsYou, question: Some(question) };
+        }
+    }
+
+    // Layer A: agent-independent, nothing in it to break.
     let state = if input.bell_pending {
         SessionState::NeedsYou
     } else if input.quiet_for >= IDLE_AFTER {
@@ -92,5 +101,47 @@ mod tests {
     #[test]
     fn слой_a_вопроса_не_знает() {
         assert!(detect(input(true, 10, &["working"])).question.is_none());
+    }
+
+    fn dialog() -> &'static [String] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/claude-permission-dialog.txt");
+        let lines: Vec<String> = std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect();
+        Box::leak(lines.into_boxed_slice())
+    }
+
+    #[test]
+    fn устоявшийся_диалог_это_вопрос_с_текстом() {
+        let out = detect(DetectInput {
+            bell_pending: false,
+            quiet_for: Duration::from_millis(500),
+            screen: dialog(),
+            alive: true,
+        });
+        assert_eq!(out.state, SessionState::NeedsYou);
+        assert!(out.question.expect("вопроса нет").text.ends_with('?'));
+    }
+
+    #[test]
+    fn ещё_рисующийся_диалог_профилю_не_верят() {
+        let out = detect(DetectInput {
+            bell_pending: false,
+            quiet_for: Duration::from_millis(20),
+            screen: dialog(),
+            alive: true,
+        });
+        assert!(out.question.is_none(), "профиль поверил недорисованному экрану");
+        assert_eq!(out.state, SessionState::Running);
+    }
+
+    #[test]
+    fn профиль_громче_простоя() {
+        let out = detect(DetectInput {
+            bell_pending: false,
+            quiet_for: Duration::from_secs(30),
+            screen: dialog(),
+            alive: true,
+        });
+        assert_eq!(out.state, SessionState::NeedsYou);
     }
 }
