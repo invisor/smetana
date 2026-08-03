@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Language
+
+**Code comments are written in English.** Most of the tree still carries Russian comments — that was
+the earlier convention, and it is being replaced file by file as each is touched, not in one sweep.
+Match this file, not the file next to you. Commit messages stay in Russian, matching the whole
+history. UI copy is English, sentence case (see Constraints).
+
 ## Commands
 
 ```sh
