@@ -7,6 +7,7 @@ import {
   ArrowDownToLine,
   Bell,
   Bot,
+  Bug,
   Check,
   ChevronDown,
   ChevronRight,
@@ -27,9 +28,11 @@ import {
   GitFork,
   Inbox,
   Info,
+  Layers,
   LoaderCircle,
   Lock,
   MessageCircleQuestion,
+  Milestone,
   Minus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -41,7 +44,11 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Sparkles,
+  SquareCheck,
+  Tag,
   Terminal,
+  Trash2,
   TriangleAlert,
   User,
   Wrench,
@@ -54,6 +61,7 @@ export const iconNodes = {
   user: User,
   'circle-dashed': CircleDashed,
   terminal: Terminal,
+  'trash-2': Trash2,
 
   // the dependency graph
   lock: Lock,
@@ -105,5 +113,13 @@ export const iconNodes = {
   minus: Minus,
   gauge: Gauge,
   inbox: Inbox,
-  'columns-3': Columns3
+  'columns-3': Columns3,
+
+  // issue types
+  bug: Bug,
+  sparkles: Sparkles,
+  layers: Layers,
+  'square-check': SquareCheck,
+  milestone: Milestone,
+  tag: Tag
 }

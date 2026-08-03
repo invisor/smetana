@@ -72,6 +72,16 @@ pub async fn tracker_reopen(
     ask(&handle, |tx| Request::Reopen(id, tx)).await?
 }
 
+/// Irreversible, and the only write that answers with nothing: a deleted issue
+/// has no shape to hand back. The disappearance reaches the board as a delta.
+#[tauri::command]
+pub async fn tracker_delete(
+    handle: State<'_, TrackerHandle>,
+    id: String,
+) -> Result<(), TrackerError> {
+    ask(&handle, |tx| Request::Delete(id, tx)).await?
+}
+
 /// Moving to another directory. `None` means "no projects are left": the board
 /// empties while the worker stays alive and waits for the next project. The
 /// answer is the new project's snapshot in full: the front end does not listen

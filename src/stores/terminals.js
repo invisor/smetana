@@ -176,9 +176,9 @@ export async function loadSessions(project) {
    failed spawn into something the human sees, and an agent asked for that
    never appeared needs to say why — swallowing the error here would leave
    nothing to show. */
-export async function createSession(project) {
+export async function createSession(project, prompt = null) {
   try {
-    const session = await invoke('terminal_create', { project })
+    const session = await invoke('terminal_create', { project, prompt })
     upsert(session)
     terminalState.activeId = session.id
     terminalState.lastError = null

@@ -41,12 +41,15 @@ pub async fn terminal_list(
     ask(&handle, |tx| Request::List(project, tx)).await
 }
 
+/// `prompt` is what the agent opens on, when it was started for a particular
+/// piece of work rather than by the "+ New agent" row.
 #[tauri::command]
 pub async fn terminal_create(
     handle: State<'_, TerminalHandle>,
     project: String,
+    prompt: Option<String>,
 ) -> Result<Session, TerminalError> {
-    ask(&handle, |tx| Request::Create(project, tx)).await?
+    ask(&handle, |tx| Request::Create(project, prompt, tx)).await?
 }
 
 #[tauri::command]

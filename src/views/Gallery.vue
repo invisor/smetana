@@ -31,7 +31,10 @@ import {
   StatusDot,
   Switch,
   TabBar,
+  TaskCard,
+  TaskInspector,
   TerminalView,
+  TypeBadge,
   Toast,
   ToolCall,
   Tooltip
@@ -83,6 +86,47 @@ const agentRows = [
   { id: 2, name: 'claude-2', state: 'running', elapsed: '1h 02m' },
   { id: 3, name: 'claude-3', state: 'done', elapsed: '18m' }
 ]
+
+/* Two issues in bd's own shape: one that has everything the inspector can
+   draw, and one that has almost nothing. The second is the case worth looking
+   at — a panel that reads as a form with blank rows is the defect this section
+   exists to catch. */
+const FULL_ISSUE = {
+  id: 'smetana-29j.11',
+  title: 'Show the tracker state on a non-empty board too',
+  status: 'in_progress',
+  description:
+    'The health notice renders only while the columns are empty, so a version mismatch is invisible exactly when there are cards — a person is looking at stale data with nothing to say so.',
+  priority: 1,
+  issue_type: 'bug',
+  owner: 'merazent@gmail.com',
+  created_at: '2026-07-28T09:15:00Z',
+  created_by: 'flexo',
+  started_at: '2026-07-30T11:02:00Z',
+  updated_at: '2026-07-31T19:04:52Z',
+  closed_at: null,
+  close_reason: null,
+  comment_count: 3,
+  parent: 'smetana-29j',
+  labels: ['tracker', 'ui'],
+  dependencies: [
+    { issue_id: 'smetana-29j.11', depends_on_id: 'smetana-1or', type: 'blocks' },
+    { issue_id: 'smetana-29j.11', depends_on_id: 'smetana-29j', type: 'parent-child' }
+  ]
+}
+
+const SPARSE_ISSUE = {
+  id: 'smetana-4tz',
+  title: 'Vendor the latin subset of IBM Plex Mono',
+  status: 'open',
+  updated_at: '2026-08-01T08:30:00Z',
+  labels: [],
+  dependencies: []
+}
+
+/* bd's six types plus a custom one, to show both halves of the type palette:
+   the three that carry a hue and the neutral set everything else falls into. */
+const types = ['bug', 'feature', 'epic', 'task', 'chore', 'decision', 'tech-debt']
 
 /* Reserved statuses plus generated ones, to show both halves of the algorithm. */
 const statuses = [
@@ -172,8 +216,62 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
 
     <section :style="sectionStyle">
       <div :style="headStyle">Kanban</div>
+      <div :style="rowStyle">
+        <TypeBadge v-for="t in types" :key="t" :type="t" />
+      </div>
+      <!-- The card at the width the board gives it, since the badge shares its
+           bottom row with the dependency marks and the assignee. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-4)', alignItems: 'flex-start' }">
+        <div :style="{ width: '212px' }">
+          <TaskCard
+            id="bd-a1b2"
+            title="Rename worktree when the branch changes"
+            status="needs-you"
+            type="bug"
+            needs-response
+            :blocks="5"
+          />
+        </div>
+        <div :style="{ width: '212px' }">
+          <TaskCard
+            id="bd-3c9d"
+            title="Virtualise the log list above 10k lines"
+            status="running"
+            type="feature"
+            :blocked-by="2"
+            spawned-from="bd-7f31"
+            :assignee="{ kind: 'agent', name: 'claude-1' }"
+          />
+        </div>
+        <div :style="{ width: '212px' }">
+          <TaskCard id="bd-12cd" title="Bump tauri to 2.1" status="done" type="chore" />
+        </div>
+      </div>
       <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <NewTaskModal :open="true" @close="() => {}" @submit="() => {}" />
+      </div>
+      <!-- Two of them: the panel draws only the fields an issue has, so the
+           sparse case is a different component to look at, not the same one
+           with less in it. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
+        <div :style="{ width: '320px' }">
+          <TaskInspector
+            :issue="FULL_ISSUE"
+            ui-status="running"
+            @status="() => {}"
+            @delete="() => {}"
+            @ask-agent="() => {}"
+          />
+        </div>
+        <div :style="{ width: '320px' }">
+          <TaskInspector
+            :issue="SPARSE_ISSUE"
+            ui-status="ready"
+            @status="() => {}"
+            @delete="() => {}"
+            @ask-agent="() => {}"
+          />
+        </div>
       </div>
     </section>
 

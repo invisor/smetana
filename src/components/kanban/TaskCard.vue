@@ -1,16 +1,23 @@
 <script setup>
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
-import StatusBadge from '../status/StatusBadge.vue'
 import DependencyBand from '../status/DependencyBand.vue'
 import DependencyMark from '../status/DependencyMark.vue'
 import Assignee from './Assignee.vue'
+import TypeBadge from './TypeBadge.vue'
 import { attentionLevel } from '../status/status.js'
 
 const props = defineProps({
   id: { type: String, required: true },
   title: { type: String, required: true },
+  /* The card no longer draws its status: it is already the column it sits in,
+     and saying it twice spends the one badge a card has on nothing. What the
+     status still decides is the card's loudness — the border, the flash, the
+     dimming of anything done — so the prop stays. */
   status: { type: String, default: 'ready' },
+  /* bd's issue type, drawn in the corner the status used to hold. Absent on a
+     card the tracker has not typed, and then nothing is drawn. */
+  type: { type: String, default: undefined },
   assignee: { type: Object, default: null },
   blockedBy: { type: Number, default: 0 },
   blocks: { type: Number, default: 0 },
@@ -109,7 +116,7 @@ const titleStyle = {
       </div>
       <div :style="titleStyle">{{ title }}</div>
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)', flexWrap: 'wrap' }">
-        <StatusBadge :status="status" size="sm" />
+        <TypeBadge v-if="type" :type="type" size="sm" />
         <span :style="{ flex: 1 }" />
         <DependencyMark :blocked-by="blockedBy" :blocks="blocks" :spawned-from="spawnedFrom" size="sm" />
         <Assignee v-if="assignee" :kind="assignee.kind" :name="assignee.name" />

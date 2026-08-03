@@ -34,6 +34,7 @@ pub enum Request {
     Update(String, IssuePatch, oneshot::Sender<Result<Issue, TrackerError>>),
     Close(String, Option<String>, oneshot::Sender<Result<Issue, TrackerError>>),
     Reopen(String, oneshot::Sender<Result<Issue, TrackerError>>),
+    Delete(String, oneshot::Sender<Result<(), TrackerError>>),
 }
 
 #[derive(Clone)]
@@ -460,6 +461,17 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(finish(app, store, result));
+            false
+        }
+        Request::Delete(id, reply) => {
+            let result = match tracked(current) {
+                Some(bd) => bd.delete(&id).await,
+                None => Err(no_tracker(health)),
+            };
+            if result.is_ok() {
+                emit_delta(app, store.remove_one(&id));
+            }
+            let _ = reply.send(result);
             false
         }
     }

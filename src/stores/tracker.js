@@ -57,6 +57,10 @@ export const boardColumns = computed(() => {
       id: issue.id,
       title: issue.title,
       status: toUiStatus(issue.status),
+      /* bd's own word, untranslated: the card's badge is the tracker's
+         vocabulary, not the design system's, and a custom type has to survive
+         the trip to be drawn at all. */
+      type: issue.issue_type ?? undefined,
       blockedBy: blockedBy.get(issue.id) ?? 0,
       blocks: blocks.get(issue.id) ?? 0,
       spawnedFrom: issue.parent ?? undefined
@@ -251,7 +255,9 @@ export function updateIssue(id, patch) {
   if (patch.title !== undefined) optimistic.title = patch.title
   if (patch.status !== undefined) optimistic.status = patch.status
   if (patch.priority !== undefined) optimistic.priority = patch.priority
-  if (patch.assignee !== undefined) optimistic.assignee = patch.assignee
+  // The patch says `assignee` because that is bd's `-a` flag; the issue says
+  // `owner` because that is what bd emits. The two names are the same person.
+  if (patch.assignee !== undefined) optimistic.owner = patch.assignee
   return write(id, optimistic, () => invoke('tracker_update', { id, patch }))
 }
 
@@ -261,4 +267,25 @@ export function closeIssue(id, reason = null) {
 
 export function reopenIssue(id) {
   return write(id, { status: 'open' }, () => invoke('tracker_reopen', { id }))
+}
+
+/* The one write whose result is an absence, so it cannot go through write():
+   there is no issue coming back to put in the Map. The optimism is the same
+   idea, inverted — the card goes at once and comes back if bd refused — and so
+   is the care about the rollback: over those two seconds the watcher or another
+   write may have put a newer version of the issue in, and restoring our stale
+   copy over it would undo somebody else's change. If anything is there under
+   that id when we come back, it is more current than what we removed. */
+export async function deleteIssue(id) {
+  const before = trackerState.issues.get(id)
+  trackerState.issues.delete(id)
+  trackerState.lastError = null
+
+  try {
+    await invoke('tracker_delete', { id })
+  } catch (error) {
+    if (before && !trackerState.issues.has(id)) trackerState.issues.set(id, before)
+    report('write', error)
+    throw error
+  }
 }

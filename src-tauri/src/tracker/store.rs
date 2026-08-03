@@ -121,6 +121,23 @@ impl Store {
         self.apply_incremental(vec![issue])
     }
 
+    /// The other half of that, for the one write whose result is an absence.
+    /// An id that is not here produces an empty delta rather than a phantom
+    /// removal: the full sweep would have taken it out already, and telling the
+    /// front end to remove what it never had would spend a generation on
+    /// nothing.
+    pub fn remove_one(&mut self, id: &str) -> Delta {
+        if self.issues.remove(id).is_none() {
+            return Delta::default();
+        }
+        self.generation += 1;
+        Delta {
+            generation: self.generation,
+            removed: vec![id.to_string()],
+            ..Default::default()
+        }
+    }
+
     pub fn columns_delta(&mut self) -> Delta {
         self.generation += 1;
         Delta {
@@ -142,12 +159,7 @@ mod tests {
             title: format!("issue {id}"),
             status: status.into(),
             updated_at: updated.into(),
-            priority: None,
-            issue_type: None,
-            assignee: None,
-            parent: None,
-            labels: vec![],
-            dependencies: vec![],
+            ..Issue::default()
         }
     }
 
@@ -166,6 +178,31 @@ mod tests {
         let delta = store.apply_incremental(vec![issue("a", "open", "2026-07-31T00:00:01Z")]);
         assert!(delta.is_empty());
         assert_eq!(store.generation(), 1, "the generation grows only on a non-empty delta");
+    }
+
+    #[test]
+    fn a_deletion_leaves_the_snapshot_and_lands_in_the_delta() {
+        let mut store = Store::default();
+        store.apply_incremental(vec![
+            issue("a", "open", "2026-07-31T00:00:01Z"),
+            issue("b", "open", "2026-07-31T00:00:01Z"),
+        ]);
+        let delta = store.remove_one("a");
+        assert_eq!(delta.removed, vec!["a".to_string()]);
+        assert_eq!(delta.generation, 2);
+        let ids: Vec<String> = store.snapshot().issues.into_iter().map(|i| i.id).collect();
+        assert_eq!(ids, vec!["b".to_string()]);
+    }
+
+    /// The full sweep may have taken it out already. Announcing a removal the
+    /// front end has no issue for would spend a generation on nothing.
+    #[test]
+    fn deleting_what_is_not_there_produces_no_delta() {
+        let mut store = Store::default();
+        store.apply_incremental(vec![issue("a", "open", "2026-07-31T00:00:01Z")]);
+        let delta = store.remove_one("b");
+        assert!(delta.is_empty());
+        assert_eq!(store.generation(), 1);
     }
 
     #[test]

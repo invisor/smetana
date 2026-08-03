@@ -129,6 +129,16 @@ pub fn update_args(id: &str, patch: &IssuePatch) -> Vec<String> {
     args
 }
 
+/// `-f` is not optional and is not about skipping a prompt: without it
+/// `bd delete` prints a preview and deletes nothing, so the call would report
+/// success while the issue stayed on the board. It also decides what happens to
+/// the issue's dependents — plain `bd delete` refuses outright when there are
+/// any, which would make the button useless on every parent task, while `-f`
+/// deletes and orphans them. The confirmation the person sees says so.
+pub fn delete_args(id: &str) -> Vec<String> {
+    vec!["delete".to_string(), "-f".to_string(), "--".to_string(), id.to_string()]
+}
+
 /// `bd init` in the project's directory.
 ///
 /// `--non-interactive` is mandatory: we have no terminal, and a wizard waiting
@@ -251,6 +261,13 @@ impl Bd {
         self.one(vec!["reopen".into(), "--json".into(), "--".into(), id.to_string()])
             .await
     }
+
+    /// Deletion is irreversible and gives nothing back to parse — an issue that
+    /// no longer exists has no shape to return. Only the exit code matters, the
+    /// same as `init`.
+    pub async fn delete(&self, id: &str) -> Result<(), TrackerError> {
+        self.run(delete_args(id)).await.map(|_| ())
+    }
 }
 
 #[cfg(test)]
@@ -264,8 +281,9 @@ mod tests {
        "issue_type":"feature","created_at":"2026-07-30T21:31:27Z","updated_at":"2026-07-30T21:31:27Z",
        "dependency_count":0,"dependent_count":0,"comment_count":0},
       {"id":"smetana-3km","title":"contract check","status":"open","priority":2,
-       "issue_type":"task","assignee":"flexo","labels":["alpha"],"parent":"smetana-29j",
-       "updated_at":"2026-07-31T00:58:55Z",
+       "issue_type":"task","owner":"flexo","labels":["alpha"],"parent":"smetana-29j",
+       "description":"the shape bd hands over","created_by":"flexo",
+       "created_at":"2026-07-31T00:58:55Z","updated_at":"2026-07-31T00:58:55Z",
        "dependencies":[
          {"issue_id":"smetana-3km","depends_on_id":"smetana-1or","type":"blocks",
           "created_at":"2026-07-31T00:58:55Z","created_by":"flexo","metadata":"{}"},
@@ -289,8 +307,30 @@ mod tests {
         let issues = parse_issues(LIST).unwrap();
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].id, "smetana-29j");
-        assert_eq!(issues[0].assignee, None);
+        assert_eq!(issues[0].owner, None);
         assert!(issues[0].labels.is_empty());
+    }
+
+    /// bd calls it `owner`; the struct called it `assignee` for a while, which
+    /// meant it silently stayed None on every issue bd ever returned. The name
+    /// is the whole test.
+    #[test]
+    fn the_owner_arrives_under_bds_own_name() {
+        let issues = parse_issues(LIST).unwrap();
+        assert_eq!(issues[1].owner.as_deref(), Some("flexo"));
+    }
+
+    /// Everything the task inspector shows has to survive deserialization —
+    /// a field missing from the struct is invisible in the panel with nothing
+    /// to say it went missing.
+    #[test]
+    fn the_inspectors_fields_survive_the_parse() {
+        let issues = parse_issues(LIST).unwrap();
+        assert_eq!(issues[1].description.as_deref(), Some("the shape bd hands over"));
+        assert_eq!(issues[1].created_by.as_deref(), Some("flexo"));
+        assert_eq!(issues[1].created_at.as_deref(), Some("2026-07-31T00:58:55Z"));
+        assert_eq!(issues[0].comment_count, Some(0));
+        assert_eq!(issues[0].dependent_count, Some(0));
     }
 
     #[test]
@@ -332,6 +372,13 @@ mod tests {
             ..Default::default() };
         assert_eq!(update_args("smetana-1", &patch),
             vec!["update", "--json", "-s", "in_progress", "--title", "new one", "--", "smetana-1"]);
+    }
+
+    /// `-f` turns a preview into an actual deletion; without it bd would print
+    /// what it would have removed, exit zero, and leave the issue in place.
+    #[test]
+    fn deleting_asks_for_the_deletion_and_not_for_a_preview() {
+        assert_eq!(delete_args("smetana-1"), vec!["delete", "-f", "--", "smetana-1"]);
     }
 
     /// bd has to take a title with a leading dash as a title, not as a flag:

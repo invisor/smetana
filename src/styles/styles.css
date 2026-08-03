@@ -2,6 +2,7 @@
 @import "./tokens/color-surfaces.css";
 @import "./tokens/color-status.css";
 @import "./tokens/color-status-generated.css";
+@import "./tokens/color-type.css";
 @import "./tokens/color-ansi.css";
 @import "./tokens/color-editor.css";
 @import "./tokens/typography.css";

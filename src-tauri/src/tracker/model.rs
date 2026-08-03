@@ -13,18 +13,49 @@ pub struct Dependency {
 
 /// An issue in the shape bd hands it over. bd omits empty fields altogether,
 /// so everything optional is either an Option or a collection with a default.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The whole shape travels to the front end, not just what the board draws:
+/// the task inspector shows every field bd knows, and a field left out here is
+/// invisible there with nothing to say it went missing. `owner` is bd's name
+/// for it — the field was called `assignee` for a while and was therefore
+/// always `None`, since bd never emits that key. On the way back it is
+/// `assignee` again, because that is what `bd update -a` is called.
+///
+/// The counts are bd's own and are kept apart from `dependencies`: they count
+/// the whole graph, while the edge list carries only the outgoing links.
+/// `Default` is for the tests only — an issue with this many optional fields
+/// is unreadable when spelled out in full, and every one of them spelled out is
+/// noise around the two or three a test is actually about.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
     pub title: String,
     pub status: String,
     pub updated_at: String,
     #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub priority: Option<i64>,
     #[serde(default)]
     pub issue_type: Option<String>,
     #[serde(default)]
-    pub assignee: Option<String>,
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub closed_at: Option<String>,
+    #[serde(default)]
+    pub close_reason: Option<String>,
+    #[serde(default)]
+    pub comment_count: Option<i64>,
+    #[serde(default)]
+    pub dependency_count: Option<i64>,
+    #[serde(default)]
+    pub dependent_count: Option<i64>,
     #[serde(default)]
     pub parent: Option<String>,
     #[serde(default)]

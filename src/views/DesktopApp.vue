@@ -14,9 +14,8 @@ import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
-import Input from '../components/core/Input.vue'
-import Select from '../components/core/Select.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
+import TaskInspector from '../components/kanban/TaskInspector.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Modal from '../components/overlays/Modal.vue'
 import Toast from '../components/overlays/Toast.vue'
@@ -37,11 +36,10 @@ import {
 } from '../stores/terminals.js'
 import {
   boardColumns,
-  closeIssue,
   createIssue,
+  deleteIssue,
   initTracker,
   issueById,
-  reopenIssue,
   toUiStatus,
   trackerState,
   updateIssue
@@ -388,29 +386,6 @@ const submitNewTask = async (issue) => {
   }
 }
 
-/* Renaming must not fire a ~2s tracker write per keystroke. Keep a local
-   draft while the field has focus and commit it only on Enter or blur, and
-   only when it actually differs from what is stored. While the field is not
-   being edited, a title changed elsewhere (watcher delta, another write)
-   still has to show up here — that's the second watcher below. */
-const titleDraft = ref('')
-const titleEditing = ref(false)
-
-watch(
-  () => project.selectedTask,
-  () => {
-    titleEditing.value = false
-    titleDraft.value = selectedIssue.value?.title ?? ''
-  }
-)
-
-watch(
-  () => selectedIssue.value?.title,
-  (nextTitle) => {
-    if (!titleEditing.value) titleDraft.value = nextTitle ?? ''
-  }
-)
-
 /* While the app was closed, the issue may have been closed and removed from
    the tracker. Restoring a selection that no longer exists is not on: the
    inspector would show emptiness while the file kept holding rubbish. We wait
@@ -438,38 +413,54 @@ watch(
   { immediate: true }
 )
 
-const commitTitle = () => {
-  const issue = selectedIssue.value
-  if (!issue) return
-  const next = titleDraft.value.trim()
-  if (next && next !== issue.title) {
-    updateIssue(issue.id, { title: next }).catch(() => {})
-  } else {
-    titleDraft.value = issue.title
+/* The status write is the panel's only write, and it is tracked in flight for
+   the same reason `creating` and `answeringId` are: a bd call takes about two
+   seconds, and a select left live for those two seconds invites a second choice
+   that races the first. */
+const settingStatus = ref(false)
+const setSelectedStatus = async (status) => {
+  settingStatus.value = true
+  try {
+    await updateIssue(project.selectedTask, { status })
+  } catch {
+    // the message already sits in trackerState.lastError
+  } finally {
+    settingStatus.value = false
   }
 }
 
-const blurTitle = () => {
-  titleEditing.value = false
-  commitTitle()
+/* Deletion is irreversible, so the id it is tracked by is the id it was asked
+   for, not a bare boolean: the selection can move while bd is still working,
+   and a flag shared between issues would grey out the wrong one's dialog. */
+const deletingId = ref(null)
+const deleteTask = async (id) => {
+  deletingId.value = id
+  try {
+    await deleteIssue(id)
+    if (project.selectedTask === id) project.selectedTask = null
+  } catch {
+    // the message already sits in trackerState.lastError
+  } finally {
+    deletingId.value = null
+  }
 }
 
-const setSelectedStatus = (status) => updateIssue(project.selectedTask, { status }).catch(() => {})
-const closeSelected = () => closeIssue(project.selectedTask).catch(() => {})
-const reopenSelected = () => reopenIssue(project.selectedTask).catch(() => {})
-
-/* bd's own status names (open/in_progress/…) are identifiers, not prose —
-   the picker still has to send them, but it must read as a sentence-case
-   phrase, not a slug. toUiStatus gives the design system's name for the
-   reserved ones; custom bd statuses pass through unchanged and get the same
-   treatment so they stay readable too. */
-const statusLabel = (name) => {
-  const words = toUiStatus(name).replace(/[-_]+/g, ' ')
-  return words.charAt(0).toUpperCase() + words.slice(1)
+/* Handing an issue to an agent. The prompt names the issue by id and quotes
+   its title: the id is what bd is driven by, and the title is what tells the
+   person reading the terminal which one it is. The rest of the sentence is
+   deliberately left unfinished — the agent is being told what to work on, not
+   what to change, and only the person knows the second half. */
+const askAgentToEdit = async (issue) => {
+  const path = activePath.value
+  if (!path) return
+  project.sideTab = 'agents'
+  project.activeTab = 'terminal'
+  try {
+    await createSession(path, `Update bd issue ${issue.id} ("${issue.title}"): `)
+  } catch {
+    // already reported — see newAgent above
+  }
 }
-const statusOptions = computed(() =>
-  trackerState.columns.map((c) => ({ value: c.name, label: statusLabel(c.name) }))
-)
 
 /* What the tracker's health means where the board would be. The generic
    "No board yet — connect a tracker" is wrong for a folder without .beads:
@@ -1046,27 +1037,16 @@ const toastStackStyle = {
               </div>
             </div>
 
-            <template v-if="selectedIssue">
-              <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
-                <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-                  {{ selectedIssue.id }}
-                </span>
-                <StatusBadge :status="toUiStatus(selectedIssue.status)" size="sm" />
-              </div>
-              <Input
-                v-model="titleDraft"
-                @focusin="titleEditing = true"
-                @focusout="blurTitle"
-                @keydown.enter="commitTitle"
-              />
-              <Select :model-value="selectedIssue.status" :options="statusOptions" @update:model-value="setSelectedStatus" />
-              <div :style="{ display: 'flex', gap: 'var(--space-4)' }">
-                <Button v-if="selectedIssue.status !== 'closed'" variant="secondary" size="sm" @click="closeSelected">
-                  Close
-                </Button>
-                <Button v-else variant="secondary" size="sm" @click="reopenSelected">Reopen</Button>
-              </div>
-            </template>
+            <TaskInspector
+              v-if="selectedIssue"
+              :issue="selectedIssue"
+              :ui-status="toUiStatus(selectedIssue.status)"
+              :busy="settingStatus"
+              :deleting="deletingId === selectedIssue.id"
+              @status="setSelectedStatus"
+              @delete="deleteTask"
+              @ask-agent="askAgentToEdit"
+            />
 
             <template v-else>
               <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">

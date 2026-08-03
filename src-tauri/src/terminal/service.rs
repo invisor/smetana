@@ -65,7 +65,9 @@ pub struct Attached {
 
 pub enum Request {
     List(String, oneshot::Sender<Vec<Session>>),
-    Create(String, oneshot::Sender<Result<Session, TerminalError>>),
+    /// The optional string is what the agent is started on. It is an argument
+    /// to the agent, not bytes written after the spawn — see `build_command`.
+    Create(String, Option<String>, oneshot::Sender<Result<Session, TerminalError>>),
     Remove(SessionId, oneshot::Sender<()>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// Carries the id it is leaving, and not for symmetry: see the handler.
@@ -385,11 +387,19 @@ fn handle(
             list.sort_by_key(|s| s.id);
             let _ = tx.send(list);
         }
-        Request::Create(project, tx) => {
+        Request::Create(project, prompt, tx) => {
             let id = *next_id;
             *next_id += 1;
             let dir = PathBuf::from(&project);
-            let spawned = Pty::spawn(id, "claude", &dir, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
+            let spawned = Pty::spawn(
+                id,
+                "claude",
+                &dir,
+                prompt.as_deref(),
+                DEFAULT_COLS,
+                DEFAULT_ROWS,
+                chunks.clone(),
+            );
             let _ = tx.send(match spawned {
                 Ok(pty) => {
                     let session = Session::new(id, "claude", &project, &project);

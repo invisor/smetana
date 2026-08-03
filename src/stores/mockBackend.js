@@ -74,25 +74,49 @@ const MOCK_MTIME = 1754006400000
    only exists here because the fixture starts life as text. */
 const toBase64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 
+/* The task inspector draws only the fields an issue actually has, so a fixture
+   that fills every one of them would hide the case it is meant to catch — a
+   panel that reads as a form with empty rows. The index decides: every third
+   issue carries a description, every other one an owner, and only closed ones
+   carry a close reason and a closing time. That way ?view=gallery and the dev
+   server show both a full inspector and a sparse one without anyone editing
+   this file to see the second. */
 function fixtureIssues() {
-  return fixtureColumns.flatMap((column) =>
-    column.tasks.map((task) => ({
+  const flat = fixtureColumns.flatMap((column) => column.tasks)
+  return flat.map((task, i) => {
+    const status = BD_STATUS[task.status] ?? task.status
+    const closed = status === 'closed'
+    return {
       id: task.id,
       title: task.title,
-      status: BD_STATUS[task.status] ?? task.status,
+      status,
       updated_at: '2026-07-31T00:00:00Z',
-      priority: 2,
-      issue_type: 'task',
-      assignee: null,
+      created_at: '2026-07-28T09:15:00Z',
+      created_by: 'flexo',
+      description:
+        i % 3 === 0
+          ? 'The watcher reports the failure and the sweep picks the work up on the next tick, so the board is stale rather than wrong. What is missing is a way to say so on screen.'
+          : null,
+      priority: (i % 4) + 1,
+      // All six of bd's types plus a custom one, so the board in `npm run dev`
+      // shows both halves of the type palette without anyone editing this file.
+      issue_type: ['task', 'bug', 'feature', 'chore', 'epic', 'decision', 'tech-debt'][i % 7],
+      owner: i % 2 === 0 ? 'merazent@gmail.com' : null,
+      started_at: closed || status === 'in_progress' ? '2026-07-30T11:02:00Z' : null,
+      closed_at: closed ? '2026-07-31T00:00:00Z' : null,
+      close_reason: closed ? 'Delivered and merged into main' : null,
+      comment_count: i % 5,
+      dependency_count: (DEPENDENCY_EDGES[task.id] ?? []).length,
+      dependent_count: 0,
       parent: task.spawnedFrom ?? null,
-      labels: [],
+      labels: i % 3 === 1 ? ['tracker', 'ui'] : [],
       dependencies: (DEPENDENCY_EDGES[task.id] ?? []).map((dependsOnId) => ({
         issue_id: task.id,
         depends_on_id: dependsOnId,
         type: 'blocks'
       }))
-    }))
-  )
+    }
+  })
 }
 
 export function installMockBackend() {

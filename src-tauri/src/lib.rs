@@ -60,6 +60,7 @@ pub fn run() {
       tracker::commands::tracker_update,
       tracker::commands::tracker_close,
       tracker::commands::tracker_reopen,
+      tracker::commands::tracker_delete,
       tracker::commands::tracker_set_project,
       tracker::commands::tracker_init,
       tracker::commands::tracker_probe,

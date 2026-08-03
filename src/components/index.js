@@ -47,6 +47,8 @@ export { default as KanbanBoard } from './kanban/KanbanBoard.vue'
 export { default as KanbanColumn } from './kanban/KanbanColumn.vue'
 export { default as NewTaskModal } from './kanban/NewTaskModal.vue'
 export { default as TaskCard } from './kanban/TaskCard.vue'
+export { default as TaskInspector } from './kanban/TaskInspector.vue'
+export { default as TypeBadge } from './kanban/TypeBadge.vue'
 
 // agent
 export { default as AgentList } from './agent/AgentList.vue'

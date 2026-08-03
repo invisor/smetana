@@ -21,8 +21,17 @@ pub enum Chunk {
 /// The pure part of spawning: exactly what we run and where. Pulled out for
 /// the test — actually spawning a process is not covered by tests, the same
 /// as bd's calls aren't.
-pub fn build_command(agent: &str, cwd: &Path) -> CommandBuilder {
+///
+/// An opening prompt travels as the agent's positional argument rather than as
+/// bytes written into the PTY afterwards. The agent takes a moment to come up,
+/// and anything sent into an input that is not reading yet is simply lost —
+/// there is no acknowledgement to wait for and no way to tell that it went. As
+/// an argument it is handed over by the OS before the process starts.
+pub fn build_command(agent: &str, cwd: &Path, prompt: Option<&str>) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(agent);
+    if let Some(prompt) = prompt {
+        cmd.arg(prompt);
+    }
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
     cmd
@@ -39,6 +48,7 @@ impl Pty {
         id: SessionId,
         agent: &str,
         cwd: &Path,
+        prompt: Option<&str>,
         cols: u16,
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
@@ -57,7 +67,7 @@ impl Pty {
 
         let child = pair
             .slave
-            .spawn_command(build_command(agent, cwd))
+            .spawn_command(build_command(agent, cwd, prompt))
             .map_err(|e| TerminalError::Spawn(format!("{agent}: {e}")))?;
 
         // The slave side must be dropped here, not kept alongside the master:
@@ -149,9 +159,17 @@ mod tests {
 
     #[test]
     fn the_command_is_the_agent_in_the_projects_directory() {
-        let cmd = build_command("claude", std::path::Path::new("/tmp/project"));
-        assert_eq!(cmd.get_argv()[0], "claude");
+        let cmd = build_command("claude", std::path::Path::new("/tmp/project"), None);
+        assert_eq!(cmd.get_argv(), &["claude"]);
         assert_eq!(cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()), Some("/tmp/project".to_owned()));
+    }
+
+    /// An opening prompt is one argument however many spaces and quotes are in
+    /// it: there is no shell between us and the process to split it up again.
+    #[test]
+    fn an_opening_prompt_is_a_single_argument_after_the_agent() {
+        let cmd = build_command("claude", std::path::Path::new("/tmp/project"), Some("Update bd issue \"x y\""));
+        assert_eq!(cmd.get_argv(), &["claude", "Update bd issue \"x y\""]);
     }
 
     #[test]
@@ -159,7 +177,7 @@ mod tests {
         // Without TERM the agent decides colours are unsupported and sends
         // plain text — and then there is nothing for screen.rs to parse and
         // nothing for the profile to recognise.
-        let cmd = build_command("claude", std::path::Path::new("/tmp/project"));
+        let cmd = build_command("claude", std::path::Path::new("/tmp/project"), None);
         let term = cmd.iter_extra_env_as_str().find(|(k, _)| *k == "TERM").map(|(_, v)| v.to_owned());
         assert_eq!(term.as_deref(), Some("xterm-256color"));
     }

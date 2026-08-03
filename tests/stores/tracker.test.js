@@ -57,6 +57,28 @@ describe('boardColumns', () => {
     expect(board.map((column) => column.status)).toContain('awaiting-review')
   })
 
+  /* The card draws the type where it used to draw the status, so bd's own word
+     has to survive the trip untranslated — a custom type would otherwise reach
+     the board as undefined and the badge would simply not be there. */
+  it('carries bd\'s type through to the card, custom ones included', async () => {
+    await start(
+      snapshot({
+        issues: [issue({ id: 'bd-1', issue_type: 'bug' }), issue({ id: 'bd-2', issue_type: 'tech-debt' })]
+      })
+    )
+
+    const tasks = tracker.boardColumns.value.flatMap((column) => column.tasks)
+
+    expect(tasks.find((t) => t.id === 'bd-1').type).toBe('bug')
+    expect(tasks.find((t) => t.id === 'bd-2').type).toBe('tech-debt')
+  })
+
+  it('an issue bd never typed leaves the card with nothing to draw', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', issue_type: null })] }))
+
+    expect(tracker.boardColumns.value.flatMap((c) => c.tasks)[0].type).toBeUndefined()
+  })
+
   it('counts blockers from the edges on both sides', async () => {
     await start(
       snapshot({
@@ -232,6 +254,43 @@ describe('writes', () => {
 
     await tracker.reopenIssue('bd-1')
     expect(tracker.trackerState.issues.get('bd-1').status).toBe('open')
+  })
+
+  it('a deletion takes the card off the board before bd answers', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1' }), issue({ id: 'bd-2' })] }))
+    ipc.on('tracker_delete', () => null)
+
+    const pending = tracker.deleteIssue('bd-1')
+    expect(tracker.trackerState.issues.has('bd-1')).toBe(false)
+
+    await pending
+    expect(ipc.calls('tracker_delete')).toEqual([{ id: 'bd-1' }])
+    expect([...tracker.trackerState.issues.keys()]).toEqual(['bd-2'])
+  })
+
+  it('a refused deletion puts the card back', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', title: 'still here' })] }))
+    ipc.fail('tracker_delete', new Error('bd failed'))
+
+    await expect(tracker.deleteIssue('bd-1')).rejects.toThrow()
+
+    expect(tracker.trackerState.issues.get('bd-1').title).toBe('still here')
+    expect(tracker.trackerState.lastError.title).toBe('Could not save to the tracker')
+  })
+
+  /* The restore has to lose to anything that arrived while bd was working: the
+     copy taken before the delete is stale by definition, and writing it over a
+     newer one would undo somebody else's change with no error anywhere. */
+  it('a refused deletion does not overwrite a version that arrived in flight', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', title: 'the old one' })] }))
+    ipc.on('tracker_delete', () => {
+      tracker.trackerState.issues.set('bd-1', issue({ id: 'bd-1', title: "somebody else's" }))
+      throw new Error('bd failed')
+    })
+
+    await expect(tracker.deleteIssue('bd-1')).rejects.toThrow()
+
+    expect(tracker.trackerState.issues.get('bd-1').title).toBe("somebody else's")
   })
 })
 

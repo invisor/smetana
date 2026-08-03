@@ -1,0 +1,28 @@
+/* ISSUE TYPES — what a card IS, beside the status ladder's what a card is DOING.
+   Three types carry colour and three do not, and that split is the whole point:
+   bd's default type is `task`, so a board where every type is coloured is a
+   board where nothing stands out. `task`, `chore` and `decision` render in the
+   neutral --type-plain-* set — one shared, theme-independent alias of the
+   surface tokens — leaving the eye to land on the three that are worth landing
+   on. Custom types configured through bd's types.custom land there too.
+
+   The hues sit inside the reserved status bands on purpose: this palette is not
+   in the status vocabulary and is never read against it. A type badge is
+   sentence-case sans with no border, a status badge is uppercase mono with one,
+   so the two silhouettes stay apart even where the hue does not. */
+:root{
+  --type-bug-fg:#a5233a;--type-bug-bg:#fbe8ec;
+  --type-feature-fg:#3d4fa0;--type-feature-bg:#eaecfa;
+  --type-epic-fg:#8a3585;--type-epic-bg:#f9e9f7;
+
+  /* --text-secondary, not --text-muted: muted on sunken measures about 3.6:1 in
+     the light theme, and this label is 10-11px and may be dimmed again to
+     --attn-quiet-opacity in a done column. Neutral has to mean "recedes", not
+     "cannot be read". */
+  --type-plain-fg:var(--text-secondary);--type-plain-bg:var(--surface-sunken);
+}
+[data-theme="dark"]{
+  --type-bug-fg:#ef8397;--type-bug-bg:#2c151c;
+  --type-feature-fg:#9aa6ee;--type-feature-bg:#191c33;
+  --type-epic-fg:#e19bda;--type-epic-bg:#2d1a2c;
+}

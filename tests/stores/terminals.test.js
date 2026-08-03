@@ -175,6 +175,25 @@ describe('detaching', () => {
   })
 })
 
+describe('creating a session', () => {
+  /* An agent started from the "+ New agent" row opens on nothing; one started
+     from a task opens on that task. The prompt travels with the create call,
+     not as a write afterwards — bytes sent into an agent that has not finished
+     starting are simply lost. */
+  it('carries the opening prompt, and sends null when there is none', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () => session({ id: 2 }))
+
+    await stores.terminals.createSession('/p')
+    await stores.terminals.createSession('/p', 'Update bd issue bd-1: ')
+
+    expect(ipc.calls('terminal_create')).toEqual([
+      { project: '/p', prompt: null },
+      { project: '/p', prompt: 'Update bd issue bd-1: ' }
+    ])
+  })
+})
+
 describe('back-end errors', () => {
   it('a terminal_attach refusal does not throw but settles into lastError', async () => {
     const { ipc, stores } = await ready()
