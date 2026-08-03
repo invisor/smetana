@@ -30,3 +30,4 @@ thiserror = "2"
 notify = "8"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 chrono = "0.4"
+vt100 = "0.16.2"
