@@ -138,15 +138,31 @@ export async function initTerminals() {
   terminalState.ready = true
 }
 
+/* A project switch can start while an earlier call is still awaiting its
+   invoke — a click on a different project row, or the activePath watcher
+   firing again before the first call's response lands. The response that
+   arrives second is not necessarily the one that was asked for second, so
+   whichever call's request no longer matches terminalState.project when it
+   wakes up has lost the race and must drop its result outright, not merge
+   it: a stale response written into `sessions` while `project` already
+   names the new project would map old session ids onto a different
+   project's agents, and clicking a row's remove button would kill the
+   wrong project's process with no error anywhere — the same class of loss
+   `stale` guards against in the files layer. There is no way to tell which
+   of a stale response's rows are still valid without asking again, and
+   asking again is exactly what the next loadSessions call already does. */
 export async function loadSessions(project) {
   terminalState.project = project
   try {
-    terminalState.sessions = project ? await invoke('terminal_list', { project }) : []
+    const sessions = project ? await invoke('terminal_list', { project }) : []
+    if (terminalState.project !== project) return
+    terminalState.sessions = sessions
     if (!terminalState.sessions.some((s) => s.id === terminalState.activeId)) {
       terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
     }
     terminalState.lastError = null
   } catch (err) {
+    if (terminalState.project !== project) return
     report('read', err)
   }
 }

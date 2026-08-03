@@ -5,9 +5,10 @@
 
    Colour is never the only signal here: needs-you is a triangle,
    everything else is a dot. */
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import { useInteractive } from '../core/interactive.js'
 import { attentionLevel } from '../status/status.js'
 
 const props = defineProps({
@@ -18,6 +19,34 @@ defineEmits(['select', 'create', 'remove'])
 
 const body = { flex: 1, minHeight: 0, overflow: 'auto' }
 
+/* Hover has to be per row, and useInteractive tracks one control at a time
+   — calling it fresh from inside rowStyle would throw hover state away on
+   every re-render, since that would build a new pair of refs each time. So
+   each row's instance is created once and cached by id, the way a keyed
+   ref would be. Press is not tracked: a row is not a button, it is a
+   place, the same reasoning ProjectList.vue uses. */
+const rowInteractive = new Map()
+const interactiveFor = (id) => {
+  let entry = rowInteractive.get(id)
+  if (!entry) {
+    entry = useInteractive()
+    rowInteractive.set(id, entry)
+  }
+  return entry
+}
+
+/* Sessions come and go with agents; without this the cache would keep one
+   stale entry per agent that ever existed for the life of the component. */
+watch(
+  () => props.rows.map((row) => row.id),
+  (ids) => {
+    const live = new Set(ids)
+    for (const id of rowInteractive.keys()) {
+      if (!live.has(id)) rowInteractive.delete(id)
+    }
+  }
+)
+
 const rowStyle = (row) => ({
   display: 'flex',
   alignItems: 'center',
@@ -25,9 +54,15 @@ const rowStyle = (row) => ({
   height: 'var(--row-h)',
   padding: '0 var(--space-5)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
-  background: row.id === props.activeId ? 'var(--surface-raised)' : 'transparent',
+  background:
+    row.id === props.activeId
+      ? 'var(--surface-raised)'
+      : interactiveFor(row.id).hover.value
+        ? 'var(--surface-hover)'
+        : 'transparent',
   cursor: 'default',
-  opacity: attentionLevel(row.state) === 'quiet' ? 'var(--attn-quiet-opacity)' : 1
+  opacity: attentionLevel(row.state) === 'quiet' ? 'var(--attn-quiet-opacity)' : 1,
+  transition: 'var(--transition-control)'
 })
 
 /* Triangle geometry has no token — there is no "--radius" for the side of a
@@ -49,7 +84,11 @@ const markOf = (state) => {
   return quietMark
 }
 
-const addRow = {
+/* The one control here that really is a button in spirit — the panel's only
+   action — so it gets its own single useInteractive() instance, same as
+   Button.vue and IconButton.vue use for themselves. */
+const addInteractive = useInteractive()
+const addRow = computed(() => ({
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
@@ -57,9 +96,11 @@ const addRow = {
   padding: '0 var(--space-5)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)',
   color: 'var(--text-muted)',
+  background: addInteractive.hover.value ? 'var(--surface-hover)' : 'transparent',
   borderTop: 'var(--border-w) solid var(--border-subtle)',
-  cursor: 'default'
-}
+  cursor: 'default',
+  transition: 'var(--transition-control)'
+}))
 
 const empty = computed(() => props.rows.length === 0)
 </script>
@@ -72,6 +113,7 @@ const empty = computed(() => props.rows.length === 0)
         :key="row.id"
         :data-attention="attentionLevel(row.state)"
         :style="rowStyle(row)"
+        v-bind="interactiveFor(row.id).handlers"
         @click="$emit('select', row.id)"
       >
         <span :style="markOf(row.state)" />
@@ -86,7 +128,7 @@ const empty = computed(() => props.rows.length === 0)
         No agents running.
       </div>
     </div>
-    <div :style="addRow" @click="$emit('create')">
+    <div :style="addRow" v-bind="addInteractive.handlers" @click="$emit('create')">
       <Icon name="plus" :size="14" />
       <span>New agent</span>
     </div>

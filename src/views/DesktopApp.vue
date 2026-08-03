@@ -134,12 +134,19 @@ onMounted(adoptInitialProject)
 onMounted(initTerminals)
 
 /* A new agent becomes the one you're looking at right away: that is what it
-   was created for. The rejection (agent binary not on PATH) is left to
-   propagate as-is — the row never appears, and the human needs to know
-   why. */
+   was created for — the tab switch sits after the await so a failed spawn
+   (agent binary not on PATH) never jumps to an empty terminal. The catch
+   below swallows the rejection: createSession already logged it and set
+   terminalState.lastError, which now renders as a toast, so nothing is lost
+   by not rethrowing here — this catch exists only to stop Vue's own
+   unhandled-rejection warning from repeating what the store already said. */
 async function newAgent() {
-  await createSession(activePath.value)
-  project.activeTab = 'terminal'
+  try {
+    await createSession(activePath.value)
+    project.activeTab = 'terminal'
+  } catch {
+    // already reported — see comment above
+  }
 }
 
 /* Дерево и вкладки открываются вместе с проектом. Активный проект к этому
@@ -929,6 +936,13 @@ const toastStackStyle = {
         title="Could not read the file tree"
         :description="filesState.lastError"
         @close="filesState.lastError = null"
+      />
+      <Toast
+        v-if="terminalState.lastError"
+        tone="error"
+        :title="terminalState.lastError.title"
+        :description="terminalState.lastError.description"
+        @close="terminalState.lastError = null"
       />
     </div>
   </div>
