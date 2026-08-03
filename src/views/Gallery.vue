@@ -30,12 +30,14 @@ import {
   StatusDot,
   Switch,
   TabBar,
+  TerminalView,
   Toast,
   ToolCall,
   Tooltip
 } from '../components/index.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
+import { terminalState } from '../stores/terminals.js'
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -87,6 +89,12 @@ const menuItems = [
   { label: 'Discard worktree', icon: 'x', tone: 'danger' },
   { label: 'Rebase', icon: 'git-branch', disabled: true }
 ]
+
+/* TerminalView has no props of its own to feed a fixture through, unlike
+   FileTree above — it reads the active session straight from the store.
+   Pointing terminalState at session 1 makes it attach on mount, which the
+   mock backend answers with terminalFixture.js's captured output. */
+terminalState.activeId = 1
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -210,6 +218,24 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           path="src/app.js"
           :notice="{ tone: 'stale', text: 'This file changed on disk since it was opened.' }"
         />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Terminal</div>
+      <!-- TerminalView takes no props — it reads the active session from
+           terminals.js itself, so the fixture has to go in through the
+           store, the way terminalFixture.js already does for the app's own
+           terminal tab. Height is a token multiple, not a pixel number:
+           the terminal fills whatever height it is given. -->
+      <div
+        :style="{
+          display: 'flex',
+          height: 'calc(var(--space-9) * 6)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <TerminalView />
       </div>
     </section>
 

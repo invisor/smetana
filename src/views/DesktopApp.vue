@@ -23,6 +23,7 @@ import LogView from '../components/agent/LogView.vue'
 import ProjectList from '../components/shell/ProjectList.vue'
 import Skeleton from '../components/core/Skeleton.vue'
 import IconButton from '../components/core/IconButton.vue'
+import { TerminalView } from '../components/index.js'
 import {
   boardColumns,
   closeIssue,
@@ -798,12 +799,7 @@ const toastStackStyle = {
           @reload="reloadTab(project.activeTab)"
           @keep-mine="keepMine(project.activeTab)"
         />
-        <EmptyState
-          v-else-if="project.activeTab === 'terminal'"
-          icon="terminal"
-          title="No terminal yet"
-          description="Agent sessions will run here."
-        />
+        <TerminalView v-else-if="project.activeTab === 'terminal'" />
         <!-- bd init is the one wait that keeps its EmptyState: the skeleton
              would replace the very sentence that explains what is happening,
              and the busy button says it better than six grey lines. Every
