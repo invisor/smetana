@@ -113,7 +113,12 @@ describe('switchTo', () => {
     expect(ipc.calls('tracker_set_project')).toHaveLength(0)
   })
 
-  it('упавший переезд не запирает список навсегда', async () => {
+  /* Название шире, чем проверка: switchTo не содержит catch, а
+     tracker.setProject глотает ошибку сама (см. tracker.js) — ветки с
+     настоящим броском в самом switchTo в коде нет. Тест реально закрепляет
+     только то, что moving снимается в finally и второй переезд после
+     отказавшего первого не заблокирован. */
+  it('переезд после отказавшего setProject не заблокирован — moving снимается в finally', async () => {
     settings.settings.activeProject = '/a'
     ipc.fail('tracker_set_project', new Error('каталога нет'))
     await projects.switchTo('/b')
@@ -175,6 +180,48 @@ describe('addProject', () => {
     expect(asked).not.toHaveBeenCalled()
     expect(ipc.calls('tracker_set_project')).toHaveLength(0)
     expect(settings.settings.openProjects).toEqual(['/a'])
+  })
+
+  /* Диалог сам стоит сколько угодно (комментарий в addProject): переезд мог
+     начаться и кончиться, пока человек выбирал папку, поэтому moving
+     проверяется заново после возврата, а не только на входе в функцию.
+     Гонка собрана детерминированно тем же приёмом, что и гонка keepMine в
+     tests/stores/tabs/freshness.test.js: диалог держится на управляемом
+     промисе, за это время switchTo успевает поднять moving и застрять на
+     своём собственном held-промисе (tracker_set_project) — так moving
+     гарантированно ещё стоит, когда диалог отпускают. */
+  it('переезд, начавшийся, пока стоял диалог, отменяет добавление — повторная проверка moving после возврата', async () => {
+    settings.settings.openProjects = ['/a']
+    settings.settings.activeProject = '/a'
+
+    let releaseDialog
+    const dialogHeld = new Promise((resolve) => {
+      releaseDialog = resolve
+    })
+    ipc.on('plugin:dialog|open', () => dialogHeld.then(() => '/новый'))
+
+    let releaseSetProject
+    const setProjectHeld = new Promise((resolve) => {
+      releaseSetProject = resolve
+    })
+    ipc.on('tracker_set_project', () => setProjectHeld.then(() => snapshot()))
+
+    const addPromise = projects.addProject()
+    /* switchTo поднимает moving синхронно, ещё до первого await, — вызов
+       ниже гарантированно застаёт addProject внутри await open(...). */
+    const switchPromise = projects.switchTo('/b')
+
+    releaseDialog()
+    await addPromise
+
+    /* moving всё ещё стоит (switchTo застрял на held tracker_set_project):
+       повторная проверка обязана была отменить добавление. */
+    expect(settings.settings.openProjects).toEqual(['/a'])
+
+    releaseSetProject()
+    await switchPromise
+
+    expect(settings.settings.activeProject).toBe('/b')
   })
 
   it('уже открытый, но неактивный проект в списке не задваивается', async () => {

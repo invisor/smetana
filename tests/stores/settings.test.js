@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { isReactive } from 'vue'
 import { loadStores } from '../support/stores.js'
 import { buffer } from '../support/fixtures.js'
 
@@ -93,18 +94,33 @@ describe('запись', () => {
   })
 
   it('поток правок схлопывается в одну запись', async () => {
+    /* Три правки в одном синхронном блоке сворачивает планировщик Vue —
+       вотчер срабатывает единожды на весь тик независимо от SAVE_DELAY (тест
+       остаётся зелёным даже при SAVE_DELAY = 0). Чтобы застать именно
+       дебаунс, две правки разнесены по разным тикам: между ними время
+       продвинуто меньше SAVE_DELAY, поэтому первый таймер обязан устоять и
+       вторая правка обязана лечь в ту же, ещё не отправленную запись. */
     vi.useFakeTimers()
 
     settings.settings.layout.leftCollapsed = true
-    settings.settings.layout.rightCollapsed = true
-    settings.settings.project.sideTab = 'agents'
     await nextTick()
-    vi.advanceTimersByTime(400)
+    vi.advanceTimersByTime(200)
+    expect(ipc.calls('settings_save')).toHaveLength(0)
+
+    settings.settings.layout.rightCollapsed = true
+    await nextTick()
+    vi.advanceTimersByTime(200)
+    /* Первый таймер (400 мс от первой правки) успел бы сработать здесь, не
+       будь он передвинут второй правкой: 200 + 200 = 400 мс от начала. */
+    expect(ipc.calls('settings_save')).toHaveLength(0)
+
+    vi.advanceTimersByTime(200)
     vi.useRealTimers()
     await Promise.resolve()
 
     expect(ipc.calls('settings_save')).toHaveLength(1)
     expect(ipc.calls('settings_save')[0].settings.layout.leftCollapsed).toBe(true)
+    expect(ipc.calls('settings_save')[0].settings.layout.rightCollapsed).toBe(true)
   })
 
   it('flushPending видит таймер, заведённый в том же синхронном блоке', async () => {
@@ -162,7 +178,13 @@ describe('запись', () => {
     await settings.flushPending()
 
     const sent = ipc.calls('settings_save')[0].settings
-    expect(sent).toEqual(JSON.parse(JSON.stringify(sent)))
+    /* Прокси структурно равен своему JSON-клону — toEqual(JSON.parse(JSON.
+       stringify(sent))) истинно всегда, реактивный он или нет, и потому
+       ничего не стережёт. isReactive работает между экземплярами vue: флаг
+       реактивности читается прокси-геттером по строковому ключу
+       ('__v_isReactive'), а не по Symbol, который был бы приписан к
+       конкретному модулю. */
+    expect(isReactive(sent)).toBe(false)
   })
 
   it('отказ записи не роняет ожидающего', async () => {
@@ -221,6 +243,18 @@ describe('закрытие окна', () => {
       () => expect(ipc.commands()).toContain('plugin:window|destroy'),
       { timeout: 4000 }
     )
+  })
+
+  it('отказавший destroy сбрасывает closing: следующий запрос снова доходит до destroy', async () => {
+    ipc.fail('plugin:window|destroy', new Error('окно занято'))
+
+    await emit('tauri://close-requested', {})
+    await vi.waitFor(() => expect(ipc.calls('plugin:window|destroy')).toHaveLength(1))
+
+    /* Без сброса closing повторный запрос молча проглотился бы re-entrancy
+       guard'ом, и окно осталось бы незакрываемым навсегда. */
+    await emit('tauri://close-requested', {})
+    await vi.waitFor(() => expect(ipc.calls('plugin:window|destroy')).toHaveLength(2))
   })
 
   it('вопрос о несохранённом задаётся до записи настроек, а не внутри её потолка', async () => {

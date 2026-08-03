@@ -25,6 +25,12 @@ export function installIpc() {
     calls(cmd) {
       return recorded.filter((call) => call.cmd === cmd).map((call) => call.args)
     },
+    /* recorded пишется до вызова обработчика, поэтому commands()/calls() не
+       отличают «команда выполнена» от «команда бросила, а вызывающий поймал
+       отказ». Тест на порядок команд, построенный только на этом списке, не
+       проверяет, что команда случилась успешно, — см. правки 2 и 3
+       (settings_save мог не произойти вовсе, а indexOf всё равно дал бы
+       сравнимое число: -1). */
     commands() {
       return recorded.map((call) => call.cmd)
     }

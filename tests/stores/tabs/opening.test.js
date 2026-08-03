@@ -206,6 +206,11 @@ describe('tabList', () => {
   it('первое чтение замка не получает: замок, мигающий на каждом открытии, врал бы', async () => {
     tabs.openFile('a.txt')
 
+    /* Без этого readOnly === false был бы истинен и тогда, когда буфера в
+       карте ещё вовсе нет (readOnlyHint(undefined) даёт null так же, как и
+       readOnlyHint без error) — ассерт ниже проверял бы пустоту, а не то,
+       что вкладка правда стоит в состоянии loading без замка. */
+    expect(tabs.buffers.get('a.txt').loading).toBe(true)
     expect(tabs.tabList.value[2].readOnly).toBe(false)
   })
 

@@ -83,6 +83,10 @@ describe('statusColors', () => {
     const colors = statusColors('Awaiting Review')
     expect(colors.reserved).toBe(false)
     expect(colors.key).toBe('awaiting-review')
+    /* Без этого fg/bg/border сравнивались бы с самими собой через colors.slot
+       и были бы истинны при любом slot — значение уже закреплено соседним
+       тестом стабильности хеша (hashStatus: statusSlot('awaiting-review') === 6). */
+    expect(colors.slot).toBe(6)
     expect(colors.fg).toBe(`var(--status-gen-${colors.slot}-fg)`)
     expect(colors.bg).toBe(`var(--status-gen-${colors.slot}-bg)`)
     expect(colors.border).toBe(`var(--status-gen-${colors.slot}-border)`)
