@@ -783,6 +783,7 @@ const toastStackStyle = {
                 v-else
                 :rows="agentRows"
                 :active-id="terminalState.activeId"
+                :can-create="Boolean(activePath)"
                 @select="terminalState.activeId = $event"
                 @create="newAgent"
                 @remove="removeSession"

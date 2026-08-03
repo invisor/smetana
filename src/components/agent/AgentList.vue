@@ -13,7 +13,11 @@ import { attentionLevel } from '../status/status.js'
 
 const props = defineProps({
   rows: { type: Array, default: () => [] },
-  activeId: { type: [Number, String], default: null }
+  activeId: { type: [Number, String], default: null },
+  /* There is nowhere to start an agent without a project: the call would
+     reach the worker and come back as a generic failure toast. An
+     affordance that cannot work says so before it is clicked. */
+  canCreate: { type: Boolean, default: true }
 })
 defineEmits(['select', 'create', 'remove'])
 
@@ -84,10 +88,13 @@ const markOf = (state) => {
   return quietMark
 }
 
+const disabled = computed(() => !props.canCreate)
 /* The one control here that really is a button in spirit — the panel's only
    action — so it gets its own single useInteractive() instance, same as
-   Button.vue and IconButton.vue use for themselves. */
-const addInteractive = useInteractive()
+   Button.vue and IconButton.vue use for themselves, and its disabled state
+   reads the same as Button.vue's: no hover, the not-allowed cursor and the
+   same dimming. One control should not be a second dialect of the other. */
+const addInteractive = useInteractive(disabled)
 const addRow = computed(() => ({
   display: 'flex',
   alignItems: 'center',
@@ -98,7 +105,8 @@ const addRow = computed(() => ({
   color: 'var(--text-muted)',
   background: addInteractive.hover.value ? 'var(--surface-hover)' : 'transparent',
   borderTop: 'var(--border-w) solid var(--border-subtle)',
-  cursor: 'default',
+  cursor: disabled.value ? 'not-allowed' : 'default',
+  opacity: disabled.value ? 0.7 : 1,
   transition: 'var(--transition-control)'
 }))
 
@@ -128,7 +136,12 @@ const empty = computed(() => props.rows.length === 0)
         No agents running.
       </div>
     </div>
-    <div :style="addRow" v-bind="addInteractive.handlers" @click="$emit('create')">
+    <div
+      :style="addRow"
+      :aria-disabled="disabled || undefined"
+      v-bind="addInteractive.handlers"
+      @click="!disabled && $emit('create')"
+    >
       <Icon name="plus" :size="14" />
       <span>New agent</span>
     </div>

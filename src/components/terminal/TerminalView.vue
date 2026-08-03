@@ -48,6 +48,10 @@ onMounted(() => {
   })
 
   unsubscribe = subscribeOutput((bytes, meta) => {
+    // An attach started before unmount can still answer after it: the
+    // subscription is dropped there, but a chunk already in flight through
+    // the store must not reach a disposed terminal.
+    if (!term) return
     if (meta?.reset) term.reset()
     term.write(bytes)
   })
@@ -72,11 +76,24 @@ onMounted(() => {
 })
 
 /* Switched to a different agent — the new ring's snapshot arrives with
-   meta.reset, and the subscriber above clears the screen before writing it. */
+   meta.reset, and the subscriber above clears the screen before writing it.
+
+   Losing the selection while the view stays mounted (switching to a project
+   with no sessions, removing the last agent) is the same seam and needs the
+   same work: without it the previous session's frame keeps sitting on screen
+   while the worker still calls it active and encodes its bytes every tick for
+   a listener that drops every one — and typing goes nowhere, because onData
+   guards on activeId. Clearing activeId is not this view's to do, though:
+   the selection belongs to the store. */
 watch(
   () => terminalState.activeId,
   (id) => {
-    if (!id) return
+    if (!id) {
+      detach(attached)
+      attached = null
+      term?.reset()
+      return
+    }
     attached = id
     attach(id).then(applySize)
   }
@@ -90,7 +107,13 @@ onBeforeUnmount(() => {
      may have already moved to another agent by now, and a nameless detach
      would silence the wrong one. */
   detach(attached)
+  attached = null
   term?.dispose()
+  /* An attach in flight still resolves into applySize after this. Forgetting
+     both here is what makes that harmless by construction, rather than by the
+     fit addon happening to bail on a detached element. */
+  term = null
+  fit = null
 })
 </script>
 

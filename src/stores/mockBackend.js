@@ -66,7 +66,10 @@ const MOCK_MTIME = 1754006400000
 
 /* PTY output is arbitrary bytes; the fixture's box-drawing characters sit
    outside Latin-1, so plain btoa() would throw. Route through TextEncoder
-   first — the same path the Rust side takes for anything outside ASCII. */
+   first, to get from this fixture's JS string to the UTF-8 bytes a PTY would
+   have produced. The Rust side has no equivalent step and needs none — it
+   holds those bytes already and base64-encodes them directly; the encoding
+   only exists here because the fixture starts life as text. */
 const toBase64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 
 function fixtureIssues() {
