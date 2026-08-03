@@ -200,16 +200,24 @@ export async function attach(id) {
   }
 }
 
-/* Detach names the session it is leaving. Without a name it would clear the
-   pointer unconditionally, and switching agents is two separate IPC calls
-   with no ordering guarantee at the worker: the old session's detach
+/* activeId carries two different meanings, and detach is only allowed to
+   touch one of them. It is "which agent the human selected" — that has to
+   survive leaving the terminal tab, because the agent list highlights its
+   row from this same field, and switching tabs must not un-pick it. It is
+   also "which session the worker is currently streaming to this window",
+   and that is what a view's unmount ends: the worker must stop pushing
+   output nobody is listening to.
+   The id argument is what keeps that stop from misfiring: switching agents
+   is two separate IPC calls with no ordering guarantee at the worker, so a
+   detach must name the session it is leaving. Without a name — or if this
+   function cleared activeId unconditionally — the old session's detach
    arriving after the new session's attach would leave the worker with no
-   active session, and output for the session the human is looking at would
-   silently stop arriving. No error, no event — the terminal just goes
-   still. */
+   active session, and output for the session the human is now looking at
+   would silently stop arriving. No error, no event — the terminal just
+   goes still. Selection is not the transport's to forget, though: it stays
+   whatever it was, so the next mount can reattach to it. */
 export async function detach(id) {
   if (id == null) return
-  if (terminalState.activeId === id) terminalState.activeId = null
   try {
     await invoke('terminal_detach', { id })
     terminalState.lastError = null

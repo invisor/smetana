@@ -32,10 +32,13 @@ export function terminalTheme() {
 }
 
 /* xterm wants the font size as a number, not a CSS string — the token is
-   read and parsed here so no literal has to appear in the component. */
+   read and parsed here so no literal has to appear in the component. No
+   fallback number either: --text-xs is defined unconditionally, and a
+   missing token is a design-system bug that should surface as a broken
+   terminal, not be quietly papered over with a size this file invented. */
 export function terminalFont() {
   return {
     fontFamily: read('--font-mono'),
-    fontSize: parseFloat(read('--text-xs')) || 12
+    fontSize: parseFloat(read('--text-xs'))
   }
 }

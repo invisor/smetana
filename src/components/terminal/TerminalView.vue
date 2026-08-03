@@ -8,6 +8,9 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+// xterm ships its own stylesheet, and without it the terminal does not
+// render at all — this import is part of the same sanctioned exception
+// theme.js explains, not an oversight of the "no CSS" rule.
 import '@xterm/xterm/css/xterm.css'
 import { terminalFont, terminalTheme } from './theme.js'
 import { attach, detach, resize, send, subscribeOutput, terminalState } from '../../stores/terminals.js'
@@ -24,10 +27,14 @@ let attached = null
 
 const style = { flex: 1, minHeight: 0, background: 'var(--editor-bg)', padding: 'var(--space-3)' }
 
+/* Fitting the terminal to its pane has nothing to do with whether a session
+   is attached — an empty terminal still has to fill the space it is given.
+   Only the worker side of it, telling the PTY its new size, needs a session
+   to send that to. */
 function applySize() {
-  if (!fit || !term || !terminalState.activeId) return
+  if (!fit || !term) return
   fit.fit()
-  resize(terminalState.activeId, term.cols, term.rows)
+  if (terminalState.activeId) resize(terminalState.activeId, term.cols, term.rows)
 }
 
 onMounted(() => {

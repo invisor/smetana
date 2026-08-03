@@ -133,6 +133,19 @@ describe('поток вывода', () => {
   })
 })
 
+describe('отключение', () => {
+  it('останавливает поток, но не забывает выбор агента', async () => {
+    const { stores } = await ready()
+    await stores.terminals.attach(1)
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+    await stores.terminals.detach(1)
+    // The worker stops streaming to this window, but the human's selection
+    // is not the transport's to forget — the agent list highlights this
+    // same field, and leaving the terminal tab must not un-pick a row.
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+  })
+})
+
 describe('ошибки бэкенда', () => {
   it('отказ terminal_attach не бросает, а оседает в lastError', async () => {
     const { ipc, stores } = await ready()
