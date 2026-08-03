@@ -67,9 +67,15 @@ pub async fn terminal_attach(
     ask(&handle, |tx| Request::Attach(id, tx)).await?
 }
 
+/// Takes the id being left, not just "stop sending": switching tabs is a
+/// detach and an attach that reach the worker in no guaranteed order, and a
+/// detach without an id could unset the attach that overtook it.
 #[tauri::command]
-pub async fn terminal_detach(handle: State<'_, TerminalHandle>) -> Result<(), TerminalError> {
-    tell(&handle, Request::Detach).await
+pub async fn terminal_detach(
+    handle: State<'_, TerminalHandle>,
+    id: SessionId,
+) -> Result<(), TerminalError> {
+    tell(&handle, Request::Detach(id)).await
 }
 
 #[tauri::command]

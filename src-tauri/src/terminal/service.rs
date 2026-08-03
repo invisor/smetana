@@ -27,6 +27,18 @@ const DEFAULT_ROWS: u16 = 30;
 /// Output is coalesced into this tick, so that one event does not go out per
 /// chunk.
 const FLUSH: Duration = Duration::from_millis(16);
+/// Detection runs every Nth flush tick, not every tick, because the two have
+/// different needs. A human's eye wants output at ~60 Hz; detection's own
+/// thresholds are `SETTLE` (150 ms) and `IDLE_AFTER` (3 s), against which the
+/// ~64 ms of latency this adds is nothing. And it is not free: `reassess`
+/// dumps the whole screen of every live session into fresh `String`s and
+/// clones its question, which at 60 Hz is a lot of burn for an app that is
+/// idle most of the time.
+const REASSESS_EVERY: u32 = 4;
+/// A capture whose deadline cannot be represented gets this one instead. See
+/// the fallback at the push site: an unrepresentable instant is a caller's
+/// mistake, and a panic here would cost every PTY.
+const CAPTURE_CEILING: Duration = Duration::from_secs(3600);
 /// How long the exit path waits for the worker to kill its PTYs. The same
 /// ceiling the settings store puts on its own flush when the window closes,
 /// for the same reason: the app always exits, and a wedged worker costs a
@@ -49,7 +61,8 @@ pub enum Request {
     Create(String, oneshot::Sender<Result<Session, TerminalError>>),
     Remove(SessionId, oneshot::Sender<()>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
-    Detach,
+    /// Carries the id it is leaving, and not for symmetry: see the handler.
+    Detach(SessionId),
     Resize(SessionId, u16, u16),
     Write(SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
     RunCapture(SessionId, String, u64, u64, oneshot::Sender<Result<Vec<String>, TerminalError>>),
@@ -100,6 +113,7 @@ pub fn start(app: AppHandle) -> TerminalHandle {
         let mut next_id: SessionId = 1;
         let mut tick = tokio::time::interval(FLUSH);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut ticks: u32 = 0;
 
         loop {
             tokio::select! {
@@ -111,12 +125,23 @@ pub fn start(app: AppHandle) -> TerminalHandle {
                     }
                 }
                 chunk = chunks_rx.recv() => {
-                    let Some(chunk) = chunk else { continue };
+                    // Cannot happen while this task owns the sender it hands
+                    // to every reader thread — and if that ownership ever
+                    // moves, breaking is a stopped worker, whereas
+                    // continuing is a branch that is instantly ready
+                    // forever, i.e. a spinning core.
+                    let Some(chunk) = chunk else { break };
                     absorb(&app, &mut sessions, chunk);
                 }
                 _ = tick.tick() => {
                     flush(&app, &mut sessions, active);
-                    reassess(&app, &mut sessions);
+                    ticks = ticks.wrapping_add(1);
+                    if ticks % REASSESS_EVERY == 0 {
+                        reassess(&app, &mut sessions);
+                    }
+                    // Captures are closed on every tick, unlike detection:
+                    // `settle` comes from the caller and may well be shorter
+                    // than the detection interval.
                     close_captures(&mut captures, &sessions);
                 }
             }
@@ -227,6 +252,19 @@ fn flush(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, active: Optio
 fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
     for live in sessions.values_mut() {
         if live.session.state == SessionState::Exited {
+            // The second poll for an exit code, and the only one there is.
+            // End of stream can arrive before the child has been reaped, and
+            // `exit_code` is a non-blocking `try_wait` that answers `None`
+            // until it has been — so the poll in `absorb` loses that race
+            // often enough to matter. Without asking again the session would
+            // keep `exitCode: null` for good, and the front end, which tells
+            // done from failed by exactly that number, could tell neither.
+            if live.session.exit_code.is_none() {
+                if let Some(code) = live.pty.exit_code() {
+                    live.session.finish(Some(code));
+                    emit_state(app, &live.session);
+                }
+            }
             continue;
         }
         let lines = live.screen.lines();
@@ -309,7 +347,9 @@ fn handle(
                     Ok(session)
                 }
                 // The agent is not on PATH — a legitimate outcome, not a
-                // panic: the row appears already dead and with a reason.
+                // panic. Nothing is inserted and the failure goes back as the
+                // command's error: an id was spent, but no half-built session
+                // is left behind for the list to carry.
                 Err(err) => Err(err),
             });
         }
@@ -338,7 +378,18 @@ fn handle(
                 }
             });
         }
-        Request::Detach => *active = None,
+        // Only when `active` still points at that session. Switching tabs is
+        // two calls — detach the old, attach the new — with no ordering
+        // guarantee by the time they reach here, and a detach that landed
+        // after the attach would clear it: the front end would believe it was
+        // attached while `flush` threw away that session's output every tick
+        // and `seq` never moved. Nothing would report it — the terminal would
+        // simply be frozen.
+        Request::Detach(id) => {
+            if *active == Some(id) {
+                *active = None;
+            }
+        }
         Request::Resize(id, cols, rows) => {
             if let Some(live) = sessions.get_mut(&id) {
                 live.pty.resize(cols, rows);
@@ -365,22 +416,35 @@ fn handle(
                 }
                 // Writing into an open permission dialog would mean
                 // answering, on a human's behalf, a question the app never
-                // read.
-                Some(live) if live.session.state == SessionState::NeedsYou => {
+                // read. The state alone is not a tight enough guard: it lags
+                // by up to `SETTLE` plus a tick, and a dialog that appeared
+                // inside that window is just as open. An unrung-out bell is
+                // the same fact arriving sooner — it is already on the `Live`,
+                // and nothing but a human's own answer clears it.
+                Some(live) if live.session.state == SessionState::NeedsYou || live.bell_pending => {
                     let _ = tx.send(Err(TerminalError::Busy));
                 }
                 Some(live) => {
                     live.pty.write(input.as_bytes());
                     // The count of silence starts over: a screen that settled
                     // before our write is not an answer to it.
-                    live.last_output = Instant::now();
+                    let now = Instant::now();
+                    live.last_output = now;
                     // Waiting inline would stop the worker serving every
                     // other session for as long as the wait; the tick closes
                     // this instead.
                     captures.push(Capture {
                         id,
                         settle: Duration::from_millis(settle_ms),
-                        deadline: Instant::now() + Duration::from_millis(timeout_ms),
+                        // Plain addition panics on an unrepresentable
+                        // instant, and a panic here unwinds the whole loop
+                        // body: past `kill_all`, so every PTY is orphaned,
+                        // and out of the worker, so every later command
+                        // reports it gone. An absurd timeout is worth a
+                        // ceiling, not that.
+                        deadline: now
+                            .checked_add(Duration::from_millis(timeout_ms))
+                            .unwrap_or(now + CAPTURE_CEILING),
                         tx,
                     });
                 }
