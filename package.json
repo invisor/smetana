@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "tauri": "tauri",
     "postinstall": "node scripts/fetch-bd.mjs --optional",
     "fetch-bd": "node scripts/fetch-bd.mjs"
@@ -41,6 +43,8 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
     "@vitejs/plugin-vue": "^5.2.1",
-    "vite": "^6.0.7"
+    "happy-dom": "^20.11.1",
+    "vite": "^6.0.7",
+    "vitest": "^4.1.10"
   }
 }

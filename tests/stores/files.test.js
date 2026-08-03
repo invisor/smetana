@@ -1,0 +1,231 @@
+import { beforeEach, describe, expect, it } from 'vitest'
+import { loadStores } from '../support/stores.js'
+import { entry, fileText, listing } from '../support/fixtures.js'
+
+let ipc
+let files
+
+beforeEach(async () => {
+  const loaded = await loadStores()
+  ipc = loaded.ipc
+  files = loaded.stores.files
+  files.setRoot('/проект')
+})
+
+describe('тексты ошибок', () => {
+  it('чтение файла: известный вид и общий запасной', () => {
+    expect(files.fileErrorText({ kind: 'binary' })).toBe('Binary file — not shown.')
+    expect(files.fileErrorText({ kind: 'чего-то-нового' })).toBe('Could not read this file.')
+    expect(files.fileErrorText(null)).toBe('Could not read this file.')
+  })
+
+  it('запись говорит про запись, а не про чтение', () => {
+    expect(files.saveErrorText({ kind: 'denied' })).toBe('No permission to write this file.')
+  })
+
+  it('у записи нет ключа stale: им занимается своя ветка с кнопками', () => {
+    expect(files.saveErrorText({ kind: 'stale' })).toBe('Could not save this file.')
+  })
+
+  it('каталог говорит про каталог', () => {
+    expect(files.dirErrorText({ kind: 'notFound' })).toBe('This folder is gone from disk.')
+  })
+})
+
+describe('мелочи', () => {
+  it('basenameOf берёт последний сегмент', () => {
+    expect(files.basenameOf('src/stores/tabs.js')).toBe('tabs.js')
+    expect(files.basenameOf('a.txt')).toBe('a.txt')
+    expect(files.basenameOf('src/')).toBe('src')
+  })
+
+  it('isStubPath узнаёт заглушку по нулевому байту', () => {
+    expect(files.isStubPath('src\u0000more')).toBe(true)
+    expect(files.isStubPath('src/more')).toBe(false)
+    expect(files.isStubPath(null)).toBe(false)
+  })
+})
+
+describe('listDir', () => {
+  it('кладёт листинг в карту под его собственным именем каталога', async () => {
+    ipc.on('files_list', () => listing({ dir: '', entries: [entry()] }))
+
+    await files.listDir('')
+
+    expect(files.filesState.dirs.get('').entries).toHaveLength(1)
+    expect(ipc.calls('files_list')).toEqual([{ root: '/проект', dir: '' }])
+  })
+
+  it('второе чтение того же каталога не начинается, пока идёт первое', async () => {
+    ipc.on('files_list', () => listing({ dir: 'src' }))
+
+    await Promise.all([files.listDir('src'), files.listDir('src')])
+
+    expect(ipc.calls('files_list')).toHaveLength(1)
+  })
+
+  it('ответ, пришедший после смены корня, не попадает в новое дерево', async () => {
+    ipc.on('files_list', () => listing({ dir: 'src', entries: [entry()] }))
+
+    const pending = files.listDir('src')
+    files.setRoot('/другой')
+    await pending
+
+    expect(files.filesState.dirs.size).toBe(0)
+  })
+
+  it('отказ оставляет дерево как было и кладёт короткую фразу наружу', async () => {
+    ipc.fail('files_list', { kind: 'denied', message: 'нет прав' })
+
+    await files.listDir('secret')
+
+    expect(files.filesState.dirs.size).toBe(0)
+    expect(files.filesState.lastError).toBe('No permission to read this folder.')
+  })
+
+  it('без корня не ходит на диск вовсе', async () => {
+    files.setRoot(null)
+    await files.listDir('')
+
+    expect(ipc.calls('files_list')).toHaveLength(0)
+  })
+})
+
+describe('setRoot', () => {
+  it('сбрасывает дерево, признак чтения и ошибку', async () => {
+    ipc.on('files_list', () => listing({ dir: '', entries: [entry()] }))
+    await files.listDir('')
+    files.filesState.lastError = 'что-то было'
+
+    files.setRoot('/другой')
+
+    expect(files.filesState.root).toBe('/другой')
+    expect(files.filesState.dirs.size).toBe(0)
+    expect(files.filesState.lastError).toBe(null)
+  })
+})
+
+describe('refreshDirs', () => {
+  it('перечитывает только те каталоги, что уже есть в карте', async () => {
+    ipc.on('files_list', (args) => listing({ dir: args.dir }))
+    await files.listDir('')
+
+    await files.refreshDirs(['', 'никто-не-раскрывал'])
+
+    expect(ipc.calls('files_list').map((call) => call.dir)).toEqual(['', ''])
+  })
+})
+
+describe('readFile и writeFile', () => {
+  it('чтение отдаёт то, что вернул бэкенд', async () => {
+    ipc.on('files_read', fileText())
+
+    await expect(files.readFile('a.txt')).resolves.toEqual(fileText())
+  })
+
+  it('ошибка Tauri проходит как есть', async () => {
+    ipc.fail('files_read', { kind: 'binary', message: 'двоичный' })
+
+    await expect(files.readFile('a.png')).rejects.toEqual({ kind: 'binary', message: 'двоичный' })
+  })
+
+  it('ошибка доставки приводится к виду io', async () => {
+    ipc.fail('files_read', new Error('IPC не поднялся'))
+
+    await expect(files.readFile('a.txt')).rejects.toEqual({
+      kind: 'io',
+      message: 'IPC не поднялся'
+    })
+  })
+
+  it('запись несёт ожидаемую метку времени и возвращает новую', async () => {
+    ipc.on('files_write', 11)
+
+    await expect(files.writeFile('a.txt', 'новый текст', 10)).resolves.toBe(11)
+    expect(ipc.calls('files_write')).toEqual([
+      { root: '/проект', path: 'a.txt', text: 'новый текст', expectedMtime: 10 }
+    ])
+  })
+})
+
+describe('statFiles', () => {
+  it('без корня не ходит на диск, даже если пути есть', async () => {
+    files.setRoot(null)
+
+    await expect(files.statFiles(['a.txt'])).resolves.toEqual([])
+    expect(ipc.calls('files_stat')).toHaveLength(0)
+  })
+
+  it('без путей не ходит на диск, даже если корень есть', async () => {
+    await expect(files.statFiles([])).resolves.toEqual([])
+    expect(ipc.calls('files_stat')).toHaveLength(0)
+  })
+
+  it('отказ даёт пустой список: проход по фокусу — удобство, ронять интерфейс незачем', async () => {
+    ipc.fail('files_stat', { kind: 'io', message: 'диск отвалился' })
+
+    await expect(files.statFiles(['a.txt'])).resolves.toEqual([])
+  })
+})
+
+describe('treeNodes', () => {
+  const наполнить = () => {
+    files.filesState.dirs.set(
+      '',
+      listing({
+        dir: '',
+        entries: [
+          entry({ name: 'src', path: 'src', kind: 'dir' }),
+          entry({ name: 'a.txt', path: 'a.txt' })
+        ]
+      })
+    )
+    files.filesState.dirs.set(
+      'src',
+      listing({ dir: 'src', entries: [entry({ name: 'tabs.js', path: 'src/tabs.js' })] })
+    )
+  }
+
+  it('нераскрытый каталог не отдаёт детей', () => {
+    наполнить()
+
+    const nodes = files.treeNodes(new Set())
+
+    expect(nodes[0].name).toBe('src')
+    expect(nodes[0].children).toBe(undefined)
+  })
+
+  it('раскрытый каталог отдаёт прочитанных детей', () => {
+    наполнить()
+
+    const nodes = files.treeNodes(new Set(['src']))
+
+    expect(nodes[0].children).toHaveLength(1)
+    expect(nodes[0].children[0].path).toBe('src/tabs.js')
+  })
+
+  it('раскрытый, но ещё не прочитанный каталог детей не выдумывает', () => {
+    files.filesState.dirs.set(
+      '',
+      listing({ entries: [entry({ name: 'src', path: 'src', kind: 'dir' })] })
+    )
+
+    const nodes = files.treeNodes(new Set(['src']))
+
+    expect(nodes[0].children).toBe(undefined)
+  })
+
+  it('обрезанный каталог получает строку-заглушку: молчаливая обрезка врала бы', () => {
+    files.filesState.dirs.set('', listing({ entries: [entry()], truncated: 7 }))
+
+    const nodes = files.treeNodes(new Set())
+
+    expect(nodes).toHaveLength(2)
+    expect(nodes[1].name).toBe('…7 more')
+    expect(files.isStubPath(nodes[1].path)).toBe(true)
+  })
+
+  it('непрочитанный корень даёт пустое дерево, а не бросок', () => {
+    expect(files.treeNodes(new Set())).toEqual([])
+  })
+})

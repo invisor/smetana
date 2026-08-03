@@ -11,15 +11,22 @@ npm run build
 npm run preview      # serve the production build
 npm run tauri dev    # the actual desktop app: Rust worker, real bd, live board
 npm run fetch-bd     # download the bd binary explicitly (fails hard, unlike postinstall)
+npm test             # front-end tests (vitest), single run
+npm run test:watch   # the same, in watch mode
 cd src-tauri && cargo test
 ```
 
-`cargo test` is the only test runner in this repository, and it covers the Rust side only. There is
-no front-end test runner, linter or formatter — do not invent one, and do not claim a change is
-"tested" on the basis of a build succeeding.
+Two test runners: `npm test` covers the front end's pure logic — the five plain modules and the five
+stores — and `cargo test` covers the Rust side. Neither covers components: there is no component test
+runner and no linter or formatter, so do not invent one, and do not claim a change is "tested" on the
+basis of a build succeeding.
 
-The way to verify a front-end change is to open it in the dev server with the query parameters the
-app reads (`src/App.vue`):
+Front-end tests live in `tests/`, never next to the source. They mock exactly one thing — the IPC
+transport — through the official `mockIPC`, and rebuild the store module graph per test;
+`tests/support/stores.js` explains why.
+
+A component change is still verified by eye, in the dev server, with the query parameters the app
+reads (`src/App.vue`):
 
 | parameter | values | default |
 |---|---|---|
@@ -249,6 +256,27 @@ The side-tab set is a closed list written out twice, in `model.rs` and in `views
 Changing one without the other is silent: the value survives the session and comes back as Files.
 
 Window size and position are not in this file: `tauri-plugin-window-state` handles them.
+
+### Tests
+
+`tests/` mirrors `src/`, and `vitest.config.js` merges the app's Vite config so the alias and the
+Vue plugin come along. Two decisions are load-bearing, and both are explained where they live.
+
+The mock boundary is the IPC transport, not the Tauri modules: `listen` and `emit` are themselves
+`invoke('plugin:event|…')` calls, so a delta in a test is delivered by a real `emit` through the
+same `initTracker` the app runs — and `plugin:dialog|open` needs no separate mock.
+`tests/support/ipc.js` also calls `mockWindows`, without which `getCurrentWindow()` throws,
+`settings.js` reads that as "we are in a browser" and the window-close path silently never
+registers.
+
+Stores are module singletons holding more state than they export — `timer`, `chain`, `watching`,
+`moving` — so `tests/support/stores.js` rebuilds the whole graph per test with `vi.resetModules()`.
+It hands back `nextTick` from that same fresh graph: `resetModules` recreates `vue` too, and
+another instance's `nextTick` drives another scheduler, so a test awaiting it would wait for a tick
+that never comes.
+
+Not covered, deliberately: `.vue` files and the CodeMirror wiring (`editor/theme.js`,
+`extensions.js`, `compartments.js`) — that is DOM, and it is checked by eye through `?view=gallery`.
 
 ### Styling: inline style objects, never CSS classes
 
