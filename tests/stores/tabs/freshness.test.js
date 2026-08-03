@@ -96,11 +96,13 @@ describe('перечитывание', () => {
      обещает, что перечитывание без force не сотрёт набранное, — но сам load()
      сбрасывает буфер в пустой до await readFile, а setText не пускает правки,
      пока стоит loading. Поэтому на строке 103 всегда сравниваются две пустые
-     строки, и ветка защиты недостижима; то же и в ветке отказа (строка 123).
-     Сегодня это не теряет текст: живой грязный буфер никто не перечитывает
-     заново. Тест закрепляет то, что код делает на самом деле, чтобы починка
-     этой ветки не прошла незамеченной. */
-  it('перечитывание без force стирает набранное: ветка защиты грязного текста недостижима', async () => {
+     строки, и на прямых последовательных путях (restoreTabs → load без force,
+     ни с чем не гоняясь) ветка защиты не срабатывает; то же и в ветке отказа
+     (строка 123). Это не значит, что ветка мертва совсем: она достижима через
+     гонку с keepMine, который захватывает буфер до своего await и переписывает
+     его захваченным — см. тест ниже. Тест здесь закрепляет то, что код делает
+     на прямом пути, чтобы починка не прошла незамеченной. */
+  it('перечитывание без force стирает набранное: на прямых путях ветка защиты не срабатывает', async () => {
     tabs.buffers.set('a.txt', buffer({ text: 'моя правка', original: 'исходный', mtime: 1 }))
     state().openTabs = ['a.txt']
 
@@ -111,6 +113,52 @@ describe('перечитывание', () => {
     expect(current.original).toBe('текст a.txt')
     expect(current.mtime).toBe(10)
     expect(tabs.isDirty('a.txt')).toBe(false)
+  })
+
+  /* ДЕФЕКТ. keepMine захватывает буфер в переменную ДО своего await readFile
+     и после возврата пишет обратно этот захваченный буфер (только mtime и
+     stale берутся из ответа). Если между захватом и возвратом load() успел
+     сбросить и перечитать буфер (диск победил), keepMine затирает свежее
+     содержимое диска захваченным старым — воскрешает уже вытесненный текст.
+     При смене проекта (projects.js moveTo: resetTabs() и следом restoreTabs())
+     это может протащить грязный буфер одного проекта в одноимённый файл
+     другого (README.md, package.json — обычное совпадение путей).
+
+     Гонка собрана детерминированно: первый вызов files_read (из keepMine)
+     держится на управляемом промисе и не отпускается, пока не завершится
+     второй вызов (из reloadTab, эмулирующего load() без гонки) — порядок
+     завершения задаётся явно, а не порядком разрешения промисов. */
+  it('гонка keepMine с параллельным load воскрешает текст, уже вытесненный диском', async () => {
+    let releaseKeepMineRead
+    const keepMineRead = new Promise((resolve) => {
+      releaseKeepMineRead = resolve
+    })
+    let calls = 0
+    ipc.on('files_read', (args) => {
+      calls += 1
+      if (calls === 1) {
+        /* Ответ на чтение, запущенное keepMine: отпускается вручную ниже,
+           после того как reloadTab уже победил диском. */
+        return keepMineRead.then(() => fileText({ path: args.path, text: `текст ${args.path}`, mtime: 20 }))
+      }
+      /* Ответ на чтение, запущенное reloadTab: отдаётся сразу. */
+      return fileText({ path: args.path, text: `текст ${args.path}`, mtime: 10 })
+    })
+    tabs.buffers.set('a.txt', buffer({ text: 'моя правка', original: 'исходный', stale: true, mtime: 1 }))
+
+    const keepMinePromise = tabs.keepMine('a.txt')
+    await tabs.reloadTab('a.txt')
+    /* Диск победил: буфер уже чист и несёт содержимое с диска. */
+    expect(tabs.isDirty('a.txt')).toBe(false)
+
+    releaseKeepMineRead()
+    await keepMinePromise
+
+    const current = tabs.buffers.get('a.txt')
+    expect(current.text).toBe('моя правка')
+    expect(current.original).toBe('исходный')
+    expect(current.mtime).toBe(20)
+    expect(tabs.isDirty('a.txt')).toBe(true)
   })
 })
 
