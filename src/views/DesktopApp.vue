@@ -248,6 +248,25 @@ const askingAgent = computed(() =>
   agentRows.value.find((row) => row.id === terminalState.activeId && row.question)
 )
 
+/* The agent's own default and "the recommended action" are one concept, not
+   two affordances on the same button: composing a `selected` prop with
+   `variant="primary"` made Button pick the generic selected tone over the
+   primary fill, so the button that was both correct and recommended read as
+   quieter than the other two — backwards. Driving `variant` from the default
+   keeps exactly one primary button, positioned on whatever the agent
+   actually highlighted. The fallback to index 0 when `selected` is missing
+   or out of range does not claim that option is the agent's default — it
+   never asserts anything about the agent — it is only the panel's own
+   fallback recommendation, the same one it offered before `selected`
+   existed. Do not reintroduce a separate `selected` binding alongside this:
+   that is the exact composition that broke it. */
+const primaryOptionIndex = computed(() => {
+  const question = askingAgent.value?.question
+  const selected = question?.selected
+  const count = question?.options.length ?? 0
+  return Number.isInteger(selected) && selected >= 0 && selected < count ? selected : 0
+})
+
 /* answer() is a round trip, and the question only clears once the next
    terminal:state event lands — nothing else stops a second click from
    writing the same payload again, into whatever now occupies the screen.
@@ -883,8 +902,7 @@ const toastStackStyle = {
                 <Button
                   v-for="(option, i) in askingAgent.question.options"
                   :key="option.send"
-                  :variant="i === 0 ? 'primary' : 'secondary'"
-                  :selected="i === askingAgent.question.selected"
+                  :variant="i === primaryOptionIndex ? 'primary' : 'secondary'"
                   :disabled="answeringId === askingAgent.id"
                   size="sm"
                   @click="submitAnswer(askingAgent.id, option)"
