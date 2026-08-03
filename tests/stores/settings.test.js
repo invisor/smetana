@@ -114,23 +114,47 @@ describe('запись', () => {
     expect(ipc.calls('settings_save')).toHaveLength(1)
   })
 
-  it('две записи не летят внахлёст', async () => {
-    const order = []
-    ipc.on('settings_save', async (args) => {
-      const mark = args.settings.layout.leftCollapsed
-      order.push(`начало:${mark}`)
-      await new Promise((resolve) => setTimeout(resolve, 10))
-      order.push(`конец:${mark}`)
-      return null
-    })
-
+  it('два flushPending в одном тике дают одну запись с последним значением', async () => {
     settings.settings.layout.leftCollapsed = true
     const first = settings.flushPending()
     settings.settings.layout.leftCollapsed = false
     const second = settings.flushPending()
     await Promise.all([first, second])
 
-    expect(order).toEqual(['начало:true', 'конец:true', 'начало:false', 'конец:false'])
+    /* Вотчер отложен на микрозадачу и за один тик срабатывает один раз, поэтому
+       таймер заводится один. Первая flush его снимает и отправляет снимок, взятый
+       уже после обеих правок; второй звать нечего — она отдаёт ту же цепочку. */
+    expect(ipc.calls('settings_save')).toHaveLength(1)
+    expect(ipc.calls('settings_save')[0].settings.layout.leftCollapsed).toBe(false)
+  })
+
+  it('две записи не летят внахлёст', async () => {
+    const order = []
+    ipc.on('settings_save', async (args) => {
+      const mark = `${args.settings.layout.leftCollapsed}/${args.settings.layout.rightCollapsed}`
+      order.push(`начало:${mark}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      order.push(`конец:${mark}`)
+      return null
+    })
+
+    settings.settings.layout.leftCollapsed = true
+    const first = settings.flushPending()
+    /* Тик отдаёт управление первой записи: её flush уже стоит в цепочке, и
+       только теперь вторая правка становится отдельной записью, а не частью той же. */
+    await nextTick()
+    settings.settings.layout.rightCollapsed = true
+    const second = settings.flushPending()
+    await Promise.all([first, second])
+
+    /* Rust пишет через временный файл и переименование: две записи внахлёст
+       спорили бы за порядок, и вторая могла бы лечь на диск раньше первой. */
+    expect(order).toEqual([
+      'начало:true/false',
+      'конец:true/false',
+      'начало:true/true',
+      'конец:true/true'
+    ])
   })
 
   it('на диск уходит простой объект, а не реактивный прокси', async () => {
