@@ -35,15 +35,22 @@ const FLUSH: Duration = Duration::from_millis(16);
 /// clones its question, which at 60 Hz is a lot of burn for an app that is
 /// idle most of the time.
 const REASSESS_EVERY: u32 = 4;
-/// A capture whose deadline cannot be represented gets this one instead. See
-/// the fallback at the push site: an unrepresentable instant is a caller's
-/// mistake, and a panic here would cost every PTY.
+/// The longest a capture may wait, whatever the caller asked for. A timeout
+/// is clamped to it before it becomes a deadline, so an absurd number costs a
+/// long wait rather than a capture that never expires at all.
 const CAPTURE_CEILING: Duration = Duration::from_secs(3600);
 /// How long the exit path waits for the worker to kill its PTYs. The same
 /// ceiling the settings store puts on its own flush when the window closes,
 /// for the same reason: the app always exits, and a wedged worker costs a
 /// cleanup rather than the app.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+/// How long a signalled agent is given to leave on its own, and how often it
+/// is asked. Both live well inside `SHUTDOWN_WAIT`: the grace period is the
+/// mechanism, that ceiling is the backstop for a worker that never gets here
+/// at all, and a mechanism that spends its own backstop leaves nothing to
+/// catch it.
+const KILL_GRACE: Duration = Duration::from_millis(1200);
+const KILL_POLL: Duration = Duration::from_millis(50);
 
 /// The answer to `terminal_attach`: everything the session has said so far,
 /// plus the sequence number that output arriving after it will continue from.
@@ -82,7 +89,8 @@ struct Live {
     screen: Screen,
     /// A bell rang and has not been cleared yet. It is cleared by a write
     /// into the session — a human answering, from the keyboard or with a
-    /// button — and by the process exiting. Detection only reads it.
+    /// button — by a view attaching, which is a human looking at it, and by
+    /// the process exiting. Detection only reads it.
     bell_pending: bool,
     last_output: Instant,
     /// Accumulated since the last flush — leaves as a single event on the
@@ -120,9 +128,17 @@ pub fn start(app: AppHandle) -> TerminalHandle {
                 request = rx.recv() => {
                     // The senders are gone — there is nobody left to work for.
                     let Some(request) = request else { break };
-                    if handle(&app, &mut sessions, &mut captures, &mut active, &mut next_id, &chunks_tx, request) {
+                    // Shutting down is the one request that cannot be served
+                    // inside `handle`: killing gracefully means waiting, and
+                    // waiting means `.await`. The reply goes back only once
+                    // the PTYs are gone, because that is what the caller is
+                    // holding the exit for.
+                    if let Request::ShutDown(tx) = request {
+                        kill_all(&mut sessions).await;
+                        let _ = tx.send(());
                         break;
                     }
+                    handle(&app, &mut sessions, &mut captures, &mut active, &mut next_id, &chunks_tx, request);
                 }
                 chunk = chunks_rx.recv() => {
                     // Cannot happen while this task owns the sender it hands
@@ -149,15 +165,39 @@ pub fn start(app: AppHandle) -> TerminalHandle {
 
         // Closing the worker: an agent left alive is an orphan in the process
         // list.
-        kill_all(&mut sessions);
+        kill_all(&mut sessions).await;
     });
 
     TerminalHandle(tx)
 }
 
-fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
+/// Signal, wait, then kill — not because killing is unreliable, but because
+/// killing first is a lie about what happened. An agent that gets SIGKILL
+/// flushes nothing, and this runs every single time the app closes; a hangup
+/// is what a person closing a terminal window sends, and every CLI is built
+/// for it. The wait is bounded because the window is already going: an agent
+/// that will not leave in a second is not going to be talked out of it, and
+/// the app must not hang on the argument. What is above this — `SHUTDOWN_WAIT`
+/// in `shutdown` — is not a longer version of the same wait: it guards against
+/// a worker that never reaches this function at all, which is why the grace
+/// period here has to stay well under it.
+async fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
     for live in sessions.values_mut() {
-        live.pty.kill();
+        live.pty.hangup();
+    }
+    let deadline = Instant::now() + KILL_GRACE;
+    while Instant::now() < deadline {
+        // `exit_code` is the same non-blocking `try_wait` the rest of the
+        // worker uses, so this also reaps whoever has already left.
+        if sessions.values_mut().all(|live| live.pty.exit_code().is_some()) {
+            return;
+        }
+        tokio::time::sleep(KILL_POLL).await;
+    }
+    for live in sessions.values_mut() {
+        if live.pty.exit_code().is_none() {
+            live.pty.kill();
+        }
     }
 }
 
@@ -167,13 +207,16 @@ fn kill_all(sessions: &mut HashMap<SessionId, Live>) {
 ///
 /// The wait is worth having because an agent left alive is an orphan in the
 /// process list. It is worth exactly two seconds because the window has to
-/// close either way.
+/// close either way — and it is a ceiling on a worker that never answers, not
+/// the grace period itself: that one is `kill_all`'s, and deliberately
+/// shorter.
 ///
 /// The blocking send cannot hang: the queue is only full while the worker is
-/// not draining it, the worker never awaits inside its loop, and the global
-/// async runtime is a process-lifetime static that outlives this callback. If
-/// the worker has already stopped, its receiver is gone and the send returns
-/// an error at once instead of blocking.
+/// not draining it, the one place the worker awaits inside its loop is the
+/// grace period this very request starts, and the global async runtime is a
+/// process-lifetime static that outlives this callback. If the worker has
+/// already stopped, its receiver is gone and the send returns an error at once
+/// instead of blocking.
 pub fn shutdown(app: &AppHandle) {
     let Some(handle) = app.try_state::<TerminalHandle>() else { return };
     let (tx, rx) = std::sync::mpsc::channel();
@@ -304,7 +347,8 @@ fn close_captures(captures: &mut Vec<Capture>, sessions: &HashMap<SessionId, Liv
     *captures = keep;
 }
 
-/// Returns true when it is time for the worker to stop.
+/// Everything the worker does synchronously. `ShutDown` is handled by the
+/// loop instead — see there.
 fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
@@ -313,7 +357,7 @@ fn handle(
     next_id: &mut SessionId,
     chunks: &mpsc::UnboundedSender<Chunk>,
     request: Request,
-) -> bool {
+) {
     match request {
         Request::List(project, tx) => {
             let mut list: Vec<Session> = sessions
@@ -367,6 +411,24 @@ fn handle(
                 None => Err(TerminalError::NoSession(id)),
                 Some(live) => {
                     *active = Some(id);
+                    // A human now has this session on screen, and that is a
+                    // reasonable acknowledgement of a bell. It has to be
+                    // acknowledged by something: a CLI agent rings on
+                    // finishing a task just as readily as on asking a
+                    // question, and with only a write and an exit clearing
+                    // it, one completion bell would hold the row at
+                    // `needs-you` for the rest of the session's life and
+                    // refuse every `run_capture` with `busy` alongside it —
+                    // an afternoon of that and every row is loud, which is
+                    // the design failing quietly.
+                    //
+                    // Clearing it here is safe because the two detection
+                    // layers are independent: if a permission dialog really
+                    // is on the screen, the profile raises `needs-you` again
+                    // from that screen on the next tick. A real question
+                    // survives the acknowledgement; only a bell whose reason
+                    // has already been read is lost.
+                    live.bell_pending = false;
                     // Everything accumulated before attaching is already in
                     // the ring — sending it as a second event would mean
                     // showing it twice.
@@ -420,7 +482,8 @@ fn handle(
                 // by up to `SETTLE` plus a tick, and a dialog that appeared
                 // inside that window is just as open. An unrung-out bell is
                 // the same fact arriving sooner — it is already on the `Live`,
-                // and nothing but a human's own answer clears it.
+                // and only a human clears it: by answering, or by putting the
+                // session on screen and reading what it rang about.
                 Some(live) if live.session.state == SessionState::NeedsYou || live.bell_pending => {
                     let _ = tx.send(Err(TerminalError::Busy));
                 }
@@ -436,25 +499,26 @@ fn handle(
                     captures.push(Capture {
                         id,
                         settle: Duration::from_millis(settle_ms),
-                        // Plain addition panics on an unrepresentable
-                        // instant, and a panic here unwinds the whole loop
-                        // body: past `kill_all`, so every PTY is orphaned,
-                        // and out of the worker, so every later command
-                        // reports it gone. An absurd timeout is worth a
-                        // ceiling, not that.
+                        // Clamped first, so a caller's absurd number costs an
+                        // hour rather than a capture that outlives the app.
+                        // And `checked_add` rather than plain addition
+                        // because that panics on an unrepresentable instant,
+                        // and a panic here unwinds the whole loop body: past
+                        // `kill_all`, so every PTY is orphaned, and out of
+                        // the worker, so every later command reports it gone.
+                        // With the clamp in front of it that fallback is
+                        // unreachable in practice; closing on the next tick
+                        // is simply the harmless way to be wrong.
                         deadline: now
-                            .checked_add(Duration::from_millis(timeout_ms))
-                            .unwrap_or(now + CAPTURE_CEILING),
+                            .checked_add(Duration::from_millis(timeout_ms).min(CAPTURE_CEILING))
+                            .unwrap_or(now),
                         tx,
                     });
                 }
             }
         }
-        Request::ShutDown(tx) => {
-            kill_all(sessions);
-            let _ = tx.send(());
-            return true;
-        }
+        // Handled by the loop, which is the only place that can await the
+        // grace period; it never reaches here.
+        Request::ShutDown(_) => {}
     }
-    false
 }

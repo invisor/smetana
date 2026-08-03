@@ -108,6 +108,29 @@ impl Pty {
         self.child.try_wait().ok().flatten().map(|status| status.exit_code() as i32)
     }
 
+    /// The soft signal, sent before any killing: an agent given no warning
+    /// flushes nothing, and this is the path that runs every time the app
+    /// closes. It goes to the process *group*, not to the child: the child is
+    /// a session leader (`spawn_command` calls `setsid`), so its pid is also
+    /// its group id, and whatever it started — a build, a test run — is in
+    /// that group unless it asked for one of its own. `kill()` reaches the
+    /// agent alone and leaves those behind as orphans, which is the very
+    /// thing the exit path exists to prevent.
+    #[cfg(unix)]
+    pub fn hangup(&mut self) {
+        if let Some(pid) = self.child.process_id() {
+            // SIGHUP rather than SIGTERM because it is what the kernel itself
+            // delivers when a terminal window closes — the case every CLI
+            // already handles.
+            let _ = unsafe { libc::killpg(pid as libc::pid_t, libc::SIGHUP) };
+        }
+    }
+
+    /// Windows has no signal to send here, so the grace wait simply expires
+    /// and `kill` does the whole job — the same outcome as before.
+    #[cfg(not(unix))]
+    pub fn hangup(&mut self) {}
+
     pub fn kill(&mut self) {
         let _ = self.child.kill();
     }
