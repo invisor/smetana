@@ -24,17 +24,27 @@ const PRIORITIES = [
   { value: '4', label: 'P4 · lowest' }
 ]
 
+/* Whether the agent talks the task through before filing it. Auto leaves the
+   judgement to the agent: nothing here has read the text, and guessing from
+   the length of a title would be wrong in both directions. */
+const BRAINSTORM = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'on', label: 'On' },
+  { value: 'off', label: 'Off' }
+]
+
 const title = ref('')
 const issueType = ref('task')
 const priority = ref('2')
 const description = ref('')
+const brainstorm = ref('auto')
 
 const valid = computed(() => title.value.trim().length > 0)
 
 const intro = computed(() =>
   props.status
-    ? `Goes straight into the tracker, in ${String(props.status).replace(/-/g, ' ')}.`
-    : 'Goes straight into the tracker.'
+    ? `An agent files it, in ${String(props.status).replace(/-/g, ' ')}.`
+    : 'An agent files it.'
 )
 
 const submit = () => {
@@ -43,7 +53,8 @@ const submit = () => {
     title: title.value.trim(),
     issue_type: issueType.value,
     priority: Number(priority.value),
-    description: description.value.trim() || null
+    description: description.value.trim() || null,
+    brainstorm: brainstorm.value
   })
 }
 
@@ -60,6 +71,7 @@ watch(
     issueType.value = 'task'
     priority.value = '2'
     description.value = ''
+    brainstorm.value = 'auto'
   }
 )
 
@@ -90,6 +102,10 @@ const field = { flex: 1, minWidth: 0 }
         <div :style="field">
           <div :style="label">Priority</div>
           <Select v-model="priority" :options="PRIORITIES" />
+        </div>
+        <div :style="field">
+          <div :style="label">Brainstorming</div>
+          <Select v-model="brainstorm" :options="BRAINSTORM" />
         </div>
       </div>
       <div>
