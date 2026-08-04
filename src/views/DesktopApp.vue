@@ -277,6 +277,7 @@ onMounted(async () => {
   if (!opened) return
   setRoot(opened)
   loadHead(opened)
+  loadConfig(opened)
   await loadSessions(opened)
   await listDir('')
   if (activePath.value !== opened) return
