@@ -65,18 +65,33 @@ mod tests {
     use crate::agents::{Brainstorm, Intent, Launch, TaskDraft};
     use std::path::PathBuf;
 
+    /// The real bundle resources, the way `claude.rs` reaches its own screen
+    /// fixtures. A made-up path would leave `read_skill` answering `None` in
+    /// every test here, and the gating in `command` — which decides that filing
+    /// guidance reaches an `Inline` harness whatever the Brainstorming switch
+    /// says — would never be observed at all.
+    fn resources(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join(name)
+    }
+
     fn launch(intent: Intent) -> Launch {
         Launch {
             profile: &Codex,
             cwd: PathBuf::from("/tmp/project"),
             intent,
             skills: Skills {
-                smetana: PathBuf::from("/app/resources/smetana"),
-                superpowers: PathBuf::from("/app/resources/superpowers"),
+                smetana: resources("smetana"),
+                superpowers: resources("superpowers"),
                 superpowers_installed: false,
             },
         }
     }
+
+    /// A line from the middle of each shipped `SKILL.md`, far enough in to be
+    /// the body rather than the front matter: finding it in the prompt is the
+    /// only proof that the file was read and pasted, not merely named.
+    const FILING_BODY: &str = "The title says what needs doing";
+    const BRAINSTORMING_BODY: &str = "ask questions one at a time";
 
     fn argv(launch: &Launch) -> Vec<String> {
         Codex
@@ -122,10 +137,43 @@ mod tests {
     #[test]
     fn auto_points_at_the_file_instead_of_pasting_it() {
         let args = argv(&launch(new_task(Brainstorm::Auto)));
-        assert!(args
-            .last()
-            .unwrap()
-            .contains("/app/resources/superpowers/skills/brainstorming/SKILL.md"));
+        let pointer = resources("superpowers").join("skills/brainstorming/SKILL.md");
+        assert!(args.last().unwrap().contains(&pointer.display().to_string()));
+    }
+
+    #[test]
+    fn the_filing_skill_is_pasted_in_whatever_the_switch_says() {
+        // The branch's headline behaviour for a harness with no skill registry:
+        // how this project wants a task worded is not part of the brainstorming
+        // question, so the text travels in all three positions of the switch.
+        // Reading it under `Brainstorm::On` alone would still satisfy every
+        // other test in this file.
+        for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
+            let args = argv(&launch(new_task(mode)));
+            assert!(
+                args.last().unwrap().contains(FILING_BODY),
+                "{mode:?}: the shipped filing skill never reached the prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn the_brainstorming_process_is_pasted_in_only_when_it_is_switched_on() {
+        // 10 KB the agent may never use: `Off` has no business with it at all,
+        // and `Auto` is handed the path instead so it pays only if it decides
+        // the task warrants a conversation.
+        for mode in [Brainstorm::Off, Brainstorm::Auto] {
+            let args = argv(&launch(new_task(mode)));
+            assert!(
+                !args.last().unwrap().contains(BRAINSTORMING_BODY),
+                "{mode:?}: the whole process was pasted in unasked"
+            );
+        }
+        let args = argv(&launch(new_task(Brainstorm::On)));
+        assert!(
+            args.last().unwrap().contains(BRAINSTORMING_BODY),
+            "on must carry the process itself, there being no registry to name it in"
+        );
     }
 
     #[test]
