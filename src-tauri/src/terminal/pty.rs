@@ -2,7 +2,9 @@
 //! each session gets its own thread: it reads and forwards chunks into the
 //! worker's shared channel. Mutable state still belongs to a single worker.
 
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use tokio::sync::mpsc;
@@ -35,7 +37,66 @@ pub fn build_command(launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
     cmd.env("TERM", "xterm-256color");
+    // Filing a task means the agent running `bd`, and this app's bd is a
+    // sidecar inside the bundle: on a machine that never installed one there is
+    // nothing on `PATH` to find, and "command not found" is now the whole
+    // feature failing. `CommandBuilder::new` has already snapshotted the
+    // parent's environment, so `get_env` reads the very value the child would
+    // otherwise have inherited and this puts one directory in front of it —
+    // nothing else about the environment is touched.
+    if let Some(dir) = sidecar_dir() {
+        let path = path_with(&dir, cmd.get_env("PATH"));
+        cmd.env("PATH", path);
+    }
     cmd
+}
+
+/// The directory the bundled `bd` sits in — `None` only when the running
+/// executable has no discoverable location, in which case the agent is left
+/// with whatever `PATH` it inherited, which is where it was before.
+///
+/// `tracker/bd.rs` reaches bd through `app.shell().sidecar("bd")`, and that is
+/// `dirname(current_exe())` joined with the name and nothing else —
+/// `relative_command_path` in tauri-plugin-shell is those two lines. Deriving
+/// the directory the same way is what makes it the same directory by
+/// construction rather than by a rule copied out of that crate: in a bundle it
+/// is `smetana.app/Contents/MacOS`, beside the app executable, where the
+/// bundler drops the external binary with its target triple stripped; under
+/// `npm run tauri dev` it is `src-tauri/target/debug`, where the Tauri CLI
+/// drops the same file.
+///
+/// `tauri::utils::platform::current_exe` rather than `std::env::current_exe`,
+/// again because it is what the plugin calls: it answers with the path captured
+/// at start-up, before anything could have moved, and it resolves an AppImage's
+/// mount point back to the image.
+fn sidecar_dir() -> Option<PathBuf> {
+    let exe = tauri::utils::platform::current_exe().ok()?;
+    let dir = exe.parent()?;
+    // A test binary lives one level below the sidecar, in `target/debug/deps`.
+    // The plugin steps up out of that directory; not doing the same here would
+    // make the two disagree in precisely the case a test can observe.
+    Some(if dir.ends_with("deps") {
+        dir.parent().unwrap_or(dir).to_path_buf()
+    } else {
+        dir.to_path_buf()
+    })
+}
+
+/// `PATH` with `dir` at the front. Pure, and the part of this worth a test.
+///
+/// Prepended and never appended: the app pins a bd version and checks it
+/// (`EXPECTED_BD_VERSION` in `tracker/service.rs`), so an agent that found some
+/// other bd first would be writing to the board through a version that
+/// handshake never verified.
+///
+/// A `join_paths` that fails leaves the inherited value alone. It can only fail
+/// on a directory that itself contains the separator, and of the two ways to be
+/// wrong there, an unreachable bd costs this one feature while a mangled `PATH`
+/// costs the agent everything else it runs.
+pub fn path_with(dir: &Path, inherited: Option<&OsStr>) -> OsString {
+    let rest = inherited.into_iter().flat_map(std::env::split_paths);
+    std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(rest))
+        .unwrap_or_else(|_| inherited.unwrap_or(OsStr::new("")).to_owned())
 }
 
 pub struct Pty {
@@ -186,6 +247,48 @@ mod tests {
             let term = cmd.get_env("TERM").map(|v| v.to_string_lossy().into_owned());
             assert_eq!(term.as_deref(), Some("xterm-256color"), "{id}");
         }
+    }
+
+    // `:` separates PATH entries on Unix and is an ordinary character on
+    // Windows, so the literal below only proves what it claims on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn the_bundled_bd_is_put_in_front_of_the_persons_own() {
+        let dir = std::path::Path::new("/app/Contents/MacOS");
+        assert_eq!(
+            path_with(dir, Some(OsStr::new("/usr/local/bin:/usr/bin"))),
+            OsString::from("/app/Contents/MacOS:/usr/local/bin:/usr/bin")
+        );
+        // Nothing inherited is still a reachable bd, not an empty PATH.
+        assert_eq!(path_with(dir, None), OsString::from("/app/Contents/MacOS"));
+    }
+
+    #[test]
+    fn every_agent_can_reach_the_bundled_bd() {
+        // Without this the agent's `bd create` is "command not found" on any
+        // machine that never installed bd — which is every machine the 128 MB
+        // sidecar exists to serve.
+        let dir = sidecar_dir().expect("the test binary has a location");
+        for id in agents::IDS {
+            let cmd = build_command(&launch(id));
+            let path = cmd.get_env("PATH").expect("PATH must reach the agent");
+            let mut entries = std::env::split_paths(path);
+            assert_eq!(entries.next(), Some(dir.clone()), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_rest_of_the_environment_is_left_alone() {
+        // One directory in front, and nothing else about PATH rewritten: an
+        // agent that lost the person's own tools would be worse off than one
+        // that could not find bd.
+        let inherited: Vec<_> = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+        let cmd = build_command(&launch("claude"));
+        let given: Vec<_> =
+            std::env::split_paths(cmd.get_env("PATH").expect("PATH must reach the agent")).collect();
+        assert_eq!(given[1..], inherited[..]);
     }
 
     #[test]
