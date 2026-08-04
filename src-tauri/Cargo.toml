@@ -33,6 +33,7 @@ chrono = "0.4"
 vt100 = "0.16.2"
 portable-pty = "0.9.0"
 base64 = "0.23.0"
+toml = "1.0.7"
 
 # Only to send a signal to a PTY session's process group on the exit path
 # (`terminal/pty.rs`): portable-pty's own `kill` is SIGKILL to the direct

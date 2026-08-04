@@ -2,6 +2,7 @@ mod agents;
 mod files;
 mod git;
 mod project;
+mod runs;
 mod settings;
 mod terminal;
 mod tracker;
