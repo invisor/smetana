@@ -156,6 +156,10 @@ mod tests {
         assert_eq!(resolve("codex").unwrap().delivery(), SkillDelivery::Inline);
     }
 
+    // `:` is a path separator on Unix and an ordinary character on Windows
+    // (where `std::env::split_paths` splits on `;`), so this literal only
+    // proves the fact it claims to on Unix; /bin/sh is itself a Unix fact.
+    #[cfg(unix)]
     #[test]
     fn a_binary_is_found_by_walking_the_path() {
         // /bin/sh exists on every platform this app builds for.
@@ -170,5 +174,23 @@ mod tests {
         // concerned, and there is nothing to fall back to either.
         assert!(pick("claude", Some("/nowhere")).is_none());
         assert!(pick("nonsense", Some("/nowhere")).is_none());
+
+        // Claude is absent and codex is present in this directory, so only
+        // the fallback branch of `pick` can produce the codex profile here.
+        let dir = std::env::temp_dir().join(format!(
+            "smetana-agents-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir for the fake install");
+        std::fs::File::create(dir.join("codex")).expect("create fake codex binary");
+
+        let path_var = dir.to_str().expect("temp dir path is valid UTF-8");
+        assert_eq!(pick("claude", Some(path_var)).map(|p| p.id()), Some("codex"));
+
+        std::fs::remove_dir_all(&dir).expect("remove temp dir for the fake install");
     }
 }
