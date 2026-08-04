@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 
 use super::model::{Session, SessionId, TerminalError};
 use super::service::{Attached, Request, TerminalHandle};
+use crate::agents::Intent;
 
 async fn ask<T>(
     handle: &TerminalHandle,
@@ -41,15 +42,17 @@ pub async fn terminal_list(
     ask(&handle, |tx| Request::List(project, tx)).await
 }
 
-/// `prompt` is what the agent opens on, when it was started for a particular
-/// piece of work rather than by the "+ New agent" row.
+/// `intent` is why the session is being started; the profile turns it into a
+/// command line. `agent` is the id from settings — an unknown or uninstalled
+/// one falls back to whatever is installed rather than failing.
 #[tauri::command]
 pub async fn terminal_create(
     handle: State<'_, TerminalHandle>,
     project: String,
-    prompt: Option<String>,
+    agent: String,
+    intent: Intent,
 ) -> Result<Session, TerminalError> {
-    ask(&handle, |tx| Request::Create(project, prompt, tx)).await?
+    ask(&handle, |tx| Request::Create(project, agent, intent, tx)).await?
 }
 
 #[tauri::command]

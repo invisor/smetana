@@ -9,11 +9,7 @@
 use std::time::Duration;
 
 use super::model::{Question, SessionState};
-// Bridge, not the final wiring: `detect` has no notion yet of which agent a
-// session is running, so this hardcodes Claude Code, the only profile that
-// implements `question` today. Threading the actual profile through
-// `DetectInput` is Task 6's job, not this one's.
-use crate::agents::{claude::Claude, Profile};
+use crate::agents::Profile;
 
 /// No output for this long — treat the agent as idle.
 pub const IDLE_AFTER: Duration = Duration::from_secs(3);
@@ -30,6 +26,9 @@ pub struct DetectInput<'a> {
     pub bell_pending: bool,
     pub quiet_for: Duration,
     pub screen: &'a [String],
+    /// Which agent this session runs — layer B is that agent's own dialog
+    /// reader, not a hardcoded one.
+    pub profile: &'static dyn Profile,
 }
 
 pub struct Detected {
@@ -41,7 +40,7 @@ pub fn detect(input: DetectInput) -> Detected {
     // Layer B: the profile knows exactly what is being asked, so it takes
     // precedence. Trusted only once the screen has settled — see SETTLE.
     if input.quiet_for >= SETTLE {
-        if let Some(question) = Claude.question(input.screen) {
+        if let Some(question) = input.profile.question(input.screen) {
             return Detected { state: SessionState::NeedsYou, question: Some(question) };
         }
     }
@@ -70,6 +69,7 @@ mod tests {
             bell_pending: bell,
             quiet_for: Duration::from_millis(quiet_ms),
             screen: Box::leak(lines.into_boxed_slice()),
+            profile: crate::agents::resolve("claude").unwrap(),
         }
     }
 
@@ -120,6 +120,7 @@ mod tests {
             bell_pending: false,
             quiet_for: Duration::from_millis(500),
             screen: dialog(),
+            profile: crate::agents::resolve("claude").unwrap(),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
         assert!(out.question.expect("there is no question").text.ends_with('?'));
@@ -131,6 +132,7 @@ mod tests {
             bell_pending: false,
             quiet_for: Duration::from_millis(20),
             screen: dialog(),
+            profile: crate::agents::resolve("claude").unwrap(),
         });
         assert!(out.question.is_none(), "the profile believed a half-drawn screen");
         assert_eq!(out.state, SessionState::Running);
@@ -142,7 +144,22 @@ mod tests {
             bell_pending: false,
             quiet_for: Duration::from_secs(30),
             screen: dialog(),
+            profile: crate::agents::resolve("claude").unwrap(),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
+    }
+
+    #[test]
+    fn a_profile_with_no_layer_b_sees_no_question_in_someone_elses_dialog() {
+        // Same settled, Claude-shaped screen as `a_settled_dialog_is_a_question_with_text`,
+        // but read by a profile that doesn't implement `question` — this proves
+        // `detect` actually consults `input.profile` rather than ignoring it.
+        let out = detect(DetectInput {
+            bell_pending: false,
+            quiet_for: Duration::from_millis(500),
+            screen: dialog(),
+            profile: crate::agents::resolve("codex").unwrap(),
+        });
+        assert!(out.question.is_none(), "codex has no layer B to read Claude's dialog with");
     }
 }

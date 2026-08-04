@@ -17,6 +17,7 @@ use super::model::{Session, SessionId, SessionState, TerminalError};
 use super::pty::{Chunk, Pty};
 use super::ring::Ring;
 use super::screen::Screen;
+use crate::agents::{self, Intent};
 
 /// How much raw output every session remembers — this is what xterm.js
 /// repaints itself from when it attaches.
@@ -65,9 +66,9 @@ pub struct Attached {
 
 pub enum Request {
     List(String, oneshot::Sender<Vec<Session>>),
-    /// The optional string is what the agent is started on. It is an argument
-    /// to the agent, not bytes written after the spawn — see `build_command`.
-    Create(String, Option<String>, oneshot::Sender<Result<Session, TerminalError>>),
+    /// Project, agent id and intent. The agent id is what settings asked for,
+    /// not necessarily what runs — see the `Create` arm and `agents::pick`.
+    Create(String, String, Intent, oneshot::Sender<Result<Session, TerminalError>>),
     Remove(SessionId, oneshot::Sender<()>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// Carries the id it is leaving, and not for symmetry: see the handler.
@@ -86,6 +87,9 @@ pub struct TerminalHandle(pub mpsc::Sender<Request>);
 
 struct Live {
     session: Session,
+    /// Which agent this session runs — layer B's own dialog reader comes
+    /// from here, not from a name hardcoded in `detect.rs`.
+    profile: &'static dyn agents::Profile,
     pty: Pty,
     ring: Ring,
     screen: Screen,
@@ -334,6 +338,7 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             bell_pending: live.bell_pending,
             quiet_for: live.last_output.elapsed(),
             screen: &lines,
+            profile: live.profile,
         });
         let before = (live.session.state, live.session.question.clone());
         live.session.apply(out.state, out.question);
@@ -387,24 +392,30 @@ fn handle(
             list.sort_by_key(|s| s.id);
             let _ = tx.send(list);
         }
-        Request::Create(project, prompt, tx) => {
+        Request::Create(project, agent, intent, tx) => {
+            let Some(profile) = agents::pick(&agent, std::env::var("PATH").ok().as_deref()) else {
+                let _ = tx.send(Err(TerminalError::NoAgent(agents::IDS.join(", "))));
+                return;
+            };
             let id = *next_id;
             *next_id += 1;
-            let dir = PathBuf::from(&project);
-            let spawned = Pty::spawn(
-                id,
-                "claude",
-                &dir,
-                prompt.as_deref(),
-                DEFAULT_COLS,
-                DEFAULT_ROWS,
-                chunks.clone(),
-            );
+            let launch = agents::Launch {
+                profile,
+                cwd: PathBuf::from(&project),
+                intent,
+                skills: agents::library::resolve(app),
+            };
+            let spawned = Pty::spawn(id, &launch, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
             let _ = tx.send(match spawned {
                 Ok(pty) => {
-                    let session = Session::new(id, "claude", &project, &project);
+                    // The name of what actually started, which is not always
+                    // the name that was asked for: `pick` falls back to an
+                    // installed agent, and the row in the panel is where that
+                    // becomes visible.
+                    let session = Session::new(id, profile.id(), &project, &project);
                     let live = Live {
                         session: session.clone(),
+                        profile,
                         pty,
                         ring: Ring::new(RING_CAP),
                         screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),

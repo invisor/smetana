@@ -3,12 +3,12 @@
 //! worker's shared channel. Mutable state still belongs to a single worker.
 
 use std::io::Read;
-use std::path::Path;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use tokio::sync::mpsc;
 
 use super::model::{SessionId, TerminalError};
+use crate::agents::Launch;
 
 /// One piece of a session's life, arriving at the worker from the reader thread.
 pub enum Chunk {
@@ -22,17 +22,18 @@ pub enum Chunk {
 /// the test — actually spawning a process is not covered by tests, the same
 /// as bd's calls aren't.
 ///
+/// What to run and what to say to it belongs to the agent's profile
+/// (`agents/`); the working directory and the terminal type belong to every
+/// agent alike and stay here.
+///
 /// An opening prompt travels as the agent's positional argument rather than as
 /// bytes written into the PTY afterwards. The agent takes a moment to come up,
 /// and anything sent into an input that is not reading yet is simply lost —
 /// there is no acknowledgement to wait for and no way to tell that it went. As
 /// an argument it is handed over by the OS before the process starts.
-pub fn build_command(agent: &str, cwd: &Path, prompt: Option<&str>) -> CommandBuilder {
-    let mut cmd = CommandBuilder::new(agent);
-    if let Some(prompt) = prompt {
-        cmd.arg(prompt);
-    }
-    cmd.cwd(cwd);
+pub fn build_command(launch: &Launch) -> CommandBuilder {
+    let mut cmd = launch.profile.command(launch);
+    cmd.cwd(&launch.cwd);
     cmd.env("TERM", "xterm-256color");
     cmd
 }
@@ -46,9 +47,7 @@ pub struct Pty {
 impl Pty {
     pub fn spawn(
         id: SessionId,
-        agent: &str,
-        cwd: &Path,
-        prompt: Option<&str>,
+        launch: &Launch,
         cols: u16,
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
@@ -67,8 +66,8 @@ impl Pty {
 
         let child = pair
             .slave
-            .spawn_command(build_command(agent, cwd, prompt))
-            .map_err(|e| TerminalError::Spawn(format!("{agent}: {e}")))?;
+            .spawn_command(build_command(launch))
+            .map_err(|e| TerminalError::Spawn(format!("{}: {e}", launch.profile.binary())))?;
 
         // The slave side must be dropped here, not kept alongside the master:
         // a PTY only signals EOF to the master's reader once every open
@@ -156,29 +155,43 @@ impl Pty {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::library::Skills;
+    use crate::agents::{self, Intent, Launch};
 
-    #[test]
-    fn the_command_is_the_agent_in_the_projects_directory() {
-        let cmd = build_command("claude", std::path::Path::new("/tmp/project"), None);
-        assert_eq!(cmd.get_argv(), &["claude"]);
-        assert_eq!(cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()), Some("/tmp/project".to_owned()));
+    fn launch(id: &str) -> Launch {
+        Launch {
+            profile: agents::resolve(id).unwrap(),
+            cwd: std::path::PathBuf::from("/tmp/project"),
+            intent: Intent::EditTask { id: "smetana-7".into(), title: "x y".into() },
+            skills: Skills {
+                smetana: std::path::PathBuf::from("/app/resources/smetana"),
+                superpowers: std::path::PathBuf::from("/app/resources/superpowers"),
+                superpowers_installed: true,
+            },
+        }
     }
 
-    /// An opening prompt is one argument however many spaces and quotes are in
-    /// it: there is no shell between us and the process to split it up again.
     #[test]
-    fn an_opening_prompt_is_a_single_argument_after_the_agent() {
-        let cmd = build_command("claude", std::path::Path::new("/tmp/project"), Some("Update bd issue \"x y\""));
-        assert_eq!(cmd.get_argv(), &["claude", "Update bd issue \"x y\""]);
+    fn the_binary_comes_from_the_profile() {
+        assert_eq!(build_command(&launch("claude")).get_argv()[0], "claude");
+        assert_eq!(build_command(&launch("codex")).get_argv()[0], "codex");
     }
 
     #[test]
-    fn the_terminal_is_declared_colour_capable() {
-        // Without TERM the agent decides colours are unsupported and sends
-        // plain text — and then there is nothing for screen.rs to parse and
-        // nothing for the profile to recognise.
-        let cmd = build_command("claude", std::path::Path::new("/tmp/project"), None);
-        let term = cmd.iter_extra_env_as_str().find(|(k, _)| *k == "TERM").map(|(_, v)| v.to_owned());
-        assert_eq!(term.as_deref(), Some("xterm-256color"));
+    fn every_agent_is_given_a_terminal_it_can_paint_in() {
+        for id in agents::IDS {
+            let cmd = build_command(&launch(id));
+            // `portable-pty` 0.9.0 has no `iter_env`; `get_env` reaches the
+            // same value.
+            let term = cmd.get_env("TERM").map(|v| v.to_string_lossy().into_owned());
+            assert_eq!(term.as_deref(), Some("xterm-256color"), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_prompt_is_an_argument_and_not_bytes_written_afterwards() {
+        let cmd = build_command(&launch("codex"));
+        let argv = cmd.get_argv();
+        assert_eq!(argv.last().unwrap().to_string_lossy(), "Update bd issue smetana-7 (\"x y\"): ");
     }
 }

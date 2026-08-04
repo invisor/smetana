@@ -63,6 +63,8 @@ pub enum TerminalError {
     Busy,
     #[error("the session did not answer in the time allowed")]
     Timeout,
+    #[error("no agent is installed: looked for {0}")]
+    NoAgent(String),
 }
 
 impl Session {
