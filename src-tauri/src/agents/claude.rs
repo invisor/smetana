@@ -44,11 +44,12 @@ impl Profile for Claude {
             cmd.arg("--plugin-dir");
             cmd.arg(&launch.skills.superpowers);
         }
-        let brainstorming = launch.skills.superpowers.join("skills/brainstorming");
         // Nothing is read from disk here: both plugins are loaded, so the
         // prompt names the skills and Claude Code fetches them on demand.
         let text = prompt::SkillText { filing: None, brainstorming: None };
-        if let Some(built) = prompt::build(&launch.intent, self.delivery(), &brainstorming, text) {
+        if let Some(built) =
+            prompt::build(&launch.intent, self.delivery(), &launch.skills, launch.facts.as_deref(), text)
+        {
             cmd.arg(built);
         }
         cmd
@@ -151,6 +152,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/project"),
             intent,
             skills: skills(superpowers_installed),
+            facts: None,
         }
     }
 

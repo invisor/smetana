@@ -4,6 +4,7 @@
 use std::fmt::Write;
 use std::path::Path;
 
+use super::library::Skills;
 use super::{Brainstorm, Intent, SkillDelivery, TaskDraft};
 
 /// The sentence that makes the agent talk the task through. It has to stand on
@@ -32,23 +33,56 @@ pub struct SkillText<'a> {
     pub brainstorming: Option<&'a str>,
 }
 
+/// What the agent is told to produce when a project has no configuration yet.
+/// The file's path is named here rather than left to the skill: a session that
+/// could not read the skill must still write to the right place.
+const SETUP: &str = "Work out what this project is made of and write .smetana/project.toml — \
+     the file Smetana reads before it runs anything here. Check the commands before you write \
+     them in, and ask me about anything the folder does not answer.";
+
 /// What the session opens on. `None` means nothing is imposed and the agent
 /// starts on an empty prompt.
 pub fn build(
     intent: &Intent,
     delivery: SkillDelivery,
-    brainstorming: &Path,
+    skills: &Skills,
+    facts: Option<&str>,
     text: SkillText,
 ) -> Option<String> {
+    let brainstorming = skills.superpowers.join("skills/brainstorming");
     match intent {
         Intent::Bare => None,
         // Deliberately unfinished: the agent is being told what to work on,
         // not what to change, and only the person knows the second half.
         Intent::EditTask { id, title } => Some(format!("Update bd issue {id} (\"{title}\"): ")),
         Intent::NewTask { brainstorm, draft } => {
-            Some(new_task(*brainstorm, draft, delivery, brainstorming, text))
+            Some(new_task(*brainstorm, draft, delivery, &brainstorming, text))
+        }
+        Intent::Setup => Some(setup(delivery, skills, facts)),
+    }
+}
+
+fn setup(delivery: SkillDelivery, skills: &Skills, facts: Option<&str>) -> String {
+    let mut out = String::from(SETUP);
+    out.push_str("\n\n");
+    match delivery {
+        SkillDelivery::PluginDir => {
+            out.push_str("Use the smetana:project-setup skill — it says what the file holds.");
+        }
+        SkillDelivery::Inline => {
+            let skill = skills.smetana.join("skills/project-setup/SKILL.md");
+            let _ = write!(
+                out,
+                "What the file holds is described at {} — read it first.",
+                skill.display()
+            );
         }
     }
+    if let Some(facts) = facts {
+        out.push_str("\n\n");
+        out.push_str(facts.trim_end());
+    }
+    out
 }
 
 /// What the person pinned, and what they left on Auto. Auto is said out loud
@@ -163,8 +197,12 @@ mod tests {
         Intent::NewTask { brainstorm, draft: draft() }
     }
 
-    fn path() -> PathBuf {
-        PathBuf::from("/app/resources/superpowers/skills/brainstorming")
+    fn skills() -> crate::agents::library::Skills {
+        crate::agents::library::Skills {
+            smetana: PathBuf::from("/app/resources/smetana"),
+            superpowers: PathBuf::from("/app/resources/superpowers"),
+            superpowers_installed: false,
+        }
     }
 
     const BRAINSTORMING: &str = "# Brainstorming\n\nAsk one question at a time.";
@@ -182,26 +220,26 @@ mod tests {
 
     #[test]
     fn a_bare_session_opens_on_nothing() {
-        assert!(build(&Intent::Bare, SkillDelivery::PluginDir, &path(), nothing()).is_none());
+        assert!(build(&Intent::Bare, SkillDelivery::PluginDir, &skills(), None, nothing()).is_none());
     }
 
     #[test]
     fn editing_an_issue_names_it_and_stops_mid_sentence() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::PluginDir, &path(), nothing()).unwrap();
+        let text = build(&intent, SkillDelivery::PluginDir, &skills(), None, nothing()).unwrap();
         assert_eq!(text, "Update bd issue smetana-7 (\"x y\"): ");
     }
 
     #[test]
     fn editing_an_issue_is_never_given_a_filing_skill() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::Inline, &path(), both()).unwrap();
+        let text = build(&intent, SkillDelivery::Inline, &skills(), None, both()).unwrap();
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
     }
 
     fn drafted(draft: TaskDraft) -> String {
         let intent = Intent::NewTask { brainstorm: Brainstorm::Off, draft };
-        build(&intent, SkillDelivery::PluginDir, &path(), nothing()).unwrap()
+        build(&intent, SkillDelivery::PluginDir, &skills(), None, nothing()).unwrap()
     }
 
     #[test]
@@ -250,7 +288,7 @@ mod tests {
         // so a leak of either into the Off arm would say nothing about the
         // process and still pass a substring check on that word alone.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            let text = build(&new_task(Brainstorm::Off), delivery, &path(), both()).unwrap();
+            let text = build(&new_task(Brainstorm::Off), delivery, &skills(), None, both()).unwrap();
             assert!(!text.contains(DISCUSS), "{delivery:?}: off must not carry the discussion prose");
             assert!(!text.contains(JUDGE), "{delivery:?}: off must not carry the judgement prose");
         }
@@ -262,7 +300,7 @@ mod tests {
         // from the PluginDir side of the same guarantee: filing applies to
         // every NewTask whatever the switch says.
         for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
-            let text = build(&new_task(mode), SkillDelivery::PluginDir, &path(), both()).unwrap();
+            let text = build(&new_task(mode), SkillDelivery::PluginDir, &skills(), None, both()).unwrap();
             assert!(text.contains("smetana:filing-a-task"), "{mode:?}");
             assert!(!text.contains(FILING), "{mode:?}: no registry should carry the skill body");
         }
@@ -274,7 +312,7 @@ mod tests {
         // question: an agent that files without discussion still has to file
         // it properly.
         for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
-            let text = build(&new_task(mode), SkillDelivery::Inline, &path(), both()).unwrap();
+            let text = build(&new_task(mode), SkillDelivery::Inline, &skills(), None, both()).unwrap();
             assert!(text.contains("The title says what needs doing"), "{mode:?}");
             assert!(!text.contains("smetana:filing-a-task"), "{mode:?}: no registry to name");
         }
@@ -283,13 +321,13 @@ mod tests {
     #[test]
     fn switched_on_a_plugin_dir_harness_is_told_the_skill_name() {
         let text =
-            build(&new_task(Brainstorm::On), SkillDelivery::PluginDir, &path(), nothing()).unwrap();
+            build(&new_task(Brainstorm::On), SkillDelivery::PluginDir, &skills(), None, nothing()).unwrap();
         assert!(text.contains("superpowers:brainstorming"));
     }
 
     #[test]
     fn switched_on_an_inline_harness_carries_the_whole_process() {
-        let text = build(&new_task(Brainstorm::On), SkillDelivery::Inline, &path(), both()).unwrap();
+        let text = build(&new_task(Brainstorm::On), SkillDelivery::Inline, &skills(), None, both()).unwrap();
         assert!(text.contains("Ask one question at a time."));
         assert!(
             !text.contains("superpowers:brainstorming"),
@@ -300,24 +338,68 @@ mod tests {
     #[test]
     fn on_inline_degrades_to_the_rule_when_the_skill_cannot_be_read() {
         let text =
-            build(&new_task(Brainstorm::On), SkillDelivery::Inline, &path(), nothing()).unwrap();
+            build(&new_task(Brainstorm::On), SkillDelivery::Inline, &skills(), None, nothing()).unwrap();
         assert!(text.contains("agree the design"), "the instruction survives a missing file");
     }
 
     #[test]
     fn auto_leaves_the_judgement_to_the_agent() {
         let text =
-            build(&new_task(Brainstorm::Auto), SkillDelivery::PluginDir, &path(), nothing()).unwrap();
+            build(&new_task(Brainstorm::Auto), SkillDelivery::PluginDir, &skills(), None, nothing()).unwrap();
         assert!(text.contains("more than one"), "auto states the test the agent applies");
     }
 
     #[test]
     fn auto_on_an_inline_harness_points_at_the_file_rather_than_pasting_it() {
-        let text = build(&new_task(Brainstorm::Auto), SkillDelivery::Inline, &path(), both()).unwrap();
+        let text = build(&new_task(Brainstorm::Auto), SkillDelivery::Inline, &skills(), None, both()).unwrap();
         assert!(text.contains("/app/resources/superpowers/skills/brainstorming/SKILL.md"));
         assert!(
             !text.contains("Ask one question at a time."),
             "auto must not pay for 10 KB the agent may not use"
         );
+    }
+
+    const FACTS: &str = "- backend — npm\n    npm run test\n";
+
+    #[test]
+    fn setting_a_project_up_carries_the_survey_and_names_the_file_to_write() {
+        let text =
+            build(&Intent::Setup, SkillDelivery::PluginDir, &skills(), Some(FACTS), nothing())
+                .expect("a setup session opens on something");
+        assert!(text.contains(".smetana/project.toml"), "{text}");
+        assert!(text.contains("npm run test"), "the survey reaches the agent: {text}");
+    }
+
+    #[test]
+    fn a_plugin_dir_harness_is_told_the_setup_skill_by_name() {
+        let text =
+            build(&Intent::Setup, SkillDelivery::PluginDir, &skills(), Some(FACTS), nothing())
+                .expect("builds");
+        assert!(text.contains("smetana:project-setup"), "{text}");
+    }
+
+    #[test]
+    fn an_inline_harness_is_given_the_setup_skill_s_path_rather_than_its_body() {
+        // The same choice `Auto` already makes for brainstorming: a path costs
+        // one line, the body costs kilobytes the session may never need.
+        let text = build(
+            &Intent::Setup,
+            SkillDelivery::Inline,
+            &skills(),
+            Some(FACTS),
+            SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING) },
+        )
+        .expect("builds");
+        assert!(text.contains("/app/resources/smetana/skills/project-setup/SKILL.md"), "{text}");
+        assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
+    }
+
+    #[test]
+    fn a_setup_session_survives_a_survey_that_found_nothing() {
+        // `render` always produces text, but a caller that could not run the
+        // survey at all passes None, and the instruction still has to stand.
+        let text = build(&Intent::Setup, SkillDelivery::PluginDir, &skills(), None, nothing())
+            .expect("builds");
+        assert!(text.contains(".smetana/project.toml"), "{text}");
     }
 }

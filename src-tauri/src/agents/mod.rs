@@ -80,6 +80,10 @@ pub enum Intent {
         id: String,
         title: String,
     },
+    /// Work out what this project is made of and write
+    /// `.smetana/project.toml`. Started from the dialog a person gets when
+    /// they add a project, and from the project row afterwards.
+    Setup,
 }
 
 /// Everything a spawn needs before any agent has looked at it.
@@ -88,6 +92,10 @@ pub struct Launch {
     pub cwd: PathBuf,
     pub intent: Intent,
     pub skills: library::Skills,
+    /// What a survey of the project found, already rendered. Only a `Setup`
+    /// intent has any, and it is read by the caller for the same reason skill
+    /// text is: `prompt.rs` stays pure and the disk stays outside it.
+    pub facts: Option<String>,
 }
 
 pub trait Profile: Sync {
@@ -258,6 +266,12 @@ mod tests {
             }
             other => panic!("expected EditTask, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_setup_intent_deserializes_from_the_front_ends_json() {
+        let intent: Intent = serde_json::from_str(r#"{"kind":"setup"}"#).expect("deserializes");
+        assert!(matches!(intent, Intent::Setup));
     }
 
     #[test]

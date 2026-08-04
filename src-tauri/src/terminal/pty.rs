@@ -229,6 +229,7 @@ mod tests {
                 superpowers: std::path::PathBuf::from("/app/resources/superpowers"),
                 superpowers_installed: true,
             },
+            facts: None,
         }
     }
 

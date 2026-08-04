@@ -4,7 +4,7 @@
 //! unpredictable length must not block one another.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::Engine;
@@ -399,11 +399,17 @@ fn handle(
             };
             let id = *next_id;
             *next_id += 1;
+            // Only a Setup session pays for the walk, and it happens here
+            // rather than in the front end so that what the agent is told is
+            // what the disk says at the moment the session starts.
+            let facts = matches!(intent, agents::Intent::Setup)
+                .then(|| crate::runs::survey::render(&crate::runs::survey::run(Path::new(&project))));
             let launch = agents::Launch {
                 profile,
                 cwd: PathBuf::from(&project),
                 intent,
                 skills: agents::library::resolve(app),
+                facts,
             };
             let spawned = Pty::spawn(id, &launch, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
             let _ = tx.send(match spawned {

@@ -46,12 +46,13 @@ impl Profile for Codex {
             filing_a_task.then(|| read_skill(&launch.skills.smetana, "filing-a-task")).flatten();
         let brainstorming_text =
             discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
-        let brainstorming = launch.skills.superpowers.join("skills/brainstorming");
         let text = prompt::SkillText {
             filing: filing.as_deref(),
             brainstorming: brainstorming_text.as_deref(),
         };
-        if let Some(built) = prompt::build(&launch.intent, self.delivery(), &brainstorming, text) {
+        if let Some(built) =
+            prompt::build(&launch.intent, self.delivery(), &launch.skills, launch.facts.as_deref(), text)
+        {
             cmd.arg(built);
         }
         cmd
@@ -84,6 +85,7 @@ mod tests {
                 superpowers: resources("superpowers"),
                 superpowers_installed: false,
             },
+            facts: None,
         }
     }
 
