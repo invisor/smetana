@@ -1069,4 +1069,22 @@ mod tests {
             assert_eq!(settings.agent, id);
         }
     }
+
+    /// A field added to `Settings` and `ResolvedSettings` but not wired into
+    /// `parse`, `resolve` and `merge` reads as `"claude"` forever no matter
+    /// what the file says — the struct-alone tests above cannot see that,
+    /// since they never call any of the three. This one walks the real path a
+    /// hand-written file takes: disk, to the front end, and back to disk.
+    #[test]
+    fn a_chosen_agent_does_not_quietly_become_claude_again() {
+        let file = settings_of(r#"{"version":1,"agent":"codex"}"#);
+        assert_eq!(file.agent, "codex", "parse must read it off the disk");
+
+        let resolved = resolve(&file, None);
+        assert_eq!(resolved.agent, "codex", "resolve must carry it to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.agent, "codex", "merge must carry it back into the file");
+    }
 }
