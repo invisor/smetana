@@ -183,16 +183,28 @@ mod tests {
 
     #[test]
     fn switched_off_it_asks_for_no_discussion() {
-        let text =
-            build(&new_task(Brainstorm::Off), SkillDelivery::PluginDir, &path(), nothing()).unwrap();
-        assert!(!text.contains("brainstorm"), "off must not mention the process at all");
+        // Checking against the constants themselves, not a retyped substring,
+        // is what keeps this test from drifting away from the prose it
+        // guards: neither DISCUSS nor JUDGE contains the word "brainstorm",
+        // so a leak of either into the Off arm would say nothing about the
+        // process and still pass a substring check on that word alone.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = build(&new_task(Brainstorm::Off), delivery, &path(), both()).unwrap();
+            assert!(!text.contains(DISCUSS), "{delivery:?}: off must not carry the discussion prose");
+            assert!(!text.contains(JUDGE), "{delivery:?}: off must not carry the judgement prose");
+        }
     }
 
     #[test]
     fn a_plugin_dir_harness_is_told_the_filing_skill_by_name() {
-        let text =
-            build(&new_task(Brainstorm::Off), SkillDelivery::PluginDir, &path(), nothing()).unwrap();
-        assert!(text.contains("smetana:filing-a-task"));
+        // Mirrors an_inline_harness_carries_the_filing_skill_whatever_the_switch_says
+        // from the PluginDir side of the same guarantee: filing applies to
+        // every NewTask whatever the switch says.
+        for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
+            let text = build(&new_task(mode), SkillDelivery::PluginDir, &path(), both()).unwrap();
+            assert!(text.contains("smetana:filing-a-task"), "{mode:?}");
+            assert!(!text.contains(FILING), "{mode:?}: no registry should carry the skill body");
+        }
     }
 
     #[test]
