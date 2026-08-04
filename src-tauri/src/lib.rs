@@ -1,3 +1,4 @@
+mod agents;
 mod files;
 mod git;
 mod project;
