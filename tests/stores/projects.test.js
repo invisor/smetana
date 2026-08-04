@@ -135,8 +135,9 @@ describe('addProject', () => {
   it('adds the chosen folder and moves into it', async () => {
     ipc.on('plugin:dialog|open', '/new')
 
-    await projects.addProject()
+    const added = await projects.addProject()
 
+    expect(added).toBe('/new')
     expect(settings.settings.openProjects).toEqual(['/new'])
     expect(settings.settings.activeProject).toBe('/new')
   })
@@ -145,8 +146,9 @@ describe('addProject', () => {
     ipc.on('plugin:dialog|open', '/repository/src/stores')
     ipc.on('project_root', '/repository')
 
-    await projects.addProject()
+    const added = await projects.addProject()
 
+    expect(added).toBe('/repository')
     expect(settings.settings.openProjects).toEqual(['/repository'])
     expect(ipc.calls('project_root')).toEqual([{ path: '/repository/src/stores' }])
   })
@@ -154,8 +156,9 @@ describe('addProject', () => {
   it('cancelling the dialog touches nothing', async () => {
     ipc.on('plugin:dialog|open', null)
 
-    await projects.addProject()
+    const added = await projects.addProject()
 
+    expect(added).toBeNull()
     expect(settings.settings.openProjects).toEqual([])
     expect(ipc.calls('tracker_set_project')).toHaveLength(0)
   })
@@ -163,7 +166,7 @@ describe('addProject', () => {
   it('a failed dialog does not break the store', async () => {
     ipc.fail('plugin:dialog|open', new Error('the dialog did not open'))
 
-    await expect(projects.addProject()).resolves.toBeUndefined()
+    await expect(projects.addProject()).resolves.toBeNull()
     expect(settings.settings.openProjects).toEqual([])
   })
 
@@ -176,8 +179,9 @@ describe('addProject', () => {
     tabs.onUnsaved(asked)
     ipc.on('plugin:dialog|open', '/a')
 
-    await projects.addProject()
+    const added = await projects.addProject()
 
+    expect(added).toBe('/a')
     expect(asked).not.toHaveBeenCalled()
     expect(ipc.calls('tracker_set_project')).toHaveLength(0)
     expect(settings.settings.openProjects).toEqual(['/a'])
@@ -213,10 +217,11 @@ describe('addProject', () => {
     const switchPromise = projects.switchTo('/b')
 
     releaseDialog()
-    await addPromise
+    const added = await addPromise
 
     /* moving is still up (switchTo is stuck on the held tracker_set_project):
        the repeat check must have cancelled the addition. */
+    expect(added).toBeNull()
     expect(settings.settings.openProjects).toEqual(['/a'])
 
     releaseSetProject()
@@ -230,8 +235,9 @@ describe('addProject', () => {
     settings.settings.activeProject = '/a'
     ipc.on('plugin:dialog|open', '/b')
 
-    await projects.addProject()
+    const added = await projects.addProject()
 
+    expect(added).toBe('/b')
     expect(settings.settings.openProjects).toEqual(['/a', '/b'])
     expect(settings.settings.activeProject).toBe('/b')
   })

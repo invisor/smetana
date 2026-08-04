@@ -19,10 +19,14 @@ const props = defineProps({
      directory the window is pointed at, and the list below shows that
      project's sessions only. Off by default, since the row means the same
      thing whether or not anything can be started from it. */
-  canAddAgent: { type: Boolean, default: false }
+  canAddAgent: { type: Boolean, default: false },
+  /* Only ever about the active row, for the same reason canAddAgent is: the
+     configuration is read on switching projects, and probing every row would
+     be a command per project for a mark nobody is looking at. */
+  needsSetup: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'remove', 'add-agent'])
+const emit = defineEmits(['select', 'remove', 'add-agent', 'setup'])
 
 /* Hover has to be per row, and useInteractive tracks one control — so the
    list keeps the hovered path itself and asks useInteractive for nothing.
@@ -95,6 +99,9 @@ const empty = computed(() => props.projects.length === 0)
         <span :style="nameStyle">{{ p.name }}</span>
         <Tooltip v-if="!p.tracked" label="No bd tracker here" side="right">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
+        </Tooltip>
+        <Tooltip v-if="needsSetup && p.path === activePath" label="Not set up for runs" side="right">
+          <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
         </Tooltip>
         <!-- Before the remove button, not after it: removal keeps the row's
              last position wherever it appears, so a click aimed at it never

@@ -107,21 +107,26 @@ async function projectRoot(path) {
   }
 }
 
+/* Returns the added path on every success, and null on every cancellation —
+   the picker closed with nothing chosen, a move was already under way, or the
+   person declined to lose unsaved changes. The caller (DesktopApp's
+   onAddProject) tells "added" from "cancelled" by this value alone, so a bare
+   return here would read as a cancellation. */
 export async function addProject() {
-  if (moving) return
+  if (moving) return null
   let picked = null
   try {
     picked = await open({ directory: true, multiple: false, title: 'Add project' })
   } catch (err) {
     console.error('[projects] picking a folder failed:', err)
-    return
+    return null
   }
-  if (!picked) return
+  if (!picked) return null
   const path = await projectRoot(picked)
   /* The dialog itself takes as long as it takes — a move may have started and
      finished while the person was picking a folder, so the flag is checked
      again after it returns, not only on the way into the function. */
-  if (moving) return
+  if (moving) return null
 
   moving = true
   try {
@@ -129,7 +134,7 @@ export async function addProject() {
        active, the tabs stay put and the question would be about nothing. It
        still comes before flushPending: the departing project's state must not
        land on disk before the person has decided whether to move at all. */
-    if (path !== settings.activeProject && !(await confirmUnsaved())) return
+    if (path !== settings.activeProject && !(await confirmUnsaved())) return null
     /* First we flush the departing project's state and only then change the
        list: a write started after the row was added would carry the old
        project's state under the new list. The order here must not depend on
@@ -137,8 +142,9 @@ export async function addProject() {
        for that itself. */
     await flushPending()
     if (!settings.openProjects.includes(path)) settings.openProjects.push(path)
-    if (path === settings.activeProject) return
+    if (path === settings.activeProject) return path
     await moveTo(path)
+    return path
   } finally {
     moving = false
   }

@@ -153,6 +153,13 @@ export function installMockBackend() {
     if (command === 'tracker_probe') {
       return MOCK_PROJECTS.map((path) => ({ path, tracked: path === MOCK_PROJECTS[0] }))
     }
+    /* The first mock project is set up, the second is not: without one of each
+       there is nowhere to see either state under npm run dev. */
+    if (command === 'project_config') {
+      return payload?.project === MOCK_PROJECTS[0]
+        ? { state: 'ok', config: { project: { repos: ['.'] } } }
+        : { state: 'missing' }
+    }
     /* The stub knows nothing about the filesystem and will not invent
        anything: the path comes back as is. The real back end would climb from
        here to the tracked repository's root, and that is the only way the

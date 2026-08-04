@@ -16,6 +16,7 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
+import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Modal from '../components/overlays/Modal.vue'
@@ -56,6 +57,7 @@ import {
   switchTo
 } from '../stores/projects.js'
 import { gitState, loadHead } from '../stores/git.js'
+import { loadConfig, needsSetup, runsState } from '../stores/runs.js'
 import { inspector, logLines, scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
@@ -221,6 +223,37 @@ async function newAgent() {
   }
 }
 
+/* The project whose setup is being offered. Null when the dialog is closed —
+   it is asked about one project at a time, and the path is what the session
+   needs. */
+const setupFor = ref(null)
+const settingUp = ref(false)
+
+/* Adding a project is a read until this point: the dialog is where it becomes
+   a session and a file in somebody's repository. */
+const onAddProject = async () => {
+  const added = await addProject()
+  if (!added) return
+  await loadConfig(added)
+  if (needsSetup.value) setupFor.value = added
+}
+
+const startSetup = async () => {
+  const path = setupFor.value
+  if (!path || settingUp.value) return
+  settingUp.value = true
+  try {
+    project.sideTab = 'agents'
+    project.activeTab = 'terminal'
+    await createSession(path, { kind: 'setup' })
+    setupFor.value = null
+  } catch {
+    // already reported by createSession; the dialog stays open
+  } finally {
+    settingUp.value = false
+  }
+}
+
 /* Picking an agent's row is a request to look at it, not just to select it:
    the terminal tab comes forward the same way it does for a freshly created
    agent. No await here — selection is local state, and TerminalView attaches
@@ -273,6 +306,11 @@ const catchUp = async () => {
      files: when focus returns. We do not await it: the bar updates on its own,
      and the pass over the tabs is not tied to it. */
   loadHead(activePath.value)
+  /* The setup session writes .smetana/project.toml from outside this window,
+     exactly like an agent changing a branch or a file — window focus is how
+     this app learns about all of those. Not awaited, for the same reason
+     loadHead above is not: the mark updates on its own. */
+  loadConfig(activePath.value)
 
   const open = [...project.openTabs]
   if (!open.length) return
@@ -691,6 +729,7 @@ watch(
 watch(activePath, (path) => {
   loadSessions(path)
   loadHead(path)
+  loadConfig(path)
 })
 
 /* What stands in the scope bar: the chosen project's name and its branch. A
@@ -871,16 +910,18 @@ const toastStackStyle = {
               size="sm"
               @click="refreshTree"
             />
-            <IconButton icon="plus" label="Add project" size="sm" @click="addProject" />
+            <IconButton icon="plus" label="Add project" size="sm" @click="onAddProject" />
           </template>
           <div :style="sidebarStyle">
             <ProjectList
               :projects="projectRows"
               :active-path="activePath"
               :can-add-agent="project.sideTab === 'agents'"
+              :needs-setup="needsSetup"
               @select="switchTo"
               @remove="removeProject"
               @add-agent="newAgent"
+              @setup="setupFor = $event"
             />
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
@@ -950,6 +991,13 @@ const toastStackStyle = {
           @close="newTaskOpen = false"
           @submit="submitNewTask"
         />
+        <SetupProjectModal
+          :open="!!setupFor"
+          :name="setupFor ? basenameOf(setupFor) : ''"
+          :busy="settingUp"
+          @close="setupFor = null"
+          @confirm="startSetup"
+        />
         <Modal
           v-if="unsaved"
           :open="true"
@@ -996,7 +1044,7 @@ const toastStackStyle = {
             </Button>
           </template>
           <template v-else-if="trackerState.health.state === 'no-project'" #action>
-            <Button variant="primary" size="sm" @click="addProject">Add project…</Button>
+            <Button variant="primary" size="sm" @click="onAddProject">Add project…</Button>
           </template>
         </EmptyState>
         <KanbanBoard
