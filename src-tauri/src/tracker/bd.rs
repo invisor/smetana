@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
-use super::model::{ColumnDef, Issue, IssuePatch, NewIssue, TrackerError};
+use super::model::{ColumnDef, Issue, IssuePatch, TrackerError};
 
 /// The column order comes from bd's categories: available first, then in
 /// progress, then frozen, then done.
@@ -66,30 +66,6 @@ pub fn parse_version(stdout: &str) -> Option<String> {
         .skip_while(|w| *w != "version")
         .nth(1)
         .map(str::to_string)
-}
-
-/// The title travels in the `--title` flag, not as a positional argument.
-/// There is no shell here and injection is impossible, but an issue named
-/// "-n 5" is entirely reachable: bd checks a positional title for a leading
-/// dash and refuses to create it, even after `--` (verified on bd 1.1.2:
-/// `title "-n 5" looks like a flag`). A flag's value goes through no such check
-/// and is taken as is.
-pub fn create_args(new: &NewIssue) -> Vec<String> {
-    let mut args = vec![
-        "create".to_string(),
-        "--json".to_string(),
-        "--title".to_string(),
-        new.title.clone(),
-        "-t".to_string(),
-        new.issue_type.clone(),
-        "-p".to_string(),
-        new.priority.to_string(),
-    ];
-    if let Some(description) = &new.description {
-        args.push("-d".into());
-        args.push(description.clone());
-    }
-    args
 }
 
 /// `--` before the identifier: bd parses everything after it as a positional
@@ -230,10 +206,6 @@ impl Bd {
                 ])
                 .await?,
         )
-    }
-
-    pub async fn create(&self, new: &NewIssue) -> Result<Issue, TrackerError> {
-        self.one(create_args(new)).await
     }
 
     /// Sets up a tracker in the directory. We do not parse the output: only
@@ -379,16 +351,6 @@ mod tests {
     #[test]
     fn deleting_asks_for_the_deletion_and_not_for_a_preview() {
         assert_eq!(delete_args("smetana-1"), vec!["delete", "-f", "--", "smetana-1"]);
-    }
-
-    /// bd has to take a title with a leading dash as a title, not as a flag:
-    /// as a positional argument it cannot do that even after `--`.
-    #[test]
-    fn the_title_travels_as_a_flag_not_as_a_positional_argument() {
-        let new = NewIssue { title: "-n 5".into(), issue_type: "task".into(), priority: 2,
-            description: None };
-        assert_eq!(create_args(&new),
-            vec!["create", "--json", "--title", "-n 5", "-t", "task", "-p", "2"]);
     }
 
     #[test]

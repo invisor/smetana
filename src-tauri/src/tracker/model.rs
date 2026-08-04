@@ -95,15 +95,6 @@ impl Delta {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct NewIssue {
-    pub title: String,
-    pub issue_type: String,
-    pub priority: i64,
-    #[serde(default)]
-    pub description: Option<String>,
-}
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct IssuePatch {
     #[serde(default)]

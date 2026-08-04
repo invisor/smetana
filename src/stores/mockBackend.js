@@ -4,7 +4,7 @@
 
    This is a stub for browser mode, not a second back end: it answers read
    commands (snapshot/resync/health, settings) and stores nothing between calls.
-   Writes to the tracker (tracker_create/update/close/reopen and anything else
+   Writes to the tracker (tracker_update/close/reopen and anything else
    not listed here) have to fail loudly rather than answer with a plausible but
    invented issue — otherwise a "write" in the browser would look like it worked
    while silently doing nothing. */
@@ -213,7 +213,7 @@ export function installMockBackend() {
     /* Detach and resize change nothing on disk and have nothing to lie
        about. */
     if (command === 'terminal_detach' || command === 'terminal_resize') return null
-    // Any write command (tracker_create/update/close/reopen, files_write, and
+    // Any write command (tracker_update/close/reopen, files_write, and
     // whatever appears later) has to reject explicitly rather than silently
     // return a plausible but foreign issue — otherwise a "write" in the browser
     // would look like it worked while doing nothing.

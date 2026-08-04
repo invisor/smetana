@@ -9,7 +9,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 use crate::project;
 
 use super::bd::Bd;
-use super::model::{Delta, Health, HealthState, Issue, IssuePatch, NewIssue, Snapshot, TrackerError};
+use super::model::{Delta, Health, HealthState, Issue, IssuePatch, Snapshot, TrackerError};
 use super::store::Store;
 use super::watcher::{self, WatchEvent};
 
@@ -30,7 +30,6 @@ pub enum Request {
     SetProject(Option<PathBuf>, oneshot::Sender<Snapshot>),
     InitTracker(oneshot::Sender<Result<Snapshot, TrackerError>>),
     Resync(oneshot::Sender<Result<Snapshot, TrackerError>>),
-    Create(NewIssue, oneshot::Sender<Result<Issue, TrackerError>>),
     Update(String, IssuePatch, oneshot::Sender<Result<Issue, TrackerError>>),
     Close(String, Option<String>, oneshot::Sender<Result<Issue, TrackerError>>),
     Reopen(String, oneshot::Sender<Result<Issue, TrackerError>>),
@@ -429,14 +428,6 @@ async fn handle(
                 None => Err(no_tracker(health)),
             };
             let _ = reply.send(result.map(|()| store.snapshot()));
-            false
-        }
-        Request::Create(new, reply) => {
-            let result = match tracked(current) {
-                Some(bd) => bd.create(&new).await,
-                None => Err(no_tracker(health)),
-            };
-            let _ = reply.send(finish(app, store, result));
             false
         }
         Request::Update(id, patch, reply) => {

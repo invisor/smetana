@@ -37,7 +37,6 @@ import {
 } from '../stores/terminals.js'
 import {
   boardColumns,
-  createIssue,
   deleteIssue,
   initTracker,
   issueById,
@@ -215,7 +214,7 @@ onMounted(initTerminals)
    unhandled-rejection warning from repeating what the store already said. */
 async function newAgent() {
   try {
-    await createSession(activePath.value)
+    await createSession(activePath.value, { kind: 'bare' })
     project.activeTab = 'terminal'
   } catch {
     // already reported — see comment above
@@ -374,14 +373,22 @@ const submitAnswer = async (id, option) => {
   }
 }
 
-const submitNewTask = async (issue) => {
+/* Filing a task is an agent's job, not a write from this window: the point of
+   the dialog is to hand the work over with enough context, and only something
+   that has read the repository can turn four sentences into a task worth
+   picking up. The card appears when the agent has run bd create — through the
+   watcher, the same as any other change made outside this window. */
+const submitNewTask = async ({ brainstorm, ...draft }) => {
+  const path = activePath.value
+  if (!path) return
   creating.value = true
+  project.sideTab = 'agents'
+  project.activeTab = 'terminal'
   try {
-    const created = await createIssue(issue)
+    await createSession(path, { kind: 'newTask', brainstorm, draft })
     newTaskOpen.value = false
-    project.selectedTask = created.id
   } catch {
-    // the message already sits in trackerState.lastError
+    // already reported by the store; the dialog stays open with the text in it
   } finally {
     creating.value = false
   }
@@ -446,18 +453,13 @@ const deleteTask = async (id) => {
   }
 }
 
-/* Handing an issue to an agent. The prompt names the issue by id and quotes
-   its title: the id is what bd is driven by, and the title is what tells the
-   person reading the terminal which one it is. The rest of the sentence is
-   deliberately left unfinished — the agent is being told what to work on, not
-   what to change, and only the person knows the second half. */
 const askAgentToEdit = async (issue) => {
   const path = activePath.value
   if (!path) return
   project.sideTab = 'agents'
   project.activeTab = 'terminal'
   try {
-    await createSession(path, `Update bd issue ${issue.id} ("${issue.title}"): `)
+    await createSession(path, { kind: 'editTask', id: issue.id, title: issue.title })
   } catch {
     // already reported — see newAgent above
   }

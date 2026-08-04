@@ -57,7 +57,6 @@ pub fn run() {
       tracker::commands::tracker_health,
       tracker::commands::tracker_snapshot,
       tracker::commands::tracker_resync,
-      tracker::commands::tracker_create,
       tracker::commands::tracker_update,
       tracker::commands::tracker_close,
       tracker::commands::tracker_reopen,

@@ -246,10 +246,6 @@ async function write(id, optimistic, run) {
   }
 }
 
-export function createIssue(issue) {
-  return write(null, null, () => invoke('tracker_create', { issue }))
-}
-
 export function updateIssue(id, patch) {
   const optimistic = {}
   if (patch.title !== undefined) optimistic.title = patch.title

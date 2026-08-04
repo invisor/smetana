@@ -1,7 +1,7 @@
 use tauri::State;
 use tokio::sync::oneshot;
 
-use super::model::{Health, Issue, IssuePatch, NewIssue, Snapshot, TrackerError};
+use super::model::{Health, Issue, IssuePatch, Snapshot, TrackerError};
 use super::service::{Request, TrackerHandle};
 
 /// The commands are deliberately thin: all they do is put a request on the
@@ -36,14 +36,6 @@ pub async fn tracker_snapshot(handle: State<'_, TrackerHandle>) -> Result<Snapsh
 #[tauri::command]
 pub async fn tracker_resync(handle: State<'_, TrackerHandle>) -> Result<Snapshot, TrackerError> {
     ask(&handle, Request::Resync).await?
-}
-
-#[tauri::command]
-pub async fn tracker_create(
-    handle: State<'_, TrackerHandle>,
-    issue: NewIssue,
-) -> Result<Issue, TrackerError> {
-    ask(&handle, |tx| Request::Create(issue, tx)).await?
 }
 
 #[tauri::command]
