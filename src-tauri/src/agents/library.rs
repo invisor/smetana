@@ -51,7 +51,7 @@ pub fn resolve(app: &AppHandle) -> Skills {
         .is_some_and(|json| has_superpowers(&json));
 
     Skills {
-        smetana: resources.join("resources/skills/smetana"),
+        smetana: resources.join("resources/smetana"),
         superpowers: resources.join("resources/superpowers"),
         superpowers_installed: installed,
     }
@@ -96,5 +96,29 @@ mod tests {
         assert!(!has_superpowers("not json at all"));
         assert!(!has_superpowers("{}"));
         assert!(!has_superpowers(r#"{"plugins":[]}"#));
+    }
+
+    #[test]
+    fn read_skill_joins_root_and_name_under_a_shared_skills_directory() {
+        // Both roots `resolve` hands out nest each skill under `skills/<name>/SKILL.md`
+        // — the vendored superpowers copy genuinely does, and `smetana` is laid out
+        // to match it. This test fails if the `skills` segment is dropped from the join.
+        let root = std::env::temp_dir().join(format!(
+            "smetana-library-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        let skill_dir = root.join("skills").join("filing-a-task");
+        std::fs::create_dir_all(&skill_dir).expect("create fake skill directory");
+        std::fs::write(skill_dir.join("SKILL.md"), "filing-a-task content")
+            .expect("write fake SKILL.md");
+
+        assert_eq!(read_skill(&root, "filing-a-task"), Some("filing-a-task content".to_string()));
+        assert_eq!(read_skill(&root, "no-such-skill"), None);
+
+        std::fs::remove_dir_all(&root).expect("remove temp dir for the fake skill root");
     }
 }

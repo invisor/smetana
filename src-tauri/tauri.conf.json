@@ -39,7 +39,7 @@
     "resources": [
       "binaries/LICENSE-bd",
       "resources/superpowers/**/*",
-      "resources/skills/**/*"
+      "resources/smetana/**/*"
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
