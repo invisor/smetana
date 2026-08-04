@@ -36,7 +36,11 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/bd"],
-    "resources": ["binaries/LICENSE-bd"],
+    "resources": [
+      "binaries/LICENSE-bd",
+      "resources/superpowers/**/*",
+      "resources/skills/**/*"
+    ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
