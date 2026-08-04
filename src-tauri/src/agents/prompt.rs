@@ -51,6 +51,39 @@ pub fn build(
     }
 }
 
+/// What the person pinned, and what they left on Auto. Auto is said out loud
+/// rather than left to silence: an agent told nothing about the type would
+/// have to invent one anyway, but would not know that inventing it was its
+/// job rather than a gap in what it was told.
+fn fields(draft: &TaskDraft) -> String {
+    let mut given: Vec<String> = Vec::new();
+    let mut auto: Vec<&str> = Vec::new();
+    match &draft.issue_type {
+        Some(kind) => given.push(format!("type {kind}")),
+        None => auto.push("type"),
+    }
+    match draft.priority {
+        Some(priority) => given.push(format!("priority P{priority}")),
+        None => auto.push("priority"),
+    }
+
+    let mut out = String::new();
+    if !given.is_empty() {
+        let _ = write!(out, "File it with {}.", given.join(" and "));
+    }
+    if !auto.is_empty() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let _ = write!(
+            out,
+            "Decide the {} yourself, from what is written above.",
+            auto.join(" and the ")
+        );
+    }
+    out
+}
+
 fn new_task(
     brainstorm: Brainstorm,
     draft: &TaskDraft,
@@ -59,16 +92,11 @@ fn new_task(
     text: SkillText,
 ) -> String {
     let mut out = String::new();
-    out.push_str("File a new task in this project's bd tracker.\n\n");
-    let _ = writeln!(out, "Title: {}", draft.title);
-    let _ = writeln!(out, "Type: {}", draft.issue_type);
-    let _ = writeln!(out, "Priority: P{}", draft.priority);
-    let _ = writeln!(
-        out,
-        "Description: {}",
-        draft.description.as_deref().unwrap_or("(none given)")
-    );
-    out.push('\n');
+    out.push_str("File a new task in this project's bd tracker. This is what needs doing:\n\n");
+    out.push_str(draft.text.trim());
+    out.push_str("\n\n");
+    out.push_str(&fields(draft));
+    out.push_str("\n\n");
 
     // How to file one properly is not part of the brainstorming question: an
     // agent that files without any discussion still has to file it well. A
@@ -125,10 +153,9 @@ mod tests {
 
     fn draft() -> TaskDraft {
         TaskDraft {
-            title: "Swap the red for green".into(),
-            issue_type: "bug".into(),
-            priority: 2,
-            description: None,
+            text: "Swap the red for green".into(),
+            issue_type: Some("bug".into()),
+            priority: Some(2),
         }
     }
 
@@ -172,13 +199,47 @@ mod tests {
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
     }
 
+    fn drafted(draft: TaskDraft) -> String {
+        let intent = Intent::NewTask { brainstorm: Brainstorm::Off, draft };
+        build(&intent, SkillDelivery::PluginDir, &path(), nothing()).unwrap()
+    }
+
     #[test]
-    fn a_draft_reaches_the_agent_field_by_field() {
-        let text =
-            build(&new_task(Brainstorm::Off), SkillDelivery::PluginDir, &path(), nothing()).unwrap();
-        assert!(text.contains("Swap the red for green"));
-        assert!(text.contains("bug"));
-        assert!(text.contains("P2"));
+    fn the_persons_own_words_reach_the_agent_whole() {
+        let text = drafted(TaskDraft {
+            text: "  The board flashes twice.\n\nIt should flash once.  ".into(),
+            ..draft()
+        });
+        // Whole, including the blank line: what a person typed into a
+        // multi-line field is one piece of prose, not a title with an
+        // afterthought, and only the trailing whitespace is ours to drop.
+        assert!(text.contains("The board flashes twice.\n\nIt should flash once.\n\n"));
+        assert!(!text.contains("  The board"), "the leading padding is not the person's text");
+    }
+
+    #[test]
+    fn a_pinned_type_and_priority_are_stated_as_settled() {
+        let text = drafted(draft());
+        assert!(text.contains("File it with type bug and priority P2."), "{text}");
+        assert!(!text.contains("Decide the"), "nothing is left to the agent here");
+    }
+
+    #[test]
+    fn auto_hands_the_field_to_the_agent_by_name() {
+        // Both on Auto, then one of each: an agent told nothing about a field
+        // would still have to choose, and would not know that choosing was
+        // its job — so every combination says which fields are its to decide.
+        let both = drafted(TaskDraft { issue_type: None, priority: None, ..draft() });
+        assert!(both.contains("Decide the type and the priority yourself"), "{both}");
+        assert!(!both.contains("File it with"), "nothing was pinned");
+
+        let typed = drafted(TaskDraft { priority: None, ..draft() });
+        assert!(typed.contains("File it with type bug."), "{typed}");
+        assert!(typed.contains("Decide the priority yourself"), "{typed}");
+
+        let prioritised = drafted(TaskDraft { issue_type: None, ..draft() });
+        assert!(prioritised.contains("File it with priority P2."), "{prioritised}");
+        assert!(prioritised.contains("Decide the type yourself"), "{prioritised}");
     }
 
     #[test]

@@ -26,10 +26,18 @@ flag's value goes through no such check and is taken as written.
 
 ## Wording
 
+What Smetana hands you is the person's own words about what needs doing — one
+piece of prose, not a title and a description. Both are yours to write from it:
+you have read it and the app has not.
+
 The title says what needs doing, not what is wrong: a reader scanning the
 board sees titles and nothing else. The description carries what the title had
 to leave out — where in the tree, what the current behaviour is, what would
-count as done.
+count as done. Keep what the person actually wrote; do not shorten it away.
+
+When the prompt tells you to decide the type or the priority yourself, decide
+from the same text, using the values listed above. `task` and 2 are the right
+answer whenever nothing in the text argues for something else.
 
 If the work splits into pieces that could be done by different people on
 different days, file them as separate tasks and say in each description how

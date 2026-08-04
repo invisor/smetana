@@ -53,10 +53,15 @@ pub enum Brainstorm {
 /// only have broken the one place it needs to match.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct TaskDraft {
-    pub title: String,
-    pub issue_type: String,
-    pub priority: u8,
-    pub description: Option<String>,
+    /// What the person wrote, in one piece. bd wants a title as well, and
+    /// writing one is the agent's job: it has read this text and the app has
+    /// not, and the filing skill is where the wording rules live.
+    pub text: String,
+    /// `None` is the dialog's Auto: the agent decides from the text. Auto
+    /// arrives as absence rather than as a word, so a value that reaches here
+    /// at all is one bd knows.
+    pub issue_type: Option<String>,
+    pub priority: Option<u8>,
 }
 
 /// Why a session is being started. The front end sends this; every profile
@@ -202,10 +207,9 @@ mod tests {
                     "kind": "newTask",
                     "brainstorm": "{literal}",
                     "draft": {{
-                        "title": "Fix the thing",
+                        "text": "Fix the thing",
                         "issue_type": "bug",
-                        "priority": 2,
-                        "description": "some text"
+                        "priority": 2
                     }}
                 }}"#
             );
@@ -213,13 +217,33 @@ mod tests {
             match intent {
                 Intent::NewTask { brainstorm, draft } => {
                     assert_eq!(brainstorm, expected, "{literal}");
-                    assert_eq!(draft.title, "Fix the thing");
-                    assert_eq!(draft.issue_type, "bug");
-                    assert_eq!(draft.priority, 2);
-                    assert_eq!(draft.description.as_deref(), Some("some text"));
+                    assert_eq!(draft.text, "Fix the thing");
+                    assert_eq!(draft.issue_type.as_deref(), Some("bug"));
+                    assert_eq!(draft.priority, Some(2));
                 }
                 other => panic!("expected NewTask, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn auto_arrives_as_null_from_the_front_ends_json() {
+        // The dialog's Auto positions. `null` rather than a missing key,
+        // because that is literally what `NewTaskModal.vue` sends — and if it
+        // ever sends the word "auto" instead, this is where that shows up as a
+        // session refusing to start rather than as a type bd would reject.
+        let json = r#"{
+            "kind": "newTask",
+            "brainstorm": "auto",
+            "draft": { "text": "Fix the thing", "issue_type": null, "priority": null }
+        }"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::NewTask { draft, .. } => {
+                assert!(draft.issue_type.is_none());
+                assert!(draft.priority.is_none());
+            }
+            other => panic!("expected NewTask, got {other:?}"),
         }
     }
 

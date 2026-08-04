@@ -36,6 +36,7 @@ import {
   TaskCard,
   TaskInspector,
   TerminalView,
+  Textarea,
   TypeBadge,
   Toast,
   ToolCall,
@@ -57,6 +58,7 @@ watchEffect(() => {
 })
 
 const text = ref('wt/bd-a1b2')
+const prose = ref('The board flashes a card twice when bd moves it, and once when we do.')
 const editorText = ref('fn main() {\n    println!("hello");\n}\n')
 const editorJs = ref('export function openFile(path, { permanent = false } = {}) {\n  // A single click opens a preview tab.\n  const state = project()\n  return state.openTabs.includes(path)\n}\n')
 const editorMd = ref('# Heading\n\nA paragraph with **strong** and *emphasis*, plus a [link](https://example.com).\n\n- an item\n- another item\n')
@@ -207,6 +209,9 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           </Input>
         </div>
         <div :style="{ width: '220px' }"><Input model-value="bad name" invalid /></div>
+        <div :style="{ width: '260px' }">
+          <Textarea v-model="prose" :rows="3" placeholder="What needs doing" />
+        </div>
         <Select v-model="choice" :options="['ready', 'running', 'done']" />
         <Checkbox v-model="checked" label="Follow tail" />
         <Checkbox :model-value="false" indeterminate label="Partial" />
@@ -280,7 +285,10 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @reorder="boardOrder = $event"
         />
       </div>
-      <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <!-- Tall enough for the whole dialog, footer included: a frame that
+           clips it turns the one harness that would catch a broken modal into
+           a picture of the top half. -->
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <NewTaskModal :open="true" @close="() => {}" @submit="() => {}" />
       </div>
       <!-- Two of them: the panel draws only the fields an issue has, so the

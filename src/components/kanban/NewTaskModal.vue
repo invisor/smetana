@@ -2,8 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
-import Input from '../core/Input.vue'
 import Select from '../core/Select.vue'
+import Textarea from '../core/Textarea.vue'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -14,9 +14,15 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'submit'])
 
-// The types and priorities are the ones bd understands.
-const TYPES = ['task', 'bug', 'feature', 'chore', 'epic', 'decision']
+/* The types and priorities are the ones bd understands, each behind an Auto
+   that leaves the choice to the agent — which has read the text of the task,
+   as nothing in this app has. Auto travels as null rather than as the word:
+   a field that is either a value bd knows or nothing at all cannot reach Rust
+   carrying a type bd would reject. */
+const AUTO = { value: 'auto', label: 'Auto' }
+const TYPES = [AUTO, 'task', 'bug', 'feature', 'chore', 'epic', 'decision']
 const PRIORITIES = [
+  AUTO,
   { value: '0', label: 'P0 · highest' },
   { value: '1', label: 'P1' },
   { value: '2', label: 'P2' },
@@ -33,13 +39,15 @@ const BRAINSTORM = [
   { value: 'off', label: 'Off' }
 ]
 
-const title = ref('')
-const issueType = ref('task')
-const priority = ref('2')
-const description = ref('')
+/* One field, not a title and a description: bd wants a title, but writing one
+   is the agent's job — it is the only party here that has read what the person
+   wrote, and the filing skill says how this project wants a title worded. */
+const text = ref('')
+const issueType = ref('auto')
+const priority = ref('auto')
 const brainstorm = ref('auto')
 
-const valid = computed(() => title.value.trim().length > 0)
+const valid = computed(() => text.value.trim().length > 0)
 
 const intro = computed(() =>
   props.status
@@ -50,10 +58,9 @@ const intro = computed(() =>
 const submit = () => {
   if (!valid.value || props.busy) return
   emit('submit', {
-    title: title.value.trim(),
-    issue_type: issueType.value,
-    priority: Number(priority.value),
-    description: description.value.trim() || null,
+    text: text.value.trim(),
+    issue_type: issueType.value === 'auto' ? null : issueType.value,
+    priority: priority.value === 'auto' ? null : Number(priority.value),
     brainstorm: brainstorm.value
   })
 }
@@ -67,10 +74,9 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) return
-    title.value = ''
-    issueType.value = 'task'
-    priority.value = '2'
-    description.value = ''
+    text.value = ''
+    issueType.value = 'auto'
+    priority.value = 'auto'
     brainstorm.value = 'auto'
   }
 )
@@ -91,8 +97,8 @@ const field = { flex: 1, minWidth: 0 }
   <Modal :open="open" :closable="!busy" title="New task" :description="intro" @close="$emit('close')">
     <div :style="fields">
       <div>
-        <div :style="label">Title</div>
-        <Input v-model="title" placeholder="What needs doing" />
+        <div :style="label">Task</div>
+        <Textarea v-model="text" :rows="5" placeholder="What needs doing, and anything the agent should know" />
       </div>
       <div :style="row">
         <div :style="field">
@@ -107,10 +113,6 @@ const field = { flex: 1, minWidth: 0 }
           <div :style="label">Brainstorming</div>
           <Select v-model="brainstorm" :options="BRAINSTORM" />
         </div>
-      </div>
-      <div>
-        <div :style="label">Description</div>
-        <Input v-model="description" placeholder="Optional" />
       </div>
     </div>
     <template #footer>

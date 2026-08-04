@@ -195,10 +195,9 @@ mod tests {
         let intent = Intent::NewTask {
             brainstorm: Brainstorm::On,
             draft: TaskDraft {
-                title: "Swap the red for green".into(),
-                issue_type: "bug".into(),
-                priority: 2,
-                description: None,
+                text: "Swap the red for green".into(),
+                issue_type: Some("bug".into()),
+                priority: Some(2),
             },
         };
         let args = argv(&launch(intent, false));
