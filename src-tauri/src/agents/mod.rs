@@ -190,26 +190,36 @@ mod tests {
 
     #[test]
     fn a_new_task_intent_deserializes_from_the_front_ends_json() {
-        let json = r#"{
-            "kind": "newTask",
-            "brainstorm": "auto",
-            "draft": {
-                "title": "Fix the thing",
-                "issue_type": "bug",
-                "priority": 2,
-                "description": "some text"
+        // All three positions of the switch, because all three are literals the
+        // modal writes and nothing but a test reads back: a rename on either
+        // side of the boundary would otherwise surface as a session that simply
+        // refuses to start, with the switch position as the only clue.
+        for (literal, expected) in
+            [("auto", Brainstorm::Auto), ("on", Brainstorm::On), ("off", Brainstorm::Off)]
+        {
+            let json = format!(
+                r#"{{
+                    "kind": "newTask",
+                    "brainstorm": "{literal}",
+                    "draft": {{
+                        "title": "Fix the thing",
+                        "issue_type": "bug",
+                        "priority": 2,
+                        "description": "some text"
+                    }}
+                }}"#
+            );
+            let intent: Intent = serde_json::from_str(&json).expect("deserializes");
+            match intent {
+                Intent::NewTask { brainstorm, draft } => {
+                    assert_eq!(brainstorm, expected, "{literal}");
+                    assert_eq!(draft.title, "Fix the thing");
+                    assert_eq!(draft.issue_type, "bug");
+                    assert_eq!(draft.priority, 2);
+                    assert_eq!(draft.description.as_deref(), Some("some text"));
+                }
+                other => panic!("expected NewTask, got {other:?}"),
             }
-        }"#;
-        let intent: Intent = serde_json::from_str(json).expect("deserializes");
-        match intent {
-            Intent::NewTask { brainstorm, draft } => {
-                assert_eq!(brainstorm, Brainstorm::Auto);
-                assert_eq!(draft.title, "Fix the thing");
-                assert_eq!(draft.issue_type, "bug");
-                assert_eq!(draft.priority, 2);
-                assert_eq!(draft.description.as_deref(), Some("some text"));
-            }
-            other => panic!("expected NewTask, got {other:?}"),
         }
     }
 

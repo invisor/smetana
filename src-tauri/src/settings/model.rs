@@ -182,7 +182,7 @@ impl Default for Settings {
 /// them, and they come back through `settings_save`, because the truth about
 /// the list's contents lives in the front end. The map of the remaining
 /// projects never crosses the boundary — the front end knows nothing about it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ResolvedSettings {
     pub appearance: Appearance,
@@ -192,6 +192,25 @@ pub struct ResolvedSettings {
     pub project: ProjectState,
     pub open_projects: Vec<String>,
     pub active_project: Option<String>,
+}
+
+/// Written out rather than derived for the sake of one field: the derived
+/// `Default` gave `agent` the empty string, which is not an agent and
+/// contradicts the `"claude"` that `Settings` beside it defaults to. Nothing
+/// reachable read that value — `resolve` always copies the file's and `merge`
+/// validates before writing — but a default that disagrees with its own file
+/// is a trap for the next person to lean on it.
+impl Default for ResolvedSettings {
+    fn default() -> Self {
+        Self {
+            appearance: Appearance::default(),
+            layout: Layout::default(),
+            agent: "claude".into(),
+            project: ProjectState::default(),
+            open_projects: Vec::new(),
+            active_project: None,
+        }
+    }
 }
 
 /// What came out of the file.
@@ -1051,6 +1070,9 @@ mod tests {
     #[test]
     fn a_fresh_file_runs_claude_code() {
         assert_eq!(Settings::default().agent, "claude");
+        // The resolved view has its own hand-written Default, and the two have
+        // to name the same agent: an empty string there is not one.
+        assert_eq!(ResolvedSettings::default().agent, "claude");
     }
 
     #[test]
