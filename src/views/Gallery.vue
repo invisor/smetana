@@ -28,6 +28,7 @@ import {
   Panel,
   ProjectList,
   Select,
+  SetupProjectModal,
   Skeleton,
   StatusBadge,
   StatusDot,
@@ -290,6 +291,9 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
            a picture of the top half. -->
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <NewTaskModal :open="true" @close="() => {}" @submit="() => {}" />
+      </div>
+      <div :style="{ position: 'relative', height: '320px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <SetupProjectModal :open="true" name="holiday-curb" @close="() => {}" @confirm="() => {}" />
       </div>
       <!-- Two of them: the panel draws only the fields an issue has, so the
            sparse case is a different component to look at, not the same one

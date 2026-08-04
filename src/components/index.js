@@ -72,5 +72,8 @@ export { default as ContextMenu } from './overlays/ContextMenu.vue'
 export { default as Modal } from './overlays/Modal.vue'
 export { default as Toast } from './overlays/Toast.vue'
 
+// run
+export { default as SetupProjectModal } from './run/SetupProjectModal.vue'
+
 // terminal
 export { default as TerminalView } from './terminal/TerminalView.vue'
