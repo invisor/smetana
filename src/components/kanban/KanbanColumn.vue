@@ -10,11 +10,18 @@ const props = defineProps({
   wipLimit: { type: Number, default: null },
   dropTarget: { type: Boolean, default: false },
   selectedId: { type: String, default: undefined },
-  addable: { type: Boolean, default: true }
+  addable: { type: Boolean, default: true },
+  /* Passed through to the header, which is the handle; the gesture itself
+     belongs to the board. */
+  movable: { type: Boolean, default: false },
+  moving: { type: Boolean, default: false }
 })
 
-defineEmits(['select', 'add'])
+defineEmits(['select', 'add', 'grab', 'move'])
 
+/* `moving` reaches the header and stops there. The column being dragged is not
+   dimmed or lifted: it is where the pointer already is, and the eye needs it to
+   read as the thing being held rather than as a hole left behind. */
 const style = {
   color: 'var(--text-primary)',
   display: 'flex',
@@ -48,7 +55,11 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
       :count="tasks.length"
       :wip-limit="wipLimit"
       :addable="addable"
+      :movable="movable"
+      :moving="moving"
       @add="$emit('add', status)"
+      @grab="$emit('grab', $event)"
+      @move="$emit('move', $event)"
     />
     <div :style="listStyle">
       <template v-if="tasks.length">

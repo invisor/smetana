@@ -39,6 +39,9 @@ const defaults = () => ({
     expanded: [],
     openTabs: [],
     previewTab: null,
+    /* The board's columns in the order a person dragged them to. Empty means
+       "never rearranged", and the board then draws bd's own order. */
+    columnOrder: [],
     usedAt: null
   }
 })

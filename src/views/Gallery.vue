@@ -2,7 +2,8 @@
 /* Dev harness: renders every component in the library once, so a broken port
    shows up here rather than in the product. Not part of the shipped app —
    reachable at ?view=gallery. */
-import { ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
+import { orderColumns } from '../components/kanban/columnOrder.js'
 import {
   AgentList,
   AppShell,
@@ -20,6 +21,7 @@ import {
   Icon,
   IconButton,
   Input,
+  KanbanBoard,
   LogView,
   Modal,
   NewTaskModal,
@@ -134,6 +136,24 @@ const statuses = [
   'awaiting-review', 'needs-triage', 'on-hold', 'shipped'
 ]
 
+/* The board is here for its one interactive part: the columns are dragged by
+   their headers, and alt+left/right moves a focused one. The order lives in a
+   ref rather than in the settings — the product stores it per project, and
+   there is no project here. Without a consumer for `reorder` a dragged column
+   would spring back, which is exactly what a broken drag looks like. */
+const boardOrder = ref([])
+const boardColumns = computed(() =>
+  orderColumns(
+    [
+      { status: 'ready', tasks: [{ id: 'bd-a1b2', title: 'Rename worktree when the branch changes', status: 'ready', type: 'bug' }] },
+      { status: 'running', tasks: [{ id: 'bd-3c9d', title: 'Virtualise the log list above 10k lines', status: 'running', type: 'feature', assignee: { kind: 'agent', name: 'claude-1' } }] },
+      { status: 'needs-you', tasks: [{ id: 'bd-7f31', title: 'Approve the migration plan', status: 'needs-you', type: 'decision', needsResponse: true }] },
+      { status: 'done', tasks: [{ id: 'bd-12cd', title: 'Bump tauri to 2.1', status: 'done', type: 'chore' }] }
+    ],
+    boardOrder.value
+  )
+)
+
 const menuItems = [
   { type: 'label', label: 'Worktree' },
   { label: 'Open in editor', icon: 'file-code', shortcut: '⏎' },
@@ -246,6 +266,19 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '212px' }">
           <TaskCard id="bd-12cd" title="Bump tauri to 2.1" status="done" type="chore" />
         </div>
+      </div>
+      <!-- The board grows to fill its parent, so the harness has to give it one
+           with a height. Drag a column by its header, or focus one and press
+           alt+left/right; escape abandons a drag. -->
+      <div :style="{ display: 'flex', height: '300px', border: 'var(--border-w) solid var(--border)' }">
+        <KanbanBoard
+          :columns="boardColumns"
+          selected-id="bd-3c9d"
+          add-to="ready"
+          @select="() => {}"
+          @add="() => {}"
+          @reorder="boardOrder = $event"
+        />
       </div>
       <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <NewTaskModal :open="true" @close="() => {}" @submit="() => {}" />

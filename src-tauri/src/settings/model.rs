@@ -33,6 +33,10 @@ const MAX_EXPANDED: usize = 500;
 /// How many file tabs we remember. The limit is not about taste but about
 /// keeping the tab row a row, and the settings file readable.
 pub const MAX_OPEN_TABS: usize = 50;
+/// How many columns an order may name. bd ships eleven statuses and a project
+/// adds custom ones; the cap is generous by that measure and only there to stop
+/// a garbage list from growing without bound.
+const MAX_COLUMNS: usize = 60;
 
 /// Appearance is about the person and their screen, hence shared by all projects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -105,6 +109,15 @@ pub struct ProjectState {
     /// Which of them is temporary. There is always exactly one, and it is never
     /// dirty: an edit drops the temporary flag at the same moment it adds the dot.
     pub preview_tab: Option<String>,
+    /// The board's columns in the order they were dragged into, named by the
+    /// front end's status vocabulary. Per project because the set of statuses
+    /// is: bd carries custom ones, and one repository's status has no meaning
+    /// in another one's order.
+    ///
+    /// A hint rather than a truth — bd still owns which columns exist. A name
+    /// here that bd no longer has costs nothing and is not pruned, so a status
+    /// that comes back finds its place again.
+    pub column_order: Vec<String>,
     /// RFC 3339, stamped on write. Needed only for trimming the map.
     pub used_at: Option<String>,
 }
@@ -119,6 +132,7 @@ impl Default for ProjectState {
             expanded: Vec::new(),
             open_tabs: Vec::new(),
             preview_tab: None,
+            column_order: Vec::new(),
             used_at: None,
         }
     }
@@ -353,7 +367,7 @@ impl Settings {
         for state in self.projects.values_mut() {
             state.validate();
         }
-        sane_paths(&mut self.open_projects, MAX_OPEN);
+        sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
         active_in(&mut self.last_project, &self.open_projects);
     }
 }
@@ -363,7 +377,7 @@ impl ResolvedSettings {
         self.appearance.validate();
         self.layout.validate();
         self.project.validate();
-        sane_paths(&mut self.open_projects, MAX_OPEN);
+        sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
         active_in(&mut self.active_project, &self.open_projects);
     }
 }
@@ -395,8 +409,12 @@ impl ProjectState {
         one_of(&mut self.side_tab, &SIDE_TABS, "files");
         forget_if_junk(&mut self.selected_task, MAX_ID_LEN);
         forget_if_junk(&mut self.selected_path, MAX_PATH_LEN);
-        sane_paths(&mut self.expanded, MAX_EXPANDED);
-        sane_paths(&mut self.open_tabs, MAX_OPEN_TABS);
+        sane_list(&mut self.expanded, MAX_EXPANDED, MAX_PATH_LEN);
+        sane_list(&mut self.open_tabs, MAX_OPEN_TABS, MAX_PATH_LEN);
+        // A status name, not a path — hence the identifier ceiling. Membership
+        // is deliberately not checked: bd's set of statuses is not known here,
+        // and a name that matches nothing is passed over by the board anyway.
+        sane_list(&mut self.column_order, MAX_COLUMNS, MAX_ID_LEN);
 
         // A preview tab that is not among the open ones cannot exist: it would
         // be drawn in italics over nothing, or replaced in a slot that is not there.
@@ -445,12 +463,14 @@ fn forget_if_junk(value: &mut Option<String>, max: usize) {
     }
 }
 
-/// A list of paths — from the file or from the front end. Empty strings and
-/// overlong paths are garbage, duplicates are pointless, and the length is capped.
-fn sane_paths(paths: &mut Vec<String>, max: usize) {
+/// A list of names — paths, statuses — from the file or from the front end.
+/// Empty strings and overlong ones are garbage, duplicates are pointless, and
+/// the length is capped. `max_item` differs by what the list holds: a path may
+/// legitimately be thousands of characters, a status name may not.
+fn sane_list(items: &mut Vec<String>, max: usize, max_item: usize) {
     let mut seen = HashSet::new();
-    paths.retain(|path| !path.is_empty() && path.len() <= MAX_PATH_LEN && seen.insert(path.clone()));
-    paths.truncate(max);
+    items.retain(|item| !item.is_empty() && item.len() <= max_item && seen.insert(item.clone()));
+    items.truncate(max);
 }
 
 /// The active project must be in the open list: otherwise the board would show
@@ -938,5 +958,75 @@ mod tests {
         assert!(state.open_tabs.is_empty());
         assert_eq!(state.preview_tab, None);
         assert_eq!(state.active_tab, "kanban");
+    }
+
+    #[test]
+    fn the_column_order_is_read_and_written() {
+        let settings =
+            settings_of(r#"{"version":1,"projects":{"/p":{"columnOrder":["done","ready"]}}}"#);
+        assert_eq!(
+            settings.projects["/p"].column_order,
+            vec!["done".to_string(), "ready".to_string()]
+        );
+
+        let mut file = Settings::default();
+        let resolved = ResolvedSettings {
+            project: ProjectState {
+                column_order: vec!["running".into(), "ready".into()],
+                ..ProjectState::default()
+            },
+            open_projects: vec!["/p".into()],
+            active_project: Some("/p".into()),
+            ..ResolvedSettings::default()
+        };
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
+        assert_eq!(
+            file.projects["/p"].column_order,
+            vec!["running".to_string(), "ready".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_file_written_before_the_column_order_reads_without_it() {
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"agents"}}}"#);
+        assert!(settings.projects["/p"].column_order.is_empty(), "no order is bd's own order");
+    }
+
+    #[test]
+    fn the_column_order_loses_blanks_duplicates_and_everything_past_the_limit() {
+        let mut order = vec![
+            String::from("done"),
+            String::from("done"),
+            String::new(),
+            "x".repeat(MAX_ID_LEN + 1),
+        ];
+        for i in 0..MAX_COLUMNS {
+            order.push(format!("gen{i:03}"));
+        }
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {"columnOrder": order}}});
+
+        let stored = &settings_of(&text.to_string()).projects["/p"].column_order;
+
+        assert_eq!(stored.len(), MAX_COLUMNS, "the order is not stored past the limit");
+        assert_eq!(stored[0], "done");
+        assert_eq!(stored[1], "gen000", "the duplicate, the empty name and the overlong one fell out");
+        assert_eq!(
+            stored.last(),
+            Some(&format!("gen{:03}", MAX_COLUMNS - 2)),
+            "the tail is trimmed, not the head"
+        );
+    }
+
+    /// bd's set of statuses is unknown on this side of the IPC, so an unknown
+    /// name is kept rather than pruned — the board passes it over, and a status
+    /// that comes back finds the place it was left in.
+    #[test]
+    fn the_column_order_keeps_a_status_nothing_matches() {
+        let settings =
+            settings_of(r#"{"version":1,"projects":{"/p":{"columnOrder":["done","gone","ready"]}}}"#);
+        assert_eq!(
+            settings.projects["/p"].column_order,
+            vec!["done".to_string(), "gone".to_string(), "ready".to_string()]
+        );
     }
 }

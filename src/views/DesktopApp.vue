@@ -12,6 +12,7 @@ import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
+import { orderColumns } from '../components/kanban/columnOrder.js'
 import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
@@ -494,6 +495,14 @@ const HEALTH_NOTICE = {
       'The tracker command keeps returning errors — see the console for what it said. The board recovers on its own once it succeeds.'
   }
 }
+
+/* bd owns which columns exist; the settings own only their sequence, and the
+   two meet in orderColumns. The stored order is per project, because the set of
+   statuses is: a custom status of one repository has no place in another one's
+   order. Writing `project.columnOrder` is the whole of saving it — the settings
+   store debounces it to disk and loadProjectLayout brings it back, on a restart
+   and on a switch alike. */
+const orderedColumns = computed(() => orderColumns(boardColumns.value, project.columnOrder))
 
 /* Only when there is nothing else to show: a failing bd is no reason to hide
    the tasks that were already read. */
@@ -990,11 +999,12 @@ const toastStackStyle = {
         </EmptyState>
         <KanbanBoard
           v-else
-          :columns="boardColumns"
+          :columns="orderedColumns"
           :selected-id="project.selectedTask"
           :add-to="ADD_TO"
           @select="project.selectedTask = $event"
           @add="newTaskOpen = true"
+          @reorder="project.columnOrder = $event"
         />
       </div>
 
