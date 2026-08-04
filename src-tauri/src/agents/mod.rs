@@ -45,8 +45,13 @@ pub enum Brainstorm {
 
 /// What the new-task dialog collected. Not an issue: nothing here is written
 /// to bd by this app any more — the agent files it.
+///
+/// No `rename_all = "camelCase"` here, unlike `Intent` below: `issue_type` is
+/// bd's own field name, spelled the same way in the modal, in the tracker's
+/// `Issue`/`IssuePatch` (`tracker/model.rs`) and by bd itself, and snake_case
+/// is the convention for it throughout this codebase. Renaming it here would
+/// only have broken the one place it needs to match.
 #[derive(Clone, Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TaskDraft {
     pub title: String,
     pub issue_type: String,
@@ -166,6 +171,59 @@ mod tests {
         assert!(on_path("sh", Some("/nowhere:/bin")));
         assert!(!on_path("sh", Some("/nowhere")));
         assert!(!on_path("sh", None));
+    }
+
+    // The JSON below is written by hand, not built from an `Intent` and
+    // serialized back: a round trip through `Serialize` would only agree with
+    // itself and prove nothing about the wire format the front end actually
+    // sends. Each string is copied from what `createSession` in
+    // `src/stores/terminals.js` hands to `invoke('terminal_create', ...)` for
+    // the intent literals built in `src/views/DesktopApp.vue` (`newAgent`,
+    // `submitNewTask`, `askAgentToEdit`) — this is the one place in either
+    // suite that crosses the IPC boundary instead of mocking it away.
+
+    #[test]
+    fn a_bare_intent_deserializes_from_the_front_ends_json() {
+        let intent: Intent = serde_json::from_str(r#"{"kind":"bare"}"#).expect("deserializes");
+        assert!(matches!(intent, Intent::Bare));
+    }
+
+    #[test]
+    fn a_new_task_intent_deserializes_from_the_front_ends_json() {
+        let json = r#"{
+            "kind": "newTask",
+            "brainstorm": "auto",
+            "draft": {
+                "title": "Fix the thing",
+                "issue_type": "bug",
+                "priority": 2,
+                "description": "some text"
+            }
+        }"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::NewTask { brainstorm, draft } => {
+                assert_eq!(brainstorm, Brainstorm::Auto);
+                assert_eq!(draft.title, "Fix the thing");
+                assert_eq!(draft.issue_type, "bug");
+                assert_eq!(draft.priority, 2);
+                assert_eq!(draft.description.as_deref(), Some("some text"));
+            }
+            other => panic!("expected NewTask, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_edit_task_intent_deserializes_from_the_front_ends_json() {
+        let json = r#"{"kind":"editTask","id":"bd-1","title":"Some title"}"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::EditTask { id, title } => {
+                assert_eq!(id, "bd-1");
+                assert_eq!(title, "Some title");
+            }
+            other => panic!("expected EditTask, got {other:?}"),
+        }
     }
 
     #[test]
