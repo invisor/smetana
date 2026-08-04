@@ -2,13 +2,18 @@
 //! bell rang and the timings — scheduling and storage live in service.rs.
 //!
 //! Layer A is agent-independent and has nothing in it to break. Layer B
-//! (profiles.rs) reads someone else's interface and is therefore fragile; it
-//! is layered on top and, when it fails to match, silently leaves layer A in
-//! place.
+//! (each profile's own `question`) reads someone else's interface and is
+//! therefore fragile; it is layered on top and, when it fails to match,
+//! silently leaves layer A in place.
 
 use std::time::Duration;
 
 use super::model::{Question, SessionState};
+// Bridge, not the final wiring: `detect` has no notion yet of which agent a
+// session is running, so this hardcodes Claude Code, the only profile that
+// implements `question` today. Threading the actual profile through
+// `DetectInput` is Task 6's job, not this one's.
+use crate::agents::{claude::Claude, Profile};
 
 /// No output for this long — treat the agent as idle.
 pub const IDLE_AFTER: Duration = Duration::from_secs(3);
@@ -36,7 +41,7 @@ pub fn detect(input: DetectInput) -> Detected {
     // Layer B: the profile knows exactly what is being asked, so it takes
     // precedence. Trusted only once the screen has settled — see SETTLE.
     if input.quiet_for >= SETTLE {
-        if let Some(question) = super::profiles::claude(input.screen) {
+        if let Some(question) = Claude.question(input.screen) {
             return Detected { state: SessionState::NeedsYou, question: Some(question) };
         }
     }
