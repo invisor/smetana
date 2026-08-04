@@ -20,7 +20,7 @@ export async function loadStores() {
   vi.resetModules()
   const ipc = installIpc()
 
-  const [vue, event, files, settings, tabs, tracker, projects, terminals, git] = await Promise.all([
+  const [vue, event, files, settings, tabs, tracker, projects, terminals, git, runs] = await Promise.all([
     import('vue'),
     import('@tauri-apps/api/event'),
     import('../../src/stores/files.js'),
@@ -29,13 +29,14 @@ export async function loadStores() {
     import('../../src/stores/tracker.js'),
     import('../../src/stores/projects.js'),
     import('../../src/stores/terminals.js'),
-    import('../../src/stores/git.js')
+    import('../../src/stores/git.js'),
+    import('../../src/stores/runs.js')
   ])
 
   return {
     ipc,
     emit: event.emit,
     nextTick: vue.nextTick,
-    stores: { files, settings, tabs, tracker, projects, terminals, git }
+    stores: { files, settings, tabs, tracker, projects, terminals, git, runs }
   }
 }
