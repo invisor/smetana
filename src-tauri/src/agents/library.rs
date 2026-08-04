@@ -22,6 +22,16 @@ pub struct Skills {
 /// without it `superpowers-extra` would read as the real thing.
 const KEY_PREFIX: &str = "superpowers@";
 
+/// A key in that file maps to the **list** of scoped installs behind it, and an
+/// empty list is a plugin that is known about and installed nowhere. Reading
+/// the key alone would call that person equipped and withhold our copy from
+/// them — the exact failure the comment below says this function is shaped to
+/// avoid. Anything that is not a list at all is read the same way, for the same
+/// reason: of the two ways to be wrong, this is the cheap one.
+fn is_installed_somewhere(scopes: &serde_json::Value) -> bool {
+    scopes.as_array().is_some_and(|list| !list.is_empty())
+}
+
 /// Does the person already have their own superpowers? Reading a file costs
 /// nothing and spawns no process — the same reasoning that keeps `files/` and
 /// `git.rs` out of a worker.
@@ -33,7 +43,11 @@ pub fn has_superpowers(installed_plugins_json: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(installed_plugins_json)
         .ok()
         .and_then(|value| value.get("plugins")?.as_object().cloned())
-        .is_some_and(|plugins| plugins.keys().any(|key| key.starts_with(KEY_PREFIX)))
+        .is_some_and(|plugins| {
+            plugins
+                .iter()
+                .any(|(key, scopes)| key.starts_with(KEY_PREFIX) && is_installed_somewhere(scopes))
+        })
 }
 
 /// The skill text, for the harnesses that can only take it in the prompt.
@@ -86,6 +100,15 @@ mod tests {
     fn a_plugin_whose_name_merely_starts_the_same_is_not_it() {
         let json = r#"{"version":2,"plugins":{"superpowers-extra@official":[]}}"#;
         assert!(!has_superpowers(json), "the marketplace separator is part of the name");
+    }
+
+    #[test]
+    fn the_name_with_nothing_behind_it_is_not_an_install() {
+        // The key survives an uninstall with its scope list emptied. Reading
+        // that as "they have their own" would take our copy away from someone
+        // who has none — the one failure this function exists to prevent.
+        let json = r#"{"version":2,"plugins":{"superpowers@claude-plugins-official":[]}}"#;
+        assert!(!has_superpowers(json), "an empty scope list is nothing installed");
     }
 
     #[test]
