@@ -228,7 +228,7 @@ function sameIssue(a, b) {
    value, not by reference. If it is already different, somebody else's changes
    matter more than our rollback, and we simply remember the error. */
 async function write(id, optimistic, run) {
-  const before = id ? trackerState.issues.get(id) : null
+  const before = trackerState.issues.get(id)
   const optimisticValue = before && optimistic ? { ...before, ...optimistic } : null
   if (optimisticValue) trackerState.issues.set(id, optimisticValue)
   trackerState.lastError = null

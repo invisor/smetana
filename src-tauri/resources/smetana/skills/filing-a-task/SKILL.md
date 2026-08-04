@@ -12,8 +12,13 @@ nothing to refresh and nothing else to notify.
 ## The command
 
 ```sh
-bd create "<title>" --type <type> --priority <0-4> --description "<text>"
+bd create --title "<title>" --type <type> --priority <0-4> --description "<text>"
 ```
+
+`--title` rather than the positional form bd's help shows first. bd checks a
+positional title for a leading dash and refuses to create the issue, even after
+`--` — a title like `-n 5 is not enough` comes back as `looks like a flag`. A
+flag's value goes through no such check and is taken as written.
 
 `--type` is one of `task`, `bug`, `feature`, `chore`, `epic`, `decision`.
 `task` is the default and the right answer when nothing else fits.
