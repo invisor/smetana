@@ -219,9 +219,12 @@ found, this looks like a stand. What is left for the agent is what the survey ca
 of those commands are really gates, what belongs in `hazards`, whether a live check exists — and it
 writes the file. Cancel leaves the project added and unconfigured.
 
-An unconfigured project is an ordinary state, not an error: the project row carries a quiet marker,
-and where the board would be there is the same calm card `no-project` and `not-a-beads-repo` already
-get, with a button to run the setup. That path also covers a config deleted or gone stale later.
+An unconfigured project is an ordinary state, not an error, and it is surfaced where it costs
+nothing: a quiet marker on the project's row, which is also the button that starts the setup, and —
+once the play buttons exist — their disabled state with the reason. The board is **not** replaced by
+a notice the way `no-project` and `not-a-beads-repo` replace it: most projects will be unconfigured,
+and taking the app's main screen away to advertise a feature is the wrong trade. That row is also
+the path back when a config is deleted or goes stale later.
 
 The app never writes the draft itself. `.smetana/project.toml` is a file a person will read and
 edit, and it should appear as the result of somebody's decision rather than on its own.
