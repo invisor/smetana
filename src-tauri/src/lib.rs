@@ -71,6 +71,7 @@ pub fn run() {
       files::commands::files_write,
       files::commands::files_stat,
       git::git_head,
+      runs::commands::project_config,
       settings::commands::settings_load,
       settings::commands::settings_save,
       terminal::commands::terminal_list,
