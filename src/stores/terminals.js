@@ -89,8 +89,18 @@ function decode(base64) {
    is meant for whoever fixes things, not whoever is waiting on a session.
    The interface gets a short explanation of what didn't work; the raw text
    stays in the console — the same split tracker.js makes between its read
-   and write errors. Two kinds are enough here too: reading (list, attach,
-   detach, resize) and writing (create, remove, write). */
+   and write errors. Two kinds cover most of it here too: reading (list,
+   attach, detach, resize) and writing (create, remove, write).
+
+   The third entry is keyed on the kind the Rust error itself carries rather
+   than on ours, and it earns the exception by being the one failure in this
+   list a person can act on. "Nothing was created" is true of a machine with
+   no agent installed and tells them nothing — and since filing a task is now
+   an agent session rather than a write into the tracker, that is no longer a
+   missing convenience but the only way to put a card on the board. It is a
+   function because the names of the agents looked for belong to Rust:
+   agents::IDS is the only copy of that list and the error carries it in its
+   message, so nothing here has to hold a second one. */
 const ERRORS = {
   read: {
     title: 'Could not read the terminal',
@@ -99,12 +109,21 @@ const ERRORS = {
   write: {
     title: 'Could not complete the action',
     description: 'Nothing was created, removed, or sent.'
-  }
+  },
+  noAgent: (looked) => ({
+    title: 'No coding agent is installed',
+    description: `Smetana looked for ${looked} on your PATH. It starts one to file a task and to edit an issue, so install one and try again.`
+  })
 }
 
 function report(kind, error) {
   console.error(`[terminal] ${kind} failed:`, error)
-  terminalState.lastError = ERRORS[kind]
+  /* A cause the worker named wins over the generic pair, when this store has
+     words for it. The typeof guard, rather than a plain lookup, is what keeps
+     a future Rust kind called `read` or `write` from resolving to the generic
+     entry's own object and being called with it. */
+  const cause = ERRORS[error?.kind]
+  terminalState.lastError = typeof cause === 'function' ? cause(error.message) : ERRORS[kind]
 }
 
 /* The number of the last chunk delivered for the active session. A gap means

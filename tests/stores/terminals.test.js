@@ -213,6 +213,38 @@ describe('back-end errors', () => {
       description: 'The session list may be out of date. It will catch up on the next change.'
     })
   })
+
+  /* The one refusal a person can do something about, and the reason it is
+     worth a message of its own: with filing a task now going through an
+     agent, "nothing was created" would be the whole explanation for a
+     machine that has no agent to create it with. The names come from the
+     error — Rust holds the only copy of that list. */
+  it('nothing installed to run says so, and says what was looked for', async () => {
+    const { ipc, stores } = await ready()
+    ipc.fail('terminal_create', { kind: 'noAgent', message: 'claude, codex' })
+
+    await expect(
+      stores.terminals.createSession('/p', { kind: 'bare' })
+    ).rejects.toBeTruthy()
+
+    expect(stores.terminals.terminalState.lastError).toEqual({
+      title: 'No coding agent is installed',
+      description:
+        'Smetana looked for claude, codex on your PATH. It starts one to file a task and to edit an issue, so install one and try again.'
+    })
+  })
+
+  it('any other write refusal is still the generic one', async () => {
+    const { ipc, stores } = await ready()
+    ipc.fail('terminal_create', { kind: 'spawn', message: 'the agent did not start: boom' })
+
+    await expect(stores.terminals.createSession('/p')).rejects.toBeTruthy()
+
+    expect(stores.terminals.terminalState.lastError).toEqual({
+      title: 'Could not complete the action',
+      description: 'Nothing was created, removed, or sent.'
+    })
+  })
 })
 
 describe('answering the question', () => {
