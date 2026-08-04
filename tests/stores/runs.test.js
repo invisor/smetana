@@ -56,13 +56,22 @@ describe('the active project\'s run configuration', () => {
     // The same guard git.js and terminals.js carry: two calls in flight have no
     // ordering guarantee, and without this the last response would win rather
     // than the last call — one project's configuration under another's name.
-    const { ipc, stores } = await loadStores()
-    const answers = { '/slow': OK, '/fast': { state: 'missing' } }
-    ipc.on('project_config', ({ project }) => answers[project])
+    // Resolved by hand, the way git.test.js does it, so the /slow call's
+    // answer genuinely arrives after /fast's rather than merely being
+    // *invoked* first: a mock that just resolves in call order would let this
+    // pass even with the guard deleted.
+    const { stores } = await loadStores()
+    const pending = new Map()
+    const { mockIPC } = await import('@tauri-apps/api/mocks')
+    mockIPC((cmd, args) => new Promise((resolve) => pending.set(args.project, resolve)))
 
     const slow = stores.runs.loadConfig('/slow')
     const fast = stores.runs.loadConfig('/fast')
-    await Promise.all([slow, fast])
+
+    pending.get('/fast')({ state: 'missing' })
+    await fast
+    pending.get('/slow')(OK)
+    await slow
 
     expect(stores.runs.runsState.project).toBe('/fast')
     expect(stores.runs.runsState.config.state).toBe('missing')

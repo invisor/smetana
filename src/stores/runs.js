@@ -21,9 +21,11 @@ export const runsState = reactive({
 /* An offer to set the project up, not a warning: most projects are here, and
    `broken` is deliberately excluded — a file that exists and cannot be parsed
    is something to fix, and running the setup over it would write across
-   somebody's work. With no project open there is nothing to offer either:
-   `config` still reads as `missing` (the same NONE a cleared project falls
-   back to), so the project itself has to be part of the check. */
+   somebody's work. The `project` check is not redundant with the `config`
+   check: clearing the project resets `config` to the very same `missing`
+   NONE a genuinely unconfigured project has, so without it "no project open"
+   would read as "this project needs setting up" and the dialog would be
+   offered for nothing. */
 export const needsSetup = computed(() => runsState.project !== null && runsState.config.state === 'missing')
 
 export const configError = computed(() =>
