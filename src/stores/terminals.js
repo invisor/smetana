@@ -9,6 +9,7 @@
 import { computed, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { settings } from './settings.js'
 
 export const terminalState = reactive({
   sessions: [],
@@ -172,13 +173,16 @@ export async function loadSessions(project) {
   }
 }
 
-/* The one write that still rejects: its caller is a later task turning a
-   failed spawn into something the human sees, and an agent asked for that
-   never appeared needs to say why — swallowing the error here would leave
-   nothing to show. */
-export async function createSession(project, prompt = null) {
+/* The one write that still rejects: its caller turns a failed spawn into
+   something the human sees, and an agent asked for that never appeared needs
+   to say why — swallowing the error here would leave nothing to show.
+
+   The intent, not a prompt: which words reach the agent depends on which agent
+   it is, and that decision lives in Rust, in agents/. The store's job is to
+   say what the session is for. */
+export async function createSession(project, intent = { kind: 'bare' }) {
   try {
-    const session = await invoke('terminal_create', { project, prompt })
+    const session = await invoke('terminal_create', { project, agent: settings.agent, intent })
     upsert(session)
     terminalState.activeId = session.id
     terminalState.lastError = null

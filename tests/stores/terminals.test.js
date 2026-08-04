@@ -175,22 +175,31 @@ describe('detaching', () => {
   })
 })
 
-describe('creating a session', () => {
-  /* An agent started from the "+ New agent" row opens on nothing; one started
-     from a task opens on that task. The prompt travels with the create call,
-     not as a write afterwards — bytes sent into an agent that has not finished
-     starting are simply lost. */
-  it('carries the opening prompt, and sends null when there is none', async () => {
-    const { ipc, stores } = await ready()
-    ipc.on('terminal_create', () => session({ id: 2 }))
+describe('starting a session', () => {
+  it('sends the configured agent and the intent, not a prompt', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('terminal_create', session({ id: 7, agent: 'codex' }))
+    stores.settings.settings.agent = 'codex'
+
+    await stores.terminals.createSession('/p', {
+      kind: 'editTask',
+      id: 'smetana-7',
+      title: 'x y'
+    })
+
+    const args = ipc.calls('terminal_create').at(-1)
+    expect(args.agent).toBe('codex')
+    expect(args.intent).toEqual({ kind: 'editTask', id: 'smetana-7', title: 'x y' })
+    expect(args.prompt).toBeUndefined()
+  })
+
+  it('a session started from the "+ New agent" row carries a bare intent', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('terminal_create', session({ id: 8 }))
 
     await stores.terminals.createSession('/p')
-    await stores.terminals.createSession('/p', 'Update bd issue bd-1: ')
 
-    expect(ipc.calls('terminal_create')).toEqual([
-      { project: '/p', prompt: null },
-      { project: '/p', prompt: 'Update bd issue bd-1: ' }
-    ])
+    expect(ipc.calls('terminal_create').at(-1).intent).toEqual({ kind: 'bare' })
   })
 })
 
