@@ -145,6 +145,14 @@ pub struct Settings {
     pub version: u32,
     pub appearance: Appearance,
     pub layout: Layout,
+    /// Which CLI agent the app starts. A habit of the person's, not a property
+    /// of the repository, so it sits at the root rather than under a project.
+    ///
+    /// The set of legal values is `agents::IDS` and is not repeated here: the
+    /// side-tab list is already written out twice — in this file and in
+    /// `src/views/DesktopApp.vue` — and a value missing from one of them comes
+    /// back after a restart as something the person did not choose.
+    pub agent: String,
     pub last_project: Option<String>,
     /// The contents and order of the on-screen list — the order things were
     /// added, not how recent they are: rows that jump on every switch are
@@ -159,6 +167,7 @@ impl Default for Settings {
             version: CURRENT_VERSION,
             appearance: Appearance::default(),
             layout: Layout::default(),
+            agent: "claude".into(),
             last_project: None,
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
@@ -178,6 +187,8 @@ impl Default for Settings {
 pub struct ResolvedSettings {
     pub appearance: Appearance,
     pub layout: Layout,
+    /// Which CLI agent the app starts. See `Settings::agent`.
+    pub agent: String,
     pub project: ProjectState,
     pub open_projects: Vec<String>,
     pub active_project: Option<String>,
@@ -212,6 +223,7 @@ pub fn parse(text: &str) -> Outcome {
         version: CURRENT_VERSION,
         appearance: section(&object, "appearance"),
         layout: section(&object, "layout"),
+        agent: object.get("agent").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| "claude".into()),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
@@ -247,6 +259,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
     ResolvedSettings {
         appearance: file.appearance.clone(),
         layout: file.layout.clone(),
+        agent: file.agent.clone(),
         project: active
             .as_deref()
             .and_then(|path| file.projects.get(path))
@@ -264,6 +277,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.version = CURRENT_VERSION;
     file.appearance = resolved.appearance;
     file.layout = resolved.layout;
+    file.agent = resolved.agent;
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
 
@@ -362,6 +376,7 @@ impl Settings {
     /// A value outside the allowed set is no reason to throw the file away:
     /// only the field itself is lost.
     pub fn validate(&mut self) {
+        one_of(&mut self.agent, &crate::agents::IDS, "claude");
         self.appearance.validate();
         self.layout.validate();
         for state in self.projects.values_mut() {
@@ -374,6 +389,7 @@ impl Settings {
 
 impl ResolvedSettings {
     pub fn validate(&mut self) {
+        one_of(&mut self.agent, &crate::agents::IDS, "claude");
         self.appearance.validate();
         self.layout.validate();
         self.project.validate();
@@ -576,6 +592,7 @@ mod tests {
         let resolved = ResolvedSettings {
             appearance: Appearance { theme: "light".into(), density: "comfortable".into() },
             layout: Layout { left_collapsed: true, left_width: 420, ..Layout::default() },
+            agent: "claude".into(),
             project: ProjectState {
                 selected_task: Some("bd-a1b2".into()),
                 ..ProjectState::default()
@@ -602,6 +619,7 @@ mod tests {
         let resolved = ResolvedSettings {
             appearance: Appearance { theme: "neon".into(), density: "comfortable".into() },
             layout: Layout::default(),
+            agent: "claude".into(),
             project: ProjectState { side_tab: "tarot".into(), ..ProjectState::default() },
             open_projects: vec!["/p".into()],
             active_project: Some("/p".into()),
@@ -1028,5 +1046,27 @@ mod tests {
             settings.projects["/p"].column_order,
             vec!["done".to_string(), "gone".to_string(), "ready".to_string()]
         );
+    }
+
+    #[test]
+    fn a_fresh_file_runs_claude_code() {
+        assert_eq!(Settings::default().agent, "claude");
+    }
+
+    #[test]
+    fn an_agent_nobody_ships_loses_the_field_and_not_the_section() {
+        let mut settings = Settings { agent: "cursor".into(), ..Settings::default() };
+        settings.validate();
+        assert_eq!(settings.agent, "claude");
+        assert_eq!(settings.appearance.theme, "dark", "the section around it survives");
+    }
+
+    #[test]
+    fn every_agent_the_app_knows_is_a_legal_setting() {
+        for id in crate::agents::IDS {
+            let mut settings = Settings { agent: id.to_string(), ..Settings::default() };
+            settings.validate();
+            assert_eq!(settings.agent, id);
+        }
     }
 }

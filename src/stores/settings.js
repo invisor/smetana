@@ -29,6 +29,10 @@ const defaults = () => ({
     leftWidth: LEFT_DEFAULT,
     rightWidth: RIGHT_DEFAULT
   },
+  /* Which agent the app starts. There is no settings screen yet, so this is
+     changed by editing settings.json; the defaults here and in Rust have to
+     agree, the same as appearance and layout do. */
+  agent: 'claude',
   openProjects: [],
   activeProject: null,
   project: {
@@ -209,6 +213,7 @@ export async function loadSettings() {
     applySection(settings.project, base.project, stored.project)
     settings.openProjects = stored.openProjects ?? []
     settings.activeProject = stored.activeProject ?? null
+    settings.agent = stored.agent ?? base.agent
   } catch (err) {
     console.error('[settings] the read failed, taking the defaults:', err)
   }

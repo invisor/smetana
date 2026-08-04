@@ -44,6 +44,26 @@ describe('loading', () => {
     await expect(settings.loadSettings()).resolves.toBeTruthy()
     expect(settings.settings.appearance.theme).toBe('dark')
   })
+
+  it('opens on Claude Code when the file names no agent', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', {})
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.agent).toBe('claude')
+  })
+
+  it('takes the agent from the file and sends it back on a save', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', { agent: 'codex' })
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.agent).toBe('codex')
+
+    stores.settings.settings.appearance.theme = 'light'
+    await stores.settings.flushPending()
+    expect(ipc.calls('settings_save').at(-1).settings.agent).toBe('codex')
+  })
 })
 
 describe('a project\'s layout', () => {
