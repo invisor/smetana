@@ -1757,8 +1757,11 @@ git commit -m "feat(runs): предложение настроить проек�
   as it does today; the file it now has is read by nothing yet.
 - No editing the config from inside the app. It is a file in the project, and
   the editor in the centre column already opens it.
-- No re-survey when a project's shape changes. The person runs the setup again
-  from the row, and the agent rewrites the file.
+- No re-survey when a project's shape changes. The gear on the row is gated on
+  the config being absent, so once a project is configured there is no route
+  back to it from here — the only way to trigger the setup agent again is to
+  delete `.smetana/project.toml` by hand. A reconfigure route belongs with the
+  run dialog, in a later stage.
 
 ## Self-review notes
 

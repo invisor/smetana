@@ -21,6 +21,13 @@ use serde::{Deserialize, Serialize};
 /// Where the file lives, relative to the project root — beside `.beads/`.
 pub const CONFIG_PATH: &str = ".smetana/project.toml";
 
+/// This one derive is both the TOML schema and the shape that crosses IPC —
+/// every other payload in the app is camelCase, and this one is deliberately
+/// not. Splitting them (a `rename_all` for JSON, the plain field names for
+/// TOML) would mean the JSON and the file spell the same field two different
+/// ways, and that costs more than one unusual payload: `target_branch` in the
+/// file and `targetBranch` in the front end's console would look like two
+/// different settings to whoever is debugging one report against the other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
@@ -148,7 +155,11 @@ pub fn path_in(root: &Path) -> PathBuf {
 
 /// Pure, so the tests need no directory. The message is the parser's own: it
 /// already names the key and the line, which is more than a hand-written
-/// summary would say.
+/// summary would say. One shape does worse: `HealthCheck` is untagged, and a
+/// value matching neither of its variants comes back as "data did not match
+/// any variant of untagged enum HealthCheck" with a line and column but no
+/// key name — serde has already thrown the field name away by the time an
+/// untagged enum fails.
 pub fn parse(text: &str) -> Result<ProjectConfig, String> {
     toml::from_str(text).map_err(|err| err.to_string())
 }

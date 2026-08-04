@@ -57,7 +57,7 @@ import {
   switchTo
 } from '../stores/projects.js'
 import { gitState, loadHead } from '../stores/git.js'
-import { loadConfig, needsSetup, runsState } from '../stores/runs.js'
+import { loadConfig, needsSetup } from '../stores/runs.js'
 import { inspector, logLines, scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
@@ -238,6 +238,38 @@ const onAddProject = async () => {
   if (needsSetup.value) setupFor.value = added
 }
 
+/* The setup agent runs inside this window's own terminal tab, so the person
+   watching it never leaves and never returns — window focus, which is how
+   every other outside writer (an agent on a branch, a person in a terminal)
+   gets noticed, simply never fires. terminalState.sessions already carries
+   state for every session, active or not (see stores/terminals.js), so that
+   is the signal to watch instead of a timer: once the session leaves
+   starting/running — it stopped to ask a question, or it is done — the file
+   may have changed, and loadConfig reads it again. Kept as a plain variable,
+   not a ref: nothing in the template reads it, it only guards against two
+   setup sessions leaving two watchers running at once. */
+let stopSetupWatch = null
+
+function watchSetupSession(id, path) {
+  if (stopSetupWatch) stopSetupWatch()
+  stopSetupWatch = watch(
+    () => terminalState.sessions.find((s) => s.id === id)?.state,
+    (state) => {
+      // The project moved on, or the session is gone from the list (removed,
+      // or a project switch repopulated it under a different one) — either
+      // way there is nothing left to watch for, and watching on would risk
+      // reloading another project's config under this one's mark.
+      if (activePath.value !== path || !state) {
+        stopSetupWatch()
+        stopSetupWatch = null
+        return
+      }
+      if (state === 'starting' || state === 'running') return
+      loadConfig(path)
+    }
+  )
+}
+
 const startSetup = async () => {
   const path = setupFor.value
   if (!path || settingUp.value) return
@@ -245,14 +277,22 @@ const startSetup = async () => {
   try {
     project.sideTab = 'agents'
     project.activeTab = 'terminal'
-    await createSession(path, { kind: 'setup' })
+    const session = await createSession(path, { kind: 'setup' })
     setupFor.value = null
+    watchSetupSession(session.id, path)
   } catch {
     // already reported by createSession; the dialog stays open
   } finally {
     settingUp.value = false
   }
 }
+
+/* Created inside an event handler rather than synchronously during setup(),
+   so Vue never ties its lifetime to the component's the way it does for the
+   watchers declared at module-body scope elsewhere in this file — it needs
+   its own stop on unmount, or a setup started just before navigating away
+   would keep polling terminalState forever. */
+onUnmounted(() => stopSetupWatch?.())
 
 /* Picking an agent's row is a request to look at it, not just to select it:
    the terminal tab comes forward the same way it does for a freshly created

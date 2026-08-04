@@ -37,6 +37,10 @@ findings. Nothing ran them.**
     health = [{ url = "http://localhost:4001/health" }, { tcp = 5433 }]
 
     [merge]
+    # Declared before the array of tables below: in TOML a bare key written
+    # after [[merge.regenerate]] would belong to that entry, not to [merge],
+    # and the file would then be refused with an "unknown field" error naming
+    # a key that looks nothing like a typo.
     hazards = """
     Prose. See below.
     """
@@ -52,6 +56,11 @@ Only `[project]` is required. Every other section may be left out, and leaving
 one out is better than filling it with a guess.
 
 ## How to fill it in
+
+**If `.smetana/project.toml` already exists, read it and update it rather than
+replacing it.** Someone may be re-running this after the project changed, and
+whatever it already got right — a gate that was verified, prose in `hazards`
+someone wrote by hand — should survive a second pass, not be guessed again.
 
 **Verify every gate before you write it.** Run it. A gate that does not exist,
 or that is red on a clean checkout, is worse than no gate: every merge will

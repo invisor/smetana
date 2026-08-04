@@ -44,12 +44,12 @@ const pathStyle = {
     @close="$emit('close')"
   >
     <div :style="body">
-      <p>
+      <div>
         An agent will look through the folder — its repositories, their manifests and scripts —
         and write what it finds to <span :style="pathStyle">.smetana/project.toml</span>.
         It will ask about anything the folder does not answer.
-      </p>
-      <p>Nothing else is changed, and you can review the file before any run uses it.</p>
+      </div>
+      <div>Nothing else is changed, and you can review the file before any run uses it.</div>
     </div>
     <template #footer>
       <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>

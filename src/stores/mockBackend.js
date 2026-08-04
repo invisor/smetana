@@ -154,10 +154,32 @@ export function installMockBackend() {
       return MOCK_PROJECTS.map((path) => ({ path, tracked: path === MOCK_PROJECTS[0] }))
     }
     /* The first mock project is set up, the second is not: without one of each
-       there is nowhere to see either state under npm run dev. */
+       there is nowhere to see either state under npm run dev. The `ok` branch
+       is the whole struct Rust serializes, defaults included, not just the
+       fields something reads today — src-tauri/src/runs/config.rs's
+       Defaults::default() is where target_branch/min_priority/
+       max_parallel_tasks/review_passes come from, and repo/preflight/merge/
+       live_check are its own empty-map and None. A narrower shape here would
+       still work for every component that exists now and throw for the first
+       one that reads config.defaults.target_branch, in the browser only. */
     if (command === 'project_config') {
       return payload?.project === MOCK_PROJECTS[0]
-        ? { state: 'ok', config: { project: { repos: ['.'] } } }
+        ? {
+            state: 'ok',
+            config: {
+              project: { repos: ['.'] },
+              defaults: {
+                target_branch: null,
+                min_priority: 2,
+                max_parallel_tasks: 3,
+                review_passes: 5
+              },
+              repo: {},
+              preflight: null,
+              merge: null,
+              live_check: null
+            }
+          }
         : { state: 'missing' }
     }
     /* The stub knows nothing about the filesystem and will not invent

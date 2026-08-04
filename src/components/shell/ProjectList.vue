@@ -97,10 +97,10 @@ const empty = computed(() => props.projects.length === 0)
         @mouseleave="hovered = null"
       >
         <span :style="nameStyle">{{ p.name }}</span>
-        <Tooltip v-if="!p.tracked" label="No bd tracker here" side="right">
+        <Tooltip v-if="!p.tracked" label="No bd tracker here" side="left">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
         </Tooltip>
-        <Tooltip v-if="needsSetup && p.path === activePath" label="Not set up for runs" side="right">
+        <Tooltip v-if="needsSetup && p.path === activePath" label="Not set up for runs" side="left">
           <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
         </Tooltip>
         <!-- Before the remove button, not after it: removal keeps the row's
