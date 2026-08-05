@@ -4,6 +4,7 @@ mod git;
 mod project;
 mod runs;
 mod settings;
+mod shell_env;
 mod terminal;
 mod tracker;
 mod window;
@@ -17,6 +18,11 @@ pub fn run() {
     .plugin(tauri_plugin_window_state::Builder::default().build())
     .plugin(tauri_plugin_dialog::init())
     .setup(|app| {
+      // Before anything asks for an agent. A bundled app is handed launchd's
+      // environment rather than the person's, so the answer takes a login
+      // shell to get; starting it here means the first "+ New agent" does not
+      // wait for one. See `shell_env`.
+      shell_env::warm();
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()

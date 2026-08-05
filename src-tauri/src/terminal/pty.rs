@@ -47,15 +47,26 @@ pub fn build_command(launch: &Launch) -> CommandBuilder {
             cmd.env(key, value);
         }
     }
+    // What the agent's own `PATH` is built on: the login shell's, because a
+    // bundled app inherits launchd's, which holds nothing a person installed —
+    // an agent started with that finds neither `git` nor `node` nor the helpers
+    // it shells out to. `crate::shell_env::path` already falls back to the
+    // inherited value, and `cmd.get_env` behind it covers the one case it
+    // cannot answer: `CommandBuilder::new` has snapshotted the parent's
+    // environment, so this is the value the child would otherwise have had.
+    let base = crate::shell_env::path()
+        .map(OsString::from)
+        .or_else(|| cmd.get_env("PATH").map(OsStr::to_owned));
     // Filing a task means the agent running `bd`, and this app's bd is a
     // sidecar inside the bundle: on a machine that never installed one there is
     // nothing on `PATH` to find, and "command not found" is now the whole
-    // feature failing. `CommandBuilder::new` has already snapshotted the
-    // parent's environment, so `get_env` reads the very value the child would
-    // otherwise have inherited and this puts one directory in front of it —
-    // nothing else about the environment is touched.
-    if let Some(dir) = sidecar_dir() {
-        let path = path_with(&dir, cmd.get_env("PATH"));
+    // feature failing. One directory in front of that base, and nothing else
+    // about the environment is touched.
+    let path = match sidecar_dir() {
+        Some(dir) => Some(path_with(&dir, base.as_deref())),
+        None => base,
+    };
+    if let Some(path) = path {
         cmd.env("PATH", path);
     }
     cmd
@@ -292,14 +303,16 @@ mod tests {
     fn the_rest_of_the_environment_is_left_alone() {
         // One directory in front, and nothing else about PATH rewritten: an
         // agent that lost the person's own tools would be worse off than one
-        // that could not find bd.
-        let inherited: Vec<_> = std::env::var_os("PATH")
-            .map(|p| std::env::split_paths(&p).collect())
+        // that could not find bd. The base is the login shell's PATH rather
+        // than this process's — a bundled app inherits launchd's, which has
+        // none of the person's own directories in it.
+        let base: Vec<_> = crate::shell_env::path()
+            .map(|p| std::env::split_paths(p).collect())
             .unwrap_or_default();
         let cmd = build_command(&launch("claude"));
         let given: Vec<_> =
             std::env::split_paths(cmd.get_env("PATH").expect("PATH must reach the agent")).collect();
-        assert_eq!(given[1..], inherited[..]);
+        assert_eq!(given[1..], base[..]);
     }
 
     #[test]

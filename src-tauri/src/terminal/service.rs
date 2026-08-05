@@ -456,7 +456,10 @@ fn handle(
             let _ = tx.send(list);
         }
         Request::Create(project, agent, intent, tx) => {
-            let Some(profile) = agents::pick(&agent, std::env::var("PATH").ok().as_deref()) else {
+            // The login shell's PATH, not this process's: a bundled app started
+            // from Finder inherits launchd's, where nothing a person installed
+            // is reachable and every agent would look uninstalled.
+            let Some(profile) = agents::pick(&agent, crate::shell_env::path()) else {
                 let _ = tx.send(Err(TerminalError::NoAgent(agents::IDS.join(", "))));
                 return;
             };
