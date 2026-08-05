@@ -118,6 +118,14 @@ pub struct ProjectState {
     /// here that bd no longer has costs nothing and is not pruned, so a status
     /// that comes back finds its place again.
     pub column_order: Vec<String>,
+    /// What the run dialog was last set to here. `None` until somebody opens
+    /// it, which is every settings file written before this existed.
+    ///
+    /// Per project, for the same reason `column_order` is: a branch name has no
+    /// meaning in another repository. And **without the scope** — that comes
+    /// from whichever play button was pressed, and remembering it would open
+    /// the dialog claiming to run something nobody clicked.
+    pub run_settings: Option<RunDefaults>,
     /// RFC 3339, stamped on write. Needed only for trimming the map.
     pub used_at: Option<String>,
 }
@@ -133,10 +141,49 @@ impl Default for ProjectState {
             open_tabs: Vec::new(),
             preview_tab: None,
             column_order: Vec::new(),
+            run_settings: None,
             used_at: None,
         }
     }
 }
+
+/// What the run dialog opens on next time. A mirror of `runs::model::RunSettings`
+/// minus the scope, and deliberately its own type rather than a reuse: this one
+/// lives in a file people edit by hand and has to tolerate anything, while the
+/// other crosses the IPC boundary and must not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RunDefaults {
+    pub mode: String,
+    pub target_branch: Option<String>,
+    pub min_priority: u8,
+    pub live_check: bool,
+    pub file_findings: bool,
+}
+
+impl Default for RunDefaults {
+    fn default() -> Self {
+        Self {
+            mode: "auto".into(),
+            target_branch: None,
+            min_priority: 2,
+            live_check: true,
+            file_findings: true,
+        }
+    }
+}
+
+/// The three the dialog offers. Written out here as well as in
+/// `runs::model::RunMode` — the one place this codebase accepts that
+/// duplication, and for the reason recorded on `IDS`: what crosses the IPC
+/// boundary must refuse an unknown value, while what comes off somebody's disk
+/// must survive one. `solo` is in the list; whether it is allowed for the scope
+/// in front of you is `RunSettings::validate`'s answer, not this file's.
+const RUN_MODES: [&str; 3] = ["auto", "supervised", "solo"];
+
+/// bd's priority scale. Anything outside it would silently take everything or
+/// nothing.
+const MAX_PRIORITY: u8 = 4;
 
 /// The whole file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -417,6 +464,20 @@ impl ResolvedSettings {
     }
 }
 
+impl RunDefaults {
+    fn validate(&mut self) {
+        one_of(&mut self.mode, &RUN_MODES, "auto");
+        forget_if_junk(&mut self.target_branch, MAX_PATH_LEN);
+        // Out of range is dropped to the default rather than clamped: a 9 in
+        // this field is not somebody meaning "the lowest priority", it is a
+        // file that has been edited wrongly, and guessing which way they meant
+        // it is how a run silently takes work nobody wanted taken.
+        if self.min_priority > MAX_PRIORITY {
+            self.min_priority = 2;
+        }
+    }
+}
+
 impl Appearance {
     fn validate(&mut self) {
         one_of(&mut self.theme, &THEMES, "dark");
@@ -450,6 +511,9 @@ impl ProjectState {
         // is deliberately not checked: bd's set of statuses is not known here,
         // and a name that matches nothing is passed over by the board anyway.
         sane_list(&mut self.column_order, MAX_COLUMNS, MAX_ID_LEN);
+        if let Some(run) = self.run_settings.as_mut() {
+            run.validate();
+        }
 
         // A preview tab that is not among the open ones cannot exist: it would
         // be drawn in italics over nothing, or replaced in a slot that is not there.
@@ -1108,5 +1172,51 @@ mod tests {
         let mut written = Settings::default();
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert_eq!(written.agent, "codex", "merge must carry it back into the file");
+    }
+    #[test]
+    fn a_settings_file_written_before_the_run_dialog_existed_still_loads() {
+        // Every file on a person's disk right now is this file.
+        let state: ProjectState =
+            serde_json::from_str(r#"{"sideTab":"files"}"#).expect("deserializes");
+        assert_eq!(state.run_settings, None);
+    }
+
+    #[test]
+    fn an_unknown_run_mode_loses_the_field_and_not_the_section() {
+        // The same leniency every other single value gets: a bad value costs
+        // that value, a bad type costs the section it is in.
+        let mut state = ProjectState {
+            run_settings: Some(RunDefaults { mode: "yolo".into(), ..RunDefaults::default() }),
+            ..ProjectState::default()
+        };
+        state.validate();
+        let run = state.run_settings.expect("the section survives");
+        assert_eq!(run.mode, "auto");
+        assert!(run.live_check, "nothing else in the section was touched");
+    }
+
+    #[test]
+    fn a_priority_outside_bds_scale_goes_back_to_the_default() {
+        // Clamping would guess: a 9 here is a wrongly edited file, and reading
+        // it as "the lowest priority" makes a run take work nobody wanted taken.
+        let mut state = ProjectState {
+            run_settings: Some(RunDefaults { min_priority: 9, ..RunDefaults::default() }),
+            ..ProjectState::default()
+        };
+        state.validate();
+        assert_eq!(state.run_settings.expect("kept").min_priority, 2);
+    }
+
+    #[test]
+    fn solo_is_a_mode_this_file_accepts_even_though_a_queue_would_refuse_it() {
+        // Whether solo fits the scope is RunSettings::validate's answer. This
+        // file only knows the three names, and dropping solo here would make
+        // the dialog forget a legitimate choice on every restart.
+        let mut state = ProjectState {
+            run_settings: Some(RunDefaults { mode: "solo".into(), ..RunDefaults::default() }),
+            ..ProjectState::default()
+        };
+        state.validate();
+        assert_eq!(state.run_settings.expect("kept").mode, "solo");
     }
 }

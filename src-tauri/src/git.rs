@@ -92,6 +92,71 @@ pub fn git_head(project: String) -> Head {
     head(Path::new(&project))
 }
 
+/// The prefix every local branch ref carries.
+const HEADS: &str = "refs/heads/";
+
+/// Branch names out of a `packed-refs` file.
+///
+/// Reading `refs/heads/` alone would be wrong in the case that matters most: a
+/// fresh clone has almost nothing loose on disk, git having packed the lot, so
+/// a person who just cloned would be offered one branch out of forty. The
+/// format is one `<sha> <ref>` per line, `#` for the header, and `^<sha>` on a
+/// line of its own for what an annotated tag points at — that last one has no
+/// ref name at all and is skipped rather than parsed into a branch called `^…`.
+pub fn parse_packed_refs(contents: &str) -> Vec<String> {
+    contents
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.starts_with('^'))
+        .filter_map(|line| line.split_once(' ').map(|(_, name)| name.trim()))
+        .filter_map(|name| name.strip_prefix(HEADS))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Every loose ref under `refs/heads/`, with the directories folded back into
+/// the name: `feature/x` is a directory and a file on disk and one branch to
+/// everybody else.
+fn loose_branches(heads: &Path, prefix: &str, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(heads) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let full = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => loose_branches(&entry.path(), &full, out),
+            Ok(_) => out.push(full),
+            Err(_) => {}
+        }
+    }
+}
+
+/// The local branches, sorted and without duplicates.
+///
+/// Nothing here is an error, the same as everywhere else in this file: a folder
+/// outside git, or one whose refs cannot be read, has no branches to offer and
+/// the dialog shows an empty list. The current branch is included even when
+/// neither source lists it — a repository with exactly one commitless branch
+/// has no ref file for it at all, and offering nothing to merge into would be
+/// worse than offering the one branch that exists.
+pub fn branches(project: &Path) -> Vec<String> {
+    let Some(dir) = git_dir(project) else { return Vec::new() };
+    let mut out = Vec::new();
+    loose_branches(&dir.join("refs/heads"), "", &mut out);
+    if let Ok(packed) = std::fs::read_to_string(dir.join("packed-refs")) {
+        out.extend(parse_packed_refs(&packed));
+    }
+    if let Some(current) = head(project).branch {
+        out.push(current);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[tauri::command]
+pub fn git_branches(project: String) -> Vec<String> {
+    branches(Path::new(&project))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +239,79 @@ mod tests {
 
         assert_eq!(head(&linked).branch.as_deref(), Some("feat/x"));
         let _ = fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn packed_refs_gives_up_its_branches_and_keeps_its_tags_out() {
+        // A fresh clone keeps nearly every branch in here and almost nothing
+        // loose on disk, so a reader that skipped this file would offer one
+        // branch out of forty.
+        let packed = "\
+# pack-refs with: peeled fully-peeled sorted
+a1b2c3 refs/heads/main
+d4e5f6 refs/heads/feature/runs
+0f0f0f refs/tags/v1.0.0
+^99887766
+c0ffee refs/remotes/origin/main
+";
+        assert_eq!(parse_packed_refs(packed), vec!["main", "feature/runs"]);
+    }
+
+    #[test]
+    fn an_annotated_tags_peel_line_never_becomes_a_branch() {
+        // `^<sha>` has no ref name on it at all; splitting it on a space would
+        // produce nothing, and not skipping it explicitly has been a source of
+        // junk entries in every hand-written parser of this file.
+        assert!(parse_packed_refs("^0123456789abcdef\n").is_empty());
+    }
+
+    #[test]
+    fn an_empty_or_header_only_file_has_no_branches() {
+        assert!(parse_packed_refs("").is_empty());
+        assert!(parse_packed_refs("# pack-refs with: peeled\n").is_empty());
+    }
+
+    #[test]
+    fn a_nested_branch_keeps_its_slash() {
+        let dir = scratch("branches");
+        let heads = dir.join(".git/refs/heads/feature");
+        fs::create_dir_all(&heads).expect("create refs/heads/feature");
+        fs::write(heads.join("runs"), "a1b2c3\n").expect("write the ref");
+        fs::write(dir.join(".git/refs/heads/main"), "d4e5f6\n").expect("write main");
+        fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+
+        assert_eq!(branches(&dir), vec!["feature/runs".to_string(), "main".to_string()]);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn the_current_branch_is_offered_even_with_no_ref_file_for_it() {
+        // A repository with no commit yet has a HEAD pointing at a branch that
+        // exists nowhere on disk. Offering nothing to merge into would be worse
+        // than offering the one branch there is.
+        let dir = scratch("branches-empty");
+        fs::create_dir_all(dir.join(".git/refs/heads")).expect("create refs/heads");
+        fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+
+        assert_eq!(branches(&dir), vec!["main".to_string()]);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_folder_outside_git_simply_has_no_branches() {
+        let dir = scratch("branches-nogit");
+        assert!(branches(&dir).is_empty());
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_branch_in_both_places_is_offered_once() {
+        let dir = scratch("branches-dup");
+        fs::create_dir_all(dir.join(".git/refs/heads")).expect("create refs/heads");
+        fs::write(dir.join(".git/refs/heads/main"), "a1b2c3\n").expect("write main");
+        fs::write(dir.join(".git/packed-refs"), "a1b2c3 refs/heads/main\n").expect("write packed");
+        fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+
+        assert_eq!(branches(&dir), vec!["main".to_string()]);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
     }
 }
