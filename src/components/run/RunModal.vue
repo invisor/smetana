@@ -9,6 +9,7 @@ import { computed, ref, watch } from 'vue'
 import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
+import Icon from '../core/Icon.vue'
 import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
 
@@ -23,6 +24,11 @@ const props = defineProps({
   /* The project's own defaults, from the config. */
   defaultBranch: { type: String, default: '' },
   defaultPriority: { type: Number, default: 2 },
+  /* The epic this task belongs to, when it belongs to one: `{ id, title,
+     open }`. The board offers a run on every card, epic children included, so
+     this dialog is where somebody finds out that the task in front of them is
+     part of something larger — and it is the last cheap moment to find out. */
+  partOf: { type: Object, default: null },
   /* What this dialog was left at last time in this project, or null. */
   remembered: { type: Object, default: null },
   /* False when the config declares no way to check a merged task. */
@@ -32,7 +38,10 @@ const props = defineProps({
   busy: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['close', 'confirm'])
+/* `rescope` re-aims this dialog at the epic without closing it: what has
+   already been chosen in the fields below is still what somebody wants, and
+   making them set it all again is a poor reward for taking the advice. */
+const emit = defineEmits(['close', 'confirm', 'rescope'])
 
 /* Solo means the agent does the work itself instead of delegating, which is
    coherent for one task and not for a queue or an epic. The same rule lives in
@@ -81,6 +90,14 @@ watch(
   { immediate: true }
 )
 
+/* The scope can change under an open dialog — `rescope` is the one thing that
+   does it — and solo is a single task's mode only. Left alone, the payload
+   would go out as solo on an epic and Rust would refuse it, with the answer
+   naming a field nobody could see was wrong. */
+watch(soloAllowed, (allowed) => {
+  if (!allowed && mode.value === 'solo') mode.value = 'auto'
+})
+
 const title = computed(() => {
   if (props.scope?.kind === 'task') return 'Run this task'
   if (props.scope?.kind === 'epic') return 'Run this epic'
@@ -117,6 +134,31 @@ const confirm = () => {
   })
 }
 
+/* Advice, not a refusal — so it is drawn on a sunken surface rather than in a
+   status colour, and it keeps its distance from the error line at the bottom.
+   Nothing here stops the run: whether one child is worth taking on its own is
+   a judgement about the epic, and the person is the only one holding it. */
+const partOfStyle = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 'var(--space-4)',
+  padding: 'var(--space-4)',
+  background: 'var(--surface-sunken)',
+  border: 'var(--border-w) solid var(--border-subtle)',
+  borderRadius: 'var(--radius-3)'
+}
+const partOfTextStyle = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 'var(--text-xs)',
+  lineHeight: 'var(--leading-normal)',
+  color: 'var(--text-secondary)'
+}
+const epicIdStyle = {
+  font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)',
+  color: 'var(--text-primary)'
+}
+
 const body = { display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }
 const row = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
 const labelStyle = {
@@ -144,6 +186,24 @@ const errorStyle = {
 <template>
   <Modal :open="open" :closable="!busy" :title="title" :description="description" @close="$emit('close')">
     <div :style="body">
+      <!-- Only while the scope is still the task. Taking the advice re-aims the
+           dialog at the epic, and the note would then be describing something
+           that has already happened — a caller that leaves `partOf` set through
+           that is not made to be right about it. -->
+      <div v-if="partOf && scope?.kind === 'task'" :style="partOfStyle">
+        <Icon name="layers" :size="13" :style="{ color: 'var(--text-muted)', flex: 'none', marginTop: '1px' }" />
+        <div :style="partOfTextStyle">
+          Part of <span :style="epicIdStyle">{{ partOf.id }}</span> — {{ partOf.title }}.
+          <template v-if="partOf.open">
+            Taking one child on its own can leave the epic merged in half; running the epic
+            takes them in order.
+          </template>
+        </div>
+        <Button v-if="partOf.open" variant="secondary" size="sm" @click="$emit('rescope')">
+          Run the epic
+        </Button>
+      </div>
+
       <div :style="row">
         <span :style="labelStyle">Merge into</span>
         <BranchSelect

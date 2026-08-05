@@ -285,6 +285,25 @@ const runTask = (id) => {
   })
 }
 
+/* The epic over the task in the dialog, if there is one. Read here rather than
+   carried in the scope: the scope is what the run is aimed at, and the epic is
+   context about it — it also has to stay right when `rescope` changes the aim.
+
+   Only an epic counts. bd's parent-child is not the epic relation by itself,
+   and a note calling some other parent an epic would be a plain untruth. */
+const runParent = computed(() => {
+  if (runScope.value.kind !== 'task') return null
+  const parent = issueById(issueById(runScope.value.id)?.parent)
+  if (!parent || parent.issue_type !== 'epic') return null
+  return { id: parent.id, title: parent.title, open: toUiStatus(parent.status) !== 'done' }
+})
+
+/* Taking the advice, without closing what is already filled in. */
+const runTheEpicInstead = () => {
+  const epic = runParent.value
+  if (epic) runScope.value = { kind: 'epic', id: epic.id, title: epic.title }
+}
+
 /* How much is in front of the run, for the line the dialog ends on. The ready
    count is the board's own, so it is the same number a person can see behind
    the dialog. */
@@ -1162,6 +1181,7 @@ const toastStackStyle = {
           :open="runOpen"
           :scope="runScope"
           :count="runCount"
+          :part-of="runParent"
           :branches="gitState.branches"
           :default-branch="runConfig?.defaults?.target_branch ?? branchLabel"
           :default-priority="runConfig?.defaults?.min_priority ?? 2"
@@ -1171,6 +1191,7 @@ const toastStackStyle = {
           :busy="runStarting"
           @close="runOpen = false"
           @confirm="startTheRun"
+          @rescope="runTheEpicInstead"
         />
         <SetupProjectModal
           :open="!!setupFor"

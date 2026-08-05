@@ -357,12 +357,14 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'task', id: 'smetana-9', title: 'Rename the worktree when the branch changes' }"
             :count="1"
+            :part-of="{ id: 'smetana-4', title: 'Worktree lifecycle', open: true }"
             :branches="['main', 'staging']"
             default-branch="main"
             :live-check-available="false"
             error="unknown field `gate` — .smetana/project.toml could not be read"
             @close="() => {}"
             @confirm="() => {}"
+            @rescope="() => {}"
           />
         </div>
       </div>
