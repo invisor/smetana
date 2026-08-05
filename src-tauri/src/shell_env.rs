@@ -27,12 +27,11 @@
 //! process inherits the full `PATH` and every lookup here would be redundant.
 //! The bug only exists in the bundle.
 //!
-//! So we ask a login shell what `PATH` is, once, and use its answer for both
-//! halves of running an agent: finding out whether one is installed
-//! (`agents::pick`) and the environment it is started with
-//! (`terminal::pty::build_command`). Answering only the first would trade "no
-//! agent is installed" for an agent that starts and cannot find `git`, `node`
-//! or its own helpers.
+//! So we ask a login shell, once, and its one answer serves both halves of
+//! running an agent: finding out whether one is installed (`agents::pick`) and
+//! the environment it is started with (`terminal::pty::build_command`).
+//! Answering only the first would trade "no agent is installed" for an agent
+//! that starts and cannot find `git`, `node` or its own helpers.
 //!
 //! `-i` is not optional, and it is not the cautious choice either: `-l` alone
 //! reads `~/.zprofile` and would have missed this machine entirely, where cargo
@@ -70,11 +69,10 @@ struct Resolved {
 
 /// What a child should be told about its locale.
 pub struct Locale {
-    /// The variable to set. When anybody on this machine has a locale, this is
-    /// the variable theirs came from, and that is not cosmetic: a value written
-    /// to a lower-precedence variable is outranked by the very setting it was
-    /// meant to replace, so an `LC_ALL=C` answered with `LC_CTYPE=C.UTF-8`
-    /// would leave the child in `C` and look fixed.
+    /// The variable to set: theirs when their value is being forwarded,
+    /// `FALLBACK_KEY` when it is not. A caller has to make sure nothing
+    /// `outranking` this reaches the child, or the setting being replaced would
+    /// outrank its replacement and the whole thing would merely look fixed.
     pub key: &'static str,
     /// Their value, when it names the UTF-8 codeset. `None` means either that
     /// nobody said anything, or that what they said contradicts the channel —
@@ -97,10 +95,7 @@ fn resolved() -> &'static Resolved {
     RESOLVED.get_or_init(|| {
         let stdout = resolve();
         let read = |key: &str| stdout.as_deref().and_then(|out| extract(out, key));
-        let found = LOCALE_KEYS
-            .iter()
-            .find_map(|key| read(key).map(|value| (*key, value)))
-            .or_else(inherited_locale);
+        let found = choose(read).or_else(|| choose(inherited));
         Resolved {
             path: read("PATH").or_else(|| std::env::var("PATH").ok()),
             locale: judge(found),
@@ -136,30 +131,84 @@ pub fn locale() -> &'static Locale {
 /// is about. A legacy codeset is worse than the C locale rather than equal to
 /// it: `ru_RU.KOI8-R` would have the agent's tools emit KOI8-R into a pane that
 /// decodes UTF-8, where `C` at least lets UTF-8 bytes through untouched.
+/// A rejected value does not keep its variable, and that is the one part of this
+/// with a measurement behind it rather than a principle. The fallback codeset is
+/// bare `UTF-8` on macOS, and bare `UTF-8` is meaningful only in the `LC_CTYPE`
+/// position: `LC_ALL=UTF-8` and `LANG=UTF-8` both resolve to US-ASCII. So
+/// answering an `LC_ALL=C` in place would swap one silent failure for another.
+/// Instead the answer always lands on `FALLBACK_KEY`, and `terminal::pty` drops
+/// whatever outranks it — which is what removes the offending variable when the
+/// offender was the one on top.
+///
+/// The alternative, replacing only the codeset so `ru_RU.KOI8-R` became
+/// `ru_RU.UTF-8`, keeps somebody's language and is rejected all the same:
+/// nothing here can tell whether the locale it just invented exists on the
+/// machine, and one that does not resolves to US-ASCII with no error — the same
+/// silence, arrived at by a longer road.
 fn judge(found: Option<(&'static str, String)>) -> Locale {
     match found {
         Some((key, value)) if names_utf8(&value) => Locale { key, value: Some(value) },
-        // Their variable, our codeset: keeping the key is what stops the value
-        // we write from being outranked by the one we are replacing.
-        Some((key, _)) => Locale { key, value: None },
-        None => Locale { key: FALLBACK_KEY, value: None },
+        _ => Locale { key: FALLBACK_KEY, value: None },
     }
 }
 
-/// The variable to set when nobody on this machine named a locale at all.
-/// `LC_CTYPE` because the codeset is the only part of a locale an app is
-/// entitled to decide for somebody, and because it is the only one of the three
-/// for which a bare codeset is a meaningful value at all — see
-/// `terminal::pty::UTF8_LOCALE`.
+/// The first of `LOCALE_KEYS` that `lookup` answers for. Pure, and split out
+/// because it is the composition the tests could not otherwise reach: with the
+/// walk inlined, reordering `LOCALE_KEYS` broke nothing that runs.
+fn choose(lookup: impl Fn(&str) -> Option<String>) -> Option<(&'static str, String)> {
+    LOCALE_KEYS.iter().find_map(|key| lookup(key).map(|value| (*key, value)))
+}
+
+/// The variables that beat `key`, for a caller that has to stop them reaching a
+/// child. `LOCALE_KEYS` is in precedence order, so they are the ones in front of
+/// it; a key not in the list has nothing above it by definition.
+pub(crate) fn outranking(key: &str) -> &'static [&'static str] {
+    let position = LOCALE_KEYS.iter().position(|candidate| *candidate == key).unwrap_or(0);
+    &LOCALE_KEYS[..position]
+}
+
+/// The variable an invented answer is written to. `LC_CTYPE` because the codeset
+/// is the only part of a locale an app is entitled to decide for somebody, and
+/// because it is the only one of the three a bare codeset is a legal value for
+/// at all — `terminal::pty::UTF8_LOCALE` has the measurements.
 const FALLBACK_KEY: &str = "LC_CTYPE";
 
-/// Whether a locale value names the UTF-8 codeset.
+/// Whether a locale value names a codeset the platform will actually resolve to
+/// UTF-8. Split by platform because the two disagree about spelling, and being
+/// generous on the wrong one is what puts a person back in US-ASCII while the
+/// code claims to have covered them.
 ///
-/// A locale is `language[_TERRITORY][.codeset][@modifier]` and only the codeset
-/// is read here. `C`, `POSIX` and any other value with no `.` name no codeset —
-/// they mean US-ASCII, which is why `LANG=UTF-8` is not the shortcut it looks
-/// like. Spelling is compared loosely on purpose: `UTF-8`, `utf8` and `UTF8` are
-/// all in the wild and all the same codeset.
+/// A locale is `language[_TERRITORY][.codeset][@modifier]`, and only what
+/// follows the `.` is read here. A value with no `.` names no codeset at all and
+/// means US-ASCII — which is why a bare `UTF-8` is never forwarded even though
+/// macOS accepts it in the one position `terminal::pty` puts it in.
+///
+/// What this cannot check is whether the *language* exists: `xx_YY.UTF-8` is
+/// well-formed and resolves to US-ASCII, and finding that out means asking the
+/// system rather than reading the string. It is left alone deliberately — a
+/// language nobody has is a broken rc file, the reader here is about the
+/// codeset, and the pairing test in `terminal::pty` is what would catch it if it
+/// ever became a real machine's answer.
+#[cfg(target_os = "macos")]
+pub(crate) fn names_utf8(value: &str) -> bool {
+    // Measured on macOS 26.5.2, as `LC_ALL=<value> locale charmap`:
+    //
+    //   en_US.UTF-8 -> UTF-8      en_US.utf8         -> US-ASCII
+    //   en_US.utf-8 -> utf-8      en_US.UTF8         -> US-ASCII
+    //   C.UTF-8     -> UTF-8      en_US.UTF-8@euro   -> US-ASCII
+    //                             "en_US.UTF-8 "     -> US-ASCII
+    //
+    // Only the hyphen spelling resolves, and case does not matter, but a
+    // modifier or a trailing space is fatal. So the codeset has to be this and
+    // nothing besides — an exact comparison rather than a prefix or a search,
+    // which is what rejects the last three.
+    matches!(value.split_once('.'), Some((_, codeset)) if codeset.eq_ignore_ascii_case("utf-8"))
+}
+
+/// Everywhere else, `.utf8` is the ordinary spelling — it is what `locale -a`
+/// prints on Debian — so the comparison ignores punctuation and case alike, and
+/// a modifier is dropped rather than treated as part of the codeset.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn names_utf8(value: &str) -> bool {
     let Some((_, codeset)) = value.split_once('.') else { return false };
     let codeset = codeset.split('@').next().unwrap_or(codeset);
@@ -168,13 +217,12 @@ pub(crate) fn names_utf8(value: &str) -> bool {
     letters == "UTF8"
 }
 
-/// This process's own locale, under the same precedence. In development it is
-/// the person's, because the binary was started from their shell; in a bundle
-/// it is nothing, which is the case this module exists for.
-fn inherited_locale() -> Option<(&'static str, String)> {
-    LOCALE_KEYS.iter().find_map(|key| {
-        std::env::var(key).ok().filter(|value| !value.is_empty()).map(|value| (*key, value))
-    })
+/// This process's own environment, read the same way the shell's output is. In
+/// development it carries the person's locale, because the binary was started
+/// from their shell; in a bundle it carries nothing, which is the case this
+/// module exists for.
+fn inherited(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 /// Start resolving now, on a thread of its own, so the first agent a person
@@ -295,13 +343,11 @@ mod tests {
         format!("{NOISE}{BEGIN}\n{body}\n{END}\n{NOISE}")
     }
 
-    /// The precedence `resolved()` applies, run over a body rather than over the
-    /// real environment.
-    fn locale_of(body: &str) -> Option<(String, String)> {
+    /// `choose` over a shell's output, which is the composition `resolved()`
+    /// performs — the real function, not a copy of its walk.
+    fn locale_of(body: &str) -> Option<(&'static str, String)> {
         let out = output(body);
-        LOCALE_KEYS
-            .iter()
-            .find_map(|key| extract(&out, key).map(|value| ((*key).to_string(), value)))
+        choose(|key| extract(&out, key))
     }
 
     #[test]
@@ -357,17 +403,29 @@ mod tests {
     }
 
     #[test]
-    fn a_codeset_that_contradicts_the_channel_is_dropped_but_its_variable_is_kept() {
+    fn a_codeset_that_contradicts_the_channel_takes_its_variable_down_with_it() {
         // `export LC_ALL=C` is a common habit for deterministic tool output, and
         // it is an *answer*, so nothing but this check stands between it and a
-        // child handed the exact locale the bug is about. The key has to survive
-        // the drop: answering an `LC_ALL` with an `LC_CTYPE` would be outranked
-        // by the `LC_ALL` still in the environment.
+        // child handed the exact locale the bug is about. The variable goes too
+        // rather than being overwritten in place: the invented value is a bare
+        // codeset, which is legal only as an `LC_CTYPE`, so `LC_ALL=UTF-8` would
+        // resolve to US-ASCII. `terminal::pty` removes what `outranking` names,
+        // which is what clears the rejected `LC_ALL` out of the way.
         for value in ["C", "POSIX", "en_US.ISO8859-1", "ru_RU.KOI8-R"] {
             let locale = judge(Some(("LC_ALL", value.to_string())));
-            assert_eq!(locale.key, "LC_ALL", "{value}");
+            assert_eq!(locale.key, FALLBACK_KEY, "{value}");
             assert_eq!(locale.value, None, "{value}");
+            assert!(outranking(locale.key).contains(&"LC_ALL"), "{value} must be cleared away");
         }
+    }
+
+    #[test]
+    fn the_variables_that_beat_a_key_are_the_ones_in_front_of_it() {
+        assert_eq!(outranking("LC_ALL"), &[] as &[&str]);
+        assert_eq!(outranking("LC_CTYPE"), &["LC_ALL"]);
+        assert_eq!(outranking("LANG"), &["LC_ALL", "LC_CTYPE"]);
+        // A key that is not one of these has nothing above it to clear.
+        assert_eq!(outranking("TERM"), &[] as &[&str]);
     }
 
     #[test]
@@ -378,23 +436,48 @@ mod tests {
     }
 
     #[test]
-    fn only_the_codeset_of_a_locale_is_read_and_only_utf8_passes() {
-        for value in ["en_US.UTF-8", "C.UTF-8", "en_US.utf8", "en_US.UTF8", "zh_CN.UTF-8@pinyin"] {
-            assert!(names_utf8(value), "{value} names UTF-8");
+    fn a_value_naming_no_codeset_never_passes_on_any_platform() {
+        // No `.` means no codeset, which means US-ASCII — including the bare
+        // `UTF-8` that looks like a shortcut and is one only in the `LC_CTYPE`
+        // position `terminal::pty` writes it to.
+        for value in ["C", "POSIX", "UTF-8", "utf-8", "en_US", ""] {
+            assert!(!names_utf8(value), "{value:?} names no codeset");
         }
-        // A value with no `.` names no codeset at all and means US-ASCII —
-        // which is why a bare `UTF-8` is not the shortcut it looks like, and is
-        // replaced rather than forwarded even though macOS would accept it as
-        // an `LC_CTYPE`. See `terminal::pty::UTF8_LOCALE`.
-        for value in ["C", "POSIX", "UTF-8", "en_US", "ru_RU.KOI8-R", "en_US.ISO8859-1"] {
-            assert!(!names_utf8(value), "{value} does not name UTF-8");
+        for value in ["ru_RU.KOI8-R", "en_US.ISO8859-1", "en_US.eucJP"] {
+            assert!(!names_utf8(value), "{value} names a codeset that is not UTF-8");
+        }
+    }
+
+    /// Measured on macOS 26.5.2 with `LC_ALL=<value> locale charmap`: only the
+    /// hyphen spelling resolves, case is free, and a modifier or a trailing
+    /// space takes the whole value down to US-ASCII. Being generous here is what
+    /// would hand somebody a locale the system reads as US-ASCII while both the
+    /// code and this test claimed they were covered.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_resolves_only_the_hyphen_spelling() {
+        for value in ["en_US.UTF-8", "en_US.utf-8", "C.UTF-8", "en_US.Utf-8"] {
+            assert!(names_utf8(value), "{value} resolves to UTF-8 on macOS");
+        }
+        for value in ["en_US.utf8", "en_US.UTF8", "zh_CN.UTF-8@pinyin", "en_US.UTF-8 "] {
+            assert!(!names_utf8(value), "{value:?} resolves to US-ASCII on macOS");
+        }
+    }
+
+    /// glibc prints `en_US.utf8` from `locale -a`, so the spelling rule that is
+    /// correct on macOS would reject the ordinary form there.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn elsewhere_the_punctuation_of_a_codeset_does_not_matter() {
+        for value in ["en_US.UTF-8", "en_US.utf8", "en_US.UTF8", "zh_CN.UTF-8@pinyin"] {
+            assert!(names_utf8(value), "{value} names UTF-8");
         }
     }
 
     #[test]
     fn the_locale_is_read_from_the_same_answer_as_the_path() {
         let found = locale_of("PATH=/usr/bin\nLANG=ru_RU.UTF-8\nTERM=xterm");
-        assert_eq!(found, Some(("LANG".to_string(), "ru_RU.UTF-8".to_string())));
+        assert_eq!(found, Some(("LANG", "ru_RU.UTF-8".to_string())));
     }
 
     #[test]
@@ -402,9 +485,9 @@ mod tests {
         // A person who sets `LC_ALL` means it to override the rest, so passing
         // on their `LANG` instead would quietly hand the child the losing value.
         let body = "LANG=en_US.UTF-8\nLC_CTYPE=de_DE.UTF-8\nLC_ALL=ru_RU.UTF-8";
-        assert_eq!(locale_of(body), Some(("LC_ALL".to_string(), "ru_RU.UTF-8".to_string())));
+        assert_eq!(locale_of(body), Some(("LC_ALL", "ru_RU.UTF-8".to_string())));
         let body = "LANG=en_US.UTF-8\nLC_CTYPE=de_DE.UTF-8";
-        assert_eq!(locale_of(body), Some(("LC_CTYPE".to_string(), "de_DE.UTF-8".to_string())));
+        assert_eq!(locale_of(body), Some(("LC_CTYPE", "de_DE.UTF-8".to_string())));
     }
 
     #[test]
