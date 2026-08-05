@@ -1,4 +1,4 @@
-//! The `PATH` a child process should actually be started with.
+//! The `PATH` and the locale a child process should actually be started with.
 //!
 //! A GUI application on macOS inherits launchd's environment, not the person's:
 //! `open smetana.app` gives the process whatever `launchctl getenv PATH` says,
@@ -8,6 +8,16 @@
 //! `~/.zshrc` or `~/.zprofile`, which only a shell ever reads. The result is an
 //! app that cannot find `claude` or `codex` on a machine where both are
 //! installed and on `PATH` in every terminal window.
+//!
+//! The same environment is missing the same way in a second place, and it costs
+//! more quietly: it carries no `LC_ALL`, no `LC_CTYPE` and no `LANG` either, so
+//! a child started from it runs in the C locale. On macOS a process with no
+//! usable locale takes its default C-string encoding from
+//! `CFStringGetSystemEncoding()`, which answers MacRoman — and the system's own
+//! command line tools then read UTF-8 bytes back as MacRoman. `pbcopy` handed
+//! the bytes of `Привет` that way puts `–ü—Ä–∏–≤–µ—Ç` on the clipboard,
+//! losslessly, with nothing anywhere reporting a failure. One login shell
+//! answers both questions, so both are read out of the same call.
 //!
 //! It is invisible in development, which is what makes it worth a module rather
 //! than a line: `npm run tauri dev` starts the binary from a terminal, so the
@@ -42,21 +52,71 @@ const END: &str = "__SMETANA_ENV_END__";
 /// telling a person their installed agent does not exist.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-static PATH: OnceLock<Option<String>> = OnceLock::new();
+/// The three variables that decide a child's character encoding, in the order
+/// POSIX resolves them: the first one set is the one that answers.
+const LOCALE_KEYS: [&str; 3] = ["LC_ALL", "LC_CTYPE", "LANG"];
+
+/// Both answers, resolved together because one login shell carries both.
+struct Resolved {
+    path: Option<String>,
+    /// The variable and its value, kept as a pair so the child is told the same
+    /// thing under the same name — a person who sets `LC_ALL` means it to win
+    /// over a `LANG` the child may pick up from somewhere else.
+    locale: Option<(String, String)>,
+}
+
+static RESOLVED: OnceLock<Resolved> = OnceLock::new();
+
+/// The fallbacks are the whole of the error handling. A shell that will not
+/// start, answers too slowly or prints something unrecognisable leaves us
+/// exactly where we were before this module existed — which is correct in
+/// development and no worse than the old behaviour anywhere else.
+///
+/// Resolving happens once per run. Either value changing under a running app
+/// means a person edited an rc file, and they can restart; re-reading it on a
+/// schedule would spawn a login shell behind their back forever.
+fn resolved() -> &'static Resolved {
+    RESOLVED.get_or_init(|| {
+        let stdout = resolve();
+        let read = |key: &str| stdout.as_deref().and_then(|out| extract(out, key));
+        Resolved {
+            path: read("PATH").or_else(|| std::env::var("PATH").ok()),
+            locale: LOCALE_KEYS
+                .iter()
+                .find_map(|key| read(key).map(|value| ((*key).to_string(), value)))
+                .or_else(inherited_locale),
+        }
+    })
+}
 
 /// The best `PATH` we know: the login shell's when it could be read, and the
 /// one this process inherited otherwise.
-///
-/// The fallback is the whole of the error handling. A shell that will not start,
-/// answers too slowly or prints something unrecognisable leaves us exactly where
-/// we were before this module existed — which is correct in development and no
-/// worse than the old behaviour anywhere else.
-///
-/// Resolving happens once per run. `PATH` changing under a running app means a
-/// person edited an rc file, and they can restart; re-reading it on a schedule
-/// would spawn a login shell behind their back forever.
 pub fn path() -> Option<&'static str> {
-    PATH.get_or_init(|| resolve().or_else(|| std::env::var("PATH").ok())).as_deref()
+    resolved().path.as_deref()
+}
+
+/// The locale a child should be started with, as the variable to set and the
+/// value to set it to — the login shell's when it could be read, this process's
+/// own otherwise, and `None` when neither has one at all.
+///
+/// `None` is a real answer and not an error: it means nobody on this machine
+/// has said what the encoding is, and the caller is the one that knows what its
+/// own stream carries. `terminal::pty` answers `LC_CTYPE=UTF-8` there, because
+/// the PTY is a UTF-8 channel by construction.
+pub fn locale() -> Option<(&'static str, &'static str)> {
+    resolved().locale.as_ref().map(|(key, value)| (key.as_str(), value.as_str()))
+}
+
+/// This process's own locale, under the same precedence. In development it is
+/// the person's, because the binary was started from their shell; in a bundle
+/// it is nothing, which is the case this module exists for.
+fn inherited_locale() -> Option<(String, String)> {
+    LOCALE_KEYS.iter().find_map(|key| {
+        std::env::var(key)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(|value| ((*key).to_string(), value))
+    })
 }
 
 /// Start resolving now, on a thread of its own, so the first agent a person
@@ -71,8 +131,8 @@ pub fn warm() {
     });
 }
 
-/// Ask a login shell. `None` on any failure — see `path()` for why that is the
-/// entire error path.
+/// Ask a login shell, and hand back everything it printed. `None` on any
+/// failure — see `resolved()` for why that is the entire error path.
 #[cfg(unix)]
 fn resolve() -> Option<String> {
     use std::io::Read;
@@ -118,10 +178,10 @@ fn resolve() -> Option<String> {
             // Lossy: a path that is not UTF-8 is possible on Unix and cannot
             // survive the `&str` the rest of this wants. Mangling one entry
             // beats discarding the whole answer over it.
-            extract(&String::from_utf8_lossy(&buf))
+            Some(String::from_utf8_lossy(&buf).into_owned())
         }
         Err(_) => {
-            eprintln!("[env] {shell} did not answer within {TIMEOUT:?}; using the inherited PATH");
+            eprintln!("[env] {shell} did not answer within {TIMEOUT:?}; using the inherited environment");
             let _ = child.kill();
             let _ = child.wait();
             None
@@ -136,21 +196,23 @@ fn resolve() -> Option<String> {
     None
 }
 
-/// `PATH` out of what the shell printed. Pure, and the part of this worth a
-/// test — spawning a login shell is not testable, the same as bd's calls and
+/// One variable out of what the shell printed. Pure, and the part of this worth
+/// a test — spawning a login shell is not testable, the same as bd's calls and
 /// the PTY spawn aren't.
 ///
-/// The first `PATH=` line between the markers wins. A multi-line value earlier
+/// The first matching line between the markers wins. A multi-line value earlier
 /// in the environment could in principle contain a line that looks like one,
 /// and nothing in `env`'s output distinguishes the two — but the alternative
 /// rules (last one, refuse when there are several) are guesses of the same kind
 /// against an event nobody has seen.
-fn extract(stdout: &str) -> Option<String> {
+fn extract(stdout: &str, key: &str) -> Option<String> {
     let body = stdout.split_once(BEGIN)?.1.split_once(END)?.0;
     body.lines()
-        .find_map(|line| line.strip_prefix("PATH="))
-        // An empty PATH is not an answer: it would be read as "nothing is
-        // installed" and is indistinguishable from a shell that broke halfway.
+        .find_map(|line| line.strip_prefix(&format!("{key}=")))
+        // An empty value is not an answer: an empty `PATH` would be read as
+        // "nothing is installed", an empty `LANG` says nothing about the
+        // encoding, and both are indistinguishable from a shell that broke
+        // halfway.
         .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
@@ -169,25 +231,35 @@ mod tests {
         format!("{NOISE}{BEGIN}\n{body}\n{END}\n{NOISE}")
     }
 
+    /// The precedence `resolved()` applies, run over a body rather than over the
+    /// real environment.
+    fn locale_of(body: &str) -> Option<(String, String)> {
+        let out = output(body);
+        LOCALE_KEYS
+            .iter()
+            .find_map(|key| extract(&out, key).map(|value| ((*key).to_string(), value)))
+    }
+
     #[test]
     fn the_value_is_read_out_of_a_stream_an_rc_file_wrote_into() {
         let out = output("SHELL=/bin/zsh\nPATH=/Users/x/.local/bin:/usr/bin\nTERM=xterm");
-        assert_eq!(extract(&out).as_deref(), Some("/Users/x/.local/bin:/usr/bin"));
+        assert_eq!(extract(&out, "PATH").as_deref(), Some("/Users/x/.local/bin:/usr/bin"));
     }
 
     #[test]
     fn a_shell_that_printed_nothing_we_recognise_is_not_an_answer() {
         // Half an answer is the shape a killed shell leaves behind, and it must
-        // not be read as one: the fallback in `path()` is the correct outcome
-        // for all three.
-        assert_eq!(extract(NOISE), None);
-        assert_eq!(extract(&format!("{NOISE}{BEGIN}\nPATH=/usr/bin\n")), None);
-        assert_eq!(extract(&output("SHELL=/bin/zsh\nTERM=xterm")), None);
+        // not be read as one: the fallback in `resolved()` is the correct
+        // outcome for all three.
+        assert_eq!(extract(NOISE, "PATH"), None);
+        assert_eq!(extract(&format!("{NOISE}{BEGIN}\nPATH=/usr/bin\n"), "PATH"), None);
+        assert_eq!(extract(&output("SHELL=/bin/zsh\nTERM=xterm"), "PATH"), None);
     }
 
     #[test]
-    fn an_empty_path_is_a_failure_and_not_an_empty_answer() {
-        assert_eq!(extract(&output("PATH=")), None);
+    fn an_empty_value_is_a_failure_and_not_an_empty_answer() {
+        assert_eq!(extract(&output("PATH="), "PATH"), None);
+        assert_eq!(extract(&output("LANG="), "LANG"), None);
     }
 
     #[test]
@@ -196,7 +268,38 @@ mod tests {
         // what its children get, including a trailing empty entry that means
         // "the current directory" to some tools.
         let out = output("PATH=/opt/homebrew/bin::/usr/bin:");
-        assert_eq!(extract(&out).as_deref(), Some("/opt/homebrew/bin::/usr/bin:"));
+        assert_eq!(extract(&out, "PATH").as_deref(), Some("/opt/homebrew/bin::/usr/bin:"));
+    }
+
+    #[test]
+    fn one_variable_is_never_mistaken_for_another_whose_name_it_ends_with() {
+        // `LANG` and `LC_ALL` share no prefix, but `strip_prefix` without the
+        // `=` would have let `PATH` be answered by `MANPATH`.
+        let out = output("MANPATH=/usr/share/man\nPATH=/usr/bin");
+        assert_eq!(extract(&out, "PATH").as_deref(), Some("/usr/bin"));
+    }
+
+    #[test]
+    fn the_locale_is_read_from_the_same_answer_as_the_path() {
+        let found = locale_of("PATH=/usr/bin\nLANG=ru_RU.UTF-8\nTERM=xterm");
+        assert_eq!(found, Some(("LANG".to_string(), "ru_RU.UTF-8".to_string())));
+    }
+
+    #[test]
+    fn the_locale_variables_are_read_in_the_order_posix_resolves_them() {
+        // A person who sets `LC_ALL` means it to override the rest, so passing
+        // on their `LANG` instead would quietly hand the child the losing value.
+        let body = "LANG=en_US.UTF-8\nLC_CTYPE=de_DE.UTF-8\nLC_ALL=ru_RU.UTF-8";
+        assert_eq!(locale_of(body), Some(("LC_ALL".to_string(), "ru_RU.UTF-8".to_string())));
+        let body = "LANG=en_US.UTF-8\nLC_CTYPE=de_DE.UTF-8";
+        assert_eq!(locale_of(body), Some(("LC_CTYPE".to_string(), "de_DE.UTF-8".to_string())));
+    }
+
+    #[test]
+    fn a_shell_with_no_locale_at_all_is_not_an_answer() {
+        // The launchd environment this module exists for, and the case
+        // `terminal::pty` answers for itself.
+        assert_eq!(locale_of("PATH=/usr/bin\nTERM=xterm"), None);
     }
 
     /// Not a test of the parser but of the machine: on any developer's Unix box
@@ -205,7 +308,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_login_shell_on_this_machine_answers() {
-        let resolved = resolve().expect("a login shell must report a PATH");
-        assert!(resolved.contains('/'), "{resolved:?} does not look like a PATH");
+        let stdout = resolve().expect("a login shell must answer");
+        let path = extract(&stdout, "PATH").expect("a login shell must report a PATH");
+        assert!(path.contains('/'), "{path:?} does not look like a PATH");
     }
 }

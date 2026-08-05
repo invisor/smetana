@@ -37,6 +37,21 @@ pub fn build_command(launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
     cmd.env("TERM", "xterm-256color");
+    // What encoding the bytes in that terminal are in, which is the second half
+    // of `TERM` and is missing for the same launchd reason `PATH` is: a bundled
+    // app is handed an environment with no locale in it at all, and a child told
+    // nothing runs in the C locale. There macOS's own tools take their default
+    // C-string encoding from `CFStringGetSystemEncoding()`, which answers
+    // MacRoman — so an agent that runs `pbcopy` on the bytes of `Привет` puts
+    // `–ü—Ä–∏–≤–µ—Ç` on the clipboard, losslessly and with no error to notice.
+    // Saying so is a statement of fact rather than a preference: this PTY is a
+    // UTF-8 channel by construction, since `terminal_write` sends a Rust
+    // string's own UTF-8 bytes and xterm.js decodes UTF-8 at the other end.
+    // `LC_CTYPE` is the last resort rather than `LANG` because the encoding is
+    // the only part of a locale this is entitled to decide for somebody —
+    // their language, money and dates are none of its business.
+    let (key, value) = crate::shell_env::locale().unwrap_or(("LC_CTYPE", "UTF-8"));
+    cmd.env(key, value);
     // The environment half of running without a person. The argument half is
     // applied by the profile itself, because it has to go in front of the
     // positional prompt and `CommandBuilder` only appends; the environment has
@@ -268,6 +283,22 @@ mod tests {
             // same value.
             let term = cmd.get_env("TERM").map(|v| v.to_string_lossy().into_owned());
             assert_eq!(term.as_deref(), Some("xterm-256color"), "{id}");
+        }
+    }
+
+    /// The other half of that: a terminal type says nothing about what encoding
+    /// the bytes in it are in, and a child left to guess guesses MacRoman on
+    /// macOS. Which of the three variables carries the answer depends on the
+    /// machine — what must never happen is that none of them does.
+    #[test]
+    fn every_agent_is_told_what_encoding_the_stream_carries() {
+        for id in agents::IDS {
+            let cmd = build_command(&launch(id));
+            let told = ["LC_ALL", "LC_CTYPE", "LANG"]
+                .iter()
+                .find_map(|key| cmd.get_env(key).map(|v| v.to_string_lossy().into_owned()));
+            let value = told.unwrap_or_else(|| panic!("{id} was started with no locale at all"));
+            assert!(!value.is_empty(), "{id} was given an empty locale");
         }
     }
 
