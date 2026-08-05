@@ -142,10 +142,17 @@ the waiting visible — the agent's row goes loud on its own, in a tab nobody is
 
 ### `.smetana/project.toml` — the shape of the project
 
-Next to `.beads/` in the project root. In a monorepo that is inside the repository and gets
-committed; in a multi-repository folder the root is usually not under git at all and the file simply
-sits beside the tracker. Nothing about the mechanics differs between the two cases — a monorepo is
-`repos = ["."]`.
+Next to `.beads/` in the project root, and not tracked by git: `runs/gitignore.rs` puts `.smetana/`
+into the project's `.gitignore` when a setup session starts, before the agent has written anything,
+so the folder is ignored from the moment it appears. In a multi-repository folder the root is
+usually not under git at all, and then there is nothing to do — each repository below tracks only
+itself and never sees the folder. Nothing about the mechanics differs between the two cases — a
+monorepo is `repos = ["."]`.
+
+That the app decides this rather than the setting-up skill is the point. An instruction in prose is
+a thing an agent can follow, argue with or quietly skip, and it did all three: reading a
+`.gitignore` whose neighbouring lines hide the tracker and the docs, it will as readily conclude the
+folder belongs there as conclude the opposite, and the answer then differs from project to project.
 
 ```toml
 [project]

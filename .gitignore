@@ -11,6 +11,7 @@ dist/
 .claude
 docs
 .beads
+.smetana
 
 # Tauri
 src-tauri/target/

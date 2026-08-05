@@ -402,8 +402,17 @@ fn handle(
             // Only a Setup session pays for the walk, and it happens here
             // rather than in the front end so that what the agent is told is
             // what the disk says at the moment the session starts.
-            let facts = matches!(intent, agents::Intent::Setup)
-                .then(|| crate::runs::survey::render(&crate::runs::survey::run(Path::new(&project))));
+            let facts = matches!(intent, agents::Intent::Setup).then(|| {
+                // Before the agent writes anything, so the folder it is about
+                // to create is already ignored when it appears rather than
+                // after somebody has staged it. Failing costs a line in a
+                // .gitignore; refusing to start the session over it would cost
+                // the whole feature, so this is logged and stepped over.
+                if let Err(err) = crate::runs::gitignore::ensure(Path::new(&project)) {
+                    eprintln!("[runs] could not add .smetana/ to .gitignore: {err}");
+                }
+                crate::runs::survey::render(&crate::runs::survey::run(Path::new(&project)))
+            });
             let launch = agents::Launch {
                 profile,
                 cwd: PathBuf::from(&project),
