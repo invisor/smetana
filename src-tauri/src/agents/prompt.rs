@@ -6,6 +6,7 @@ use std::path::Path;
 
 use super::library::Skills;
 use super::{Brainstorm, Intent, SkillDelivery, TaskDraft};
+use crate::runs::model::{RunMode, RunScope, RunSettings};
 
 /// The sentence that makes the agent talk the task through. It has to stand on
 /// its own: `Inline` may find no skill text to attach, and `Auto` deliberately
@@ -59,7 +60,86 @@ pub fn build(
             Some(new_task(*brainstorm, draft, delivery, &brainstorming, text))
         }
         Intent::Setup => Some(setup(delivery, skills, facts)),
+        Intent::Run { settings } => Some(run(settings, delivery, skills)),
     }
+}
+
+/// What one batch of a run opens on.
+///
+/// Everything variable is stated here, and everything fixed is left to the
+/// skill: the settings are this run's and are not in any file, while how to
+/// carry work through is the same every time and is 300 lines nobody should
+/// pay for in a prompt. The rest — repositories, gates, hazards — the skill
+/// reads out of `.smetana/project.toml` itself, which is also what keeps a
+/// batch reading the config as it is now rather than as it was when the run
+/// started.
+fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> String {
+    let mut out = String::from("Work this project's bd tracker. ");
+
+    match &settings.scope {
+        RunScope::Queue => out.push_str("Take ready tasks from the board."),
+        RunScope::Task { id } => {
+            let _ = write!(out, "Work only on issue {id}, and nothing else.");
+        }
+        RunScope::Epic { id } => {
+            let _ = write!(out, "Work only on the children of epic {id}, and nothing else.");
+        }
+    }
+
+    out.push_str("\n\nThis run:\n");
+    let _ = writeln!(out, "- merge finished work into `{}`", settings.target_branch);
+    let _ = writeln!(
+        out,
+        "- take nothing worse than priority P{} automatically",
+        settings.min_priority
+    );
+    let _ = writeln!(
+        out,
+        "- {}",
+        match settings.mode {
+            RunMode::Auto =>
+                "you are on your own — there is no one to ask. Park anything you cannot resolve, \
+                 note why, and carry on with the rest",
+            RunMode::Supervised =>
+                "ask me when something genuinely needs a decision, and keep going otherwise",
+            RunMode::Solo =>
+                "do the work yourself rather than delegating it, and ask me freely",
+        }
+    );
+    let _ = writeln!(
+        out,
+        "- {}",
+        if settings.live_check {
+            "verify each merged task for real before closing it"
+        } else {
+            "close a task on a green merge; there is no live check this run"
+        }
+    );
+    let _ = writeln!(
+        out,
+        "- {}",
+        if settings.file_findings {
+            "findings that are out of scope may be filed as `deferred`, within the budget"
+        } else {
+            "file nothing new: every out-of-scope finding goes to the digest and nowhere else"
+        }
+    );
+
+    out.push('\n');
+    match delivery {
+        SkillDelivery::PluginDir => out.push_str(
+            "Follow the smetana:running-tasks skill — it is the process, and it names the \
+             others it needs.",
+        ),
+        SkillDelivery::Inline => {
+            let _ = write!(
+                out,
+                "The process is at {} — read it first, and read the skills it names beside it.",
+                skills.smetana.join("skills/running-tasks/SKILL.md").display()
+            );
+        }
+    }
+    out
 }
 
 fn setup(delivery: SkillDelivery, skills: &Skills, facts: Option<&str>) -> String {
@@ -216,6 +296,109 @@ mod tests {
 
     fn both() -> SkillText<'static> {
         SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING) }
+    }
+
+    fn run_settings(mode: RunMode, scope: RunScope) -> RunSettings {
+        RunSettings {
+            scope,
+            mode,
+            target_branch: "staging".into(),
+            min_priority: 2,
+            live_check: true,
+            file_findings: true,
+        }
+    }
+
+    fn run_prompt(settings: RunSettings, delivery: SkillDelivery) -> String {
+        build(&Intent::Run { settings }, delivery, &skills(), None, nothing()).unwrap()
+    }
+
+    #[test]
+    fn a_run_names_the_process_skill_in_both_deliveries() {
+        let named = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), SkillDelivery::PluginDir);
+        assert!(named.contains("smetana:running-tasks"), "{named}");
+
+        let pointed = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), SkillDelivery::Inline);
+        assert!(
+            pointed.contains("/app/resources/smetana/skills/running-tasks/SKILL.md"),
+            "a harness with no registry gets the path: {pointed}"
+        );
+        assert!(!pointed.contains("smetana:running-tasks"), "it has no registry to name");
+    }
+
+    #[test]
+    fn every_setting_the_person_chose_reaches_the_prompt() {
+        // The config is read by the skill; these are the ones that exist only
+        // in this run and are in no file for it to find.
+        let text = run_prompt(
+            RunSettings {
+                target_branch: "release/7".into(),
+                min_priority: 1,
+                ..run_settings(RunMode::Auto, RunScope::Queue)
+            },
+            SkillDelivery::PluginDir,
+        );
+        assert!(text.contains("release/7"), "{text}");
+        assert!(text.contains("P1"), "{text}");
+    }
+
+    #[test]
+    fn the_scope_says_what_may_be_touched() {
+        let queue = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), SkillDelivery::PluginDir);
+        assert!(queue.contains("Take ready tasks"), "{queue}");
+
+        let one = run_prompt(
+            run_settings(RunMode::Auto, RunScope::Task { id: "smetana-9".into() }),
+            SkillDelivery::PluginDir,
+        );
+        assert!(one.contains("only on issue smetana-9"), "{one}");
+        assert!(one.contains("and nothing else"), "{one}");
+
+        let epic = run_prompt(
+            run_settings(RunMode::Auto, RunScope::Epic { id: "smetana-4".into() }),
+            SkillDelivery::PluginDir,
+        );
+        assert!(epic.contains("children of epic smetana-4"), "{epic}");
+    }
+
+    #[test]
+    fn each_mode_says_what_to_do_when_something_is_unclear() {
+        // The whole difference between the three modes is this one line, and an
+        // agent that never reads it would ask a question nobody can answer.
+        let auto = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), SkillDelivery::PluginDir);
+        assert!(auto.contains("no one to ask"), "{auto}");
+        assert!(auto.contains("Park"), "{auto}");
+
+        let supervised =
+            run_prompt(run_settings(RunMode::Supervised, RunScope::Queue), SkillDelivery::PluginDir);
+        assert!(supervised.contains("ask me"), "{supervised}");
+        assert!(!supervised.contains("no one to ask"), "{supervised}");
+
+        let solo = run_prompt(
+            run_settings(RunMode::Solo, RunScope::Task { id: "smetana-9".into() }),
+            SkillDelivery::PluginDir,
+        );
+        assert!(solo.contains("yourself rather than delegating"), "{solo}");
+    }
+
+    #[test]
+    fn the_two_switches_are_stated_in_both_positions() {
+        // Silence would be read as the default, and the defaults differ from
+        // what a person may have just turned off.
+        let on = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), SkillDelivery::PluginDir);
+        assert!(on.contains("verify each merged task"), "{on}");
+        assert!(on.contains("may be filed as `deferred`"), "{on}");
+
+        let off = run_prompt(
+            RunSettings {
+                live_check: false,
+                file_findings: false,
+                ..run_settings(RunMode::Auto, RunScope::Queue)
+            },
+            SkillDelivery::PluginDir,
+        );
+        assert!(off.contains("no live check this run"), "{off}");
+        assert!(off.contains("file nothing new"), "{off}");
     }
 
     #[test]

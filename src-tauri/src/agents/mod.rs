@@ -84,6 +84,14 @@ pub enum Intent {
     /// `.smetana/project.toml`. Started from the dialog a person gets when
     /// they add a project, and from the project row afterwards.
     Setup,
+    /// One batch of a run. Started by `runs::service`, never by a person
+    /// directly — which is why it carries the whole of what the run was asked
+    /// to do rather than a reference to it: the session may outlive a settings
+    /// change, and a batch that quietly retargets halfway is worse than one
+    /// that is wrong from the start and says so.
+    Run {
+        settings: crate::runs::model::RunSettings,
+    },
 }
 
 /// Everything a spawn needs before any agent has looked at it.
@@ -112,6 +120,26 @@ pub trait Profile: Sync {
     fn question(&self, _screen: &[String]) -> Option<Question> {
         None
     }
+
+    /// Extra arguments for working without a person, and the environment that
+    /// goes with them.
+    ///
+    /// The default is nothing, and that is a working answer rather than a gap:
+    /// a harness with no such switch stops at its first permission prompt, the
+    /// session turns `needs-you`, and the run waits — which is exactly what
+    /// `Supervised` is. A harness that cannot be autonomous is a fact about
+    /// that harness, and the app says so by behaving like the supervised mode
+    /// instead of pretending.
+    fn autonomy(&self, _mode: crate::runs::model::RunMode) -> Autonomy {
+        Autonomy::default()
+    }
+}
+
+/// What a profile needs added to run a batch.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct Autonomy {
+    pub args: Vec<&'static str>,
+    pub env: Vec<(&'static str, &'static str)>,
 }
 
 /// The closed list of agent ids, and the only copy of it. `settings/model.rs`

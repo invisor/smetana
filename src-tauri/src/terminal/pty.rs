@@ -10,7 +10,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, P
 use tokio::sync::mpsc;
 
 use super::model::{SessionId, TerminalError};
-use crate::agents::Launch;
+use crate::agents::{Intent, Launch};
 
 /// One piece of a session's life, arriving at the worker from the reader thread.
 pub enum Chunk {
@@ -37,6 +37,16 @@ pub fn build_command(launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
     cmd.env("TERM", "xterm-256color");
+    // The environment half of running without a person. The argument half is
+    // applied by the profile itself, because it has to go in front of the
+    // positional prompt and `CommandBuilder` only appends; the environment has
+    // no order and belongs here, beside the other two variables every agent
+    // gets. Only a `Run` has a mode, and only a `Run` gets any of this.
+    if let Intent::Run { settings } = &launch.intent {
+        for (key, value) in launch.profile.autonomy(settings.mode).env {
+            cmd.env(key, value);
+        }
+    }
     // Filing a task means the agent running `bd`, and this app's bd is a
     // sidecar inside the bundle: on a machine that never installed one there is
     // nothing on `PATH` to find, and "command not found" is now the whole

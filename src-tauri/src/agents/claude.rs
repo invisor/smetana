@@ -10,7 +10,8 @@
 
 use portable_pty::CommandBuilder;
 
-use super::{prompt, Launch, Profile, SkillDelivery};
+use super::{prompt, Autonomy, Intent, Launch, Profile, SkillDelivery};
+use crate::runs::model::RunMode;
 use crate::terminal::model::{Question, QuestionOption};
 
 pub struct Claude;
@@ -44,6 +45,14 @@ impl Profile for Claude {
             cmd.arg("--plugin-dir");
             cmd.arg(&launch.skills.superpowers);
         }
+        // Before the prompt, which is positional: a flag after it would rely
+        // on the CLI's parser being relaxed about the order, and this app does
+        // not get to assume that about somebody else's argument grammar.
+        if let Intent::Run { settings } = &launch.intent {
+            for arg in self.autonomy(settings.mode).args {
+                cmd.arg(arg);
+            }
+        }
         // Nothing is read from disk here: both plugins are loaded, so the
         // prompt names the skills and Claude Code fetches them on demand.
         let text = prompt::SkillText { filing: None, brainstorming: None };
@@ -57,6 +66,28 @@ impl Profile for Claude {
 
     fn question(&self, screen: &[String]) -> Option<Question> {
         question(screen)
+    }
+
+    /// `Auto` means nobody is there to answer a permission prompt, so the run
+    /// would sit on the first one forever. The other two modes have a person,
+    /// and taking their prompts away would take away the thing that makes them
+    /// different.
+    ///
+    /// The environment variable goes on in every mode, and it is not about
+    /// permissions at all: the CLI stops waiting on its own background tasks at
+    /// a ten-minute default and carries on without them. That is fine for a
+    /// person watching one answer arrive and wrong for a batch — the source
+    /// this was ported from lost workers mid-task to it, with nothing in the
+    /// output to say a task had been abandoned rather than finished. Zero means
+    /// no ceiling.
+    fn autonomy(&self, mode: RunMode) -> Autonomy {
+        Autonomy {
+            args: match mode {
+                RunMode::Auto => vec!["--permission-mode", "bypassPermissions"],
+                RunMode::Supervised | RunMode::Solo => vec![],
+            },
+            env: vec![("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")],
+        }
     }
 }
 
@@ -303,5 +334,54 @@ mod tests {
         .collect();
         let q = question(&screen).expect("the dialog went unrecognised");
         assert_eq!(q.text, "Do you want to make this edit to tabs.js?");
+    }
+    fn run(mode: crate::runs::model::RunMode) -> Intent {
+        Intent::Run {
+            settings: crate::runs::model::RunSettings {
+                scope: crate::runs::model::RunScope::Queue,
+                mode,
+                target_branch: "staging".into(),
+                min_priority: 2,
+                live_check: true,
+                file_findings: true,
+            },
+        }
+    }
+
+    #[test]
+    fn an_unattended_batch_gets_the_permission_switch_and_a_supervised_one_does_not() {
+        use crate::runs::model::RunMode;
+        let auto = argv(&launch(run(RunMode::Auto), false));
+        assert!(
+            auto.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "bypassPermissions"),
+            "nobody is there to answer a prompt: {auto:?}"
+        );
+        for mode in [RunMode::Supervised, RunMode::Solo] {
+            let args = argv(&launch(run(mode), false));
+            assert!(
+                !args.iter().any(|a| a == "--permission-mode"),
+                "{mode:?} has a person, and their prompts are what it is"
+            );
+        }
+    }
+
+    #[test]
+    fn the_switch_goes_in_front_of_the_positional_prompt() {
+        // A flag after a positional relies on somebody else's parser being
+        // relaxed about the order, which is not ours to assume.
+        let args = argv(&launch(run(crate::runs::model::RunMode::Auto), false));
+        let flag = args.iter().position(|a| a == "--permission-mode").expect("the flag is there");
+        assert_eq!(flag, args.len() - 3, "only the flag's value and the prompt come after it");
+    }
+
+    #[test]
+    fn nothing_a_person_started_is_silently_given_a_bypass() {
+        // build_command applies autonomy for a Run and for nothing else; the
+        // profile does the same with the arguments. Both halves are checked
+        // here because either one alone would let a bare session through.
+        for intent in [Intent::Bare, Intent::Setup] {
+            let args = argv(&launch(intent, false));
+            assert!(!args.iter().any(|a| a == "--permission-mode"), "{args:?}");
+        }
     }
 }
