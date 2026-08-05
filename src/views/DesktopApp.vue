@@ -275,27 +275,45 @@ const openRun = async (scopeValue) => {
   await loadBranches(activePath.value)
 }
 
+/* What is left to do under an issue. Parenthood in bd is the parent-child
+   relation and nothing else: the parent's own type has no part in it, and
+   neither does its status — this tracker's own `smetana-29j` is a closed
+   `feature` with two open children under it. Reading the type instead was
+   wrong, and it was wrong silently: the card said "part of smetana-29j" while
+   the dialog said nothing at all.
+
+   Done children are left out because a run would not take them, which is what
+   makes this the number worth showing and worth deciding from. */
+const childrenOf = (id) =>
+  [...trackerState.issues.values()].filter(
+    (issue) => issue.parent === id && toUiStatus(issue.status) !== 'done'
+  )
+
+/* An issue with children is run as its children — that is what the epic scope
+   means, and the parent issue itself is never the work. */
 const runTask = (id) => {
   const issue = issueById(id)
   if (!issue) return
   openRun({
-    kind: issue.issue_type === 'epic' ? 'epic' : 'task',
+    kind: childrenOf(id).length ? 'epic' : 'task',
     id,
     title: issue.title
   })
 }
 
-/* The epic over the task in the dialog, if there is one. Read here rather than
-   carried in the scope: the scope is what the run is aimed at, and the epic is
+/* The issue above the one in the dialog, if there is one. Read here rather
+   than carried in the scope: the scope is what the run is aimed at, and this is
    context about it — it also has to stay right when `rescope` changes the aim.
 
-   Only an epic counts. bd's parent-child is not the epic relation by itself,
-   and a note calling some other parent an epic would be a plain untruth. */
+   `siblings` is how many other unfinished children it has, and the advice hangs
+   off it rather than off the parent's status: running the parent runs its
+   children, so a closed parent is no reason to stay quiet, while being its only
+   unfinished child means running it together is the same run by another name. */
 const runParent = computed(() => {
   if (runScope.value.kind !== 'task') return null
   const parent = issueById(issueById(runScope.value.id)?.parent)
-  if (!parent || parent.issue_type !== 'epic') return null
-  return { id: parent.id, title: parent.title, open: toUiStatus(parent.status) !== 'done' }
+  if (!parent) return null
+  return { id: parent.id, title: parent.title, siblings: childrenOf(parent.id).length - 1 }
 })
 
 /* Taking the advice, without closing what is already filled in. */
@@ -309,9 +327,7 @@ const runTheEpicInstead = () => {
    the dialog. */
 const runCount = computed(() => {
   if (runScope.value.kind === 'task') return 1
-  if (runScope.value.kind === 'epic') {
-    return [...trackerState.issues.values()].filter((i) => i.parent === runScope.value.id).length
-  }
+  if (runScope.value.kind === 'epic') return childrenOf(runScope.value.id).length
   return orderedColumns.value.find((c) => c.status === ADD_TO)?.tasks.length ?? 0
 })
 

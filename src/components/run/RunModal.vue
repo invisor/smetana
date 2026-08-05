@@ -24,10 +24,15 @@ const props = defineProps({
   /* The project's own defaults, from the config. */
   defaultBranch: { type: String, default: '' },
   defaultPriority: { type: Number, default: 2 },
-  /* The epic this task belongs to, when it belongs to one: `{ id, title,
-     open }`. The board offers a run on every card, epic children included, so
-     this dialog is where somebody finds out that the task in front of them is
-     part of something larger — and it is the last cheap moment to find out. */
+  /* The issue this one sits under, when it sits under one: `{ id, title,
+     siblings }`, where `siblings` is how many other unfinished children it has.
+     The board offers a run on every card, children included, so this dialog is
+     where somebody finds out that the task in front of them is part of
+     something larger — and it is the last cheap moment to find out.
+
+     Deliberately not called an epic: bd's parent-child says nothing about the
+     parent's type, and calling a `feature` with children an epic would be a
+     plain untruth on screen. */
   partOf: { type: Object, default: null },
   /* What this dialog was left at last time in this project, or null. */
   remembered: { type: Object, default: null },
@@ -100,8 +105,17 @@ watch(soloAllowed, (allowed) => {
 
 const title = computed(() => {
   if (props.scope?.kind === 'task') return 'Run this task'
-  if (props.scope?.kind === 'epic') return 'Run this epic'
+  /* Not "Run this epic": the scope takes an issue's children, and whether that
+     issue is typed as one is bd's business and often nobody's. */
+  if (props.scope?.kind === 'epic') return 'Run these tasks'
   return 'Run the queue'
+})
+
+/* "One other task of it is unfinished" reads as a fact about this run; a bare
+   count next to a title reads as a badge. */
+const siblings = computed(() => {
+  const n = props.partOf?.siblings ?? 0
+  return n === 1 ? 'One other task of it is unfinished' : `${n} other tasks of it are unfinished`
 })
 
 const description = computed(() =>
@@ -110,13 +124,22 @@ const description = computed(() =>
 
 /* Named out loud, because the dialog is the last place a wrong aim is
    cheap. Null means it has not been counted, and saying nothing is better
-   than saying zero. */
+   than saying zero.
+
+   Two sentences rather than one, because the count is not the priority's:
+   nothing here has read anybody's priorities, and "12 ready tasks at or above
+   P2" said it had. The count is what is in front of the run, the floor is what
+   it will take out of it, and they are stated separately because that is what
+   is actually known. */
 const takes = computed(() => {
   if (props.count == null) return ''
   if (props.scope?.kind === 'task') return 'One task.'
   const n = props.count
-  const what = props.scope?.kind === 'epic' ? 'child' : 'ready task'
-  return `${n} ${what}${n === 1 ? '' : 's'} at or above P${priority.value}.`
+  const what =
+    props.scope?.kind === 'epic'
+      ? `${n} task${n === 1 ? ' is' : 's are'} unfinished under it.`
+      : `${n} task${n === 1 ? ' is' : 's are'} ready.`
+  return `${what} It takes those at or above P${priority.value}.`
 })
 
 const confirm = () => {
@@ -136,7 +159,7 @@ const confirm = () => {
 
 /* Advice, not a refusal — so it is drawn on a sunken surface rather than in a
    status colour, and it keeps its distance from the error line at the bottom.
-   Nothing here stops the run: whether one child is worth taking on its own is
+   Nothing here stops the run: whether one task is worth taking on its own is
    a judgement about the epic, and the person is the only one holding it. */
 const partOfStyle = {
   display: 'flex',
@@ -194,13 +217,13 @@ const errorStyle = {
         <Icon name="layers" :size="13" :style="{ color: 'var(--text-muted)', flex: 'none', marginTop: '1px' }" />
         <div :style="partOfTextStyle">
           Part of <span :style="epicIdStyle">{{ partOf.id }}</span> — {{ partOf.title }}.
-          <template v-if="partOf.open">
-            Taking one child on its own can leave the epic merged in half; running the epic
-            takes them in order.
+          <template v-if="partOf.siblings > 0">
+            {{ siblings }} — taking one on its own can leave the rest merged in half, and
+            running them together goes in order.
           </template>
         </div>
-        <Button v-if="partOf.open" variant="secondary" size="sm" @click="$emit('rescope')">
-          Run the epic
+        <Button v-if="partOf.siblings > 0" variant="secondary" size="sm" @click="$emit('rescope')">
+          Run all of it
         </Button>
       </div>
 

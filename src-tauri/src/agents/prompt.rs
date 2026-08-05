@@ -81,8 +81,11 @@ fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> Stri
         RunScope::Task { id } => {
             let _ = write!(out, "Work only on issue {id}, and nothing else.");
         }
+        /* "the children of", not "the children of epic": bd's parent-child is
+           the relation, and the parent's own type has nothing to do with it —
+           a `feature` with children is how this very tracker is written. */
         RunScope::Epic { id } => {
-            let _ = write!(out, "Work only on the children of epic {id}, and nothing else.");
+            let _ = write!(out, "Work only on the children of {id}, and nothing else.");
         }
     }
 
@@ -389,7 +392,7 @@ mod tests {
             run_settings(RunMode::Auto, RunScope::Epic { id: "smetana-4".into() }),
             SkillDelivery::PluginDir,
         );
-        assert!(epic.contains("children of epic smetana-4"), "{epic}");
+        assert!(epic.contains("children of smetana-4"), "{epic}");
     }
 
     #[test]
