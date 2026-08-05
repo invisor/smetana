@@ -39,14 +39,21 @@ pub fn run() {
         .map(std::path::PathBuf::from)
         .or_else(project::default_project);
 
-      let handle = tracker::service::start(app.handle().clone(), initial);
-      app.manage(handle);
+      let tracker = tracker::service::start(app.handle().clone(), initial);
+      app.manage(tracker.clone());
 
       // The terminal worker knows no project of its own: a session carries
       // the directory it was created in, and the front end asks for the list
       // by that directory.
       let terminal = terminal::service::start(app.handle().clone());
-      app.manage(terminal);
+      app.manage(terminal.clone());
+
+      // The run worker drives the other two rather than owning anything of its
+      // own: it reads the board from the tracker and starts one session per
+      // batch through the terminal. Handed clones of both, so it queues behind
+      // them like every other caller.
+      let runs = runs::service::start(app.handle().clone(), tracker.clone(), terminal);
+      app.manage(runs);
 
       // The plugin writes the window geometry only on exit; here it starts
       // being written along the way too, so that a run cut short without a
@@ -72,6 +79,9 @@ pub fn run() {
       files::commands::files_stat,
       git::git_head,
       runs::commands::project_config,
+      runs::commands::run_start,
+      runs::commands::run_stop,
+      runs::commands::run_state,
       settings::commands::settings_load,
       settings::commands::settings_save,
       terminal::commands::terminal_list,

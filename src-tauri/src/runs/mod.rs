@@ -13,4 +13,5 @@ pub mod gitignore;
 pub mod model;
 pub mod preflight;
 pub mod queue;
+pub mod service;
 pub mod survey;
