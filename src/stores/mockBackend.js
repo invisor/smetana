@@ -182,6 +182,14 @@ export function installMockBackend() {
           }
         : { state: 'missing' }
     }
+    /* No worker in a browser, so nothing is ever running. Answering null
+       rather than rejecting: "is a run going here" is a read, and a read that
+       throws would leave the panel unable to draw its ordinary empty state. */
+    if (command === 'run_state') return null
+    /* `run_start` and `run_stop` are deliberately absent: they fall through to
+       the refusal at the bottom, like every other write. A run that looked like
+       it had started would be worse than none — there is no worker, no session
+       and no board behind it. */
     /* The stub knows nothing about the filesystem and will not invent
        anything: the path comes back as is. The real back end would climb from
        here to the tracked repository's root, and that is the only way the

@@ -57,7 +57,7 @@ import {
   switchTo
 } from '../stores/projects.js'
 import { gitState, loadHead } from '../stores/git.js'
-import { loadConfig, needsSetup } from '../stores/runs.js'
+import { initRuns, loadConfig, loadRun, needsSetup } from '../stores/runs.js'
 import { inspector, logLines, scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
@@ -206,6 +206,9 @@ const hoveredSideTab = ref(null)
 onMounted(initTracker)
 onMounted(adoptInitialProject)
 onMounted(initTerminals)
+// The run's own event can fire before the webview is listening, which is what
+// the loadRun calls beside every loadConfig are for.
+onMounted(initRuns)
 
 /* A new agent becomes the one you're looking at right away: that is what it
    was created for — the tab switch sits after the await so a failed spawn
@@ -318,6 +321,7 @@ onMounted(async () => {
   setRoot(opened)
   loadHead(opened)
   loadConfig(opened)
+  loadRun(opened)
   await loadSessions(opened)
   await listDir('')
   if (activePath.value !== opened) return
@@ -771,6 +775,7 @@ watch(activePath, (path) => {
   loadSessions(path)
   loadHead(path)
   loadConfig(path)
+  loadRun(path)
 })
 
 /* What stands in the scope bar: the chosen project's name and its branch. A
