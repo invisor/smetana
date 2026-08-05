@@ -73,12 +73,12 @@ const rowStyle = (project) => {
 
 const nameStyle = { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 
-/* Both marks take the default side and none names one, deliberately: this
-   list scrolls, and a tooltip that had to open inside it was cut off by its
-   edges whichever way it went. Tooltip now teleports its panel out of the
-   document flow and chooses a side against the window, so the right answer
-   here is to ask for nothing and let it decide — a row near the top of the
-   panel gets its hint below, everywhere else above. */
+/* Neither mark names a side, deliberately: this list scrolls, and a tooltip
+   that had to open inside it was cut off by its edges whichever way it went.
+   Tooltip now teleports its panel out of the document flow and chooses a side
+   against the window, so the right answer here is to ask for nothing and let
+   it decide — a row near the top of the panel gets its hint below, everywhere
+   else above. */
 const setupMarkStyle = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }
 
 /* A context menu here would get clipped by the list's own scroll container
@@ -111,7 +111,13 @@ const empty = computed(() => props.projects.length === 0)
         @mouseleave="hovered = null"
       >
         <span :style="nameStyle">{{ p.name }}</span>
-        <Tooltip v-if="!p.tracked" label="No bd tracker here">
+        <!-- The empty title is not decoration: `title` is inherited, and the
+             row carries the project's full path in one. Hovering a glyph that
+             explains itself would otherwise draw that path as well, in a
+             second panel the app does not control the placement of. An empty
+             title is the standard way to say "nothing to advise here" and
+             stops the lookup before it reaches the row. -->
+        <Tooltip v-if="!p.tracked" label="No bd tracker here" title="">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
         </Tooltip>
         <!-- The mark and the button that clears it are one hover target, tied
@@ -120,12 +126,17 @@ const empty = computed(() => props.projects.length === 0)
              press. Red is the loudest colour the system has, and it is only
              ever spent once here — the mark is drawn for the active project
              alone, the same reason the gear is. -->
-        <Tooltip v-if="needsSetup && p.path === activePath" label="Not set up for runs">
-          <span :style="setupMarkStyle">
+        <!-- The tooltip wraps the glyph alone, not the pair. A panel centred
+             over both would hang off to one side of whichever of them the
+             pointer is actually on, and the two have different things to say:
+             the mark reports the state, the button offers the action, and the
+             button already carries its own label. -->
+        <span v-if="needsSetup && p.path === activePath" :style="setupMarkStyle">
+          <Tooltip label="Not set up for runs" title="">
             <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
-            <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
-          </span>
-        </Tooltip>
+          </Tooltip>
+          <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
+        </span>
         <!-- Before the remove button, not after it: removal keeps the row's
              last position wherever it appears, so a click aimed at it never
              lands on something that moved in. -->
