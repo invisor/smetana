@@ -1,0 +1,350 @@
+//! What is left to do, and whether to run another batch.
+//!
+//! The port of `holiday-curb`'s `loop-state.mjs`, with one substitution that
+//! changes its cost rather than its logic: the source shelled out to `bd ready`
+//! and `bd list` between every batch, about four seconds each time, while this
+//! reads the snapshot the tracker worker already keeps current from its
+//! watcher. Pure — issues in, numbers out — which is what lets the decisions
+//! below be tested instead of reasoned about.
+
+use std::collections::HashSet;
+
+use crate::runs::model::{RunScope, StopReason};
+use crate::tracker::model::Issue;
+
+/// bd's own status for work that has been claimed.
+const IN_PROGRESS: &str = "in_progress";
+/// Our custom status for work that is reviewed and not yet merged.
+const READY_TO_MERGE: &str = "ready_to_merge";
+/// Our custom status for a dead end left for a person.
+const PARKED: &str = "parked";
+/// bd's own status for work that is available.
+const OPEN: &str = "open";
+const CLOSED: &str = "closed";
+/// The dependency kind that actually blocks. bd also records `parent-child`,
+/// `related` and `discovered-from`, and none of those means "wait".
+const BLOCKS: &str = "blocks";
+
+/// The board, as a run cares about it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct QueueSnapshot {
+    /// Open, unblocked, within the scope and no worse than the floor.
+    pub ready: Vec<String>,
+    /// Claimed or reviewed but not finished: `in_progress` and
+    /// `ready_to_merge`. Tracked separately because `bd ready` hides both, and
+    /// a run that only watched the ready set would leave a killed batch's
+    /// orphans on the board forever.
+    pub unfinished: Vec<String>,
+    pub closed: usize,
+    pub parked: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Run another batch. The reason is for the log, not for the front end.
+    Run(RunReason),
+    Stop(StopReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunReason {
+    ReadyWork,
+    /// Nothing new to take, but a killed batch left work behind.
+    RecoverUnfinished,
+    RetryAfterCrash,
+}
+
+/// Is this issue inside what the run was asked to work on?
+fn in_scope(issue: &Issue, scope: &RunScope) -> bool {
+    match scope {
+        RunScope::Queue => true,
+        RunScope::Task { id } => &issue.id == id,
+        RunScope::Epic { id } => issue.parent.as_ref() == Some(id),
+    }
+}
+
+/// bd's priority runs 0 (most urgent) to 4, so "no worse than the floor" is
+/// `<=`. An issue with no priority at all is taken: bd omits the field rather
+/// than defaulting it, and refusing to work on something because nobody graded
+/// it would hide it from every run forever.
+fn within_floor(issue: &Issue, min_priority: u8) -> bool {
+    issue.priority.is_none_or(|p| p <= i64::from(min_priority))
+}
+
+/// The board, under a scope and a floor.
+///
+/// `closed` and `parked` are counted across the scope and reported, but they
+/// deliberately take no part in the decision below — see `next_action`.
+pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: u8) -> QueueSnapshot {
+    let unfinished_or_open: HashSet<&str> = issues
+        .iter()
+        .filter(|i| matches!(i.status.as_str(), OPEN | IN_PROGRESS | READY_TO_MERGE))
+        .map(|i| i.id.as_str())
+        .collect();
+
+    let mut out = QueueSnapshot::default();
+    for issue in issues.iter().filter(|i| in_scope(i, scope)) {
+        match issue.status.as_str() {
+            CLOSED => out.closed += 1,
+            PARKED => out.parked += 1,
+            IN_PROGRESS | READY_TO_MERGE => out.unfinished.push(issue.id.clone()),
+            OPEN if within_floor(issue, min_priority) && !blocked(issue, &unfinished_or_open) => {
+                out.ready.push(issue.id.clone());
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Waiting on something that has not finished. A dependency on a closed issue
+/// is satisfied; one on an issue that is not on the board at all is treated as
+/// satisfied too, since the alternative is a run that stalls on a reference
+/// nobody can resolve and says nothing about why.
+fn blocked(issue: &Issue, unfinished_or_open: &HashSet<&str>) -> bool {
+    issue
+        .dependencies
+        .iter()
+        .any(|d| d.kind == BLOCKS && unfinished_or_open.contains(d.depends_on_id.as_str()))
+}
+
+/// Order-independent equality: bd's ordering is not stable across calls, and
+/// two passes returning the same work in a different order is not progress.
+fn same_set(a: &[String], b: &[String]) -> bool {
+    a.len() == b.len() && {
+        let set: HashSet<&str> = b.iter().map(String::as_str).collect();
+        a.iter().all(|id| set.contains(id.as_str()))
+    }
+}
+
+/// Another batch, or an ending.
+///
+/// Four decisions, each of them a defect somebody already paid for:
+///
+/// - Work remains while **either** set is non-empty. A run that stopped on an
+///   empty ready queue would abandon the orphans a killed batch left behind,
+///   and nothing else ever picks those up.
+/// - **Progress is either set changing**, not the closed or parked counts. A
+///   batch that only moves tasks to `in_progress`, merges an orphan or parks a
+///   stuck one has made progress, and stopping there would call a working run
+///   stuck.
+/// - **A crashed batch suppresses the no-progress stop.** An unchanged board
+///   after a crash means the batch never ran, not that the board is stuck.
+/// - The iteration cap is a backstop and nothing more.
+pub fn next_action(
+    now: &QueueSnapshot,
+    prev: Option<&QueueSnapshot>,
+    iteration: u32,
+    max_iterations: u32,
+    last_batch_crashed: bool,
+) -> Action {
+    if now.ready.is_empty() && now.unfinished.is_empty() {
+        return Action::Stop(StopReason::QueueEmpty);
+    }
+    if iteration >= max_iterations {
+        return Action::Stop(StopReason::MaxIterations);
+    }
+    let unchanged = prev
+        .is_some_and(|p| same_set(&now.ready, &p.ready) && same_set(&now.unfinished, &p.unfinished));
+    if unchanged && !last_batch_crashed {
+        return Action::Stop(StopReason::NoProgress);
+    }
+    if last_batch_crashed {
+        return Action::Run(RunReason::RetryAfterCrash);
+    }
+    Action::Run(if now.ready.is_empty() {
+        RunReason::RecoverUnfinished
+    } else {
+        RunReason::ReadyWork
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tracker::model::Dependency;
+
+    fn issue(id: &str, status: &str) -> Issue {
+        Issue {
+            id: id.into(),
+            title: id.into(),
+            status: status.into(),
+            updated_at: "2026-08-05".into(),
+            description: None,
+            priority: Some(1),
+            issue_type: None,
+            owner: None,
+            created_at: None,
+            created_by: None,
+            started_at: None,
+            closed_at: None,
+            close_reason: None,
+            comment_count: None,
+            dependency_count: None,
+            dependent_count: None,
+            parent: None,
+            labels: vec![],
+            dependencies: vec![],
+        }
+    }
+
+    fn snap(ready: &[&str], unfinished: &[&str]) -> QueueSnapshot {
+        QueueSnapshot {
+            ready: ready.iter().map(|s| (*s).to_string()).collect(),
+            unfinished: unfinished.iter().map(|s| (*s).to_string()).collect(),
+            closed: 0,
+            parked: 0,
+        }
+    }
+
+    #[test]
+    fn only_open_issues_are_ready() {
+        // deferred is where findings go and parked is a dead end: a run that
+        // took either would be feeding itself, which is the whole reason both
+        // statuses exist.
+        let board = vec![
+            issue("a", "open"),
+            issue("b", "deferred"),
+            issue("c", "parked"),
+            issue("d", "closed"),
+            issue("e", "in_progress"),
+            issue("f", "ready_to_merge"),
+        ];
+        let s = snapshot(&board, &RunScope::Queue, 4);
+        assert_eq!(s.ready, vec!["a"]);
+        assert_eq!(s.unfinished, vec!["e", "f"]);
+        assert_eq!(s.closed, 1);
+        assert_eq!(s.parked, 1);
+    }
+
+    #[test]
+    fn the_floor_drops_what_is_worse_and_keeps_what_is_equal() {
+        let mut low = issue("low", "open");
+        low.priority = Some(3);
+        let mut edge = issue("edge", "open");
+        edge.priority = Some(2);
+        let mut ungraded = issue("ungraded", "open");
+        ungraded.priority = None;
+
+        let s = snapshot(&[low, edge, ungraded], &RunScope::Queue, 2);
+        assert_eq!(s.ready, vec!["edge", "ungraded"], "bd omits priority rather than defaulting it");
+    }
+
+    #[test]
+    fn a_task_scope_is_that_issue_alone_and_an_epic_scope_is_its_children() {
+        let mut child = issue("child", "open");
+        child.parent = Some("epic".into());
+        let board = vec![issue("other", "open"), child, issue("epic", "open")];
+
+        assert_eq!(snapshot(&board, &RunScope::Task { id: "other".into() }, 4).ready, vec!["other"]);
+        assert_eq!(snapshot(&board, &RunScope::Epic { id: "epic".into() }, 4).ready, vec!["child"]);
+    }
+
+    #[test]
+    fn an_issue_waiting_on_unfinished_work_is_not_ready() {
+        let mut waiting = issue("waiting", "open");
+        waiting.dependencies = vec![Dependency {
+            issue_id: "waiting".into(),
+            depends_on_id: "earlier".into(),
+            kind: "blocks".into(),
+        }];
+        let board = vec![waiting.clone(), issue("earlier", "open")];
+        assert!(snapshot(&board, &RunScope::Queue, 4).ready.iter().all(|id| id != "waiting"));
+
+        // The same issue once what it waited for has closed.
+        let board = vec![waiting, issue("earlier", "closed")];
+        assert_eq!(snapshot(&board, &RunScope::Queue, 4).ready, vec!["waiting"]);
+    }
+
+    #[test]
+    fn only_a_blocking_dependency_blocks() {
+        // bd records parent-child, related and discovered-from in the same
+        // list; reading any of them as "wait" would stall every child of an
+        // open epic.
+        let mut child = issue("child", "open");
+        child.dependencies = vec![Dependency {
+            issue_id: "child".into(),
+            depends_on_id: "epic".into(),
+            kind: "parent-child".into(),
+        }];
+        let board = vec![child, issue("epic", "open")];
+        assert!(snapshot(&board, &RunScope::Queue, 4).ready.contains(&"child".to_string()));
+    }
+
+    #[test]
+    fn an_empty_board_ends_the_run() {
+        assert_eq!(
+            next_action(&snap(&[], &[]), None, 0, 20, false),
+            Action::Stop(StopReason::QueueEmpty)
+        );
+    }
+
+    #[test]
+    fn unfinished_work_keeps_a_run_going_with_nothing_ready() {
+        // A killed batch leaves in_progress and ready_to_merge behind, and
+        // `bd ready` hides both. Stopping here would abandon them.
+        assert_eq!(
+            next_action(&snap(&[], &["orphan"]), None, 0, 20, false),
+            Action::Run(RunReason::RecoverUnfinished)
+        );
+    }
+
+    #[test]
+    fn a_whole_batch_that_changed_neither_set_is_stuck() {
+        let before = snap(&["a"], &["b"]);
+        let after = snap(&["a"], &["b"]);
+        assert_eq!(
+            next_action(&after, Some(&before), 1, 20, false),
+            Action::Stop(StopReason::NoProgress)
+        );
+    }
+
+    #[test]
+    fn an_unchanged_board_after_a_crash_is_retried_not_called_stuck() {
+        // The batch never ran. Reading that as a stuck queue would end a run
+        // over a transient failure of the harness.
+        let before = snap(&["a"], &[]);
+        assert_eq!(
+            next_action(&snap(&["a"], &[]), Some(&before), 1, 20, true),
+            Action::Run(RunReason::RetryAfterCrash)
+        );
+    }
+
+    #[test]
+    fn moving_a_task_into_flight_counts_as_progress() {
+        // Nothing closed and nothing parked, and the run must not stop: this is
+        // exactly the pass the source's earlier closed-count check got wrong.
+        let before = snap(&["a"], &[]);
+        assert_eq!(
+            next_action(&snap(&[], &["a"]), Some(&before), 1, 20, false),
+            Action::Run(RunReason::RecoverUnfinished)
+        );
+    }
+
+    #[test]
+    fn the_same_work_in_a_different_order_is_not_progress() {
+        let before = snap(&["a", "b"], &[]);
+        assert_eq!(
+            next_action(&snap(&["b", "a"], &[]), Some(&before), 1, 20, false),
+            Action::Stop(StopReason::NoProgress)
+        );
+    }
+
+    #[test]
+    fn the_iteration_cap_is_a_backstop() {
+        assert_eq!(
+            next_action(&snap(&["a"], &[]), None, 20, 20, false),
+            Action::Stop(StopReason::MaxIterations)
+        );
+    }
+
+    #[test]
+    fn an_empty_board_wins_over_the_cap() {
+        // Finishing the work is not a churn stop, and reporting it as one would
+        // send somebody looking for a problem that is not there.
+        assert_eq!(
+            next_action(&snap(&[], &[]), None, 99, 20, false),
+            Action::Stop(StopReason::QueueEmpty)
+        );
+    }
+}
