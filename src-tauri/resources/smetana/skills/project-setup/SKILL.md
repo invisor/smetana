@@ -16,6 +16,13 @@ were given already carries a scan of the folder — repositories, manifests and
 the commands those manifests suggest. **Those commands are candidates, not
 findings. Nothing ran them.**
 
+**Do not add `.smetana` to any `.gitignore`, whatever the neighbouring entries
+suggest.** The file belongs in the repository. Everything in it was learned by
+running commands and reading output, and it is the same for everyone working
+here; ignored, it is written again from guesses in every fresh clone and in
+every worktree a run provisions. In a folder holding several repositories the
+root is usually not under git at all, and then there is simply nothing to do.
+
 ## What the file holds
 
     [project]
