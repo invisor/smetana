@@ -11,6 +11,10 @@ import { invoke } from '@tauri-apps/api/core'
 
 export const gitState = reactive({
   branch: null,
+  /* Local branch names, for the run dialog's "merge into" field. Loaded when
+     that dialog opens rather than on every project switch: it is a directory
+     read, but it is one nobody needs until they are looking at the field. */
+  branches: [],
   /* A short hash when HEAD is detached. Kept apart from `branch` rather than
      written into it: a bar that shows a hash where a branch name goes has to
      say so, and a component cannot tell the two apart once they share a
@@ -47,5 +51,22 @@ export async function loadHead(project) {
     // itself failed. The bar shows no branch; the reason stays in the console.
     console.error('[git] head failed:', err)
     clear()
+  }
+}
+
+/* The local branches. Not guarded against a stale response the way loadHead is,
+   and deliberately: this is called from opening a dialog, which cannot happen
+   twice at once, and the dialog reads the list at that moment. Clearing first
+   is what keeps a previous project's branches off the screen while the new
+   ones are on their way. */
+export async function loadBranches(project) {
+  gitState.branches = []
+  if (!project) return
+  try {
+    gitState.branches = await invoke('git_branches', { project })
+  } catch (err) {
+    // An empty list, like a folder outside git: the dialog then has nothing to
+    // offer and its Run button stays disabled, which is honest.
+    console.error('[git] listing branches failed:', err)
   }
 }

@@ -13,6 +13,11 @@ const props = defineProps({
      null: the board creates nothing. Which status that is, is the product's
      decision: there is no fixed set of columns here and there cannot be. */
   addTo: { type: String, default: null },
+  /* The status of the one column whose header offers a run — `ready` in
+     practice, and a prop for the same reason `addTo` is one: there is no fixed
+     set of columns here. Null means runs are not offered at all, which is what
+     an unconfigured project gets. */
+  runFrom: { type: String, default: null },
   reorderable: { type: Boolean, default: true }
 })
 
@@ -20,7 +25,7 @@ const props = defineProps({
    from/to pair: the board is not the owner of the order and has no business
    describing a change to a list it does not keep. Whoever stores it applies the
    answer wholesale and hands it back through `columns`. */
-const emit = defineEmits(['select', 'add', 'reorder'])
+const emit = defineEmits(['select', 'add', 'reorder', 'run', 'run-task'])
 
 const strip = ref(null)
 /* The order under the pointer, and only while the pointer holds it. Idle, this
@@ -191,10 +196,13 @@ const style = {
       v-bind="c"
       :selected-id="selectedId"
       :addable="c.status === addTo"
+      :runnable="runFrom != null && c.status === runFrom"
       :movable="movable"
       :moving="c.status === held"
       @select="$emit('select', $event)"
       @add="$emit('add', $event)"
+      @run="$emit('run', $event)"
+      @run-task="$emit('run-task', $event)"
       @grab="onGrab(c.status, $event)"
       @move="onMove(c.status, $event)"
     />

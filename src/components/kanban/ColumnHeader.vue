@@ -2,6 +2,7 @@
 import { computed, nextTick } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import Tooltip from '../core/Tooltip.vue'
 import StatusDot from '../status/StatusDot.vue'
 import { statusColors } from '../status/status.js'
 
@@ -16,10 +17,13 @@ const props = defineProps({
      gesture — where the column ends up is the board's to decide, since the
      board is what holds the list. */
   movable: { type: Boolean, default: false },
-  moving: { type: Boolean, default: false }
+  moving: { type: Boolean, default: false },
+  /* A run takes the whole ready queue, so the play stands in exactly one
+     column — which one is the board's to decide, the same as `addable`. */
+  runnable: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['add', 'grab', 'move'])
+const emit = defineEmits(['add', 'grab', 'move', 'run'])
 
 const c = computed(() => statusColors(props.status))
 const over = computed(() => props.wipLimit != null && props.count > props.wipLimit)
@@ -116,6 +120,12 @@ const wipStyle = computed(() => ({
     </span>
     <span :style="{ flex: 1 }" />
     <slot name="actions">
+      <!-- Before the "+", so the "+" keeps the position it has always had:
+           nothing a person is already aiming at moves when a project gains a
+           configuration. -->
+      <Tooltip v-if="runnable" label="Run the queue" title="">
+        <IconButton icon="play" label="Run the queue" size="sm" @click="$emit('run')" />
+      </Tooltip>
       <IconButton v-if="addable" icon="plus" :label="`Add task to ${c.key}`" size="sm" @click="$emit('add')" />
     </slot>
   </div>

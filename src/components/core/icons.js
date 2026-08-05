@@ -46,6 +46,7 @@ import {
   Settings,
   Settings2,
   Sparkles,
+  Square,
   SquareCheck,
   Tag,
   Terminal,
@@ -94,6 +95,9 @@ export const iconNodes = {
   // log and tools
   pause: Pause,
   play: Play,
+  // Stop, in the run bar: a filled square is what every transport control
+  // in the world uses, and there is no `stop` glyph in lucide.
+  square: Square,
   'arrow-down-to-line': ArrowDownToLine,
   wrench: Wrench,
   search: Search,

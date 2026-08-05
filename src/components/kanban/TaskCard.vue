@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
+import IconButton from '../core/IconButton.vue'
 import DependencyBand from '../status/DependencyBand.vue'
 import DependencyMark from '../status/DependencyMark.vue'
 import Assignee from './Assignee.vue'
@@ -25,10 +26,15 @@ const props = defineProps({
   needsResponse: { type: Boolean, default: false },
   state: { type: String, default: 'default' },
   changedBy: { type: String, default: undefined },
-  selected: { type: Boolean, default: false }
+  selected: { type: Boolean, default: false },
+  /* Whether this card can be run on its own. The board decides: a task with no
+     epic over it, or an epic itself. A child of an epic never gets one — it
+     runs as part of its epic, and offering it alone is how somebody merges half
+     an epic without meaning to. */
+  runnable: { type: Boolean, default: false }
 })
 
-defineEmits(['click'])
+defineEmits(['click', 'run'])
 
 const hover = ref(false)
 const level = computed(() => attentionLevel(props.status))
@@ -107,6 +113,17 @@ const titleStyle = {
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
         <span :style="idStyle">{{ id }}</span>
         <span :style="{ flex: 1 }" />
+        <!-- The box stays in the layout and only its visibility changes: a
+             control that appears on hover must not reflow the row it appears
+             in, which is the same rule the project list keeps. -->
+        <IconButton
+          v-if="runnable"
+          icon="play"
+          label="Run this"
+          size="sm"
+          :style="{ visibility: hover || selected ? 'visible' : 'hidden' }"
+          @click.stop="$emit('run')"
+        />
         <span v-if="needsResponse" title="Agent is waiting for your answer" :style="askStyle">
           <Icon name="message-circle-question-mark" :size="9" :stroke-width="2.5" />ASK
         </span>

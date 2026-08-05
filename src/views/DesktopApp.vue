@@ -17,6 +17,8 @@ import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
+import RunBar from '../components/run/RunBar.vue'
+import RunModal from '../components/run/RunModal.vue'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Modal from '../components/overlays/Modal.vue'
@@ -56,8 +58,17 @@ import {
   removeProject,
   switchTo
 } from '../stores/projects.js'
-import { gitState, loadHead } from '../stores/git.js'
-import { initRuns, loadConfig, loadRun, needsSetup } from '../stores/runs.js'
+import { gitState, loadBranches, loadHead } from '../stores/git.js'
+import {
+  configError,
+  initRuns,
+  loadConfig,
+  loadRun,
+  needsSetup,
+  runsState,
+  startRun,
+  stopRun
+} from '../stores/runs.js'
 import { inspector, logLines, scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
@@ -229,6 +240,95 @@ async function newAgent() {
 /* The project whose setup is being offered. Null when the dialog is closed —
    it is asked about one project at a time, and the path is what the session
    needs. */
+/* A project is runnable once it has a configuration that could be read. A
+   damaged one deliberately does not count: the run would be against gates
+   nobody can see, and `configError` is what says so on screen. */
+const configured = computed(() => runsState.config.state === 'ok')
+const runConfig = computed(() => (configured.value ? runsState.config.config : null))
+
+/* Which cards may be run on their own. Decided here rather than in the tracker
+   store, because it is a product rule and it depends on something the store
+   knows nothing about — whether this project has a configuration at all. */
+const runnableTask = (task) =>
+  configured.value && task.status !== 'done' && (!task.spawnedFrom || task.type === 'epic')
+
+const runOpen = ref(false)
+const runScope = ref({ kind: 'queue' })
+const runError = ref('')
+const runStarting = ref(false)
+
+/* Loaded when the dialog opens rather than on every project switch: it is a
+   directory read, but nobody needs it until they are looking at the field. */
+const openRun = async (scopeValue) => {
+  runScope.value = scopeValue
+  runError.value = ''
+  runOpen.value = true
+  await loadBranches(activePath.value)
+}
+
+const runTask = (id) => {
+  const issue = issueById(id)
+  if (!issue) return
+  openRun({
+    kind: issue.issue_type === 'epic' ? 'epic' : 'task',
+    id,
+    title: issue.title
+  })
+}
+
+/* How much is in front of the run, for the line the dialog ends on. The ready
+   count is the board's own, so it is the same number a person can see behind
+   the dialog. */
+const runCount = computed(() => {
+  if (runScope.value.kind === 'task') return 1
+  if (runScope.value.kind === 'epic') {
+    return [...trackerState.issues.values()].filter((i) => i.parent === runScope.value.id).length
+  }
+  return orderedColumns.value.find((c) => c.status === ADD_TO)?.tasks.length ?? 0
+})
+
+const startTheRun = async (settings) => {
+  const project = activePath.value
+  if (!project || runStarting.value) return
+  runStarting.value = true
+  runError.value = ''
+  try {
+    await startRun(project, settings)
+    /* Remembered for next time, minus the scope — that comes from whichever
+       button was pressed. */
+    project.runSettings = {
+      mode: settings.mode,
+      targetBranch: settings.target_branch,
+      minPriority: settings.min_priority,
+      liveCheck: settings.live_check,
+      fileFindings: settings.file_findings
+    }
+    runOpen.value = false
+    /* A run is agent sessions, and watching them is the point — the same move
+       filing a task and "Ask agent to edit" already make. */
+    project.sideTab = 'agents'
+    project.activeTab = 'terminal'
+  } catch (err) {
+    runError.value = runFailure(err)
+  } finally {
+    runStarting.value = false
+  }
+}
+
+/* Rust's own words, which are already written for a person: the broken-config
+   one names the section that will not parse, and that is the whole of why it is
+   worth showing rather than replacing with something of our own. */
+const runFailure = (err) => {
+  const detail = err?.detail ?? err?.message ?? String(err)
+  if (err?.kind === 'not_configured') return 'This project has no run configuration yet.'
+  if (err?.kind === 'already_running') return 'A run is already going in this project.'
+  return detail || 'The run could not be started.'
+}
+
+const stopTheRun = () => {
+  if (activePath.value) stopRun(activePath.value)
+}
+
 const setupFor = ref(null)
 const settingUp = ref(false)
 
@@ -933,7 +1033,11 @@ const toastStackStyle = {
       :repo="activePath ? basename(activePath) : '—'"
       worktree=""
       :branch="branchLabel"
-    />
+    >
+      <template #status>
+        <RunBar :run="runsState.run" :busy="runStarting" @stop="stopTheRun" />
+      </template>
+    </ScopeIndicator>
 
     <div :style="bodyStyle">
       <!-- left: worktree files and the agents working in it -->
@@ -1037,6 +1141,20 @@ const toastStackStyle = {
           @close="newTaskOpen = false"
           @submit="submitNewTask"
         />
+        <RunModal
+          :open="runOpen"
+          :scope="runScope"
+          :count="runCount"
+          :branches="gitState.branches"
+          :default-branch="runConfig?.defaults?.target_branch ?? branchLabel"
+          :default-priority="runConfig?.defaults?.min_priority ?? 2"
+          :remembered="project.runSettings"
+          :live-check-available="runConfig?.live_check?.mode !== 'none'"
+          :error="runError"
+          :busy="runStarting"
+          @close="runOpen = false"
+          @confirm="startTheRun"
+        />
         <SetupProjectModal
           :open="!!setupFor"
           :name="setupFor ? basenameOf(setupFor) : ''"
@@ -1098,8 +1216,11 @@ const toastStackStyle = {
           :columns="orderedColumns"
           :selected-id="project.selectedTask"
           :add-to="ADD_TO"
+          :run-from="configured ? ADD_TO : null"
           @select="project.selectedTask = $event"
           @add="newTaskOpen = true"
+          @run="openRun({ kind: 'queue' })"
+          @run-task="runTask"
           @reorder="project.columnOrder = $event"
         />
       </div>

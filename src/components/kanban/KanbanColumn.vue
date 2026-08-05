@@ -14,10 +14,15 @@ const props = defineProps({
   /* Passed through to the header, which is the handle; the gesture itself
      belongs to the board. */
   movable: { type: Boolean, default: false },
-  moving: { type: Boolean, default: false }
+  moving: { type: Boolean, default: false },
+  runnable: { type: Boolean, default: false }
 })
 
-defineEmits(['select', 'add', 'grab', 'move'])
+/* A card's own `runnable` rides in the task object and reaches TaskCard through
+   the v-bind below — the board already decides everything else about a card
+   that way, and adding a second channel for one flag would put the decision in
+   two places. */
+defineEmits(['select', 'add', 'grab', 'move', 'run', 'run-task'])
 
 /* `moving` reaches the header and stops there. The column being dragged is not
    dimmed or lifted: it is where the pointer already is, and the eye needs it to
@@ -57,7 +62,9 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
       :addable="addable"
       :movable="movable"
       :moving="moving"
+      :runnable="runnable"
       @add="$emit('add', status)"
+      @run="$emit('run', status)"
       @grab="$emit('grab', $event)"
       @move="$emit('move', $event)"
     />
@@ -69,6 +76,7 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
           v-bind="t"
           :selected="t.id === selectedId"
           @click="$emit('select', t.id)"
+          @run="$emit('run-task', t.id)"
         />
       </template>
       <EmptyState v-else compact icon="minus" title="Empty" :description="emptyDescription" />

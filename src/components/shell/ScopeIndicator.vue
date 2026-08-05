@@ -69,6 +69,11 @@ const badgeStyle = {
       <Icon name="bot" :size="12" />{{ agentsActive }}
     </span>
 
+    <!-- Whatever else belongs to the scope right now — today the run. Beside
+         the counters rather than out at the right, because it is about this
+         project and the buttons over there are about the window. -->
+    <slot name="status" />
+
     <span :style="{ flex: 1 }" />
 
     <span :style="{ position: 'relative', display: 'inline-flex' }">

@@ -28,6 +28,8 @@ import {
   Panel,
   ProjectList,
   Select,
+  RunBar,
+  RunModal,
   SetupProjectModal,
   Skeleton,
   StatusBadge,
@@ -46,6 +48,25 @@ import {
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 import { terminalState } from '../stores/terminals.js'
+
+/* One Run, varied. Written here rather than imported so the states the bar has
+   to draw are visible beside the thing drawing them. */
+const runFixture = (state, extra = {}) => ({
+  project: '/Users/you/dev/smetana',
+  settings: {
+    scope: { kind: 'queue' },
+    mode: 'auto',
+    target_branch: 'staging',
+    min_priority: 2,
+    live_check: true,
+    file_findings: true
+  },
+  state,
+  session: 4,
+  batches: 1,
+  stopping: false,
+  ...extra
+})
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -295,6 +316,36 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <SetupProjectModal :open="true" name="holiday-curb" @close="() => {}" @confirm="() => {}" />
       </div>
+      <!-- Two scopes, because the mode list differs between them: solo is
+           offered for a single task and refused for a queue, and that is the
+           model's rule rather than the dialog's to soften. The second one also
+           carries a refusal and a project that declares no live check. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', flexWrap: 'wrap' }">
+        <div :style="{ position: 'relative', width: '480px', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <RunModal
+            :open="true"
+            :scope="{ kind: 'queue' }"
+            :count="12"
+            :branches="['main', 'staging', 'feature/runs-project-config']"
+            default-branch="staging"
+            @close="() => {}"
+            @confirm="() => {}"
+          />
+        </div>
+        <div :style="{ position: 'relative', width: '480px', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <RunModal
+            :open="true"
+            :scope="{ kind: 'task', id: 'smetana-9', title: 'Rename the worktree when the branch changes' }"
+            :count="1"
+            :branches="['main', 'staging']"
+            default-branch="main"
+            :live-check-available="false"
+            error="unknown field `gate` — .smetana/project.toml could not be read"
+            @close="() => {}"
+            @confirm="() => {}"
+          />
+        </div>
+      </div>
       <!-- Two of them: the panel draws only the fields an issue has, so the
            sparse case is a different component to look at, not the same one
            with less in it. -->
@@ -458,6 +509,21 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             <ProjectList :projects="[]" />
           </Panel>
         </div>
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Run bar</div>
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)', alignItems: 'flex-start' }">
+        <RunBar :run="runFixture({ kind: 'preflight' })" @stop="() => {}" />
+        <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3 })" @stop="() => {}" />
+        <!-- Stopping is a state of its own on screen: the batch in flight is
+             still going, and a bar that went on saying "Batch 3" would read as
+             the button having done nothing. -->
+        <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3, stopping: true })" @stop="() => {}" />
+        <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'queue_empty' } })" />
+        <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'no_progress' } })" />
+        <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'crashed', attempts: 5 } })" />
       </div>
     </section>
 
