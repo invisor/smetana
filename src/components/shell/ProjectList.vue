@@ -15,6 +15,7 @@
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import Tooltip from '../core/Tooltip.vue'
 
 const props = defineProps({
   projects: { type: Array, default: () => [] },
@@ -72,21 +73,13 @@ const rowStyle = (project) => {
 
 const nameStyle = { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 
-/* Both marks explain themselves through the browser's own tooltip rather than
-   the design system's, and the scroll container above is the reason. The list
-   clips on both axes — `overflow-y: auto` computes the other axis to `auto`
-   too — so a Tooltip has nowhere inside the row to open: above and below are
-   cut off by the list's edges, and `side="top"` was measured truncating the
-   label to its first word and widening scrollWidth, which shifted the whole
-   list sideways on hover. Turning it to `side="left"` only moved the problem:
-   with room nowhere else, the panel opened into the gap after the project
-   name and read as a slab wedged into the row, not as a hint about a glyph.
-   The operating system draws its tooltips outside the document, so nothing
-   clips them and nothing reflows — and `title` is already this row's idiom,
-   carrying the project's full path and every IconButton's label. */
-const markStyle = { display: 'inline-flex', alignItems: 'center' }
-
-const setupMarkStyle = { ...markStyle, gap: 'var(--space-2)' }
+/* Both marks take the default side and none names one, deliberately: this
+   list scrolls, and a tooltip that had to open inside it was cut off by its
+   edges whichever way it went. Tooltip now teleports its panel out of the
+   document flow and chooses a side against the window, so the right answer
+   here is to ask for nothing and let it decide — a row near the top of the
+   panel gets its hint below, everywhere else above. */
+const setupMarkStyle = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }
 
 /* A context menu here would get clipped by the list's own scroll container
    (overflow-y in listStyle) no matter which way it opened, and moving it
@@ -118,19 +111,21 @@ const empty = computed(() => props.projects.length === 0)
         @mouseleave="hovered = null"
       >
         <span :style="nameStyle">{{ p.name }}</span>
-        <span v-if="!p.tracked" title="No bd tracker here" :style="markStyle">
+        <Tooltip v-if="!p.tracked" label="No bd tracker here">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
-        </span>
+        </Tooltip>
         <!-- The mark and the button that clears it are one hover target, tied
              together by a gap narrower than the row's own: the triangle is what
              a person sees without touching anything, the gear is what they
              press. Red is the loudest colour the system has, and it is only
              ever spent once here — the mark is drawn for the active project
              alone, the same reason the gear is. -->
-        <span v-if="needsSetup && p.path === activePath" title="Not set up for runs" :style="setupMarkStyle">
-          <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
-          <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
-        </span>
+        <Tooltip v-if="needsSetup && p.path === activePath" label="Not set up for runs">
+          <span :style="setupMarkStyle">
+            <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+            <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
+          </span>
+        </Tooltip>
         <!-- Before the remove button, not after it: removal keeps the row's
              last position wherever it appears, so a click aimed at it never
              lands on something that moved in. -->
