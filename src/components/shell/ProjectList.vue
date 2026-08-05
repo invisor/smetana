@@ -3,6 +3,12 @@
    click away. A folder with no bd tracker still belongs here — it is a
    project you added, and the mark says what it is missing, quietly.
 
+   Two rows can carry a warning triangle at once, and they are told apart by
+   what they sit next to rather than by colour alone: the missing tracker is a
+   lone muted glyph beside the name, with nothing on the row that fixes it,
+   while the missing run configuration is a red glyph bonded to the gear that
+   opens the setup it is asking for.
+
    No header of its own: the enclosing Panel already shows "Projects" and
    carries the "+" in its actions slot, so a second copy here would print the
    same word twice in a row. */
@@ -67,6 +73,8 @@ const rowStyle = (project) => {
 
 const nameStyle = { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 
+const setupMarkStyle = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }
+
 /* A context menu here would get clipped by the list's own scroll container
    (overflow-y in listStyle) no matter which way it opened, and moving it
    outside the list would mean measuring the DOM for the sake of one single
@@ -100,8 +108,17 @@ const empty = computed(() => props.projects.length === 0)
         <Tooltip v-if="!p.tracked" label="No bd tracker here" side="left">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
         </Tooltip>
+        <!-- The mark and the button that clears it are one hover target, tied
+             together by a gap narrower than the row's own: the triangle is what
+             a person sees without touching anything, the gear is what they
+             press. Red is the loudest colour the system has, and it is only
+             ever spent once here — the mark is drawn for the active project
+             alone, the same reason the gear is. -->
         <Tooltip v-if="needsSetup && p.path === activePath" label="Not set up for runs" side="left">
-          <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
+          <span :style="setupMarkStyle">
+            <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+            <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
+          </span>
         </Tooltip>
         <!-- Before the remove button, not after it: removal keeps the row's
              last position wherever it appears, so a click aimed at it never

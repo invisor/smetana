@@ -434,6 +434,22 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             />
           </Panel>
         </div>
+        <!-- Both marks on one row — a folder just added, with neither a tracker
+             nor a run configuration. The two triangles are the same glyph in
+             two colours, so this is the frame that shows whether position and
+             pairing carry the difference on their own. -->
+        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="plus" label="Add project" size="sm" />
+            </template>
+            <ProjectList
+              :projects="[{ path: '/Users/you/dev/scratch', name: 'scratch', tracked: false }]"
+              active-path="/Users/you/dev/scratch"
+              needs-setup
+            />
+          </Panel>
+        </div>
         <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false">
             <template #actions>
