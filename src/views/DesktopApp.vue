@@ -246,16 +246,20 @@ async function newAgent() {
 const configured = computed(() => runsState.config.state === 'ok')
 const runConfig = computed(() => (configured.value ? runsState.config.config : null))
 
-/* Which cards may be run on their own — applied in `orderedColumns`, which is
-   the one place a card is built for the board. Decided here rather than in the
-   tracker store, because it is a product rule and it depends on something the
-   store knows nothing about: whether this project has a configuration at all.
+/* Which cards may be run — applied in `orderedColumns`, which is the one place
+   a card is built for the board. Decided here rather than in the tracker store,
+   because it is a product rule and it depends on something the store knows
+   nothing about: whether this project has a configuration at all.
 
-   A task under an epic never gets one. It runs as part of its epic, and
-   offering it alone is how somebody merges half an epic without meaning to —
-   the epic's own card carries the button for the whole of it. */
-const runnableTask = (task) =>
-  configured.value && task.status !== 'done' && (!task.spawnedFrom || task.type === 'epic')
+   A task under an epic is offered too, and that is a deliberate answer to a
+   real question rather than an oversight: running one child alone can leave its
+   epic half merged. The judgement is the person's — they are looking at the
+   board and they know what the epic is — and taking the button away is not a
+   way to have that conversation with them.
+
+   Done is the one exclusion left: the run would claim a closed issue, and there
+   is nothing there to do. */
+const runnableTask = (task) => configured.value && task.status !== 'done'
 
 const runOpen = ref(false)
 const runScope = ref({ kind: 'queue' })

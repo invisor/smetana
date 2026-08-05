@@ -27,10 +27,8 @@ const props = defineProps({
   state: { type: String, default: 'default' },
   changedBy: { type: String, default: undefined },
   selected: { type: Boolean, default: false },
-  /* Whether this card can be run on its own. The board decides: a task with no
-     epic over it, or an epic itself. A child of an epic never gets one — it
-     runs as part of its epic, and offering it alone is how somebody merges half
-     an epic without meaning to. */
+  /* Whether this card can be run on its own. The board decides — it is a
+     product rule and it depends on things this component has never heard of. */
   runnable: { type: Boolean, default: false }
 })
 
@@ -113,17 +111,13 @@ const titleStyle = {
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
         <span :style="idStyle">{{ id }}</span>
         <span :style="{ flex: 1 }" />
-        <!-- The box stays in the layout and only its visibility changes: a
-             control that appears on hover must not reflow the row it appears
-             in, which is the same rule the project list keeps. -->
-        <IconButton
-          v-if="runnable"
-          icon="play"
-          label="Run this"
-          size="sm"
-          :style="{ visibility: hover || selected ? 'visible' : 'hidden' }"
-          @click.stop="$emit('run')"
-        />
+        <!-- Drawn whether or not the pointer is here. Starting a task is the
+             one thing a person comes to this board to do, and a control that
+             only exists under the pointer has to be found before it can be
+             used. It is quiet — a muted glyph on no surface until it is
+             hovered itself — which is what lets it be always there without
+             joining the card's argument for attention. -->
+        <IconButton v-if="runnable" icon="play" label="Run this" size="sm" @click.stop="$emit('run')" />
         <span v-if="needsResponse" title="Agent is waiting for your answer" :style="askStyle">
           <Icon name="message-circle-question-mark" :size="9" :stroke-width="2.5" />ASK
         </span>
