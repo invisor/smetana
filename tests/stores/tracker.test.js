@@ -167,12 +167,67 @@ describe('deltas', () => {
       await emit('tracker:delta', delta({ generation: 9, upserted: [issue({ id: 'bd-9' })] }))
       return snapshot({ generation: 5, issues: [issue({ id: 'bd-old' })] })
     })
+    ipc.on('tracker_resync', snapshot({ generation: 9, issues: [issue({ id: 'bd-9' })] }))
 
     await tracker.initTracker()
 
     expect(tracker.trackerState.generation).toBe(9)
     expect(tracker.trackerState.issues.has('bd-9')).toBe(true)
     expect(tracker.trackerState.issues.has('bd-old')).toBe(false)
+  })
+
+  /* Discarding the stale snapshot leaves the board holding only what that one
+     delta carried — every issue the watcher had no reason to mention is
+     missing. Generations run consecutively from there, so the gap check never
+     fires, and the back end's own sweep sees no discrepancy to report. The
+     moment the snapshot is discarded is the only place left to recover. */
+  it('a snapshot discarded as stale is recovered by a resync', async () => {
+    ipc.on('tracker_health', { state: 'ok' })
+    ipc.on('tracker_snapshot', async () => {
+      await emit('tracker:delta', delta({ generation: 9, upserted: [issue({ id: 'bd-9' })] }))
+      return snapshot({ generation: 5, issues: [issue({ id: 'bd-old' })] })
+    })
+    ipc.on('tracker_resync', snapshot({
+      generation: 9,
+      issues: [issue({ id: 'bd-1' }), issue({ id: 'bd-9' })]
+    }))
+
+    await tracker.initTracker()
+
+    expect(ipc.calls('tracker_resync')).toHaveLength(1)
+    /* initTracker does not return until the board is whole: the issue the
+       delta never mentioned is there. */
+    expect([...tracker.trackerState.issues.keys()].sort()).toEqual(['bd-1', 'bd-9'])
+    expect(tracker.trackerState.generation).toBe(9)
+    expect(tracker.trackerState.ready).toBe(true)
+  })
+
+  /* A fresh snapshot is the ordinary path, and it must not pay for the
+     recovery with an extra bd call — one costs about two seconds. */
+  it('a snapshot that is still current costs no resync', async () => {
+    await start(snapshot({ generation: 5, issues: [issue({ id: 'bd-1' })] }))
+
+    expect(ipc.calls('tracker_resync')).toHaveLength(0)
+    expect(tracker.trackerState.issues.has('bd-1')).toBe(true)
+  })
+
+  /* The recovery is a read, and a read that fails is already handled the way
+     every other one is: the board keeps what it has and the error is
+     remembered. What must not happen is initTracker throwing — the app would
+     come up with no board at all. */
+  it('a failed recovery leaves the board up and remembers the read error', async () => {
+    ipc.on('tracker_health', { state: 'ok' })
+    ipc.on('tracker_snapshot', async () => {
+      await emit('tracker:delta', delta({ generation: 9, upserted: [issue({ id: 'bd-9' })] }))
+      return snapshot({ generation: 5, issues: [issue({ id: 'bd-old' })] })
+    })
+    ipc.fail('tracker_resync', new Error('bd did not start'))
+
+    await expect(tracker.initTracker()).resolves.toBeUndefined()
+
+    expect(tracker.trackerState.ready).toBe(true)
+    expect(tracker.trackerState.issues.has('bd-9')).toBe(true)
+    expect(tracker.trackerState.lastError.title).toBe('Could not read the tracker')
   })
 })
 

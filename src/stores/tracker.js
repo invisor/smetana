@@ -201,11 +201,24 @@ export async function initTracker() {
      back; the next delta usually fixes that with a gap in the numbering, but if
      the tracker has gone quiet there will not be one, and Rust already holds
      the new value — its full sweep will see no discrepancy and send nothing.
-     The board would stay wrong, silently. So a stale snapshot is ignored
-     entirely, and a fresh one replaces the state the way resync() does: with a
-     clear, otherwise those same deletions are lost. */
+     So a stale snapshot is ignored entirely, and a fresh one replaces the
+     state the way resync() does: with a clear, otherwise those same deletions
+     are lost.
+
+     Ignoring it cannot be the end of it, though. What the board holds at that
+     point is one delta's worth of issues and nothing else — the watcher had no
+     reason to mention any of the rest. The gap check will not repair it,
+     because from here the generations run consecutively, and neither will the
+     back end, for the reason just given. So the discarded snapshot is asked
+     for again. A second delta can overtake that request as well — nothing here
+     stops it — but ready is true by the end of it, so the gap check is armed
+     and this path is then no worse off than every other resync in this file.
+     The first snapshot is the one that has nothing behind it at all, which is
+     why the recovery belongs exactly here. It is awaited so ready is not
+     announced over a board that is missing most of itself. */
   const snapshot = await invoke('tracker_snapshot')
   if (snapshot.generation >= trackerState.generation) applySnapshot(snapshot)
+  else await resync()
   trackerState.ready = true
 }
 
