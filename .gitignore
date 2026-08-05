@@ -21,3 +21,5 @@ src-tauri/binaries/*
 
 CLAUDE.md
 !src-tauri/resources/superpowers/CLAUDE.md
+# Worktrees cut for tracker tasks
+.worktrees/
