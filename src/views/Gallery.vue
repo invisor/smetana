@@ -8,6 +8,7 @@ import {
   AgentList,
   AppShell,
   Assignee,
+  BranchSelect,
   Button,
   ChatMessage,
   Checkbox,
@@ -86,6 +87,10 @@ const editorJs = ref('export function openFile(path, { permanent = false } = {})
 const editorMd = ref('# Heading\n\nA paragraph with **strong** and *emphasis*, plus a [link](https://example.com).\n\n- an item\n- another item\n')
 const editorPlain = ref('no language for this extension\nplain text, no colour\n')
 const choice = ref('running')
+/* The branch picker on its own: its three states are reached by clicking, and
+   the dialog around it is not what needs looking at. */
+const pickedBranch = ref('staging')
+const branchIsNew = ref(false)
 const checked = ref(true)
 const switched = ref(true)
 
@@ -509,6 +514,21 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             <ProjectList :projects="[]" />
           </Panel>
         </div>
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Branch picker</div>
+      <!-- Click it: the panel opens under the field, "New branch" turns the
+           field into an input, and the X puts the previous choice back. None of
+           those states can be reached by a prop, which is why it is here on its
+           own and not only inside the dialog. -->
+      <div :style="{ width: '320px' }">
+        <BranchSelect
+          v-model="pickedBranch"
+          v-model:create="branchIsNew"
+          :branches="['main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7']"
+        />
       </div>
     </section>
 

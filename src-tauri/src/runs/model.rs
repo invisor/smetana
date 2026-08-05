@@ -44,6 +44,13 @@ pub struct RunSettings {
     /// is already going, and a run that silently retargets halfway through is
     /// worse than one that is wrong from the start and says so.
     pub target_branch: String,
+    /// The target branch does not exist yet and has to be cut before anything
+    /// merges into it. Decided by the dialog, which is the only place that
+    /// knows what the branch list held — the worker never sees it, and the
+    /// agent asking `git` itself would be asking after the run had already
+    /// decided where things go.
+    #[serde(default)]
+    pub create_target: bool,
     /// Nothing worse than this is taken automatically. bd's scale runs 0 (most
     /// urgent) to 4.
     pub min_priority: u8,
@@ -189,6 +196,7 @@ mod tests {
             scope,
             mode,
             target_branch: "main".into(),
+            create_target: false,
             min_priority: 2,
             live_check: true,
             file_findings: true,

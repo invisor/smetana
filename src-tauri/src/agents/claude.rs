@@ -341,6 +341,7 @@ mod tests {
                 scope: crate::runs::model::RunScope::Queue,
                 mode,
                 target_branch: "staging".into(),
+            create_target: false,
                 min_priority: 2,
                 live_check: true,
                 file_findings: true,

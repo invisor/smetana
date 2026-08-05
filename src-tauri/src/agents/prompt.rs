@@ -87,7 +87,16 @@ fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> Stri
     }
 
     out.push_str("\n\nThis run:\n");
-    let _ = writeln!(out, "- merge finished work into `{}`", settings.target_branch);
+    let _ = writeln!(
+        out,
+        "- merge finished work into `{}`{}",
+        settings.target_branch,
+        if settings.create_target {
+            " — it does not exist yet, so cut it from the current branch before the first merge"
+        } else {
+            ""
+        }
+    );
     let _ = writeln!(
         out,
         "- take nothing worse than priority P{} automatically",
@@ -303,6 +312,7 @@ mod tests {
             scope,
             mode,
             target_branch: "staging".into(),
+            create_target: false,
             min_priority: 2,
             live_check: true,
             file_findings: true,
@@ -340,6 +350,27 @@ mod tests {
         );
         assert!(text.contains("release/7"), "{text}");
         assert!(text.contains("P1"), "{text}");
+    }
+
+    #[test]
+    fn a_branch_that_does_not_exist_yet_is_named_as_one_to_cut() {
+        // The dialog is the only place that knows the branch list, so the fact
+        // travels in the settings. Without this line the first merge is into a
+        // branch nothing created, and every task parks on the same error.
+        let settings = RunSettings {
+            target_branch: "release/8".into(),
+            create_target: true,
+            ..run_settings(RunMode::Auto, RunScope::Queue)
+        };
+        let text = run_prompt(settings, SkillDelivery::PluginDir);
+        assert!(text.contains("release/8"), "{text}");
+        assert!(text.contains("does not exist yet"), "{text}");
+        assert!(text.contains("cut it from the current branch"), "{text}");
+
+        // And an existing branch says nothing of the kind: an agent told to
+        // create a branch that is already there fails on its first command.
+        let plain = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), SkillDelivery::PluginDir);
+        assert!(!plain.contains("does not exist yet"), "{plain}");
     }
 
     #[test]

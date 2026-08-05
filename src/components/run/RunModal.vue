@@ -9,6 +9,7 @@ import { computed, ref, watch } from 'vue'
 import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
 import Select from '../core/Select.vue'
+import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
 
 const props = defineProps({
@@ -51,6 +52,7 @@ const PRIORITIES = [0, 1, 2, 3, 4].map((p) => ({ value: p, label: `P${p} and bet
 const mode = ref('auto')
 const branch = ref('')
 const priority = ref(2)
+const createBranch = ref(false)
 const liveCheck = ref(true)
 const fileFindings = ref(true)
 
@@ -69,6 +71,7 @@ watch(
       (name) => name && props.branches.includes(name)
     )
     branch.value = wanted ?? props.branches[0] ?? ''
+    createBranch.value = false
     const keptMode = kept.mode ?? 'auto'
     mode.value = keptMode === 'solo' && !soloAllowed.value ? 'auto' : keptMode
     priority.value = kept.minPriority ?? props.defaultPriority
@@ -107,6 +110,7 @@ const confirm = () => {
         : { kind: props.scope.kind, id: props.scope.id },
     mode: mode.value,
     target_branch: branch.value,
+    create_target: createBranch.value,
     min_priority: priority.value,
     live_check: liveCheck.value,
     file_findings: fileFindings.value
@@ -142,7 +146,12 @@ const errorStyle = {
     <div :style="body">
       <div :style="row">
         <span :style="labelStyle">Merge into</span>
-        <Select v-model="branch" :options="branches" :disabled="busy" />
+        <BranchSelect
+          v-model="branch"
+          v-model:create="createBranch"
+          :branches="branches"
+          :disabled="busy"
+        />
       </div>
 
       <div :style="row">
