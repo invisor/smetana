@@ -175,9 +175,11 @@ const boardOrder = ref([])
 const boardColumns = computed(() =>
   orderColumns(
     [
-      { status: 'ready', tasks: [{ id: 'bd-a1b2', title: 'Rename worktree when the branch changes', status: 'ready', type: 'bug' }] },
-      { status: 'running', tasks: [{ id: 'bd-3c9d', title: 'Virtualise the log list above 10k lines', status: 'running', type: 'feature', assignee: { kind: 'agent', name: 'claude-1' } }] },
-      { status: 'needs-you', tasks: [{ id: 'bd-7f31', title: 'Approve the migration plan', status: 'needs-you', type: 'decision', needsResponse: true }] },
+      /* Three of the four are runnable and the child of the epic is not, which
+         is the whole of the rule the board applies — see `runnableTask`. */
+      { status: 'ready', tasks: [{ id: 'bd-a1b2', title: 'Rename worktree when the branch changes', status: 'ready', type: 'bug', runnable: true }] },
+      { status: 'running', tasks: [{ id: 'bd-3c9d', title: 'Virtualise the log list above 10k lines', status: 'running', type: 'feature', assignee: { kind: 'agent', name: 'claude-1' }, spawnedFrom: 'bd-7f31' }] },
+      { status: 'needs-you', tasks: [{ id: 'bd-7f31', title: 'Approve the migration plan', status: 'needs-you', type: 'epic', needsResponse: true, runnable: true }] },
       { status: 'done', tasks: [{ id: 'bd-12cd', title: 'Bump tauri to 2.1', status: 'done', type: 'chore' }] }
     ],
     boardOrder.value
@@ -289,6 +291,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             status="needs-you"
             type="bug"
             needs-response
+            runnable
             :blocks="5"
           />
         </div>
@@ -315,8 +318,11 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           :columns="boardColumns"
           selected-id="bd-3c9d"
           add-to="ready"
+          run-from="ready"
           @select="() => {}"
           @add="() => {}"
+          @run="() => {}"
+          @run-task="() => {}"
           @reorder="boardOrder = $event"
         />
       </div>

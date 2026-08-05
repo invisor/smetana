@@ -246,9 +246,14 @@ async function newAgent() {
 const configured = computed(() => runsState.config.state === 'ok')
 const runConfig = computed(() => (configured.value ? runsState.config.config : null))
 
-/* Which cards may be run on their own. Decided here rather than in the tracker
-   store, because it is a product rule and it depends on something the store
-   knows nothing about — whether this project has a configuration at all. */
+/* Which cards may be run on their own — applied in `orderedColumns`, which is
+   the one place a card is built for the board. Decided here rather than in the
+   tracker store, because it is a product rule and it depends on something the
+   store knows nothing about: whether this project has a configuration at all.
+
+   A task under an epic never gets one. It runs as part of its epic, and
+   offering it alone is how somebody merges half an epic without meaning to —
+   the epic's own card carries the button for the whole of it. */
 const runnableTask = (task) =>
   configured.value && task.status !== 'done' && (!task.spawnedFrom || task.type === 'epic')
 
@@ -687,7 +692,15 @@ const HEALTH_NOTICE = {
    order. Writing `project.columnOrder` is the whole of saving it — the settings
    store debounces it to disk and loadProjectLayout brings it back, on a restart
    and on a switch alike. */
-const orderedColumns = computed(() => orderColumns(boardColumns.value, project.columnOrder))
+const orderedColumns = computed(() =>
+  orderColumns(boardColumns.value, project.columnOrder).map((column) => ({
+    ...column,
+    /* `runnable` rides in the task object, the way every other thing a card is
+       drawn from does — the column v-binds the whole of it, and a second
+       channel for one flag would put the decision in two places. */
+    tasks: column.tasks.map((task) => ({ ...task, runnable: runnableTask(task) }))
+  }))
+)
 
 /* Only when there is nothing else to show: a failing bd is no reason to hide
    the tasks that were already read. */
