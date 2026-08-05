@@ -20,6 +20,37 @@ pub enum Chunk {
     Gone(SessionId),
 }
 
+/// The codeset an agent is told about when nobody on the machine named a UTF-8
+/// locale of their own — which on a bundled app is every time, since launchd
+/// hands it no locale at all. That makes this the shipped path rather than an
+/// edge case, and worth a measurement per platform instead of one value that
+/// reads well.
+///
+/// macOS 26.5.2, as `LC_CTYPE=<value> locale charmap`:
+///
+///   `UTF-8` -> UTF-8, `C.UTF-8` -> UTF-8
+///
+/// `C.UTF-8` is present here, but macOS has not always had it and the bundle
+/// names no `minimumSystemVersion`, so it inherits Tauri's default of 10.13.
+/// Where it is absent it resolves to US-ASCII — the bug unfixed — and adds a
+/// five-line `Setting locale failed` block from every Perl-based tool, printed
+/// into the surface `screen.rs` reads. `UTF-8` has been understood by macOS
+/// throughout, so it is the one that cannot regress.
+///
+/// It is also why `shell_env::FALLBACK_KEY` is `LC_CTYPE`, and why an invented
+/// answer is never written to the variable it replaced: a bare codeset is legal
+/// in only one position. Measured the same way, and the single copy of this —
+/// `LC_CTYPE=UTF-8` -> UTF-8, against `LC_ALL=UTF-8` -> US-ASCII and
+/// `LANG=UTF-8` -> US-ASCII.
+#[cfg(target_os = "macos")]
+const UTF8_LOCALE: &str = "UTF-8";
+
+/// glibc is the other way round: a bare `UTF-8` is inert there and resolves to
+/// US-ASCII, while `C.UTF-8` is a real locale. WebKitGTK is a stated build
+/// target, so both halves ship.
+#[cfg(not(target_os = "macos"))]
+const UTF8_LOCALE: &str = "C.UTF-8";
+
 /// The pure part of spawning: exactly what we run and where. Pulled out for
 /// the test — actually spawning a process is not covered by tests, the same
 /// as bd's calls aren't.
@@ -37,6 +68,38 @@ pub fn build_command(launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
     cmd.env("TERM", "xterm-256color");
+    // What encoding the bytes in that terminal are in, which is the second half
+    // of `TERM` and is missing for the same launchd reason `PATH` is: a bundled
+    // app is handed an environment with no locale in it at all, and a child told
+    // nothing runs in the C locale. There macOS's own tools take their default
+    // C-string encoding from `CFStringGetSystemEncoding()`, which answers
+    // MacRoman — so an agent that runs `pbcopy` over the UTF-8 bytes of a
+    // Russian greeting puts `–ü—Ä–∏–≤–µ—Ç` on the clipboard, losslessly and with
+    // no error to notice. That is the whole of smetana-bn3: a coding agent
+    // copies a mouse selection by shelling out to `pbcopy`, so text the agent
+    // had drawn correctly in its own pane reached the clipboard as mojibake,
+    // and nothing in the webview was ever involved.
+    //
+    // Saying what the encoding is is a statement of fact rather than a
+    // preference: this PTY is a UTF-8 channel by construction, since
+    // `terminal_write` sends a Rust string's own UTF-8 bytes and both
+    // `screen.rs` and xterm.js decode UTF-8 at the other end. Which variable
+    // carries it is `shell_env`'s to decide: theirs when their value is being
+    // forwarded, and deliberately not theirs when it was rejected, because the
+    // codeset invented for that case is legal in only one position.
+    let locale = crate::shell_env::locale();
+    // Anything that would outrank what is about to be set is dropped first, and
+    // it does two jobs at once. The login shell's environment is this process's
+    // plus whatever its rc files did, so a variable this process has and the
+    // shell does not is one an rc file unset — leaving it in would let the value
+    // the person removed decide the encoding after all. And when the resolved
+    // locale was rejected rather than forwarded, the variable it came from is by
+    // definition one of these, so this is also what takes the offending
+    // `LC_ALL=C` out of the way of the `LC_CTYPE` replacing it.
+    for key in crate::shell_env::outranking(locale.key) {
+        cmd.env_remove(key);
+    }
+    cmd.env(locale.key, locale.value.as_deref().unwrap_or(UTF8_LOCALE));
     // The environment half of running without a person. The argument half is
     // applied by the profile itself, because it has to go in front of the
     // positional prompt and `CommandBuilder` only appends; the environment has
@@ -264,10 +327,75 @@ mod tests {
     fn every_agent_is_given_a_terminal_it_can_paint_in() {
         for id in agents::IDS {
             let cmd = build_command(&launch(id));
-            // `portable-pty` 0.9.0 has no `iter_env`; `get_env` reaches the
-            // same value.
-            let term = cmd.get_env("TERM").map(|v| v.to_string_lossy().into_owned());
-            assert_eq!(term.as_deref(), Some("xterm-256color"), "{id}");
+            // `iter_extra_env_as_str` and not `get_env`, for the reason the
+            // test below spells out: `get_env` answers out of the snapshot of
+            // this process's own environment, where a `TERM` is all but certain.
+            let term = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "TERM");
+            assert_eq!(term, Some(("TERM", "xterm-256color")), "{id}");
+        }
+    }
+
+    /// The other half of that: a terminal type says nothing about what encoding
+    /// the bytes in it are in, and a child left to guess guesses MacRoman on
+    /// macOS. Which of the three variables carries the answer depends on the
+    /// machine — what must never happen is that none of them does.
+    ///
+    /// Whether the value *resolves* is deliberately not asserted here. It is not
+    /// a property of the string: `names_utf8` is a rule about forwarding
+    /// somebody else's value and rejects a bare codeset for having no `.`, which
+    /// is right, and which would fail this test on every path that falls back —
+    /// including the bundle's own, where nobody names a locale at all. The
+    /// question is answered one test down by asking the platform instead.
+    ///
+    /// Read through `iter_extra_env_as_str`, which yields only what `env()` set,
+    /// and never `get_env`: `CommandBuilder::new` snapshots this process's
+    /// environment and `get_env` answers out of that snapshot, so on any machine
+    /// whose own environment has a locale — every developer terminal, most CI
+    /// images — a `get_env` assertion passes on the tester's environment and
+    /// would go on passing with the lines it guards deleted.
+    #[test]
+    fn every_agent_is_told_what_encoding_the_stream_carries() {
+        for id in agents::IDS {
+            let cmd = build_command(&launch(id));
+            let told: Vec<_> = cmd
+                .iter_extra_env_as_str()
+                .filter(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
+                .collect();
+            assert_eq!(told.len(), 1, "{id} was told {told:?}, want exactly one locale variable");
+        }
+    }
+
+    /// The pairing, asked of the platform rather than of our own reading of it.
+    /// A key and a value can each be defensible and still resolve to US-ASCII
+    /// together — `LC_ALL=UTF-8` is exactly that — and no pure function in this
+    /// tree can notice, because whether a locale resolves is the system's answer
+    /// and not a property of the string.
+    #[cfg(unix)]
+    #[test]
+    fn what_the_agent_is_told_resolves_to_utf8_on_this_machine() {
+        const LOCALE: &str = "/usr/bin/locale";
+        if !std::path::Path::new(LOCALE).exists() {
+            // Not a silent pass: it is loud where the tool exists, which is
+            // every developer machine and the gate this project runs.
+            eprintln!("{LOCALE} is absent; the pairing could not be checked");
+            return;
+        }
+        for id in agents::IDS {
+            let cmd = build_command(&launch(id));
+            let (key, value) = cmd
+                .iter_extra_env_as_str()
+                .find(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
+                .expect("one of the locale variables must have been set");
+            let out = std::process::Command::new(LOCALE)
+                .arg("charmap")
+                // Cleared so the answer is about this pair and nothing else,
+                // exactly as the values in `UTF8_LOCALE` were measured.
+                .env_clear()
+                .env(key, value)
+                .output()
+                .expect("locale must run");
+            let charmap = String::from_utf8_lossy(&out.stdout).trim().to_ascii_uppercase();
+            assert_eq!(charmap, "UTF-8", "{id} was told {key}={value}, which resolves to {charmap}");
         }
     }
 
