@@ -20,6 +20,23 @@ pub enum Chunk {
     Gone(SessionId),
 }
 
+/// The codeset an agent is told about when nobody on the machine named a UTF-8
+/// locale of their own.
+///
+/// `C.UTF-8` rather than a bare `UTF-8`, and the difference is not cosmetic. As
+/// an `LC_CTYPE` value macOS accepts both and resolves both to UTF-8, but a bare
+/// `UTF-8` is inert on glibc — a stated build target, since WebKitGTK is one of
+/// the webviews this ships against — where it resolves to US-ASCII and makes
+/// Perl-based tools print their `Setting locale failed` block into the pane.
+/// `C.UTF-8` is valid on both.
+///
+/// It is also why the fallback variable is `LC_CTYPE` and not `LANG`, which is
+/// worth spelling out because the scope argument alone would let a future reader
+/// tidy it the other way: a bare codeset is only meaningful as an `LC_CTYPE`
+/// value. `LANG=UTF-8` resolves to US-ASCII, silently, with no error at all —
+/// measured, not assumed.
+const UTF8_LOCALE: &str = "C.UTF-8";
+
 /// The pure part of spawning: exactly what we run and where. Pulled out for
 /// the test — actually spawning a process is not covered by tests, the same
 /// as bd's calls aren't.
@@ -42,16 +59,30 @@ pub fn build_command(launch: &Launch) -> CommandBuilder {
     // app is handed an environment with no locale in it at all, and a child told
     // nothing runs in the C locale. There macOS's own tools take their default
     // C-string encoding from `CFStringGetSystemEncoding()`, which answers
-    // MacRoman — so an agent that runs `pbcopy` on the bytes of `Привет` puts
-    // `–ü—Ä–∏–≤–µ—Ç` on the clipboard, losslessly and with no error to notice.
-    // Saying so is a statement of fact rather than a preference: this PTY is a
-    // UTF-8 channel by construction, since `terminal_write` sends a Rust
-    // string's own UTF-8 bytes and xterm.js decodes UTF-8 at the other end.
-    // `LC_CTYPE` is the last resort rather than `LANG` because the encoding is
-    // the only part of a locale this is entitled to decide for somebody —
-    // their language, money and dates are none of its business.
-    let (key, value) = crate::shell_env::locale().unwrap_or(("LC_CTYPE", "UTF-8"));
-    cmd.env(key, value);
+    // MacRoman — so an agent that runs `pbcopy` over the UTF-8 bytes of a
+    // Russian greeting puts `–ü—Ä–∏–≤–µ—Ç` on the clipboard, losslessly and with
+    // no error to notice. That is the whole of smetana-bn3: a coding agent
+    // copies a mouse selection by shelling out to `pbcopy`, so text the agent
+    // had drawn correctly in its own pane reached the clipboard as mojibake,
+    // and nothing in the webview was ever involved.
+    //
+    // Saying what the encoding is is a statement of fact rather than a
+    // preference: this PTY is a UTF-8 channel by construction, since
+    // `terminal_write` sends a Rust string's own UTF-8 bytes and both
+    // `screen.rs` and xterm.js decode UTF-8 at the other end. Which variable
+    // carries it is `shell_env`'s to decide, because it has to be the one the
+    // person's own setting used.
+    let locale = crate::shell_env::locale();
+    // Anything that would outrank what is about to be set is dropped first. The
+    // login shell's environment is this process's plus whatever its rc files
+    // did, so a variable this process has and the shell does not is one an rc
+    // file unset — and leaving it in the child would let the value the person
+    // removed decide the encoding after all. `LOCALE_KEYS` is in precedence
+    // order, so the ones ahead of the chosen key are exactly the ones that win.
+    for key in crate::shell_env::LOCALE_KEYS.iter().take_while(|key| **key != locale.key) {
+        cmd.env_remove(key);
+    }
+    cmd.env(locale.key, locale.value.as_deref().unwrap_or(UTF8_LOCALE));
     // The environment half of running without a person. The argument half is
     // applied by the profile itself, because it has to go in front of the
     // positional prompt and `CommandBuilder` only appends; the environment has
@@ -289,16 +320,45 @@ mod tests {
     /// The other half of that: a terminal type says nothing about what encoding
     /// the bytes in it are in, and a child left to guess guesses MacRoman on
     /// macOS. Which of the three variables carries the answer depends on the
-    /// machine — what must never happen is that none of them does.
+    /// machine — what must never happen is that none of them does, or that the
+    /// one that does names a codeset the pane cannot read.
+    ///
+    /// Read through `iter_extra_env_as_str`, which yields only what `env()` set,
+    /// and never `get_env`: `CommandBuilder::new` snapshots this process's
+    /// environment and `get_env` answers out of that snapshot, so on any machine
+    /// whose own environment has a locale — every developer terminal, most CI
+    /// images — a `get_env` assertion passes on the tester's environment and
+    /// would go on passing with the lines it guards deleted.
     #[test]
     fn every_agent_is_told_what_encoding_the_stream_carries() {
         for id in agents::IDS {
             let cmd = build_command(&launch(id));
-            let told = ["LC_ALL", "LC_CTYPE", "LANG"]
-                .iter()
-                .find_map(|key| cmd.get_env(key).map(|v| v.to_string_lossy().into_owned()));
-            let value = told.unwrap_or_else(|| panic!("{id} was started with no locale at all"));
-            assert!(!value.is_empty(), "{id} was given an empty locale");
+            let told: Vec<_> = cmd
+                .iter_extra_env_as_str()
+                .filter(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
+                .collect();
+            assert_eq!(told.len(), 1, "{id} was told {told:?}, want exactly one locale variable");
+            let (_, value) = told[0];
+            assert!(
+                crate::shell_env::names_utf8(value),
+                "{id} was told {value:?}, which does not name the codeset the pane decodes"
+            );
+        }
+    }
+
+    /// Setting the right value under the wrong variable would look identical to
+    /// a fix and do nothing: `LC_ALL` beats `LC_CTYPE` beats `LANG`, and the
+    /// child's environment is this process's to start with. So whichever
+    /// variable carries the answer, nothing above it may survive into the child.
+    #[test]
+    fn nothing_the_child_inherits_can_outrank_what_it_was_told() {
+        let cmd = build_command(&launch("claude"));
+        let chosen = crate::shell_env::LOCALE_KEYS
+            .iter()
+            .position(|key| cmd.iter_extra_env_as_str().any(|(set, _)| set == *key))
+            .expect("one of the locale variables must have been set");
+        for key in &crate::shell_env::LOCALE_KEYS[..chosen] {
+            assert_eq!(cmd.get_env(key), None, "an inherited {key} would outrank what was set");
         }
     }
 
