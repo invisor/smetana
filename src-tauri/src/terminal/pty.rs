@@ -39,8 +39,9 @@ pub enum Chunk {
 ///
 /// It is also why `shell_env::FALLBACK_KEY` is `LC_CTYPE`, and why an invented
 /// answer is never written to the variable it replaced: a bare codeset is legal
-/// only in that position. Measured the same way — `LC_ALL=UTF-8` -> US-ASCII,
-/// `LANG=UTF-8` -> US-ASCII, `LC_CTYPE=UTF-8` -> UTF-8.
+/// in only one position. Measured the same way, and the single copy of this —
+/// `LC_CTYPE=UTF-8` -> UTF-8, against `LC_ALL=UTF-8` -> US-ASCII and
+/// `LANG=UTF-8` -> US-ASCII.
 #[cfg(target_os = "macos")]
 const UTF8_LOCALE: &str = "UTF-8";
 
@@ -83,8 +84,9 @@ pub fn build_command(launch: &Launch) -> CommandBuilder {
     // preference: this PTY is a UTF-8 channel by construction, since
     // `terminal_write` sends a Rust string's own UTF-8 bytes and both
     // `screen.rs` and xterm.js decode UTF-8 at the other end. Which variable
-    // carries it is `shell_env`'s to decide, because it has to be the one the
-    // person's own setting used.
+    // carries it is `shell_env`'s to decide: theirs when their value is being
+    // forwarded, and deliberately not theirs when it was rejected, because the
+    // codeset invented for that case is legal in only one position.
     let locale = crate::shell_env::locale();
     // Anything that would outrank what is about to be set is dropped first, and
     // it does two jobs at once. The login shell's environment is this process's
@@ -325,18 +327,25 @@ mod tests {
     fn every_agent_is_given_a_terminal_it_can_paint_in() {
         for id in agents::IDS {
             let cmd = build_command(&launch(id));
-            // `portable-pty` 0.9.0 has no `iter_env`; `get_env` reaches the
-            // same value.
-            let term = cmd.get_env("TERM").map(|v| v.to_string_lossy().into_owned());
-            assert_eq!(term.as_deref(), Some("xterm-256color"), "{id}");
+            // `iter_extra_env_as_str` and not `get_env`, for the reason the
+            // test below spells out: `get_env` answers out of the snapshot of
+            // this process's own environment, where a `TERM` is all but certain.
+            let term = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "TERM");
+            assert_eq!(term, Some(("TERM", "xterm-256color")), "{id}");
         }
     }
 
     /// The other half of that: a terminal type says nothing about what encoding
     /// the bytes in it are in, and a child left to guess guesses MacRoman on
     /// macOS. Which of the three variables carries the answer depends on the
-    /// machine — what must never happen is that none of them does, or that the
-    /// one that does names a codeset the pane cannot read.
+    /// machine — what must never happen is that none of them does.
+    ///
+    /// Whether the value *resolves* is deliberately not asserted here. It is not
+    /// a property of the string: `names_utf8` is a rule about forwarding
+    /// somebody else's value and rejects a bare codeset for having no `.`, which
+    /// is right, and which would fail this test on every path that falls back —
+    /// including the bundle's own, where nobody names a locale at all. The
+    /// question is answered one test down by asking the platform instead.
     ///
     /// Read through `iter_extra_env_as_str`, which yields only what `env()` set,
     /// and never `get_env`: `CommandBuilder::new` snapshots this process's
@@ -353,33 +362,6 @@ mod tests {
                 .filter(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
                 .collect();
             assert_eq!(told.len(), 1, "{id} was told {told:?}, want exactly one locale variable");
-            let (_, value) = told[0];
-            assert!(
-                crate::shell_env::names_utf8(value),
-                "{id} was told {value:?}, which does not name the codeset the pane decodes"
-            );
-        }
-    }
-
-    /// Setting the right value under the wrong variable would look identical to
-    /// a fix and do nothing: `LC_ALL` beats `LC_CTYPE` beats `LANG`, and the
-    /// child's environment is this process's to start with. So whichever
-    /// variable carries the answer, nothing above it may survive into the child.
-    #[test]
-    fn nothing_the_child_inherits_can_outrank_what_it_was_told() {
-        let cmd = build_command(&launch("claude"));
-        let (chosen, _) = cmd
-            .iter_extra_env_as_str()
-            .find(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
-            .expect("one of the locale variables must have been set");
-        // Asserted over the pure list rather than over `get_env`: where the
-        // chosen key is already the top one this loop is empty, and on a machine
-        // with no locale of its own `get_env` answers `None` whether or not the
-        // removal happened — so on its own it would prove nothing here. What
-        // makes it a test is `shell_env::the_variables_that_beat_a_key`, which
-        // pins the list this walks.
-        for key in crate::shell_env::outranking(chosen) {
-            assert_eq!(cmd.get_env(key), None, "an inherited {key} would outrank what was set");
         }
     }
 

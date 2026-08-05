@@ -132,10 +132,9 @@ pub fn locale() -> &'static Locale {
 /// it: `ru_RU.KOI8-R` would have the agent's tools emit KOI8-R into a pane that
 /// decodes UTF-8, where `C` at least lets UTF-8 bytes through untouched.
 /// A rejected value does not keep its variable, and that is the one part of this
-/// with a measurement behind it rather than a principle. The fallback codeset is
-/// bare `UTF-8` on macOS, and bare `UTF-8` is meaningful only in the `LC_CTYPE`
-/// position: `LC_ALL=UTF-8` and `LANG=UTF-8` both resolve to US-ASCII. So
-/// answering an `LC_ALL=C` in place would swap one silent failure for another.
+/// with a measurement behind it rather than a principle: the invented codeset is
+/// legal in only one position, so answering an `LC_ALL=C` in place would swap
+/// one silent failure for another. `terminal::pty::UTF8_LOCALE` has the numbers.
 /// Instead the answer always lands on `FALLBACK_KEY`, and `terminal::pty` drops
 /// whatever outranks it — which is what removes the offending variable when the
 /// offender was the one on top.
@@ -171,6 +170,16 @@ pub(crate) fn outranking(key: &str) -> &'static [&'static str] {
 /// is the only part of a locale an app is entitled to decide for somebody, and
 /// because it is the only one of the three a bare codeset is a legal value for
 /// at all — `terminal::pty::UTF8_LOCALE` has the measurements.
+///
+/// It also has to sit in the *middle* of `LOCALE_KEYS`, and that is load-bearing
+/// rather than incidental: each of the three variables a rejected value can
+/// arrive in is disposed of by a different mechanism, and only this position
+/// covers all three. A rejected `LC_ALL` is **removed**, because it outranks
+/// this and `outranking` names it. A rejected `LC_CTYPE` is **overwritten**,
+/// being this same key. A rejected `LANG` is **outranked** by what is written
+/// here, and left alone so the person keeps their language for everything but
+/// the codeset. Move this to `LANG` and the second case breaks silently: a
+/// rejected `LC_CTYPE` would neither be removed nor overwritten, and would win.
 const FALLBACK_KEY: &str = "LC_CTYPE";
 
 /// Whether a locale value names a codeset the platform will actually resolve to
@@ -190,7 +199,7 @@ const FALLBACK_KEY: &str = "LC_CTYPE";
 /// codeset, and the pairing test in `terminal::pty` is what would catch it if it
 /// ever became a real machine's answer.
 #[cfg(target_os = "macos")]
-pub(crate) fn names_utf8(value: &str) -> bool {
+fn names_utf8(value: &str) -> bool {
     // Measured on macOS 26.5.2, as `LC_ALL=<value> locale charmap`:
     //
     //   en_US.UTF-8 -> UTF-8      en_US.utf8         -> US-ASCII
@@ -209,7 +218,7 @@ pub(crate) fn names_utf8(value: &str) -> bool {
 /// prints on Debian — so the comparison ignores punctuation and case alike, and
 /// a modifier is dropped rather than treated as part of the codeset.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn names_utf8(value: &str) -> bool {
+fn names_utf8(value: &str) -> bool {
     let Some((_, codeset)) = value.split_once('.') else { return false };
     let codeset = codeset.split('@').next().unwrap_or(codeset);
     let letters: String =
@@ -406,11 +415,10 @@ mod tests {
     fn a_codeset_that_contradicts_the_channel_takes_its_variable_down_with_it() {
         // `export LC_ALL=C` is a common habit for deterministic tool output, and
         // it is an *answer*, so nothing but this check stands between it and a
-        // child handed the exact locale the bug is about. The variable goes too
-        // rather than being overwritten in place: the invented value is a bare
-        // codeset, which is legal only as an `LC_CTYPE`, so `LC_ALL=UTF-8` would
-        // resolve to US-ASCII. `terminal::pty` removes what `outranking` names,
-        // which is what clears the rejected `LC_ALL` out of the way.
+        // child handed the exact locale the bug is about. The variable goes with
+        // it rather than being overwritten in place — see `judge` — and
+        // `terminal::pty` removes what `outranking` names, which is what clears
+        // the rejected `LC_ALL` out of the way.
         for value in ["C", "POSIX", "en_US.ISO8859-1", "ru_RU.KOI8-R"] {
             let locale = judge(Some(("LC_ALL", value.to_string())));
             assert_eq!(locale.key, FALLBACK_KEY, "{value}");
@@ -448,11 +456,10 @@ mod tests {
         }
     }
 
-    /// Measured on macOS 26.5.2 with `LC_ALL=<value> locale charmap`: only the
-    /// hyphen spelling resolves, case is free, and a modifier or a trailing
-    /// space takes the whole value down to US-ASCII. Being generous here is what
-    /// would hand somebody a locale the system reads as US-ASCII while both the
-    /// code and this test claimed they were covered.
+    /// The cases behind the macOS arm of `names_utf8`, which carries the
+    /// measurements. Being generous here is what would hand somebody a locale
+    /// the system reads as US-ASCII while both the code and this test claimed
+    /// they were covered.
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_resolves_only_the_hyphen_spelling() {
