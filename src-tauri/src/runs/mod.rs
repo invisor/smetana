@@ -11,5 +11,6 @@ pub mod commands;
 pub mod config;
 pub mod gitignore;
 pub mod model;
+pub mod preflight;
 pub mod queue;
 pub mod survey;

@@ -76,6 +76,9 @@ pub enum Request {
     Resize(SessionId, u16, u16),
     Write(SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
     RunCapture(SessionId, String, u64, u64, oneshot::Sender<Result<Vec<String>, TerminalError>>),
+    /// Answer once this session's process is gone, with its exit code. See
+    /// `ExitWaiter` for why it is a request and not a subscription.
+    AwaitExit(SessionId, oneshot::Sender<Option<i32>>),
     /// The one reply that is not a `oneshot`: it is awaited from the exit
     /// event, on a synchronous thread, and only `std::sync::mpsc` can put a
     /// ceiling on a blocking receive.
@@ -105,6 +108,29 @@ struct Live {
     seq: u64,
 }
 
+/// Somebody waiting for a session to end — in practice the run worker, which
+/// starts one session per batch and has nothing to do until it is over.
+///
+/// A request rather than a subscription, and that is the race it exists to
+/// settle: the run worker creates a session and asks in the next breath, and
+/// the process may already be gone by then. A subscriber would have missed the
+/// event and waited forever; a request looks at the state that is here.
+///
+/// `grace` is set the first time the session is seen `Exited` **without** an
+/// exit code. End of stream can arrive before the child has been reaped, and
+/// `reassess` re-polls for the code every detection tick until it comes — so
+/// answering the instant the state flips would report a clean batch as a crash.
+/// A code that never arrives at all (a signal) answers `None` once the grace is
+/// spent, and `None` is a crash, which is what being signalled is.
+struct ExitWaiter {
+    id: SessionId,
+    tx: oneshot::Sender<Option<i32>>,
+    grace: Option<Instant>,
+}
+
+/// How long to keep re-polling for an exit code before answering without one.
+const EXIT_CODE_GRACE: Duration = Duration::from_secs(5);
+
 /// An unclosed capture: wait until this session's screen has held still for
 /// `settle`, then hand back its lines. It lives in the worker's loop rather
 /// than in a task of its own, because the screen is the worker's state and is
@@ -123,6 +149,7 @@ pub fn start(app: AppHandle) -> TerminalHandle {
     tauri::async_runtime::spawn(async move {
         let mut sessions: HashMap<SessionId, Live> = HashMap::new();
         let mut captures: Vec<Capture> = Vec::new();
+        let mut exit_waiters: Vec<ExitWaiter> = Vec::new();
         let mut active: Option<SessionId> = None;
         let mut next_id: SessionId = 1;
         let mut tick = tokio::time::interval(FLUSH);
@@ -147,7 +174,7 @@ pub fn start(app: AppHandle) -> TerminalHandle {
                         let _ = tx.send(());
                         return;
                     }
-                    handle(&app, &mut sessions, &mut captures, &mut active, &mut next_id, &chunks_tx, request);
+                    handle(&app, &mut sessions, &mut captures, &mut exit_waiters, &mut active, &mut next_id, &chunks_tx, request);
                 }
                 chunk = chunks_rx.recv() => {
                     // Cannot happen while this task owns the sender it hands
@@ -168,6 +195,7 @@ pub fn start(app: AppHandle) -> TerminalHandle {
                     // `settle` comes from the caller and may well be shorter
                     // than the detection interval.
                     close_captures(&mut captures, &sessions);
+                    close_exit_waiters(&mut exit_waiters, &sessions);
                 }
             }
         }
@@ -371,12 +399,47 @@ fn close_captures(captures: &mut Vec<Capture>, sessions: &HashMap<SessionId, Liv
     *captures = keep;
 }
 
+/// Answer whoever is waiting for a session to end. Run on the same tick as the
+/// captures, and deliberately after `reassess`, so a code that arrived on this
+/// tick is handed over on this tick rather than the next.
+fn close_exit_waiters(waiters: &mut Vec<ExitWaiter>, sessions: &HashMap<SessionId, Live>) {
+    let now = Instant::now();
+    let mut keep = Vec::new();
+    for mut waiter in waiters.drain(..) {
+        match sessions.get(&waiter.id) {
+            // Removed while somebody waited. The process is gone either way,
+            // and there is no code left to report — which reads as a crash,
+            // correctly: a batch whose session was taken out from under it did
+            // not finish.
+            None => {
+                let _ = waiter.tx.send(None);
+            }
+            Some(live) if live.session.state != SessionState::Exited => keep.push(waiter),
+            Some(live) => match live.session.exit_code {
+                Some(code) => {
+                    let _ = waiter.tx.send(Some(code));
+                }
+                None => {
+                    let deadline = *waiter.grace.get_or_insert(now + EXIT_CODE_GRACE);
+                    if now >= deadline {
+                        let _ = waiter.tx.send(None);
+                    } else {
+                        keep.push(waiter);
+                    }
+                }
+            },
+        }
+    }
+    *waiters = keep;
+}
+
 /// Everything the worker does synchronously. `ShutDown` is handled by the
 /// loop instead — see there.
 fn handle(
     app: &AppHandle,
     sessions: &mut HashMap<SessionId, Live>,
     captures: &mut Vec<Capture>,
+    exit_waiters: &mut Vec<ExitWaiter>,
     active: &mut Option<SessionId>,
     next_id: &mut SessionId,
     chunks: &mpsc::UnboundedSender<Chunk>,
@@ -569,6 +632,14 @@ fn handle(
                     });
                 }
             }
+        }
+        Request::AwaitExit(id, tx) => {
+            // No answer here even for a session that is already gone: the tick
+            // is the only place that knows whether an exit code is still on its
+            // way, and duplicating that judgement here is how the two would
+            // drift apart. A session that ended long ago is answered on the
+            // next tick, sixteen milliseconds later.
+            exit_waiters.push(ExitWaiter { id, tx, grace: None });
         }
         // Handled by the loop, which is the only place that can await the
         // grace period; it never reaches here.
