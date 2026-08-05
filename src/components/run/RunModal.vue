@@ -8,7 +8,7 @@
 import { computed, ref, watch } from 'vue'
 import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
-import Select from '../core/Select.vue'
+import Dropdown from '../core/Dropdown.vue'
 import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
 
@@ -156,7 +156,7 @@ const errorStyle = {
 
       <div :style="row">
         <span :style="labelStyle">How it works</span>
-        <Select v-model="mode" :options="modes" :disabled="busy" />
+        <Dropdown v-model="mode" :options="modes" :disabled="busy" />
         <span :style="noteStyle">
           {{
             mode === 'auto'
@@ -170,7 +170,7 @@ const errorStyle = {
 
       <div :style="row">
         <span :style="labelStyle">Take tasks</span>
-        <Select v-model="priority" :options="PRIORITIES" :disabled="busy" />
+        <Dropdown v-model="priority" :options="PRIORITIES" :disabled="busy" />
       </div>
 
       <div :style="row">

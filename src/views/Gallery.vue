@@ -15,6 +15,7 @@ import {
   CodeBlock,
   ContextMenu,
   DependencyMark,
+  Dropdown,
   DependencySpine,
   EmptyState,
   FileEditor,
@@ -518,17 +519,31 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
     </section>
 
     <section :style="sectionStyle">
-      <div :style="headStyle">Branch picker</div>
-      <!-- Click it: the panel opens under the field, "New branch" turns the
-           field into an input, and the X puts the previous choice back. None of
-           those states can be reached by a prop, which is why it is here on its
+      <div :style="headStyle">Dropdown, and the branch picker built on it</div>
+      <!-- Click them. The panel, the filter and the list are Dropdown's; the
+           branch picker adds "New branch" and the naming state, and none of
+           those can be reached by a prop, which is why both are here on their
            own and not only inside the dialog. -->
-      <div :style="{ width: '320px' }">
-        <BranchSelect
-          v-model="pickedBranch"
-          v-model:create="branchIsNew"
-          :branches="['main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7']"
-        />
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <!-- The same panel without the two things only a branch field needs:
+             this is what the rest of the run dialog uses. -->
+        <div :style="{ width: '220px' }">
+          <Dropdown
+            v-model="choice"
+            :options="[
+              { value: 'ready', label: 'On its own' },
+              { value: 'running', label: 'With a lead' },
+              { value: 'done', label: 'Plain, one task' }
+            ]"
+          />
+        </div>
+        <div :style="{ width: '320px' }">
+          <BranchSelect
+            v-model="pickedBranch"
+            v-model:create="branchIsNew"
+            :branches="['main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7']"
+          />
+        </div>
       </div>
     </section>
 

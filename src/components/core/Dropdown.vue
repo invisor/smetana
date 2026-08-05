@@ -1,0 +1,275 @@
+<script setup>
+/* A value picked from a list, drawn by us rather than by the platform.
+
+   `Select` is still the right thing for a short list in an ordinary form —
+   it is one element, it is accessible for free, and it costs nothing. This
+   exists for the two things a native select cannot do: put anything of our own
+   in the panel, and filter a long list. `BranchSelect` needs both; the run
+   dialog's other fields need neither, and use this so that three controls
+   stacked in one dialog do not read as three different kinds of thing.
+
+   The panel is absolutely positioned inside this component, which is fine
+   where it is used and not a general guarantee: an ancestor with `overflow`
+   would clip it, the same trap `Tooltip` had to leave the document for. The
+   dialog it lives in sets no overflow, and that is why this is allowed to stay
+   simple. */
+import { computed, nextTick, ref, watch } from 'vue'
+import Icon from './Icon.vue'
+
+const props = defineProps({
+  modelValue: { type: [String, Number], default: '' },
+  /* Accepts ['a','b'] or [{ value, label }], exactly as `Select` does — the two
+     are interchangeable at the call site on purpose. */
+  options: { type: Array, default: () => [] },
+  disabled: { type: Boolean, default: false },
+  /* A filter above the list. Off by default: it is worth the extra field only
+     where the list is long enough that scanning it is work. */
+  searchable: { type: Boolean, default: false },
+  searchLabel: { type: String, default: 'Search' },
+  /* Identifiers are drawn in mono and prose in sans — a branch name is one, a
+     mode is the other. */
+  mono: { type: Boolean, default: false },
+  placeholder: { type: String, default: 'Select' },
+  /* Something to say about the current value, muted, before the chevron. */
+  hint: { type: String, default: '' }
+})
+
+const emit = defineEmits(['update:modelValue', 'open'])
+
+const open = ref(false)
+const query = ref('')
+const cursor = ref(0)
+const root = ref(null)
+const panel = ref(null)
+const filterField = ref(null)
+
+const items = computed(() =>
+  props.options.map((o) => (typeof o === 'object' && o !== null ? o : { value: o, label: String(o) }))
+)
+
+const matches = computed(() => {
+  const needle = query.value.trim().toLowerCase()
+  if (!needle) return items.value
+  return items.value.filter((o) => String(o.label).toLowerCase().includes(needle))
+})
+
+/* A value that is not in the list is still shown, as itself. The list is what
+   can be picked, not what can be held: a branch just named here is not in it
+   yet, and a value kept in settings may have gone since. Blanking the field to
+   the placeholder in either case would say "nothing is chosen" about something
+   that is about to be acted on. */
+const selectedLabel = computed(() => {
+  const found = items.value.find((o) => o.value === props.modelValue)
+  if (found) return String(found.label)
+  return props.modelValue === '' || props.modelValue == null ? '' : String(props.modelValue)
+})
+
+watch(matches, () => {
+  cursor.value = 0
+})
+
+const show = async () => {
+  if (props.disabled) return
+  open.value = true
+  query.value = ''
+  cursor.value = Math.max(
+    0,
+    items.value.findIndex((o) => o.value === props.modelValue)
+  )
+  emit('open')
+  await nextTick()
+  /* Whichever of the two can take the keyboard. Without focus landing
+     somewhere inside the panel the arrow keys would go to the page, and a list
+     that cannot be walked by keyboard is a list a native select did better. */
+  ;(props.searchable ? filterField.value : panel.value)?.focus()
+}
+
+const hide = () => {
+  open.value = false
+  query.value = ''
+}
+
+const choose = (value) => {
+  emit('update:modelValue', value)
+  hide()
+}
+
+const onKeydown = (event) => {
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    const n = matches.value.length
+    if (n) cursor.value = (cursor.value + (event.key === 'ArrowDown' ? 1 : -1) + n) % n
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    const pick = matches.value[cursor.value]
+    if (pick) choose(pick.value)
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    hide()
+  }
+}
+
+/* Pointerdown rather than click: a press that starts inside the panel and ends
+   outside it — a drag across the list — would otherwise close the panel out
+   from under the pointer. */
+const onDocumentPointerdown = (event) => {
+  if (!root.value?.contains(event.target)) hide()
+}
+
+watch(open, (isOpen) => {
+  if (isOpen) document.addEventListener('pointerdown', onDocumentPointerdown, true)
+  else document.removeEventListener('pointerdown', onDocumentPointerdown, true)
+})
+
+defineExpose({ close: hide })
+
+/* The field is deliberately the same silhouette as `Select`'s: same height,
+   same padding, same border and the same chevron, so a dialog mixing the two
+   does not look like a dialog mixing two libraries. */
+const fieldStyle = computed(() => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  width: '100%',
+  height: 'var(--control-h)',
+  padding: '0 var(--space-4)',
+  background: props.disabled ? 'var(--surface-sunken)' : 'var(--surface-raised)',
+  color: props.disabled ? 'var(--text-muted)' : 'var(--text-primary)',
+  border: `var(--border-w) solid ${open.value ? 'var(--focus-ring)' : 'var(--border)'}`,
+  borderRadius: 'var(--radius-3)',
+  font: `var(--weight-regular) var(--text-sm)/1 ${props.mono ? 'var(--font-mono)' : 'var(--font-sans)'}`,
+  cursor: props.disabled ? 'not-allowed' : 'default',
+  textAlign: 'left'
+}))
+
+const valueStyle = computed(() => ({
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  color: selectedLabel.value === '' ? 'var(--text-muted)' : 'inherit'
+}))
+
+const panelStyle = {
+  position: 'absolute',
+  top: 'calc(100% + var(--space-2))',
+  left: 0,
+  right: 0,
+  zIndex: 'var(--z-dropdown)',
+  display: 'flex',
+  flexDirection: 'column',
+  background: 'var(--surface-overlay)',
+  border: 'var(--border-w) solid var(--border-strong)',
+  borderRadius: 'var(--radius-3)',
+  boxShadow: 'var(--shadow-overlay)',
+  overflow: 'hidden',
+  outline: 'none'
+}
+
+const filterStyle = {
+  height: 'var(--row-h)',
+  padding: '0 var(--space-4)',
+  border: 'none',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)',
+  outline: 'none',
+  background: 'transparent',
+  color: 'var(--text-primary)',
+  font: 'var(--weight-regular) var(--text-sm)/1 var(--font-mono)',
+  width: '100%'
+}
+
+/* Eight rows and then it scrolls: enough to hold a working set without the
+   panel running past the bottom of whatever it opened in. */
+const listStyle = {
+  maxHeight: 'calc(8 * var(--row-h))',
+  overflowY: 'auto',
+  display: 'flex',
+  flexDirection: 'column'
+}
+
+const optionStyle = (option, index) => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  height: 'var(--row-h)',
+  padding: '0 var(--space-4)',
+  border: 'none',
+  width: '100%',
+  textAlign: 'left',
+  /* Where the keyboard is and what is chosen are different facts and are drawn
+     differently: a surface step for the first, a check for the second. Colour
+     is never the only signal here either. */
+  background: index === cursor.value ? 'var(--surface-hover)' : 'transparent',
+  color: option.value === props.modelValue ? 'var(--text-primary)' : 'var(--text-secondary)',
+  font: `var(--weight-regular) var(--text-sm)/1 ${props.mono ? 'var(--font-mono)' : 'var(--font-sans)'}`,
+  cursor: 'default'
+})
+
+const emptyStyle = {
+  padding: 'var(--space-4)',
+  fontSize: 'var(--text-xs)',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-sans)'
+}
+
+const hintStyle = {
+  fontSize: 'var(--text-2xs)',
+  color: 'var(--text-muted)',
+  whiteSpace: 'nowrap',
+  fontFamily: 'var(--font-sans)'
+}
+</script>
+
+<template>
+  <div ref="root" :style="{ position: 'relative', width: '100%' }">
+    <button
+      type="button"
+      :disabled="disabled"
+      :aria-expanded="open"
+      :style="fieldStyle"
+      @click="show"
+    >
+      <span :style="valueStyle">{{ selectedLabel || placeholder }}</span>
+      <span v-if="hint" :style="hintStyle">{{ hint }}</span>
+      <Icon name="chevron-down" :size="14" :style="{ color: 'var(--text-muted)' }" />
+    </button>
+
+    <div v-if="open" ref="panel" tabindex="-1" :style="panelStyle" @keydown="onKeydown">
+      <!-- Anything of our own that belongs above the list. This is the whole
+           reason this component exists rather than a `Select`. -->
+      <slot name="header" :close="hide" />
+      <input
+        v-if="searchable"
+        ref="filterField"
+        v-model="query"
+        :style="filterStyle"
+        :placeholder="searchLabel"
+        :aria-label="searchLabel"
+        @keydown="onKeydown"
+      />
+      <div :style="listStyle">
+        <button
+          v-for="(option, i) in matches"
+          :key="option.value"
+          type="button"
+          :style="optionStyle(option, i)"
+          @mouseenter="cursor = i"
+          @click="choose(option.value)"
+        >
+          <Icon
+            name="check"
+            :size="12"
+            :style="{ visibility: option.value === modelValue ? 'visible' : 'hidden' }"
+          />
+          <span :style="{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
+            {{ option.label }}
+          </span>
+        </button>
+        <div v-if="!matches.length" :style="emptyStyle">
+          <slot name="empty">Nothing matches.</slot>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
