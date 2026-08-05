@@ -8,7 +8,7 @@
    overwrite what an agent wrote while the panel sat open. */
 import { computed, ref, watch } from 'vue'
 import Button from '../core/Button.vue'
-import Select from '../core/Select.vue'
+import Dropdown from '../core/Dropdown.vue'
 import Modal from '../overlays/Modal.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import TypeBadge from './TypeBadge.vue'
@@ -194,7 +194,12 @@ const divider = {
 
     <div v-if="issue.description" :style="descriptionStyle">{{ issue.description }}</div>
 
-    <Select
+    <!-- A Dropdown rather than a Select, and here that is load-bearing rather
+         than cosmetic: this panel is inside Panel's scroll container, and a
+         list drawn in the flow would be clipped by it. Dropdown's panel leaves
+         the document, which is the same move the delete dialog below makes and
+         for the same reason. -->
+    <Dropdown
       :model-value="issue.status"
       :options="statusOptions"
       :disabled="busy || deleting"

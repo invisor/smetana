@@ -8,11 +8,12 @@
    dialog's other fields need neither, and use this so that three controls
    stacked in one dialog do not read as three different kinds of thing.
 
-   The panel is absolutely positioned inside this component, which is fine
-   where it is used and not a general guarantee: an ancestor with `overflow`
-   would clip it, the same trap `Tooltip` had to leave the document for. The
-   dialog it lives in sets no overflow, and that is why this is allowed to stay
-   simple. */
+   The panel is teleported out and positioned in window coordinates, for the
+   reason `Tooltip` was: an ancestor with `overflow` clips an absolutely
+   positioned descendant however it is positioned, and this is used inside
+   `Panel`'s scroll container as well as inside a dialog that has none. It flips
+   above the field when there is no room below, and it follows the field while
+   anything scrolls. */
 import { computed, nextTick, ref, watch } from 'vue'
 import Icon from './Icon.vue'
 
@@ -30,6 +31,9 @@ const props = defineProps({
      mode is the other. */
   mono: { type: Boolean, default: false },
   placeholder: { type: String, default: 'Select' },
+  /* The same two `Select` has, and the same names: a dense panel wants the
+     short one. */
+  size: { type: String, default: 'md' },
   /* Something to say about the current value, muted, before the chevron. */
   hint: { type: String, default: '' }
 })
@@ -40,8 +44,24 @@ const open = ref(false)
 const query = ref('')
 const cursor = ref(0)
 const root = ref(null)
+const field = ref(null)
 const panel = ref(null)
 const filterField = ref(null)
+/* Where the panel goes, in window coordinates. Null until measured — the one
+   state it must not be seen in, since it would be sitting in the corner. */
+const at = ref(null)
+/* The field's width, taken before the panel is rendered rather than with the
+   rest of the placement. It has to be right on the very first layout: a panel
+   measured at zero width wraps every label and comes out far taller than it
+   will end up, and the flip below would then be decided from that height. */
+const width = ref(0)
+
+/* The distance from the field, and the closest the panel may come to the
+   window's edge. Operands in arithmetic against getBoundingClientRect rather
+   than values handed to the browser, which is why they are numbers here and not
+   token references — the same note `Tooltip` carries. */
+const GAP = 4
+const EDGE = 8
 
 const items = computed(() =>
   props.options.map((o) => (typeof o === 'object' && o !== null ? o : { value: o, label: String(o) }))
@@ -76,12 +96,33 @@ const show = async () => {
     0,
     items.value.findIndex((o) => o.value === props.modelValue)
   )
+  at.value = null
+  width.value = field.value?.getBoundingClientRect().width ?? 0
   emit('open')
   await nextTick()
+  place()
   /* Whichever of the two can take the keyboard. Without focus landing
      somewhere inside the panel the arrow keys would go to the page, and a list
      that cannot be walked by keyboard is a list a native select did better. */
   ;(props.searchable ? filterField.value : panel.value)?.focus()
+}
+
+/* Measured once on opening and again whenever anything moves under it. Below
+   the field when it fits, above when it does not, and clamped to the window
+   either way — the last of those is what stands between a field near the bottom
+   of a small window and a list drawn off the edge. */
+function place() {
+  const anchor = field.value?.getBoundingClientRect()
+  const box = panel.value?.getBoundingClientRect()
+  if (!anchor || !box) return
+  const room = window.innerHeight - anchor.bottom - GAP - EDGE
+  const above = box.height > room && anchor.top - GAP - EDGE > room
+  const top = above ? anchor.top - GAP - box.height : anchor.bottom + GAP
+  width.value = anchor.width
+  at.value = {
+    left: anchor.left,
+    top: Math.max(EDGE, Math.min(top, window.innerHeight - box.height - EDGE))
+  }
 }
 
 const hide = () => {
@@ -111,14 +152,30 @@ const onKeydown = (event) => {
 
 /* Pointerdown rather than click: a press that starts inside the panel and ends
    outside it — a drag across the list — would otherwise close the panel out
-   from under the pointer. */
+   from under the pointer.
+
+   Both boxes are checked, and the panel one is not optional: it is teleported
+   to the body and is therefore not inside `root` at all. Without it a press on
+   an option would close the panel on pointerdown and the click would land on a
+   node that had already been removed — the list would look completely dead. */
 const onDocumentPointerdown = (event) => {
-  if (!root.value?.contains(event.target)) hide()
+  const inside =
+    root.value?.contains(event.target) || panel.value?.contains(event.target)
+  if (!inside) hide()
 }
 
 watch(open, (isOpen) => {
-  if (isOpen) document.addEventListener('pointerdown', onDocumentPointerdown, true)
-  else document.removeEventListener('pointerdown', onDocumentPointerdown, true)
+  const method = isOpen ? 'addEventListener' : 'removeEventListener'
+  document[method]('pointerdown', onDocumentPointerdown, true)
+  // Capture, so a scroll inside any ancestor is seen, not only the window's.
+  window[method]('scroll', place, true)
+  window[method]('resize', place)
+})
+
+/* The list changes height as it is filtered, and a panel opened upwards has to
+   move with it or it drifts away from its field. */
+watch(matches, () => {
+  if (open.value) nextTick(place)
 })
 
 defineExpose({ close: hide })
@@ -131,7 +188,7 @@ const fieldStyle = computed(() => ({
   alignItems: 'center',
   gap: 'var(--space-3)',
   width: '100%',
-  height: 'var(--control-h)',
+  height: props.size === 'sm' ? 'var(--control-h-sm)' : 'var(--control-h)',
   padding: '0 var(--space-4)',
   background: props.disabled ? 'var(--surface-sunken)' : 'var(--surface-raised)',
   color: props.disabled ? 'var(--text-muted)' : 'var(--text-primary)',
@@ -151,12 +208,16 @@ const valueStyle = computed(() => ({
   color: selectedLabel.value === '' ? 'var(--text-muted)' : 'inherit'
 }))
 
-const panelStyle = {
-  position: 'absolute',
-  top: 'calc(100% + var(--space-2))',
-  left: 0,
-  right: 0,
-  zIndex: 'var(--z-dropdown)',
+const panelStyle = computed(() => ({
+  position: 'fixed',
+  top: `${at.value?.top ?? 0}px`,
+  left: `${at.value?.left ?? 0}px`,
+  width: `${width.value}px`,
+  // Hidden until measured: one frame of it in the window's corner reads as a
+  // flash, and it has to be in the document at its natural height to be
+  // measured at all.
+  visibility: at.value ? 'visible' : 'hidden',
+  zIndex: 'var(--z-popover)',
   display: 'flex',
   flexDirection: 'column',
   background: 'var(--surface-overlay)',
@@ -165,7 +226,7 @@ const panelStyle = {
   boxShadow: 'var(--shadow-overlay)',
   overflow: 'hidden',
   outline: 'none'
-}
+}))
 
 const filterStyle = {
   height: 'var(--row-h)',
@@ -224,6 +285,7 @@ const hintStyle = {
 <template>
   <div ref="root" :style="{ position: 'relative', width: '100%' }">
     <button
+      ref="field"
       type="button"
       :disabled="disabled"
       :aria-expanded="open"
@@ -235,7 +297,8 @@ const hintStyle = {
       <Icon name="chevron-down" :size="14" :style="{ color: 'var(--text-muted)' }" />
     </button>
 
-    <div v-if="open" ref="panel" tabindex="-1" :style="panelStyle" @keydown="onKeydown">
+    <Teleport to="body">
+      <div v-if="open" ref="panel" tabindex="-1" :style="panelStyle" @keydown="onKeydown">
       <!-- Anything of our own that belongs above the list. This is the whole
            reason this component exists rather than a `Select`. -->
       <slot name="header" :close="hide" />
@@ -266,10 +329,11 @@ const hintStyle = {
             {{ option.label }}
           </span>
         </button>
-        <div v-if="!matches.length" :style="emptyStyle">
-          <slot name="empty">Nothing matches.</slot>
+          <div v-if="!matches.length" :style="emptyStyle">
+            <slot name="empty">Nothing matches.</slot>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>

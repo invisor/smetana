@@ -240,7 +240,14 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '260px' }">
           <Textarea v-model="prose" :rows="3" placeholder="What needs doing" />
         </div>
+        <!-- Both, side by side. Select is still the library's control for a
+             short list in an ordinary form; Dropdown is what the product uses
+             where the panel has to carry something of its own or escape a
+             scrolling ancestor. -->
         <Select v-model="choice" :options="['ready', 'running', 'done']" />
+        <div :style="{ width: '160px' }">
+          <Dropdown v-model="choice" :options="['ready', 'running', 'done']" />
+        </div>
         <Checkbox v-model="checked" label="Follow tail" />
         <Checkbox :model-value="false" indeterminate label="Partial" />
         <Switch v-model="switched" label="Compact density" />

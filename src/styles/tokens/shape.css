@@ -24,6 +24,14 @@
   --z-dropdown:100; /* @kind other */
   --z-tooltip:200; /* @kind other */
   --z-modal:300; /* @kind other */
+  /* Above the modal, deliberately, and the one addition this port makes to the
+     scale. The rest of it assumes an overlay is nested inside whatever it
+     belongs to, where painting order settles the question on its own. A popover
+     that has to leave its stacking context — because a scrolling ancestor would
+     clip it — no longer gets that for free, and at --z-dropdown it would
+     disappear behind the very dialog it was opened in. Dropdown and Tooltip
+     both use this. */
+  --z-popover:350; /* @kind other */
   --z-toast:400; /* @kind other */
 }
 [data-theme="dark"]{

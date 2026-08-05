@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
-import Select from '../core/Select.vue'
+import Dropdown from '../core/Dropdown.vue'
 import Textarea from '../core/Textarea.vue'
 
 const props = defineProps({
@@ -103,15 +103,15 @@ const field = { flex: 1, minWidth: 0 }
       <div :style="row">
         <div :style="field">
           <div :style="label">Type</div>
-          <Select v-model="issueType" :options="TYPES" />
+          <Dropdown v-model="issueType" :options="TYPES" />
         </div>
         <div :style="field">
           <div :style="label">Priority</div>
-          <Select v-model="priority" :options="PRIORITIES" />
+          <Dropdown v-model="priority" :options="PRIORITIES" />
         </div>
         <div :style="field">
           <div :style="label">Brainstorming</div>
-          <Select v-model="brainstorm" :options="BRAINSTORM" />
+          <Dropdown v-model="brainstorm" :options="BRAINSTORM" />
         </div>
       </div>
     </div>

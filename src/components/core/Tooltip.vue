@@ -22,11 +22,12 @@
    where it was — hover ends the moment the pointer leaves, so the window for
    that is a stray frame.
 
-   Leaving the trigger's DOM also leaves its stacking context, and `--z-tooltip`
-   is 200 against `--z-modal`'s 300: a tooltip nested inside a modal used to sit
-   above it for free and now would go behind it. Nothing in the app puts one
-   there today. Whatever does first has a token question to settle rather than a
-   local override to write, since the ordering is the design system's to state. */
+   Leaving the trigger's DOM also leaves its stacking context, which is why the
+   panel sits at `--z-popover` rather than `--z-tooltip`: nesting used to settle
+   the order for free, and at 200 against a modal's 300 a tooltip inside a dialog
+   would now go behind it. `--z-popover` is the scale's answer to that, added
+   when `Dropdown` needed the same thing — the ordering is the design system's to
+   state, not a local override's. */
 import { computed, nextTick, ref } from 'vue'
 
 const props = defineProps({
@@ -101,7 +102,7 @@ function hide() {
 
 const tipStyle = computed(() => ({
   position: 'fixed',
-  zIndex: 'var(--z-tooltip)',
+  zIndex: 'var(--z-popover)',
   top: `${at.value?.top ?? 0}px`,
   left: `${at.value?.left ?? 0}px`,
   visibility: at.value ? 'visible' : 'hidden',
