@@ -3,8 +3,7 @@ import { computed, nextTick } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
-import StatusDot from '../status/StatusDot.vue'
-import { statusColors } from '../status/status.js'
+import { attentionLevel, statusColors, statusGlyph } from '../status/status.js'
 
 const props = defineProps({
   status: { type: String, required: true },
@@ -35,6 +34,26 @@ const emit = defineEmits(['add', 'grab', 'move', 'run'])
 const c = computed(() => statusColors(props.status))
 const over = computed(() => props.wipLimit != null && props.count > props.wipLimit)
 const label = computed(() => c.value.key.replace(/-/g, ' '))
+
+/* A glyph rather than `StatusDot`'s silhouette: a column names one status and
+   only ever that one, so the shape can say what the status *means* instead of
+   telling apart six statuses standing side by side, which is the job the dot
+   exists for on a card. Every column gets one, the generic tag included, so a
+   custom status is not the only header on the board with a gap where the
+   others have a glyph. */
+const glyph = computed(() => statusGlyph(props.status))
+
+/* The one moving thing on the board, and only while something is actually
+   moving. A spinner over an empty running column claims work that is not
+   there — and since it never stopped, it also said nothing when work started.
+   Motion means something happened; an idle board must look idle. */
+const spinning = computed(() => c.value.key === 'running' && props.count > 0)
+
+const glyphStyle = computed(() => ({
+  color: c.value.fg,
+  opacity: attentionLevel(props.status) === 'quiet' ? 'var(--attn-quiet-opacity)' : 1,
+  animation: spinning.value ? 'sm-spin var(--dur-pulse) linear infinite' : undefined
+}))
 
 /* A pointerdown on the "+" is a press of that button and nothing else. Without
    this the button still works — a click survives a drag that never passed its
@@ -124,7 +143,7 @@ const wipStyle = computed(() => ({
     @pointerdown="onPointerdown"
     @keydown="onKeydown"
   >
-    <StatusDot :status="status" :size="8" />
+    <Icon :name="glyph" :size="12" :stroke-width="2" :style="glyphStyle" />
     <span :style="nameStyle">{{ label }}</span>
     <span :style="{ font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
       {{ count }}

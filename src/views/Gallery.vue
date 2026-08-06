@@ -14,6 +14,7 @@ import {
   ChatMessage,
   Checkbox,
   CodeBlock,
+  ColumnHeader,
   ContextMenu,
   DependencyMark,
   Dropdown,
@@ -232,6 +233,29 @@ const boardColumns = computed(() =>
   )
 )
 
+/* Every glyph a column header can draw: bd's built-in vocabulary, the two
+   reserved statuses no bd column carries but a custom one might, the two custom
+   statuses that have a glyph of their own — `ready_to_merge` in bd's own
+   spelling, to show `normalizeStatus` doing its half — and one on the end with
+   no glyph, for the generic tag. `running` appears twice, because the spinner
+   is the count's business: it turns over work and stands still over an empty
+   column. */
+const columnHeaders = [
+  { status: 'ready', count: 4 },
+  { status: 'running', count: 2 },
+  { status: 'running', count: 0 },
+  { status: 'blocked', count: 1 },
+  { status: 'deferred', count: 3 },
+  { status: 'pinned', count: 1 },
+  { status: 'hooked', count: 2 },
+  { status: 'needs-you', count: 1 },
+  { status: 'done', count: 9 },
+  { status: 'failed', count: 0 },
+  { status: 'parked', count: 2 },
+  { status: 'ready_to_merge', count: 1 },
+  { status: 'awaiting-review', count: 2 }
+]
+
 const menuItems = [
   { type: 'label', label: 'Worktree' },
   { label: 'Open in editor', icon: 'file-code', shortcut: '⏎' },
@@ -326,6 +350,13 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       <div :style="headStyle">Kanban</div>
       <div :style="rowStyle">
         <TypeBadge v-for="t in types" :key="t" :type="t" />
+      </div>
+      <!-- The glyph vocabulary of the column headers. The second `running` is
+           the one to check: an empty column's glyph must sit perfectly still. -->
+      <div :style="{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)' }">
+        <div v-for="(col, i) in columnHeaders" :key="i" :style="{ width: '176px' }">
+          <ColumnHeader :status="col.status" :count="col.count" :addable="false" />
+        </div>
       </div>
       <!-- The card at the width the board gives it, since the badge shares its
            bottom row with the dependency marks and the assignee. -->

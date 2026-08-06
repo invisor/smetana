@@ -72,3 +72,32 @@ export const STATUS_GLYPH = {
   done: 'check',
   failed: 'x'
 }
+
+/* Three of bd's built-in statuses fall outside RESERVED and so have no glyph of
+   their own above — `deferred`, `pinned` and `hooked` reach the board as
+   user-defined statuses (see the translation in `stores/tracker.js`). They are
+   still a fixed vocabulary with a settled meaning, so they get a glyph here
+   rather than sharing the generic one: postponed, standing, claimed by an
+   agent onto its hook. */
+const EXTRA_GLYPH = {
+  deferred: 'clock',
+  pinned: 'pin',
+  hooked: 'anchor',
+  /* Custom statuses, and so nobody's to guarantee — but these two names are
+     common enough across projects to be worth a glyph rather than the generic
+     tag. `parked` borrows `needs-you`'s triangle deliberately: a parked issue
+     is one somebody has to come back to. The two never share a board — one is
+     a bd status, the other is how an agent asks a question — so the triangle
+     still means one thing wherever it is drawn. */
+  parked: 'triangle-alert',
+  'ready-to-merge': 'git-merge'
+}
+
+/* A status nobody has heard of is an ordinary outcome, not an error: it draws
+   the generic tag, the same answer `kanban/issueType.js` gives an unknown type.
+   Colour is never alone either way — whatever renders this glyph spells the
+   status out beside it. */
+export function statusGlyph(s) {
+  const n = normalizeStatus(s)
+  return STATUS_GLYPH[n] || EXTRA_GLYPH[n] || 'tag'
+}

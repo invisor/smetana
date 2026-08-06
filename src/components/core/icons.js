@@ -4,6 +4,7 @@
    If the product ever gets its own icon set, replace this map and nothing else
    in the system changes. */
 import {
+  Anchor,
   ArrowDownToLine,
   Bell,
   Bot,
@@ -13,6 +14,7 @@ import {
   ChevronRight,
   ChevronsRight,
   CircleDashed,
+  Clock,
   Columns3,
   Copy,
   CornerDownRight,
@@ -27,6 +29,7 @@ import {
   Gauge,
   GitBranch,
   GitFork,
+  GitMerge,
   Inbox,
   Info,
   Layers,
@@ -41,6 +44,7 @@ import {
   PanelRightOpen,
   Paperclip,
   Pause,
+  Pin,
   Play,
   Plus,
   RefreshCw,
@@ -74,6 +78,7 @@ export const iconNodes = {
 
   // scope
   'git-branch': GitBranch,
+  'git-merge': GitMerge,
   'folder-git-2': FolderGit2,
   'file-pen': FilePen,
 
@@ -99,6 +104,10 @@ export const iconNodes = {
   x: X,
   info: Info,
   dot: Dot,
+  // bd's own statuses that are not reserved here: deferred, pinned, hooked.
+  clock: Clock,
+  pin: Pin,
+  anchor: Anchor,
   // The design system asks for "message-circle-question-mark"; lucide 0.469 still
   // calls it MessageCircleQuestion (renamed upstream later). Keep the DS name.
   'message-circle-question-mark': MessageCircleQuestion,
