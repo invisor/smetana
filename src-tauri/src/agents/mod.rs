@@ -32,6 +32,26 @@ pub enum SkillDelivery {
     Inline,
 }
 
+/// How a harness is handed the images attached to a task.
+///
+/// The same split as `SkillDelivery`, for the same reason and with the same
+/// division of labour: *that* the agent has images and what it owes us for them
+/// is the product's decision and is written once, in `prompt.rs`; *how the
+/// pixels reach this particular CLI* is the harness's business and lives in its
+/// own file. Codex takes `-i/--image`; Claude Code has no such flag and reads
+/// an image when the prompt names its path.
+///
+/// The paths are named in the prompt either way — the agent has to copy them
+/// into the issue description, and the description is what an implementer opens
+/// the picture by. The delivery only decides what is said about them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ImageDelivery {
+    /// One flag per file on the command line, in front of the prompt.
+    Flag(&'static str),
+    /// Nothing on the command line: the harness opens a path it is told about.
+    InPrompt,
+}
+
 /// Whether the agent must talk the task through before filing it. `Auto`
 /// leaves the judgement to the agent on purpose: nothing in the app has read
 /// the text, and a heuristic on title length would misfire in both directions.
@@ -62,6 +82,13 @@ pub struct TaskDraft {
     /// at all is one bd knows.
     pub issue_type: Option<String>,
     pub priority: Option<u8>,
+    /// Absolute paths of the images attached in the dialog, already copied into
+    /// the app's own data directory by `attachments.rs`. `default` because a
+    /// dialog that attached nothing sends nothing, and because a payload
+    /// written before this field existed must still start a session rather than
+    /// fail to deserialize.
+    #[serde(default)]
+    pub images: Vec<String>,
 }
 
 /// Why a session is being started. The front end sends this; every profile
@@ -111,6 +138,12 @@ pub trait Profile: Sync {
     /// What to exec. Also what we look for on `PATH`.
     fn binary(&self) -> &'static str;
     fn delivery(&self) -> SkillDelivery;
+    /// How images reach this harness. The default is the answer for any CLI
+    /// that has no flag for them, which is most of them: a path named in the
+    /// prompt is the one channel every harness has.
+    fn images(&self) -> ImageDelivery {
+        ImageDelivery::InPrompt
+    }
     /// The whole command line, prompt included. `cwd` and the environment are
     /// added by `terminal::pty::build_command`, which owns those for every agent.
     fn command(&self, launch: &Launch) -> CommandBuilder;
@@ -245,7 +278,8 @@ mod tests {
                     "draft": {{
                         "text": "Fix the thing",
                         "issue_type": "bug",
-                        "priority": 2
+                        "priority": 2,
+                        "images": ["/data/attachments/20260806-121314-mock.png"]
                     }}
                 }}"#
             );
@@ -256,9 +290,28 @@ mod tests {
                     assert_eq!(draft.text, "Fix the thing");
                     assert_eq!(draft.issue_type.as_deref(), Some("bug"));
                     assert_eq!(draft.priority, Some(2));
+                    assert_eq!(draft.images, vec!["/data/attachments/20260806-121314-mock.png"]);
                 }
                 other => panic!("expected NewTask, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn a_draft_with_nothing_attached_carries_no_images_and_still_deserializes() {
+        // The dialog sends the key only when something is attached, and a
+        // payload written before the field existed has none either. A session
+        // that refused to start over an absent key would take the whole
+        // new-task flow with it.
+        let json = r#"{
+            "kind": "newTask",
+            "brainstorm": "off",
+            "draft": { "text": "Fix the thing", "issue_type": null, "priority": null }
+        }"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::NewTask { draft, .. } => assert!(draft.images.is_empty()),
+            other => panic!("expected NewTask, got {other:?}"),
         }
     }
 

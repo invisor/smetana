@@ -43,6 +43,27 @@ If the work splits into pieces that could be done by different people on
 different days, file them as separate tasks and say in each description how
 they relate. One task that means four is a task nobody can pick up.
 
+## Attached images
+
+A task can arrive with images — a mock, a screenshot of the thing that is
+wrong. The prompt names them by absolute path, and some harnesses are handed
+the files themselves as well.
+
+The description owes two things for each one, and one without the other is not
+enough:
+
+- **The path**, copied in exactly as it was given. Whoever picks the task up
+  opens the picture by that string and has nowhere else to find it — bd carries
+  no attachments of its own.
+- **What matters in the picture, in words.** The files live in Smetana's own
+  data directory on one machine; they are not in the repository, so in another
+  clone the path leads nowhere and the words are all that is left. A described
+  mock is not a mock, which is why the path is required too.
+
+Say what the picture is for, not what it contains pixel by pixel: which screen,
+what is wrong with it or what should change, and anything in it the text does
+not already say.
+
 ## After filing
 
 Report the id `bd create` printed. Do not start the work unless you were asked

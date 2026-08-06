@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use super::library::Skills;
-use super::{Brainstorm, Intent, SkillDelivery, TaskDraft};
+use super::{Brainstorm, ImageDelivery, Intent, SkillDelivery, TaskDraft};
 use crate::runs::model::{RunMode, RunScope, RunSettings};
 
 /// The sentence that makes the agent talk the task through. It has to stand on
@@ -46,6 +46,7 @@ const SETUP: &str = "Work out what this project is made of and write .smetana/pr
 pub fn build(
     intent: &Intent,
     delivery: SkillDelivery,
+    images: ImageDelivery,
     skills: &Skills,
     facts: Option<&str>,
     text: SkillText,
@@ -57,7 +58,7 @@ pub fn build(
         // not what to change, and only the person knows the second half.
         Intent::EditTask { id, title } => Some(format!("Update bd issue {id} (\"{title}\"): ")),
         Intent::NewTask { brainstorm, draft } => {
-            Some(new_task(*brainstorm, draft, delivery, &brainstorming, text))
+            Some(new_task(*brainstorm, draft, delivery, images, &brainstorming, text))
         }
         Intent::Setup => Some(setup(delivery, skills, facts)),
         Intent::Run { settings } => Some(run(settings, delivery, skills)),
@@ -225,10 +226,65 @@ fn fields(draft: &TaskDraft) -> String {
     out
 }
 
+/// What the agent owes us for an attached image, and it is two things at once.
+///
+/// The paths, because a described mock is not a mock: whoever picks the task up
+/// opens the pictures by the strings in the description, and nothing else in
+/// bd carries them. The words, because those paths are on one machine only —
+/// they are in this app's data directory, not in the repository, and in
+/// somebody else's clone they lead nowhere. Either half alone loses something
+/// that cannot be got back from the other.
+const IMAGES: &str = "Copy each path into the issue description exactly as it is written above, and \
+     also say in words what matters in each picture. The paths are how whoever picks this up opens \
+     the images; the words are what is left of them on a machine that does not have the files. \
+     Neither on its own is enough.";
+
+/// The images, named. Empty when there are none — the whole block is absent
+/// then, rather than a heading with nothing under it.
+fn images(paths: &[String], delivery: ImageDelivery) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let one = paths.len() == 1;
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "{} attached to this task, at {} absolute path{} on this machine:\n\n",
+        if one { "There is an image" } else { "There are images" },
+        if one { "this" } else { "these" },
+        if one { "" } else { "s" }
+    );
+    for path in paths {
+        let _ = writeln!(out, "{path}");
+    }
+    out.push('\n');
+    let it = if one { "it" } else { "them" };
+    match delivery {
+        // The harness took the files on its command line; saying so keeps it
+        // from hunting for something it is already holding.
+        ImageDelivery::Flag(_) => {
+            let _ = write!(
+                out,
+                "{} attached to this session as well. ",
+                if one { "It is" } else { "They are" }
+            );
+        }
+        // The only channel there is: this harness opens an image when the path
+        // is in front of it.
+        ImageDelivery::InPrompt => {
+            let _ = write!(out, "Open and look at {it} before you write anything. ");
+        }
+    }
+    out.push_str(IMAGES);
+    out.push_str("\n\n");
+    out
+}
+
 fn new_task(
     brainstorm: Brainstorm,
     draft: &TaskDraft,
     delivery: SkillDelivery,
+    image_delivery: ImageDelivery,
     brainstorming: &Path,
     text: SkillText,
 ) -> String {
@@ -236,6 +292,7 @@ fn new_task(
     out.push_str("File a new task in this project's bd tracker. This is what needs doing:\n\n");
     out.push_str(draft.text.trim());
     out.push_str("\n\n");
+    out.push_str(&images(&draft.images, image_delivery));
     out.push_str(&fields(draft));
     out.push_str("\n\n");
 
@@ -297,6 +354,7 @@ mod tests {
             text: "Swap the red for green".into(),
             issue_type: Some("bug".into()),
             priority: Some(2),
+            images: Vec::new(),
         }
     }
 
@@ -345,7 +403,7 @@ mod tests {
     }
 
     fn run_prompt(settings: RunSettings, delivery: SkillDelivery) -> String {
-        build(&Intent::Run { settings }, delivery, &skills(), None, nothing()).unwrap()
+        build(&Intent::Run { settings }, delivery, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap()
     }
 
     #[test]
@@ -510,26 +568,26 @@ mod tests {
 
     #[test]
     fn a_bare_session_opens_on_nothing() {
-        assert!(build(&Intent::Bare, SkillDelivery::PluginDir, &skills(), None, nothing()).is_none());
+        assert!(build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).is_none());
     }
 
     #[test]
     fn editing_an_issue_names_it_and_stops_mid_sentence() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::PluginDir, &skills(), None, nothing()).unwrap();
+        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
         assert_eq!(text, "Update bd issue smetana-7 (\"x y\"): ");
     }
 
     #[test]
     fn editing_an_issue_is_never_given_a_filing_skill() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::Inline, &skills(), None, both()).unwrap();
+        let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
     }
 
     fn drafted(draft: TaskDraft) -> String {
         let intent = Intent::NewTask { brainstorm: Brainstorm::Off, draft };
-        build(&intent, SkillDelivery::PluginDir, &skills(), None, nothing()).unwrap()
+        build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap()
     }
 
     #[test]
@@ -570,6 +628,76 @@ mod tests {
         assert!(prioritised.contains("Decide the type yourself"), "{prioritised}");
     }
 
+    fn with_images(image_delivery: ImageDelivery) -> String {
+        let intent = Intent::NewTask {
+            brainstorm: Brainstorm::Off,
+            draft: TaskDraft {
+                images: vec![
+                    "/data/attachments/20260806-121314-mock.png".into(),
+                    "/data/attachments/20260806-121315-flow.png".into(),
+                ],
+                ..draft()
+            },
+        };
+        build(&intent, SkillDelivery::PluginDir, image_delivery, &skills(), None, nothing()).unwrap()
+    }
+
+    #[test]
+    fn attached_images_reach_the_prompt_by_path_in_either_delivery() {
+        // Even the harness that is handed the files on its command line is told
+        // the paths: they have to end up in the issue description, and the
+        // command line is not somewhere the agent can read them back from.
+        for delivery in [ImageDelivery::InPrompt, ImageDelivery::Flag("-i")] {
+            let text = with_images(delivery);
+            assert!(text.contains("/data/attachments/20260806-121314-mock.png"), "{delivery:?}: {text}");
+            assert!(text.contains("/data/attachments/20260806-121315-flow.png"), "{delivery:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn both_the_paths_and_a_description_of_them_are_demanded() {
+        // The whole point of the feature: a described mock is not a mock, and a
+        // path is nothing on a machine that does not have the file. Checking
+        // against the constant rather than a retyped substring, the same as the
+        // brainstorming prose is checked.
+        for delivery in [ImageDelivery::InPrompt, ImageDelivery::Flag("-i")] {
+            assert!(with_images(delivery).contains(IMAGES), "{delivery:?}");
+        }
+    }
+
+    #[test]
+    fn a_harness_holding_the_files_is_not_sent_to_open_them_and_one_without_is() {
+        assert!(with_images(ImageDelivery::InPrompt).contains("Open and look at them"));
+        let flagged = with_images(ImageDelivery::Flag("-i"));
+        assert!(!flagged.contains("Open and look at them"), "{flagged}");
+        assert!(flagged.contains("attached to this session"), "{flagged}");
+    }
+
+    #[test]
+    fn one_image_is_spoken_of_in_the_singular() {
+        // A prompt reading "There are images ... at these absolute paths" over a
+        // single line is a prompt somebody wrote without looking, the same
+        // objection the run's "at most 1 tasks" already carries.
+        let intent = Intent::NewTask {
+            brainstorm: Brainstorm::Off,
+            draft: TaskDraft { images: vec!["/data/a.png".into()], ..draft() },
+        };
+        let text =
+            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing())
+                .unwrap();
+        assert!(text.contains("There is an image attached to this task, at this absolute path"), "{text}");
+        assert!(text.contains("Open and look at it before"), "{text}");
+    }
+
+    #[test]
+    fn a_task_with_no_images_says_nothing_at_all_about_images() {
+        // A heading with nothing under it would have the agent looking for
+        // files nobody attached.
+        let text = drafted(draft());
+        assert!(!text.contains(IMAGES), "{text}");
+        assert!(!text.contains("attached"), "{text}");
+    }
+
     #[test]
     fn switched_off_it_asks_for_no_discussion() {
         // Checking against the constants themselves, not a retyped substring,
@@ -578,7 +706,7 @@ mod tests {
         // so a leak of either into the Off arm would say nothing about the
         // process and still pass a substring check on that word alone.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            let text = build(&new_task(Brainstorm::Off), delivery, &skills(), None, both()).unwrap();
+            let text = build(&new_task(Brainstorm::Off), delivery, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
             assert!(!text.contains(DISCUSS), "{delivery:?}: off must not carry the discussion prose");
             assert!(!text.contains(JUDGE), "{delivery:?}: off must not carry the judgement prose");
         }
@@ -590,7 +718,7 @@ mod tests {
         // from the PluginDir side of the same guarantee: filing applies to
         // every NewTask whatever the switch says.
         for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
-            let text = build(&new_task(mode), SkillDelivery::PluginDir, &skills(), None, both()).unwrap();
+            let text = build(&new_task(mode), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
             assert!(text.contains("smetana:filing-a-task"), "{mode:?}");
             assert!(!text.contains(FILING), "{mode:?}: no registry should carry the skill body");
         }
@@ -602,7 +730,7 @@ mod tests {
         // question: an agent that files without discussion still has to file
         // it properly.
         for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
-            let text = build(&new_task(mode), SkillDelivery::Inline, &skills(), None, both()).unwrap();
+            let text = build(&new_task(mode), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
             assert!(text.contains("The title says what needs doing"), "{mode:?}");
             assert!(!text.contains("smetana:filing-a-task"), "{mode:?}: no registry to name");
         }
@@ -611,13 +739,13 @@ mod tests {
     #[test]
     fn switched_on_a_plugin_dir_harness_is_told_the_skill_name() {
         let text =
-            build(&new_task(Brainstorm::On), SkillDelivery::PluginDir, &skills(), None, nothing()).unwrap();
+            build(&new_task(Brainstorm::On), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
         assert!(text.contains("superpowers:brainstorming"));
     }
 
     #[test]
     fn switched_on_an_inline_harness_carries_the_whole_process() {
-        let text = build(&new_task(Brainstorm::On), SkillDelivery::Inline, &skills(), None, both()).unwrap();
+        let text = build(&new_task(Brainstorm::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
         assert!(text.contains("Ask one question at a time."));
         assert!(
             !text.contains("superpowers:brainstorming"),
@@ -628,20 +756,20 @@ mod tests {
     #[test]
     fn on_inline_degrades_to_the_rule_when_the_skill_cannot_be_read() {
         let text =
-            build(&new_task(Brainstorm::On), SkillDelivery::Inline, &skills(), None, nothing()).unwrap();
+            build(&new_task(Brainstorm::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
         assert!(text.contains("agree the design"), "the instruction survives a missing file");
     }
 
     #[test]
     fn auto_leaves_the_judgement_to_the_agent() {
         let text =
-            build(&new_task(Brainstorm::Auto), SkillDelivery::PluginDir, &skills(), None, nothing()).unwrap();
+            build(&new_task(Brainstorm::Auto), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
         assert!(text.contains("more than one"), "auto states the test the agent applies");
     }
 
     #[test]
     fn auto_on_an_inline_harness_points_at_the_file_rather_than_pasting_it() {
-        let text = build(&new_task(Brainstorm::Auto), SkillDelivery::Inline, &skills(), None, both()).unwrap();
+        let text = build(&new_task(Brainstorm::Auto), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
         assert!(text.contains("/app/resources/superpowers/skills/brainstorming/SKILL.md"));
         assert!(
             !text.contains("Ask one question at a time."),
@@ -654,7 +782,7 @@ mod tests {
     #[test]
     fn setting_a_project_up_carries_the_survey_and_names_the_file_to_write() {
         let text =
-            build(&Intent::Setup, SkillDelivery::PluginDir, &skills(), Some(FACTS), nothing())
+            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing())
                 .expect("a setup session opens on something");
         assert!(text.contains(".smetana/project.toml"), "{text}");
         assert!(text.contains("npm run test"), "the survey reaches the agent: {text}");
@@ -663,7 +791,7 @@ mod tests {
     #[test]
     fn a_plugin_dir_harness_is_told_the_setup_skill_by_name() {
         let text =
-            build(&Intent::Setup, SkillDelivery::PluginDir, &skills(), Some(FACTS), nothing())
+            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing())
                 .expect("builds");
         assert!(text.contains("smetana:project-setup"), "{text}");
     }
@@ -675,6 +803,7 @@ mod tests {
         let text = build(
             &Intent::Setup,
             SkillDelivery::Inline,
+            ImageDelivery::InPrompt,
             &skills(),
             Some(FACTS),
             SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING) },
@@ -688,7 +817,7 @@ mod tests {
     fn a_setup_session_survives_a_survey_that_found_nothing() {
         // `render` always produces text, but a caller that could not run the
         // survey at all passes None, and the instruction still has to stand.
-        let text = build(&Intent::Setup, SkillDelivery::PluginDir, &skills(), None, nothing())
+        let text = build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing())
             .expect("builds");
         assert!(text.contains(".smetana/project.toml"), "{text}");
     }

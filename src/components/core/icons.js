@@ -38,6 +38,7 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Paperclip,
   Pause,
   Play,
   Plus,
@@ -74,6 +75,9 @@ export const iconNodes = {
   'git-branch': GitBranch,
   'folder-git-2': FolderGit2,
   'file-pen': FilePen,
+
+  // attachments
+  paperclip: Paperclip,
 
   // files
   file: File,

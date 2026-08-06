@@ -60,6 +60,14 @@ import {
 } from '../stores/projects.js'
 import { gitState, loadBranches, loadHead } from '../stores/git.js'
 import {
+  attachFiles,
+  attachmentsState,
+  clearAttachments,
+  pickImages,
+  removeAttachment,
+  watchDrops
+} from '../stores/attachments.js'
+import {
   configError,
   initRuns,
   loadConfig,
@@ -636,13 +644,36 @@ const submitNewTask = async ({ brainstorm, ...draft }) => {
   project.activeTab = 'terminal'
   try {
     await createSession(path, { kind: 'newTask', brainstorm, draft })
-    newTaskOpen.value = false
+    closeNewTask()
   } catch {
-    // already reported by the store; the dialog stays open with the text in it
+    // already reported by the store; the dialog stays open with the text and
+    // the thumbnails still in it
   } finally {
     creating.value = false
   }
 }
+
+/* Closing is the one event that clears the attachments, and it covers both
+   cases that should: cancelling, and a session that actually started. A failed
+   create does not reach here, so nobody has to attach four screenshots again
+   because the agent was not installed.
+
+   The paths outlive this: the files stay in the app's data directory whether
+   the task was filed or not. Forgetting them here is all that happens, which is
+   the same bargain the store's own note describes. */
+const closeNewTask = () => {
+  newTaskOpen.value = false
+  clearAttachments()
+}
+
+/* A drop is a window event, not the dialog's — Tauri intercepts file drops
+   before the webview sees them — so the subscription lives up here and asks
+   whether anything is collecting. */
+let stopDrops = null
+onMounted(() => {
+  stopDrops = watchDrops(() => newTaskOpen.value)
+})
+onUnmounted(() => stopDrops?.())
 
 /* While the app was closed, the issue may have been closed and removed from
    the tracker. Restoring a selection that no longer exists is not on: the
@@ -1213,8 +1244,14 @@ const toastStackStyle = {
           :open="newTaskOpen"
           :busy="creating"
           :status="ADD_TO"
-          @close="newTaskOpen = false"
+          :attachments="attachmentsState.items"
+          :dragging="attachmentsState.dragging"
+          :error="attachmentsState.lastError ?? ''"
+          @close="closeNewTask"
           @submit="submitNewTask"
+          @attach="pickImages"
+          @files="attachFiles"
+          @remove="removeAttachment"
         />
         <RunModal
           :open="runOpen"

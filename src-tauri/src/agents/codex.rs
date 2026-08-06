@@ -16,7 +16,7 @@
 use portable_pty::CommandBuilder;
 
 use super::library::read_skill;
-use super::{prompt, Autonomy, Brainstorm, Intent, Launch, Profile, SkillDelivery};
+use super::{prompt, Autonomy, Brainstorm, ImageDelivery, Intent, Launch, Profile, SkillDelivery};
 use crate::runs::model::RunMode;
 
 pub struct Codex;
@@ -32,6 +32,14 @@ impl Profile for Codex {
 
     fn delivery(&self) -> SkillDelivery {
         SkillDelivery::Inline
+    }
+
+    /// `-i, --image <FILE>...` — verified against the installed CLI's own help.
+    /// Repeated once per file rather than given a list: a repeated flag is the
+    /// one form every argument parser agrees on, and this app does not get to
+    /// assume anything about somebody else's separator.
+    fn images(&self) -> ImageDelivery {
+        ImageDelivery::Flag("-i")
     }
 
     fn command(&self, launch: &Launch) -> CommandBuilder {
@@ -54,13 +62,31 @@ impl Profile for Codex {
                 cmd.arg(arg);
             }
         }
+        // The pixels, on the command line. The paths are in the prompt as well,
+        // and that is not a duplicate: what rides here is what Codex looks at,
+        // and what rides there is what has to end up in the issue description.
+        // Read back through `self.images()` rather than written out again, so
+        // the flag and the profile's answer about it cannot drift apart.
+        if let (Intent::NewTask { draft, .. }, ImageDelivery::Flag(flag)) =
+            (&launch.intent, self.images())
+        {
+            for image in &draft.images {
+                cmd.arg(flag);
+                cmd.arg(image);
+            }
+        }
         let text = prompt::SkillText {
             filing: filing.as_deref(),
             brainstorming: brainstorming_text.as_deref(),
         };
-        if let Some(built) =
-            prompt::build(&launch.intent, self.delivery(), &launch.skills, launch.facts.as_deref(), text)
-        {
+        if let Some(built) = prompt::build(
+            &launch.intent,
+            self.delivery(),
+            self.images(),
+            &launch.skills,
+            launch.facts.as_deref(),
+            text,
+        ) {
             cmd.arg(built);
         }
         cmd
@@ -137,12 +163,17 @@ mod tests {
     }
 
     fn new_task(brainstorm: Brainstorm) -> Intent {
+        with_images(brainstorm, Vec::new())
+    }
+
+    fn with_images(brainstorm: Brainstorm, images: Vec<String>) -> Intent {
         Intent::NewTask {
             brainstorm,
             draft: TaskDraft {
                 text: "Swap the red for green".into(),
                 issue_type: Some("bug".into()),
                 priority: Some(2),
+                images,
             },
         }
     }
@@ -207,6 +238,34 @@ mod tests {
             args.last().unwrap().contains(BRAINSTORMING_BODY),
             "on must carry the process itself, there being no registry to name it in"
         );
+    }
+
+    #[test]
+    fn every_attached_image_rides_as_its_own_flag_in_front_of_the_prompt() {
+        let args = argv(&launch(with_images(
+            Brainstorm::Off,
+            vec!["/data/a.png".into(), "/data/b.png".into()],
+        )));
+
+        assert_eq!(
+            args,
+            vec!["codex", "-i", "/data/a.png", "-i", "/data/b.png", args.last().unwrap()],
+            "the prompt is positional and everything else goes in front of it: {args:?}"
+        );
+    }
+
+    #[test]
+    fn the_paths_are_in_the_prompt_as_well_as_on_the_command_line() {
+        // Not a duplicate: the flag is what Codex looks at, the path in the
+        // prompt is what has to reach the issue description.
+        let args = argv(&launch(with_images(Brainstorm::Off, vec!["/data/a.png".into()])));
+        assert!(args.last().unwrap().contains("/data/a.png"), "{args:?}");
+    }
+
+    #[test]
+    fn a_task_with_no_images_gets_no_image_flag() {
+        let args = argv(&launch(new_task(Brainstorm::Off)));
+        assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
     }
 
     #[test]
