@@ -113,6 +113,57 @@ pub fn parse_packed_refs(contents: &str) -> Vec<String> {
         .collect()
 }
 
+/// The unix timestamp out of one `logs/refs/heads/<branch>` line.
+///
+/// The format is `<old sha> <new sha> <who> <unix time> <zone>`, a tab, then
+/// what was done. The name and the email in the middle can hold spaces, so the
+/// two numbers are counted from the end of that first half rather than from
+/// its start. Anything that does not read that way — an empty line, a file
+/// somebody truncated, a format git has yet to invent — is `None`, which the
+/// caller treats as "no local history", not as a failure.
+pub fn parse_reflog_time(line: &str) -> Option<i64> {
+    let entry = line.split_once('\t').map_or(line, |(entry, _)| entry);
+    let fields: Vec<&str> = entry.split_whitespace().collect();
+    // Both shas, an identity of at least one field, the time and the zone: four
+    // is the shortest a real entry gets, and the guard is what stops a stray
+    // pair of numbers somewhere else in the file reading as a timestamp.
+    if fields.len() < 4 {
+        return None;
+    }
+    fields[fields.len() - 2].parse().ok()
+}
+
+/// When this machine last moved a branch, from its own reflog.
+///
+/// The whole file is read for its last line, which sounds worse than it is:
+/// these are a few kilobytes each, git expires them at ninety days, and the
+/// list is built once when the run dialog opens rather than on every window
+/// focus the way the scope bar's HEAD is. Reading backwards from the end would
+/// buy nothing measurable and cost a seek loop over a text format.
+fn touched_at(logs: &Path, branch: &str) -> Option<i64> {
+    let contents = std::fs::read_to_string(logs.join(branch)).ok()?;
+    contents.lines().rev().find_map(parse_reflog_time)
+}
+
+/// The order the dialog offers branches in: what was worked on here most
+/// recently, first.
+///
+/// Freshness is deliberately local activity rather than commit date. A branch
+/// a colleague pushed to an hour ago, never touched on this machine, is not
+/// what this person is about to merge into; the branch they merged into
+/// yesterday is. So a branch with no reflog does not sort as "very old" — it
+/// sorts outside the recency group entirely, into the alphabetical tail, which
+/// is where a fresh clone leaves nearly everything.
+pub fn by_recency(mut branches: Vec<(String, Option<i64>)>) -> Vec<String> {
+    branches.sort_by(|(a, at), (b, bt)| match (at, bt) {
+        (Some(x), Some(y)) => y.cmp(x).then_with(|| a.cmp(b)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.cmp(b),
+    });
+    branches.into_iter().map(|(name, _)| name).collect()
+}
+
 /// Every loose ref under `refs/heads/`, with the directories folded back into
 /// the name: `feature/x` is a directory and a file on disk and one branch to
 /// everybody else.
@@ -129,7 +180,14 @@ fn loose_branches(heads: &Path, prefix: &str, out: &mut Vec<String>) {
     }
 }
 
-/// The local branches, sorted and without duplicates.
+/// The local branches, most recently worked on first, without duplicates.
+///
+/// The order is the whole point of the list: on a project with a couple of
+/// dozen branches, the one somebody merges into every day is nowhere in
+/// particular alphabetically. `by_recency` says what "recently" means and why
+/// it is the reflog that answers it. `git_dir` already resolves a linked
+/// worktree to the directory holding its logs, so this works from one without
+/// anything extra.
 ///
 /// Nothing here is an error, the same as everywhere else in this file: a folder
 /// outside git, or one whose refs cannot be read, has no branches to offer and
@@ -149,7 +207,15 @@ pub fn branches(project: &Path) -> Vec<String> {
     }
     out.sort();
     out.dedup();
-    out
+    let logs = dir.join("logs/refs/heads");
+    let touched = out
+        .into_iter()
+        .map(|name| {
+            let at = touched_at(&logs, &name);
+            (name, at)
+        })
+        .collect();
+    by_recency(touched)
 }
 
 #[tauri::command]
@@ -312,6 +378,86 @@ c0ffee refs/remotes/origin/main
         fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
 
         assert_eq!(branches(&dir), vec!["main".to_string()]);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_reflog_line_gives_up_its_time_from_the_end_not_the_start() {
+        // The identity sits between the shas and the time and holds two spaces
+        // of its own, so counting fields from the front would land on the
+        // e-mail address.
+        let line = "d363fe4 45c4160 Ada Lovelace <ada@example.com> 1785970400 +0300\tmerge staging";
+        assert_eq!(parse_reflog_time(line), Some(1785970400));
+    }
+
+    #[test]
+    fn a_reflog_entry_without_a_message_still_has_a_time() {
+        let line = "0000000 a1b2c3 flexo <f@example.com> 1700000000 -0800";
+        assert_eq!(parse_reflog_time(line), Some(1700000000));
+    }
+
+    #[test]
+    fn a_line_that_is_not_a_reflog_entry_is_an_ordinary_none() {
+        // Not an error anywhere: a branch whose log cannot be read simply has
+        // no local history and goes to the alphabetical tail.
+        assert_eq!(parse_reflog_time(""), None);
+        assert_eq!(parse_reflog_time("1785970400 +0300"), None);
+        assert_eq!(parse_reflog_time("d363fe4 45c4160 flexo <f@e.com> yesterday +0300\tx"), None);
+    }
+
+    #[test]
+    fn the_branch_worked_on_last_comes_first() {
+        let ordered = by_recency(vec![
+            ("main".to_string(), Some(100)),
+            ("staging".to_string(), Some(300)),
+            ("feature/runs".to_string(), Some(200)),
+        ]);
+        assert_eq!(ordered, vec!["staging", "feature/runs", "main"]);
+    }
+
+    #[test]
+    fn a_branch_never_touched_here_waits_in_the_alphabetical_tail() {
+        // The case a fresh clone makes ordinary: everything is in packed-refs
+        // and nothing has a log yet. Those branches are not "very old" — they
+        // are outside the recency question, and alphabetical is the answer they
+        // had before this ordering existed.
+        let ordered = by_recency(vec![
+            ("zebra".to_string(), None),
+            ("main".to_string(), Some(100)),
+            ("apple".to_string(), None),
+        ]);
+        assert_eq!(ordered, vec!["main", "apple", "zebra"]);
+    }
+
+    #[test]
+    fn two_branches_touched_in_the_same_second_stay_in_a_settled_order() {
+        let ordered = by_recency(vec![
+            ("b".to_string(), Some(100)),
+            ("a".to_string(), Some(100)),
+        ]);
+        assert_eq!(ordered, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn the_list_on_disk_comes_back_in_the_order_it_was_worked_in() {
+        let dir = scratch("branches-recency");
+        fs::create_dir_all(dir.join(".git/refs/heads")).expect("create refs/heads");
+        fs::create_dir_all(dir.join(".git/logs/refs/heads/feature")).expect("create the logs");
+        for name in ["alpha", "main", "staging"] {
+            fs::write(dir.join(".git/refs/heads").join(name), "a1b2c3\n").expect("write the ref");
+        }
+        fs::create_dir_all(dir.join(".git/refs/heads/feature")).expect("create refs/heads/feature");
+        fs::write(dir.join(".git/refs/heads/feature/runs"), "d4e5f6\n").expect("write the nested ref");
+        fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+        // `zeta` is packed and has no log — the fresh-clone case, in the tail.
+        fs::write(dir.join(".git/packed-refs"), "c0ffee refs/heads/zeta\n").expect("write packed");
+
+        let log = |at: i64| format!("0000000 a1b2c3 flexo <f@e.com> {at} +0300\tcommit: x\n");
+        fs::write(dir.join(".git/logs/refs/heads/main"), log(100)).expect("write main's log");
+        fs::write(dir.join(".git/logs/refs/heads/alpha"), log(300)).expect("write alpha's log");
+        fs::write(dir.join(".git/logs/refs/heads/feature/runs"), log(200)).expect("write the nested log");
+
+        assert_eq!(branches(&dir), vec!["alpha", "feature/runs", "main", "staging", "zeta"]);
         fs::remove_dir_all(&dir).expect("remove the temp directory");
     }
 }
