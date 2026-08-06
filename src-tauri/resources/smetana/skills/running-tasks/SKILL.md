@@ -148,8 +148,9 @@ on its own. **This runs before you take any new work.**
    `bd ready --json -n 50`, drop everything worse than the floor, take what you need from
    what survives. Nothing survives → say "no ready work above <floor>" and stop. That is
    an outcome.
-3. **How many at once** — at most `[defaults].max_parallel_tasks` from the config, fewer
-   when you were told fewer.
+3. **How many at once** — the number the run gave you, whatever it is: it is this run's
+   choice and it wins over `[defaults].max_parallel_tasks`, upwards as well as down. Were
+   you given none, the config's number is the answer.
 4. Per task: load the spec through `provisioning`. Vague or empty → policy (park, or ask)
    **before** claiming. Then claim and provision, serialized on you.
 
@@ -158,7 +159,7 @@ on its own. **This runs before you take any new work.**
 For each repository of each claimed task, spawn one worker. What they get is in
 `provisioning`'s last section: the worktree path, the whole spec pasted, that
 repository's gates, the hazards that bear on the change, and that every question comes to
-you. Keep concurrency at `[defaults].max_parallel_tasks` or below; queue the rest.
+you. Keep concurrency at the number Phase 0 settled on or below; queue the rest.
 
 Where a task spans repositories: independent layers working against a contract they have
 agreed can go in parallel; a layer that is hard-blocked on a contract that does not exist

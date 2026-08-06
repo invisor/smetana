@@ -24,6 +24,10 @@ const props = defineProps({
   /* The project's own defaults, from the config. */
   defaultBranch: { type: String, default: '' },
   defaultPriority: { type: Number, default: 2 },
+  /* `[defaults].max_parallel_tasks` from the project's config, which this field
+     is filled from and which the choice then overrides for this one run — the
+     file is not rewritten. */
+  defaultParallel: { type: Number, default: 3 },
   /* The issue this one sits under, when it sits under one: `{ id, title,
      siblings }`, where `siblings` is how many other unfinished children it has.
      The board offers a run on every card, children included, so this dialog is
@@ -72,9 +76,20 @@ const modes = computed(() => (soloAllowed.value ? MODES : MODES.filter((m) => m.
 
 const PRIORITIES = [0, 1, 2, 3, 4].map((p) => ({ value: p, label: `P${p} and better` }))
 
+/* What stops a run going wider is the subscription and the machine, not this
+   app, so the ceiling is a wide one — and it is a closed list rather than a
+   number field because there is nothing here worth typing. The same range is
+   in RunSettings::validate, which is what refuses one that arrives anyway. */
+const PARALLEL_MAX = 8
+const PARALLEL = Array.from({ length: PARALLEL_MAX }, (_, i) => ({
+  value: i + 1,
+  label: i === 0 ? 'One at a time' : `${i + 1} at once`
+}))
+
 const mode = ref('auto')
 const branch = ref('')
 const priority = ref(2)
+const parallel = ref(3)
 const createBranch = ref(false)
 const liveCheck = ref(true)
 const fileFindings = ref(true)
@@ -98,6 +113,12 @@ watch(
     const keptMode = kept.mode ?? 'auto'
     mode.value = keptMode === 'solo' && !soloAllowed.value ? 'auto' : keptMode
     priority.value = kept.minPriority ?? props.defaultPriority
+    /* Straight from the config every time, and never from what was chosen last
+       run: the choice lives one run by design, and the config is the project's
+       standing answer. Clamped because nothing constrains the file's number to
+       this list — an out-of-range default would otherwise leave the field
+       showing a value it does not have. */
+    parallel.value = Math.min(Math.max(props.defaultParallel || 1, 1), PARALLEL_MAX)
     liveCheck.value = props.liveCheckAvailable && (kept.liveCheck ?? true)
     fileFindings.value = kept.fileFindings ?? true
   },
@@ -158,6 +179,10 @@ const confirm = () => {
     target_branch: branch.value,
     create_target: createBranch.value,
     min_priority: hasFloor.value ? priority.value : null,
+    /* Null in solo, where the lead delegates to nobody — the same shape and the
+       same reason as the floor above, and RunSettings::validate refuses a
+       number that comes anyway. */
+    max_parallel_tasks: mode.value === 'solo' ? null : parallel.value,
     live_check: liveCheck.value,
     file_findings: fileFindings.value
   })
@@ -254,6 +279,20 @@ const errorStyle = {
                 ? 'It keeps going on its own and asks when something needs deciding.'
                 : 'It does the work itself instead of delegating, and asks freely.'
           }}
+        </span>
+      </div>
+
+      <!-- Kept where the mode is, because it is the mode that decides whether
+           it means anything: solo does the work itself. Disabled rather than
+           hidden, the same as the play buttons on the board — a field that
+           came and went as the mode changed would move everything under it. -->
+      <div :style="row">
+        <span :style="labelStyle">How many at once</span>
+        <Dropdown v-model="parallel" :options="PARALLEL" :disabled="busy || mode === 'solo'" />
+        <!-- Named by what the mode does rather than by "solo": the word is not
+             on screen — the option above reads "Plain, one task". -->
+        <span v-if="mode === 'solo'" :style="noteStyle">
+          This mode does the work itself, so there is nobody to spawn.
         </span>
       </div>
 

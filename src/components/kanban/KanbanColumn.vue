@@ -15,7 +15,13 @@ const props = defineProps({
      belongs to the board. */
   movable: { type: Boolean, default: false },
   moving: { type: Boolean, default: false },
-  runnable: { type: Boolean, default: false }
+  runnable: { type: Boolean, default: false },
+  /* Why nothing here can be run just now, in words; empty means it can — a
+     lowercase fragment, since both plays interpolate it into a sentence of
+     their own. Unlike `runnable` it is the same fragment for every card and for
+     the header, so it is a prop of its own rather than a copy in each task
+     object. */
+  runBlockedReason: { type: String, default: '' }
 })
 
 /* A card's own `runnable` rides in the task object and reaches TaskCard through
@@ -63,6 +69,7 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
       :movable="movable"
       :moving="moving"
       :runnable="runnable"
+      :run-blocked-reason="runBlockedReason"
       @add="$emit('add', status)"
       @run="$emit('run', status)"
       @grab="$emit('grab', $event)"
@@ -75,6 +82,7 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
           :key="t.id"
           v-bind="t"
           :selected="t.id === selectedId"
+          :run-blocked-reason="runBlockedReason"
           @click="$emit('select', t.id)"
           @run="$emit('run-task', t.id)"
         />

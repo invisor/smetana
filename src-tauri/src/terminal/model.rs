@@ -52,6 +52,26 @@ pub struct Session {
     pub exit_code: Option<i32>,
 }
 
+/// How a session ended, as far as whoever was waiting on it is concerned.
+///
+/// Three answers rather than an `Option<i32>`, and the third is the whole
+/// reason this type exists: a session a person took out of the agents panel and
+/// a session whose process fell over are the same absence to anyone reading an
+/// exit code, and they need opposite responses from a run — one is somebody
+/// saying "stop", the other is a harness to retry. The worker is the only place
+/// that knows which happened, so it is the worker that says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exit {
+    /// The process exited and this is its code.
+    Code(i32),
+    /// The process is gone and no code ever arrived before the grace ran out —
+    /// in practice it was signalled. A crash, for anybody counting them.
+    NoCode,
+    /// The session was removed while somebody waited on it. Not a crash: the
+    /// process did not fail, a person took it away.
+    Removed,
+}
+
 #[derive(Debug, thiserror::Error, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "message")]
 pub enum TerminalError {

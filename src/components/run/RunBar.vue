@@ -3,9 +3,9 @@
    it has.
 
    A stopped run stays here until the project changes or another starts. The
-   reason it stopped is the thing somebody came back to read, and the four
-   unhappy endings need four different responses — a single word for all of
-   them would send people to the wrong place. */
+   reason it stopped is the thing somebody came back to read, and the unhappy
+   endings need different responses — a single word for all of them would send
+   people to the wrong place. */
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
@@ -29,6 +29,22 @@ const over = computed(() => state.value?.kind === 'stopped')
 const REASONS = {
   queue_empty: { text: 'Done — nothing left to take', loud: false, icon: 'check' },
   cancelled: { text: 'Stopped', loud: false },
+  /* Quiet, like the stop button and for the same reason: a person did this on
+     purpose and there is nothing here to fix. Loudness is not what it owes
+     them — the sentence is. "Mid-batch" is the whole of it: a stop lets the
+     batch in flight finish, while removing the session killed it where it
+     stood, so there are worktrees left half-done for the next run's recovery
+     phase to pick up. The person reading this line is deciding whether to go
+     and look, and nothing else on screen will tell them to.
+
+     `bare` keeps the branch suffix off this one line: "…was removed into
+     staging" is a garden path, and the branch is the least of what somebody
+     needs at that moment. */
+  session_removed: {
+    text: 'Stopped mid-batch — its agent session was removed',
+    loud: false,
+    bare: true
+  },
   no_progress: { text: 'Stuck — a whole batch changed nothing', loud: true },
   max_iterations: { text: 'Stopped after too many batches', loud: true },
   unreadable: { text: 'Stopped — the tracker could not be read', loud: true },
@@ -43,8 +59,9 @@ const reason = computed(() => {
   return REASONS[kind] ?? { text: kind ? `Stopped — ${kind.replace(/_/g, ' ')}` : 'Stopped', loud: true }
 })
 
-/* The finished run and the four unhappy ones differ by silhouette, not only by
-   colour — the rule the status palette keeps everywhere else in this system. */
+/* The finished run and the ones that stopped short differ by silhouette, not
+   only by colour — the rule the status palette keeps everywhere else in this
+   system. */
 const glyph = computed(() => (over.value ? (reason.value.icon ?? 'square') : 'play'))
 
 const label = computed(() => {
@@ -97,7 +114,7 @@ const detailStyle = {
   <div v-if="run" :style="style">
     <Icon :name="glyph" :size="11" />
     <span :style="{ whiteSpace: 'nowrap' }">{{ label }}</span>
-    <span v-if="detail" :style="detailStyle">{{ detail }}</span>
+    <span v-if="detail && !reason.bare" :style="detailStyle">{{ detail }}</span>
     <Tooltip v-if="!over" :label="run.stopping ? 'Stopping after this batch' : 'Stop after this batch'" title="">
       <IconButton
         icon="square"

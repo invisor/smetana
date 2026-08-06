@@ -220,8 +220,10 @@ mod tests {
                 scope: crate::runs::model::RunScope::Queue,
                 mode,
                 target_branch: "staging".into(),
-            create_target: false,
+                create_target: false,
                 min_priority: Some(2),
+                // None in Solo, the way `RunSettings::validate` requires.
+                max_parallel_tasks: (!matches!(mode, crate::runs::model::RunMode::Solo)).then_some(3),
                 live_check: true,
                 file_findings: true,
             },

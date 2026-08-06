@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import Tooltip from '../core/Tooltip.vue'
 import DependencyBand from '../status/DependencyBand.vue'
 import DependencyMark from '../status/DependencyMark.vue'
 import Assignee from './Assignee.vue'
@@ -29,7 +30,13 @@ const props = defineProps({
   selected: { type: Boolean, default: false },
   /* Whether this card can be run on its own. The board decides — it is a
      product rule and it depends on things this component has never heard of. */
-  runnable: { type: Boolean, default: false }
+  runnable: { type: Boolean, default: false },
+  /* Why it cannot be run just now, in words; empty means it can. A lowercase
+     fragment, because it is interpolated into `runLabel` below rather than
+     standing on its own. The button is drawn inactive rather than taken away,
+     and the sentence is what it is drawn for — a play that simply disappeared
+     while a run was going would read as the board having lost a feature. */
+  runBlockedReason: { type: String, default: '' }
 })
 
 defineEmits(['click', 'run'])
@@ -41,6 +48,14 @@ const drop = computed(() => props.state === 'drop-target')
 const changed = computed(() => props.state === 'changed')
 /* An agent waiting on an answer is the one thing allowed to shout. */
 const loud = computed(() => props.needsResponse || level.value === 'loud')
+
+/* One sentence for the tooltip and for the accessible name both. Two strings
+   would mean the panel a person reads and the name a screen reader announces
+   disagreeing about the same button — and `ColumnHeader` composes its own play
+   the same way, so the two paths say the same thing in the same words. */
+const runLabel = computed(() =>
+  props.runBlockedReason ? `Run this — ${props.runBlockedReason}` : 'Run this'
+)
 
 const borderColor = computed(() => {
   if (props.selected) return 'var(--focus-ring)'
@@ -117,7 +132,22 @@ const titleStyle = {
              used. It is quiet — a muted glyph on no surface until it is
              hovered itself — which is what lets it be always there without
              joining the card's argument for attention. -->
-        <IconButton v-if="runnable" icon="play" label="Run this" size="sm" @click.stop="$emit('run')" />
+        <!-- Wrapped the way `ColumnHeader` wraps its own play, and for the
+             reason that one proved: a native `title` is browser chrome, not
+             page content — it waits a second, cannot be styled, and what a
+             disabled control does with it is the engine's business, which is
+             three different engines here. `Tooltip` is page content and its
+             wrapper span takes the hover even though its only child is
+             disabled. -->
+        <Tooltip v-if="runnable" :label="runLabel" title="">
+          <IconButton
+            icon="play"
+            :label="runLabel"
+            size="sm"
+            :disabled="!!runBlockedReason"
+            @click.stop="$emit('run')"
+          />
+        </Tooltip>
         <span v-if="needsResponse" title="Agent is waiting for your answer" :style="askStyle">
           <Icon name="message-circle-question-mark" :size="9" :stroke-width="2.5" />ASK
         </span>

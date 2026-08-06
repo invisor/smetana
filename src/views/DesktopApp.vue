@@ -65,6 +65,7 @@ import {
   loadConfig,
   loadRun,
   needsSetup,
+  running,
   runsState,
   startRun,
   stopRun
@@ -260,6 +261,22 @@ const runConfig = computed(() => (configured.value ? runsState.config.config : n
    Done is the one exclusion left: the run would claim a closed issue, and there
    is nothing there to do. */
 const runnableTask = (task) => configured.value && task.status !== 'done'
+
+/* Why every play on the board is inactive, or '' when none of them is.
+   Strictly sequential work inside a project is the invariant — one stand, one
+   set of ports, one database, and merges in one order — so a second run here is
+   refused by the worker. It was refused only at the very end, though: somebody
+   pressed play, filled the dialog in and confirmed before hearing it. This is
+   the same refusal, said where the decision is made. It is the project's own
+   run and nothing else: a run in another project is no reason to grey anything
+   here, which is the other half of what this task changed.
+
+   Lowercase, because it is never shown on its own: both plays interpolate it
+   into "Run this — …" / "Run the queue — …", and a capital there would read as
+   two sentences joined by a dash. */
+const runBlockedReason = computed(() =>
+  running.value ? 'a run is already going in this project' : ''
+)
 
 const runOpen = ref(false)
 const runScope = ref({ kind: 'queue' })
@@ -1207,6 +1224,7 @@ const toastStackStyle = {
           :branches="gitState.branches"
           :default-branch="runConfig?.defaults?.target_branch ?? branchLabel"
           :default-priority="runConfig?.defaults?.min_priority ?? 2"
+          :default-parallel="runConfig?.defaults?.max_parallel_tasks ?? 3"
           :remembered="project.runSettings"
           :live-check-available="runConfig?.live_check?.mode !== 'none'"
           :error="runError"
@@ -1277,6 +1295,7 @@ const toastStackStyle = {
           :selected-id="project.selectedTask"
           :add-to="ADD_TO"
           :run-from="configured ? ADD_TO : null"
+          :run-blocked-reason="runBlockedReason"
           @select="project.selectedTask = $event"
           @add="newTaskOpen = true"
           @run="openRun({ kind: 'queue' })"

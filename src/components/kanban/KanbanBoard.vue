@@ -18,6 +18,16 @@ const props = defineProps({
      set of columns here. Null means runs are not offered at all, which is what
      an unconfigured project gets. */
   runFrom: { type: String, default: null },
+  /* Why a run cannot be started just now, in words; empty means it can. Every
+     play on the board — the header's and every card's — goes inactive on it and
+     says this instead. Not a boolean: a control that is off owes a person the
+     reason, and the board is not the place that knows it.
+
+     A lowercase fragment, and this is the prop a caller actually binds — the
+     plays interpolate it into "Run this — …" and "Run the queue — …", so a
+     capital arriving here renders as two sentences joined by a dash, silently
+     and only inside a tooltip. */
+  runBlockedReason: { type: String, default: '' },
   reorderable: { type: Boolean, default: true }
 })
 
@@ -197,6 +207,7 @@ const style = {
       :selected-id="selectedId"
       :addable="c.status === addTo"
       :runnable="runFrom != null && c.status === runFrom"
+      :run-blocked-reason="runBlockedReason"
       :movable="movable"
       :moving="c.status === held"
       @select="$emit('select', $event)"
