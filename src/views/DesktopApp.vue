@@ -339,11 +339,17 @@ const startTheRun = async (settings) => {
   try {
     await startRun(project, settings)
     /* Remembered for next time, minus the scope — that comes from whichever
-       button was pressed. */
+       button was pressed.
+
+       The floor is only in the payload when the run was the queue's, and what
+       is remembered is the queue's floor: writing this run's absence over it
+       would drop somebody's choice back to the config default every time they
+       ran a single task from a card. */
+    const floor = settings.min_priority ?? project.runSettings?.minPriority
     project.runSettings = {
       mode: settings.mode,
       targetBranch: settings.target_branch,
-      minPriority: settings.min_priority,
+      ...(floor == null ? {} : { minPriority: floor }),
       liveCheck: settings.live_check,
       fileFindings: settings.file_findings
     }
