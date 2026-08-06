@@ -42,6 +42,13 @@ const props = defineProps({
   remembered: { type: Object, default: null },
   /* False when the config declares no way to check a merged task. */
   liveCheckAvailable: { type: Boolean, default: true },
+  /* The parser's own complaint about .smetana/project.toml, or '' when the file
+     reads. This dialog is where a damaged configuration is said out loud, and
+     it is the only place: the board offers no other route, and the project row
+     carries a mark with nothing on it that could name a section. The message is
+     the parser's verbatim — it already points at the key and the line, which is
+     more than a summary written here would say. */
+  configError: { type: String, default: '' },
   /* What the worker refused with, if it did. */
   error: { type: String, default: '' },
   busy: { type: Boolean, default: false }
@@ -49,8 +56,24 @@ const props = defineProps({
 
 /* `rescope` re-aims this dialog at the epic without closing it: what has
    already been chosen in the fields below is still what somebody wants, and
-   making them set it all again is a poor reward for taking the advice. */
-const emit = defineEmits(['close', 'confirm', 'rescope'])
+   making them set it all again is a poor reward for taking the advice.
+
+   `setup` re-runs the project's setup agent. It is offered here whatever state
+   the configuration is in, and that is the point: the gear on the project row
+   only ever appears while there is no file, so a project that is set up has no
+   other way back to it — and the shape of a project changes, repositories get
+   added. A damaged file needs the same route for a different reason, which is
+   why one button serves both. */
+const emit = defineEmits(['close', 'confirm', 'rescope', 'setup'])
+
+/* Nothing here can be answered while the configuration cannot be read: the
+   defaults every field is filled from come out of that file, so the values on
+   screen would be this component's own fallbacks presented as the project's.
+   The fields are disabled rather than hidden, the same as the parallel field
+   under solo — a dialog that emptied itself would leave the notice floating
+   over nothing and say less, not more, about what is wrong. */
+const broken = computed(() => props.configError !== '')
+const locked = computed(() => props.busy || broken.value)
 
 /* Solo means the agent does the work itself instead of delegating, which is
    coherent for one task and not for a queue or an epic. The same rule lives in
@@ -213,6 +236,52 @@ const epicIdStyle = {
   color: 'var(--text-primary)'
 }
 
+/* The same sunken slab the `partOf` advice sits on, and deliberately so: the
+   two are the dialog's two ways of saying something before the fields, and
+   giving this one a status-coloured surface of its own would make the pair read
+   as different kinds of thing. The colour it does spend is the glyph and the
+   headline — a red panel behind a wall of parser output is the loud budget gone
+   on a paragraph nobody can act on directly. */
+const configErrorStyle = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 'var(--space-4)',
+  padding: 'var(--space-4)',
+  background: 'var(--surface-sunken)',
+  border: 'var(--border-w) solid var(--border-subtle)',
+  borderRadius: 'var(--radius-3)'
+}
+const configErrorHeadStyle = {
+  fontSize: 'var(--text-xs)',
+  lineHeight: 'var(--leading-normal)',
+  color: 'var(--status-failed-fg)'
+}
+/* `pre-wrap` because the message is the parser's own layout — the caret line
+   under the offending key means nothing once its spaces collapse. It scrolls
+   rather than growing: a file with a deep error produces a long complaint, and
+   the dialog must not push its own footer off the screen.
+
+   The ceiling is six of this text's own lines, written as its font size times
+   its line height rather than as a multiple of a spacing token. Spacing is the
+   one scale density rewrites and this text is not on it — `--text-xs` and
+   `--leading-normal` are the same in both — so a spacing-based ceiling shrank
+   under compact while the parser's message stayed the size it was, and the
+   sentence naming the field dropped out of view entirely. Six lines is what the
+   ordinary complaint measures: a header, the caret pair, the offending line,
+   and that sentence. */
+const configErrorTextStyle = {
+  marginTop: 'var(--space-3)',
+  maxHeight: 'calc(var(--text-xs) * var(--leading-normal) * 6)',
+  overflow: 'auto',
+  whiteSpace: 'pre-wrap',
+  font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-mono)',
+  color: 'var(--text-secondary)'
+}
+const configErrorPathStyle = {
+  font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)',
+  color: 'var(--text-primary)'
+}
+
 const body = { display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }
 const row = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
 const labelStyle = {
@@ -240,6 +309,24 @@ const errorStyle = {
 <template>
   <Modal :open="open" :closable="!busy" :title="title" :description="description" @close="$emit('close')">
     <div :style="body">
+      <!-- First, and above the epic advice: everything below it is a choice
+           about a run that cannot start, and the advice about running an epic
+           whole is beside the point until the file reads. -->
+      <div v-if="broken" :style="configErrorStyle">
+        <Icon
+          name="triangle-alert"
+          :size="13"
+          :style="{ color: 'var(--status-failed-fg)', flex: 'none', marginTop: '1px' }"
+        />
+        <div :style="{ flex: 1, minWidth: 0 }">
+          <div :style="configErrorHeadStyle">
+            <span :style="configErrorPathStyle">.smetana/project.toml</span> cannot be read, so
+            nothing can be run here until it is fixed.
+          </div>
+          <div :style="configErrorTextStyle">{{ configError }}</div>
+        </div>
+      </div>
+
       <!-- Only while the scope is still the task. Taking the advice re-aims the
            dialog at the epic, and the note would then be describing something
            that has already happened — a caller that leaves `partOf` set through
@@ -264,13 +351,13 @@ const errorStyle = {
           v-model="branch"
           v-model:create="createBranch"
           :branches="branches"
-          :disabled="busy"
+          :disabled="locked"
         />
       </div>
 
       <div :style="row">
         <span :style="labelStyle">How it works</span>
-        <Dropdown v-model="mode" :options="modes" :disabled="busy" />
+        <Dropdown v-model="mode" :options="modes" :disabled="locked" />
         <span :style="noteStyle">
           {{
             mode === 'auto'
@@ -288,7 +375,7 @@ const errorStyle = {
            came and went as the mode changed would move everything under it. -->
       <div :style="row">
         <span :style="labelStyle">How many at once</span>
-        <Dropdown v-model="parallel" :options="PARALLEL" :disabled="busy || mode === 'solo'" />
+        <Dropdown v-model="parallel" :options="PARALLEL" :disabled="locked || mode === 'solo'" />
         <!-- Named by what the mode does rather than by "solo": the word is not
              on screen — the option above reads "Plain, one task". -->
         <span v-if="mode === 'solo'" :style="noteStyle">
@@ -299,13 +386,13 @@ const errorStyle = {
       <!-- The queue's alone: see `hasFloor`. -->
       <div v-if="hasFloor" :style="row">
         <span :style="labelStyle">Take tasks</span>
-        <Dropdown v-model="priority" :options="PRIORITIES" :disabled="busy" />
+        <Dropdown v-model="priority" :options="PRIORITIES" :disabled="locked" />
       </div>
 
       <div :style="row">
         <Switch
           v-model="liveCheck"
-          :disabled="busy || !liveCheckAvailable"
+          :disabled="locked || !liveCheckAvailable"
           label="Check each task for real before closing it"
         />
         <span v-if="!liveCheckAvailable" :style="noteStyle">
@@ -314,18 +401,33 @@ const errorStyle = {
       </div>
 
       <div :style="row">
-        <Switch v-model="fileFindings" :disabled="busy" label="File what it finds along the way" />
+        <Switch v-model="fileFindings" :disabled="locked" label="File what it finds along the way" />
         <span :style="noteStyle">
           New tasks go to deferred and wait for you — a run never picks up its own findings.
         </span>
       </div>
 
-      <span v-if="takes" :style="takesStyle">{{ takes }}</span>
+      <!-- Not while the file is unreadable: the count is true, but "12 tasks are
+           ready" under a notice saying nothing can be run reads as a promise the
+           dialog is in no position to keep. -->
+      <span v-if="takes && !broken" :style="takesStyle">{{ takes }}</span>
       <span v-if="error" :style="errorStyle">{{ error }}</span>
     </div>
     <template #footer>
+      <!-- Pushed to the far side by its own margin rather than by a change to
+           Modal: the footer is right-aligned for every dialog in the system, and
+           this is the one button in one of them that is neither the action nor
+           its refusal. -->
+      <Button
+        variant="ghost"
+        :disabled="busy"
+        :style="{ marginRight: 'auto' }"
+        @click="$emit('setup')"
+      >
+        Set up again
+      </Button>
       <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>
-      <Button variant="primary" :disabled="busy || !branch" @click="confirm">
+      <Button variant="primary" :disabled="locked || !branch" @click="confirm">
         {{ busy ? 'Starting…' : 'Run' }}
       </Button>
     </template>

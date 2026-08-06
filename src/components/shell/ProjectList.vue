@@ -3,11 +3,20 @@
    click away. A folder with no bd tracker still belongs here — it is a
    project you added, and the mark says what it is missing, quietly.
 
-   Two rows can carry a warning triangle at once, and they are told apart by
-   what they sit next to rather than by colour alone: the missing tracker is a
-   lone muted glyph beside the name, with nothing on the row that fixes it,
-   while the missing run configuration is a red glyph bonded to the gear that
-   opens the setup it is asking for.
+   Three marks can meet on one row, and none of them is told apart from the
+   others by colour: the missing tracker is a lone muted triangle beside the
+   name, with nothing on the row that fixes it; the missing run configuration is
+   a red triangle bonded to the gear that opens the setup it is asking for; and
+   a run configuration that cannot be parsed is a red page-with-a-cross,
+   standing alone. The last needs its own glyph rather than a third triangle
+   precisely because it stands alone — beside the tracker's lone triangle, the
+   two would differ in nothing but hue.
+
+   That it stands alone is the deliberate part. A file that exists and cannot be
+   parsed must not be answered by a button that starts an agent writing over it,
+   and the row has nowhere to name the section that failed anyway — so it
+   reports the state and stops there. The route out is the run dialog, which has
+   the room to quote the parser and offers the re-setup itself.
 
    No header of its own: the enclosing Panel already shows "Projects" and
    carries the "+" in its actions slot, so a second copy here would print the
@@ -29,7 +38,13 @@ const props = defineProps({
   /* Only ever about the active row, for the same reason canAddAgent is: the
      configuration is read on switching projects, and probing every row would
      be a command per project for a mark nobody is looking at. */
-  needsSetup: { type: Boolean, default: false }
+  needsSetup: { type: Boolean, default: false },
+  /* The other half of the same question, and never true at the same time as
+     `needsSetup` — a file is missing or it is damaged, and the back end reports
+     one state, not two. Kept as a separate prop rather than folded into a
+     three-valued one because the two draw differently and only one of them
+     offers a button. */
+  configBroken: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['select', 'remove', 'add-agent', 'setup'])
@@ -137,6 +152,12 @@ const empty = computed(() => props.projects.length === 0)
           </Tooltip>
           <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
         </span>
+        <!-- No gear beside it: see the note at the top of this file. The mark is
+             what a person sees without pressing anything, and pressing the play
+             on the board is what tells them which section failed. -->
+        <Tooltip v-if="configBroken && p.path === activePath" label="Run configuration cannot be read" title="">
+          <Icon name="file-x" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+        </Tooltip>
         <!-- Before the remove button, not after it: removal keeps the row's
              last position wherever it appears, so a click aimed at it never
              lands on something that moved in. -->
