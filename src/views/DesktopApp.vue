@@ -356,13 +356,20 @@ const runCount = computed(() => {
   return orderedColumns.value.find((c) => c.status === ADD_TO)?.tasks.length ?? 0
 })
 
-const startTheRun = async (settings) => {
-  const project = activePath.value
-  if (!project || runStarting.value) return
+/* `path` and `runSettings`, neither of them `project` or `settings`: this
+   function is the one place where the run's payload and the project's own state
+   meet, and naming either of them after a module-scope binding hid a defect
+   here once. The local `project` used to be the active path — a string — so
+   `project.runSettings = {...}` threw in strict mode, inside the try, and the
+   catch put the exception's text under a dialog that stayed open over a run
+   that had in fact started. */
+const startTheRun = async (runSettings) => {
+  const path = activePath.value
+  if (!path || runStarting.value) return
   runStarting.value = true
   runError.value = ''
   try {
-    await startRun(project, settings)
+    await startRun(path, runSettings)
     /* Remembered for next time, minus the scope — that comes from whichever
        button was pressed.
 
@@ -370,13 +377,13 @@ const startTheRun = async (settings) => {
        is remembered is the queue's floor: writing this run's absence over it
        would drop somebody's choice back to the config default every time they
        ran a single task from a card. */
-    const floor = settings.min_priority ?? project.runSettings?.minPriority
+    const floor = runSettings.min_priority ?? project.runSettings?.minPriority
     project.runSettings = {
-      mode: settings.mode,
-      targetBranch: settings.target_branch,
+      mode: runSettings.mode,
+      targetBranch: runSettings.target_branch,
       ...(floor == null ? {} : { minPriority: floor }),
-      liveCheck: settings.live_check,
-      fileFindings: settings.file_findings
+      liveCheck: runSettings.live_check,
+      fileFindings: runSettings.file_findings
     }
     runOpen.value = false
     /* A run is agent sessions, and watching them is the point — the same move
