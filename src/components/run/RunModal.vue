@@ -203,7 +203,7 @@ const noteStyle = {
 const takesStyle = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-secondary)',
-  fontFamily: 'var(--font-mono)'
+  fontFamily: 'var(--font-sans)'
 }
 const errorStyle = {
   fontSize: 'var(--text-xs)',
