@@ -125,6 +125,40 @@ describe('images attached to a task that has not been filed', () => {
     expect(stores.attachments.attachmentsState.lastError).toBe(null)
   })
 
+  /* Starting from a store that has something to lose, because the test above
+     starts from an empty one and would pass whatever the code did with the
+     message. Opening the picker is not an attempt to attach anything: a person
+     who pastes an oversized screenshot, reads why it was refused, opens the
+     picker and thinks better of it has done nothing that should take the
+     explanation off the screen. */
+  it('cancelling the picker leaves an earlier refusal on screen', async () => {
+    const { ipc, stores } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('attachment_import', { kind: 'tooLarge', message: 'huge.png is too big' })
+    await stores.attachments.importPaths(['/a/huge.png'])
+    expect(stores.attachments.attachmentsState.lastError).toBe('huge.png is too big')
+
+    ipc.on('plugin:dialog|open', null)
+    await stores.attachments.pickImages()
+
+    expect(stores.attachments.attachmentsState.lastError).toBe('huge.png is too big')
+  })
+
+  /* The other half: a picker that fails has a message of its own, and it must
+     win over whatever an earlier attempt left behind rather than queue behind
+     it — `fail` keeps the first refusal of a batch, and this is a new one. */
+  it('a picker that fails says so, over an older refusal', async () => {
+    const { ipc, stores } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('attachment_import', { kind: 'tooLarge', message: 'huge.png is too big' })
+    await stores.attachments.importPaths(['/a/huge.png'])
+
+    ipc.fail('plugin:dialog|open', new Error('the picker did not open'))
+    await stores.attachments.pickImages()
+
+    expect(stores.attachments.attachmentsState.lastError).toContain('the picker did not open')
+  })
+
   it('the picker takes several at once', async () => {
     const { ipc, stores } = await loadStores()
     ipc.on('plugin:dialog|open', ['/a/one.png', '/a/two.png'])

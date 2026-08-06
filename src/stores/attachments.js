@@ -27,13 +27,20 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
    that decides, by looking at the bytes rather than at the name. */
 const EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
 
-/* A second copy of `MAX_IMAGE_BYTES` from `attachments.rs`, and the same
-   bargain `defaults()` in settings.js makes with the Rust schema: Rust holds
-   the authority and refuses every oversized payload on arrival, whatever this
-   number says. It exists here only so a paste that is certainly going to be
-   refused is not first turned into a base64 string a third larger than itself.
-   The two have to agree; if they drift, the cost is one wasted encode or one
-   refusal worded by the wrong side, never an oversized file getting through. */
+/* A second copy of `MAX_IMAGE_BYTES` from `attachments.rs`, and the same bargain
+   `defaults()` in settings.js makes with the Rust schema: Rust holds the
+   authority and refuses every oversized payload on arrival, whatever this number
+   says. It exists here only so a file that is certainly going to be refused is
+   not first read into an ArrayBuffer, turned into a base64 string a third larger
+   again, and carried across the boundary to be told no.
+
+   Drift is not symmetrical, and that is the thing to keep in mind if either
+   number ever moves. Above Rust's is harmless: the extra files are encoded for
+   nothing and refused a moment later by the side that decides. Below Rust's is
+   not: every file between the two is refused here, by a message Rust would never
+   have sent, and there is no way to attach it at all — the same false refusal
+   `decoded_at_least` on the Rust side is deliberately a lower bound to avoid. So
+   this number must never be the smaller of the two. */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 export const attachmentsState = reactive({
@@ -100,9 +107,13 @@ export async function importPaths(paths) {
   }
 }
 
-/* The picker. Cancelling is not a failure and leaves everything as it was. */
+/* The picker. Cancelling is not a failure and leaves everything as it was —
+   including a refusal already on screen. Opening the picker is not a batch;
+   `begin()` therefore belongs to the two outcomes that are, and not to the top
+   of this function: clearing there would let a person paste a 12 MB screenshot,
+   read why it was refused, click Attach, change their mind, and watch the
+   explanation disappear with nothing having happened. */
 export async function pickImages() {
-  begin()
   let picked = null
   try {
     picked = await open({
@@ -111,10 +122,15 @@ export async function pickImages() {
       filters: [{ name: 'Images', extensions: EXTENSIONS }]
     })
   } catch (err) {
+    /* The picker itself failing is a batch of one that went wrong, and its own
+       message has to win over whatever an earlier attempt left behind. */
+    begin()
     fail(err)
     return
   }
   if (!picked) return
+  /* `importPaths` opens the batch — one `begin()`, in the one place that knows
+     something is actually about to be attached. */
   await importPaths(Array.isArray(picked) ? picked : [picked])
 }
 
