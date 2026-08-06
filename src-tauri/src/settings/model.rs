@@ -164,6 +164,19 @@ pub struct RunDefaults {
     /// dialog would open on it instead of on the project's own
     /// `[defaults] min_priority` — quietly overriding the file with a number
     /// that only ever came from this field's default.
+    ///
+    /// Left out of the file entirely when there is none, which is the one place
+    /// in this schema where that matters. Every change to it so far has been
+    /// additive, and an unknown key is ignored — but this field changed *type*,
+    /// and a build older than this one reads `u8` here. A present `null` is not
+    /// a missing field, so `#[serde(default)]` would not rescue it: the whole
+    /// `RunDefaults` would fail, taking `ProjectState` with it, and `projects()`
+    /// drops an entry it cannot parse — that project's side tab, open tabs,
+    /// expanded folders and selection, gone without a word. The version is
+    /// deliberately not bumped for this, which would cost every project's
+    /// entry rather than one. Absent, an older build simply takes its own
+    /// default, and nothing in the current front end can tell absent from null.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_priority: Option<u8>,
     pub live_check: bool,
     pub file_findings: bool,
@@ -1225,11 +1238,27 @@ mod tests {
         // means something for the queue, so the dialog sends none. Read back as
         // a number it would open the next queue run on a choice nobody made,
         // over the top of `[defaults] min_priority` in the project's own config.
-        let state: ProjectState = serde_json::from_str(
+        //
+        // The written shape is asserted as well as the read one, and the key
+        // has to be genuinely absent rather than a null: a build older than
+        // this one reads `u8` here, and a null it cannot parse costs that whole
+        // project entry. See the field's own comment.
+        let state = ProjectState {
+            run_settings: Some(RunDefaults::default()),
+            ..ProjectState::default()
+        };
+        let json = serde_json::to_string(&state).expect("serializes");
+        assert!(!json.contains("minPriority"), "no floor is no key at all: {json}");
+        let back: ProjectState = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back.run_settings.expect("kept").min_priority, None);
+
+        // And the same file read by this build once more, written by hand the
+        // way every file on disk before this change looks.
+        let old: ProjectState = serde_json::from_str(
             r#"{"runSettings":{"mode":"auto","liveCheck":true,"fileFindings":true}}"#,
         )
         .expect("deserializes");
-        assert_eq!(state.run_settings.expect("kept").min_priority, None);
+        assert_eq!(old.run_settings.expect("kept").min_priority, None);
     }
 
     #[test]
