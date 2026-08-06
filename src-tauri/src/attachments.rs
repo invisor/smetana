@@ -19,6 +19,18 @@
 //! Nothing here ever deletes. Taking a thumbnail out of the dialog forgets the
 //! path and leaves the file; tidying the store is deliberately outside this
 //! work, so the directory grows.
+//!
+//! **There is no `resolve_within` here, and its absence is the design rather
+//! than an oversight.** `files/fs.rs` confines every path to the project root
+//! because everything it touches belongs to the project. Nothing here does: the
+//! *source* of `attachment_import` is whatever a person picked in a system
+//! dialog or dragged off their desktop, and a folder outside the project is the
+//! ordinary case, not the attack. Reading it is exactly what was asked for, by
+//! the same person, through the OS's own picker. What is confined is the
+//! *destination*: it is always `app_data_dir()/attachments`, and the file name
+//! is not the one that arrived — `stored_name` builds it out of a timestamp and
+//! a `slug` that keeps ASCII letters and digits and nothing else, so no name
+//! coming in can climb a directory, hide behind a dot or need quoting.
 
 use std::path::{Path, PathBuf};
 
@@ -26,13 +38,40 @@ use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-/// The ceiling, and deliberately not a number of its own: it is the one the
-/// editor already refuses to open a file above. Two answers to "how big is too
-/// big" in one app would be two numbers to keep in step.
-pub use crate::files::model::MAX_FILE_BYTES as MAX_IMAGE_BYTES;
+/// The ceiling, and deliberately **not** `files::model::MAX_FILE_BYTES`.
+///
+/// That one is 2 MiB and answers a different question: how much text a
+/// `textarea` will open without freezing the window. This one answers how big a
+/// screenshot is, and the two have no reason to agree — a full-screen retina
+/// PNG, which is the gesture this whole feature exists for, routinely lands
+/// between 2 and 8 MB. Reusing the editor's number would have refused the
+/// primary case on ordinary input, and tying them together would guarantee that
+/// one of the two is wrong whenever the other is right.
+///
+/// 8 MiB is where a screenshot stops being a screenshot. Past it the payload
+/// costs more to carry through the webview than the picture is worth, and the
+/// refusal names both numbers so a person can see what they are up against.
+pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// The directory under `app_data_dir()` everything lands in.
 const STORE: &str = "attachments";
+
+/// What a refusal calls something that arrived with no name — a screenshot off
+/// the clipboard. One copy, because the pre-check and the real check have to
+/// name it the same way or the same file would be refused in two voices.
+const PASTED: &str = "the pasted image";
+
+/// The smallest number of bytes a base64 string of this length can decode to.
+///
+/// Every 4 characters carry 3 bytes, and at most 2 of the last 3 are padding.
+/// The *lower* bound is the one to compare against a ceiling: this check sits
+/// in front of the authoritative one in `save_into` and must never turn away a
+/// payload that one would have accepted — a base64 length cannot tell a file of
+/// exactly the ceiling from one a byte over, and of the two ways to be wrong
+/// here, refusing early is the one that costs somebody their screenshot.
+fn decoded_at_least(len: usize) -> u64 {
+    (len / 4 * 3).saturating_sub(2) as u64
+}
 
 /// What the bytes turn out to be. The name a file arrives with is not asked:
 /// a pasted screenshot has no name at all, and a `.png` that is really a JPEG
@@ -211,7 +250,7 @@ pub fn save_into(
     bytes: Vec<u8>,
     stamp: &str,
 ) -> Result<Attachment, AttachmentError> {
-    let label = original.unwrap_or("the pasted image").to_owned();
+    let label = original.unwrap_or(PASTED).to_owned();
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
         return Err(AttachmentError::TooLarge { name: label, bytes: bytes.len() as u64 });
     }
@@ -278,6 +317,12 @@ pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachmen
 /// base64 rather than a `Vec<u8>`, for the reason `terminal/service.rs` records
 /// on the way out: a byte array crosses this boundary as a JSON array of
 /// numbers, which for a screenshot is several times the size of the picture.
+///
+/// The size is judged from the string's own length before any of it is decoded,
+/// which is this route's version of the `metadata().len()` read in
+/// `attachment_import` — and it matters more here, not less: a paste is the
+/// gesture most likely to be oversized, and decoding first would allocate the
+/// whole picture a second time only to throw it away.
 #[tauri::command]
 pub async fn attachment_write(
     app: AppHandle,
@@ -285,9 +330,18 @@ pub async fn attachment_write(
     data: String,
 ) -> Result<Attachment, AttachmentError> {
     let dir = store_dir(&app)?;
+    if decoded_at_least(data.len()) > MAX_IMAGE_BYTES {
+        return Err(AttachmentError::TooLarge {
+            name: name.unwrap_or_else(|| PASTED.to_owned()),
+            // The upper bound, which is what the person actually handed over to
+            // within two bytes; the lower bound is for deciding, not for
+            // reporting a size back to somebody.
+            bytes: (data.len() / 4 * 3) as u64,
+        });
+    }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data.as_bytes())
-        .map_err(|err| AttachmentError::Io(format!("the pasted image did not decode: {err}")))?;
+        .map_err(|err| AttachmentError::Io(format!("{PASTED} did not decode: {err}")))?;
     save_into(&dir, name.as_deref(), bytes, &stamp())
 }
 
@@ -446,6 +500,45 @@ mod tests {
         }
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The base64 length of a file of exactly `bytes`, the way the webview
+    /// produces it: 4 characters per 3 bytes, rounded up, padded.
+    fn encoded_len(bytes: usize) -> usize {
+        bytes.div_ceil(3) * 4
+    }
+
+    #[test]
+    fn an_oversized_paste_is_refused_from_the_strings_length_alone() {
+        // The point is what does *not* happen: nothing is decoded, so a 40 MB
+        // paste never becomes 40 MB of bytes beside the 53 MB of text already
+        // holding it. `attachment_import` reads `metadata().len()` for exactly
+        // the same reason.
+        let huge = MAX_IMAGE_BYTES as usize * 4;
+        assert!(decoded_at_least(encoded_len(huge)) > MAX_IMAGE_BYTES);
+    }
+
+    #[test]
+    fn the_cheap_refusal_never_turns_away_what_the_real_one_would_keep() {
+        // A base64 length cannot tell a file of exactly the ceiling from one a
+        // byte over it, so this check is deliberately the looser of the two:
+        // everything up to and including the ceiling passes here and meets the
+        // authoritative check in `save_into`.
+        for bytes in [0, 1, 1024, MAX_IMAGE_BYTES as usize - 1, MAX_IMAGE_BYTES as usize] {
+            assert!(
+                decoded_at_least(encoded_len(bytes)) <= MAX_IMAGE_BYTES,
+                "{bytes} bytes would have been refused before anything looked at them"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ceiling_is_this_module_s_own_and_not_the_editor_s() {
+        // A screenshot is not a source file, and 2 MiB — what a textarea will
+        // open — refuses the very gesture this feature exists for. If these two
+        // are ever equal again it is because somebody wired them together.
+        assert_ne!(MAX_IMAGE_BYTES, crate::files::model::MAX_FILE_BYTES);
+        assert!(MAX_IMAGE_BYTES >= 8 * 1024 * 1024, "a retina screenshot reaches 8 MB");
     }
 
     #[test]

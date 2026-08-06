@@ -22,7 +22,22 @@ defineEmits(['remove'])
    dialog. */
 const THUMB = '64px'
 
-const strip = { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)' }
+/* Two rows, and then it scrolls. Nothing bounds how many images are attached —
+   the picker takes several at once and a drop carries every path in it — while
+   the dialog has no scrolling of its own and the window may be as short as
+   640px. Without a ceiling here the fifth row pushes Cancel and Create off the
+   bottom of a screen with nothing to scroll back. The same answer the file tree
+   and the log give: a maximum height and `auto`. */
+const strip = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 'var(--space-4)',
+  maxHeight: `calc(${THUMB} * 2 + var(--space-4))`,
+  overflowY: 'auto',
+  /* A wrapped flex container hands leftover height to its lines; without this
+     one row of thumbnails would sit spread down a box two rows tall. */
+  alignContent: 'flex-start'
+}
 
 const cell = {
   position: 'relative',

@@ -85,7 +85,19 @@ const submit = () => {
    open and taken off the moment it closes, so a paste into the editor behind
    it never reaches here. */
 const onPaste = (event) => {
-  const files = [...(event.clipboardData?.files ?? [])]
+  const clipboard = event.clipboardData
+  /* Two ways in, because WebKit uses both. A screenshot off the system
+     clipboard lands in `files`, which is the main case; an image copied out of
+     a web page sometimes arrives only through `items`, with `files` empty. The
+     one route the spec says this feature is pointless without does not get to
+     depend on which of the two the browser happened to take. */
+  let files = [...(clipboard?.files ?? [])]
+  if (!files.length) {
+    files = [...(clipboard?.items ?? [])]
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean)
+  }
   if (!files.length) return
   /* Text pastes are left alone entirely: preventDefault here would swallow the
      ordinary Cmd+V into the field above. */

@@ -71,6 +71,14 @@ const ATTACHMENTS = [
   }
 ]
 
+/* Enough of them to overflow the strip's two-row ceiling, which is the state
+   that would otherwise push a dialog's footer off a short screen. */
+const MANY_ATTACHMENTS = Array.from({ length: 14 }, (_, i) => ({
+  ...ATTACHMENTS[i % 2],
+  path: `${ATTACHMENTS[i % 2].path}.${i}`,
+  name: `2026080-12131${i}-shot.png`
+}))
+
 /* One Run, varied. Written here rather than imported so the states the bar has
    to draw are visible beside the thing drawing them. */
 const runFixture = (state, extra = {}) => ({
@@ -399,7 +407,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <NewTaskModal
           :open="true"
           :dragging="true"
-          error="cat.gif is 4194304 bytes; the ceiling is 2097152 bytes"
+          error="cat.gif is 12582912 bytes; the ceiling is 8388608 bytes"
           @close="() => {}"
           @submit="() => {}"
           @attach="() => {}"
@@ -408,6 +416,12 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         />
       </div>
       <AttachmentStrip :items="ATTACHMENTS" @remove="() => {}" />
+      <!-- Past two rows the strip scrolls instead of growing: nothing bounds
+           how many images are attached, and the dialog has no scrolling of its
+           own to absorb them. -->
+      <div :style="{ width: '400px' }">
+        <AttachmentStrip :items="MANY_ATTACHMENTS" @remove="() => {}" />
+      </div>
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <SetupProjectModal :open="true" name="holiday-curb" @close="() => {}" @confirm="() => {}" />
       </div>

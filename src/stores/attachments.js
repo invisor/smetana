@@ -27,6 +27,15 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
    that decides, by looking at the bytes rather than at the name. */
 const EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
 
+/* A second copy of `MAX_IMAGE_BYTES` from `attachments.rs`, and the same
+   bargain `defaults()` in settings.js makes with the Rust schema: Rust holds
+   the authority and refuses every oversized payload on arrival, whatever this
+   number says. It exists here only so a paste that is certainly going to be
+   refused is not first turned into a base64 string a third larger than itself.
+   The two have to agree; if they drift, the cost is one wasted encode or one
+   refusal worded by the wrong side, never an oversized file getting through. */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
 export const attachmentsState = reactive({
   /* { path, name, bytes, url } — `url` is a data URL built from what Rust
      stored, which is how a thumbnail is drawn without an asset protocol. */
@@ -46,9 +55,23 @@ function messageOf(err) {
   return String(err)
 }
 
+/* Every refusal is logged; the first one of a batch is the one kept on screen.
+   The rest are usually the same refusal about the same handful of files, and a
+   line that keeps being rewritten reads as the newest thing that happened
+   rather than as the thing that did not. */
 function fail(err) {
-  attachmentsState.lastError = messageOf(err)
   console.error('[attachments] attaching failed:', err)
+  if (attachmentsState.lastError === null) attachmentsState.lastError = messageOf(err)
+}
+
+/* A batch begins. The refusal is cleared exactly here — once, in front of the
+   loop — and never after a success inside it: clearing on success would let the
+   second of two files wipe the message the first one earned, and a person who
+   attached [huge.png, small.png] would be looking at one thumbnail, no message,
+   and nothing at all to say the other file never arrived. A write that failed
+   and looked like it worked is the one thing this app refuses everywhere. */
+function begin() {
+  attachmentsState.lastError = null
 }
 
 function add(attachment) {
@@ -67,10 +90,10 @@ function add(attachment) {
    worth showing — four toasts about the same folder of holiday photos say
    nothing the first does not. */
 export async function importPaths(paths) {
+  begin()
   for (const path of paths) {
     try {
       add(await invoke('attachment_import', { path }))
-      attachmentsState.lastError = null
     } catch (err) {
       fail(err)
     }
@@ -79,6 +102,7 @@ export async function importPaths(paths) {
 
 /* The picker. Cancelling is not a failure and leaves everything as it was. */
 export async function pickImages() {
+  begin()
   let picked = null
   try {
     picked = await open({
@@ -111,11 +135,21 @@ function toBase64(bytes) {
    arrayBuffer(), and a pasted screenshot is one with no name — Rust invents
    one for it. */
 export async function attachFiles(files) {
+  begin()
   for (const file of files) {
     try {
+      /* Measured before it is encoded, which is this route's version of the
+         `metadata().len()` read the picker's route gets in Rust. Encoding first
+         would build a base64 string a third larger than the file, hand it
+         across the boundary and have it refused there — for a video somebody
+         dropped by mistake that is hundreds of megabytes of string built to be
+         thrown away. Rust refuses it again on arrival; that check is the
+         authority and this one only keeps the cost down. */
+      if (file.size > MAX_IMAGE_BYTES) {
+        throw { kind: 'tooLarge', message: `${file.name || 'the pasted image'} is ${file.size} bytes; the ceiling is ${MAX_IMAGE_BYTES} bytes` }
+      }
       const bytes = new Uint8Array(await file.arrayBuffer())
       add(await invoke('attachment_write', { name: file.name || null, data: toBase64(bytes) }))
-      attachmentsState.lastError = null
     } catch (err) {
       fail(err)
     }
