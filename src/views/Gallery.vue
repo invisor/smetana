@@ -156,7 +156,12 @@ const tabs = [
 const agentRows = [
   { id: 1, name: 'claude-1', state: 'needs-you', elapsed: '2h 14m' },
   { id: 2, name: 'claude-2', state: 'running', elapsed: '1h 02m' },
-  { id: 3, name: 'claude-3', state: 'done', elapsed: '18m' }
+  { id: 3, name: 'claude-3', state: 'done', elapsed: '18m' },
+  /* An agent the worker has not answered about yet: no id in the name, the word
+     in place of a time, and a remove button with nothing to remove. It lasts
+     about a second in the app, which is exactly why it belongs here — the only
+     place it can be looked at for longer than that. */
+  { id: 'start-1', name: 'claude', state: 'running', elapsed: 'starting', starting: true }
 ]
 
 /* Two issues in bd's own shape: one that has everything the inspector can

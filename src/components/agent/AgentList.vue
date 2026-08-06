@@ -120,7 +120,19 @@ const empty = computed(() => props.rows.length === 0)
         <span :style="{ color: row.state === 'needs-you' ? 'var(--attn-loud)' : 'var(--text-muted)' }">
           {{ row.elapsed }}
         </span>
-        <IconButton icon="x" size="sm" label="Remove agent" @click.stop="$emit('remove', row.id)" />
+        <!-- A row that is still starting has no process behind it to take away,
+             and the id it carries is this window's own rather than the worker's,
+             so removing it would ask about a session nobody has. Disabled rather
+             than left out: the button is the widest thing on the row, and a row
+             that grew one a second after appearing would shift everything on it
+             sideways exactly as somebody started reading it. -->
+        <IconButton
+          icon="x"
+          size="sm"
+          label="Remove agent"
+          :disabled="!!row.starting"
+          @click.stop="$emit('remove', row.id)"
+        />
       </div>
       <div v-if="empty" :style="{ padding: 'var(--space-5)', color: 'var(--text-muted)', font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)' }">
         No agents running. Start one with + on the project row.

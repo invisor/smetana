@@ -14,7 +14,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import EmptyState from '../core/EmptyState.vue'
 import { terminalFont, terminalTheme } from './theme.js'
-import { attach, detach, resize, send, subscribeOutput, terminalState } from '../../stores/terminals.js'
+import { attach, detach, isStarting, resize, send, subscribeOutput, terminalState } from '../../stores/terminals.js'
 
 const host = ref(null)
 let term = null
@@ -63,6 +63,12 @@ const overlayStyle = {
   background: 'var(--editor-bg)'
 }
 
+/* The selection names an agent that is still being spawned. It is neither idle
+   — somebody has just asked for this and is watching it — nor attachable, so it
+   gets its own word rather than either of the two the empty state already has:
+   "No agent selected" under a row a person picked themselves reads as the app
+   having lost it. */
+const starting = computed(() => isStarting(terminalState.activeId))
 const idle = computed(() => !terminalState.activeId)
 const noSessions = computed(() => terminalState.sessions.length === 0)
 
@@ -108,7 +114,7 @@ onMounted(() => {
   sizes = new ResizeObserver(applySize)
   sizes.observe(host.value)
 
-  if (terminalState.activeId) {
+  if (terminalState.activeId && !isStarting(terminalState.activeId)) {
     attached = terminalState.activeId
     attach(attached).then(applySize)
   }
@@ -127,7 +133,13 @@ onMounted(() => {
 watch(
   () => terminalState.activeId,
   (id) => {
-    if (!id) {
+    /* An agent still being spawned goes through this same seam: there is
+       nothing to attach to yet, and leaving the previous session attached
+       would keep the worker encoding its bytes every tick for a screen that is
+       about to be replaced — and would show that agent's output under the new
+       one's name in the meantime. The watcher fires again the moment the
+       selection turns into a real id. */
+    if (!id || isStarting(id)) {
       detach(attached)
       attached = null
       term?.reset()
@@ -159,7 +171,10 @@ onBeforeUnmount(() => {
 <template>
   <div :style="wrapStyle">
     <div ref="host" :style="style" />
-    <div v-if="idle" :style="overlayStyle">
+    <div v-if="starting" :style="overlayStyle">
+      <EmptyState icon="bot" title="Starting the agent" description="Its output appears here in a moment." />
+    </div>
+    <div v-else-if="idle" :style="overlayStyle">
       <EmptyState
         icon="bot"
         :title="noSessions ? 'No agents in this project' : 'No agent selected'"

@@ -230,17 +230,30 @@ onMounted(initTerminals)
 // the loadRun calls beside every loadConfig are for.
 onMounted(initRuns)
 
-/* A new agent becomes the one you're looking at right away: that is what it
-   was created for — the tab switch sits after the await so a failed spawn
-   (agent binary not on PATH) never jumps to an empty terminal. The catch
-   below swallows the rejection: createSession already logged it and set
-   terminalState.lastError, which now renders as a toast, so nothing is lost
-   by not rethrowing here — this catch exists only to stop Vue's own
+/* A new agent becomes the one you're looking at right away: that is what it was
+   created for. Both switches sit before the await, the same as on the other two
+   routes into a session — a spawn takes about a second, and waiting it out
+   leaves the button a person pressed doing nothing visible for that second.
+   What used to make the switch wait was a failed spawn jumping to an empty
+   terminal; that is now the store's business rather than each caller's, and it
+   is answered properly: the row and the selection appear at once and are both
+   taken back if nothing starts, so a failure ends where it began instead of on
+   a blank pane.
+
+   The side tab is set here even though the button that calls this only exists
+   while the panel is already on Agents: where a session is started from is not
+   what should decide where the window ends up, and the three routes say the
+   same two lines so that adding a fourth is one decision rather than two.
+
+   The catch below swallows the rejection: createSession already logged it and
+   set terminalState.lastError, which renders as a toast, so nothing is lost by
+   not rethrowing — this catch exists only to stop Vue's own
    unhandled-rejection warning from repeating what the store already said. */
 async function newAgent() {
   try {
-    await createSession(activePath.value, { kind: 'bare' })
+    project.sideTab = 'agents'
     project.activeTab = 'terminal'
+    await createSession(activePath.value, { kind: 'bare' })
   } catch {
     // already reported — see comment above
   }
