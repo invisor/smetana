@@ -46,6 +46,15 @@ const defaults = () => ({
     /* The board's columns in the order a person dragged them to. Empty means
        "never rearranged", and the board then draws bd's own order. */
     columnOrder: [],
+    /* What the run dialog was last set to here — null until somebody runs
+       something. Listed rather than left out, and the difference is not
+       cosmetic: applySection is Object.assign(target, defaults, stored), so a
+       key missing from this object is a key the defaults layer cannot clear.
+       Switching projects would then leave the previous project's remembered
+       target branch in place unless Rust happened to send an explicit null,
+       and it would be prefilled in the one dialog whose whole job is being the
+       last cheap place to notice a run aimed at the wrong thing. */
+    runSettings: null,
     usedAt: null
   }
 })
