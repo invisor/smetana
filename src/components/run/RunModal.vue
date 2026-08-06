@@ -54,6 +54,15 @@ const emit = defineEmits(['close', 'confirm', 'rescope'])
    here for the reason recorded next to it: a dialog gets rewritten. */
 const soloAllowed = computed(() => props.scope?.kind === 'task')
 
+/* A priority floor is only a question where the run picks its own work. Where
+   somebody pointed at a task or an epic the work is already named, and the
+   floor could only take it away — which is what it did, silently: a P4 task run
+   from its card under the default P2 floor stopped at once with "the queue is
+   empty", about the task the person had just chosen. So the field is not shown,
+   and the payload carries null rather than a number nobody reads —
+   RunSettings::validate refuses one that comes anyway. */
+const hasFloor = computed(() => props.scope?.kind === 'queue')
+
 const MODES = [
   { value: 'auto', label: 'On its own' },
   { value: 'supervised', label: 'With a lead' },
@@ -126,20 +135,17 @@ const description = computed(() =>
    cheap. Null means it has not been counted, and saying nothing is better
    than saying zero.
 
-   Two sentences rather than one, because the count is not the priority's:
-   nothing here has read anybody's priorities, and "12 ready tasks at or above
-   P2" said it had. The count is what is in front of the run, the floor is what
-   it will take out of it, and they are stated separately because that is what
-   is actually known. */
+   The count only, and never the floor beside it: nothing here has read
+   anybody's priorities, so "12 ready tasks at or above P2" would say it had —
+   and the two scopes that have no floor at all were being told about one. What
+   the queue will take out of the count is the field above, in its own words. */
 const takes = computed(() => {
   if (props.count == null) return ''
   if (props.scope?.kind === 'task') return 'One task.'
   const n = props.count
-  const what =
-    props.scope?.kind === 'epic'
-      ? `${n} task${n === 1 ? ' is' : 's are'} unfinished under it.`
-      : `${n} task${n === 1 ? ' is' : 's are'} ready.`
-  return `${what} It takes those at or above P${priority.value}.`
+  return props.scope?.kind === 'epic'
+    ? `${n} task${n === 1 ? ' is' : 's are'} unfinished under it.`
+    : `${n} task${n === 1 ? ' is' : 's are'} ready.`
 })
 
 const confirm = () => {
@@ -151,7 +157,7 @@ const confirm = () => {
     mode: mode.value,
     target_branch: branch.value,
     create_target: createBranch.value,
-    min_priority: priority.value,
+    min_priority: hasFloor.value ? priority.value : null,
     live_check: liveCheck.value,
     file_findings: fileFindings.value
   })
@@ -197,7 +203,7 @@ const noteStyle = {
 const takesStyle = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-secondary)',
-  fontFamily: 'var(--font-mono)'
+  fontFamily: 'var(--font-sans)'
 }
 const errorStyle = {
   fontSize: 'var(--text-xs)',
@@ -251,7 +257,8 @@ const errorStyle = {
         </span>
       </div>
 
-      <div :style="row">
+      <!-- The queue's alone: see `hasFloor`. -->
+      <div v-if="hasFloor" :style="row">
         <span :style="labelStyle">Take tasks</span>
         <Dropdown v-model="priority" :options="PRIORITIES" :disabled="busy" />
       </div>

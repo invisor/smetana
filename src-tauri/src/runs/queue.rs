@@ -67,15 +67,26 @@ fn in_scope(issue: &Issue, scope: &RunScope) -> bool {
 /// `<=`. An issue with no priority at all is taken: bd omits the field rather
 /// than defaulting it, and refusing to work on something because nobody graded
 /// it would hide it from every run forever.
-fn within_floor(issue: &Issue, min_priority: u8) -> bool {
-    issue.priority.is_none_or(|p| p <= i64::from(min_priority))
+///
+/// The floor is asked only of a queue, and `RunSettings::validate` is what
+/// makes anything else `None`. Where a person named the work — one task, or one
+/// epic's children — there is nothing to choose between, so the floor could
+/// only drop what they picked: a P4 task run from its card under the default P2
+/// floor left `ready` empty and stopped the run with `QueueEmpty`, about the
+/// task the person was looking at. An epic's children are all of them, whatever
+/// they are graded.
+fn within_floor(issue: &Issue, scope: &RunScope, min_priority: Option<u8>) -> bool {
+    match (scope, min_priority) {
+        (RunScope::Queue, Some(floor)) => issue.priority.is_none_or(|p| p <= i64::from(floor)),
+        _ => true,
+    }
 }
 
-/// The board, under a scope and a floor.
+/// The board, under a scope and — for a queue — a floor.
 ///
 /// `closed` and `parked` are counted across the scope and reported, but they
 /// deliberately take no part in the decision below — see `next_action`.
-pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: u8) -> QueueSnapshot {
+pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) -> QueueSnapshot {
     let unfinished_or_open: HashSet<&str> = issues
         .iter()
         .filter(|i| matches!(i.status.as_str(), OPEN | IN_PROGRESS | READY_TO_MERGE))
@@ -88,7 +99,9 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: u8) -> QueueSn
             CLOSED => out.closed += 1,
             PARKED => out.parked += 1,
             IN_PROGRESS | READY_TO_MERGE => out.unfinished.push(issue.id.clone()),
-            OPEN if within_floor(issue, min_priority) && !blocked(issue, &unfinished_or_open) => {
+            OPEN if within_floor(issue, scope, min_priority)
+                && !blocked(issue, &unfinished_or_open) =>
+            {
                 out.ready.push(issue.id.clone());
             }
             _ => {}
@@ -210,7 +223,7 @@ mod tests {
             issue("e", "in_progress"),
             issue("f", "ready_to_merge"),
         ];
-        let s = snapshot(&board, &RunScope::Queue, 4);
+        let s = snapshot(&board, &RunScope::Queue, Some(4));
         assert_eq!(s.ready, vec!["a"]);
         assert_eq!(s.unfinished, vec!["e", "f"]);
         assert_eq!(s.closed, 1);
@@ -226,8 +239,38 @@ mod tests {
         let mut ungraded = issue("ungraded", "open");
         ungraded.priority = None;
 
-        let s = snapshot(&[low, edge, ungraded], &RunScope::Queue, 2);
+        let s = snapshot(&[low, edge, ungraded], &RunScope::Queue, Some(2));
         assert_eq!(s.ready, vec!["edge", "ungraded"], "bd omits priority rather than defaulting it");
+    }
+
+    #[test]
+    fn the_floor_does_not_reach_work_a_person_named() {
+        // The defect this pins: a P4 task run from its own card under the
+        // default P2 floor came back with an empty ready set, so the run
+        // stopped at once and said the queue was empty — about the one task
+        // the person had just pointed at. An epic's children are all of them,
+        // whatever they are graded.
+        let mut low = issue("low", "open");
+        low.priority = Some(4);
+        let mut child = issue("child", "open");
+        child.priority = Some(4);
+        child.parent = Some("epic".into());
+        let board = vec![low, child, issue("epic", "open")];
+
+        // Passed a floor anyway — validate refuses this payload, and the rule
+        // is the scope's, not the caller's remembering to send None.
+        assert_eq!(snapshot(&board, &RunScope::Task { id: "low".into() }, Some(2)).ready, vec!["low"]);
+        assert_eq!(
+            snapshot(&board, &RunScope::Epic { id: "epic".into() }, Some(2)).ready,
+            vec!["child"]
+        );
+
+        // The same board as a queue is where the floor still bites.
+        let queued = snapshot(&board, &RunScope::Queue, Some(2)).ready;
+        assert!(
+            !queued.contains(&"low".to_string()) && !queued.contains(&"child".to_string()),
+            "a run choosing its own work still stops at the floor: {queued:?}"
+        );
     }
 
     #[test]
@@ -236,8 +279,8 @@ mod tests {
         child.parent = Some("epic".into());
         let board = vec![issue("other", "open"), child, issue("epic", "open")];
 
-        assert_eq!(snapshot(&board, &RunScope::Task { id: "other".into() }, 4).ready, vec!["other"]);
-        assert_eq!(snapshot(&board, &RunScope::Epic { id: "epic".into() }, 4).ready, vec!["child"]);
+        assert_eq!(snapshot(&board, &RunScope::Task { id: "other".into() }, None).ready, vec!["other"]);
+        assert_eq!(snapshot(&board, &RunScope::Epic { id: "epic".into() }, None).ready, vec!["child"]);
     }
 
     #[test]
@@ -249,11 +292,11 @@ mod tests {
             kind: "blocks".into(),
         }];
         let board = vec![waiting.clone(), issue("earlier", "open")];
-        assert!(snapshot(&board, &RunScope::Queue, 4).ready.iter().all(|id| id != "waiting"));
+        assert!(snapshot(&board, &RunScope::Queue, Some(4)).ready.iter().all(|id| id != "waiting"));
 
         // The same issue once what it waited for has closed.
         let board = vec![waiting, issue("earlier", "closed")];
-        assert_eq!(snapshot(&board, &RunScope::Queue, 4).ready, vec!["waiting"]);
+        assert_eq!(snapshot(&board, &RunScope::Queue, Some(4)).ready, vec!["waiting"]);
     }
 
     #[test]
@@ -268,7 +311,7 @@ mod tests {
             kind: "parent-child".into(),
         }];
         let board = vec![child, issue("epic", "open")];
-        assert!(snapshot(&board, &RunScope::Queue, 4).ready.contains(&"child".to_string()));
+        assert!(snapshot(&board, &RunScope::Queue, Some(4)).ready.contains(&"child".to_string()));
     }
 
     #[test]

@@ -53,7 +53,14 @@ pub struct RunSettings {
     pub create_target: bool,
     /// Nothing worse than this is taken automatically. bd's scale runs 0 (most
     /// urgent) to 4.
-    pub min_priority: u8,
+    ///
+    /// `None` for every scope but the queue, and an `Option` rather than a
+    /// number nobody reads: a floor only means something where the run picks
+    /// its own work. Where a person pointed at a task or an epic the work is
+    /// already named, and a field sent and silently ignored is one somebody
+    /// starts honouring again in six months. The same choice, for the same
+    /// reason, is already made for Auto in `TaskDraft`.
+    pub min_priority: Option<u8>,
     pub live_check: bool,
     /// Whether a finding may become a `deferred` issue at all. Off means
     /// everything goes to the digest — see the `running-tasks` skill.
@@ -135,18 +142,29 @@ pub enum RunError {
 }
 
 impl RunSettings {
-    /// The one rule that is not the dialog's to keep. `Solo` means the agent
+    /// The two rules that are not the dialog's to keep. `Solo` means the agent
     /// does the work itself instead of delegating, which is a coherent thing to
     /// ask of one task and not of a queue or an epic — there it would silently
-    /// become something else. Checked here rather than in the dialog because a
-    /// dialog gets rewritten and this does not.
+    /// become something else. And a priority floor is the queue's alone: it
+    /// decides what a run picks up for itself, so against work a person already
+    /// pointed at it can only drop it. Checked here rather than in the dialog
+    /// because a dialog gets rewritten and this does not.
     pub fn validate(&self) -> Result<(), RunError> {
-        match (&self.mode, &self.scope) {
-            (RunMode::Solo, RunScope::Queue | RunScope::Epic { .. }) => Err(RunError::BadSettings(
+        if matches!(self.mode, RunMode::Solo)
+            && matches!(self.scope, RunScope::Queue | RunScope::Epic { .. })
+        {
+            return Err(RunError::BadSettings(
                 "solo mode runs one task; a queue or an epic needs auto or supervised".into(),
-            )),
-            _ => Ok(()),
+            ));
         }
+        if self.min_priority.is_some() && !matches!(self.scope, RunScope::Queue) {
+            return Err(RunError::BadSettings(
+                "a priority floor belongs to the queue; a named task or epic is taken whatever \
+                 its priority"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -191,13 +209,16 @@ impl Run {
 mod tests {
     use super::*;
 
+    /// A floor only where the scope allows one, which is what every test below
+    /// that is not about the floor wants.
     fn settings(mode: RunMode, scope: RunScope) -> RunSettings {
+        let min_priority = matches!(scope, RunScope::Queue).then_some(2);
         RunSettings {
             scope,
             mode,
             target_branch: "main".into(),
             create_target: false,
-            min_priority: 2,
+            min_priority,
             live_check: true,
             file_findings: true,
         }
@@ -218,6 +239,26 @@ mod tests {
             {
                 assert!(settings(mode, scope).validate().is_ok());
             }
+        }
+    }
+
+    #[test]
+    fn a_priority_floor_belongs_to_the_queue_and_to_nothing_else() {
+        // A floor against work somebody pointed at can only take it away: the
+        // run has nothing to choose, so a P4 task under a P2 floor would come
+        // back as an empty queue naming the task the person had just picked.
+        let floored = |scope| RunSettings { min_priority: Some(2), ..settings(RunMode::Auto, scope) };
+        assert!(floored(RunScope::Queue).validate().is_ok());
+        assert!(floored(RunScope::Task { id: "a-1".into() }).validate().is_err());
+        assert!(floored(RunScope::Epic { id: "a-2".into() }).validate().is_err());
+
+        // And no floor is fine everywhere, the queue included — the dialog
+        // always sends one there, but nothing here depends on it.
+        for scope in
+            [RunScope::Queue, RunScope::Task { id: "a-1".into() }, RunScope::Epic { id: "a-2".into() }]
+        {
+            let bare = RunSettings { min_priority: None, ..settings(RunMode::Auto, scope) };
+            assert!(bare.validate().is_ok());
         }
     }
 
@@ -271,13 +312,14 @@ mod tests {
             "scope": { "kind": "epic", "id": "smetana-1" },
             "mode": "supervised",
             "target_branch": "staging",
-            "min_priority": 2,
+            "min_priority": null,
             "live_check": false,
             "file_findings": true
         });
         let parsed: RunSettings = serde_json::from_value(json).expect("the dialog's payload deserializes");
         assert_eq!(parsed.scope, RunScope::Epic { id: "smetana-1".into() });
         assert_eq!(parsed.mode, RunMode::Supervised);
+        assert_eq!(parsed.min_priority, None, "the dialog shows no floor outside the queue");
         assert!(!parsed.live_check);
     }
 }

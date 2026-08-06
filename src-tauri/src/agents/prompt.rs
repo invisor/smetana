@@ -100,11 +100,13 @@ fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> Stri
             ""
         }
     );
-    let _ = writeln!(
-        out,
-        "- take nothing worse than priority P{} automatically",
-        settings.min_priority
-    );
+    // Only where there is something to choose between, which is the queue and
+    // nothing else — `RunSettings::validate` is what makes it `None` elsewhere.
+    // Beside "Work only on issue X, and nothing else" a floor is a second
+    // instruction contradicting the first.
+    if let Some(floor) = settings.min_priority {
+        let _ = writeln!(out, "- take nothing worse than priority P{floor} automatically");
+    }
     let _ = writeln!(
         out,
         "- {}",
@@ -310,13 +312,17 @@ mod tests {
         SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING) }
     }
 
+    /// A floor only where the scope allows one — `RunSettings::validate` is
+    /// what refuses the rest, and a fixture that could not be started is not
+    /// worth writing a prompt for.
     fn run_settings(mode: RunMode, scope: RunScope) -> RunSettings {
+        let min_priority = matches!(scope, RunScope::Queue).then_some(2);
         RunSettings {
             scope,
             mode,
             target_branch: "staging".into(),
             create_target: false,
-            min_priority: 2,
+            min_priority,
             live_check: true,
             file_findings: true,
         }
@@ -346,13 +352,34 @@ mod tests {
         let text = run_prompt(
             RunSettings {
                 target_branch: "release/7".into(),
-                min_priority: 1,
+                min_priority: Some(1),
                 ..run_settings(RunMode::Auto, RunScope::Queue)
             },
             SkillDelivery::PluginDir,
         );
         assert!(text.contains("release/7"), "{text}");
         assert!(text.contains("P1"), "{text}");
+    }
+
+    #[test]
+    fn only_a_queue_is_told_about_a_priority_floor() {
+        // "Work only on issue X, and nothing else" beside "take nothing worse
+        // than P2" is two instructions that contradict each other, and the
+        // work is already named — there is nothing left for a floor to pick.
+        let queue = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), SkillDelivery::PluginDir);
+        assert!(queue.contains("nothing worse than priority P2"), "{queue}");
+
+        let one = run_prompt(
+            run_settings(RunMode::Auto, RunScope::Task { id: "smetana-9".into() }),
+            SkillDelivery::PluginDir,
+        );
+        assert!(!one.contains("nothing worse than priority"), "{one}");
+
+        let epic = run_prompt(
+            run_settings(RunMode::Auto, RunScope::Epic { id: "smetana-4".into() }),
+            SkillDelivery::PluginDir,
+        );
+        assert!(!epic.contains("nothing worse than priority"), "{epic}");
     }
 
     #[test]

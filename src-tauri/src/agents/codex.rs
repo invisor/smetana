@@ -221,7 +221,7 @@ mod tests {
                 mode,
                 target_branch: "staging".into(),
             create_target: false,
-                min_priority: 2,
+                min_priority: Some(2),
                 live_check: true,
                 file_findings: true,
             },
