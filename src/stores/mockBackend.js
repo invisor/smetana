@@ -44,7 +44,17 @@ const DEPENDENCY_EDGES = {
    something to show. The first is the "real" one, the second has no tracker:
    without it there is nowhere to see the "no bd here" mark under
    npm run dev. */
-const MOCK_PROJECTS = ['/Users/you/dev/smetana', '/Users/you/dev/notes']
+/* One project per run-configuration state, because there are three of them and
+   a browser is the only place any of them can be looked at. The third is the
+   one that costs nothing to leave out and is worth the most: `broken` is the
+   state with no board behind it and no gear on its row, so an omission there
+   does not read as an omission — it reads as a project that is simply quiet. */
+const MOCK_PROJECTS = ['/Users/you/dev/smetana', '/Users/you/dev/notes', '/Users/you/dev/holiday-curb']
+/* Tracked is about `.beads/`, not about the run configuration: the damaged one
+   is a fully tracked project whose board draws, which is exactly the case where
+   nothing else on screen would say what is wrong. */
+const UNTRACKED = '/Users/you/dev/notes'
+const BROKEN_CONFIG_PROJECT = '/Users/you/dev/holiday-curb'
 
 /* The tree that used to live in views/desktopAppData.js. The real tree comes
    from disk, but a browser has no disk and Gallery needs something to show
@@ -151,10 +161,10 @@ export function installMockBackend() {
     if (command === 'settings_save') return null
     if (command === 'tracker_set_project') return snapshot
     if (command === 'tracker_probe') {
-      return MOCK_PROJECTS.map((path) => ({ path, tracked: path === MOCK_PROJECTS[0] }))
+      return MOCK_PROJECTS.map((path) => ({ path, tracked: path !== UNTRACKED }))
     }
-    /* The first mock project is set up, the second is not: without one of each
-       there is nowhere to see either state under npm run dev. The `ok` branch
+    /* One project per state — set up, not set up, and damaged: without one of
+       each there is nowhere to see any of them under npm run dev. The `ok` branch
        is the whole struct Rust serializes, defaults included, not just the
        fields something reads today — src-tauri/src/runs/config.rs's
        Defaults::default() is where target_branch/min_priority/
@@ -163,6 +173,20 @@ export function installMockBackend() {
        still work for every component that exists now and throw for the first
        one that reads config.defaults.target_branch, in the browser only. */
     if (command === 'project_config') {
+      /* The parser's own message, caret line and all, because that is what the
+         run dialog quotes verbatim — a tidied one-liner here would leave the
+         only view of the real thing untested. */
+      if (payload?.project === BROKEN_CONFIG_PROJECT) {
+        return {
+          state: 'broken',
+          message:
+            'TOML parse error at line 14, column 1\n' +
+            '   |\n' +
+            '14 | gate = ["npm test", "npm run build"]\n' +
+            '   | ^^^^\n' +
+            'unknown field `gate`, expected one of `setup`, `gates`, `env_files`\n'
+        }
+      }
       return payload?.project === MOCK_PROJECTS[0]
         ? {
             state: 'ok',

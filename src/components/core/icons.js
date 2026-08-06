@@ -20,6 +20,7 @@ import {
   File,
   FileCode,
   FilePen,
+  FileX,
   Folder,
   FolderGit2,
   FolderOpen,
@@ -87,6 +88,12 @@ export const iconNodes = {
 
   // status
   'triangle-alert': TriangleAlert,
+  // The run configuration that exists and cannot be parsed. A triangle would
+  // have been the obvious choice and is the wrong one: the project row already
+  // draws a muted triangle for a folder with no bd tracker, and a red one on
+  // its own beside it would leave two states of a project told apart by colour
+  // and nothing else. A page silhouette says which of the two is about a file.
+  'file-x': FileX,
   'loader-circle': LoaderCircle,
   check: Check,
   x: X,

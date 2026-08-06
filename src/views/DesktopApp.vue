@@ -255,6 +255,31 @@ async function newAgent() {
 const configured = computed(() => runsState.config.state === 'ok')
 const runConfig = computed(() => (configured.value ? runsState.config.config : null))
 
+/* Whether the run dialog can be reached at all, which is not the same question
+   as whether a run can start. A damaged configuration is offered the dialog on
+   purpose: it is the only surface wide enough to quote the parser and name the
+   section that failed, and it carries the button that repairs the file. Take
+   the route away and the state is exactly what it was before this task — a
+   board with no play buttons and nothing anywhere saying why.
+
+   The dialog itself is what refuses: `configError` disables its Run. Letting
+   the play through to a dialog that says no is the opposite of the rule about
+   `runBlockedReason` below only in appearance — that rule is about a refusal
+   arriving after the form is filled in and confirmed, and this one arrives
+   before anything is answered, next to the way out. */
+const configBroken = computed(() => runsState.config.state === 'broken')
+const runOffered = computed(() => configured.value || configBroken.value)
+
+/* The message the dialog quotes, and '' when there is nothing wrong — which is
+   the same thing the dialog reads as "runnable". Derived from the state and not
+   from the message, with a sentence of our own where the state says broken and
+   the message is somehow empty: otherwise a blank complaint would leave the
+   dialog live and its Run button enabled over a file the worker is about to
+   refuse, which is the one way these two views of `config` could disagree. */
+const configErrorText = computed(() =>
+  configBroken.value ? configError.value || 'The file could not be parsed.' : ''
+)
+
 /* Which cards may be run — applied in `orderedColumns`, which is the one place
    a card is built for the board. Decided here rather than in the tracker store,
    because it is a product rule and it depends on something the store knows
@@ -268,7 +293,7 @@ const runConfig = computed(() => (configured.value ? runsState.config.config : n
 
    Done is the one exclusion left: the run would claim a closed issue, and there
    is nothing there to do. */
-const runnableTask = (task) => configured.value && task.status !== 'done'
+const runnableTask = (task) => runOffered.value && task.status !== 'done'
 
 /* Why every play on the board is inactive, or '' when none of them is.
    Strictly sequential work inside a project is the invariant — one stand, one
@@ -423,7 +448,22 @@ const stopTheRun = () => {
 }
 
 const setupFor = ref(null)
+/* Whether the project being asked about already has a file. Held beside the
+   path rather than derived from `runsState` at render time: the dialog stays
+   open across a config reload, and a value recomputed under it would change the
+   words somebody is in the middle of reading. Every route sets both through
+   `openSetup`, which is what stops the two drifting apart. */
+const setupExisting = ref(false)
 const settingUp = ref(false)
+
+const openSetup = (path, existing) => {
+  setupFor.value = path
+  setupExisting.value = existing
+}
+
+const closeSetup = () => {
+  setupFor.value = null
+}
 
 /* Adding a project is a read until this point: the dialog is where it becomes
    a session and a file in somebody's repository. */
@@ -431,7 +471,18 @@ const onAddProject = async () => {
   const added = await addProject()
   if (!added) return
   await loadConfig(added)
-  if (needsSetup.value) setupFor.value = added
+  if (needsSetup.value) openSetup(added, false)
+}
+
+/* The run dialog's own way back to the setup, and the only one a project that
+   is already configured has — the gear on its row goes as soon as the file
+   exists. The dialog closes: the two are alternatives, and leaving the run
+   dialog behind this one would put a person back in front of fields that are
+   about to be filled from a file being rewritten. */
+const setupFromRun = () => {
+  if (!activePath.value) return
+  runOpen.value = false
+  openSetup(activePath.value, true)
 }
 
 /* The setup agent runs inside this window's own terminal tab, so the person
@@ -474,7 +525,7 @@ const startSetup = async () => {
     project.sideTab = 'agents'
     project.activeTab = 'terminal'
     const session = await createSession(path, { kind: 'setup' })
-    setupFor.value = null
+    closeSetup()
     watchSetupSession(session.id, path)
   } catch {
     // already reported by createSession; the dialog stays open
@@ -1192,10 +1243,11 @@ const toastStackStyle = {
               :active-path="activePath"
               :can-add-agent="project.sideTab === 'agents'"
               :needs-setup="needsSetup"
+              :config-broken="configBroken"
               @select="switchTo"
               @remove="removeProject"
               @add-agent="newAgent"
-              @setup="setupFor = $event"
+              @setup="openSetup($event, false)"
             />
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
@@ -1282,17 +1334,20 @@ const toastStackStyle = {
           :default-parallel="runConfig?.defaults?.max_parallel_tasks ?? 3"
           :remembered="project.runSettings"
           :live-check-available="runConfig?.live_check?.mode !== 'none'"
+          :config-error="configErrorText"
           :error="runError"
           :busy="runStarting"
           @close="runOpen = false"
           @confirm="startTheRun"
           @rescope="runTheEpicInstead"
+          @setup="setupFromRun"
         />
         <SetupProjectModal
           :open="!!setupFor"
           :name="setupFor ? basenameOf(setupFor) : ''"
+          :existing="setupExisting"
           :busy="settingUp"
-          @close="setupFor = null"
+          @close="closeSetup"
           @confirm="startSetup"
         />
         <Modal
@@ -1349,7 +1404,7 @@ const toastStackStyle = {
           :columns="orderedColumns"
           :selected-id="project.selectedTask"
           :add-to="ADD_TO"
-          :run-from="configured ? ADD_TO : null"
+          :run-from="runOffered ? ADD_TO : null"
           :run-blocked-reason="runBlockedReason"
           @select="project.selectedTask = $event"
           @add="newTaskOpen = true"

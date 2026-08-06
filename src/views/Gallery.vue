@@ -79,6 +79,17 @@ const MANY_ATTACHMENTS = Array.from({ length: 14 }, (_, i) => ({
   name: `2026080-12131${i}-shot.png`
 }))
 
+/* What the toml crate actually produces for a misspelled key, caret line and
+   all. Copied from a real failure rather than paraphrased: the run dialog shows
+   it verbatim in `pre-wrap`, so the leading spaces and the line breaks are the
+   thing being checked here, and a tidied-up one-liner would check nothing. */
+const BROKEN_CONFIG = `TOML parse error at line 14, column 1
+   |
+14 | gate = ["npm test", "npm run build"]
+   | ^^^^
+unknown field \`gate\`, expected one of \`setup\`, \`gates\`, \`env_files\`
+`
+
 /* One Run, varied. Written here rather than imported so the states the bar has
    to draw are visible beside the thing drawing them. */
 const runFixture = (state, extra = {}) => ({
@@ -422,8 +433,14 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       <div :style="{ width: '400px' }">
         <AttachmentStrip :items="MANY_ATTACHMENTS" @remove="() => {}" />
       </div>
+      <!-- Both wordings: the first run, which promises a file will appear, and
+           the second over a file that is already there, which promises the
+           opposite — that what it already gets right survives. -->
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <SetupProjectModal :open="true" name="holiday-curb" @close="() => {}" @confirm="() => {}" />
+      </div>
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <SetupProjectModal :open="true" name="holiday-curb" existing @close="() => {}" @confirm="() => {}" />
       </div>
       <!-- Three, because the fields differ between them: solo is offered for a
            single task and refused for a queue, and that is the model's rule
@@ -476,6 +493,22 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :remembered="{ mode: 'solo' }"
             @close="() => {}"
             @confirm="() => {}"
+          />
+        </div>
+        <!-- The damaged configuration, with the parser's own message in it —
+             the caret line and its leading spaces are the point, so this
+             fixture keeps them. Every field below the notice is disabled and so
+             is Run; "Set up again" is not, because it is the way out. -->
+        <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <RunModal
+            :open="true"
+            :count="12"
+            :branches="['main', 'staging']"
+            default-branch="staging"
+            :config-error="BROKEN_CONFIG"
+            @close="() => {}"
+            @confirm="() => {}"
+            @setup="() => {}"
           />
         </div>
       </div>
@@ -631,6 +664,26 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
               :projects="[{ path: '/Users/you/dev/scratch', name: 'scratch', tracked: false }]"
               active-path="/Users/you/dev/scratch"
               needs-setup
+            />
+          </Panel>
+        </div>
+        <!-- The damaged configuration, deliberately on an untracked folder so
+             that its mark stands next to the tracker's. The two are the only
+             pair on this row that both stand alone, so this is the frame that
+             says whether the silhouettes carry the difference — a triangle and
+             a page — or whether it was resting on hue after all. There is no
+             gear beside the red one on purpose, and it must not read as a
+             button that failed to render. -->
+        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="plus" label="Add project" size="sm" />
+            </template>
+            <ProjectList
+              :projects="[{ path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: false }]"
+              active-path="/Users/you/dev/holiday-curb"
+              can-add-agent
+              config-broken
             />
           </Panel>
         </div>
