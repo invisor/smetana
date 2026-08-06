@@ -20,23 +20,25 @@ export async function loadStores() {
   vi.resetModules()
   const ipc = installIpc()
 
-  const [vue, event, files, settings, tabs, tracker, projects, terminals, git, runs] = await Promise.all([
-    import('vue'),
-    import('@tauri-apps/api/event'),
-    import('../../src/stores/files.js'),
-    import('../../src/stores/settings.js'),
-    import('../../src/stores/tabs.js'),
-    import('../../src/stores/tracker.js'),
-    import('../../src/stores/projects.js'),
-    import('../../src/stores/terminals.js'),
-    import('../../src/stores/git.js'),
-    import('../../src/stores/runs.js')
-  ])
+  const [vue, event, files, settings, tabs, tracker, projects, terminals, git, runs, attachments] =
+    await Promise.all([
+      import('vue'),
+      import('@tauri-apps/api/event'),
+      import('../../src/stores/files.js'),
+      import('../../src/stores/settings.js'),
+      import('../../src/stores/tabs.js'),
+      import('../../src/stores/tracker.js'),
+      import('../../src/stores/projects.js'),
+      import('../../src/stores/terminals.js'),
+      import('../../src/stores/git.js'),
+      import('../../src/stores/runs.js'),
+      import('../../src/stores/attachments.js')
+    ])
 
   return {
     ipc,
     emit: event.emit,
     nextTick: vue.nextTick,
-    stores: { files, settings, tabs, tracker, projects, terminals, git, runs }
+    stores: { files, settings, tabs, tracker, projects, terminals, git, runs, attachments }
   }
 }

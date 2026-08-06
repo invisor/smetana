@@ -55,10 +55,19 @@ impl Profile for Claude {
         }
         // Nothing is read from disk here: both plugins are loaded, so the
         // prompt names the skills and Claude Code fetches them on demand.
+        // Attached images are not on this command line either, and for a
+        // harder reason: Claude Code has no flag for one. It opens an image
+        // when the prompt names its path, which is what `ImageDelivery::InPrompt`
+        // — the default this profile keeps — asks `prompt.rs` to write.
         let text = prompt::SkillText { filing: None, brainstorming: None };
-        if let Some(built) =
-            prompt::build(&launch.intent, self.delivery(), &launch.skills, launch.facts.as_deref(), text)
-        {
+        if let Some(built) = prompt::build(
+            &launch.intent,
+            self.delivery(),
+            self.images(),
+            &launch.skills,
+            launch.facts.as_deref(),
+            text,
+        ) {
             cmd.arg(built);
         }
         cmd
@@ -223,20 +232,34 @@ mod tests {
         assert_eq!(argv(&launch(Intent::Bare, true)).len(), 3);
     }
 
-    #[test]
-    fn a_new_task_rides_as_the_last_argument() {
-        let intent = Intent::NewTask {
+    fn new_task(images: Vec<String>) -> Intent {
+        Intent::NewTask {
             brainstorm: Brainstorm::On,
             draft: TaskDraft {
                 text: "Swap the red for green".into(),
                 issue_type: Some("bug".into()),
                 priority: Some(2),
+                images,
             },
-        };
-        let args = argv(&launch(intent, false));
+        }
+    }
+
+    #[test]
+    fn a_new_task_rides_as_the_last_argument() {
+        let args = argv(&launch(new_task(Vec::new()), false));
         let last = args.last().unwrap();
         assert!(last.contains("Swap the red for green"));
         assert!(last.contains("superpowers:brainstorming"));
+    }
+
+    #[test]
+    fn an_attached_image_reaches_this_harness_by_path_and_never_by_flag() {
+        // Claude Code has no flag for an image and reads one when the prompt
+        // names it. A flag invented for it here would be an unknown argument
+        // and the session would not start at all.
+        let args = argv(&launch(new_task(vec!["/data/a.png".into()]), false));
+        assert!(args.last().unwrap().contains("/data/a.png"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "-i" || a == "--image"), "{args:?}");
     }
 
     fn fixture(name: &str) -> Vec<String> {

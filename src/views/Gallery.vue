@@ -8,6 +8,7 @@ import {
   AgentList,
   AppShell,
   Assignee,
+  AttachmentStrip,
   BranchSelect,
   Button,
   ChatMessage,
@@ -50,6 +51,33 @@ import {
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 import { terminalState } from '../stores/terminals.js'
+
+/* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
+   written out as data URLs, which is exactly the shape `attachments.js` builds
+   from what Rust stored — a fixture that pointed at a file on disk would draw
+   nothing here and nothing in the browser. */
+const ATTACHMENTS = [
+  {
+    path: '/Users/you/Library/Application Support/com.invisor.smetana/attachments/20260806-121314-mock.png',
+    name: '20260806-121314-mock.png',
+    bytes: 96,
+    url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR42mPIwwEYhpYEADyoUoFZDU7TAAAAAElFTkSuQmCC'
+  },
+  {
+    path: '/Users/you/Library/Application Support/com.invisor.smetana/attachments/20260806-121315-flow.png',
+    name: '20260806-121315-flow.png',
+    bytes: 96,
+    url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR42mNwwAEYhpYEAMHWMAEiHQbtAAAAAElFTkSuQmCC'
+  }
+]
+
+/* Enough of them to overflow the strip's two-row ceiling, which is the state
+   that would otherwise push a dialog's footer off a short screen. */
+const MANY_ATTACHMENTS = Array.from({ length: 14 }, (_, i) => ({
+  ...ATTACHMENTS[i % 2],
+  path: `${ATTACHMENTS[i % 2].path}.${i}`,
+  name: `2026080-12131${i}-shot.png`
+}))
 
 /* One Run, varied. Written here rather than imported so the states the bar has
    to draw are visible beside the thing drawing them. */
@@ -359,9 +387,40 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       </div>
       <!-- Tall enough for the whole dialog, footer included: a frame that
            clips it turns the one harness that would catch a broken modal into
-           a picture of the top half. -->
-      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
-        <NewTaskModal :open="true" @close="() => {}" @submit="() => {}" />
+           a picture of the top half. It grew from 400px with the images row;
+           adding another row means measuring it again. -->
+      <div :style="{ position: 'relative', height: '520px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <NewTaskModal
+          :open="true"
+          :attachments="ATTACHMENTS"
+          @close="() => {}"
+          @submit="() => {}"
+          @attach="() => {}"
+          @files="() => {}"
+          @remove="() => {}"
+        />
+      </div>
+      <!-- The same dialog with nothing attached and something being dragged
+           over the window: the empty state and the invitation are the two
+           halves nobody sees together in the app. -->
+      <div :style="{ position: 'relative', height: '520px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <NewTaskModal
+          :open="true"
+          :dragging="true"
+          error="cat.gif is 12582912 bytes; the ceiling is 8388608 bytes"
+          @close="() => {}"
+          @submit="() => {}"
+          @attach="() => {}"
+          @files="() => {}"
+          @remove="() => {}"
+        />
+      </div>
+      <AttachmentStrip :items="ATTACHMENTS" @remove="() => {}" />
+      <!-- Past two rows the strip scrolls instead of growing: nothing bounds
+           how many images are attached, and the dialog has no scrolling of its
+           own to absorb them. -->
+      <div :style="{ width: '400px' }">
+        <AttachmentStrip :items="MANY_ATTACHMENTS" @remove="() => {}" />
       </div>
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <SetupProjectModal :open="true" name="holiday-curb" @close="() => {}" @confirm="() => {}" />

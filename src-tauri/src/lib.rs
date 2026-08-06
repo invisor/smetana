@@ -1,4 +1,5 @@
 mod agents;
+mod attachments;
 mod files;
 mod git;
 mod project;
@@ -83,6 +84,8 @@ pub fn run() {
       files::commands::files_read,
       files::commands::files_write,
       files::commands::files_stat,
+      attachments::attachment_import,
+      attachments::attachment_write,
       git::git_head,
       git::git_branches,
       runs::commands::project_config,

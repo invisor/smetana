@@ -44,6 +44,7 @@ export { default as TabBar } from './shell/TabBar.vue'
 
 // kanban
 export { default as Assignee } from './kanban/Assignee.vue'
+export { default as AttachmentStrip } from './kanban/AttachmentStrip.vue'
 export { default as ColumnHeader } from './kanban/ColumnHeader.vue'
 export { default as KanbanBoard } from './kanban/KanbanBoard.vue'
 export { default as KanbanColumn } from './kanban/KanbanColumn.vue'
