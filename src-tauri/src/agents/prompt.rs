@@ -107,6 +107,19 @@ fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> Stri
     if let Some(floor) = settings.min_priority {
         let _ = writeln!(out, "- take nothing worse than priority P{floor} automatically");
     }
+    // Said out loud as this run's number and as beating the file, because the
+    // skill reads `[defaults].max_parallel_tasks` on its own and would
+    // otherwise treat anything higher than the file's number as a mistake. It
+    // is absent in Solo, where there is nobody to spawn — `RunSettings::validate`
+    // is what makes it `None` there.
+    if let Some(agents) = settings.max_parallel_tasks {
+        let _ = writeln!(
+            out,
+            "- work on at most {agents} task{} at once — this run's number, and it wins over \
+             `[defaults].max_parallel_tasks` in the config, upwards as well as down",
+            if agents == 1 { "" } else { "s" }
+        );
+    }
     let _ = writeln!(
         out,
         "- {}",
@@ -312,17 +325,20 @@ mod tests {
         SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING) }
     }
 
-    /// A floor only where the scope allows one — `RunSettings::validate` is
-    /// what refuses the rest, and a fixture that could not be started is not
-    /// worth writing a prompt for.
+    /// A floor only where the scope allows one and a number of agents only
+    /// where the mode allows one — `RunSettings::validate` is what refuses the
+    /// rest, and a fixture that could not be started is not worth writing a
+    /// prompt for.
     fn run_settings(mode: RunMode, scope: RunScope) -> RunSettings {
         let min_priority = matches!(scope, RunScope::Queue).then_some(2);
+        let max_parallel_tasks = (!matches!(mode, RunMode::Solo)).then_some(3);
         RunSettings {
             scope,
             mode,
             target_branch: "staging".into(),
             create_target: false,
             min_priority,
+            max_parallel_tasks,
             live_check: true,
             file_findings: true,
         }
@@ -380,6 +396,36 @@ mod tests {
             SkillDelivery::PluginDir,
         );
         assert!(!epic.contains("nothing worse than priority"), "{epic}");
+    }
+
+    #[test]
+    fn the_number_of_agents_is_this_runs_and_says_it_beats_the_config() {
+        // The skill reads `[defaults].max_parallel_tasks` for itself, so a
+        // number merely stated would be read as an upper bound to stay under —
+        // and choosing more than the file says would silently do nothing.
+        let text = run_prompt(
+            RunSettings { max_parallel_tasks: Some(6), ..run_settings(RunMode::Auto, RunScope::Queue) },
+            SkillDelivery::PluginDir,
+        );
+        assert!(text.contains("at most 6 tasks at once"), "{text}");
+        assert!(text.contains("wins over"), "{text}");
+        assert!(text.contains("max_parallel_tasks"), "{text}");
+
+        // One is singular, because a prompt reading "at most 1 tasks" is a
+        // prompt somebody wrote without looking.
+        let one = run_prompt(
+            RunSettings { max_parallel_tasks: Some(1), ..run_settings(RunMode::Auto, RunScope::Queue) },
+            SkillDelivery::PluginDir,
+        );
+        assert!(one.contains("at most 1 task at once"), "{one}");
+
+        // Solo delegates to nobody: the line is absent rather than set to one,
+        // which would be a second instruction contradicting "do it yourself".
+        let solo = run_prompt(
+            run_settings(RunMode::Solo, RunScope::Task { id: "smetana-9".into() }),
+            SkillDelivery::PluginDir,
+        );
+        assert!(!solo.contains("at once"), "{solo}");
     }
 
     #[test]

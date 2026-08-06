@@ -20,7 +20,14 @@ const props = defineProps({
   moving: { type: Boolean, default: false },
   /* A run takes the whole ready queue, so the play stands in exactly one
      column — which one is the board's to decide, the same as `addable`. */
-  runnable: { type: Boolean, default: false }
+  runnable: { type: Boolean, default: false },
+  /* Why the run cannot be started just now, in words. Empty means it can. A
+     lowercase fragment, because it is interpolated into `runLabel` below
+     rather than standing on its own. A sentence rather than a boolean, and the
+     button goes grey rather than away: a control that vanished says nothing
+     about why it is not there, and the one thing somebody wants to know at
+     that moment is exactly why. */
+  runBlockedReason: { type: String, default: '' }
 })
 
 const emit = defineEmits(['add', 'grab', 'move', 'run'])
@@ -93,6 +100,13 @@ const nameStyle = computed(() => ({
    does nothing is worse than no stop. */
 const moveLabel = computed(() => `Column ${label.value}. Alt with left or right arrow moves it.`)
 
+/* One sentence for the tooltip and for the accessible name both — the panel a
+   person reads and the name a screen reader announces must not disagree about
+   the same button. `TaskCard` composes its own play the same way. */
+const runLabel = computed(() =>
+  props.runBlockedReason ? `Run the queue — ${props.runBlockedReason}` : 'Run the queue'
+)
+
 const wipStyle = computed(() => ({
   display: 'inline-flex',
   alignItems: 'center',
@@ -123,8 +137,14 @@ const wipStyle = computed(() => ({
       <!-- Before the "+", so the "+" keeps the position it has always had:
            nothing a person is already aiming at moves when a project gains a
            configuration. -->
-      <Tooltip v-if="runnable" label="Run the queue" title="">
-        <IconButton icon="play" label="Run the queue" size="sm" @click="$emit('run')" />
+      <Tooltip v-if="runnable" :label="runLabel" title="">
+        <IconButton
+          icon="play"
+          :label="runLabel"
+          size="sm"
+          :disabled="!!runBlockedReason"
+          @click="$emit('run')"
+        />
       </Tooltip>
       <IconButton v-if="addable" icon="plus" :label="`Add task to ${c.key}`" size="sm" @click="$emit('add')" />
     </slot>

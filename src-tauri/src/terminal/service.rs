@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::detect::{detect, DetectInput};
-use super::model::{Session, SessionId, SessionState, TerminalError};
+use super::model::{Exit, Session, SessionId, SessionState, TerminalError};
 use super::pty::{Chunk, Pty};
 use super::ring::Ring;
 use super::screen::Screen;
@@ -76,9 +76,10 @@ pub enum Request {
     Resize(SessionId, u16, u16),
     Write(SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
     RunCapture(SessionId, String, u64, u64, oneshot::Sender<Result<Vec<String>, TerminalError>>),
-    /// Answer once this session's process is gone, with its exit code. See
-    /// `ExitWaiter` for why it is a request and not a subscription.
-    AwaitExit(SessionId, oneshot::Sender<Option<i32>>),
+    /// Answer once this session's process is gone, with how it ended. See
+    /// `ExitWaiter` for why it is a request and not a subscription, and `Exit`
+    /// for why the answer is three-valued rather than an exit code.
+    AwaitExit(SessionId, oneshot::Sender<Exit>),
     /// The one reply that is not a `oneshot`: it is awaited from the exit
     /// event, on a synchronous thread, and only `std::sync::mpsc` can put a
     /// ceiling on a blocking receive.
@@ -120,11 +121,11 @@ struct Live {
 /// exit code. End of stream can arrive before the child has been reaped, and
 /// `reassess` re-polls for the code every detection tick until it comes — so
 /// answering the instant the state flips would report a clean batch as a crash.
-/// A code that never arrives at all (a signal) answers `None` once the grace is
-/// spent, and `None` is a crash, which is what being signalled is.
+/// A code that never arrives at all (a signal) answers `Exit::NoCode` once the
+/// grace is spent, and that is a crash, which is what being signalled is.
 struct ExitWaiter {
     id: SessionId,
-    tx: oneshot::Sender<Option<i32>>,
+    tx: oneshot::Sender<Exit>,
     grace: Option<Instant>,
 }
 
@@ -407,22 +408,23 @@ fn close_exit_waiters(waiters: &mut Vec<ExitWaiter>, sessions: &HashMap<SessionI
     let mut keep = Vec::new();
     for mut waiter in waiters.drain(..) {
         match sessions.get(&waiter.id) {
-            // Removed while somebody waited. The process is gone either way,
-            // and there is no code left to report — which reads as a crash,
-            // correctly: a batch whose session was taken out from under it did
-            // not finish.
+            // Gone from the map, and `Request::Remove` is the only thing that
+            // takes a session out of it — so this is a person removing the row,
+            // never a process falling over. Said as its own answer rather than
+            // as a missing exit code: the waiter cannot tell the two apart from
+            // here, and the responses they deserve are opposite ones.
             None => {
-                let _ = waiter.tx.send(None);
+                let _ = waiter.tx.send(Exit::Removed);
             }
             Some(live) if live.session.state != SessionState::Exited => keep.push(waiter),
             Some(live) => match live.session.exit_code {
                 Some(code) => {
-                    let _ = waiter.tx.send(Some(code));
+                    let _ = waiter.tx.send(Exit::Code(code));
                 }
                 None => {
                     let deadline = *waiter.grace.get_or_insert(now + EXIT_CODE_GRACE);
                     if now >= deadline {
-                        let _ = waiter.tx.send(None);
+                        let _ = waiter.tx.send(Exit::NoCode);
                     } else {
                         keep.push(waiter);
                     }

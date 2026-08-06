@@ -60,6 +60,7 @@ const runFixture = (state, extra = {}) => ({
     mode: 'auto',
     target_branch: 'staging',
     min_priority: 2,
+    max_parallel_tasks: 3,
     live_check: true,
     file_findings: true
   },
@@ -310,6 +311,19 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '212px' }">
           <TaskCard id="bd-12cd" title="Bump tauri to 2.1" status="done" type="chore" />
         </div>
+        <!-- Runnable, and not runnable now: the play stays where it was, grey,
+             and carries the reason. A button that vanished while a run was
+             going would look like the board had lost the feature. -->
+        <div :style="{ width: '212px' }">
+          <TaskCard
+            id="bd-77e0"
+            title="Fold the settings debounce into the store"
+            status="ready"
+            type="task"
+            runnable
+            run-blocked-reason="a run is already going in this project"
+          />
+        </div>
       </div>
       <!-- The board grows to fill its parent, so the harness has to give it one
            with a height. Drag a column by its header, or focus one and press
@@ -327,6 +341,22 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @reorder="boardOrder = $event"
         />
       </div>
+      <!-- The same board with a run already going in the project: every play on
+           it, the column header's included, is inactive and carries the reason
+           rather than disappearing. -->
+      <div :style="{ display: 'flex', height: '300px', border: 'var(--border-w) solid var(--border)' }">
+        <KanbanBoard
+          :columns="boardColumns"
+          add-to="ready"
+          run-from="ready"
+          run-blocked-reason="a run is already going in this project"
+          :reorderable="false"
+          @select="() => {}"
+          @add="() => {}"
+          @run="() => {}"
+          @run-task="() => {}"
+        />
+      </div>
       <!-- Tall enough for the whole dialog, footer included: a frame that
            clips it turns the one harness that would catch a broken modal into
            a picture of the top half. -->
@@ -336,12 +366,21 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <SetupProjectModal :open="true" name="holiday-curb" @close="() => {}" @confirm="() => {}" />
       </div>
-      <!-- Two scopes, because the mode list differs between them: solo is
-           offered for a single task and refused for a queue, and that is the
-           model's rule rather than the dialog's to soften. The second one also
-           carries a refusal and a project that declares no live check. -->
+      <!-- Three, because the fields differ between them: solo is offered for a
+           single task and refused for a queue, and that is the model's rule
+           rather than the dialog's to soften. The second also carries a refusal
+           and a project that declares no live check; the third opens in solo,
+           where "How many at once" is inactive — a state behind two clicks is a
+           state nobody checks, so it is on the page like every other one.
+
+           The frames are 800px tall rather than 640: the whole dialog has to be
+           visible, footer included, at comfortable density, which is the taller
+           of the two densities — a frame that clips it turns the one harness
+           that would catch a broken modal into a picture of the top half. The
+           tallest of the three, measured, leaves about 70px over. Adding a row
+           to this dialog means measuring this number again. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', flexWrap: 'wrap' }">
-        <div :style="{ position: 'relative', width: '480px', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
           <RunModal
             :open="true"
             :scope="{ kind: 'queue' }"
@@ -352,7 +391,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             @confirm="() => {}"
           />
         </div>
-        <div :style="{ position: 'relative', width: '480px', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
           <RunModal
             :open="true"
             :scope="{ kind: 'task', id: 'smetana-9', title: 'Rename the worktree when the branch changes' }"
@@ -361,10 +400,23 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :branches="['main', 'staging']"
             default-branch="main"
             :live-check-available="false"
+            :default-parallel="5"
             error="unknown field `gate` — .smetana/project.toml could not be read"
             @close="() => {}"
             @confirm="() => {}"
             @rescope="() => {}"
+          />
+        </div>
+        <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <RunModal
+            :open="true"
+            :scope="{ kind: 'task', id: 'smetana-77', title: 'Fold the settings debounce into the store' }"
+            :count="1"
+            :branches="['main', 'staging']"
+            default-branch="main"
+            :remembered="{ mode: 'solo' }"
+            @close="() => {}"
+            @confirm="() => {}"
           />
         </div>
       </div>
@@ -575,6 +627,9 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'queue_empty' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'no_progress' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'crashed', attempts: 5 } })" />
+        <!-- Somebody's own doing, like a stop, and quiet for that reason — but
+             a different act, and the line is where the two are told apart. -->
+        <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'session_removed' } })" />
       </div>
     </section>
 

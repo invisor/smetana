@@ -96,6 +96,7 @@ const RUN = {
     mode: 'auto',
     target_branch: 'main',
     min_priority: 2,
+    max_parallel_tasks: 3,
     live_check: true,
     file_findings: true
   },
@@ -146,6 +147,25 @@ describe('the run in the active project', () => {
 
     expect(stores.runs.runsState.run).not.toBe(null)
     expect(stores.runs.running.value).toBe(false)
+  })
+
+  it('a run the worker ended is over whatever it ended for', async () => {
+    // `running` is what the board's play buttons hang off, so it has to be
+    // false for every ending and not only for the ones this front end has a
+    // sentence for: a reason it has never heard of would otherwise leave every
+    // play inactive with no run behind it.
+    const { emit, ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('run_start', RUN)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+    await stores.runs.startRun('/p', RUN.settings)
+    expect(stores.runs.running.value).toBe(true)
+
+    await emit('run:state', { ...RUN, state: { kind: 'stopped', reason: { kind: 'session_removed' } }, session: null })
+
+    expect(stores.runs.running.value).toBe(false)
+    expect(stores.runs.runsState.run.state.reason.kind).toBe('session_removed')
   })
 
   it('a state event for another project is dropped', async () => {

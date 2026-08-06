@@ -61,6 +61,17 @@ pub struct RunSettings {
     /// starts honouring again in six months. The same choice, for the same
     /// reason, is already made for Auto in `TaskDraft`.
     pub min_priority: Option<u8>,
+    /// How many tasks the lead may have in flight at once. Chosen in the
+    /// dialog, offered from `[defaults].max_parallel_tasks`, and it wins over
+    /// that key rather than only being allowed to lower it — the file is not
+    /// rewritten, so the choice lives exactly one run.
+    ///
+    /// `None` in `Solo`, and an `Option` for the reason `min_priority` is one:
+    /// there the lead delegates to nobody, so "do the work yourself" and "keep
+    /// this many agents" would be two instructions contradicting each other in
+    /// the same prompt.
+    #[serde(default)]
+    pub max_parallel_tasks: Option<u8>,
     pub live_check: bool,
     /// Whether a finding may become a `deferred` issue at all. Off means
     /// everything goes to the digest — see the `running-tasks` skill.
@@ -86,6 +97,11 @@ pub enum StopReason {
     Unreadable,
     /// Somebody pressed stop. The batch in flight was allowed to finish.
     Cancelled,
+    /// The session the batch was running in was removed from the agents panel.
+    /// Deliberately not `Cancelled` — that one is the stop button, and the two
+    /// are different acts: this one ended a batch mid-flight, so what it left
+    /// behind is the recovery phase's to clean up.
+    SessionRemoved,
     /// The project would not come up; the string names what failed.
     Preflight { detail: String },
 }
@@ -141,8 +157,13 @@ pub enum RunError {
     Terminal(String),
 }
 
+/// The most agents a run may be told to keep in flight. The ceiling is not the
+/// app's — it is the subscription's and the machine's — so it is a wide one, and
+/// it exists at all so that a number nobody could honour cannot reach a prompt.
+pub const MAX_PARALLEL: u8 = 8;
+
 impl RunSettings {
-    /// The two rules that are not the dialog's to keep. `Solo` means the agent
+    /// The three rules that are not the dialog's to keep. `Solo` means the agent
     /// does the work itself instead of delegating, which is a coherent thing to
     /// ask of one task and not of a queue or an epic — there it would silently
     /// become something else. And a priority floor is the queue's alone: it
@@ -163,6 +184,23 @@ impl RunSettings {
                  its priority"
                     .into(),
             ));
+        }
+        // The same shape as the floor, one rule down: a number of agents only
+        // means something where the lead delegates, and `Solo` is the mode in
+        // which it does not.
+        if self.max_parallel_tasks.is_some() && matches!(self.mode, RunMode::Solo) {
+            return Err(RunError::BadSettings(
+                "solo mode does the work itself and delegates to nobody; a number of agents \
+                 belongs to the other two modes"
+                    .into(),
+            ));
+        }
+        if let Some(agents) = self.max_parallel_tasks {
+            if agents == 0 || agents > MAX_PARALLEL {
+                return Err(RunError::BadSettings(format!(
+                    "between 1 and {MAX_PARALLEL} agents at once, not {agents}"
+                )));
+            }
         }
         Ok(())
     }
@@ -209,16 +247,19 @@ impl Run {
 mod tests {
     use super::*;
 
-    /// A floor only where the scope allows one, which is what every test below
-    /// that is not about the floor wants.
+    /// A floor only where the scope allows one and a parallel count only where
+    /// the mode allows one, which is what every test below that is not about
+    /// either of them wants.
     fn settings(mode: RunMode, scope: RunScope) -> RunSettings {
         let min_priority = matches!(scope, RunScope::Queue).then_some(2);
+        let max_parallel_tasks = (!matches!(mode, RunMode::Solo)).then_some(3);
         RunSettings {
             scope,
             mode,
             target_branch: "main".into(),
             create_target: false,
             min_priority,
+            max_parallel_tasks,
             live_check: true,
             file_findings: true,
         }
@@ -260,6 +301,39 @@ mod tests {
             let bare = RunSettings { min_priority: None, ..settings(RunMode::Auto, scope) };
             assert!(bare.validate().is_ok());
         }
+    }
+
+    #[test]
+    fn a_number_of_agents_belongs_to_every_mode_but_solo() {
+        // Solo does the work itself, so "keep three agents going" beside "do it
+        // yourself" is one prompt contradicting itself.
+        let solo = RunSettings {
+            max_parallel_tasks: Some(3),
+            ..settings(RunMode::Solo, RunScope::Task { id: "a-1".into() })
+        };
+        assert!(solo.validate().is_err());
+
+        // And none at all is fine anywhere: the dialog always sends one outside
+        // solo, but nothing here depends on it — the lead then falls back to
+        // the config, which is what the skill says.
+        for mode in [RunMode::Auto, RunMode::Supervised] {
+            let bare = RunSettings { max_parallel_tasks: None, ..settings(mode, RunScope::Queue) };
+            assert!(bare.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn a_number_of_agents_outside_the_range_is_refused() {
+        // Not the app's ceiling — the subscription's and the machine's — but a
+        // number nobody could honour must not reach a prompt.
+        let with = |agents| RunSettings {
+            max_parallel_tasks: Some(agents),
+            ..settings(RunMode::Auto, RunScope::Queue)
+        };
+        assert!(with(0).validate().is_err(), "zero agents is not a run, it is a stop");
+        assert!(with(1).validate().is_ok());
+        assert!(with(MAX_PARALLEL).validate().is_ok());
+        assert!(with(MAX_PARALLEL + 1).validate().is_err());
     }
 
     #[test]
@@ -313,6 +387,7 @@ mod tests {
             "mode": "supervised",
             "target_branch": "staging",
             "min_priority": null,
+            "max_parallel_tasks": 4,
             "live_check": false,
             "file_findings": true
         });
@@ -320,6 +395,17 @@ mod tests {
         assert_eq!(parsed.scope, RunScope::Epic { id: "smetana-1".into() });
         assert_eq!(parsed.mode, RunMode::Supervised);
         assert_eq!(parsed.min_priority, None, "the dialog shows no floor outside the queue");
+        assert_eq!(parsed.max_parallel_tasks, Some(4));
         assert!(!parsed.live_check);
+    }
+
+    #[test]
+    fn a_stop_reason_a_person_caused_is_not_the_stop_button() {
+        // Both endings are somebody's doing and neither is a crash, but they
+        // are different acts and the bar has to be able to say which: removing
+        // the session ended a batch mid-flight, pressing stop let it finish.
+        let removed = serde_json::to_value(StopReason::SessionRemoved).expect("serialize");
+        assert_eq!(removed["kind"], "session_removed");
+        assert_ne!(removed, serde_json::to_value(StopReason::Cancelled).expect("serialize"));
     }
 }

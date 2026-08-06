@@ -8,9 +8,13 @@
 //! file is the part that talks to the other two workers, and like them it
 //! carries no tests.
 //!
-//! One run per project and one run at a time in the window — a second is
-//! refused rather than queued (smetana-tra).
+//! One run per project, keyed by the project's path — a second run in the same
+//! project is refused rather than queued, and a run in another project is none
+//! of this one's business. Different projects are different folders, stacks,
+//! boards and target branches; the only thing they share is a subscription
+//! limit, and a run does not reserve one (smetana-tra).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -22,6 +26,7 @@ use super::model::{Run, RunError, RunSettings, RunState, StopReason};
 use super::preflight;
 use super::queue::{self, Action, QueueSnapshot};
 use crate::agents::Intent;
+use crate::terminal::model::Exit;
 use crate::terminal::service::{Request as TerminalRequest, TerminalHandle};
 use crate::tracker::service::{Request as TrackerRequest, TrackerHandle};
 
@@ -43,9 +48,15 @@ pub enum Request {
 #[derive(Clone)]
 pub struct RunHandle(pub mpsc::Sender<Request>);
 
-/// The worker's own view of the run in flight. `Run` is what leaves the
-/// worker; this is what stays.
+/// The worker's own view of one project's run in flight. `Run` is what leaves
+/// the worker; this is what stays.
 struct Active {
+    /// Which loop task this entry belongs to. The map is keyed by project and a
+    /// project's next run may start the moment its last one is out of the map,
+    /// so a late report has to be told from the run that replaced it — the same
+    /// job `generation` does for the tracker, and the same defect if it is
+    /// missing: a finished run's state written over a live one's.
+    token: u64,
     run: Run,
     /// Cancels the loop task. Dropping it is what a stop after the final batch
     /// comes down to.
@@ -54,32 +65,38 @@ struct Active {
 
 pub fn start(app: AppHandle, tracker: TrackerHandle, terminal: TerminalHandle) -> RunHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(8);
-    let (report_tx, mut report_rx) = mpsc::unbounded_channel::<Run>();
+    let (report_tx, mut report_rx) = mpsc::unbounded_channel::<(u64, Run)>();
 
     tauri::async_runtime::spawn(async move {
-        let mut active: Option<Active> = None;
+        // Keyed by the project's path: that key is what makes a run in one
+        // project invisible to another, and it is the same path the tracker,
+        // the settings and the front end name a project by.
+        let mut active: HashMap<String, Active> = HashMap::new();
+        let mut next_token: u64 = 1;
 
         loop {
             tokio::select! {
                 request = rx.recv() => {
                     let Some(request) = request else { break };
-                    handle(&app, &mut active, &tracker, &terminal, &report_tx, request);
+                    handle(&app, &mut active, &mut next_token, &tracker, &terminal, &report_tx, request);
                 }
                 // The loop task's own progress. It owns no state the front end
                 // reads — it hands a whole `Run` back here, and this task is
                 // the only thing that writes one out.
                 report = report_rx.recv() => {
-                    let Some(run) = report else { break };
-                    if let Some(current) = active.as_mut() {
-                        if current.run.project != run.project {
-                            // A report from a run that was already replaced.
-                            continue;
-                        }
-                        current.run = run.clone();
+                    let Some((token, run)) = report else { break };
+                    // Nothing under that key any more — a stop already took the
+                    // run out and emitted it — or something newer under it.
+                    // Either way this report is the past, and emitting it would
+                    // put a finished run back on the screen.
+                    let Some(current) = active.get_mut(&run.project) else { continue };
+                    if current.token != token {
+                        continue;
                     }
+                    current.run = run.clone();
                     emit(&app, &run);
                     if run.is_over() {
-                        active = None;
+                        active.remove(&run.project);
                     }
                 }
             }
@@ -95,10 +112,11 @@ fn emit(app: &AppHandle, run: &Run) {
 
 fn handle(
     app: &AppHandle,
-    active: &mut Option<Active>,
+    active: &mut HashMap<String, Active>,
+    next_token: &mut u64,
     tracker: &TrackerHandle,
     terminal: &TerminalHandle,
-    report: &mpsc::UnboundedSender<Run>,
+    report: &mpsc::UnboundedSender<(u64, Run)>,
     request: Request,
 ) {
     match request {
@@ -107,29 +125,30 @@ fn handle(
         }
         Request::Stop(project, tx) => {
             let mut answer = None;
-            if let Some(current) = active.as_mut() {
-                if current.run.project == project {
-                    current.run.request_stop();
-                    // A closed channel is the signal; the loop reads it between
-                    // batches, which is what makes stopping cooperative. It is
-                    // never killed mid-batch: a run interrupted between a merge
-                    // and a close is exactly the state the recovery phase
-                    // exists to clean up, and doing that deliberately is not a
-                    // feature.
-                    let _ = current.stop.try_send(());
-                    answer = Some(current.run.clone());
-                }
+            if let Some(current) = active.get_mut(&project) {
+                current.run.request_stop();
+                // A closed channel is the signal; the loop reads it between
+                // batches, which is what makes stopping cooperative. It is
+                // never killed mid-batch: a run interrupted between a merge
+                // and a close is exactly the state the recovery phase
+                // exists to clean up, and doing that deliberately is not a
+                // feature.
+                let _ = current.stop.try_send(());
+                answer = Some(current.run.clone());
             }
             if let Some(run) = &answer {
                 emit(app, run);
                 if run.is_over() {
-                    *active = None;
+                    active.remove(&project);
                 }
             }
             let _ = tx.send(answer);
         }
         Request::Start(project, settings, tx) => {
-            if active.as_ref().is_some_and(|a| !a.run.is_over()) {
+            // This project's own run and nothing else. Another project's is not
+            // in the way of anything: it has its own board, its own worktrees
+            // and its own target branch.
+            if active.get(&project).is_some_and(|a| !a.run.is_over()) {
                 let _ = tx.send(Err(RunError::AlreadyRunning));
                 return;
             }
@@ -157,9 +176,12 @@ fn handle(
 
             let run = Run::new(project.clone(), settings);
             let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
-            *active = Some(Active { run: run.clone(), stop: stop_tx });
+            let token = *next_token;
+            *next_token += 1;
+            active.insert(project.clone(), Active { token, run: run.clone(), stop: stop_tx });
 
             tauri::async_runtime::spawn(drive(
+                token,
                 run.clone(),
                 config.preflight.clone(),
                 PathBuf::from(&project),
@@ -175,24 +197,25 @@ fn handle(
     }
 }
 
-fn current(active: &Option<Active>, project: &str) -> Option<Run> {
-    active.as_ref().filter(|a| a.run.project == project).map(|a| a.run.clone())
+fn current(active: &HashMap<String, Active>, project: &str) -> Option<Run> {
+    active.get(project).map(|a| a.run.clone())
 }
 
 /// The loop itself, on a task of its own so the worker above stays answerable
 /// while a batch runs for an hour.
 #[allow(clippy::too_many_arguments)]
 async fn drive(
+    token: u64,
     mut run: Run,
     preflight_config: Option<config::Preflight>,
     root: PathBuf,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
-    report: mpsc::UnboundedSender<Run>,
+    report: mpsc::UnboundedSender<(u64, Run)>,
     mut stop: mpsc::Receiver<()>,
 ) {
     let say = |run: &Run| {
-        let _ = report.send(run.clone());
+        let _ = report.send((token, run.clone()));
     };
 
     if let Some(config) = preflight_config {
@@ -258,11 +281,21 @@ async fn drive(
         run.advance(RunState::Working { iteration });
         say(&run);
 
-        let code = await_exit(&terminal, session).await;
-        // `None` is a session that was signalled or removed, and both mean the
-        // batch did not finish — the same reading `terminal/service.rs` records
-        // beside the waiter.
-        if code == Some(0) {
+        let exit = await_exit(&terminal, session).await;
+        // A session somebody removed from the agents panel is not a harness
+        // that fell over: nothing is going to go better on the next try, and
+        // retrying it would answer "take this away" with another one just like
+        // it. So the run ends here, with its own reason — the crash backstop
+        // below is for processes that failed on their own.
+        if exit == Exit::Removed {
+            run.advance(RunState::Stopped { reason: StopReason::SessionRemoved });
+            say(&run);
+            return;
+        }
+        // `NoCode` is a session that was signalled, which did not finish the
+        // batch either — the same reading `terminal/service.rs` records beside
+        // the waiter.
+        if exit == Exit::Code(0) {
             crashes = 0;
             crashed_last = false;
         } else {
@@ -366,10 +399,13 @@ fn agent_id() -> String {
     crate::agents::IDS[0].to_string()
 }
 
-async fn await_exit(terminal: &TerminalHandle, session: u64) -> Option<i32> {
+/// A terminal worker that is not there to answer counts as a batch that ended
+/// without a code, never as a session somebody removed: `Removed` stops the run
+/// outright, and a worker that has gone away is not a person's decision.
+async fn await_exit(terminal: &TerminalHandle, session: u64) -> Exit {
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::AwaitExit(session, tx)).await.is_err() {
-        return None;
+        return Exit::NoCode;
     }
-    rx.await.ok().flatten()
+    rx.await.unwrap_or(Exit::NoCode)
 }
