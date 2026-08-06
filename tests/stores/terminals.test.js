@@ -201,6 +201,128 @@ describe('starting a session', () => {
 
     expect(ipc.calls('terminal_create').at(-1).intent).toEqual({ kind: 'bare' })
   })
+
+  /* The panel drew its empty state at the exact moment somebody had asked for
+     an agent — a spawn takes about a second, and until the worker answered
+     there was nothing in the list to draw. */
+  it('the row is there and picked before the worker has answered', async () => {
+    const { ipc, stores } = await ready()
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+
+    const started = stores.terminals.createSession('/p', { kind: 'bare' })
+
+    const row = stores.terminals.agentRows.value.at(-1)
+    expect(row.name).toBe('claude')
+    expect(row.elapsed).toBe('starting')
+    expect(row.starting).toBe(true)
+    expect(stores.terminals.terminalState.activeId).toBe(row.id)
+
+    answer(session({ id: 9 }))
+    await started
+
+    // The handover: one row, and the selection moves with it rather than being
+    // left on a ticket nothing will ever fill.
+    expect(stores.terminals.terminalState.starting).toEqual([])
+    expect(stores.terminals.agentRows.value.map((r) => r.name)).toEqual(['claude-1', 'claude-9'])
+    expect(stores.terminals.terminalState.activeId).toBe(9)
+  })
+
+  /* Picking another agent while one is starting is a person saying what they
+     want to look at, and an answer arriving afterwards does not overrule it. */
+  it('a start that lands late does not steal a selection somebody has moved', async () => {
+    const { ipc, stores } = await ready()
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+
+    const started = stores.terminals.createSession('/p', { kind: 'bare' })
+    stores.terminals.terminalState.activeId = 1
+    answer(session({ id: 9 }))
+    await started
+
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+    expect(stores.terminals.terminalState.sessions.map((s) => s.id)).toEqual([1, 9])
+  })
+
+  it('nothing started means no row and the selection back where it was', async () => {
+    const { ipc, stores } = await ready()
+    stores.terminals.terminalState.activeId = 1
+    ipc.fail('terminal_create', { kind: 'noAgent', message: 'claude, codex' })
+
+    await expect(stores.terminals.createSession('/p')).rejects.toBeTruthy()
+
+    expect(stores.terminals.terminalState.starting).toEqual([])
+    expect(stores.terminals.agentRows.value.map((r) => r.name)).toEqual(['claude-1'])
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+  })
+
+  /* Neither id is one the worker has ever heard of, and asking it about one
+     would come back as `no session` — a failure reported at the one moment
+     nothing has failed. */
+  it('the transport is never asked about an agent that has not started', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+    stores.terminals.createSession('/p', { kind: 'bare' })
+    const ticket = stores.terminals.terminalState.activeId
+
+    await stores.terminals.attach(ticket)
+    await stores.terminals.detach(ticket)
+    await stores.terminals.send(ticket, 'x')
+    await stores.terminals.resize(ticket, 80, 24)
+
+    expect(ipc.calls('terminal_attach')).toEqual([])
+    expect(ipc.calls('terminal_detach')).toEqual([])
+    expect(ipc.calls('terminal_write')).toEqual([])
+    expect(ipc.calls('terminal_resize')).toEqual([])
+    expect(stores.terminals.terminalState.lastError).toBeNull()
+  })
+
+  /* The defect this task was filed for: a list request that went out before the
+     session existed comes back without it, and replacing the list wholesale
+     dropped both the row and the selection — leaving the agent somebody had
+     just started unreachable, with the terminal saying "No agent selected" and
+     nothing due to arrive that would put it back. */
+  it('a list answer older than the session does not take it away again', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', session({ id: 9 }))
+    let answer
+    ipc.on('terminal_list', () => new Promise((resolve) => (answer = resolve)))
+
+    const listing = stores.terminals.loadSessions('/p')
+    await stores.terminals.createSession('/p', { kind: 'bare' })
+    // The worker had not made session 9 when it was asked this question.
+    answer([session({ id: 1 })])
+    await listing
+
+    expect(stores.terminals.terminalState.sessions.map((s) => s.id)).toEqual([1, 9])
+    expect(stores.terminals.terminalState.activeId).toBe(9)
+  })
+
+  /* A spawn takes about a second and a person can switch project inside it. The
+     start is not cancelled — it is somebody's agent and it keeps coming up —
+     but it belongs to the panel it was asked for, exactly as a session does. */
+  it('a start does not follow the person to another project', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+    stores.terminals.createSession('/p', { kind: 'bare' })
+    expect(stores.terminals.agentRows.value.at(-1).starting).toBe(true)
+
+    ipc.on('terminal_list', [])
+    await stores.terminals.loadSessions('/elsewhere')
+
+    expect(stores.terminals.agentRows.value).toEqual([])
+    expect(stores.terminals.terminalState.activeId).toBeNull()
+  })
+
+  /* The other half of the same rule: a row the answer does not mention and that
+     was already there when the question went out really is gone. */
+  it('a session that was there before the question and is not in the answer goes', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [])
+    await stores.terminals.loadSessions('/p')
+    expect(stores.terminals.terminalState.sessions).toEqual([])
+    expect(stores.terminals.terminalState.activeId).toBeNull()
+  })
 })
 
 describe('back-end errors', () => {
