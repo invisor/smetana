@@ -156,7 +156,28 @@ impl Default for ProjectState {
 pub struct RunDefaults {
     pub mode: String,
     pub target_branch: Option<String>,
-    pub min_priority: u8,
+    /// `None` is "no floor was ever chosen here", and it is a different thing
+    /// from any number — an `Option` for exactly the reason `RunSettings`'
+    /// own field is one, which is what makes this a mirror rather than a
+    /// near-mirror. A run aimed at a task or an epic sends no floor at all;
+    /// stored as a 2 it would come back as a choice nobody made, and the queue
+    /// dialog would open on it instead of on the project's own
+    /// `[defaults] min_priority` — quietly overriding the file with a number
+    /// that only ever came from this field's default.
+    ///
+    /// Left out of the file entirely when there is none, which is the one place
+    /// in this schema where that matters. Every change to it so far has been
+    /// additive, and an unknown key is ignored — but this field changed *type*,
+    /// and a build older than this one reads `u8` here. A present `null` is not
+    /// a missing field, so `#[serde(default)]` would not rescue it: the whole
+    /// `RunDefaults` would fail, taking `ProjectState` with it, and `projects()`
+    /// drops an entry it cannot parse — that project's side tab, open tabs,
+    /// expanded folders and selection, gone without a word. The version is
+    /// deliberately not bumped for this, which would cost every project's
+    /// entry rather than one. Absent, an older build simply takes its own
+    /// default, and nothing in the current front end can tell absent from null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_priority: Option<u8>,
     pub live_check: bool,
     pub file_findings: bool,
 }
@@ -166,7 +187,7 @@ impl Default for RunDefaults {
         Self {
             mode: "auto".into(),
             target_branch: None,
-            min_priority: 2,
+            min_priority: None,
             live_check: true,
             file_findings: true,
         }
@@ -468,12 +489,15 @@ impl RunDefaults {
     fn validate(&mut self) {
         one_of(&mut self.mode, &RUN_MODES, "auto");
         forget_if_junk(&mut self.target_branch, MAX_PATH_LEN);
-        // Out of range is dropped to the default rather than clamped: a 9 in
-        // this field is not somebody meaning "the lowest priority", it is a
-        // file that has been edited wrongly, and guessing which way they meant
-        // it is how a run silently takes work nobody wanted taken.
-        if self.min_priority > MAX_PRIORITY {
-            self.min_priority = 2;
+        // Out of range is forgotten rather than clamped: a 9 in this field is
+        // not somebody meaning "the lowest priority", it is a file that has
+        // been edited wrongly, and guessing which way they meant it is how a
+        // run silently takes work nobody wanted taken. Forgotten rather than
+        // replaced with a number of ours, too — with no floor remembered the
+        // dialog falls back to the project's own configured default, which is
+        // a real answer, where a 2 from here would be an invention.
+        if self.min_priority.is_some_and(|floor| floor > MAX_PRIORITY) {
+            self.min_priority = None;
         }
     }
 }
@@ -1196,15 +1220,59 @@ mod tests {
     }
 
     #[test]
-    fn a_priority_outside_bds_scale_goes_back_to_the_default() {
+    fn a_priority_outside_bds_scale_is_forgotten() {
         // Clamping would guess: a 9 here is a wrongly edited file, and reading
         // it as "the lowest priority" makes a run take work nobody wanted taken.
+        // No floor sends the dialog back to the project's own configured one.
         let mut state = ProjectState {
-            run_settings: Some(RunDefaults { min_priority: 9, ..RunDefaults::default() }),
+            run_settings: Some(RunDefaults { min_priority: Some(9), ..RunDefaults::default() }),
             ..ProjectState::default()
         };
         state.validate();
-        assert_eq!(state.run_settings.expect("kept").min_priority, 2);
+        assert_eq!(state.run_settings.expect("kept").min_priority, None);
+    }
+
+    #[test]
+    fn a_run_with_no_floor_is_remembered_as_having_none() {
+        // Every run aimed at a task or an epic writes this shape: a floor only
+        // means something for the queue, so the dialog sends none. Read back as
+        // a number it would open the next queue run on a choice nobody made,
+        // over the top of `[defaults] min_priority` in the project's own config.
+        //
+        // The written shape is asserted as well as the read one, and the key
+        // has to be genuinely absent rather than a null: a build older than
+        // this one reads `u8` here, and a null it cannot parse costs that whole
+        // project entry. See the field's own comment.
+        let state = ProjectState {
+            run_settings: Some(RunDefaults::default()),
+            ..ProjectState::default()
+        };
+        let json = serde_json::to_string(&state).expect("serializes");
+        assert!(!json.contains("minPriority"), "no floor is no key at all: {json}");
+        let back: ProjectState = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back.run_settings.expect("kept").min_priority, None);
+
+        // And the same file read by this build once more, written by hand the
+        // way every file on disk before this change looks.
+        let old: ProjectState = serde_json::from_str(
+            r#"{"runSettings":{"mode":"auto","liveCheck":true,"fileFindings":true}}"#,
+        )
+        .expect("deserializes");
+        assert_eq!(old.run_settings.expect("kept").min_priority, None);
+    }
+
+    #[test]
+    fn a_floor_inside_the_scale_survives_the_round_trip() {
+        // The other half of the pair above: what the queue dialog did choose
+        // has to come back, and come back as the same number.
+        let mut state = ProjectState {
+            run_settings: Some(RunDefaults { min_priority: Some(1), ..RunDefaults::default() }),
+            ..ProjectState::default()
+        };
+        state.validate();
+        let json = serde_json::to_string(&state).expect("serializes");
+        let back: ProjectState = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back.run_settings.expect("kept").min_priority, Some(1));
     }
 
     #[test]

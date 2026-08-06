@@ -356,13 +356,32 @@ const runCount = computed(() => {
   return orderedColumns.value.find((c) => c.status === ADD_TO)?.tasks.length ?? 0
 })
 
-const startTheRun = async (settings) => {
-  const project = activePath.value
-  if (!project || runStarting.value) return
+/* `path` and `chosen`, neither of them `project`, `settings` or `runSettings`:
+   this function is the one place where the dialog's answer and the project's
+   own state meet, and naming a local after something already in scope hid a
+   defect here once. The local `project` used to be the active path — a string —
+   so `project.runSettings = {...}` threw in strict mode, inside the try, and
+   the catch put the exception's text under a dialog that stayed open over a run
+   that had in fact started. The two objects are not interchangeable either:
+   what the dialog hands over is snake_case and carries the scope, what the
+   project remembers is camelCase and deliberately does not. */
+const startTheRun = async (chosen) => {
+  const path = activePath.value
+  if (!path || runStarting.value) return
   runStarting.value = true
   runError.value = ''
   try {
-    await startRun(project, settings)
+    await startRun(path, chosen)
+    /* Answered, so it goes — whether or not any of the rest below applies. */
+    runOpen.value = false
+    /* Moving to another project can start while this is still in its await, on
+       a click in the project list, and this file checks after every await for
+       exactly that (see the comment over onMounted). `project` is the *active*
+       project's state by now, so the three writes below would put this run's
+       branch and this run's tabs under a project it was never aimed at. The run
+       itself is safely started and stays started; what is left here is only the
+       screen, and the screen belongs to somebody else now. */
+    if (activePath.value !== path) return
     /* Remembered for next time, minus the scope — that comes from whichever
        button was pressed.
 
@@ -370,15 +389,14 @@ const startTheRun = async (settings) => {
        is remembered is the queue's floor: writing this run's absence over it
        would drop somebody's choice back to the config default every time they
        ran a single task from a card. */
-    const floor = settings.min_priority ?? project.runSettings?.minPriority
+    const floor = chosen.min_priority ?? project.runSettings?.minPriority
     project.runSettings = {
-      mode: settings.mode,
-      targetBranch: settings.target_branch,
+      mode: chosen.mode,
+      targetBranch: chosen.target_branch,
       ...(floor == null ? {} : { minPriority: floor }),
-      liveCheck: settings.live_check,
-      fileFindings: settings.file_findings
+      liveCheck: chosen.live_check,
+      fileFindings: chosen.file_findings
     }
-    runOpen.value = false
     /* A run is agent sessions, and watching them is the point — the same move
        filing a task and "Ask agent to edit" already make. */
     project.sideTab = 'agents'
