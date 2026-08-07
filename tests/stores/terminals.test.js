@@ -100,18 +100,14 @@ describe('switching project', () => {
 })
 
 describe('agent rows', () => {
-  it('a row assembles the caption, the translated status, the question and the elapsed time', async () => {
+  it('a row assembles the caption, the translated status and the elapsed time', async () => {
     vi.useFakeTimers({ now: new Date('2026-08-03T10:18:00Z') })
     try {
       const { stores } = await ready()
       const [row] = stores.terminals.agentRows.value
       expect(row.label).toBe('Agent')
       expect(row.tasks).toEqual([])
-      // The process name survives, but only for the question block: what asks
-      // is one particular agent, not the job it was handed.
-      expect(row.process).toBe('claude-1')
       expect(row.state).toBe('running')
-      expect(row.question).toBeNull()
       expect(row.elapsed).toBe('18m')
     } finally {
       vi.useRealTimers()
@@ -391,7 +387,6 @@ describe('starting a session', () => {
     const started = stores.terminals.createSession('/p', { kind: 'bare' })
 
     const row = stores.terminals.agentRows.value.at(-1)
-    expect(row.process).toBe('claude')
     expect(row.elapsed).toBe('starting')
     expect(row.starting).toBe(true)
     expect(stores.terminals.terminalState.activeId).toBe(row.id)
@@ -402,7 +397,7 @@ describe('starting a session', () => {
     // The handover: one row, and the selection moves with it rather than being
     // left on a ticket nothing will ever fill.
     expect(stores.terminals.terminalState.starting).toEqual([])
-    expect(stores.terminals.agentRows.value.map((r) => r.process)).toEqual(['claude-1', 'claude-9'])
+    expect(stores.terminals.agentRows.value.map((r) => r.id)).toEqual([1, 9])
     expect(stores.terminals.terminalState.activeId).toBe(9)
   })
 
@@ -499,7 +494,7 @@ describe('starting a session', () => {
     await expect(stores.terminals.createSession('/p')).rejects.toBeTruthy()
 
     expect(stores.terminals.terminalState.starting).toEqual([])
-    expect(stores.terminals.agentRows.value.map((r) => r.process)).toEqual(['claude-1'])
+    expect(stores.terminals.agentRows.value.map((r) => r.id)).toEqual([1])
     expect(stores.terminals.terminalState.activeId).toBe(1)
   })
 
@@ -613,14 +608,6 @@ describe('back-end errors', () => {
       title: 'Could not complete the action',
       description: 'Nothing was created, removed, or sent.'
     })
-  })
-})
-
-describe('answering the question', () => {
-  it('the button sends what the profile named', async () => {
-    const { ipc, stores } = await ready()
-    await stores.terminals.answer(1, { label: 'Yes', send: '1\r' })
-    expect(ipc.calls('terminal_write')).toEqual([{ id: 1, data: '1\r' }])
   })
 })
 

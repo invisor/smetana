@@ -164,23 +164,23 @@ const tabs = [
    check is for, since prose and issue ids are set in different families and a
    row has to hold both without either one wandering. */
 const agentRows = [
-  { id: 1, process: 'claude-1', label: null, tasks: ['smetana-42'], state: 'needs-you', elapsed: '2h 14m' },
+  { id: 1, label: null, tasks: ['smetana-42'], state: 'needs-you', elapsed: '2h 14m' },
   /* A run holding several. Also the longest caption the list can be asked to
      draw, and therefore the one that says whether the elapsed time and the
      remove button still have room. */
-  { id: 2, process: 'claude-2', label: null, tasks: ['smetana-42', 'smetana-9je', 'smetana-hvw'], state: 'running', elapsed: '1h 02m' },
-  { id: 3, process: 'claude-3', label: 'Editing', tasks: ['smetana-8av'], state: 'running', elapsed: '41m' },
-  { id: 4, process: 'claude-4', label: 'Creating a task', tasks: [], state: 'running', elapsed: '3m' },
-  { id: 5, process: 'claude-5', label: 'Project setup', tasks: [], state: 'done', elapsed: '18m' },
+  { id: 2, label: null, tasks: ['smetana-42', 'smetana-9je', 'smetana-hvw'], state: 'running', elapsed: '1h 02m' },
+  { id: 3, label: 'Editing', tasks: ['smetana-8av'], state: 'running', elapsed: '41m' },
+  { id: 4, label: 'Creating a task', tasks: [], state: 'running', elapsed: '3m' },
+  { id: 5, label: 'Project setup', tasks: [], state: 'done', elapsed: '18m' },
   /* A bare agent, and also a run that has not claimed anything yet: the same
      caption, deliberately — it is an agent, and there is no work to name. */
-  { id: 6, process: 'claude-6', label: 'Agent', tasks: [], state: 'ready', elapsed: '2m' },
+  { id: 6, label: 'Agent', tasks: [], state: 'ready', elapsed: '2m' },
   /* An agent the worker has not answered about yet: the word in place of a
      time, and a remove button with nothing to remove. Captioned exactly as it
      will be once the session lands, so the handover moves nothing on screen.
      It lasts about a second in the app, which is exactly why it belongs here —
      the only place it can be looked at for longer than that. */
-  { id: 'start-1', process: 'claude', label: 'Creating a task', tasks: [], state: 'running', elapsed: 'starting', starting: true }
+  { id: 'start-1', label: 'Creating a task', tasks: [], state: 'running', elapsed: 'starting', starting: true }
 ]
 
 /* Two issues in bd's own shape: one that has everything the inspector can

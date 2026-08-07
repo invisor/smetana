@@ -203,35 +203,30 @@ function describeWork(work, sessionId) {
    both before and after it lands, and the row a person is watching does not
    move under them when it becomes real.
 
-   `process` is the one thing a row still carries that names the process rather
-   than the work — `claude-7`. The panel does not draw it; the question block in
-   the right panel does, and there it is the right answer, because what is
-   asking is one particular agent and not the job it was handed. A start has no
-   id yet, so its process is the agent alone: inventing a number here would be
-   the one lie a placeholder must not tell, since the very next thing a person
-   does with a row is match it against a terminal.
+   A row carries what the panel draws and nothing else. It used to carry the
+   process name — `claude-7` — and the pending question too, for the block the
+   right panel drew over the task card; that block is gone, a person answers in
+   the terminal itself, and neither field had another reader. `needs-you` does
+   not depend on either: it comes from the session's own state, so the triangle
+   in AgentList is untouched by their absence.
 
-   The agent named is the configured one, and the worker may start another —
-   `agents::pick` falls back to whatever is installed. It corrects itself the
-   moment the session arrives, which is the same second or so this row exists
-   for at all. What a start says instead of an elapsed time is what it is
-   doing, which is also why it needs no separate state: `running` already draws
-   the live dot, and `starting` in the corner says the rest. */
+   Nothing here names the agent any more, which also means nothing on screen
+   does: `agents::pick` may start something other than the configured agent,
+   and `Session.agent` is the only record of what it picked. A start says what
+   it is doing instead of an elapsed time, which is also why it needs no
+   separate state: `running` already draws the live dot, and `starting` in the
+   corner says the rest. */
 export const agentRows = computed(() => [
   ...terminalState.sessions.map((session) => ({
     id: session.id,
-    process: `${session.agent}-${session.id}`,
     ...describeWork(session.work, session.id),
     state: toUiState(session),
-    question: session.question,
     elapsed: formatElapsed(now.value - Date.parse(session.startedAt))
   })),
   ...visibleStarts().map((ticket) => ({
     id: ticket.id,
-    process: ticket.agent,
     ...describeWork(ticket.work, null),
     state: 'running',
-    question: null,
     elapsed: 'starting',
     starting: true
   }))
@@ -410,7 +405,7 @@ function selected() {
    it is, and that decision lives in Rust, in agents/. The store's job is to
    say what the session is for. */
 export async function createSession(project, intent = { kind: 'bare' }) {
-  const ticket = { id: `start-${(tickets += 1)}`, agent: settings.agent, project, work: workOf(intent) }
+  const ticket = { id: `start-${(tickets += 1)}`, project, work: workOf(intent) }
   terminalState.starting.push(ticket)
   /* Where the selection goes back to if nothing starts. Not "the last session"
      — that is a repair, and this is a person's own place in the panel, which a
@@ -527,12 +522,6 @@ export async function send(id, data) {
   } catch (err) {
     report('write', err)
   }
-}
-
-/* What to send is the profile's knowledge, not the panel's: one CLI wants a
-   digit followed by a newline, another wants arrow keys and Enter. */
-export function answer(id, option) {
-  return send(id, option.send)
 }
 
 export async function resize(id, cols, rows) {

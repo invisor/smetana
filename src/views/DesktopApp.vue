@@ -36,7 +36,6 @@ import { TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import {
   agentRows,
-  answer,
   createSession,
   initTerminals,
   lastHandover,
@@ -745,10 +744,9 @@ const selectFromBoard = (id) => {
   rightFocus.value = null
 }
 
-/* The row the panel is following. The same lookup `askingAgent` makes, and it
-   has to be a lookup rather than a stored row: `agentRows` is rebuilt on every
-   state event, and a row held from the moment it was clicked would keep drawing
-   a session's first second forever. */
+/* The row the panel is following. It has to be a lookup rather than a stored
+   row: `agentRows` is rebuilt on every state event, and a row held from the
+   moment it was clicked would keep drawing a session's first second forever. */
 const selectedAgent = computed(
   () => agentRows.value.find((row) => row.id === terminalState.activeId) ?? null
 )
@@ -824,49 +822,6 @@ const highlightedTask = computed(() => {
 const inspectedIssue = computed(() =>
   highlightedTask.value ? issueById(highlightedTask.value) : null
 )
-
-/* The question is shown for the selected agent, not the selected task: it is
-   the agent that is asking. The task stays whatever it was — the panel just
-   hands the top to whichever is louder. */
-const askingAgent = computed(() =>
-  agentRows.value.find((row) => row.id === terminalState.activeId && row.question)
-)
-
-/* The agent's own default and "the recommended action" are one concept, not
-   two affordances on the same button: composing a `selected` prop with
-   `variant="primary"` made Button pick the generic selected tone over the
-   primary fill, so the button that was both correct and recommended read as
-   quieter than the other two — backwards. Driving `variant` from the default
-   keeps exactly one primary button, positioned on whatever the agent
-   actually highlighted. The fallback to index 0 when `selected` is missing
-   or out of range does not claim that option is the agent's default — it
-   never asserts anything about the agent — it is only the panel's own
-   fallback recommendation, the same one it offered before `selected`
-   existed. Do not reintroduce a separate `selected` binding alongside this:
-   that is the exact composition that broke it. */
-const primaryOptionIndex = computed(() => {
-  const question = askingAgent.value?.question
-  const selected = question?.selected
-  const count = question?.options.length ?? 0
-  return Number.isInteger(selected) && selected >= 0 && selected < count ? selected : 0
-})
-
-/* answer() is a round trip, and the question only clears once the next
-   terminal:state event lands — nothing else stops a second click from
-   writing the same payload again, into whatever now occupies the screen.
-   Tracked by id, not a bare boolean, the same shape as `creating` and
-   `initing` above: the buttons for the in-flight agent disable, and come
-   back on failure too, since the store already reports the error and the
-   human may want to try again. */
-const answeringId = ref(null)
-const submitAnswer = async (id, option) => {
-  answeringId.value = id
-  try {
-    await answer(id, option)
-  } finally {
-    answeringId.value = null
-  }
-}
 
 /* Filing a task is an agent's job, not a write from this window: the point of
    the dialog is to hand the work over with enough context, and only something
@@ -956,9 +911,9 @@ watch(
 )
 
 /* The status write is the panel's only write, and it is tracked in flight for
-   the same reason `creating` and `answeringId` are: a bd call takes about two
-   seconds, and a select left live for those two seconds invites a second choice
-   that races the first. */
+   the same reason `creating` is: a bd call takes about two seconds, and a
+   select left live for those two seconds invites a second choice that races
+   the first. */
 const settingStatus = ref(false)
 const setSelectedStatus = async (status) => {
   settingStatus.value = true
@@ -1351,18 +1306,6 @@ const hatchSwatch = {
   backgroundImage: 'repeating-linear-gradient(135deg,var(--hatch-blocked) 0 1.5px,transparent 1.5px 4px)'
 }
 
-/* Horizontal padding is deliberately left out: inspectorBody already pads the
-   whole column, and adding it again here would indent this block's text and
-   buttons past the left edge everything else in the panel sits on. Only the
-   bottom padding is this block's own — the gap it needs before its rule. */
-const questionBlock = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 'var(--space-4)',
-  paddingBottom: 'var(--panel-pad)',
-  borderBottom: 'var(--border-w) solid var(--border-subtle)'
-}
-
 /* The column of toasts in the corner. When empty it takes up nothing and
    intercepts nothing: with no children its size is zero. */
 const toastStackStyle = {
@@ -1613,30 +1556,6 @@ const toastStackStyle = {
           @toggle="layout.rightCollapsed = !layout.rightCollapsed"
         >
           <div :style="inspectorBody">
-            <div v-if="askingAgent" :style="questionBlock">
-              <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-                <!-- The process, not the work the row is captioned by: what is
-                     asking here is one particular agent, and a person about to
-                     answer it needs to know which terminal to look at. -->
-                {{ askingAgent.process }} asks
-              </span>
-              <div :style="{ font: 'var(--weight-medium) var(--text-sm)/1.4 var(--font-sans)', color: 'var(--text-primary)' }">
-                {{ askingAgent.question.text }}
-              </div>
-              <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }">
-                <Button
-                  v-for="(option, i) in askingAgent.question.options"
-                  :key="option.send"
-                  :variant="i === primaryOptionIndex ? 'primary' : 'secondary'"
-                  :disabled="answeringId === askingAgent.id"
-                  size="sm"
-                  @click="submitAnswer(askingAgent.id, option)"
-                >
-                  {{ option.label }}
-                </Button>
-              </div>
-            </div>
-
             <!-- A task still being filed: the person's own words, read-only,
                  with no issue behind them. Alone in the column — there is no
                  card selected on the board while this is up. -->
