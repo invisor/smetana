@@ -36,6 +36,7 @@ import {
   answer,
   createSession,
   initTerminals,
+  lastHandover,
   loadSessions,
   removeSession,
   terminalState
@@ -576,6 +577,22 @@ onUnmounted(() => stopSetupWatch?.())
    do not survive a restart. */
 const rightFocus = ref(null)
 
+/* The one move of the selection that the rule above must not treat as a loss:
+   the row being watched was a start, the worker has answered for it, and it
+   keeps its place in the panel under a session's id. Without this the draft
+   vanished about a second after a task was filed — which is exactly the second
+   somebody spends looking at the row they just created.
+
+   This is a watcher, and it is deliberately not the watcher on `activeId` that
+   this design refuses. That one cannot tell a handover from a repair, so it
+   would drag the focus onto whatever a project switch or a removed session
+   happened to land on. This one fires on nothing else: `lastHandover` is only
+   ever written when a ticket becomes a session in this panel, which the store
+   is the only party able to recognise. */
+watch(lastHandover, (handover) => {
+  if (handover && rightFocus.value === handover.ticket) rightFocus.value = handover.session
+})
+
 /* Picking an agent's row opens the work behind it in the right column, and
    touches nothing else. In particular it does not bring the terminal tab
    forward any more, and that is the point of the change rather than an
@@ -745,9 +762,15 @@ const focusIsLive = computed(
 )
 
 /* The draft, when one is being drawn. Also guarded on the agent still *being* a
-   filing one, which is what makes the placeholder-to-session handover invisible
-   here: both carry the same `work`, so the row changing identity underneath
-   changes nothing on screen. */
+   filing one, so a focus that somehow outlived its agent draws nothing rather
+   than throwing.
+
+   The placeholder-to-session handover is invisible here, and it takes both
+   halves to be: the words survive because the ticket and the session carry the
+   same `work` (that is what putting the draft in `SessionWork` bought), and the
+   focus survives because the watcher above moves it onto the session's id. The
+   `work` half alone is not enough — the id comparison in `focusIsLive` would
+   have dropped the row a moment before the identical draft arrived. */
 const agentDraft = computed(() =>
   focusIsLive.value && selectedAgent.value?.work?.kind === 'newTask'
     ? selectedAgent.value.work
@@ -857,7 +880,23 @@ const submitNewTask = async ({ brainstorm, ...draft }) => {
   project.sideTab = 'agents'
   project.activeTab = 'terminal'
   try {
-    await createSession(path, { kind: 'newTask', brainstorm, draft })
+    const started = createSession(path, { kind: 'newTask', brainstorm, draft })
+    /* Filing a task opens its draft on the right, the same as picking the row
+       would: it is the same selection arriving by another route, and the action
+       giving two different answers depending on what the column happened to be
+       showing was the inconsistency this closes.
+
+       Read before the await, not after, and that is the whole reason this is
+       not one line further down. `createSession` picks its start's row
+       synchronously — "the row is there and picked before the worker has
+       answered", pinned by that name in tests/stores/terminals.test.js — so
+       `activeId` is already the ticket, and the draft goes up the moment the
+       dialog closes. Waiting for the session would leave the column on the
+       board for the second the agent takes to come up, showing somebody the
+       board they had just stopped looking at. The handover watcher carries the
+       focus onto the session's own id when it lands. */
+    rightFocus.value = terminalState.activeId
+    await started
     closeNewTask()
   } catch {
     // already reported by the store; the dialog stays open with the text and

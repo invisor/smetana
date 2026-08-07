@@ -436,6 +436,45 @@ describe('starting a session', () => {
     })
   })
 
+  /* A ticket becoming a session is the one move of `activeId` that is a
+     continuation rather than a repair, and nothing outside this store can tell
+     the two apart afterwards — the ticket is gone from `starting` by then.
+     Anything following the selection (the right column's focus, in
+     DesktopApp.vue) would otherwise treat the handover as a loss and let go of
+     the row a person is still looking at, a second after they filed a task. */
+  it('a start becoming a session is announced, ticket and session together', async () => {
+    const { ipc, stores } = await ready()
+    expect(stores.terminals.lastHandover.value).toBeNull()
+
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+    const started = stores.terminals.createSession('/p', { kind: 'bare' })
+    const ticket = stores.terminals.terminalState.activeId
+
+    // Nothing yet: the worker has not answered, and there is no session to
+    // hand over to.
+    expect(stores.terminals.lastHandover.value).toBeNull()
+
+    answer(session({ id: 9 }))
+    await started
+
+    expect(stores.terminals.lastHandover.value).toEqual({ ticket, session: 9 })
+    expect(stores.terminals.terminalState.activeId).toBe(9)
+  })
+
+  /* The other half: a start whose project was switched away from under it
+     handed nothing over *here*. Saying it did would point a follower at a row
+     that is not in this panel — the same reason `createSession` sends the
+     selection back to `before` rather than to the session in this case. */
+  it('a start that landed in another project hands nothing over', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', session({ id: 9, project: '/elsewhere' }))
+
+    await stores.terminals.createSession('/p', { kind: 'bare' })
+
+    expect(stores.terminals.lastHandover.value).toBeNull()
+  })
+
   /* Picking another agent while one is starting is a person saying what they
      want to look at, and an answer arriving afterwards does not overrule it. */
   it('a start that lands late does not steal a selection somebody has moved', async () => {

@@ -29,6 +29,26 @@ export const terminalState = reactive({
   lastError: null
 })
 
+/* The last start the worker answered for: `{ ticket, session }`, or null until
+   one lands.
+
+   This exists because one move of `activeId` is a *continuation* and every
+   other is a repair, and from outside this file they are indistinguishable. A
+   ticket becoming a session keeps its place in the panel and changes only its
+   id; a project switch or a removed session moves the selection to a different
+   row altogether. Both look like "activeId is not what it was", and the ticket
+   is gone from `starting` by the time anyone could ask. So anything holding an
+   id from before the swap — the right column's focus, in `DesktopApp.vue` —
+   would have to treat a handover as a loss and let go of a row the person is
+   still looking at. The store is the only party that knows which happened, so
+   it says so, and says nothing about what should be done with it: what follows
+   a selection is the view's business.
+
+   One slot rather than a log: `activeId` names one row, so only the most recent
+   handover can still be somebody's place in the panel, and keeping the rest
+   would be a map that only ever grows. */
+export const lastHandover = ref(null)
+
 /* Whether an id names a start rather than a session. Ticket ids are strings and
    the worker's are numbers, so the two can never be confused for one another —
    which is what lets `activeId` carry either without anything having to ask
@@ -408,6 +428,14 @@ export async function createSession(project, intent = { kind: 'bare' }) {
        selection at a row that is not in the panel would black the terminal out
        with no way back to it. */
     if (terminalState.activeId === ticket.id) terminalState.activeId = kept ? session.id : before
+    /* Announced after the move, so anything reading both sees a consistent
+       pair, and only when the session is actually in this panel: a start whose
+       project was switched away from under it handed nothing over here, and
+       saying it did would point a follower at a row that is not on screen.
+       Announced whether or not the selection was on the ticket, because it is
+       a fact about the panel rather than about the selection — who cares is
+       for the reader to decide. */
+    if (kept) lastHandover.value = { ticket: ticket.id, session: session.id }
     terminalState.lastError = null
     return session
   } catch (err) {
