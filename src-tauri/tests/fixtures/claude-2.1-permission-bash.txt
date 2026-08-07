@@ -1,0 +1,30 @@
+│                Welcome back, friend!               │ Ask Claude to create a new app or clone a repository            │
+│                                                    │ ─────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                      │
+│                      ▝▜█████▛▘                     │ Added self-hosted environments: `claude self-hosted-runner` tu… │
+│                        ▘▘ ▝▝                       │ Added `archive` plugin source: install plugins from a zip over… │
+│      Opus · Claude Max · person@example.com's      │ Added a cancel-and-confirm step when removing an unavailable p… │
+│      Organization                                  │ /release-notes for more                                         │
+│               /…/tmp/example/project               │                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ Run the shell command: sw_vers -productVersion
+
+  Running 1 shell command…
+  ⎿  $ sw_vers -productVersion
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   sw_vers -productVersion
+   Get macOS product version
+
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don’t ask again for: sw_vers *
+   3. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
