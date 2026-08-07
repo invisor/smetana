@@ -122,15 +122,25 @@ pub enum Intent {
 }
 
 impl Intent {
-    /// What this reduces to for the agents panel. It lives here rather than in
-    /// `terminal::model` because it is knowledge about `Intent` — which of its
-    /// payload is a caption and which is only a briefing for the agent — and
-    /// the answer moves whenever a variant does.
+    /// What this reduces to for the two panels that draw a session. It lives
+    /// here rather than in `terminal::model` because it is knowledge about
+    /// `Intent` — which of its payload is drawn and which is only a briefing
+    /// for the agent — and the answer moves whenever a variant does.
+    ///
+    /// A draft's three fields come along and its `images` do not: the right
+    /// panel draws the prose, the type and the priority, and the paths of the
+    /// attachments are for the agent to open and to copy into the issue. So is
+    /// `brainstorm`, which is an instruction about how to work rather than
+    /// anything about the task.
     pub fn work(&self) -> crate::terminal::model::SessionWork {
         use crate::terminal::model::SessionWork as W;
         match self {
             Intent::Bare => W::Bare,
-            Intent::NewTask { .. } => W::NewTask,
+            Intent::NewTask { draft, .. } => W::NewTask {
+                text: draft.text.clone(),
+                issue_type: draft.issue_type.clone(),
+                priority: draft.priority,
+            },
             Intent::EditTask { id, .. } => W::EditTask { id: id.clone() },
             Intent::Setup => W::Setup,
             Intent::Run { .. } => W::Run,
@@ -381,6 +391,49 @@ mod tests {
             Intent::EditTask { id: "smetana-42".into(), title: "Some title".into() }.work(),
             W::EditTask { id: "smetana-42".into() },
             "the id is kept and the title is not — the row draws an identifier"
+        );
+    }
+
+    #[test]
+    fn a_filing_intent_carries_its_draft_across_and_leaves_the_briefing_behind() {
+        use crate::terminal::model::SessionWork as W;
+        let intent = Intent::NewTask {
+            brainstorm: Brainstorm::On,
+            draft: TaskDraft {
+                text: "The log drops lines above 10k".into(),
+                issue_type: Some("bug".into()),
+                priority: Some(1),
+                images: vec!["/data/attachments/20260806-121314-mock.png".into()],
+            },
+        };
+        // The prose, the type and the priority are what the right panel draws
+        // back. The images and the brainstorming switch are the agent's
+        // briefing and stop here — nothing on screen would show them.
+        assert_eq!(
+            intent.work(),
+            W::NewTask {
+                text: "The log drops lines above 10k".into(),
+                issue_type: Some("bug".into()),
+                priority: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn a_filing_intent_left_on_auto_carries_the_absence_rather_than_a_value() {
+        use crate::terminal::model::SessionWork as W;
+        let intent = Intent::NewTask {
+            brainstorm: Brainstorm::Auto,
+            draft: TaskDraft {
+                text: "Something".into(),
+                issue_type: None,
+                priority: None,
+                images: vec![],
+            },
+        };
+        assert_eq!(
+            intent.work(),
+            W::NewTask { text: "Something".into(), issue_type: None, priority: None }
         );
     }
 

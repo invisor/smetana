@@ -37,20 +37,48 @@ pub struct Question {
     pub selected: Option<usize>,
 }
 
-/// What a session was started to do, in as much detail as a row in the agents
-/// panel needs to name the work rather than the process.
+/// What a session was started to do, in as much detail as the two places that
+/// draw it need: the row in the agents panel, which names the work rather than
+/// the process, and the panel on the right, which opens that work when the row
+/// is picked.
 ///
 /// One variant per `Intent`, and deliberately not the `Intent` itself: that
-/// carries the whole of what a person typed, the paths of the images they
-/// attached and a run's entire settings. None of it is a caption, and what
-/// crosses the boundary here is only what gets drawn.
+/// carries the paths of the images a person attached and a run's entire
+/// settings, and neither is ever drawn. **What crosses the boundary here is
+/// what gets drawn, and nothing else.**
+///
+/// That rule is why `NewTask` carries the person's own prose, which it did not
+/// before. A filed task becomes a card and the card is what the right panel
+/// opens; a task still being filed has no card and no id — the agent has not
+/// run `bd create` yet, and when it does, the issue arrives through the watcher
+/// with nothing tying it back to this session. So the draft the dialog
+/// collected is the only thing there is to show for a filing agent, and this is
+/// the only copy of it on the front end. It rides here rather than in a map
+/// beside the start ticket because a start becomes a session about a second
+/// later: carried here it survives that handover for free, and the placeholder
+/// row and the session's own row draw the same words.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SessionWork {
     Bare,
-    NewTask,
+    /// The draft the new-task dialog collected, read back read-only. Not an
+    /// issue: it has no status, nothing deletes it, and nothing edits it here.
+    ///
+    /// The `rename_all` on the enum above renames the *variants*; a struct
+    /// variant's fields need their own, which is what this one is for. The
+    /// front end reads `text`, `issueType` and `priority`.
+    #[serde(rename_all = "camelCase")]
+    NewTask {
+        text: String,
+        /// `None` is the dialog's Auto, the same invariant `TaskDraft` holds:
+        /// Auto travels as absence and never as the word, so the panel draws it
+        /// as Auto rather than inventing a type bd would reject.
+        issue_type: Option<String>,
+        priority: Option<u8>,
+    },
     /// The issue being edited, by id rather than by title: the panel draws it
-    /// as an identifier, and a title would not fit a row anyway.
+    /// as an identifier, and a title would not fit a row anyway. The right
+    /// panel looks the issue itself up by this id.
     EditTask { id: String },
     Setup,
     /// One batch of a run. Which issues it has taken is not known here and
@@ -169,10 +197,35 @@ mod tests {
         let json = serde_json::to_string(&SessionWork::EditTask { id: "smetana-42".into() })
             .expect("serializes");
         assert_eq!(json, r#"{"kind":"editTask","id":"smetana-42"}"#);
+    }
+
+    #[test]
+    fn a_draft_reaches_the_front_end_camel_cased_and_whole() {
+        // `issueType`, not `issue_type`: the enum's own `rename_all` renames
+        // variants only, so the variant carries a second one for its fields.
+        // Drop that attribute and the right panel silently draws Auto over a
+        // type the person did choose.
+        let json = serde_json::to_string(&SessionWork::NewTask {
+            text: "The log drops lines above 10k".into(),
+            issue_type: Some("bug".into()),
+            priority: Some(1),
+        })
+        .expect("serializes");
         assert_eq!(
-            serde_json::to_string(&SessionWork::NewTask).expect("serializes"),
-            r#"{"kind":"newTask"}"#
+            json,
+            r#"{"kind":"newTask","text":"The log drops lines above 10k","issueType":"bug","priority":1}"#
         );
+    }
+
+    #[test]
+    fn a_draft_left_on_auto_reaches_the_front_end_as_null() {
+        // Auto is absence on this side of the boundary too, and the panel draws
+        // the word from the absence. A default substituted anywhere along the
+        // way would have the panel claim a choice nobody made.
+        let json =
+            serde_json::to_string(&SessionWork::NewTask { text: "x".into(), issue_type: None, priority: None })
+                .expect("serializes");
+        assert_eq!(json, r#"{"kind":"newTask","text":"x","issueType":null,"priority":null}"#);
     }
 
     #[test]

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { TYPES, normalizeType, typeColors, typeGlyph, typeLabel } from '../../../src/components/kanban/issueType.js'
+import {
+  TYPES,
+  normalizeType,
+  priorityLabel,
+  typeColors,
+  typeGlyph,
+  typeLabel
+} from '../../../src/components/kanban/issueType.js'
 
 describe('the type vocabulary', () => {
   it('covers everything bd creates', () => {
@@ -45,5 +52,25 @@ describe('colour and glyph', () => {
       expect(c.fg).toMatch(/^var\(--type-[a-z]+-fg\)$/)
       expect(c.bg).toMatch(/^var\(--type-[a-z]+-bg\)$/)
     }
+  })
+})
+
+/* One copy of how a priority is written, because it was two: the task
+   inspector and the draft panel beside it, with a comment on the second asking
+   whoever came next to keep them matching. */
+describe('how a priority is written', () => {
+  it('is P and the number, never a bare number', () => {
+    expect(priorityLabel(0)).toBe('P0')
+    expect(priorityLabel(4)).toBe('P4')
+  })
+
+  /* Both callers need the absence back rather than a word, and they answer it
+     differently: the inspector drops the row, the draft panel says Auto. A
+     placeholder decided here would take that choice away from them — and P0 is
+     a real priority, so a falsy check would swallow the highest one there is. */
+  it('no priority comes back as nothing at all, and P0 survives', () => {
+    expect(priorityLabel(null)).toBeNull()
+    expect(priorityLabel(undefined)).toBeNull()
+    expect(priorityLabel(0)).not.toBeNull()
   })
 })

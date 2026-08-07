@@ -180,6 +180,118 @@ describe('agent rows', () => {
   })
 })
 
+/* The right-hand column follows the selected agent, and everything it needs to
+   draw that agent's work rides on the row: the panel has no second channel to
+   the worker, and half the rows are starts with no session behind them at all.
+   `claimed` is separate from the caption's `tasks` on purpose — an edit's
+   `tasks` is the issue it is editing, which is not a claim. */
+describe('what a row says about the work behind it', () => {
+  it('the work rides whole, and only a run carries claims', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 3, work: { kind: 'editTask', id: 'smetana-42' } }))
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.map((r) => [r.work?.kind, r.claimed])).toEqual([
+      ['bare', []],
+      ['editTask', []]
+    ])
+    expect(stores.terminals.agentRows.value.at(-1).work).toEqual({
+      kind: 'editTask',
+      id: 'smetana-42'
+    })
+  })
+
+  it("a run's claims are on the row as well as in its caption", async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
+    stores.runs.runsState.project = '/p'
+    stores.runs.runsState.run = { project: '/p', session: 7, state: { kind: 'working' } }
+    stores.tracker.trackerState.issues.set('smetana-9', { id: 'smetana-9', status: 'in_progress' })
+    await nextTick()
+
+    // One list, read twice: the caption and the panel on the right cannot
+    // disagree about what a run has taken.
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      claimed: ['smetana-9'],
+      tasks: ['smetana-9']
+    })
+  })
+
+  /* The whole reason the draft rides in `SessionWork` rather than in a map
+     beside the start ticket: a start becomes a session about a second later,
+     and the panel must not go blank across the handover. */
+  it('a filing agent carries its draft, before and after the worker answers', async () => {
+    const { ipc, stores } = await ready()
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+
+    const started = stores.terminals.createSession('/p', {
+      kind: 'newTask',
+      brainstorm: 'off',
+      draft: {
+        text: 'The log drops lines above 10k',
+        issue_type: 'bug',
+        priority: 1,
+        images: ['/data/attachments/20260806-121314-mock.png']
+      }
+    })
+
+    // The placeholder. `issue_type` is what the dialog and bd call the field;
+    // `issueType` is what comes back over the wire, and the row has to speak
+    // the wire's language or the panel would read Auto over a chosen type for
+    // the second the start lasts. The attached image does not come along — it
+    // is the agent's briefing, and nothing draws it.
+    expect(stores.terminals.agentRows.value.at(-1).work).toEqual({
+      kind: 'newTask',
+      text: 'The log drops lines above 10k',
+      issueType: 'bug',
+      priority: 1
+    })
+
+    answer(
+      session({
+        id: 9,
+        work: {
+          kind: 'newTask',
+          text: 'The log drops lines above 10k',
+          issueType: 'bug',
+          priority: 1
+        }
+      })
+    )
+    await started
+
+    expect(stores.terminals.agentRows.value.at(-1).work).toEqual({
+      kind: 'newTask',
+      text: 'The log drops lines above 10k',
+      issueType: 'bug',
+      priority: 1
+    })
+  })
+
+  /* Auto travels as absence, never as the word — the same invariant TaskDraft
+     and prompt.rs hold on the Rust side. A placeholder that substituted a
+     default here would have the draft panel claim a choice nobody made for the
+     one second before the session lands. */
+  it('a draft left on Auto reaches the row as null', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    stores.terminals.createSession('/p', {
+      kind: 'newTask',
+      brainstorm: 'auto',
+      draft: { text: 'Something', issue_type: null, priority: null, images: [] }
+    })
+
+    expect(stores.terminals.agentRows.value.at(-1).work).toEqual({
+      kind: 'newTask',
+      text: 'Something',
+      issueType: null,
+      priority: null
+    })
+  })
+})
+
 describe('the output stream', () => {
   it('attaching hands the ring snapshot to the subscriber', async () => {
     const { stores } = await ready()
@@ -322,6 +434,45 @@ describe('starting a session', () => {
       label: 'Editing',
       tasks: ['smetana-42']
     })
+  })
+
+  /* A ticket becoming a session is the one move of `activeId` that is a
+     continuation rather than a repair, and nothing outside this store can tell
+     the two apart afterwards — the ticket is gone from `starting` by then.
+     Anything following the selection (the right column's focus, in
+     DesktopApp.vue) would otherwise treat the handover as a loss and let go of
+     the row a person is still looking at, a second after they filed a task. */
+  it('a start becoming a session is announced, ticket and session together', async () => {
+    const { ipc, stores } = await ready()
+    expect(stores.terminals.lastHandover.value).toBeNull()
+
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+    const started = stores.terminals.createSession('/p', { kind: 'bare' })
+    const ticket = stores.terminals.terminalState.activeId
+
+    // Nothing yet: the worker has not answered, and there is no session to
+    // hand over to.
+    expect(stores.terminals.lastHandover.value).toBeNull()
+
+    answer(session({ id: 9 }))
+    await started
+
+    expect(stores.terminals.lastHandover.value).toEqual({ ticket, session: 9 })
+    expect(stores.terminals.terminalState.activeId).toBe(9)
+  })
+
+  /* The other half: a start whose project was switched away from under it
+     handed nothing over *here*. Saying it did would point a follower at a row
+     that is not in this panel — the same reason `createSession` sends the
+     selection back to `before` rather than to the session in this case. */
+  it('a start that landed in another project hands nothing over', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', session({ id: 9, project: '/elsewhere' }))
+
+    await stores.terminals.createSession('/p', { kind: 'bare' })
+
+    expect(stores.terminals.lastHandover.value).toBeNull()
   })
 
   /* Picking another agent while one is starting is a person saying what they

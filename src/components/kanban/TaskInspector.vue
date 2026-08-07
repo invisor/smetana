@@ -12,6 +12,7 @@ import Dropdown from '../core/Dropdown.vue'
 import Modal from '../overlays/Modal.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import TypeBadge from './TypeBadge.vue'
+import { priorityLabel } from './issueType.js'
 
 const props = defineProps({
   /* The issue in bd's own shape, straight out of the tracker store. */
@@ -81,7 +82,9 @@ const rows = computed(() => {
   const issue = props.issue
   const entries = [
     /* Type is not here: it is a badge in the header, beside the status. */
-    ['Priority', issue.priority === null || issue.priority === undefined ? null : `P${issue.priority}`, false],
+    /* null when there is none, which the filter below drops: this panel shows
+       only the rows an issue actually has. */
+    ['Priority', priorityLabel(issue.priority), false],
     ['Owner', issue.owner, true],
     ['Labels', issue.labels?.length ? issue.labels.join(', ') : null, false],
     ['Parent', issue.parent, true],

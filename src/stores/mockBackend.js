@@ -256,8 +256,37 @@ export function installMockBackend() {
     }
     if (command === 'terminal_list') {
       return [
+        /* The filing agent comes first deliberately: `loadSessions` repairs an
+           empty selection to the *last* session in this list, and the one worth
+           landing on is the one with a question attached — it is the only way
+           the question block can be seen with no worker behind it. Picking this
+           row is what shows the draft panel. */
         {
           id: 1,
+          agent: 'claude',
+          cwd: MOCK_PROJECTS[0],
+          project: payload?.project ?? MOCK_PROJECTS[0],
+          state: 'running',
+          question: null,
+          startedAt: new Date(Date.now() - 4 * 60000).toISOString(),
+          exitCode: null,
+          /* The draft rides in the session — see `SessionWork` in
+             `src-tauri/src/terminal/model.rs`. There is no issue behind it and
+             nothing else on the front end holds these words, so without this
+             the right-hand draft panel would be unreachable in a browser.
+             Priority is set and the type is left on Auto, so both halves of
+             that pair can be seen at once. */
+          work: {
+            kind: 'newTask',
+            text:
+              'The log view drops lines once it is past about ten thousand of ' +
+              'them, and nothing says so — it just stops scrolling back.',
+            issueType: null,
+            priority: 1
+          }
+        },
+        {
+          id: 2,
           agent: 'claude',
           cwd: MOCK_PROJECTS[0],
           project: payload?.project ?? MOCK_PROJECTS[0],
@@ -277,8 +306,13 @@ export function installMockBackend() {
              honest answer for a session whose work is unknown and a useless
              one for the only session a browser has. An edit is the case worth
              showing: it is the one caption with both halves in it, prose and
-             an issue id, set in different families. */
-          work: { kind: 'editTask', id: 'smetana-42' }
+             an issue id, set in different families.
+
+             The id is one of the fixture board's own, not an invented one:
+             picking this row opens that issue in the right column and
+             highlights its card, and an id no column holds would leave both
+             empty with nothing to say why. */
+          work: { kind: 'editTask', id: 'bd-3c9d' }
         }
       ]
     }
