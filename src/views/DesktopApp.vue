@@ -39,6 +39,7 @@ import {
   createSession,
   initTerminals,
   lastHandover,
+  lastRunStart,
   loadSessions,
   removeSession,
   terminalState
@@ -633,6 +634,27 @@ function selectAgent(id) {
     rightFocus.value = id
   }
 }
+
+/* The one start this window does not make: a run asks the terminal worker
+   itself, so nothing here calls `createSession` and there is no ticket to
+   follow — the store recognises the arrival and moves the selection (see
+   stores/terminals.js), and what is left is the half every other start does for
+   itself, which is to bring the agent forward. Routed through `selectAgent` for
+   exactly that reason: picking a row and a run handing over to its next batch
+   should land a person in the same place, and two copies of "what follows a
+   selection" would be two answers to that within a week.
+
+   Every batch, not only the first: a run is a sequence of sessions and the one
+   before has exited by the time the next starts, so staying put would leave
+   somebody watching a dead terminal for the rest of the run. `startTheRun` sets
+   the same two fields a second earlier for the same reason, and setting them
+   again when the session actually lands costs nothing — before that there is no
+   agent to select. */
+watch(lastRunStart, (id) => {
+  if (id == null) return
+  project.sideTab = 'agents'
+  selectAgent(id)
+})
 
 /* The tree and the tabs open together with the project. By this point settings
    have already read the active project — App.vue awaits loadSettings before it

@@ -71,6 +71,77 @@ describe('the session list', () => {
   })
 })
 
+/* A run's sessions are not started from this window: the run worker asks the
+   terminal worker directly, and the only thing the front end ever sees is a
+   state event. Without this the row appeared in the panel unselected, the
+   terminal kept showing whichever agent was there before — often a finished one,
+   or nothing at all — and the person watching a run had to click every batch
+   back into view. */
+describe('a session a run started', () => {
+  it('is selected as soon as it arrives, and says so', async () => {
+    const { stores, emit, nextTick } = await ready()
+    expect(stores.terminals.lastRunStart.value).toBeNull()
+
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.activeId).toBe(7)
+    expect(stores.terminals.lastRunStart.value).toBe(7)
+  })
+
+  /* Every batch of a run is a session of its own, and the one before it has
+     exited by the time the next starts: staying on the first would leave a
+     person watching a dead terminal for the rest of the run. */
+  it('the next batch takes the selection from the one that finished', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
+    await emit('terminal:state', session({ id: 8, work: { kind: 'run' } }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.activeId).toBe(8)
+    expect(stores.terminals.lastRunStart.value).toBe(8)
+  })
+
+  /* Only the arrival moves anything. A run's session goes on emitting state
+     for as long as it lives — every question, every exit — and re-selecting it
+     on each one would drag a person back off whatever row they had picked. */
+  it('a later state event about it does not take the selection back', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
+    stores.terminals.terminalState.activeId = 1
+
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' }, state: 'needs-you' }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+  })
+
+  /* The same rule the list itself applies: a session belonging somewhere else
+     is not in this panel, and pointing the selection at a row nobody can see
+     would black the terminal out with no way back to it. */
+  it("another project's run does not move the selection", async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 7, project: '/other', work: { kind: 'run' } }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+    expect(stores.terminals.lastRunStart.value).toBeNull()
+  })
+
+  /* Sessions this window started are `createSession`'s business, and it has
+     rules of its own — a person who picked another agent mid-start keeps their
+     place. The worker announces those sessions by event too, and following the
+     event here would overrule that. */
+  it('a session that is not a run is left to the start that asked for it', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, work: { kind: 'newTask' } }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+    expect(stores.terminals.lastRunStart.value).toBeNull()
+  })
+})
+
 describe('switching project', () => {
   it('a stale answer from the old project does not survive the switch', async () => {
     const { ipc, stores } = await loadStores()

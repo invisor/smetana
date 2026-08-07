@@ -49,6 +49,25 @@ export const terminalState = reactive({
    would be a map that only ever grows. */
 export const lastHandover = ref(null)
 
+/* The id of the newest session a run started in this panel, or null until one
+   arrives.
+
+   A run's sessions are the one kind this window does not ask for: the run
+   worker sends `TerminalRequest::Create` to the terminal worker itself
+   (`src-tauri/src/runs/service.rs`), so there is no ticket, no handover and no
+   caller — the whole of what the front end ever sees is a state event about a
+   session that was not there a moment ago. Selection has to follow it here or
+   nowhere, and "nowhere" is what it was: the row appeared unselected while the
+   terminal went on showing whichever agent was there before, which after the
+   first batch is one that has already exited.
+
+   Announced as well as followed, for the reason `lastHandover` is: what the
+   selection moving *means* for the rest of the screen — which centre tab is in
+   front, which side panel — is the view's business, and this is the only party
+   that can tell a run's own start from any other state event. One slot, same as
+   above: only the most recent can still be somebody's place in the panel. */
+export const lastRunStart = ref(null)
+
 /* Whether an id names a start rather than a session. Ticket ids are strings and
    the worker's are numbers, so the two can never be confused for one another —
    which is what lets `activeId` carry either without anything having to ask
@@ -320,7 +339,26 @@ function upsert(session) {
 
 export async function initTerminals() {
   startClock()
-  await listen('terminal:state', (event) => upsert(event.payload))
+  await listen('terminal:state', (event) => {
+    const session = event.payload
+    /* Asked before the upsert, because the upsert is what makes it false: a
+       session nobody has seen before is a start, anything else is one of the
+       many state events a live session goes on emitting — a question, an exit —
+       and following those would drag a person off whatever row they had picked
+       every time the agent they are not watching moved.
+       `upsert`'s own answer is the other half: a run belonging to another
+       project is not in this panel, and selecting a row nobody can see would
+       black the terminal out with no way back to it. */
+    const arrived = !terminalState.sessions.some((s) => s.id === session.id)
+    if (!upsert(session)) return
+    /* Only a run's. Everything else with a start behind it is `createSession`'s
+       to place, and it has a rule this cannot see — a person who picked another
+       agent while one was starting keeps their place. */
+    if (arrived && session.work?.kind === 'run') {
+      terminalState.activeId = session.id
+      lastRunStart.value = session.id
+    }
+  })
   await listen('terminal:output', (event) => {
     const { id, seq: next, data } = event.payload
     if (id !== terminalState.activeId) return
