@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
+import Tooltip from '../core/Tooltip.vue'
 
 const GIT = {
   modified: { c: 'var(--git-modified)', l: 'M' },
@@ -89,10 +90,10 @@ const onDoubleClick = () => {
       title="Locked by an agent"
       :style="{ color: 'var(--status-blocked-fg)' }"
     />
-    <span
-      v-if="g && g.l"
-      :title="git"
-      :style="{ color: g.c, width: '9px', textAlign: 'center', fontWeight: 'var(--weight-semibold)' }"
-    >{{ g.l }}</span>
+    <Tooltip v-if="g && g.l" :label="git">
+      <span
+        :style="{ color: g.c, width: '9px', textAlign: 'center', fontWeight: 'var(--weight-semibold)' }"
+      >{{ g.l }}</span>
+    </Tooltip>
   </div>
 </template>

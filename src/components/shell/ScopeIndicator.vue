@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import Tooltip from '../core/Tooltip.vue'
 
 /* The scope bar answers "where am I working" before anything else on screen:
    repo / worktree @ branch, then the two live counters. */
@@ -62,12 +63,16 @@ const badgeStyle = {
     </span>
     <span v-if="branch && worktree" :style="{ color: 'var(--text-muted)' }">@{{ branch }}</span>
 
-    <span v-if="dirtyCount > 0" :title="`${dirtyCount} uncommitted files`" :style="counter('var(--git-modified)')">
-      <Icon name="file-pen" :size="12" />{{ dirtyCount }}
-    </span>
-    <span v-if="agentsActive > 0" :title="`${agentsActive} agents running`" :style="counter('var(--attn-live)')">
-      <Icon name="bot" :size="12" />{{ agentsActive }}
-    </span>
+    <Tooltip v-if="dirtyCount > 0" :label="`${dirtyCount} uncommitted files`">
+      <span :style="counter('var(--git-modified)')">
+        <Icon name="file-pen" :size="12" />{{ dirtyCount }}
+      </span>
+    </Tooltip>
+    <Tooltip v-if="agentsActive > 0" :label="`${agentsActive} agents running`">
+      <span :style="counter('var(--attn-live)')">
+        <Icon name="bot" :size="12" />{{ agentsActive }}
+      </span>
+    </Tooltip>
 
     <!-- Whatever else belongs to the scope right now — today the run. Beside
          the counters rather than out at the right, because it is about this

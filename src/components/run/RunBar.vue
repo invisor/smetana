@@ -9,7 +9,6 @@
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
-import Tooltip from '../core/Tooltip.vue'
 
 const props = defineProps({
   /* The whole Run from the worker, or null when nothing has been started. */
@@ -143,14 +142,19 @@ const detailStyle = {
     <Icon :name="glyph" :size="11" />
     <span :style="{ whiteSpace: 'nowrap' }">{{ label }}</span>
     <span v-if="detail && !reason.bare" :style="detailStyle">{{ detail }}</span>
-    <Tooltip v-if="!over" :label="run.stopping ? 'Stopping after this batch' : 'Stop after this batch'" title="">
-      <IconButton
-        icon="square"
-        label="Stop the run"
-        size="sm"
-        :disabled="busy || run.stopping"
-        @click="$emit('stop')"
-      />
-    </Tooltip>
+    <!-- The label says what stopping actually does rather than "Stop the run":
+         the wrapper `Tooltip` that used to say it is gone, since `IconButton`
+         draws its own now and two would draw two panels. It is the accessible
+         name as well as the hint, and both are better for the precision — the
+         button does not stop the run where it stands, it stops it after the
+         batch in flight. -->
+    <IconButton
+      v-if="!over"
+      icon="square"
+      :label="run.stopping ? 'Stopping after this batch' : 'Stop after this batch'"
+      size="sm"
+      :disabled="busy || run.stopping"
+      @click="$emit('stop')"
+    />
   </div>
 </template>
