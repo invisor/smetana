@@ -179,6 +179,35 @@ const divider = {
   height: 'var(--border-w)',
   background: 'var(--border-subtle)'
 }
+
+/* The controls sit under the record, and stay on screen while it is scrolled.
+   A real issue's description runs well past the height of this panel, and a
+   control below it is one a person has to go looking for — including Delete,
+   which is the last thing that should be hard to find or, worse, arrived at by
+   accident at the end of a long scroll.
+
+   Sticky rather than Panel's own footer slot: the bar belongs to the issue, not
+   to the column. It is enabled and disabled with the issue, and the same panel
+   also shows a draft and a run's claimed list, neither of which has these
+   controls — a footer on the panel would have to be switched on and off from
+   the view, which is where this component's business would start leaking.
+
+   The negative inline margin is ClaimedTasks' move and for the same reason: the
+   bar has to reach the panel's own edges, or the description would scroll past
+   it through a gutter on either side. Where there is nothing to scroll — the
+   gallery, a short issue — a sticky box simply sits where it falls in the flow,
+   so this costs nothing there. */
+const footer = {
+  position: 'sticky',
+  bottom: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-4)',
+  margin: '0 calc(-1 * var(--panel-pad))',
+  padding: 'var(--space-5) var(--panel-pad) var(--panel-pad)',
+  background: 'var(--surface)',
+  borderTop: 'var(--border-w) solid var(--border-subtle)'
+}
 </script>
 
 <template>
@@ -197,35 +226,10 @@ const divider = {
 
     <div v-if="issue.description" :style="descriptionStyle">{{ issue.description }}</div>
 
-    <!-- A Dropdown rather than a Select, and here that is load-bearing rather
-         than cosmetic: this panel is inside Panel's scroll container, and a
-         list drawn in the flow would be clipped by it. Dropdown's panel leaves
-         the document, which is the same move the delete dialog below makes and
-         for the same reason. -->
-    <Dropdown
-      :model-value="issue.status"
-      :options="statusOptions"
-      :disabled="busy || deleting"
-      size="sm"
-      @update:model-value="$emit('status', $event)"
-    />
-
-    <div :style="actions">
-      <Button variant="secondary" size="sm" icon="bot" :disabled="deleting" @click="askAgent">
-        Ask agent to edit
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        icon="trash-2"
-        :disabled="deleting"
-        @click="confirming = true"
-      >
-        Delete
-      </Button>
-    </div>
-
-    <div :style="divider" />
+    <!-- Only when there is a record to separate: with the controls moved below
+         it, an issue carrying neither fields nor a close reason would otherwise
+         draw two rules with a gap between them and nothing in it. -->
+    <div v-if="rows.length || issue.close_reason" :style="divider" />
 
     <div v-if="rows.length" :style="grid">
       <template v-for="row in rows" :key="row.label">
@@ -237,6 +241,41 @@ const divider = {
     <div v-if="issue.close_reason" :style="closeReasonBox">
       <span :style="rowLabel">Close reason</span>
       <span :style="descriptionStyle">{{ issue.close_reason }}</span>
+    </div>
+
+    <!-- The two things a person can do to the issue, under everything the issue
+         is: reading comes first and acting last, and a Delete button sitting
+         between the title and the fields put the one irreversible control in
+         this panel where a glance lands. -->
+    <div :style="footer">
+      <!-- A Dropdown rather than a Select, and here that is load-bearing rather
+           than cosmetic: this panel is inside Panel's scroll container, and a
+           list drawn in the flow would be clipped by it. Dropdown's panel leaves
+           the document, which is the same move the delete dialog below makes and
+           for the same reason — and it is what lets the bar be sticky at all,
+           since a menu opening upward from here has nothing to be clipped by. -->
+      <Dropdown
+        :model-value="issue.status"
+        :options="statusOptions"
+        :disabled="busy || deleting"
+        size="sm"
+        @update:model-value="$emit('status', $event)"
+      />
+
+      <div :style="actions">
+        <Button variant="secondary" size="sm" icon="bot" :disabled="deleting" @click="askAgent">
+          Ask agent to edit
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon="trash-2"
+          :disabled="deleting"
+          @click="confirming = true"
+        >
+          Delete
+        </Button>
+      </div>
     </div>
 
     <!-- Teleported, unlike every other Modal in this app, and for a reason that

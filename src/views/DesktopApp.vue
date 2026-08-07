@@ -1,6 +1,10 @@
 <script setup>
 /* Desktop app shell — three-column agent control room: scope bar, tab bar,
-   kanban, task inspector and live log.
+   kanban and task inspector.
+
+   The right column carries no log any more: what it held was a fixture, and a
+   pane of invented output under a real issue said the app knew something it did
+   not. A session's actual output is the terminal tab, which is one click away.
 
    The core moment this screen is built for: you come back after two hours and
    read, in three seconds, what finished, what stalled, and what is waiting for
@@ -25,7 +29,6 @@ import ClaimedTasks from '../components/agent/ClaimedTasks.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Modal from '../components/overlays/Modal.vue'
 import Toast from '../components/overlays/Toast.vue'
-import LogView from '../components/agent/LogView.vue'
 import ProjectList from '../components/shell/ProjectList.vue'
 import Skeleton from '../components/core/Skeleton.vue'
 import IconButton from '../components/core/IconButton.vue'
@@ -81,7 +84,7 @@ import {
   startRun,
   stopRun
 } from '../stores/runs.js'
-import { inspector, logLines, scope } from './desktopAppData.js'
+import { inspector, scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
   basenameOf,
@@ -593,13 +596,13 @@ watch(lastHandover, (handover) => {
   if (handover && rightFocus.value === handover.ticket) rightFocus.value = handover.session
 })
 
-/* Picking an agent's row opens the work behind it in the right column, and
-   touches nothing else. In particular it does not bring the terminal tab
-   forward any more, and that is the point of the change rather than an
-   omission: the tab switch meant that glancing at what an agent is doing cost
-   whoever was reading a file or the board their place in it. Where a session is
-   watched is now the person's choice; what a row does is say what the agent is
-   working on.
+/* Picking an agent's row brings its session forward — the terminal centre tab,
+   showing that agent — and opens the work behind it in the right column. The
+   row names an agent, and what a person wants from an agent is to watch it: the
+   list and the terminal are one gesture, the same way "+ New agent", filing a
+   task and "Ask agent to edit" all switch the centre tab themselves. The cost
+   is the open file or the board losing its place, which is recoverable by one
+   click on the tab it was on.
 
    Each kind answers for itself, and three of them answer "nothing":
 
@@ -621,6 +624,7 @@ watch(lastHandover, (handover) => {
    activeId names once it is on screen. */
 function selectAgent(id) {
   terminalState.activeId = id
+  project.activeTab = 'terminal'
   const row = agentRows.value.find((candidate) => candidate.id === id)
   const work = row?.work
   if (work?.kind === 'editTask') {
@@ -725,10 +729,6 @@ const initHere = async () => {
     initing.value = false
   }
 }
-const follow = ref(true)
-const streamState = ref('streaming')
-const logQuery = ref('')
-
 /* bd gives a new task the one status it has for them — open, which the board
    calls ready. So that column, and only it, carries the "+": a plus over any
    other column would promise a placement the tracker cannot make. */
@@ -1253,9 +1253,6 @@ const branchLabel = computed(() => {
    spec), and this is the second half of the answer to "what is on disk right
    now" — the first half fires on its own when focus returns to the window. */
 const refreshTree = () => refreshDirs(['', ...project.expanded])
-const toggleStream = () => {
-  streamState.value = streamState.value === 'streaming' ? 'paused' : 'streaming'
-}
 
 /* ---- styles ---------------------------------------------------------- */
 const rootStyle = {
@@ -1606,10 +1603,10 @@ const toastStackStyle = {
         @reset="resetWidth('right')"
       />
 
-      <!-- right: the task that is waiting on you, and its live output -->
+      <!-- right: the task that is waiting on you, and everything known about it -->
       <div :style="rightStyle">
         <Panel
-          title="Task &amp; output"
+          title="Task &amp; details"
           side="right"
           :collapsed="layout.rightCollapsed"
           :style="{ flex: 1, minWidth: 0 }"
@@ -1684,16 +1681,6 @@ const toastStackStyle = {
                 blocks {{ inspector.blocksDownstream }} downstream tasks
               </div>
             </template>
-
-            <LogView
-              :lines="logLines"
-              :stream-state="streamState"
-              :follow="follow"
-              v-model:query="logQuery"
-              :height="260"
-              @toggle-follow="follow = !follow"
-              @toggle-stream="toggleStream"
-            />
           </div>
         </Panel>
       </div>
