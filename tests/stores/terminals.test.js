@@ -10,6 +10,7 @@ const session = (over = {}) => ({
   question: null,
   startedAt: '2026-08-03T10:00:00Z',
   exitCode: null,
+  work: { kind: 'bare' },
   ...over
 })
 
@@ -99,18 +100,83 @@ describe('switching project', () => {
 })
 
 describe('agent rows', () => {
-  it('a row assembles the name, the translated status, the question and the elapsed time', async () => {
+  it('a row assembles the caption, the translated status, the question and the elapsed time', async () => {
     vi.useFakeTimers({ now: new Date('2026-08-03T10:18:00Z') })
     try {
       const { stores } = await ready()
       const [row] = stores.terminals.agentRows.value
-      expect(row.name).toBe('claude-1')
+      expect(row.label).toBe('Agent')
+      expect(row.tasks).toEqual([])
+      // The process name survives, but only for the question block: what asks
+      // is one particular agent, not the job it was handed.
+      expect(row.process).toBe('claude-1')
       expect(row.state).toBe('running')
       expect(row.question).toBeNull()
       expect(row.elapsed).toBe('18m')
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  /* The point of the whole change: a column of `claude-1`…`claude-5` said
+     nothing about who was doing what. Each intent gets its own caption, and
+     the two halves are kept apart because the component sets them
+     differently — prose in sans, issue ids in mono. */
+  it('every intent names its own work', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, work: { kind: 'newTask' } }))
+    await emit('terminal:state', session({ id: 3, work: { kind: 'editTask', id: 'smetana-42' } }))
+    await emit('terminal:state', session({ id: 4, work: { kind: 'setup' } }))
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.map((r) => [r.label, r.tasks])).toEqual([
+      ['Agent', []],
+      ['Creating a task', []],
+      ['Editing', ['smetana-42']],
+      ['Project setup', []]
+    ])
+  })
+
+  /* A session the worker described with something this front end has never
+     heard of is an ordinary outcome, not an error: it is still an agent, and a
+     row that says so is worth more than a blank one. */
+  it('work with no caption of its own still draws a row', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, work: { kind: 'somethingLater' } }))
+    await emit('terminal:state', session({ id: 3, work: undefined }))
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.map((r) => r.label)).toEqual(['Agent', 'Agent', 'Agent'])
+  })
+
+  /* There is no channel saying "this session took that issue": the agent runs
+     `bd update --claim` itself and the app only sees the tracker move. So the
+     connection is made from the two halves already on the front end — the run
+     names the session working, the tracker names what is in progress. */
+  it('a run is captioned by the issues it has taken', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
+    await nextTick()
+
+    // Nothing claimed yet: it is an agent, and there is no work to name.
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({ label: 'Agent', tasks: [] })
+
+    stores.runs.runsState.project = '/p'
+    stores.runs.runsState.run = { project: '/p', session: 7, state: { kind: 'working' } }
+    stores.tracker.trackerState.issues.set('smetana-9', { id: 'smetana-9', status: 'in_progress' })
+    stores.tracker.trackerState.issues.set('smetana-42', { id: 'smetana-42', status: 'in_progress' })
+    stores.tracker.trackerState.issues.set('smetana-7', { id: 'smetana-7', status: 'open' })
+    await nextTick()
+
+    // Sorted, so a second issue appearing does not reorder the first, and only
+    // what is actually in progress — an open issue is nobody's work yet.
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: null,
+      tasks: ['smetana-42', 'smetana-9']
+    })
+
+    // And it belongs to the run's own session, not to every agent on screen.
+    expect(stores.terminals.agentRows.value[0]).toMatchObject({ label: 'Agent', tasks: [] })
   })
 })
 
@@ -213,7 +279,7 @@ describe('starting a session', () => {
     const started = stores.terminals.createSession('/p', { kind: 'bare' })
 
     const row = stores.terminals.agentRows.value.at(-1)
-    expect(row.name).toBe('claude')
+    expect(row.process).toBe('claude')
     expect(row.elapsed).toBe('starting')
     expect(row.starting).toBe(true)
     expect(stores.terminals.terminalState.activeId).toBe(row.id)
@@ -224,8 +290,38 @@ describe('starting a session', () => {
     // The handover: one row, and the selection moves with it rather than being
     // left on a ticket nothing will ever fill.
     expect(stores.terminals.terminalState.starting).toEqual([])
-    expect(stores.terminals.agentRows.value.map((r) => r.name)).toEqual(['claude-1', 'claude-9'])
+    expect(stores.terminals.agentRows.value.map((r) => r.process)).toEqual(['claude-1', 'claude-9'])
     expect(stores.terminals.terminalState.activeId).toBe(9)
+  })
+
+  /* The placeholder is captioned from the very intent being sent, so it says
+     what the session will say. Without that the row would be captioned twice
+     over the second it exists — once as a generic agent and once as the work —
+     and it would visibly change under somebody who had just started reading
+     it. */
+  it('a start is captioned as the session it becomes', async () => {
+    const { ipc, stores } = await ready()
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+
+    const started = stores.terminals.createSession('/p', {
+      kind: 'editTask',
+      id: 'smetana-42',
+      title: 'Some title'
+    })
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Editing',
+      tasks: ['smetana-42'],
+      starting: true
+    })
+
+    answer(session({ id: 9, work: { kind: 'editTask', id: 'smetana-42' } }))
+    await started
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Editing',
+      tasks: ['smetana-42']
+    })
   })
 
   /* Picking another agent while one is starting is a person saying what they
@@ -252,7 +348,7 @@ describe('starting a session', () => {
     await expect(stores.terminals.createSession('/p')).rejects.toBeTruthy()
 
     expect(stores.terminals.terminalState.starting).toEqual([])
-    expect(stores.terminals.agentRows.value.map((r) => r.name)).toEqual(['claude-1'])
+    expect(stores.terminals.agentRows.value.map((r) => r.process)).toEqual(['claude-1'])
     expect(stores.terminals.terminalState.activeId).toBe(1)
   })
 

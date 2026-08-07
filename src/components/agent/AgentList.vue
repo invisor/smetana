@@ -8,7 +8,12 @@
    sessions and nothing else.
 
    Colour is never the only signal here: needs-you is the status system's
-   warning triangle, everything else is a dot. */
+   warning triangle, everything else is a dot.
+
+   A row is captioned by the work, not by the process: `claude-7` names a
+   process, and five of those in a column said nothing about who was doing
+   what. The caption arrives in two pieces because they are set differently —
+   `label` is prose and goes in sans, `tasks` are issue ids and go in mono. */
 import { computed, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
@@ -57,7 +62,7 @@ const rowStyle = (row) => ({
   gap: 'var(--space-3)',
   height: 'var(--row-h)',
   padding: '0 var(--space-5)',
-  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans)',
   background:
     row.id === props.activeId
       ? 'var(--surface-raised)'
@@ -91,6 +96,37 @@ const quietMark = { width: '8px', height: '8px', borderRadius: '50%', background
 
 const dotOf = (state) => (state === 'running' ? runningMark : quietMark)
 
+/* One glyph for every agent. Lucide has no brand marks, and telling claude
+   from codex on a row was never the question this list has to answer — what
+   the agent is doing was. It sits at the same size as the state mark beside
+   it, so the two read as one pair rather than as two competing signals. */
+const AGENT_ICON = 'bot'
+
+/* minWidth 0 and the ellipsis are what keep a long caption — a run holding
+   four issues — from pushing the elapsed time and the remove button off the
+   end of the row: a flex item refuses by default to shrink below its own
+   content. Baseline rather than centre, because the two halves are set in
+   different families and centring would leave them sitting at different
+   heights. */
+const captionBox = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 'var(--space-2)',
+  minWidth: 0,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap'
+}
+const idsStyle = {
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis'
+}
+const labelStyle = { overflow: 'hidden', textOverflow: 'ellipsis' }
+/* The elapsed time stays mono: it is a measurement in a column, and a
+   proportional face would let "18m" and "2h 14m" wander sideways as the clock
+   ticks. */
+const elapsedStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', flex: 'none' }
+
 const empty = computed(() => props.rows.length === 0)
 </script>
 
@@ -115,9 +151,13 @@ const empty = computed(() => props.rows.length === 0)
           />
           <span v-else :style="dotOf(row.state)" />
         </span>
-        <span>{{ row.name }}</span>
+        <Icon :name="AGENT_ICON" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
+        <span :style="captionBox">
+          <span v-if="row.label" :style="labelStyle">{{ row.label }}</span>
+          <span v-if="row.tasks?.length" :style="idsStyle">{{ row.tasks.join(', ') }}</span>
+        </span>
         <span :style="{ flex: 1 }" />
-        <span :style="{ color: row.state === 'needs-you' ? 'var(--attn-loud)' : 'var(--text-muted)' }">
+        <span :style="[elapsedStyle, { color: row.state === 'needs-you' ? 'var(--attn-loud)' : 'var(--text-muted)' }]">
           {{ row.elapsed }}
         </span>
         <!-- A row that is still starting has no process behind it to take away,

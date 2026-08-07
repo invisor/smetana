@@ -37,6 +37,29 @@ pub struct Question {
     pub selected: Option<usize>,
 }
 
+/// What a session was started to do, in as much detail as a row in the agents
+/// panel needs to name the work rather than the process.
+///
+/// One variant per `Intent`, and deliberately not the `Intent` itself: that
+/// carries the whole of what a person typed, the paths of the images they
+/// attached and a run's entire settings. None of it is a caption, and what
+/// crosses the boundary here is only what gets drawn.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SessionWork {
+    Bare,
+    NewTask,
+    /// The issue being edited, by id rather than by title: the panel draws it
+    /// as an identifier, and a title would not fit a row anyway.
+    EditTask { id: String },
+    Setup,
+    /// One batch of a run. Which issues it has taken is not known here and
+    /// cannot be: the agent claims them by running `bd update --claim` itself,
+    /// and nothing reports that back. The front end crosses the run's session
+    /// with what the tracker holds in progress.
+    Run,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
@@ -50,6 +73,11 @@ pub struct Session {
     pub question: Option<Question>,
     pub started_at: String,
     pub exit_code: Option<i32>,
+    /// Why this session exists. Fixed at the spawn and never revised — an
+    /// agent handed one job does not acquire another halfway through, and a
+    /// row whose caption changed under a person would be describing a session
+    /// they are no longer looking at.
+    pub work: SessionWork,
 }
 
 /// How a session ended, as far as whoever was waiting on it is concerned.
@@ -88,7 +116,7 @@ pub enum TerminalError {
 }
 
 impl Session {
-    pub fn new(id: SessionId, agent: &str, cwd: &str, project: &str) -> Self {
+    pub fn new(id: SessionId, agent: &str, cwd: &str, project: &str, work: SessionWork) -> Self {
         Self {
             id,
             agent: agent.to_owned(),
@@ -98,6 +126,7 @@ impl Session {
             question: None,
             started_at: chrono::Utc::now().to_rfc3339(),
             exit_code: None,
+            work,
         }
     }
 
@@ -128,7 +157,22 @@ mod tests {
     use super::*;
 
     fn session() -> Session {
-        Session::new(1, "claude", "/p", "/p")
+        Session::new(1, "claude", "/p", "/p", SessionWork::Bare)
+    }
+
+    #[test]
+    fn the_work_a_session_was_started_for_serializes_as_the_front_end_reads_it() {
+        // The panel switches on `kind` and reads `id` for an edit; both
+        // spellings are written out again in `src/stores/terminals.js`, which
+        // is the only other place they exist, so this is what catches a rename
+        // on one side of the boundary before a row goes blank on the other.
+        let json = serde_json::to_string(&SessionWork::EditTask { id: "smetana-42".into() })
+            .expect("serializes");
+        assert_eq!(json, r#"{"kind":"editTask","id":"smetana-42"}"#);
+        assert_eq!(
+            serde_json::to_string(&SessionWork::NewTask).expect("serializes"),
+            r#"{"kind":"newTask"}"#
+        );
     }
 
     #[test]

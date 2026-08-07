@@ -9,7 +9,9 @@
 import { computed, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { runsState } from './runs.js'
 import { settings } from './settings.js'
+import { trackerState } from './tracker.js'
 
 export const terminalState = reactive({
   sessions: [],
@@ -81,33 +83,101 @@ function startClock() {
   setInterval(() => (now.value = Date.now()), 30000)
 }
 
+/* What a start will call its work once it is a session, worked out from the
+   very intent that is being sent. The `kind` tags on this side and on
+   `SessionWork`'s are the same words by construction — `Intent::work` in
+   `src-tauri/src/agents/mod.rs` maps one onto the other — so the placeholder
+   row and the session's own row say the same thing, and the handover a second
+   later changes nothing on screen.
+
+   Nothing else an intent carries comes along: the person's prose, the paths of
+   the images they attached and a run's settings are the agent's briefing, not
+   a caption. */
+const workOf = (intent) =>
+  intent.kind === 'editTask' ? { kind: 'editTask', id: intent.id } : { kind: intent.kind }
+
+/* The prose half of a row's caption. Sentence case, and every one of them is
+   what the session is *for* — the process behind it is `claude-7`, and that
+   name is deliberately not on a row any more: five of them said nothing about
+   who was doing what. */
+const CAPTION = {
+  bare: 'Agent',
+  newTask: 'Creating a task',
+  editTask: 'Editing',
+  setup: 'Project setup'
+}
+
+/* The issues a run's session has taken, if this session is that one.
+
+   There is no channel that says so: the agent claims an issue by running
+   `bd update <id> --claim` itself, which sets the assignee and moves it to
+   in_progress, and the app hears about it only as the tracker changing under
+   the watcher. So the connection is made here, from the two halves that are
+   already on the front end — the run knows which session is working, the
+   tracker knows what is in progress. An explicit "this session claimed this
+   issue" would be steadier, and it needs the agent to tell the app; until
+   then this is the honest reconstruction rather than a guess.
+
+   Sorted, so a second issue appearing does not reorder the first. */
+function claimedBy(sessionId) {
+  const run = runsState.run
+  if (!run || run.session == null || run.session !== sessionId) return []
+  return [...trackerState.issues.values()]
+    .filter((issue) => issue.status === 'in_progress')
+    .map((issue) => issue.id)
+    .sort()
+}
+
+/* A row's caption, in two pieces because they are set differently: `label` is
+   prose and belongs in sans, `tasks` are identifiers and belong in mono. The
+   component is what knows that; this only says which is which.
+
+   A run with nothing claimed yet reads as a bare agent does, and that is the
+   truth rather than a fallback — it is an agent, and there is no work to name
+   until it takes some. Work this front end has never heard of lands there too:
+   a row that says "Agent" is still a row. */
+function captionOf(work, sessionId) {
+  const kind = work?.kind
+  if (kind === 'editTask') return { label: CAPTION.editTask, tasks: [work.id] }
+  if (kind === 'run') {
+    const tasks = sessionId == null ? [] : claimedBy(sessionId)
+    if (tasks.length) return { label: null, tasks }
+  }
+  return { label: CAPTION[kind] ?? CAPTION.bare, tasks: [] }
+}
+
 /* Sessions first, in the worker's own order, then whatever is still starting.
    A new session always takes the highest id, so a start belongs at the bottom
    both before and after it lands, and the row a person is watching does not
    move under them when it becomes real.
 
-   A ticket's name is the agent alone: the rest of the name is the id, and this
-   row does not have one yet — inventing a number here would be the one lie a
-   placeholder must not tell, since the very next thing a person does with a row
-   is match it against a terminal. What it says instead of an elapsed time is
-   what it is doing, which is also why it needs no separate state: `running`
-   already draws the live dot, and `starting` in the corner says the rest.
+   `process` is the one thing a row still carries that names the process rather
+   than the work — `claude-7`. The panel does not draw it; the question block in
+   the right panel does, and there it is the right answer, because what is
+   asking is one particular agent and not the job it was handed. A start has no
+   id yet, so its process is the agent alone: inventing a number here would be
+   the one lie a placeholder must not tell, since the very next thing a person
+   does with a row is match it against a terminal.
 
    The agent named is the configured one, and the worker may start another —
    `agents::pick` falls back to whatever is installed. It corrects itself the
    moment the session arrives, which is the same second or so this row exists
-   for at all. */
+   for at all. What a start says instead of an elapsed time is what it is
+   doing, which is also why it needs no separate state: `running` already draws
+   the live dot, and `starting` in the corner says the rest. */
 export const agentRows = computed(() => [
   ...terminalState.sessions.map((session) => ({
     id: session.id,
-    name: `${session.agent}-${session.id}`,
+    process: `${session.agent}-${session.id}`,
+    ...captionOf(session.work, session.id),
     state: toUiState(session),
     question: session.question,
     elapsed: formatElapsed(now.value - Date.parse(session.startedAt))
   })),
   ...visibleStarts().map((ticket) => ({
     id: ticket.id,
-    name: ticket.agent,
+    process: ticket.agent,
+    ...captionOf(ticket.work, null),
     state: 'running',
     question: null,
     elapsed: 'starting',
@@ -288,7 +358,7 @@ function selected() {
    it is, and that decision lives in Rust, in agents/. The store's job is to
    say what the session is for. */
 export async function createSession(project, intent = { kind: 'bare' }) {
-  const ticket = { id: `start-${(tickets += 1)}`, agent: settings.agent, project }
+  const ticket = { id: `start-${(tickets += 1)}`, agent: settings.agent, project, work: workOf(intent) }
   terminalState.starting.push(ticket)
   /* Where the selection goes back to if nothing starts. Not "the last session"
      — that is a repair, and this is a person's own place in the panel, which a

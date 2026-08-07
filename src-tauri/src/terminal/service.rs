@@ -481,6 +481,10 @@ fn handle(
                 }
                 crate::runs::survey::render(&crate::runs::survey::run(Path::new(&project)))
             });
+            // Taken before the intent is handed to the launch, which consumes
+            // it. Nothing else is kept from it: the rest is the agent's
+            // briefing, not the panel's caption.
+            let work = intent.work();
             let launch = agents::Launch {
                 profile,
                 cwd: PathBuf::from(&project),
@@ -495,7 +499,7 @@ fn handle(
                     // the name that was asked for: `pick` falls back to an
                     // installed agent, and the row in the panel is where that
                     // becomes visible.
-                    let session = Session::new(id, profile.id(), &project, &project);
+                    let session = Session::new(id, profile.id(), &project, &project, work);
                     let live = Live {
                         session: session.clone(),
                         profile,
