@@ -1,5 +1,6 @@
 <script setup>
 import IconButton from '../core/IconButton.vue'
+import Tooltip from '../core/Tooltip.vue'
 
 /* What is attached to a task that has not been filed yet: a row of thumbnails,
    each with a way to take it back out.
@@ -58,8 +59,16 @@ const corner = { position: 'absolute', top: 'var(--space-1)', right: 'var(--spac
 
 <template>
   <div v-if="props.items.length" :style="strip">
-    <div v-for="item in props.items" :key="item.path" :style="cell" :title="item.name">
-      <img :src="item.url" :alt="item.name" :style="image" />
+    <div v-for="item in props.items" :key="item.path" :style="cell">
+      <!-- The name hangs on the picture, not on the cell. The remove button
+           sits inside the cell and carries a hint of its own, and a cell-wide
+           wrapper would still be hovered while the pointer was on the button —
+           two panels over one thumbnail. Leaving the picture wraps the whole of
+           the cell a person actually points at, and moving onto the button
+           leaves it, so exactly one is ever open. -->
+      <Tooltip :label="item.name" :style="{ width: '100%', height: '100%' }">
+        <img :src="item.url" :alt="item.name" :style="image" />
+      </Tooltip>
       <div :style="corner">
         <IconButton
           icon="x"

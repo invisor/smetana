@@ -132,28 +132,32 @@ const titleStyle = {
              used. It is quiet — a muted glyph on no surface until it is
              hovered itself — which is what lets it be always there without
              joining the card's argument for attention. -->
-        <!-- Wrapped the way `ColumnHeader` wraps its own play, and for the
-             reason that one proved: a native `title` is browser chrome, not
-             page content — it waits a second, cannot be styled, and what a
-             disabled control does with it is the engine's business, which is
-             three different engines here. `Tooltip` is page content and its
-             wrapper span takes the hover even though its only child is
-             disabled. -->
-        <Tooltip v-if="runnable" :label="runLabel" title="">
-          <IconButton
-            icon="play"
-            :label="runLabel"
-            size="sm"
-            :disabled="!!runBlockedReason"
-            @click.stop="$emit('run')"
-          />
+        <!-- No `Tooltip` around it: `IconButton` carries its own, and a second
+             one here would draw two panels over one glyph. The reason the
+             wrapper was here in the first place still holds and is now the
+             button's — a native `title` is browser chrome, not page content, it
+             waits a second, cannot be styled, and what a disabled control does
+             with it is the engine's business, which is three different engines
+             here. `Tooltip`'s wrapper span takes the hover even though its only
+             child is disabled. -->
+        <IconButton
+          v-if="runnable"
+          icon="play"
+          :label="runLabel"
+          size="sm"
+          :disabled="!!runBlockedReason"
+          @click.stop="$emit('run')"
+        />
+        <Tooltip v-if="needsResponse" label="Agent is waiting for your answer">
+          <span :style="askStyle">
+            <Icon name="message-circle-question-mark" :size="9" :stroke-width="2.5" />ASK
+          </span>
         </Tooltip>
-        <span v-if="needsResponse" title="Agent is waiting for your answer" :style="askStyle">
-          <Icon name="message-circle-question-mark" :size="9" :stroke-width="2.5" />ASK
-        </span>
-        <span v-if="changedBy" :title="`Changed by ${changedBy} since you last looked`" :style="newStyle">
-          <Icon name="dot" :size="12" :stroke-width="3" />new
-        </span>
+        <Tooltip v-if="changedBy" :label="`Changed by ${changedBy} since you last looked`">
+          <span :style="newStyle">
+            <Icon name="dot" :size="12" :stroke-width="3" />new
+          </span>
+        </Tooltip>
       </div>
       <div :style="titleStyle">{{ title }}</div>
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)', flexWrap: 'wrap' }">

@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import Tooltip from '../core/Tooltip.vue'
 import { attentionLevel, statusColors } from './status.js'
 
 /* Status is never colour alone. Each reserved status has its own silhouette:
@@ -53,9 +54,16 @@ const shape = computed(() => {
   }
 })
 
-const style = computed(() => ({ display: 'inline-block', flex: '0 0 auto', ...shape.value }))
+const style = computed(() => ({ display: 'inline-block', ...shape.value }))
 </script>
 
 <template>
-  <span aria-hidden="true" :title="c.key" :data-attention="level" :style="style" />
+  <!-- The dot stays aria-hidden — it is a silhouette, and whatever it sits
+       beside carries the accessible name. The key is a hint for the eye only,
+       and it is the one thing telling a row of bare silhouettes apart in the
+       gallery, which is where they are drawn and checked. `flex` moves to the
+       wrapper because the wrapper is the flex item now. -->
+  <Tooltip :label="c.key" :style="{ flex: '0 0 auto' }">
+    <span aria-hidden="true" :data-attention="level" :style="style" />
+  </Tooltip>
 </template>

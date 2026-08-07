@@ -112,7 +112,17 @@ const tipStyle = computed(() => ({
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
-  whiteSpace: 'nowrap',
+  /* A ceiling rather than `nowrap`. A fixed box with no width is already
+     shrink-to-fit, so a label that fits stays on one line exactly as it did;
+     the ceiling only bites on one that does not, and the labels that do not are
+     the ones this panel now carries — an absolute project path, a read-only
+     reason, a run blocked by a sentence. `nowrap` drew those straight off the
+     edge of the window, since the clamp in `show` can only move a panel that is
+     narrower than the window it is in. `anywhere` is what breaks a path: it has
+     no spaces to break at. The 2 × EDGE subtracted here is the same margin the
+     clamp keeps, so the widest panel is one the clamp can still place. */
+  maxWidth: `calc(100vw - ${2 * EDGE}px)`,
+  overflowWrap: 'anywhere',
   padding: 'var(--space-2) var(--space-4)',
   background: 'var(--surface-overlay)',
   fontFamily: 'var(--font-sans)',

@@ -120,19 +120,22 @@ const empty = computed(() => props.projects.length === 0)
         v-for="p in projects"
         :key="p.path"
         :style="rowStyle(p)"
-        :title="p.path"
         @click="emit('select', p.path)"
         @mouseenter="hovered = p.path"
         @mouseleave="hovered = null"
       >
-        <span :style="nameStyle">{{ p.name }}</span>
-        <!-- The empty title is not decoration: `title` is inherited, and the
-             row carries the project's full path in one. Hovering a glyph that
-             explains itself would otherwise draw that path as well, in a
-             second panel the app does not control the placement of. An empty
-             title is the standard way to say "nothing to advise here" and
-             stops the lookup before it reaches the row. -->
-        <Tooltip v-if="!p.tracked" label="No bd tracker here" title="">
+        <!-- The path hangs on the name, not on the row. It used to be the row's
+             native `title`, which every glyph inside then had to suppress with
+             an empty one of its own; a `Tooltip` on the row cannot be suppressed
+             that way at all, because `mouseleave` does not fire on the way to a
+             child — hovering a glyph would draw the glyph's panel and leave the
+             row's open beside it. The name is also the element that is
+             ellipsised, so revealing the whole path there is where a person
+             looks for it. -->
+        <Tooltip :label="p.path" :style="{ flex: 1, minWidth: 0 }">
+          <span :style="nameStyle">{{ p.name }}</span>
+        </Tooltip>
+        <Tooltip v-if="!p.tracked" label="No bd tracker here">
           <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
         </Tooltip>
         <!-- The mark and the button that clears it are one hover target, tied
@@ -147,7 +150,7 @@ const empty = computed(() => props.projects.length === 0)
              the mark reports the state, the button offers the action, and the
              button already carries its own label. -->
         <span v-if="needsSetup && p.path === activePath" :style="setupMarkStyle">
-          <Tooltip label="Not set up for runs" title="">
+          <Tooltip label="Not set up for runs">
             <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
           </Tooltip>
           <IconButton icon="settings-2" label="Set up for runs" size="sm" @click.stop="emit('setup', p.path)" />
@@ -155,7 +158,7 @@ const empty = computed(() => props.projects.length === 0)
         <!-- No gear beside it: see the note at the top of this file. The mark is
              what a person sees without pressing anything, and pressing the play
              on the board is what tells them which section failed. -->
-        <Tooltip v-if="configBroken && p.path === activePath" label="Run configuration cannot be read" title="">
+        <Tooltip v-if="configBroken && p.path === activePath" label="Run configuration cannot be read">
           <Icon name="file-x" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
         </Tooltip>
         <!-- Before the remove button, not after it: removal keeps the row's

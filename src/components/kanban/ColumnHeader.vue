@@ -148,23 +148,24 @@ const wipStyle = computed(() => ({
     <span :style="{ font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
       {{ count }}
     </span>
-    <span v-if="wipLimit != null" :title="`WIP limit ${wipLimit}`" :style="wipStyle">
-      <Icon :name="over ? 'triangle-alert' : 'gauge'" :size="10" :stroke-width="2" />/{{ wipLimit }}
-    </span>
+    <Tooltip v-if="wipLimit != null" :label="`WIP limit ${wipLimit}`">
+      <span :style="wipStyle">
+        <Icon :name="over ? 'triangle-alert' : 'gauge'" :size="10" :stroke-width="2" />/{{ wipLimit }}
+      </span>
+    </Tooltip>
     <span :style="{ flex: 1 }" />
     <slot name="actions">
       <!-- Before the "+", so the "+" keeps the position it has always had:
            nothing a person is already aiming at moves when a project gains a
            configuration. -->
-      <Tooltip v-if="runnable" :label="runLabel" title="">
-        <IconButton
-          icon="play"
-          :label="runLabel"
-          size="sm"
-          :disabled="!!runBlockedReason"
-          @click="$emit('run')"
-        />
-      </Tooltip>
+      <IconButton
+        v-if="runnable"
+        icon="play"
+        :label="runLabel"
+        size="sm"
+        :disabled="!!runBlockedReason"
+        @click="$emit('run')"
+      />
       <IconButton v-if="addable" icon="plus" :label="`Add task to ${c.key}`" size="sm" @click="$emit('add')" />
     </slot>
   </div>

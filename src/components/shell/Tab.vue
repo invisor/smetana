@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import Tooltip from '../core/Tooltip.vue'
 
 /* Tab kinds
    pinned  - Terminal and Kanban. Always first, no close affordance.
@@ -79,18 +80,18 @@ const onClose = (e) => {
   >
     <Icon v-if="icon" :name="icon" :size="13" :style="{ color: readOnly ? 'var(--text-muted)' : undefined }" />
     <span :style="labelStyle">{{ label }}</span>
-    <!-- The hint hangs on the wrapper rather than on Icon: Icon's `title`
-         becomes an aria-label and never reaches the pointer — the SVG is left
-         with no native tooltip. The wrapper gives it to the mouse, Icon leaves
-         the reason to the screen reader. -->
-    <span v-if="readOnly" :title="readOnlyHint" :style="{ display: 'flex', flex: '0 0 auto' }">
+    <!-- The hint hangs on the wrapper rather than on Icon: Icon's `title` is a
+         prop that becomes an aria-label and never reaches the pointer — the SVG
+         is left with nothing to hover. The wrapper gives it to the mouse, Icon
+         leaves the reason to the screen reader. -->
+    <Tooltip v-if="readOnly" :label="readOnlyHint" :style="{ flex: '0 0 auto' }">
       <Icon name="lock" :size="11" :title="readOnlyHint" :style="{ color: 'var(--status-blocked-fg)' }" />
-    </span>
-    <span
-      v-if="dirty"
-      title="Unsaved changes"
-      :style="{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--attn-loud)', flex: '0 0 auto' }"
-    />
+    </Tooltip>
+    <Tooltip v-if="dirty" label="Unsaved changes" :style="{ flex: '0 0 auto' }">
+      <span
+        :style="{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--attn-loud)', flex: '0 0 auto' }"
+      />
+    </Tooltip>
     <span v-if="kind !== 'pinned'" :style="{ width: '16px', display: 'flex', justifyContent: 'center' }">
       <IconButton
         v-if="hover || active"
