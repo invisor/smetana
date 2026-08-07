@@ -114,56 +114,90 @@ fn option_line(line: &str) -> Option<(usize, String, bool)> {
     Some((index, label, selected))
 }
 
-/// Claude Code's permission dialog: a frame, a question line, numbered
-/// options. What separates it from any numbered list in ordinary output is
-/// the frame around it and a question mark in the text.
-fn question(screen: &[String]) -> Option<Question> {
-    let framed: Vec<&String> = screen.iter().filter(|l| l.contains('│')).collect();
-    if framed.is_empty() {
-        return None;
-    }
+/// One line of the dialog's own chrome and nothing else: a box edge, a full
+/// width rule, the dashed rule that fences a diff preview off from the
+/// question under it. Box drawing characters occupy one contiguous Unicode
+/// block, which is the whole test — naming the handful in use today would
+/// mean a silent miss the first time the CLI reaches for another.
+fn is_rule(line: &str) -> bool {
+    !line.is_empty()
+        && line.chars().all(|c| c.is_whitespace() || ('\u{2500}'..='\u{257F}').contains(&c))
+}
 
-    // The first option line marks where the question ends and the option
-    // list begins: everything above it is candidate question text,
-    // everything from it on is never text, so an option label that itself
-    // ends in '?' cannot be mistaken for the question. This is also the
-    // sole "no options, not a dialog" guard — nothing downstream repeats it.
-    let first_option = framed.iter().position(|l| option_line(l).is_some())?;
+/// One screen line as this reader wants it: without the frame it used to
+/// carry, so both shapes of the dialog are read the same way.
+fn strip(line: &str) -> &str {
+    line.trim_matches(['│', ' '])
+}
+
+/// Claude Code's permission dialog: a question line and numbered options.
+///
+/// It was a box until 2.1, and the frame around it was what told it apart
+/// from any numbered list in the agent's own output. That frame is gone —
+/// today the dialog is fenced off by full width rules and its lines are
+/// bare — so two other properties carry that weight instead, and both are
+/// things ordinary output does not do:
+///
+/// - the options number themselves 1, 2, 3 … and the **last** such run on
+///   the screen is the dialog, since anything the agent merely printed sits
+///   above it;
+/// - exactly one of them carries the cursor. A list in a paragraph of prose
+///   never does, and a live dialog always does.
+///
+/// The question is still the text directly above the options and still has
+/// to end in a question mark.
+fn question(screen: &[String]) -> Option<Question> {
+    let lines: Vec<&str> = screen.iter().map(|l| strip(l)).collect();
+
+    // Every numbered line on the screen, the agent's own among them.
+    let marks: Vec<(usize, (usize, String, bool))> =
+        lines.iter().enumerate().filter_map(|(i, l)| option_line(l).map(|o| (i, o))).collect();
+
+    // The dialog is the last block that starts its numbering over at 1.
+    let start = marks.iter().rposition(|(_, (index, _, _))| *index == 1)?;
 
     let mut options = Vec::new();
     let mut selected = None;
-    for line in &framed[first_option..] {
-        if let Some((index, label, is_selected)) = option_line(line) {
-            if is_selected {
-                selected = Some(options.len());
-            }
-            options.push(QuestionOption { label, send: format!("{index}\r") });
+    let mut expected = 1;
+    for (_, (index, label, is_selected)) in &marks[start..] {
+        // A gap in the numbering is the end of this block, not a hole in it.
+        if *index != expected {
+            break;
         }
+        if *is_selected {
+            selected = Some(options.len());
+        }
+        options.push(QuestionOption { label: label.clone(), send: format!("{index}\r") });
+        expected += 1;
     }
 
-    // The title, an optional diff preview and the question all live above
-    // the options, in the same frame, separated from each other by blank
-    // lines — that is how the dialog itself lays them out. Split what is
-    // above the first option into paragraphs on those blanks and take the
-    // last one: that is the question and nothing else, however much other
-    // text the frame carries above it. A question wrapped across more than
-    // one row still lives in a single paragraph and still reassembles.
-    let mut paragraphs: Vec<Vec<&str>> = vec![Vec::new()];
-    for line in &framed[..first_option] {
-        let stripped = line.trim_matches(['│', ' ']);
-        if stripped.is_empty() {
-            if !paragraphs.last().unwrap().is_empty() {
-                paragraphs.push(Vec::new());
-            }
-        } else {
-            paragraphs.last_mut().unwrap().push(stripped);
-        }
-    }
-    let question_paragraph = paragraphs.into_iter().filter(|p| !p.is_empty()).last()?;
+    // Nothing is waiting on a list nobody is pointing at.
+    selected?;
 
-    // split_whitespace both drops the frame's own padding and collapses any
-    // run of whitespace to one space.
-    let text = question_paragraph.iter().flat_map(|l| l.split_whitespace()).collect::<Vec<_>>().join(" ");
+    // Upwards from the options to the question. Some versions of the dialog
+    // put a blank line between the two and some put none, so whatever
+    // separates them is stepped over first; then the run of text directly
+    // above is the question, and it ends where the dialog's own layout ends
+    // it — at a blank line, or at the rule under a diff preview. Everything
+    // further up is a title, a preview or the agent's output, and none of it
+    // belongs in what a person is asked.
+    let mut above = lines[..marks[start].0].iter().rev().peekable();
+    while above.peek().is_some_and(|line| line.is_empty()) {
+        above.next();
+    }
+    let mut text_lines: Vec<&str> = Vec::new();
+    for line in above {
+        if line.is_empty() || is_rule(line) {
+            break;
+        }
+        text_lines.push(line);
+    }
+    text_lines.reverse();
+
+    // split_whitespace both drops the dialog's own padding and collapses any
+    // run of whitespace to one space, so a question wrapped across rows comes
+    // back as one line.
+    let text = text_lines.iter().flat_map(|l| l.split_whitespace()).collect::<Vec<_>>().join(" ");
     if !text.ends_with('?') {
         return None;
     }
@@ -277,10 +311,105 @@ mod tests {
         assert_eq!(q.selected, Some(0));
     }
 
+    // The two fixtures below are whole 120x30 screens, captured off a real
+    // Claude Code 2.1.224 under a PTY and rendered through the same vt100 the
+    // worker reads: banner, the agent's own output, and the dialog at the
+    // bottom. That is the shape this reader actually has to survive, and a
+    // hand-written excerpt of it would prove only that it survives an excerpt.
+
+    #[test]
+    fn recognises_the_unframed_dialog_of_claude_2_1() {
+        // No frame anywhere on it any more: the dialog is fenced off by a
+        // full width rule and its lines are bare. The box filter this used to
+        // open with matched only the welcome banner, which has no options in
+        // it, so every permission prompt went unseen (smetana-8hc).
+        let q = question(&fixture("claude-2.1-permission-bash.txt")).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Do you want to proceed?");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(q.options[0].label, "Yes");
+        assert_eq!(q.options[2].label, "No");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn a_diff_preview_is_fenced_off_by_a_rule_rather_than_a_blank_line() {
+        // The edit dialog puts its diff directly above the question with a
+        // dashed rule between them and no blank line anywhere near, so
+        // splitting on blanks alone drags the whole preview into the text.
+        let q = question(&fixture("claude-2.1-permission-edit.txt")).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Do you want to make this edit to tabs.js?");
+        assert_eq!(q.options.len(), 3);
+    }
+
     #[test]
     fn ordinary_work_is_not_a_dialog() {
         let screen: Vec<String> = ["Reading tabs.js", "  1. checked", "Done"].iter().map(|s| (*s).to_owned()).collect();
         assert!(question(&screen).is_none(), "a numbered list was taken for a question");
+    }
+
+    #[test]
+    fn a_numbered_list_the_agent_printed_is_not_a_dialog() {
+        // Ends in a question mark and is numbered, and before 2.1 the frame
+        // was the only thing keeping it out. Nothing points at it, which is
+        // what a dialog always has and prose never does.
+        let screen: Vec<String> = [
+            "⏺ Which of these would you like me to do first?",
+            "  1. Rename the module",
+            "  2. Split the test file",
+            "  3. Neither, stop here",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "prose with a numbered list was taken for a dialog");
+    }
+
+    #[test]
+    fn a_list_in_the_output_above_does_not_shadow_the_dialog() {
+        // Both blocks number themselves from 1. The dialog is the lower one —
+        // it replaces the input box at the foot of the screen, and whatever
+        // the agent printed is by definition above it.
+        let screen: Vec<String> = [
+            "⏺ I considered three options:",
+            "  1. Rename the module",
+            "  2. Split the test file",
+            "",
+            "────────────────────────────────────────",
+            " Bash command",
+            "",
+            " Do you want to proceed?",
+            " ❯ 1. Yes",
+            "   2. No",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog was shadowed by the output above it");
+        assert_eq!(q.text, "Do you want to proceed?");
+        assert_eq!(q.options.len(), 2, "the printed list was swept in with the dialog's own options");
+        assert_eq!(q.options[0].label, "Yes");
+    }
+
+    #[test]
+    fn the_title_above_a_rule_is_not_part_of_the_question() {
+        let screen: Vec<String> = [
+            "────────────────────────────────────────",
+            " Bash command",
+            "",
+            "   sw_vers -productVersion",
+            "   Get macOS product version",
+            "",
+            " This command requires approval",
+            "",
+            " Do you want to proceed?",
+            " ❯ 1. Yes",
+            "   2. No",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Do you want to proceed?");
     }
 
     #[test]
@@ -411,3 +540,5 @@ mod tests {
         }
     }
 }
+
+
