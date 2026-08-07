@@ -116,6 +116,19 @@ pub enum RunState {
     Working { iteration: u32 },
     /// Between batches: reading the board and deciding.
     Deciding,
+    /// The subscription's allowance is spent, and the run is waiting for it to
+    /// reset rather than spending sessions finding that out again.
+    ///
+    /// A state and not a sleep inside the loop, deliberately: a run that had
+    /// simply gone quiet for three hours is indistinguishable from one that
+    /// hung, and the bar is where somebody looks to tell those apart. Being a
+    /// state is also what makes the stop button reach it — `request_stop` ends
+    /// a run with no session in flight at once, and a pause has none.
+    ///
+    /// `resets` is the harness's own sentence about when the allowance clears
+    /// ("Aug 11 at 5:59pm (Europe/Moscow)"), passed through untouched. The app
+    /// never turns it into a moment in time — see `usage::Usage`.
+    Paused { pct: u8, resets: Option<String> },
     Stopped { reason: StopReason },
 }
 
@@ -136,6 +149,17 @@ pub struct Run {
     /// interface says "stopping after this batch" from this, and it is a
     /// separate field rather than a state because the run is still working.
     pub stopping: bool,
+    /// How much of the subscription's allowance was spent when the batch in
+    /// flight was started, if that was enough to make it take fewer tasks than
+    /// the person asked for (`usage::REDUCED_THRESHOLD`). `None` is the
+    /// ordinary case: full size.
+    ///
+    /// A field beside `stopping` rather than a state, for exactly the reason
+    /// that one is: the run is working, and this only qualifies how. What it
+    /// buys is that the reduction is not silent — somebody who chose four tasks
+    /// and is watching two has something on screen that says why.
+    #[serde(default)]
+    pub reduced: Option<u8>,
 }
 
 /// What a run cannot start for.
@@ -208,7 +232,15 @@ impl RunSettings {
 
 impl Run {
     pub fn new(project: String, settings: RunSettings) -> Self {
-        Run { project, settings, state: RunState::Preflight, session: None, batches: 0, stopping: false }
+        Run {
+            project,
+            settings,
+            state: RunState::Preflight,
+            session: None,
+            batches: 0,
+            stopping: false,
+            reduced: None,
+        }
     }
 
     pub fn is_over(&self) -> bool {

@@ -21,6 +21,7 @@ defineEmits(['stop'])
 
 const state = computed(() => props.run?.state ?? null)
 const over = computed(() => state.value?.kind === 'stopped')
+const paused = computed(() => state.value?.kind === 'paused')
 
 /* Loud only where a person has to do something. A run that finished its queue
    is the ordinary ending and gets the quiet treatment; one that stopped because
@@ -61,8 +62,12 @@ const reason = computed(() => {
 
 /* The finished run and the ones that stopped short differ by silhouette, not
    only by colour — the rule the status palette keeps everywhere else in this
-   system. */
-const glyph = computed(() => (over.value ? (reason.value.icon ?? 'square') : 'play'))
+   system. A pause is a third silhouette for the same reason: it is neither
+   working nor over, and the glyph is the fastest way to tell it from both. */
+const glyph = computed(() => {
+  if (over.value) return reason.value.icon ?? 'square'
+  return paused.value ? 'pause' : 'play'
+})
 
 const label = computed(() => {
   if (!state.value) return ''
@@ -73,18 +78,41 @@ const label = computed(() => {
       return 'Reading the board'
     case 'working':
       return `Batch ${(props.run.batches ?? 0) || 1}`
+    /* Named as the subscription's and not as an error: nothing failed, and
+       nobody is being asked to do anything. The percentage is here rather than
+       in the detail because it is the whole of what happened. */
+    case 'paused':
+      return `Paused — subscription limit reached (${state.value.pct}%)`
     default:
       return reason.value.text
   }
 })
 
+const branch = computed(() =>
+  props.run?.settings?.target_branch ? `into ${props.run.settings.target_branch}` : ''
+)
+
 /* The whole point of a cooperative stop is visible here or nowhere: pressing
    stop does not end the batch in flight, and a bar that went on saying "Batch
    3" would read as the button having done nothing. */
 const detail = computed(() => {
-  if (over.value) return props.run?.settings?.target_branch ? `into ${props.run.settings.target_branch}` : ''
+  if (over.value) return branch.value
+  /* While paused the branch is the least of what somebody needs: they came to
+     find out when this picks up again, and the harness's own sentence about the
+     reset is the only thing that answers it. Without one, say that the run is
+     still asking rather than leave the line bare — silence there reads as a
+     hang, which is the very thing making the pause a state was meant to
+     prevent. */
+  if (paused.value) return state.value.resets ? `resets ${state.value.resets}` : 're-checking every 10 min'
   if (props.run?.stopping) return 'stopping after this batch'
-  return props.run?.settings?.target_branch ? `into ${props.run.settings.target_branch}` : ''
+  /* A batch running smaller than was asked for has nothing else on screen to
+     explain it, and "why is it only doing two" is a question somebody would
+     otherwise take to the tracker. Joined rather than interpolated: a project
+     with no target branch would otherwise open the line on a bare separator. */
+  if (props.run?.reduced != null) {
+    return [branch.value, `fewer tasks, ${props.run.reduced}% used`].filter(Boolean).join(' · ')
+  }
+  return branch.value
 })
 
 const tone = computed(() => {

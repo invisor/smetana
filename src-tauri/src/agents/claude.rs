@@ -12,6 +12,7 @@ use portable_pty::CommandBuilder;
 
 use super::{prompt, Autonomy, Intent, Launch, Profile, SkillDelivery};
 use crate::runs::model::RunMode;
+use crate::runs::usage::Usage;
 use crate::terminal::model::{Question, QuestionOption};
 
 pub struct Claude;
@@ -98,6 +99,81 @@ impl Profile for Claude {
             env: vec![("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")],
         }
     }
+
+    /// `/usage` is a slash command of the interactive interface, and `-p` runs
+    /// one anyway and prints what it would have drawn. There is no
+    /// machine-readable form of this and none has appeared: as of 2.1.174 the
+    /// command grew a *more* interactive shape in the terminal — day and week
+    /// views switched with `d` and `w` — while `-p` kept printing the same
+    /// plain text it always did.
+    fn usage_command(&self) -> Option<&'static [&'static str]> {
+        Some(&["-p", "/usage"])
+    }
+
+    fn parse_usage(&self, output: &str) -> Option<Usage> {
+        usage(output)
+    }
+}
+
+/// The two lines that carry a plan limit, verbatim from `claude -p "/usage"`:
+///
+/// ```text
+/// Current session: 10% used · resets Aug 7 at 8pm (Europe/Moscow)
+/// Current week (all models): 20% used · resets Aug 11 at 5:59pm (Europe/Moscow)
+/// Current week (Fable): 0% used
+/// ```
+///
+/// The third is a per-model allowance and is deliberately not read. Claude
+/// Code's own documentation answers an exhausted Opus or Fable limit with
+/// "switch models", not "stop", and the CLI does that itself — pausing a run
+/// for it would hold up work the harness was about to carry on with anyway.
+/// The prefix below is exact for the same reason, so `(Fable)` cannot match
+/// `(all models)`.
+const SESSION: &str = "Current session:";
+const WEEK: &str = "Current week (all models):";
+
+fn usage(output: &str) -> Option<Usage> {
+    let mut usage = Usage::default();
+    let mut read_one = false;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix(SESSION) {
+            if let Some((pct, resets)) = used(rest) {
+                usage.session_pct = pct;
+                usage.session_reset = resets;
+                read_one = true;
+            }
+        } else if let Some(rest) = line.strip_prefix(WEEK) {
+            if let Some((pct, resets)) = used(rest) {
+                usage.week_pct = pct;
+                usage.week_reset = resets;
+                read_one = true;
+            }
+        }
+    }
+    // One of the two is enough. A rename of either line loses that half and
+    // leaves it reading zero, which is the source's own behaviour and the
+    // benign direction to be wrong in: a run keeps going and finds the wall by
+    // hitting it, rather than pausing forever on a limit nobody has reached.
+    read_one.then_some(usage)
+}
+
+/// ` 10% used · resets Aug 7 at 8pm (Europe/Moscow)` → `(10, Some("Aug 7 at 8pm (Europe/Moscow)"))`.
+///
+/// The reset half is optional and its absence is not a failure: a fresh
+/// allowance prints no reset at all, and a percentage with nothing to say about
+/// when it clears is still the number the decision is made on.
+fn used(rest: &str) -> Option<(u8, Option<String>)> {
+    let rest = rest.trim_start();
+    let percent = rest.find('%')?;
+    let pct: u8 = rest[..percent].trim().parse().ok()?;
+    const RESETS: &str = "resets ";
+    let tail = &rest[percent + 1..];
+    let resets = tail
+        .find(RESETS)
+        .map(|at| tail[at + RESETS.len()..].trim().to_owned())
+        .filter(|text| !text.is_empty());
+    Some((pct, resets))
 }
 
 /// An option line: `❯ 1. Yes` or `  2. Yes, and don't ask again`.
@@ -538,6 +614,71 @@ mod tests {
             let args = argv(&launch(intent, false));
             assert!(!args.iter().any(|a| a == "--permission-mode"), "{args:?}");
         }
+    }
+
+    /// Copied out of `claude -p "/usage"` on 2.1.224, whole and unedited. It is
+    /// a fixture rather than a hand-written line for the same reason the
+    /// `Intent` tests hold hand-copied JSON: a round trip through something we
+    /// wrote would only agree with itself, and what breaks here is the other
+    /// side changing its wording.
+    const USAGE_OUTPUT: &str = "\
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 10% used · resets Aug 7 at 8pm (Europe/Moscow)
+Current week (all models): 20% used · resets Aug 11 at 5:59pm (Europe/Moscow)
+Current week (Fable): 0% used
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai.
+
+Last 24h · 2269 requests · 24 sessions
+  60% of your usage came from subagent-heavy sessions
+  55% of your usage was at >150k context
+";
+
+    #[test]
+    fn both_plan_limits_are_read_out_of_what_the_cli_prints() {
+        let read = usage(USAGE_OUTPUT).expect("the two lines are there");
+        assert_eq!(read.session_pct, 10);
+        assert_eq!(read.session_reset.as_deref(), Some("Aug 7 at 8pm (Europe/Moscow)"));
+        assert_eq!(read.week_pct, 20);
+        assert_eq!(read.week_reset.as_deref(), Some("Aug 11 at 5:59pm (Europe/Moscow)"));
+    }
+
+    #[test]
+    fn a_per_model_allowance_is_not_one_of_them() {
+        // `Current week (Fable): 0% used` sits between the two lines that do
+        // count, and reading it as the weekly figure would report 0% while the
+        // week is nearly spent. The CLI answers an exhausted model limit by
+        // switching models, so it is not a run's business at all.
+        let read = usage(USAGE_OUTPUT).expect("the two lines are there");
+        assert_eq!(read.week_pct, 20, "the per-model line must not overwrite the weekly one");
+    }
+
+    #[test]
+    fn percentages_in_the_body_of_the_report_are_not_mistaken_for_limits() {
+        // "60% of your usage came from subagent-heavy sessions" is a share of
+        // what was spent, not a share of the allowance. Matching it would pause
+        // a run at 8% of its actual limit.
+        let read = usage(USAGE_OUTPUT).expect("the two lines are there");
+        assert!(read.pct() < 60, "read {}%, which is a line from the breakdown", read.pct());
+    }
+
+    #[test]
+    fn an_allowance_with_nothing_to_say_about_its_reset_is_still_a_reading() {
+        // A fresh week prints no reset. Refusing the whole reading over the
+        // missing half would leave the run blind to a session at 95%.
+        let read = usage("Current session: 95% used\n").expect("a percentage is a reading");
+        assert_eq!(read.session_pct, 95);
+        assert_eq!(read.session_reset, None);
+    }
+
+    #[test]
+    fn output_with_neither_line_in_it_is_no_reading_at_all() {
+        // Not a zero: `decide` treats `None` as no reason to hold a run up,
+        // while a zero would claim a fresh allowance nobody measured.
+        assert_eq!(usage("Invalid API key · Please run /login"), None);
+        assert_eq!(usage(""), None);
     }
 }
 

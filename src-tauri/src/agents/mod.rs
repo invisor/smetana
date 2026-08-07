@@ -181,6 +181,25 @@ pub trait Profile: Sync {
         None
     }
 
+    /// How this harness is asked what is left of the subscription's allowance,
+    /// as arguments after `binary()`, and how its answer reads. A pair: the
+    /// command is worth nothing without something able to read what it prints,
+    /// and a profile that answers one and not the other simply reads as
+    /// unaskable, which `runs::usage::decide` treats as no reason to hold a run
+    /// up.
+    ///
+    /// The default is that pair of absences, and it is a working answer rather
+    /// than a gap — the same shape `question` keeps. A harness with no way to
+    /// report its allowance runs at full size and finds out by failing, which
+    /// is where every harness was before this existed.
+    fn usage_command(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
+    fn parse_usage(&self, _output: &str) -> Option<crate::runs::usage::Usage> {
+        None
+    }
+
     /// Extra arguments for working without a person, and the environment that
     /// goes with them.
     ///

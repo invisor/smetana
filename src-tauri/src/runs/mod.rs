@@ -15,3 +15,4 @@ pub mod preflight;
 pub mod queue;
 pub mod service;
 pub mod survey;
+pub mod usage;
