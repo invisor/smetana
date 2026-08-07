@@ -24,8 +24,9 @@ use tokio::sync::{mpsc, oneshot};
 use super::config::{self, ConfigState};
 use super::model::{Run, RunError, RunSettings, RunState, StopReason};
 use super::preflight;
-use super::queue::{self, Action, QueueSnapshot};
-use crate::agents::Intent;
+use super::queue::{self, Action, LastBatch, QueueSnapshot};
+use super::usage::{self, Decision};
+use crate::agents::{Intent, Profile};
 use crate::terminal::model::Exit;
 use crate::terminal::service::{Request as TerminalRequest, TerminalHandle};
 use crate::tracker::service::{Request as TrackerRequest, TrackerHandle};
@@ -226,10 +227,17 @@ async fn drive(
         }
     }
 
+    // Which agent's allowance to ask about. Resolved once, the same way
+    // `terminal/service.rs` resolves the one it spawns, so the run asks the
+    // harness that will actually run rather than the one settings named.
+    // Nothing installed is not an error here — the gate simply cannot ask, and
+    // `spawn_batch` is where that failure belongs and is already reported.
+    let profile = crate::agents::pick(&agent_id(), crate::shell_env::path());
+
     let mut previous: Option<QueueSnapshot> = None;
     let mut crashes: u32 = 0;
     let mut unreadable: u32 = 0;
-    let mut crashed_last = false;
+    let mut last_batch = LastBatch::Completed;
 
     for iteration in 0.. {
         if stop.try_recv().is_ok() || run.stopping {
@@ -257,7 +265,7 @@ async fn drive(
         unreadable = 0;
 
         let now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
-        match queue::next_action(&now, previous.as_ref(), iteration, MAX_ITERATIONS, crashed_last) {
+        match queue::next_action(&now, previous.as_ref(), iteration, MAX_ITERATIONS, last_batch) {
             Action::Stop(reason) => {
                 run.advance(RunState::Stopped { reason });
                 say(&run);
@@ -267,7 +275,15 @@ async fn drive(
         }
         previous = Some(now);
 
-        let session = match spawn_batch(&terminal, &run).await {
+        // Before spending the allowance, find out what is left of it. This is
+        // the whole reason the gate is worth having: an exhausted limit costs
+        // no session at all, where discovering it by failing costs one every
+        // time round.
+        let Some(tasks) = headroom(&mut run, &say, profile, &mut stop).await else {
+            return;
+        };
+
+        let session = match spawn_batch(&terminal, &run, tasks).await {
             Ok(id) => id,
             Err(err) => {
                 run.advance(RunState::Stopped { reason: StopReason::Preflight { detail: err } });
@@ -297,25 +313,103 @@ async fn drive(
         // the waiter.
         if exit == Exit::Code(0) {
             crashes = 0;
-            crashed_last = false;
-        } else {
-            crashes += 1;
-            crashed_last = true;
-            if crashes >= MAX_CRASHES {
-                run.advance(RunState::Stopped { reason: StopReason::Crashed { attempts: crashes } });
+            last_batch = LastBatch::Completed;
+            continue;
+        }
+
+        // An allowance that ran out mid-batch and a harness that fell over are
+        // the same absence to anyone reading an exit code, and they need
+        // opposite responses: one is retried, the other is waited out. So the
+        // gate's own question is asked a second time, here as a classification
+        // rather than as a gate — the source of the answer is the same one, and
+        // there is no second mechanism to keep in step with the first.
+        if matches!(ask(profile).await, Decision::Pause { .. }) {
+            // Not a crash: the counter is untouched, and `Limited` is what
+            // keeps the next round from reading an unmoved board as stuck.
+            // Nothing pauses here — the gate at the top of the loop is where
+            // waiting lives, and it is about to ask again anyway.
+            last_batch = LastBatch::Limited;
+            continue;
+        }
+
+        crashes += 1;
+        last_batch = LastBatch::Crashed;
+        if crashes >= MAX_CRASHES {
+            run.advance(RunState::Stopped { reason: StopReason::Crashed { attempts: crashes } });
+            say(&run);
+            return;
+        }
+        let backoff = CRASH_BACKOFF_MAX.min(CRASH_BACKOFF_BASE * 2u32.pow(crashes - 1));
+        // Interruptible: two minutes of backoff is long enough that a
+        // person who pressed stop would otherwise think it did nothing.
+        tokio::select! {
+            _ = tokio::time::sleep(backoff) => {}
+            _ = stop.recv() => {
+                run.advance(RunState::Stopped { reason: StopReason::Cancelled });
                 say(&run);
                 return;
             }
-            let backoff = CRASH_BACKOFF_MAX.min(CRASH_BACKOFF_BASE * 2u32.pow(crashes - 1));
-            // Interruptible: two minutes of backoff is long enough that a
-            // person who pressed stop would otherwise think it did nothing.
-            tokio::select! {
-                _ = tokio::time::sleep(backoff) => {}
-                _ = stop.recv() => {
-                    run.advance(RunState::Stopped { reason: StopReason::Cancelled });
-                    say(&run);
-                    return;
+        }
+    }
+}
+
+/// What the harness says is left of the allowance. Blocking work goes to a
+/// thread, the same as the preflight's commands: waiting on somebody else's CLI
+/// would otherwise hold the whole async runtime.
+async fn ask(profile: Option<&'static dyn Profile>) -> Decision {
+    let Some(profile) = profile else { return Decision::Normal };
+    let read = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
+    usage::decide(read.as_ref())
+}
+
+/// Wait until there is allowance enough to run a batch, and answer with how
+/// many tasks that batch may take.
+///
+/// `None` means the run ended while it waited — the caller returns.
+///
+/// The wait is a state rather than a sleep, which is what puts it in the scope
+/// bar and what lets the stop button reach it: a run with no session in flight
+/// stops the moment it is asked, and a paused one has none. The poll is
+/// interruptible for the same reason the crash backoff is, only more so — ten
+/// minutes of silence after pressing stop would read as the button having done
+/// nothing at all.
+async fn headroom(
+    run: &mut Run,
+    say: &impl Fn(&Run),
+    profile: Option<&'static dyn Profile>,
+    stop: &mut mpsc::Receiver<()>,
+) -> Option<Option<u8>> {
+    loop {
+        // The channel and not `run.stopping`: this task holds its own `Run`,
+        // and `Request::Stop` sets that flag on the worker's copy. Nothing
+        // carries it back here, so a check on the field would look like a guard
+        // and be one only by accident.
+        if stop.try_recv().is_ok() {
+            run.advance(RunState::Stopped { reason: StopReason::Cancelled });
+            say(run);
+            return None;
+        }
+        match ask(profile).await {
+            Decision::Pause { pct, resets } => {
+                run.advance(RunState::Paused { pct, resets });
+                say(run);
+                tokio::select! {
+                    _ = tokio::time::sleep(usage::POLL) => {}
+                    _ = stop.recv() => {
+                        run.advance(RunState::Stopped { reason: StopReason::Cancelled });
+                        say(run);
+                        return None;
+                    }
                 }
+            }
+            decision => {
+                // Cleared as well as set: an allowance that came back up must
+                // not leave the bar claiming a reduction that is over.
+                run.reduced = match decision {
+                    Decision::Reduced { pct } => Some(pct),
+                    _ => None,
+                };
+                return Some(usage::cap(run.settings.max_parallel_tasks, &decision));
             }
         }
     }
@@ -375,9 +469,19 @@ async fn board(tracker: &TrackerHandle) -> Option<Vec<crate::tracker::model::Iss
 /// `terminal_create` resolves from settings, the same as every other session,
 /// so a run uses the agent the person configured and the substitution rules
 /// stay in one place.
-async fn spawn_batch(terminal: &TerminalHandle, run: &Run) -> Result<u64, String> {
+///
+/// `tasks` is what *this* batch may take, which is not always what the person
+/// chose: a low allowance caps it (`usage::cap`). The run's own settings are
+/// left alone, so the bar and the report keep naming the choice rather than the
+/// condition of the moment — the same split `views/panelWidths.js` makes.
+async fn spawn_batch(
+    terminal: &TerminalHandle,
+    run: &Run,
+    tasks: Option<u8>,
+) -> Result<u64, String> {
     let (tx, rx) = oneshot::channel();
-    let intent = Intent::Run { settings: run.settings.clone() };
+    let settings = RunSettings { max_parallel_tasks: tasks, ..run.settings.clone() };
+    let intent = Intent::Run { settings };
     terminal
         .0
         .send(TerminalRequest::Create(run.project.clone(), agent_id(), intent, tx))

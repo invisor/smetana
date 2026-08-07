@@ -52,6 +52,27 @@ pub enum RunReason {
     /// Nothing new to take, but a killed batch left work behind.
     RecoverUnfinished,
     RetryAfterCrash,
+    RetryAfterLimit,
+}
+
+/// How the batch before this one ended, as far as the decision cares.
+///
+/// Three answers rather than "did it crash", and the third is what the type
+/// exists for: a batch stopped by a spent subscription allowance changed the
+/// board no more than a crashed one did, and reading either as a stuck queue
+/// would end a run over something that is not stuck. But they are not the same
+/// event and must not be reported as one — a harness that keeps falling over
+/// needs somebody to look at it, while an exhausted allowance needs nothing at
+/// all except time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LastBatch {
+    /// It ran to completion.
+    Completed,
+    /// Its session exited non-zero — in practice a transient failure of the
+    /// harness.
+    Crashed,
+    /// It could not run, or could not finish: the allowance was spent.
+    Limited,
 }
 
 /// Is this issue inside what the run was asked to work on?
@@ -141,15 +162,16 @@ fn same_set(a: &[String], b: &[String]) -> bool {
 ///   batch that only moves tasks to `in_progress`, merges an orphan or parks a
 ///   stuck one has made progress, and stopping there would call a working run
 ///   stuck.
-/// - **A crashed batch suppresses the no-progress stop.** An unchanged board
-///   after a crash means the batch never ran, not that the board is stuck.
+/// - **A batch that did not run to completion suppresses the no-progress
+///   stop.** An unchanged board after a crash, or after an allowance ran out,
+///   means the batch never got to move anything — not that the board is stuck.
 /// - The iteration cap is a backstop and nothing more.
 pub fn next_action(
     now: &QueueSnapshot,
     prev: Option<&QueueSnapshot>,
     iteration: u32,
     max_iterations: u32,
-    last_batch_crashed: bool,
+    last: LastBatch,
 ) -> Action {
     if now.ready.is_empty() && now.unfinished.is_empty() {
         return Action::Stop(StopReason::QueueEmpty);
@@ -159,11 +181,13 @@ pub fn next_action(
     }
     let unchanged = prev
         .is_some_and(|p| same_set(&now.ready, &p.ready) && same_set(&now.unfinished, &p.unfinished));
-    if unchanged && !last_batch_crashed {
+    if unchanged && matches!(last, LastBatch::Completed) {
         return Action::Stop(StopReason::NoProgress);
     }
-    if last_batch_crashed {
-        return Action::Run(RunReason::RetryAfterCrash);
+    match last {
+        LastBatch::Crashed => return Action::Run(RunReason::RetryAfterCrash),
+        LastBatch::Limited => return Action::Run(RunReason::RetryAfterLimit),
+        LastBatch::Completed => {}
     }
     Action::Run(if now.ready.is_empty() {
         RunReason::RecoverUnfinished
@@ -317,7 +341,7 @@ mod tests {
     #[test]
     fn an_empty_board_ends_the_run() {
         assert_eq!(
-            next_action(&snap(&[], &[]), None, 0, 20, false),
+            next_action(&snap(&[], &[]), None, 0, 20, LastBatch::Completed),
             Action::Stop(StopReason::QueueEmpty)
         );
     }
@@ -327,7 +351,7 @@ mod tests {
         // A killed batch leaves in_progress and ready_to_merge behind, and
         // `bd ready` hides both. Stopping here would abandon them.
         assert_eq!(
-            next_action(&snap(&[], &["orphan"]), None, 0, 20, false),
+            next_action(&snap(&[], &["orphan"]), None, 0, 20, LastBatch::Completed),
             Action::Run(RunReason::RecoverUnfinished)
         );
     }
@@ -337,7 +361,7 @@ mod tests {
         let before = snap(&["a"], &["b"]);
         let after = snap(&["a"], &["b"]);
         assert_eq!(
-            next_action(&after, Some(&before), 1, 20, false),
+            next_action(&after, Some(&before), 1, 20, LastBatch::Completed),
             Action::Stop(StopReason::NoProgress)
         );
     }
@@ -348,8 +372,37 @@ mod tests {
         // over a transient failure of the harness.
         let before = snap(&["a"], &[]);
         assert_eq!(
-            next_action(&snap(&["a"], &[]), Some(&before), 1, 20, true),
+            next_action(&snap(&["a"], &[]), Some(&before), 1, 20, LastBatch::Crashed),
             Action::Run(RunReason::RetryAfterCrash)
+        );
+    }
+
+    #[test]
+    fn an_unchanged_board_after_a_spent_allowance_is_not_called_stuck_either() {
+        // The batch could not run, so of course it moved nothing. Reading that
+        // as a stuck queue is the defect smetana-bvn is about: an overnight run
+        // would end on `NoProgress` while the work was untouched and the only
+        // thing missing was time.
+        let before = snap(&["a"], &[]);
+        assert_eq!(
+            next_action(&snap(&["a"], &[]), Some(&before), 1, 20, LastBatch::Limited),
+            Action::Run(RunReason::RetryAfterLimit),
+            "and not RetryAfterCrash — nothing crashed, and the log must not say it did"
+        );
+    }
+
+    #[test]
+    fn a_spent_allowance_does_not_outrank_an_empty_board_or_the_cap() {
+        // Both endings are about the run being over rather than about waiting,
+        // so neither is worth pausing for: there would be nothing to come back
+        // to when the limit cleared.
+        assert_eq!(
+            next_action(&snap(&[], &[]), None, 0, 20, LastBatch::Limited),
+            Action::Stop(StopReason::QueueEmpty)
+        );
+        assert_eq!(
+            next_action(&snap(&["a"], &[]), None, 20, 20, LastBatch::Limited),
+            Action::Stop(StopReason::MaxIterations)
         );
     }
 
@@ -359,7 +412,7 @@ mod tests {
         // exactly the pass the source's earlier closed-count check got wrong.
         let before = snap(&["a"], &[]);
         assert_eq!(
-            next_action(&snap(&[], &["a"]), Some(&before), 1, 20, false),
+            next_action(&snap(&[], &["a"]), Some(&before), 1, 20, LastBatch::Completed),
             Action::Run(RunReason::RecoverUnfinished)
         );
     }
@@ -368,7 +421,7 @@ mod tests {
     fn the_same_work_in_a_different_order_is_not_progress() {
         let before = snap(&["a", "b"], &[]);
         assert_eq!(
-            next_action(&snap(&["b", "a"], &[]), Some(&before), 1, 20, false),
+            next_action(&snap(&["b", "a"], &[]), Some(&before), 1, 20, LastBatch::Completed),
             Action::Stop(StopReason::NoProgress)
         );
     }
@@ -376,7 +429,7 @@ mod tests {
     #[test]
     fn the_iteration_cap_is_a_backstop() {
         assert_eq!(
-            next_action(&snap(&["a"], &[]), None, 20, 20, false),
+            next_action(&snap(&["a"], &[]), None, 20, 20, LastBatch::Completed),
             Action::Stop(StopReason::MaxIterations)
         );
     }
@@ -386,7 +439,7 @@ mod tests {
         // Finishing the work is not a churn stop, and reporting it as one would
         // send somebody looking for a problem that is not there.
         assert_eq!(
-            next_action(&snap(&[], &[]), None, 99, 20, false),
+            next_action(&snap(&[], &[]), None, 99, 20, LastBatch::Completed),
             Action::Stop(StopReason::QueueEmpty)
         );
     }

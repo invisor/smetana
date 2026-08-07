@@ -110,6 +110,7 @@ const runFixture = (state, extra = {}) => ({
   session: 4,
   batches: 1,
   stopping: false,
+  reduced: null,
   ...extra
 })
 
@@ -841,6 +842,21 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
              still going, and a bar that went on saying "Batch 3" would read as
              the button having done nothing. -->
         <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3, stopping: true })" @stop="() => {}" />
+        <!-- A batch running smaller than was asked for, because the allowance
+             is low. The reduction is qualified working, not a state of its own
+             — hence a field on the run, the way `stopping` is. -->
+        <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3, reduced: 78 })" @stop="() => {}" />
+        <!-- Neither working nor over: the allowance is spent and the run is
+             waiting for it, which is why the glyph is a third silhouette and
+             the stop button is still there. The reset line is the harness's own
+             sentence, passed through untouched — the app never parses it. -->
+        <RunBar
+          :run="runFixture({ kind: 'paused', pct: 92, resets: 'Aug 11 at 5:59pm (Europe/Moscow)' })"
+          @stop="() => {}"
+        />
+        <!-- The same pause where the harness said nothing about a reset. A bare
+             line would read as a hang. -->
+        <RunBar :run="runFixture({ kind: 'paused', pct: 92, resets: null })" @stop="() => {}" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'queue_empty' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'no_progress' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'crashed', attempts: 5 } })" />
