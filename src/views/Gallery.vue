@@ -154,15 +154,30 @@ const tabs = [
 
 /* AgentList reads rows and activeId as props, unlike TerminalView below,
    which reads the store directly — so a plain local fixture is enough here. */
+/* Every caption the store can produce, once each: a run that has taken work
+   and one that has not, an edit, a filing, a setup, and a bare agent. That is
+   the whole of what `captionOf` in `src/stores/terminals.js` answers, and this
+   is the only place all six can be seen side by side — which is what the
+   check is for, since prose and issue ids are set in different families and a
+   row has to hold both without either one wandering. */
 const agentRows = [
-  { id: 1, name: 'claude-1', state: 'needs-you', elapsed: '2h 14m' },
-  { id: 2, name: 'claude-2', state: 'running', elapsed: '1h 02m' },
-  { id: 3, name: 'claude-3', state: 'done', elapsed: '18m' },
-  /* An agent the worker has not answered about yet: no id in the name, the word
-     in place of a time, and a remove button with nothing to remove. It lasts
-     about a second in the app, which is exactly why it belongs here — the only
-     place it can be looked at for longer than that. */
-  { id: 'start-1', name: 'claude', state: 'running', elapsed: 'starting', starting: true }
+  { id: 1, process: 'claude-1', label: null, tasks: ['smetana-42'], state: 'needs-you', elapsed: '2h 14m' },
+  /* A run holding several. Also the longest caption the list can be asked to
+     draw, and therefore the one that says whether the elapsed time and the
+     remove button still have room. */
+  { id: 2, process: 'claude-2', label: null, tasks: ['smetana-42', 'smetana-9je', 'smetana-hvw'], state: 'running', elapsed: '1h 02m' },
+  { id: 3, process: 'claude-3', label: 'Editing', tasks: ['smetana-8av'], state: 'running', elapsed: '41m' },
+  { id: 4, process: 'claude-4', label: 'Creating a task', tasks: [], state: 'running', elapsed: '3m' },
+  { id: 5, process: 'claude-5', label: 'Project setup', tasks: [], state: 'done', elapsed: '18m' },
+  /* A bare agent, and also a run that has not claimed anything yet: the same
+     caption, deliberately — it is an agent, and there is no work to name. */
+  { id: 6, process: 'claude-6', label: 'Agent', tasks: [], state: 'ready', elapsed: '2m' },
+  /* An agent the worker has not answered about yet: the word in place of a
+     time, and a remove button with nothing to remove. Captioned exactly as it
+     will be once the session lands, so the handover moves nothing on screen.
+     It lasts about a second in the app, which is exactly why it belongs here —
+     the only place it can be looked at for longer than that. */
+  { id: 'start-1', process: 'claude', label: 'Creating a task', tasks: [], state: 'running', elapsed: 'starting', starting: true }
 ]
 
 /* Two issues in bd's own shape: one that has everything the inspector can
@@ -646,7 +661,11 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
 
     <section :style="sectionStyle">
       <div :style="headStyle">Agents</div>
-      <div :style="{ width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
+      <!-- 252px is the left panel's shipped width, so what truncates here
+           truncates in the app. Tall enough for all seven rows at the
+           comfortable row height: the point of this section is seeing every
+           caption at once, and a scrollbar would hide the last of them. -->
+      <div :style="{ width: '252px', height: '224px', border: 'var(--border-w) solid var(--border)' }">
         <AgentList :rows="agentRows" :active-id="2" />
       </div>
     </section>

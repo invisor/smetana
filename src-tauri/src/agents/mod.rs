@@ -121,6 +121,23 @@ pub enum Intent {
     },
 }
 
+impl Intent {
+    /// What this reduces to for the agents panel. It lives here rather than in
+    /// `terminal::model` because it is knowledge about `Intent` — which of its
+    /// payload is a caption and which is only a briefing for the agent — and
+    /// the answer moves whenever a variant does.
+    pub fn work(&self) -> crate::terminal::model::SessionWork {
+        use crate::terminal::model::SessionWork as W;
+        match self {
+            Intent::Bare => W::Bare,
+            Intent::NewTask { .. } => W::NewTask,
+            Intent::EditTask { id, .. } => W::EditTask { id: id.clone() },
+            Intent::Setup => W::Setup,
+            Intent::Run { .. } => W::Run,
+        }
+    }
+}
+
 /// Everything a spawn needs before any agent has looked at it.
 pub struct Launch {
     pub profile: &'static dyn Profile,
@@ -353,6 +370,18 @@ mod tests {
     fn a_setup_intent_deserializes_from_the_front_ends_json() {
         let intent: Intent = serde_json::from_str(r#"{"kind":"setup"}"#).expect("deserializes");
         assert!(matches!(intent, Intent::Setup));
+    }
+
+    #[test]
+    fn an_intent_reduces_to_the_work_the_panel_names_it_by() {
+        use crate::terminal::model::SessionWork as W;
+        assert_eq!(Intent::Bare.work(), W::Bare);
+        assert_eq!(Intent::Setup.work(), W::Setup);
+        assert_eq!(
+            Intent::EditTask { id: "smetana-42".into(), title: "Some title".into() }.work(),
+            W::EditTask { id: "smetana-42".into() },
+            "the id is kept and the title is not — the row draws an identifier"
+        );
     }
 
     #[test]

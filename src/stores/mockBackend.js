@@ -272,7 +272,13 @@ export function installMockBackend() {
             selected: 0
           },
           startedAt: new Date(Date.now() - 134 * 60000).toISOString(),
-          exitCode: null
+          exitCode: null,
+          /* Without this the row would be captioned "Agent", which is the
+             honest answer for a session whose work is unknown and a useless
+             one for the only session a browser has. An edit is the case worth
+             showing: it is the one caption with both halves in it, prose and
+             an issue id, set in different families. */
+          work: { kind: 'editTask', id: 'smetana-42' }
         }
       ]
     }

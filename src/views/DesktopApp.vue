@@ -1447,7 +1447,10 @@ const toastStackStyle = {
           <div :style="inspectorBody">
             <div v-if="askingAgent" :style="questionBlock">
               <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-                {{ askingAgent.name }} asks
+                <!-- The process, not the work the row is captioned by: what is
+                     asking here is one particular agent, and a person about to
+                     answer it needs to know which terminal to look at. -->
+                {{ askingAgent.process }} asks
               </span>
               <div :style="{ font: 'var(--weight-medium) var(--text-sm)/1.4 var(--font-sans)', color: 'var(--text-primary)' }">
                 {{ askingAgent.question.text }}
