@@ -8,7 +8,7 @@
    sessions and nothing else.
 
    Colour is never the only signal here: needs-you is the status system's
-   warning triangle, everything else is a dot.
+   warning triangle, everything else is the agent's own glyph.
 
    A row is captioned by the work, not by the process: `claude-7` names a
    process, and five of those in a column said nothing about who was doing
@@ -74,14 +74,18 @@ const rowStyle = (row) => ({
   transition: 'var(--transition-control)'
 })
 
-/* needs-you draws STATUS_GLYPH's own glyph — the same triangle-with-a-bang
-   the badges use — rather than a shape built here: one status, one picture
-   across the app. Everything else stays a dot, so the loud row is still
-   distinguishable by silhouette alone.
+/* One mark to a row, and it is the agent's own glyph carrying the state in
+   its colour — a dot beside the agent icon said the same thing twice and
+   spent two marks of a row's width on one signal.
 
-   The mark's box is fixed at the icon's size, and the dots sit centred
-   inside it: the two marks differ in shape, and a row must not shift by
-   four pixels when an agent starts waiting. */
+   needs-you is the exception, and it is what keeps the row honest: it draws
+   STATUS_GLYPH's own glyph — the same triangle-with-a-bang the badges use —
+   rather than the agent icon in a louder colour, so the loud row is still
+   distinguishable by silhouette alone. One status, one picture across the app.
+
+   The mark's box is fixed at the icon's size: the two glyphs differ in
+   shape, and a row must not shift by four pixels when an agent starts
+   waiting. */
 const MARK = 12
 const markBox = {
   display: 'inline-flex',
@@ -91,16 +95,13 @@ const markBox = {
   height: `${MARK}px`,
   flex: 'none'
 }
-const runningMark = { width: '8px', height: '8px', borderRadius: '50%', background: 'var(--attn-live)' }
-const quietMark = { width: '8px', height: '8px', borderRadius: '50%', background: 'var(--text-muted)' }
-
-const dotOf = (state) => (state === 'running' ? runningMark : quietMark)
 
 /* One glyph for every agent. Lucide has no brand marks, and telling claude
    from codex on a row was never the question this list has to answer — what
-   the agent is doing was. It sits at the same size as the state mark beside
-   it, so the two read as one pair rather than as two competing signals. */
+   the agent is doing was. */
 const AGENT_ICON = 'bot'
+
+const markColour = (state) => (state === 'running' ? 'var(--attn-live)' : 'var(--text-muted)')
 
 /* minWidth 0 and the ellipsis are what keep a long caption — a run holding
    four issues — from pushing the elapsed time and the remove button off the
@@ -149,9 +150,8 @@ const empty = computed(() => props.rows.length === 0)
             :stroke-width="2.25"
             :style="{ color: 'var(--attn-loud)' }"
           />
-          <span v-else :style="dotOf(row.state)" />
+          <Icon v-else :name="AGENT_ICON" :size="MARK" :style="{ color: markColour(row.state) }" />
         </span>
-        <Icon :name="AGENT_ICON" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
         <span :style="captionBox">
           <span v-if="row.label" :style="labelStyle">{{ row.label }}</span>
           <span v-if="row.tasks?.length" :style="idsStyle">{{ row.tasks.join(', ') }}</span>
