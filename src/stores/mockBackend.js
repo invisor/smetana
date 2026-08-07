@@ -258,9 +258,9 @@ export function installMockBackend() {
       return [
         /* The filing agent comes first deliberately: `loadSessions` repairs an
            empty selection to the *last* session in this list, and the one worth
-           landing on is the one with a question attached — it is the only way
-           the question block can be seen with no worker behind it. Picking this
-           row is what shows the draft panel. */
+           landing on is the one waiting on a person — it is the only way the
+           `needs-you` triangle can be seen with no worker behind it. Picking
+           this row is what shows the draft panel instead. */
         {
           id: 1,
           agent: 'claude',
