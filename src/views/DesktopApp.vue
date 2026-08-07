@@ -556,16 +556,25 @@ const startSetup = async () => {
    would keep polling terminalState forever. */
 onUnmounted(() => stopSetupWatch?.())
 
-/* What the right column is showing under the question block. Three answers,
-   and they cannot be folded into `project.selectedTask`: a draft is not an
-   issue and has no id to put there, and a run has several issues rather than
-   one. See `rightPanel` below for how this is read back — deliberately not
-   directly, so that focus on something that has since gone away falls back to
-   the board rather than leaving the column blank.
+/* Whose work the right column is showing under the question block: the id of
+   the agent row a person opened, or null for the board's own selection. It
+   cannot be folded into `project.selectedTask` — a draft is not an issue and
+   has no id to put there, and a run has several issues rather than one.
+
+   An id rather than a mode, and that is what keeps it from going stale. Every
+   reader below requires it to still equal `terminalState.activeId`, so anything
+   that moves the selection without a person clicking — `loadSessions` repairing
+   onto the new project's last session after a switch, `removeSession` repairing
+   onto whatever is left — drops the focus by arithmetic, with no watcher to
+   forget and nothing cleared that nobody asked to clear. A mode would have
+   survived those moves and hidden the new project's remembered card behind a
+   draft belonging to the project just left. Session ids come from one
+   monotonic counter in the worker, so an id cannot be reused by another
+   project's session and accidentally match.
 
    Not in settings, unlike the selected task: it names a session, and sessions
    do not survive a restart. */
-const rightFocus = ref('board')
+const rightFocus = ref(null)
 
 /* Picking an agent's row opens the work behind it in the right column, and
    touches nothing else. In particular it does not bring the terminal tab
@@ -577,10 +586,15 @@ const rightFocus = ref('board')
 
    Each kind answers for itself, and three of them answer "nothing":
 
-   - an edit opens its issue, which also highlights the card on the board — the
-     panel and the board are the same selection;
-   - a filing opens its draft, and clears the board's selection, because there
-     is no card for it and highlighting an unrelated one would be a lie;
+   - an edit opens its issue on the board's own selection, which is what
+     highlights the card: the panel and the board are one selection, so this is
+     the one kind that writes `project.selectedTask`;
+   - a filing opens its draft. It does *not* clear the board's selection, and
+     that restraint is the point: `selectedTask` is remembered per project in
+     settings.json, so glancing at a filing agent would otherwise forget the
+     card somebody had open, permanently, and leave them on a placeholder when
+     they left the draft. Nothing is highlighted while the draft is up all the
+     same — `highlightedTask` answers that, without writing anything down;
    - a run offers the issues it has taken, and picking one of those opens it;
    - a bare agent, a setup, and a run that has claimed nothing have no work to
      name, so the column and the board keep whatever they were showing. That is
@@ -594,12 +608,9 @@ function selectAgent(id) {
   const work = row?.work
   if (work?.kind === 'editTask') {
     project.selectedTask = work.id
-    rightFocus.value = 'board'
-  } else if (work?.kind === 'newTask') {
-    project.selectedTask = null
-    rightFocus.value = 'draft'
-  } else if (row?.claimed?.length) {
-    rightFocus.value = 'claimed'
+    rightFocus.value = null
+  } else if (work?.kind === 'newTask' || row?.claimed?.length) {
+    rightFocus.value = id
   }
 }
 
@@ -708,15 +719,13 @@ const ADD_TO = 'ready'
 const newTaskOpen = ref(false)
 const creating = ref(false)
 
-const selectedIssue = computed(() => (project.selectedTask ? issueById(project.selectedTask) : null))
-
 /* A click on a card is an explicit request to see that card, and it takes the
    right column back from whatever an agent's row put in it. Without this,
    picking a filing agent would leave the draft standing over every card clicked
    afterwards, with no way back to the board but another agent. */
 const selectFromBoard = (id) => {
   project.selectedTask = id
-  rightFocus.value = 'board'
+  rightFocus.value = null
 }
 
 /* The row the panel is following. The same lookup `askingAgent` makes, and it
@@ -727,23 +736,32 @@ const selectedAgent = computed(
   () => agentRows.value.find((row) => row.id === terminalState.activeId) ?? null
 )
 
-/* The draft, when one is being drawn. Guarded on the selected agent still being
-   a filing agent rather than on `rightFocus` alone: the session can be removed,
-   or the selection repaired to another agent by `loadSessions`, and a column
-   left pointing at a draft nobody is filing would draw nothing at all. The same
-   guard is what makes the placeholder-to-session handover invisible here — both
-   carry the same `work`. */
+/* Whether what `rightFocus` names is still the agent the person is looking at.
+   Every reader of the focus goes through this: a repair that moved `activeId`
+   — a project switch, a removed session — leaves the focus naming an agent that
+   is no longer selected, and the column falls back to the board on its own. */
+const focusIsLive = computed(
+  () => rightFocus.value !== null && rightFocus.value === terminalState.activeId
+)
+
+/* The draft, when one is being drawn. Also guarded on the agent still *being* a
+   filing one, which is what makes the placeholder-to-session handover invisible
+   here: both carry the same `work`, so the row changing identity underneath
+   changes nothing on screen. */
 const agentDraft = computed(() =>
-  rightFocus.value === 'draft' && selectedAgent.value?.work?.kind === 'newTask'
+  focusIsLive.value && selectedAgent.value?.work?.kind === 'newTask'
     ? selectedAgent.value.work
     : null
 )
 
-/* The run's own list, with whatever titles the tracker has. An id the tracker
-   does not know is still listed: the claim is what the run reported, and
-   dropping the row would hide work the agent is actually doing. */
+/* The run's own list, with each issue's title. Every id here is one the tracker
+   holds — `claimedBy` in the store built the list out of `trackerState.issues`
+   in the first place — so the lookup always finds its issue and a row for an
+   issue nobody has heard of cannot happen. The `?? null` is for the other
+   thing: an issue that arrived with no title at all, which bd should never
+   send and which the list draws around rather than leaving a gap. */
 const claimedTasks = computed(() => {
-  if (rightFocus.value !== 'claimed') return []
+  if (!focusIsLive.value) return []
   return (selectedAgent.value?.claimed ?? []).map((id) => ({
     id,
     title: issueById(id)?.title ?? null
@@ -759,22 +777,30 @@ const rightPanel = computed(() => {
   return 'board'
 })
 
-/* The issue the inspector draws. Under a run's list it has to be one of the
-   run's own: a board selection left over from before would sit under "Taken by
-   this agent" reading as part of that run's work. */
-const inspectedIssue = computed(() => {
-  const issue = selectedIssue.value
-  if (!issue) return null
-  /* A draft stands alone. Selecting a filing agent clears the board's
-     selection, so this is belt and braces — but a card drawn under a draft
-     would read as the one it filed, which is exactly the thing that cannot
-     happen yet. */
+/* The one answer to "which card is the person looking at", read by the board
+   for its highlight and by the inspector for what to draw. Derived, never
+   stored: `project.selectedTask` is remembered per project in settings.json, so
+   a panel choice that wrote to it would turn a glance at an agent into an edit
+   of a preference. Deriving it also stops the two halves drifting — a stored
+   version had the run case highlighting a card on the board that the inspector
+   then refused to draw.
+
+   A draft has no card, so nothing is highlighted. Under a run's list the
+   selection has to be one of the run's own: a card left selected from before
+   would sit under "Taken by this agent" reading as part of that run's work. */
+const highlightedTask = computed(() => {
   if (rightPanel.value === 'draft') return null
-  if (rightPanel.value === 'claimed' && !claimedTasks.value.some((task) => task.id === issue.id)) {
-    return null
+  if (rightPanel.value === 'claimed') {
+    return claimedTasks.value.some((task) => task.id === project.selectedTask)
+      ? project.selectedTask
+      : null
   }
-  return issue
+  return project.selectedTask
 })
+
+const inspectedIssue = computed(() =>
+  highlightedTask.value ? issueById(highlightedTask.value) : null
+)
 
 /* The question is shown for the selected agent, not the selected task: it is
    the agent that is asking. The task stays whatever it was — the panel just
@@ -1521,7 +1547,7 @@ const toastStackStyle = {
         <KanbanBoard
           v-else
           :columns="orderedColumns"
-          :selected-id="project.selectedTask"
+          :selected-id="highlightedTask"
           :add-to="ADD_TO"
           :run-from="runOffered ? ADD_TO : null"
           :run-blocked-reason="runBlockedReason"
@@ -1587,7 +1613,7 @@ const toastStackStyle = {
             <ClaimedTasks
               v-else-if="rightPanel === 'claimed'"
               :tasks="claimedTasks"
-              :selected-id="project.selectedTask"
+              :selected-id="highlightedTask"
               @select="project.selectedTask = $event"
             />
 

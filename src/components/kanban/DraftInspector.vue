@@ -14,6 +14,7 @@
    and naming the agent's eventual choice here would be inventing one. */
 import { computed } from 'vue'
 import TypeBadge from './TypeBadge.vue'
+import { priorityLabel } from './issueType.js'
 
 const props = defineProps({
   /* `SessionWork::NewTask` as it arrives: { text, issueType, priority }. Auto
@@ -21,13 +22,11 @@ const props = defineProps({
   draft: { type: Object, required: true }
 })
 
-/* Priority is written the way the inspector writes it — P1, not "1" — so the
-   same number means the same thing in both panels. */
-const priorityText = computed(() =>
-  props.draft.priority === null || props.draft.priority === undefined
-    ? null
-    : `P${props.draft.priority}`
-)
+/* `P1`, not a bare `1`, and from the same function the task inspector uses so
+   the two cannot drift. Null is Auto here — the shared helper deliberately does
+   not decide that word, because the inspector's answer to the same absence is
+   to drop the row entirely. */
+const priorityText = computed(() => priorityLabel(props.draft.priority) ?? 'Auto')
 
 const body = { display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }
 
@@ -55,8 +54,18 @@ const noteStyle = {
   textWrap: 'pretty'
 }
 
-/* TaskInspector's grid, to the pixel: the two panels take the same slot and a
-   different label column would make switching between them jump. */
+/* TaskInspector's two-column shape, not its measurements. The label column is
+   `max-content` in both, so it is as wide as the longest label each panel
+   happens to hold — two labels here against eleven there, so this one comes out
+   narrower and the value column starts further left. That is not worth fixing:
+   the two never appear at once (a draft has no issue behind it, so
+   `inspectedIssue` draws nothing while this is up), and pinning a width to make
+   two panels agree that are never seen together would be a number to maintain
+   for nothing.
+
+   `center` rather than TaskInspector's `baseline`, and that one *is* deliberate:
+   the Type cell holds a badge, and a badge baseline-aligned against a bare word
+   hangs below it by the height of its own padding. */
 const grid = {
   display: 'grid',
   gridTemplateColumns: 'max-content minmax(0, 1fr)',
@@ -64,6 +73,12 @@ const grid = {
   rowGap: 'var(--space-3)',
   alignItems: 'center'
 }
+
+/* The badge's cell. Without it the wrapper would be a bare inline box at the
+   root line-height, which is taller than either thing it can hold: the Type row
+   measured 19.5px against Priority's 16.2px, so in a draft left on Auto the two
+   identical words sat at different heights. */
+const badgeCell = { display: 'flex', alignItems: 'center' }
 
 const rowValue = {
   font: 'var(--weight-regular) var(--text-sm)/var(--leading-snug) var(--font-sans)',
@@ -92,13 +107,13 @@ const divider = { height: 'var(--border-w)', background: 'var(--border-subtle)' 
       <!-- A badge when a type was chosen and the word when it was not: the same
            field in the same place either way, rather than a badge that
            disappears and takes its row with it. -->
-      <span>
+      <span :style="badgeCell">
         <TypeBadge v-if="draft.issueType" :type="draft.issueType" size="sm" />
         <span v-else :style="rowValue">Auto</span>
       </span>
 
       <span :style="eyebrow">Priority</span>
-      <span :style="rowValue">{{ priorityText ?? 'Auto' }}</span>
+      <span :style="rowValue">{{ priorityText }}</span>
     </div>
   </div>
 </template>

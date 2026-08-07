@@ -9,9 +9,12 @@
 
    There is no channel saying "this session claimed that issue": the list is
    reconstructed in `src/stores/terminals.js` from the run's session and what
-   the tracker holds in progress. A title the tracker has not got yet is left
-   out rather than faked — the id is the part that is certainly true, and it is
-   the part a person matches against the terminal. */
+   the tracker holds in progress. Because it is built *out of* the tracker's own
+   issues, an id here is always one the tracker has — a row for an issue nobody
+   has heard of is impossible by construction, and the caller has an issue to
+   read a title off every time. The `v-if` on the title is not for that case: it
+   guards an issue that arrived without one, which bd should never send and
+   which would otherwise draw a gap where a title goes. */
 import { ref } from 'vue'
 
 const props = defineProps({
@@ -47,11 +50,18 @@ const listStyle = {
   margin: '0 calc(-1 * var(--panel-pad))'
 }
 
+/* The row centres its content and the baseline grouping happens one box in,
+   which is the shape AgentList and ProjectList already have. It is not
+   interchangeable with putting `baseline` here: a single-line flex container
+   whose cross size comes from the row height stretches its line to that height,
+   and baseline-aligned items sit at the line's *start* — `align-items:
+   baseline` cannot centre anything. The row drew its words flush against the
+   top edge of the hover band with a bar of empty background under them, at both
+   densities and in both themes, because it is geometry rather than colour. */
 const rowStyle = (task) => ({
   display: 'flex',
-  alignItems: 'baseline',
-  gap: 'var(--space-3)',
-  minHeight: 'var(--row-h)',
+  alignItems: 'center',
+  height: 'var(--row-h)',
   padding: '0 var(--panel-pad)',
   background:
     task.id === props.selectedId
@@ -62,6 +72,19 @@ const rowStyle = (task) => ({
   cursor: 'default',
   transition: 'var(--transition-control)'
 })
+
+/* The inner box is where baseline belongs: it is content-sized, so its line box
+   is the text's own and the two families line up on it. Mono and sans differ in
+   where their glyphs sit within the line, and centring the pair instead would
+   leave the id and the title at visibly different heights. */
+const pairStyle = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 'var(--space-3)',
+  minWidth: 0,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap'
+}
 
 /* The id is an identifier and stays mono at its natural width; the title is
    prose and takes what is left, ellipsised. Without minWidth 0 a long title
@@ -94,8 +117,10 @@ const titleStyle = {
         @mouseleave="hovered = null"
         @click="$emit('select', task.id)"
       >
-        <span :style="idStyle">{{ task.id }}</span>
-        <span v-if="task.title" :style="titleStyle">{{ task.title }}</span>
+        <span :style="pairStyle">
+          <span :style="idStyle">{{ task.id }}</span>
+          <span v-if="task.title" :style="titleStyle">{{ task.title }}</span>
+        </span>
       </div>
     </div>
   </div>
