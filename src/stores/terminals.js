@@ -88,13 +88,28 @@ function startClock() {
    `SessionWork`'s are the same words by construction — `Intent::work` in
    `src-tauri/src/agents/mod.rs` maps one onto the other — so the placeholder
    row and the session's own row say the same thing, and the handover a second
-   later changes nothing on screen.
+   later changes nothing on screen. This function is the mirror of that one and
+   has to keep agreeing with it field for field, which is why the draft is
+   spelled out here rather than passed through: `issue_type` is the name bd and
+   the dialog use, `issueType` is the name that comes back over the wire, and a
+   placeholder holding the first would draw Auto over a type somebody chose for
+   the one second before the session lands.
 
-   Nothing else an intent carries comes along: the person's prose, the paths of
-   the images they attached and a run's settings are the agent's briefing, not
-   a caption. */
-const workOf = (intent) =>
-  intent.kind === 'editTask' ? { kind: 'editTask', id: intent.id } : { kind: intent.kind }
+   What an intent carries and this does not is the agent's briefing rather than
+   anything drawn: the paths of the images attached to a task, the brainstorming
+   switch, a run's settings. */
+const workOf = (intent) => {
+  if (intent.kind === 'editTask') return { kind: 'editTask', id: intent.id }
+  if (intent.kind === 'newTask') {
+    return {
+      kind: 'newTask',
+      text: intent.draft.text,
+      issueType: intent.draft.issue_type ?? null,
+      priority: intent.draft.priority ?? null
+    }
+  }
+  return { kind: intent.kind }
+}
 
 /* The prose half of a row's caption. Sentence case, and every one of them is
    what the session is *for* — the process behind it is `claude-7`, and that
@@ -136,14 +151,31 @@ function claimedBy(sessionId) {
    truth rather than a fallback — it is an agent, and there is no work to name
    until it takes some. Work this front end has never heard of lands there too:
    a row that says "Agent" is still a row. */
-function captionOf(work, sessionId) {
+function captionOf(work, claimed) {
   const kind = work?.kind
   if (kind === 'editTask') return { label: CAPTION.editTask, tasks: [work.id] }
-  if (kind === 'run') {
-    const tasks = sessionId == null ? [] : claimedBy(sessionId)
-    if (tasks.length) return { label: null, tasks }
-  }
+  if (kind === 'run' && claimed.length) return { label: null, tasks: claimed }
   return { label: CAPTION[kind] ?? CAPTION.bare, tasks: [] }
+}
+
+/* Everything a row says about the work behind it: the caption the agents panel
+   draws, plus the two things the panel on the right needs to open that work
+   when the row is picked.
+
+   `work` rides whole rather than being unpacked into flags, the same choice
+   `runsState.config` makes for the same reason: a kind this front end has never
+   heard of must stay unrecognisable instead of quietly reading as one it knows.
+   It is on the row rather than looked up from `terminalState.sessions` because
+   half the rows are not sessions — a start has a ticket and no session behind it
+   for about a second, and the draft has to be drawable in that second too.
+
+   `claimed` is the run's own list, computed here so the caption and the right
+   panel cannot disagree about it and so the tracker is walked once per row
+   rather than twice. Empty for everything that is not a run, and for a run that
+   has taken nothing yet. */
+function describeWork(work, sessionId) {
+  const claimed = work?.kind === 'run' && sessionId != null ? claimedBy(sessionId) : []
+  return { work: work ?? null, claimed, ...captionOf(work, claimed) }
 }
 
 /* Sessions first, in the worker's own order, then whatever is still starting.
@@ -169,7 +201,7 @@ export const agentRows = computed(() => [
   ...terminalState.sessions.map((session) => ({
     id: session.id,
     process: `${session.agent}-${session.id}`,
-    ...captionOf(session.work, session.id),
+    ...describeWork(session.work, session.id),
     state: toUiState(session),
     question: session.question,
     elapsed: formatElapsed(now.value - Date.parse(session.startedAt))
@@ -177,7 +209,7 @@ export const agentRows = computed(() => [
   ...visibleStarts().map((ticket) => ({
     id: ticket.id,
     process: ticket.agent,
-    ...captionOf(ticket.work, null),
+    ...describeWork(ticket.work, null),
     state: 'running',
     question: null,
     elapsed: 'starting',

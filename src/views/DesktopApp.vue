@@ -20,6 +20,8 @@ import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import RunBar from '../components/run/RunBar.vue'
 import RunModal from '../components/run/RunModal.vue'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
+import DraftInspector from '../components/kanban/DraftInspector.vue'
+import ClaimedTasks from '../components/agent/ClaimedTasks.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Modal from '../components/overlays/Modal.vue'
 import Toast from '../components/overlays/Toast.vue'
@@ -554,13 +556,51 @@ const startSetup = async () => {
    would keep polling terminalState forever. */
 onUnmounted(() => stopSetupWatch?.())
 
-/* Picking an agent's row is a request to look at it, not just to select it:
-   the terminal tab comes forward the same way it does for a freshly created
-   agent. No await here — selection is local state, and TerminalView attaches
-   to whatever activeId names once it is on screen. */
+/* What the right column is showing under the question block. Three answers,
+   and they cannot be folded into `project.selectedTask`: a draft is not an
+   issue and has no id to put there, and a run has several issues rather than
+   one. See `rightPanel` below for how this is read back — deliberately not
+   directly, so that focus on something that has since gone away falls back to
+   the board rather than leaving the column blank.
+
+   Not in settings, unlike the selected task: it names a session, and sessions
+   do not survive a restart. */
+const rightFocus = ref('board')
+
+/* Picking an agent's row opens the work behind it in the right column, and
+   touches nothing else. In particular it does not bring the terminal tab
+   forward any more, and that is the point of the change rather than an
+   omission: the tab switch meant that glancing at what an agent is doing cost
+   whoever was reading a file or the board their place in it. Where a session is
+   watched is now the person's choice; what a row does is say what the agent is
+   working on.
+
+   Each kind answers for itself, and three of them answer "nothing":
+
+   - an edit opens its issue, which also highlights the card on the board — the
+     panel and the board are the same selection;
+   - a filing opens its draft, and clears the board's selection, because there
+     is no card for it and highlighting an unrelated one would be a lie;
+   - a run offers the issues it has taken, and picking one of those opens it;
+   - a bare agent, a setup, and a run that has claimed nothing have no work to
+     name, so the column and the board keep whatever they were showing. That is
+     the whole behaviour, not a gap in it.
+
+   No await — selection is local state, and TerminalView attaches to whatever
+   activeId names once it is on screen. */
 function selectAgent(id) {
   terminalState.activeId = id
-  project.activeTab = 'terminal'
+  const row = agentRows.value.find((candidate) => candidate.id === id)
+  const work = row?.work
+  if (work?.kind === 'editTask') {
+    project.selectedTask = work.id
+    rightFocus.value = 'board'
+  } else if (work?.kind === 'newTask') {
+    project.selectedTask = null
+    rightFocus.value = 'draft'
+  } else if (row?.claimed?.length) {
+    rightFocus.value = 'claimed'
+  }
 }
 
 /* The tree and the tabs open together with the project. By this point settings
@@ -669,6 +709,72 @@ const newTaskOpen = ref(false)
 const creating = ref(false)
 
 const selectedIssue = computed(() => (project.selectedTask ? issueById(project.selectedTask) : null))
+
+/* A click on a card is an explicit request to see that card, and it takes the
+   right column back from whatever an agent's row put in it. Without this,
+   picking a filing agent would leave the draft standing over every card clicked
+   afterwards, with no way back to the board but another agent. */
+const selectFromBoard = (id) => {
+  project.selectedTask = id
+  rightFocus.value = 'board'
+}
+
+/* The row the panel is following. The same lookup `askingAgent` makes, and it
+   has to be a lookup rather than a stored row: `agentRows` is rebuilt on every
+   state event, and a row held from the moment it was clicked would keep drawing
+   a session's first second forever. */
+const selectedAgent = computed(
+  () => agentRows.value.find((row) => row.id === terminalState.activeId) ?? null
+)
+
+/* The draft, when one is being drawn. Guarded on the selected agent still being
+   a filing agent rather than on `rightFocus` alone: the session can be removed,
+   or the selection repaired to another agent by `loadSessions`, and a column
+   left pointing at a draft nobody is filing would draw nothing at all. The same
+   guard is what makes the placeholder-to-session handover invisible here — both
+   carry the same `work`. */
+const agentDraft = computed(() =>
+  rightFocus.value === 'draft' && selectedAgent.value?.work?.kind === 'newTask'
+    ? selectedAgent.value.work
+    : null
+)
+
+/* The run's own list, with whatever titles the tracker has. An id the tracker
+   does not know is still listed: the claim is what the run reported, and
+   dropping the row would hide work the agent is actually doing. */
+const claimedTasks = computed(() => {
+  if (rightFocus.value !== 'claimed') return []
+  return (selectedAgent.value?.claimed ?? []).map((id) => ({
+    id,
+    title: issueById(id)?.title ?? null
+  }))
+})
+
+/* Which of the three the column is drawing, derived rather than read straight
+   off `rightFocus` for the reason above: the thing focused can vanish, and the
+   board is the answer that always exists. */
+const rightPanel = computed(() => {
+  if (agentDraft.value) return 'draft'
+  if (claimedTasks.value.length) return 'claimed'
+  return 'board'
+})
+
+/* The issue the inspector draws. Under a run's list it has to be one of the
+   run's own: a board selection left over from before would sit under "Taken by
+   this agent" reading as part of that run's work. */
+const inspectedIssue = computed(() => {
+  const issue = selectedIssue.value
+  if (!issue) return null
+  /* A draft stands alone. Selecting a filing agent clears the board's
+     selection, so this is belt and braces — but a card drawn under a draft
+     would read as the one it filed, which is exactly the thing that cannot
+     happen yet. */
+  if (rightPanel.value === 'draft') return null
+  if (rightPanel.value === 'claimed' && !claimedTasks.value.some((task) => task.id === issue.id)) {
+    return null
+  }
+  return issue
+})
 
 /* The question is shown for the selected agent, not the selected task: it is
    the agent that is asking. The task stays whatever it was — the panel just
@@ -1419,7 +1525,7 @@ const toastStackStyle = {
           :add-to="ADD_TO"
           :run-from="runOffered ? ADD_TO : null"
           :run-blocked-reason="runBlockedReason"
-          @select="project.selectedTask = $event"
+          @select="selectFromBoard"
           @add="newTaskOpen = true"
           @run="openRun({ kind: 'queue' })"
           @run-task="runTask"
@@ -1469,18 +1575,34 @@ const toastStackStyle = {
               </div>
             </div>
 
+            <!-- A task still being filed: the person's own words, read-only,
+                 with no issue behind them. Alone in the column — there is no
+                 card selected on the board while this is up. -->
+            <DraftInspector v-if="rightPanel === 'draft'" :draft="agentDraft" />
+
+            <!-- What a run has taken, and the card for whichever of them is
+                 picked. The list stays above the card: the choice between them
+                 is the point, and a card that replaced the list would take the
+                 way back with it. -->
+            <ClaimedTasks
+              v-else-if="rightPanel === 'claimed'"
+              :tasks="claimedTasks"
+              :selected-id="project.selectedTask"
+              @select="project.selectedTask = $event"
+            />
+
             <TaskInspector
-              v-if="selectedIssue"
-              :issue="selectedIssue"
-              :ui-status="toUiStatus(selectedIssue.status)"
+              v-if="inspectedIssue"
+              :issue="inspectedIssue"
+              :ui-status="toUiStatus(inspectedIssue.status)"
               :busy="settingStatus"
-              :deleting="deletingId === selectedIssue.id"
+              :deleting="deletingId === inspectedIssue.id"
               @status="setSelectedStatus"
               @delete="deleteTask"
               @ask-agent="askAgentToEdit"
             />
 
-            <template v-else>
+            <template v-else-if="rightPanel === 'board'">
               <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
                 <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
                   {{ inspector.id }}

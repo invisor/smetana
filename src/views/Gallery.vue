@@ -13,12 +13,14 @@ import {
   Button,
   ChatMessage,
   Checkbox,
+  ClaimedTasks,
   CodeBlock,
   ColumnHeader,
   ContextMenu,
   DependencyMark,
   Dropdown,
   DependencySpine,
+  DraftInspector,
   EmptyState,
   FileEditor,
   FileTree,
@@ -216,6 +218,29 @@ const SPARSE_ISSUE = {
   labels: [],
   dependencies: []
 }
+
+/* Two drafts, because the pair of Auto fields is the whole of what can go wrong
+   here: Auto arrives as null and has to be drawn as the word rather than as a
+   type nobody chose. One has both fields set, the other neither. */
+const FULL_DRAFT = {
+  text:
+    'The log view drops lines once it is past about ten thousand of them, and nothing says so — it just stops scrolling back. It should either keep them or say plainly that it stopped.',
+  issueType: 'bug',
+  priority: 1
+}
+const AUTO_DRAFT = {
+  text: 'Vendor the latin subset of IBM Plex Mono so an offline build has a face to set identifiers in.',
+  issueType: null,
+  priority: null
+}
+
+/* What a run has taken. Three of them, one without a title — the tracker may
+   not hold an issue the run claimed, and the id alone is still a row. */
+const CLAIMED = [
+  { id: 'smetana-42', title: 'Show the tracker state on a non-empty board too' },
+  { id: 'smetana-9je', title: 'Deterministic status colours for custom statuses, including the very long ones' },
+  { id: 'smetana-hvw', title: null }
+]
 
 /* bd's six types plus a custom one, to show both halves of the type palette:
    the three that carry a hue and the neutral set everything else falls into. */
@@ -586,6 +611,19 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           />
         </div>
       </div>
+      <!-- The other thing that stands in the inspector's slot: a task an agent
+           is filing, which has no id, no status and nothing to act on. Both
+           Auto positions are here, because Auto arrives as null and drawing it
+           as anything but the word would claim a choice nobody made. Same
+           320px, so the two panels can be compared where they actually sit. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
+        <div :style="{ width: '320px' }">
+          <DraftInspector :draft="FULL_DRAFT" />
+        </div>
+        <div :style="{ width: '320px' }">
+          <DraftInspector :draft="AUTO_DRAFT" />
+        </div>
+      </div>
     </section>
 
     <section :style="sectionStyle">
@@ -667,6 +705,18 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
            caption at once, and a scrollbar would hide the last of them. -->
       <div :style="{ width: '252px', height: '224px', border: 'var(--border-w) solid var(--border)' }">
         <AgentList :rows="agentRows" :active-id="2" />
+      </div>
+      <!-- What that second row's run has taken, drawn where it actually
+           appears: the right column at its shipped 340px, padded by
+           --panel-pad the way the inspector column is, so the negative margin
+           the list reaches back out with lands on the real edge. 340 is the
+           outer width — box-sizing is border-box tree-wide — and the padding is
+           a token rather than a number, because it is 12px comfortable and 8px
+           compact and a literal could only be right at one of them. The third
+           row has no title, which is what an id the tracker has not caught up
+           with looks like. -->
+      <div :style="{ width: '340px', padding: '0 var(--panel-pad)' }">
+        <ClaimedTasks :tasks="CLAIMED" selected-id="smetana-9je" @select="() => {}" />
       </div>
     </section>
 
