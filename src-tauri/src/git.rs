@@ -74,12 +74,45 @@ pub fn parse_gitdir(contents: &str, project: &Path) -> Option<PathBuf> {
 
 /// The project's git directory: `.git` itself in an ordinary clone, whatever
 /// the `.git` file points at in a linked worktree.
+///
+/// This is the per-worktree half of the repository, and only a handful of
+/// things live in it: `HEAD`, `ORIG_HEAD`, the index and `logs/HEAD`. Anything
+/// shared — `refs/heads/`, `packed-refs`, `logs/refs/heads/` — is in the common
+/// directory instead, which is what [`common_dir`] resolves.
 fn git_dir(project: &Path) -> Option<PathBuf> {
     let dot_git = project.join(".git");
     if dot_git.is_dir() {
         return Some(dot_git);
     }
     parse_gitdir(&std::fs::read_to_string(&dot_git).ok()?, project)
+}
+
+/// Where the shared half of the repository is, out of a `commondir` file.
+///
+/// A linked worktree's git directory holds a `commondir` line naming the
+/// repository everything else is shared with — usually the relative `../..`,
+/// which from `.git/worktrees/<name>` is `.git`, and it is relative to that
+/// directory rather than to the checkout. An absolute path is accepted too,
+/// which is what git writes when the worktree was made with one.
+pub fn parse_commondir(contents: &str, git_dir: &Path) -> Option<PathBuf> {
+    let path = contents.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let path = Path::new(path);
+    Some(if path.is_absolute() { path.to_path_buf() } else { git_dir.join(path) })
+}
+
+/// The directory the refs actually live in.
+///
+/// A main checkout has no `commondir` file at all — it *is* the common
+/// directory — and so is the answer whenever the file is missing, empty or
+/// unreadable, the same "nothing here is an error" this whole file keeps to.
+fn common_dir(git_dir: &Path) -> PathBuf {
+    std::fs::read_to_string(git_dir.join("commondir"))
+        .ok()
+        .and_then(|text| parse_commondir(&text, git_dir))
+        .unwrap_or_else(|| git_dir.to_path_buf())
 }
 
 pub fn head(project: &Path) -> Head {
@@ -185,9 +218,16 @@ fn loose_branches(heads: &Path, prefix: &str, out: &mut Vec<String>) {
 /// The order is the whole point of the list: on a project with a couple of
 /// dozen branches, the one somebody merges into every day is nowhere in
 /// particular alphabetically. `by_recency` says what "recently" means and why
-/// it is the reflog that answers it. `git_dir` already resolves a linked
-/// worktree to the directory holding its logs, so this works from one without
-/// anything extra.
+/// it is the reflog that answers it.
+///
+/// All three sources are read from the **common** directory, which is the same
+/// directory in an ordinary clone and a different one in a linked worktree:
+/// `refs/heads/`, `packed-refs` and `logs/refs/heads/` are shared by every
+/// worktree of a repository and simply do not exist next to a linked
+/// worktree's HEAD. Reading them from the per-worktree directory left the
+/// dialog offering exactly one branch — the one the worktree is on, which is
+/// the one nobody needs to merge into. HEAD stays per-worktree, because that
+/// is the branch this checkout is actually on.
 ///
 /// Nothing here is an error, the same as everywhere else in this file: a folder
 /// outside git, or one whose refs cannot be read, has no branches to offer and
@@ -197,9 +237,10 @@ fn loose_branches(heads: &Path, prefix: &str, out: &mut Vec<String>) {
 /// worse than offering the one branch that exists.
 pub fn branches(project: &Path) -> Vec<String> {
     let Some(dir) = git_dir(project) else { return Vec::new() };
+    let common = common_dir(&dir);
     let mut out = Vec::new();
-    loose_branches(&dir.join("refs/heads"), "", &mut out);
-    if let Ok(packed) = std::fs::read_to_string(dir.join("packed-refs")) {
+    loose_branches(&common.join("refs/heads"), "", &mut out);
+    if let Ok(packed) = std::fs::read_to_string(common.join("packed-refs")) {
         out.extend(parse_packed_refs(&packed));
     }
     if let Some(current) = head(project).branch {
@@ -207,7 +248,7 @@ pub fn branches(project: &Path) -> Vec<String> {
     }
     out.sort();
     out.dedup();
-    let logs = dir.join("logs/refs/heads");
+    let logs = common.join("logs/refs/heads");
     let touched = out
         .into_iter()
         .map(|name| {
@@ -228,8 +269,15 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Where a test's directory would be, without touching the disk — the
+    /// absolute-`commondir` case has to name the path before anything is
+    /// written into it.
+    fn scratch_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("smetana-git-{}-{name}", std::process::id()))
+    }
+
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("smetana-git-{}-{name}", std::process::id()));
+        let dir = scratch_path(name);
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create the temp directory");
         dir
@@ -306,6 +354,95 @@ mod tests {
         assert_eq!(head(&linked).branch.as_deref(), Some("feat/x"));
         let _ = fs::remove_dir_all(&root);
     }
+    /// A linked worktree on disk, laid out the way git lays one out: the shared
+    /// half of the repository under `repo/.git`, and next to the worktree's own
+    /// HEAD nothing but `commondir` and a per-worktree `logs/HEAD`. `commondir`
+    /// is written relative unless a path is given, since that is what git
+    /// writes. Returns the main checkout and the linked one.
+    fn linked_worktree(name: &str, commondir: Option<&str>) -> (PathBuf, PathBuf, PathBuf) {
+        let root = scratch(name);
+        let repo = root.join("repo");
+        let linked = root.join("wt");
+        let wt_git = repo.join(".git/worktrees/wt");
+        fs::create_dir_all(wt_git.join("logs")).expect("create the worktree git directory");
+        fs::create_dir_all(&linked).expect("create the worktree");
+        fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write the main HEAD");
+        fs::write(wt_git.join("HEAD"), "ref: refs/heads/feat/x\n").expect("write the worktree HEAD");
+        // Per-worktree, and deliberately not what branch ordering reads.
+        fs::write(wt_git.join("logs/HEAD"), "").expect("write the worktree HEAD log");
+        fs::write(wt_git.join("commondir"), format!("{}\n", commondir.unwrap_or("../.."))).expect("write commondir");
+        fs::write(linked.join(".git"), format!("gitdir: {}\n", wt_git.display())).expect("write the .git file");
+        (root, repo, linked)
+    }
+
+    #[test]
+    fn commondir_resolves_against_the_worktrees_own_git_directory() {
+        let git_dir = Path::new("/Users/you/repo/.git/worktrees/feature");
+        let relative = parse_commondir("../..\n", git_dir);
+        assert_eq!(relative.as_deref(), Some(Path::new("/Users/you/repo/.git/worktrees/feature/../..")));
+
+        let absolute = parse_commondir("/Users/you/repo/.git\n", git_dir);
+        assert_eq!(absolute.as_deref(), Some(Path::new("/Users/you/repo/.git")));
+
+        assert_eq!(parse_commondir("", git_dir), None);
+        assert_eq!(parse_commondir("  \n", git_dir), None);
+    }
+
+    #[test]
+    fn a_repository_without_a_commondir_file_is_its_own_common_directory() {
+        // The ordinary clone, which must keep reading exactly where it did.
+        let dir = scratch("commondir-absent");
+        assert_eq!(common_dir(&dir), dir);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_worktree_offers_every_branch_of_the_repository_not_only_its_own() {
+        // The bug this pins: `refs/heads/`, `packed-refs` and `logs/refs/heads/`
+        // are shared and live in the common directory, so reading them next to
+        // the worktree's HEAD found nothing and the dialog offered one branch —
+        // the one the worktree is already on, which is the one nobody merges
+        // into.
+        let (root, repo, linked) = linked_worktree("worktree-branches", None);
+        let heads = repo.join(".git/refs/heads");
+        fs::create_dir_all(heads.join("feat")).expect("create refs/heads/feat");
+        for name in ["main", "staging"] {
+            fs::write(heads.join(name), "a1b2c3\n").expect("write the ref");
+        }
+        fs::write(heads.join("feat/x"), "d4e5f6\n").expect("write the nested ref");
+        // Packed and never touched here: the fresh-clone case, in the tail.
+        fs::write(repo.join(".git/packed-refs"), "c0ffee refs/heads/zeta\n").expect("write packed");
+
+        let logs = repo.join(".git/logs/refs/heads");
+        fs::create_dir_all(logs.join("feat")).expect("create the logs");
+        let log = |at: i64| format!("0000000 a1b2c3 flexo <f@e.com> {at} +0300\tcommit: x\n");
+        fs::write(logs.join("main"), log(100)).expect("write main's log");
+        fs::write(logs.join("staging"), log(300)).expect("write staging's log");
+        fs::write(logs.join("feat/x"), log(200)).expect("write the nested log");
+
+        // The same list as in the main checkout, in reflog order rather than the
+        // alphabetical tail every branch would fall into with no logs found.
+        let expected = vec!["staging", "feat/x", "main", "zeta"];
+        assert_eq!(branches(&linked), expected);
+        assert_eq!(branches(&repo), expected);
+        // And HEAD is still the worktree's own, not the main checkout's `main`.
+        assert_eq!(head(&linked).branch.as_deref(), Some("feat/x"));
+
+        fs::remove_dir_all(&root).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_worktree_with_an_absolute_commondir_reads_the_same_place() {
+        // git writes an absolute path when the worktree was created with one.
+        let common = scratch_path("worktree-abs").join("repo/.git");
+        let (root, repo, linked) = linked_worktree("worktree-abs", Some(&common.display().to_string()));
+        fs::create_dir_all(repo.join(".git/refs/heads")).expect("create refs/heads");
+        fs::write(repo.join(".git/refs/heads/other"), "a1b2c3\n").expect("write the ref");
+
+        assert_eq!(branches(&linked), vec!["feat/x".to_string(), "other".to_string()]);
+        fs::remove_dir_all(&root).expect("remove the temp directory");
+    }
+
     #[test]
     fn packed_refs_gives_up_its_branches_and_keeps_its_tags_out() {
         // A fresh clone keeps nearly every branch in here and almost nothing
