@@ -103,8 +103,9 @@ pub async fn terminal_write(
     ask(&handle, |tx| Request::Write(id, data, tx)).await?
 }
 
-/// Send and wait for the screen to settle. Refuses with `busy` when the
-/// session is waiting for a human: see the comment in service.rs.
+/// Send and wait for the output to stop, then hand back the screen. Refuses
+/// with `busy` when the session is waiting for a human: see the comment in
+/// service.rs.
 #[tauri::command]
 pub async fn terminal_run_capture(
     handle: State<'_, TerminalHandle>,
