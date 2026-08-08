@@ -1,0 +1,30 @@
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭──────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.146.0)                           │
+│                                                      │
+│ model:     gpt-5.5 high   /model to change           │
+│ directory: /…/tmp/example/project                    │
+╰──────────────────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+
+› Append a line saying bye to readme.txt. Use apply_patch, not the shell.
+
+
+• I’ll make the requested edit directly with apply_patch, keeping the change limited to readme.txt.
+
+• Edited readme.txt (+1 -0)
+    1  hello
+    2 +bye
+
+
+  Would you like to make the following edits?
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for these files (a)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel                                                                               

@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
-use super::detect::{detect, DetectInput};
+use super::detect::{detect, DetectInput, Quiet};
 use super::model::{Exit, Session, SessionId, SessionState, TerminalError};
 use super::pty::{Chunk, Pty};
 use super::ring::Ring;
@@ -35,6 +35,15 @@ const FLUSH: Duration = Duration::from_millis(16);
 /// dumps the whole screen of every live session into fresh `String`s and
 /// clones its question, which at 60 Hz is a lot of burn for an app that is
 /// idle most of the time.
+///
+/// This is also the rate at which the screen is compared with the one before
+/// it, and therefore the resolution of layer A's clock. A screen that changed
+/// and changed back inside one interval reads as still — with the interval
+/// free-running against whatever the agent is drawing, that would have to hold
+/// across the forty-odd samples an `IDLE_AFTER` is made of, and the cost of
+/// being wrong is one dot drawn dashed instead of spinning. Lengthening this
+/// interval also lengthens how late `Idle` can arrive — see the note at the top
+/// of `detect.rs`.
 const REASSESS_EVERY: u32 = 4;
 /// The longest a capture may wait, whatever the caller asked for. A timeout
 /// is clamped to it before it becomes a deadline, so an absurd number costs a
@@ -102,6 +111,14 @@ struct Live {
     /// button — by a view attaching, which is a human looking at it, and by
     /// the process exiting. Detection only reads it.
     bell_pending: bool,
+    /// Layer A's clock: how long the screen has looked the way it looks now.
+    /// Deliberately not the same thing as `last_output` — an agent waiting on
+    /// a person can keep repainting the very screen it is waiting on, and used
+    /// to read as busy for it. See the note at the top of `detect.rs`.
+    quiet: Quiet,
+    /// When bytes last arrived, whether or not they changed anything. Only
+    /// `close_captures` reads it: a capture is waiting for its own write to
+    /// come back, and the stream is what tells it the write was heard at all.
     last_output: Instant,
     /// Accumulated since the last flush — leaves as a single event on the
     /// tick.
@@ -132,10 +149,17 @@ struct ExitWaiter {
 /// How long to keep re-polling for an exit code before answering without one.
 const EXIT_CODE_GRACE: Duration = Duration::from_secs(5);
 
-/// An unclosed capture: wait until this session's screen has held still for
-/// `settle`, then hand back its lines. It lives in the worker's loop rather
+/// An unclosed capture: wait until this session's output has stopped for
+/// `settle`, then hand back its screen. It lives in the worker's loop rather
 /// than in a task of its own, because the screen is the worker's state and is
 /// never handed out.
+///
+/// The stream and not the picture, which is the opposite of what layer A
+/// measures now, and deliberately: a capture has just written into the session
+/// and is waiting for an answer to arrive at all, and a screen that happens to
+/// look unchanged for a moment mid-answer is not one. Reading a half-finished
+/// reply as a settled one would be handing a caller the wrong text with nothing
+/// to say so.
 struct Capture {
     id: SessionId,
     settle: Duration,
@@ -363,9 +387,14 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             continue;
         }
         let lines = live.screen.lines();
+        // The screen against the one this session showed last tick — the
+        // clock is restarted by a change to the picture, not by the arrival of
+        // bytes. `into_std` because `Quiet` keeps no clock of its own and is
+        // driven from here, which is what makes it testable without sleeping.
+        let still_for = live.quiet.still_for(&lines, Instant::now().into_std());
         let out = detect(DetectInput {
             bell_pending: live.bell_pending,
-            quiet_for: live.last_output.elapsed(),
+            still_for,
             screen: &lines,
             profile: live.profile,
         });
@@ -377,9 +406,9 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
     }
 }
 
-/// On every tick, check each unclosed capture: the screen has held still for
-/// `settle` — hand it over; the deadline has passed — hand back Timeout. The
-/// answer goes out exactly once.
+/// On every tick, check each unclosed capture: no output for `settle` — hand
+/// the screen over; the deadline has passed — hand back Timeout. The answer
+/// goes out exactly once.
 fn close_captures(captures: &mut Vec<Capture>, sessions: &HashMap<SessionId, Live>) {
     let now = Instant::now();
     let mut keep = Vec::new();
@@ -507,6 +536,7 @@ fn handle(
                         ring: Ring::new(RING_CAP),
                         screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),
                         bell_pending: false,
+                        quiet: Quiet::new(),
                         last_output: Instant::now(),
                         pending: Vec::new(),
                         seq: 0,
@@ -609,15 +639,26 @@ fn handle(
                 // the same fact arriving sooner — it is already on the `Live`,
                 // and only a human clears it: by answering, or by putting the
                 // session on screen and reading what it rang about.
+                //
+                // What this does not catch, and cannot: a dialog whose agent
+                // rang no bell and whose profile failed to read it. Layer A now
+                // calls that session `Idle` rather than `Running`, which is the
+                // truth but not a refusal — an idle session is exactly what a
+                // capture expects to write into, so `Idle` can never be part of
+                // this guard. Only the profile can tell the two apart.
                 Some(live) if live.session.state == SessionState::NeedsYou || live.bell_pending => {
                     let _ = tx.send(Err(TerminalError::Busy));
                 }
                 Some(live) => {
                     live.pty.write(input.as_bytes());
                     // The count of silence starts over: a screen that settled
-                    // before our write is not an answer to it.
+                    // before our write is not an answer to it. Both clocks —
+                    // the capture is waiting on the stream, detection on the
+                    // picture, and neither may credit this session for having
+                    // been quiet before we spoke to it.
                     let now = Instant::now();
                     live.last_output = now;
+                    live.quiet.restart(now.into_std());
                     // Waiting inline would stop the worker serving every
                     // other session for as long as the wait; the tick closes
                     // this instead.

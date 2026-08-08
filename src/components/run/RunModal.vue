@@ -12,6 +12,7 @@ import Dropdown from '../core/Dropdown.vue'
 import Icon from '../core/Icon.vue'
 import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
+import { pickBranch } from './branchChoice.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -117,6 +118,57 @@ const createBranch = ref(false)
 const liveCheck = ref(true)
 const fileFindings = ref(true)
 
+/* Whether the branch in the field is somebody's answer or this dialog's guess.
+   Set in exactly one place — the handler under the control — which is why the
+   control is not on `v-model` here: through `v-model` a fill and a choice are
+   the same assignment, and nothing downstream could tell them apart. */
+const branchChosen = ref(false)
+
+/* Remembered, else the project's default, else the first in the list. The rule
+   itself is in branchChoice.js, where a test can reach it. */
+const fillBranch = () => {
+  branch.value = pickBranch(props.branches, props.remembered?.targetBranch, props.defaultBranch)
+  /* Everything this fills with is a branch that exists — pickBranch offers
+     nothing else — so there is never anything to create.
+
+     Note what makes that safe, since it is not local: `createBranch` is guarded
+     by `branchChosen`, which this function does not set, and the two only stay
+     in step because BranchSelect never raises `create` on its own — both paths
+     that do (`pick` and `commitName`) emit `update:modelValue` first, so
+     `chooseBranch` has already run by the time `create` arrives and no fill can
+     land between the two. If that ever stops being true, the fix is here: an
+     `@update:create` handler setting `branchChosen` would make the invariant
+     local instead of borrowed. */
+  createBranch.value = false
+}
+
+/* Somebody's own answer, and the one thing the late fill below will not touch
+   afterwards. `create` needs no handler of its own: the control only raises it
+   while naming a branch, which is a choice by definition and arrives with a
+   choice of `modelValue` in the same breath. */
+const chooseBranch = (name) => {
+  branch.value = name
+  branchChosen.value = true
+}
+
+/* The list is often not there when the dialog opens: `openRun` shows the dialog
+   and only then goes to disk for the branches. So the fill on opening can run
+   against nothing, and this is what runs it again once they land. Without it the
+   field opened on "Pick a branch" every time and Run stayed disabled until
+   somebody picked one by hand, which left the remembered branch, the config
+   default and the fall back to the most recent branch all dead at once
+   (smetana-6gs, smetana-o8r).
+
+   Only while nobody has chosen. An answer arriving late must never overwrite a
+   person's own pick — that is what `branchChosen` is for, and why it cannot be
+   set by anything but the control. */
+watch(
+  [() => props.branches, () => props.defaultBranch, () => props.remembered],
+  () => {
+    if (props.open && !branchChosen.value) fillBranch()
+  }
+)
+
 /* Filled on opening rather than on mounting: the dialog is kept in the tree
    and reopened, and its fields have to be what this project remembers now, not
    what the last project remembered. */
@@ -125,14 +177,10 @@ watch(
   (open) => {
     if (!open) return
     const kept = props.remembered ?? {}
-    /* A remembered branch that no longer exists is dropped in silence rather
-       than shown as an option that would fail: the branch list is the truth
-       here, and a stale name in settings is not worth a warning. */
-    const wanted = [kept.targetBranch, props.defaultBranch].find(
-      (name) => name && props.branches.includes(name)
-    )
-    branch.value = wanted ?? props.branches[0] ?? ''
-    createBranch.value = false
+    /* A fresh dialog: whatever was picked by hand last time was for that run,
+       and the three steps above decide this one. */
+    branchChosen.value = false
+    fillBranch()
     const keptMode = kept.mode ?? 'auto'
     mode.value = keptMode === 'solo' && !soloAllowed.value ? 'auto' : keptMode
     priority.value = kept.minPriority ?? props.defaultPriority
@@ -347,11 +395,14 @@ const errorStyle = {
 
       <div :style="row">
         <span :style="labelStyle">Merge into</span>
+        <!-- Not `v-model`: see `chooseBranch`. What the control emits is a
+             person's answer, and it has to stay one. -->
         <BranchSelect
-          v-model="branch"
+          :model-value="branch"
           v-model:create="createBranch"
           :branches="branches"
           :disabled="locked"
+          @update:model-value="chooseBranch"
         />
       </div>
 
