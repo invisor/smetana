@@ -40,7 +40,7 @@ npm run test:watch   # the same, in watch mode
 cd src-tauri && cargo test
 ```
 
-Two test runners: `npm test` covers the front end's pure logic — the eight plain modules and the
+Two test runners: `npm test` covers the front end's pure logic — the nine plain modules and the
 stores — and `cargo test` covers the Rust side. Neither covers components: there is no component test
 runner and no linter or formatter, so do not invent one, and do not claim a change is "tested" on the
 basis of a build succeeding.
@@ -289,6 +289,21 @@ offers an empty list. The one name that is added whatever the refs say is the cu
 repository whose only branch has no commits yet has no ref file at all, and a merge target field
 offering nothing would be worse than one offering the single branch that exists.
 
+**Refs are shared and HEAD is per-worktree, and conflating the two is `smetana-5t7`.** A linked
+worktree's git directory — whatever its `.git` file points at, `.git/worktrees/<name>` — holds only
+the per-checkout half: `HEAD`, `ORIG_HEAD`, the index, `logs/HEAD`. Everything a branch list is made
+of lives in the *common* directory instead, named by a `commondir` file sitting next to that git
+directory, and `parse_commondir` resolves it — relative (git's usual `../..`, which from
+`.git/worktrees/<name>` is `.git`) against the git directory rather than the checkout, absolute taken
+as-is, and missing meaning an ordinary clone that *is* its own common directory. So `refs/heads/`,
+`packed-refs` and `logs/refs/heads/` are all read from that one resolved place, while `HEAD` stays
+where it is, because the branch this checkout is on is exactly the per-worktree fact. Before that,
+opening a linked worktree as a project offered exactly one branch in the run dialog — the branch the
+worktree was already on, which is the single branch nobody needs to merge into — and the reflog
+ordering did not work at all, since the log directory was not there either and every branch fell into
+the alphabetical tail. Live-checked against this repository's own linked worktree: the same 30-branch
+list as the main checkout, in the same reflog order, with HEAD still reading per-worktree.
+
 The counters next to it — uncommitted files, running agents — are still fixture.
 
 ### The terminal: agent sessions
@@ -374,7 +389,7 @@ every session, active or not** — `reassess()` walks all of them — and that a
 point: a background agent's row can turn `needs-you` while its bytes never leave the worker.
 
 Detection is two layers that degrade in one direction only. Layer A (`detect.rs`) is agent-independent
-— a bell, or three seconds of silence — and has nothing in it to break. Layer B is `Profile::question`,
+— a bell, or three seconds of stillness — and has nothing in it to break. Layer B is `Profile::question`,
 so it lives with the agent it reads rather than in this subsystem: `agents/claude.rs` reads
 Claude Code's own interface — a question line and numbered options — and a version bump to that CLI can
 break it. It did, in exactly that way: the dialog was a box until 2.1, and the frame around it was what
@@ -389,17 +404,96 @@ deliberately quiet: a finished agent and a waiting agent both simply stop produc
 must not guess between them — loudness comes only from the bell or from a layer B match, never from
 silence alone.
 
-Layer A is **not**, today, the safety net the paragraph above implies for Claude Code, and that is
-`smetana-8h7`: it rings no bell on a permission prompt, and the dialog repaints roughly every 0.6
-seconds while it waits, so the three-second silence never arrives either. With layer B unmatched, a
-waiting agent reads as busy and nothing says a human is needed. Do not lean on the fallback when
-changing this — it is measured, and it is not there.
+That last rule is a rule **plus one named exception**, and the shape of the exception is the part
+worth keeping. Claude Code's one-off folder-trust dialog — asked the first time it starts somewhere
+new, which is a new project's very first agent and the worst possible moment to stall silently — lays
+its text out differently: under the heading come the path, the question, a sentence about what the
+agent will be able to do, and a link caption. It is the caption, "Security guide", that sits directly
+above the options, so the ordinary reading declined it and the agent waited with nothing on screen to
+say so (smetana-xh7). The fix opens a second, narrower reading **only after the generic one has
+declined**, and only for a dialog that names itself: `const HEADINGS` is a literal table — one entry
+today, `"Accessing workspace:"` — of strings such a dialog prints and ordinary output does not. Inside
+it the search is fenced between that heading and the options, never above the heading and never in
+what the agent itself wrote, and it takes the first paragraph carrying a question mark, cut at the
+mark, because the trust dialog's question runs on past it into an aside and a piece of advice.
+
+Both obvious shortcuts were refused, and each would have cost something real. Reaching past a blank
+line for the nearest `?` — for the whole reader rather than under a heading — would drag a diff
+preview and a title into the permission dialog's question, which is exactly what the blank-line and
+rule boundaries exist to prevent. Dropping the question-mark requirement for everyone would leave the
+cursor as the only guard against a numbered list in the agent's own prose, and a loud row is budgeted
+at one or two a screen. Neither guard is relaxed: tests pin that a numbered list under that very
+heading with nobody pointing at it is still refused, that an unheaded dialog still needs its question
+mark, and that a question mark in the agent's output *above* the heading is not read as the dialog's.
+A wording change on Claude Code's side loses the reading and leaves layer A in place, which is how
+the rest of that file already fails.
+
+The fixture behind it is a real trust dialog captured under a PTY off claude 2.1.226 and rendered
+through `terminal/screen.rs` — and unlike the two permission fixtures beside it, it is the dialog
+alone, because that is the whole of what was captured and an invented surrounding screen would prove
+nothing. The live check turned up the one fact that makes the heading gate safe to lean on: the
+dialog is drawn on an otherwise empty screen, so the heading is never pushed off the top of the grid
+and out of the reader's reach.
+
+**Quiet is measured on the screen, not on the byte stream**, and that is what `Quiet` in `detect.rs`
+exists for. An agent that is waiting can still be talking: Claude Code 2.1 repaints an open permission
+dialog about every 0.61 s for as long as it stands there, and while quiet meant "no bytes arrived",
+every one of those chunks restarted the clock — so a session waiting on a human read as `Running` for
+as long as it waited and `IDLE_AFTER` was simply unreachable (`smetana-8h7`). A repaint that draws the
+same text changes nothing a person could act on, so what gets timed is the picture they see. The rule
+cuts the other way too, deliberately: a session whose screen holds still for `IDLE_AFTER` is called
+idle even while bytes pour in, which is the honest reading and cheap to be wrong about.
+
+`Quiet` keeps a hash rather than the screen — this runs for every live session on every detection
+tick, and holding the previous screen would mean copying kilobytes per session per tick. **The
+fingerprint deliberately covers the plain text of the visible rows and nothing else**: no colour, no
+bold or reverse, no cursor, because `Screen::lines` comes from `vt100::Screen::rows`, which writes
+characters only. So an attribute-only repaint, or the cursor moving over unchanged text, counts as
+stillness. That exclusion is the fix, and **feeding attributes into it would bring the bug straight
+back** — an agent waiting on a person redraws its dialog to keep the highlight under the selected
+option alive, which is a colour repaint of identical text, and the symptom of getting it wrong is
+silence: a session needing a human that reads as busy with nothing anywhere to say so. Getting it
+wrong the other way, for an agent whose spinner animates purely in colour, costs a dashed dot instead
+of a spinning one.
+
+**Half of `smetana-8h7` is fixed and half is not, and the difference matters when changing this.**
+The silence half is closed. The bell half is not: Claude Code still rings none on a permission prompt,
+so a bell is not the fallback here either. What an unmatched layer B now produces is `Idle` — which
+reaches the front end as the `ready` status, whose loudness is `live`, the same as `running`. So the
+whole visible cost of a waiting agent that no profile could read is the dot beside its row turning
+from the spinning `loader-circle` into `circle-dashed`. **Nothing shouts, nothing dims, and nothing
+else in the app acts on the state at all.** Layer A is still not a safety net that says a human is
+needed — it never claims one is — and the two states that would cost something to get wrong are
+untouched: `NeedsYou` comes only from a bell or from a profile's own match, never from silence of any
+kind. One honest caveat on the fix: the premise that the permission dialog repaints *identical* text
+is unverified. The live check could not reach a permission dialog without spending model quota, and
+the trust dialog is no stand-in — it was measured emitting zero bytes after the first 0.6 s, so it
+exercises nothing the old clock would have failed.
+
+An agent that has genuinely finished still reaches `Idle` at about three seconds, but not to the
+millisecond it did before, and the drift goes both ways. Earlier, because the last bytes a CLI writes
+are often invisible ones — showing the cursor again, resetting the window title — which the old clock
+counted and this one does not. Later, because the clock is stamped when the worker next looks rather
+than when the screen actually changed, so it can lag by one detection interval (`REASSESS_EVERY` ×
+`FLUSH`, ~64 ms today). Anyone lengthening that interval lengthens this error with it, and also
+coarsens the resolution at which a change is seen at all.
 
 `terminal_run_capture` — the call an automated flow uses to drive a session and read back its
 settled screen — refuses with `busy` when the session is `needs-you`, and also when a bell is still
 unrung even if state hasn't caught up yet (state lags the fact by up to `SETTLE` plus a tick; the bell
 flag is that same fact arriving sooner). Writing into an open permission dialog would answer, on a
-human's behalf, a question the app never read and the human never saw.
+human's behalf, a question the app never read and the human never saw. **What that guard cannot
+catch is the other half of `smetana-8h7`**: a dialog whose agent rang no bell and whose profile failed
+to read it. Layer A now calls that session `Idle`, which is the truth and not a refusal — an idle
+session is exactly what a capture expects to write into, so `Idle` can never join this guard without
+breaking the ordinary case. Only the profile can tell the two apart, which is another way of saying
+layer B is the whole of the protection here.
+
+The capture's own settle is the one place the stream is still the right thing to measure, and it is
+deliberately the opposite of what layer A now does: a capture has just written into the session and is
+waiting for an answer to arrive at all, so a screen that happens to look unchanged mid-answer is not a
+settled one. Reading a half-finished reply as finished would hand a caller the wrong text with nothing
+to say so.
 
 Sessions do not survive a restart, and nothing about them is written to `settings.json` — a session
 row with a dead process behind it is worse than an empty list. `RunEvent::Exit` calls
@@ -524,7 +618,55 @@ harness leaks into the code that decides what we want done: `prompt.rs` takes an
 | `library.rs` | where the bundled skills are, whether the person already has their own superpowers, and reading a `SKILL.md` for inlining |
 | `prompt.rs` | an intent becomes the text the agent opens on — pure; the skill text, where one is needed, is read by the caller and passed in |
 | `claude.rs` | Claude Code: `--plugin-dir`, and layer B, its permission dialog read off the screen |
-| `codex.rs` | Codex: `Inline`, and no layer B — a person waiting on a Codex approval shows as waiting without the question (smetana-603) |
+| `codex.rs` | Codex: `Inline`, `-i` for images, and its own layer B — the approval dialog read off a screen with no frame anywhere on it (smetana-603) |
+
+**Codex has a layer B of its own now, and it is genuinely a different reader — not Claude's with the
+glyphs swapped.** The two deliberately share no code, because a glyph one harness happens to use today
+is exactly the kind of thing that drifts. Three properties of Codex's interface force the difference,
+each measured off fixtures in `src-tauri/tests/fixtures/` captured under a PTY at 60 and 120 columns
+from CLI 0.146.0 — the command dialog, the edit dialog, the trust prompt, the update prompt, a session
+at work, and a draft left in the composer.
+
+The cursor is `›` (U+203A), not Claude's `❯`, and Codex draws that same glyph in two other places: in
+front of the person's own submitted prompt in the transcript, and in front of the placeholder in the
+empty composer. So the marker has to be the **first non-blank character of the line** rather than
+merely present in it — a label that happened to contain one would otherwise read as the selected
+option and point a person at the wrong answer.
+
+There is no frame at all, and **the only structural boundary is indentation**. Codex draws the first
+row of every transcript entry hard against column 0 and indents everything continuing it, and
+top-level blocks are separated by **two** blank rows where paragraphs inside one block are separated
+by one. That single-versus-double distinction is the whole of what separates the second paragraph of
+an agent's answer from a dialog drawn underneath it; both are prose indented by two under a bullet at
+column 0.
+
+The rule that took three versions to get right is what a block is **refused** for. It is refused for
+what it hangs off — a turn of the conversation, meaning `•`, `◦` or `›` specifically — and not for how
+closely it sits. Bounding the block by indentation alone held only while the turn above fitted on one
+row and failed the moment it wrapped, which is the common case in a narrow centre pane. Refusing a
+block only when it was glued to the turn above with no blank between missed whenever that turn's first
+paragraph was a single row, since the row beneath is then the blank before its *second* paragraph and
+the block looks unanchored. Distinguishing a conversational turn from any old column-0 line is also
+what keeps the trust prompt readable, because that prompt hangs off `> You are in …` rather than off a
+bullet. Two other refinements come from real screens: a long label is gathered across the rows it
+wrapped onto, since cutting it at the pane's wrap column once left the update prompt's first option
+reading as a truncated fragment of the shell command behind it — the update prompt at 60 columns wraps
+that option over three rows and numbers none of them; and a paragraph that is a question outright is
+preferred over one that
+merely opens with a question mark, because in the command dialog the preview sits *below* the
+question, so a command containing `x ? 1 : 2` would otherwise be handed back as what a person is being
+asked.
+
+The known gap is recorded rather than papered over: **a scrolled screen with no anchor left on it**.
+When the turn that owns the prose has scrolled off the top, the walk upward reaches row 0 having met
+nothing, and indented prose ending in a question mark above a numbered draft still reads as a dialog;
+a test pins the case by name. Closing it would mean requiring every block to be anchored, which would
+then refuse Codex's update prompt — a real dialog drawn from row 0. That is a trade between a false
+match in a rare scroll position and a miss in an ordinary one, with no measurement available to settle
+it. Every rule here is written to fail closed for the same reason the design budgets loudness: a
+session wrongly turned `needs-you` spends one of the one or two loud rows on the screen and makes
+`terminal_run_capture` refuse a session with nothing open on it, so a change to that CLI should cost
+a miss rather than a false alarm.
 
 Three more methods on `Profile` are the same split one level down, and each one's **default is a
 working answer rather than a gap** — that is the shape to keep when a fourth is added. `images` says
@@ -808,6 +950,35 @@ recreated, or a project reopened, finds the place it was left in.
 `moveColumn` returns the very array it was given, by reference, when nothing moved — an out-of-range
 index, or a move to where the column already is. The caller leans on that identity to tell "nothing
 happened" from "something did" without comparing contents.
+
+`components/run/branchChoice.js` is the third of that family and was pulled out for the same reason:
+a `.vue` file is the one thing no test in this repository can reach, so the whole of the rule filling
+the run dialog's branch field lives outside the component. `pickBranch` is three steps in one order —
+what this project was left at last time, then its own `[defaults].target_branch`, then whatever the
+list puts first, which is the most recently worked-on branch because `git_branches` orders by reflog.
+A remembered name that is no longer in the list is skipped in silence rather than offered, since a
+branch deleted since it was remembered would sit in the field as an option that fails on the first
+merge.
+
+The defect it was written for was not the rule being wrong but the rule running **once**, against a
+list that had not arrived yet (smetana-6gs, smetana-o8r): the dialog is shown first and the branches
+are fetched afterwards, so the fill on opening ran against nothing and the field opened on "Pick a
+branch" with Run disabled, which left the remembered branch, the config default and the fall-back to
+the most recent branch all dead at once. A watcher now refills when the list lands — **but only while
+nobody has chosen**. That is what `branchChosen` guards, and it is why the control is deliberately not
+on `v-model`: through `v-model` a fill and a person's pick are the same assignment and nothing
+downstream could tell them apart, so a late answer would overwrite a choice somebody had already made.
+
+The other half of that fix is in `git.js`, and it is a trade taken with its eyes open. `loadBranches`
+clears the list when it belongs to *another* project — offering the branches of a repository somebody
+has already left is worse than offering none — but leaves **this** project's list in place while it
+reads it again, because clearing unconditionally emptied the field under the dialog that had just
+opened. The cost is that for the length of one call the field can be filled from a list one read out
+of date: a branch deleted since the last open is still on offer in that window, and somebody picking
+it inside that window has the choice frozen by `branchChosen`, so the run goes out against a branch
+that is not there. Clearing first made that impossible — by keeping Run disabled every time, for
+everybody. The window is a single call, the field self-corrects when the list lands as long as nobody
+has chosen, and the bad case costs a run that fails at the merge.
 
 ### Settings
 
