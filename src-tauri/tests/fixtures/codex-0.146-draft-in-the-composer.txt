@@ -1,0 +1,29 @@
+╭──────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.146.0)                           │
+│                                                      │
+│ model:     gpt-5.5 high   /model to change           │
+│ directory: /…/tmp/example/project                    │
+╰──────────────────────────────────────────────────────╯
+
+  Tip: Try the Desktop app. Run 'codex app' or visit
+  https://chatgpt.com/codex?app-landing-page=true
+
+
+› Reply with exactly two paragraphs separated by a blank
+  line. Each paragraph must be at least twenty words long
+  and must end with a question mark. Do not read any files.
+
+
+• I will not read any files, inspect the workspace, or run
+  commands, and I can continue from your constraints exactly
+  as stated here, okay?
+
+  This response has exactly two paragraphs, each long enough
+  to satisfy the minimum length requirement, with both
+  ending in a question mark, correct?
+
+
+› 1. rename the module
+  2. split the test file
+
+  gpt-5.5 high · /tmp/example/project
