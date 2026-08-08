@@ -9,15 +9,16 @@
 //! `~/.codex/skills/` or repointing `CODEX_HOME` would reach into the person's
 //! own setup, so neither is done. The skill text rides in the prompt instead.
 //!
-//! Layer B is not implemented for Codex: reading its permission dialog off the
-//! screen is tracked as smetana-603. Until then layer A — a bell, or three
-//! seconds of silence — says that somebody is waiting, without the question.
+//! Layer B — Codex's own approval dialog, read off the vt100 grid — is at the
+//! bottom of this file. It reads someone else's interface and an update to that
+//! CLI can break it; when it does it breaks softly, leaving layer A in place.
 
 use portable_pty::CommandBuilder;
 
 use super::library::read_skill;
 use super::{prompt, Autonomy, Brainstorm, ImageDelivery, Intent, Launch, Profile, SkillDelivery};
 use crate::runs::model::RunMode;
+use crate::terminal::model::{Question, QuestionOption};
 
 pub struct Codex;
 
@@ -92,6 +93,10 @@ impl Profile for Codex {
         cmd
     }
 
+    fn question(&self, screen: &[String]) -> Option<Question> {
+        question(screen)
+    }
+
     /// `--dangerously-bypass-approvals-and-sandbox` rather than the gentler
     /// `--ask-for-approval never --sandbox workspace-write`, and the difference
     /// is not caution but reach: a run cuts worktrees in sibling repositories
@@ -115,6 +120,351 @@ impl Profile for Codex {
             env: vec![],
         }
     }
+}
+
+/// The glyph Codex draws against the option the cursor is on: U+203A, a single
+/// right-pointing angle quotation mark. Not Claude Code's U+276F, and the two
+/// readers deliberately do not share one: a glyph one harness happens to use
+/// today is exactly the kind of thing that would drift.
+///
+/// Codex uses the same glyph in two other places, and both are why this reader
+/// insists on the numbering as well: it prefixes the person's own submitted
+/// prompt in the transcript, and it prefixes the placeholder inside the empty
+/// composer at the foot of the screen. Neither is numbered.
+const CURSOR: char = '\u{203A}';
+
+/// One option of a dialog: `› 1. Yes, proceed (y)` or
+/// `  3. No, and tell Codex what to do differently (esc)`.
+/// Returns (index, label, whether the cursor is on it).
+///
+/// The cursor has to be the first non-blank character of the line rather than
+/// merely present in it, which is where this parts company with the Claude
+/// reader: `›` is a character Codex writes into ordinary lines, so a label
+/// containing one would otherwise read as the selected option and the app would
+/// point a person at the wrong answer.
+///
+/// The label is only the head row; a label long enough to wrap continues on the
+/// rows beneath, and `wrapped` below puts it back together. Whatever comes back
+/// keeps the shortcut hint Codex prints after it — `(y)`, `(p)`, `(esc)`. It is
+/// what a person reads on the screen, and trimming it would mean this app
+/// deciding which part of somebody else's wording is the real label.
+fn option_line(line: &str) -> Option<(usize, String, bool)> {
+    let rest = line.trim_start();
+    let selected = rest.starts_with(CURSOR);
+    let rest = if selected { rest[CURSOR.len_utf8()..].trim_start() } else { rest };
+    let dot = rest.find(". ")?;
+    let index: usize = rest[..dot].parse().ok()?;
+    let label = rest[dot + 2..].trim_end().to_owned();
+    if label.is_empty() {
+        return None;
+    }
+    Some((index, label, selected))
+}
+
+fn is_blank(line: &str) -> bool {
+    line.trim().is_empty()
+}
+
+/// The first row of a transcript entry: the person's prompt behind `›`, one of
+/// the agent's `•` bullets, a rule, the session banner. Codex draws every one
+/// of them hard against column 0 and indents everything that continues one, and
+/// on a screen with no frame anywhere on it that is the only structural
+/// boundary there is between the transcript and a dialog.
+fn is_entry(line: &str) -> bool {
+    !is_blank(line) && !line.starts_with(char::is_whitespace)
+}
+
+/// A transcript entry specifically — a turn of the conversation, rather than
+/// any old thing at column 0.
+///
+/// The distinction earns its keep in exactly one place, and without it that
+/// place cannot work at all. An agent's entry and the trust prompt are the same
+/// shape to the row: something at column 0, a blank, indented prose ending in a
+/// question mark, a blank, the options. Rejecting everything that hangs off a
+/// column-0 line would take the trust prompt with it; rejecting only what hangs
+/// off a turn of the conversation keeps it, because the trust prompt's anchor is
+/// `> You are in …` and a turn's is `•` or `›`.
+///
+/// `◦` is the same bullet in the hollow state Codex alternates it into while a
+/// turn is still running — `codex-0.146-working.txt` caught the filled form of
+/// the very same line. Naming a glyph that never appears would cost nothing
+/// here anyway: everything in this set only ever adds refusals.
+fn is_turn(line: &str) -> bool {
+    is_entry(line) && line.starts_with(['\u{2022}', '\u{25E6}', CURSOR])
+}
+
+/// The whole of an option's label, head row and any rows it wrapped onto.
+///
+/// A continuation row is anything directly under the option that is not blank,
+/// not a transcript entry and not an option of its own — measured on the update
+/// prompt at 60 columns, which wraps its first option over three rows and
+/// numbers none of them. Gathering it is not cosmetic: skipping it, which is
+/// what the first version of this did, cut every long label at whatever column
+/// the pane happened to wrap, so `Update now (runs \`sh -c 'curl -fsSL` was the
+/// whole of what a person would have been offered.
+///
+/// The blank row is what ends the list, and it is also all that stands between
+/// the last option and the footer under it. A dialog that ever drew the two
+/// without one between them would fold the footer into the last label — a
+/// cosmetic cost, and the direction to be wrong in, since the alternative is
+/// guessing at wording.
+fn wrapped(screen: &[String], row: usize, head: &str) -> String {
+    let mut words: Vec<&str> = head.split_whitespace().collect();
+    for line in &screen[row + 1..] {
+        if is_blank(line) || is_entry(line) || option_line(line).is_some() {
+            break;
+        }
+        words.extend(line.split_whitespace());
+    }
+    words.join(" ")
+}
+
+/// Is there a break in the layout strictly between these two rows — a transcript
+/// entry of its own, or the double blank Codex puts between one top-level block
+/// and the next?
+///
+/// Measured, on real screens at 60 and 120 columns: **one** blank row separates
+/// two paragraphs of the same block, **two** separate one block from another.
+/// That is the difference between the second paragraph of an agent's answer and
+/// a dialog drawn under it, and there is nothing else to tell them apart —
+/// both are prose indented by two under a `•` at column 0.
+fn parted(screen: &[String], from: usize, to: usize) -> bool {
+    let mut blanks = 0;
+    for line in &screen[from + 1..to] {
+        if is_entry(line) {
+            return true;
+        }
+        if is_blank(line) {
+            blanks += 1;
+            if blanks >= 2 {
+                return true;
+            }
+        } else {
+            blanks = 0;
+        }
+    }
+    false
+}
+
+/// The question inside one paragraph of a dialog, or `None` if there is none.
+///
+/// Two shapes, both taken from real screens. `Would you like to run the
+/// following command?` is the whole paragraph — that is `whole`. The trust
+/// prompt is a question followed by two sentences explaining it, and only the
+/// first is what a person is being asked, so a question mark with whitespace
+/// after it ends the question too — that is `opening`.
+///
+/// They are two functions and the caller tries every paragraph against `whole`
+/// before it tries any against `opening`, which is not a detail: in the command
+/// dialog the preview sits *below* the question, so the nearest paragraph is
+/// the command itself, and a command carrying `x ? 1 : 2` would otherwise hand
+/// back `$ node -e "console.log(x ?` as what a person is being asked. Preferring
+/// a paragraph that is a question outright leaves `opening` doing only the job
+/// it was written for.
+fn whole(text: &str) -> Option<String> {
+    text.ends_with('?').then(|| text.to_owned())
+}
+
+/// The first sentence of a paragraph, if it is a question.
+///
+/// The "followed by whitespace" is not decoration: the paragraph above the
+/// options can be a shell command Codex is asking to run, and `grep "what?"
+/// file` must not be read as a question. A question mark that ends a sentence
+/// is followed by a space; one inside a quoted argument is followed by the
+/// quote.
+fn opening(text: &str) -> Option<String> {
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        if c == '?' && chars.peek().is_some_and(|(_, next)| next.is_whitespace()) {
+            return Some(text[..=at].to_owned());
+        }
+    }
+    None
+}
+
+/// Codex's approval dialog: a paragraph of text and numbered options, drawn
+/// straight onto the transcript with no frame around it.
+///
+/// Read off Codex CLI 0.146.0 — the command dialog, the edit dialog, the
+/// trust-this-directory prompt, the update prompt, a session at work and a
+/// draft left in the composer are all in `tests/fixtures/`, captured under a
+/// PTY at 60 and 120 columns and rendered through the same vt100 the worker
+/// reads. Every discriminator below is a property of those screens.
+///
+/// **What this aims at, and what it does not promise.** The direction that
+/// matters is missing rather than matching: a session wrongly turned
+/// `needs-you` claims one of the one or two loud rows the design budgets, and
+/// makes `terminal_run_capture` refuse to write to a session with nothing open
+/// on it. So every rule here is written to fail closed, and a change to that
+/// CLI should cost a miss.
+///
+/// That is an aim and not a guarantee, and saying otherwise here would be worse
+/// than saying nothing — the next person would read it as a contract and stop
+/// checking. It has been untrue twice already. Both times the shape was the
+/// same: something the app had never seen on a screen turned out to be built
+/// out of the same rows a dialog is. The known open case is written out under
+/// the rules below; the unknown ones are why this is a list of properties of
+/// six screens rather than a specification of an interface nobody here owns.
+///
+/// - the options number themselves 1, 2, 3 … and the **last** such run on the
+///   screen is the dialog, since anything the agent merely printed sits above
+///   it. Same reasoning as the Claude reader, and it holds for the same reason:
+///   the dialog replaces the composer at the foot of the screen;
+/// - **exactly one** option carries the cursor. Prose never does, and a live
+///   dialog always does. More than one would not be this dialog at all;
+/// - there are **at least two** options, and nothing parts them from one
+///   another — a wrapped label may sit between two of them, a blank pair or
+///   another transcript entry may not;
+/// - the question is in the block directly above the options, and that block is
+///   what is left after the transcript is cut away: the walk up stops at a
+///   line drawn at column 0 or at the double blank between two top-level
+///   blocks, and if it stopped on a **turn of the conversation** — a `•` or a
+///   `›` rather than any old column-0 line — then everything it gathered is
+///   that turn's own continuation and is thrown away whole;
+/// - and something in that block has to read as a question — a paragraph that
+///   is one outright for preference, and only failing that a paragraph that
+///   opens with one.
+///
+/// The block rules are the third version of this, and both earlier ones were
+/// wrong in the same direction: they matched a screen with nothing on it to
+/// answer.
+///
+/// The first bounded the block by indentation alone, which holds while the turn
+/// above fits on one row and fails the moment it wraps — at a narrow centre
+/// pane, the common case. `codex-0.146-draft-in-the-composer.txt` is that
+/// failure captured: an agent still working, its answer's last paragraph ending
+/// in a question mark on an indented row, and a two-line numbered draft sitting
+/// unsent in the composer below.
+///
+/// The second threw the block away only when its first row was glued to the
+/// turn above with no blank between, which misses whenever that turn's first
+/// paragraph is a single row — the row under it is then the blank before its
+/// *second* paragraph, and the block looks unanchored. `• Done — tests pass.`
+/// followed by a blank, a question and a numbered draft is the whole of it.
+/// Hence a turn, not a gap: the block is refused for what it hangs off, rather
+/// than for how closely.
+///
+/// **Known open: a scrolled screen with no anchor on it at all.** When the turn
+/// that owns the prose has scrolled off the top, the walk reaches row 0 without
+/// meeting anything, and an indented `is that alright with you?` above a
+/// numbered draft still reads as a dialog —
+/// `a_scrolled_screen_with_nothing_to_anchor_it_is_a_known_gap` pins it.
+/// Closing it means requiring a block to be anchored at all, which would then
+/// refuse a dialog drawn at the top of an unscrolled screen — the update prompt
+/// is one, and it starts at row 0. That is a trade between a false match in a
+/// rare scroll position and a miss in an ordinary one, with no measurement
+/// available to settle it, so it is recorded rather than guessed at.
+fn question(screen: &[String]) -> Option<Question> {
+    // Every numbered line on the screen, the agent's own among them.
+    let marks: Vec<(usize, (usize, String, bool))> = screen
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| option_line(line).map(|parsed| (i, parsed)))
+        .collect();
+
+    // The dialog is the last block that starts its numbering over at 1.
+    let start = marks.iter().rposition(|(_, (index, _, _))| *index == 1)?;
+
+    let mut options = Vec::new();
+    let mut selected = None;
+    let mut cursors = 0;
+    let mut expected = 1;
+    let mut previous = None;
+    for (row, (index, label, is_selected)) in &marks[start..] {
+        // A gap in the numbering is the end of this block, not a hole in it.
+        // Rows are not required to be adjacent: a long label wraps, and the
+        // continuation line is neither an option nor the end of the list — the
+        // update prompt at 60 columns wraps its first option over three rows.
+        // What may not sit between two options is a break in the layout, which
+        // is what stops a stray `4.` further down the screen from joining a
+        // list it has nothing to do with.
+        if *index != expected || previous.is_some_and(|last| parted(screen, last, *row)) {
+            break;
+        }
+        if *is_selected {
+            cursors += 1;
+            selected = Some(options.len());
+        }
+        // Verified against 0.146.0 by answering a live dialog with these very
+        // bytes: the digit selects and the return confirms, the same as Claude
+        // Code, which is what the footer means by "press enter to confirm".
+        options.push(QuestionOption {
+            label: wrapped(screen, *row, label),
+            send: format!("{index}\r"),
+        });
+        expected += 1;
+        previous = Some(*row);
+    }
+
+    if cursors != 1 || options.len() < 2 {
+        return None;
+    }
+
+    // Upwards from the options: first over the blank rows the dialog leaves
+    // between its text and its options, then over its own rows, stopping at a
+    // transcript entry at column 0 or at the double blank that separates one
+    // top-level block from the next.
+    let first = marks[start].0;
+    let mut top = first;
+    while top > 0 && is_blank(&screen[top - 1]) {
+        top -= 1;
+    }
+    while top > 0 {
+        if is_entry(&screen[top - 1]) {
+            break;
+        }
+        if is_blank(&screen[top - 1]) && top >= 2 && is_blank(&screen[top - 2]) {
+            top -= 1;
+            break;
+        }
+        top -= 1;
+    }
+
+    // What is left may still be the tail of the transcript rather than a block
+    // of its own: a turn's continuation rows are indented exactly as a dialog's
+    // are, and its later paragraphs are parted from its first by the same
+    // single blank a dialog uses inside itself. Hanging off that turn at all is
+    // what says so — not how closely, which was the second version of this rule
+    // and missed every turn whose first paragraph was one row. It throws the
+    // whole run away rather than trimming it, because a dialog hangs off
+    // nothing.
+    //
+    // A dialog reached its own block over the double blank between top-level
+    // blocks, so `top` sits on that blank and this never fires; the trust
+    // prompt reaches it over `> You are in …`, which is not a turn.
+    if top > 0 && is_turn(&screen[top - 1]) {
+        return None;
+    }
+
+    // `split_whitespace` drops the dialog's own indent and collapses any run of
+    // whitespace to one space, so a question wrapped across rows comes back as
+    // one line.
+    let mut paragraphs: Vec<String> = Vec::new();
+    for line in &screen[top..first] {
+        if is_blank(line) {
+            paragraphs.push(String::new());
+        } else {
+            let joined = line.split_whitespace().collect::<Vec<_>>().join(" ");
+            match paragraphs.last_mut() {
+                Some(last) if !last.is_empty() => {
+                    last.push(' ');
+                    last.push_str(&joined);
+                }
+                _ => paragraphs.push(joined),
+            }
+        }
+    }
+
+    // Bottom-most paragraph first, because a command preview sits *below* the
+    // question in the command dialog and a diff sits *above* it in the edit
+    // one, so the nearest one that reads as a question is the right answer for
+    // both. A whole question beats an opening one anywhere on the screen.
+    let text = paragraphs
+        .iter()
+        .rev()
+        .find_map(|paragraph| whole(paragraph))
+        .or_else(|| paragraphs.iter().rev().find_map(|paragraph| opening(paragraph)))?;
+    Some(Question { text, options, selected })
 }
 
 #[cfg(test)]
@@ -268,11 +618,438 @@ mod tests {
         assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
     }
 
-    #[test]
-    fn it_cannot_read_its_own_dialog_yet() {
-        // Layer A still reports that somebody is waiting. smetana-603.
-        assert!(Codex.question(&["│ Allow this command? │".to_string()]).is_none());
+    // The four fixtures below are whole 120x30 screens captured off a real
+    // Codex CLI 0.146.0 under a PTY and rendered through the same vt100 the
+    // worker reads: the update banner, the session header, the person's own
+    // prompt, the agent's transcript and the dialog at the bottom. That is the
+    // shape this reader actually has to survive, and a hand-written excerpt of
+    // it would prove only that it survives an excerpt. Only the working
+    // directory in them is edited, to keep somebody's home directory out of the
+    // repository.
+    fn fixture(name: &str) -> Vec<String> {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+        std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect()
     }
+
+    #[test]
+    fn recognises_the_command_approval_dialog() {
+        let q = question(&fixture("codex-0.146-approval-command.txt"))
+            .expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to run the following command?");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(q.options[0].label, "Yes, proceed (y)");
+        assert_eq!(q.options[0].send, "1\r");
+        assert_eq!(q.options[2].label, "No, and tell Codex what to do differently (esc)");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn the_command_preview_under_the_question_does_not_become_the_question() {
+        // The command dialog puts `Environment: local` and `$ touch probe.txt`
+        // *between* the question and the options, which is the opposite of
+        // Claude Code's layout. Reading the run of text directly above the
+        // options — which is exactly what the Claude reader does — would hand
+        // back the shell command and then reject the whole dialog for not
+        // ending in a question mark.
+        let q = question(&fixture("codex-0.146-approval-command.txt"))
+            .expect("the dialog went unrecognised");
+        assert!(!q.text.contains("touch probe.txt"), "{}", q.text);
+    }
+
+    #[test]
+    fn recognises_the_edit_approval_dialog() {
+        // Here the preview is a diff and it sits *above* the question, inside
+        // the agent's own transcript entry.
+        let q = question(&fixture("codex-0.146-approval-patch.txt"))
+            .expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to make the following edits?");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(q.options[1].label, "Yes, and don't ask again for these files (a)");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn a_diff_above_the_question_does_not_reach_the_text() {
+        let q = question(&fixture("codex-0.146-approval-patch.txt"))
+            .expect("the dialog went unrecognised");
+        assert!(!q.text.contains("hello"), "{}", q.text);
+        assert!(!q.text.contains("bye"), "{}", q.text);
+    }
+
+    #[test]
+    fn recognises_the_trust_prompt_a_session_opens_on() {
+        // The first thing Codex draws in a directory it has not been trusted
+        // in, before the agent has done anything at all. It is a question with
+        // a person's answer required, so it is one of these — and reading it is
+        // worth as much as reading an approval, since a session sat on this one
+        // never starts.
+        let q = question(&fixture("codex-0.146-trust-directory.txt"))
+            .expect("the trust prompt went unrecognised");
+        assert_eq!(q.text, "Do you trust the contents of this directory?");
+        assert_eq!(q.options.len(), 2);
+        assert_eq!(q.options[1].label, "No, quit");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn the_explanation_under_the_trust_prompt_is_not_part_of_the_question() {
+        // Two sentences of prose follow the question mark in the same
+        // paragraph, wrapped across two rows. What a person is being asked is
+        // the first sentence.
+        let q = question(&fixture("codex-0.146-trust-directory.txt"))
+            .expect("the trust prompt went unrecognised");
+        assert!(!q.text.contains("prompt injection"), "{}", q.text);
+    }
+
+    #[test]
+    fn an_agent_at_work_is_not_waiting_on_anybody() {
+        // A whole real screen mid-turn: the banner, the person's prompt behind
+        // the cursor glyph, the spinner, and the composer's own placeholder
+        // behind that same glyph at the foot. Two `›` on it and nothing to
+        // answer.
+        assert!(
+            question(&fixture("codex-0.146-working.txt")).is_none(),
+            "an agent at work was read as waiting on a person"
+        );
+    }
+
+    #[test]
+    fn a_numbered_list_the_agent_printed_is_not_a_dialog() {
+        // Ends in a question mark and is numbered. Nothing points at it, which
+        // is what a dialog always has and prose never does.
+        let screen: Vec<String> = [
+            "• Which of these would you like me to do first?",
+            "  1. Rename the module",
+            "  2. Split the test file",
+            "  3. Neither, stop here",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "prose with a numbered list was taken for a dialog");
+    }
+
+    #[test]
+    fn a_list_in_the_output_above_does_not_shadow_the_dialog() {
+        // Both blocks number themselves from 1. The dialog is the lower one —
+        // it replaces the composer at the foot of the screen, and whatever the
+        // agent printed is by definition above it.
+        let screen: Vec<String> = [
+            "• I considered three options:",
+            "  1. Rename the module",
+            "  2. Split the test file",
+            "",
+            "",
+            "  Would you like to run the following command?",
+            "",
+            "  $ ls",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog was shadowed by the output above it");
+        assert_eq!(q.text, "Would you like to run the following command?");
+        assert_eq!(q.options.len(), 2, "the printed list was swept in with the dialog's own");
+        assert_eq!(q.options[0].label, "Yes, proceed (y)");
+    }
+
+    #[test]
+    fn a_persons_own_numbered_prompt_is_not_a_dialog() {
+        // Typed into the composer, it is a numbered line with the cursor glyph
+        // in front of it and a question directly above. One option is not a
+        // dialog: every one Codex draws offers a way out as well as a way on.
+        let screen: Vec<String> = [
+            "  Which module should this live in?",
+            "",
+            "\u{203a} 1. the one you suggested",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "a person's own prompt was taken for a dialog");
+    }
+
+    #[test]
+    fn a_numbered_draft_left_in_the_composer_is_not_a_dialog() {
+        // The false positive this reader's first version had, captured whole
+        // rather than argued about: a real session at 60 columns with a
+        // two-line numbered draft sitting unsent in the composer, and the
+        // agent's own answer above it ending — on an indented continuation row
+        // — in a question mark. Two options, the cursor on the first, prose
+        // above indented exactly as a dialog's is. Everything a dialog has
+        // except being one.
+        //
+        // The agent was asked for two paragraphs each ending in a question
+        // mark, so the shape was provoked rather than stumbled on; every row of
+        // it is Codex's own rendering, which is the part that had to be real.
+        //
+        // What tells them apart is that those rows hang off the `•` at column 0
+        // that owns them, and a dialog hangs off nothing.
+        assert!(
+            question(&fixture("codex-0.146-draft-in-the-composer.txt")).is_none(),
+            "a busy agent with a draft in its composer was read as waiting on a person"
+        );
+    }
+
+    #[test]
+    fn a_later_paragraph_of_the_agents_own_answer_is_not_the_dialogs_question() {
+        // The same shape reduced to its bones. Measured on real screens at 60
+        // and 120 columns: one blank row parts two paragraphs of the same
+        // entry, two part one block from the next — so the blank above the
+        // second paragraph says nothing, and the glue to the bullet says
+        // everything.
+        let screen: Vec<String> = [
+            "• I can rename it, but the test file carries the old",
+            "  name too. Should I rename that one as well?",
+            "",
+            "  A second paragraph of the same answer, which also",
+            "  happens to end in a question mark, correct?",
+            "",
+            "",
+            "\u{203a} 1. rename the module",
+            "  2. split the test file",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "the agent's own prose was read as a dialog");
+    }
+
+    #[test]
+    fn a_question_mark_used_as_an_operator_is_not_the_question() {
+        // The command preview sits below the question in this dialog, so it is
+        // the paragraph reached first, and a ternary in it carries a question
+        // mark followed by a space. Detection would be right either way; the
+        // text handed over would be a shell fragment. A paragraph that is a
+        // question outright wins over one that merely opens with something
+        // shaped like one.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "  $ node -e \"console.log(x ? 1 : 2)\"",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to run the following command?");
+    }
+
+    #[test]
+    fn a_stray_number_further_down_the_screen_does_not_join_the_list() {
+        // Nothing consumes `options` today, but a list that quietly swallows
+        // whatever is below it would hand a person an answer that is not on
+        // their screen the day something does.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+            "",
+            "",
+            "• 3. something the agent printed underneath",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.options.len(), 2, "a line from below the dialog joined its options");
+    }
+
+    #[test]
+    fn the_update_prompt_wraps_its_first_option_and_asks_nothing() {
+        // A real screen at 60 columns, and two facts at once. Codex wraps a
+        // long option label over three rows and numbers none of the
+        // continuations, which is why an option run is allowed to skip rows.
+        // And this prompt states rather than asks — no question mark anywhere
+        // on it — so this reader says nothing and layer A is left to speak,
+        // which is the honest answer and a recorded gap rather than a bug: a
+        // session does sit here waiting for a person.
+        assert!(
+            question(&fixture("codex-0.146-update-prompt.txt")).is_none(),
+            "a screen with no question on it was given one"
+        );
+    }
+
+    #[test]
+    fn a_question_mark_inside_a_command_preview_is_not_a_question() {
+        // The paragraph directly above the options is the command Codex is
+        // asking to run, and it happens to carry a question mark inside a
+        // quoted argument. The real question is the paragraph above that.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "  $ grep -n \"what?\" README.md",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to run the following command?");
+    }
+
+    #[test]
+    fn a_dialog_with_nothing_pointing_at_it_is_not_read() {
+        // The same screen as the one that matches, with the cursor taken off
+        // it. Nothing is waiting on a list nobody is pointing at, and this is
+        // what a half-drawn dialog looks like on the way in.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "  1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "an unpointed list was taken for a dialog");
+    }
+
+    #[test]
+    fn a_turn_whose_first_paragraph_is_one_row_is_still_a_turn() {
+        // The second version of the block rules refused a block only when its
+        // first row was glued to the turn above with no blank between. When the
+        // turn's first paragraph is a single row, the row under it is the blank
+        // before the turn's *second* paragraph, so nothing looked glued and
+        // this read as a dialog with nothing to answer.
+        let screen: Vec<String> = [
+            "• Done — tests pass.",
+            "",
+            "  Do you want me to also update the changelog?",
+            "",
+            "",
+            "\u{203a} 1. yes update it",
+            "  2. no leave it",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "the agent's own one-line turn was read as a dialog");
+    }
+
+    #[test]
+    fn a_scrolled_screen_with_nothing_to_anchor_it_is_a_known_gap() {
+        // Pinned as it behaves, not as it should: when the turn that owns the
+        // prose has scrolled off the top there is no anchor on the screen at
+        // all, and this reads as a dialog. Closing it means requiring a block
+        // to hang off something, which would refuse a dialog drawn at the top
+        // of an unscrolled screen — `codex-0.146-update-prompt.txt` is one, and
+        // it starts at row 0. Recorded rather than guessed at; if this
+        // assertion ever needs inverting, that is the trade being made.
+        let screen: Vec<String> =
+            ["  is that alright with you?", "", "", "\u{203a} 1. yes", "  2. no"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+        assert!(question(&screen).is_some(), "the known gap closed on its own — read the doc");
+    }
+
+    #[test]
+    fn a_wrapped_option_label_is_gathered_whole() {
+        // A real wrapped label, three rows of it, off the update prompt at 60
+        // columns. Skipping the continuations — which the first version of this
+        // did — left a person being offered
+        // `Update now (runs \`sh -c 'curl -fsSL`, cut at whatever column the
+        // pane happened to wrap. `question` itself says nothing about this
+        // screen, so the two pieces are called directly.
+        let screen = fixture("codex-0.146-update-prompt.txt");
+        let row = screen.iter().position(|l| option_line(l).is_some()).expect("an option is there");
+        let (index, head, selected) = option_line(&screen[row]).expect("an option is there");
+        assert_eq!(index, 1);
+        assert!(selected, "the cursor is on the first option");
+        assert_eq!(
+            wrapped(&screen, row, &head),
+            "Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | \
+             CODEX_NON_INTERACTIVE=1 sh'`)"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_option_label_does_not_end_the_list() {
+        // A narrow pane wraps the long second option, and the continuation row
+        // is neither an option nor the end of the block. Losing option 3 would
+        // hide the only way out of the dialog.
+        let screen: Vec<String> = [
+            "  Would you like to run the following command?",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. Yes, and don't ask again for commands that start",
+            "     with `touch probe.txt` (p)",
+            "  3. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(
+            q.options[1].label,
+            "Yes, and don't ask again for commands that start with `touch probe.txt` (p)",
+            "the label was cut at the column the pane happened to wrap"
+        );
+        assert_eq!(q.options[2].label, "No, and tell Codex what to do differently (esc)");
+    }
+
+    #[test]
+    fn a_question_the_agent_asked_in_prose_above_the_dialog_is_not_the_dialogs() {
+        // The turn directly above ends in a question mark of its own. What
+        // separates it from the dialog here is the double blank Codex puts
+        // between one top-level block and the next — the walk stops on that and
+        // never reaches the `•`, so this pins the blank-pair rule rather than
+        // the column-0 one. Without it the dialog's question would be whatever
+        // the agent last said.
+        let screen: Vec<String> = [
+            "• Should I also rename the test file?",
+            "",
+            "",
+            "  Would you like to run the following command?",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let q = question(&screen).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Would you like to run the following command?");
+    }
+
+    #[test]
+    fn a_dialog_with_no_question_in_it_is_not_read() {
+        // Options and a cursor, and nothing above them that reads as a
+        // question. Layer A still says somebody is waiting; this reader says
+        // nothing rather than handing over a line of preview as the question.
+        let screen: Vec<String> = [
+            "  Environment: local",
+            "",
+            "\u{203a} 1. Yes, proceed (y)",
+            "  2. No, and tell Codex what to do differently (esc)",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none());
+    }
+
+    #[test]
+    fn it_does_not_read_a_dialog_drawn_by_another_cli() {
+        // Claude Code's boxed dialog, frame and all. Reading it would be a lie
+        // about which agent is running, and `detect` picks the reader by the
+        // session's own profile precisely so that it cannot happen.
+        let q = question(&fixture("claude-permission-dialog.txt"));
+        assert!(q.is_none(), "codex read a dialog drawn by another CLI");
+    }
+
     fn run(mode: crate::runs::model::RunMode) -> Intent {
         Intent::Run {
             settings: crate::runs::model::RunSettings {

@@ -264,25 +264,56 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_with_no_layer_b_sees_no_question_in_someone_elses_dialog() {
+    fn a_profile_with_no_layer_b_sees_no_question_in_a_dialog_it_could_read() {
         // Same settled, Claude-shaped screen as `a_settled_dialog_is_a_question_with_text`,
-        // but read by a profile that doesn't implement `question` — this proves
+        // read by a profile that has no `question` of its own — this proves
         // `detect` actually consults `input.profile` rather than ignoring it.
         let out = detect(DetectInput {
             bell_pending: false,
             still_for: Duration::from_millis(500),
             screen: dialog(),
-            profile: crate::agents::resolve("codex").unwrap(),
+            profile: no_layer_b(),
         });
-        assert!(out.question.is_none(), "codex has no layer B to read Claude's dialog with");
+        assert!(out.question.is_none(), "a profile with no layer B was given one");
     }
 
-    /// A profile with no `question` of its own. The tests below are about
-    /// layer A alone, and reading them through a profile that matches dialogs
-    /// would mean they passed for layer B's reasons rather than their own —
-    /// which is exactly the failure this whole file exists to survive.
+    /// A profile with no `question` of its own, which is the trait's default
+    /// and the honest answer for any harness whose dialog nobody has taught the
+    /// app to read.
+    ///
+    /// It is written here rather than borrowed from `agents::` because every
+    /// shipped profile now matches dialogs. The tests below are about layer A
+    /// alone, and running them through a profile that matches would mean they
+    /// passed for layer B's reasons rather than their own — and worse, that
+    /// they went on passing only for as long as that profile happened to miss
+    /// their screens. Borrowing `codex` was true when it was written and stopped
+    /// being true the day that profile learnt to read its own dialog
+    /// (smetana-603); nothing failed, which is exactly the problem.
+    struct NoLayerB;
+
+    impl Profile for NoLayerB {
+        fn id(&self) -> &'static str {
+            "no-layer-b"
+        }
+
+        fn binary(&self) -> &'static str {
+            "no-layer-b"
+        }
+
+        fn delivery(&self) -> crate::agents::SkillDelivery {
+            crate::agents::SkillDelivery::Inline
+        }
+
+        fn command(&self, _launch: &crate::agents::Launch) -> portable_pty::CommandBuilder {
+            portable_pty::CommandBuilder::new(self.binary())
+        }
+
+        // `question` is deliberately left at the trait's default of `None`.
+        // That absence is the whole of what this profile is for.
+    }
+
     fn no_layer_b() -> &'static dyn Profile {
-        crate::agents::resolve("codex").unwrap()
+        &NoLayerB
     }
 
     /// One detection tick, as the worker performs it: sample the screen, ask
