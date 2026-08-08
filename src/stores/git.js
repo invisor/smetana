@@ -54,19 +54,52 @@ export async function loadHead(project) {
   }
 }
 
-/* The local branches. Not guarded against a stale response the way loadHead is,
-   and deliberately: this is called from opening a dialog, which cannot happen
-   twice at once, and the dialog reads the list at that moment. Clearing first
-   is what keeps a previous project's branches off the screen while the new
-   ones are on their way. */
+/* Which project the list currently in the store belongs to, and the project of
+   the last call — one variable serving both, since a call always claims the
+   list it is about to replace. Module state rather than part of gitState:
+   nothing on screen reads it. */
+let branchesFor = null
+
+/* The local branches, for the run dialog's field.
+
+   Two rules, and the second one was paid for. A list belonging to *another*
+   project is cleared the moment this one is asked about: offering the branches
+   of a repository somebody has already left is worse than offering none. A list
+   belonging to *this* project is left alone while it is read again — clearing
+   unconditionally emptied the field under the dialog that had just opened, and
+   nothing refilled it, which is what smetana-6gs was.
+
+   Keeping it costs one thing, and it is a real one: for the length of a
+   git_branches call the field can be filled from a list that is one read out of
+   date. A branch deleted since the last open is still on offer in that window,
+   and somebody who picks it by hand inside it has their choice frozen by
+   RunModal's `branchChosen` — the run then goes out with create_target false
+   against a branch that is not there. Clearing first made that impossible,
+   because Run stayed disabled until the fresh list landed. The trade is taken
+   knowingly: the window is a single call, the field self-corrects the moment
+   the list arrives as long as nobody has chosen, and what the bad case costs is
+   a run that fails at the merge — against a dialog that offered nothing, every
+   time, to everybody.
+
+   Guarded against its own stale response the way loadHead is: the last call
+   wins, not the last answer. The dialog cannot be opened twice at once, but a
+   project switch and an open can overlap, and the guard costs a comparison. */
 export async function loadBranches(project) {
-  gitState.branches = []
+  const same = !!project && project === branchesFor
+  branchesFor = project
+  if (!same) gitState.branches = []
   if (!project) return
   try {
-    gitState.branches = await invoke('git_branches', { project })
+    const list = await invoke('git_branches', { project })
+    if (branchesFor !== project) return
+    gitState.branches = list
   } catch (err) {
+    if (branchesFor !== project) return
     // An empty list, like a folder outside git: the dialog then has nothing to
-    // offer and its Run button stays disabled, which is honest.
+    // offer and its Run button stays disabled, which is honest. A list that
+    // could not be read again is dropped rather than kept — it is no longer
+    // known to be the repository's.
     console.error('[git] listing branches failed:', err)
+    gitState.branches = []
   }
 }

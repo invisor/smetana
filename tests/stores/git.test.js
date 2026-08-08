@@ -67,3 +67,85 @@ describe('the active project\'s branch', () => {
     expect(stores.git.gitState.branch).toBe('new-branch')
   })
 })
+
+describe('the branches offered to the run dialog', () => {
+  it('the list is read and lands in the store', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('git_branches', ['staging', 'main'])
+
+    await stores.git.loadBranches('/p')
+
+    expect(stores.git.gitState.branches).toEqual(['staging', 'main'])
+  })
+
+  /* Half of smetana-6gs: the dialog opens and asks for the branches in the same
+     breath, so emptying this project's list to go and read it again leaves the
+     field with nothing to fill from at the moment it fills. */
+  it('this project\'s branches stay on screen while they are read again', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('git_branches', ['staging', 'main'])
+    await stores.git.loadBranches('/p')
+
+    let answer
+    ipc.on('git_branches', () => new Promise((resolve) => (answer = resolve)))
+    const again = stores.git.loadBranches('/p')
+
+    expect(stores.git.gitState.branches).toEqual(['staging', 'main'])
+    answer(['main', 'staging'])
+    await again
+    expect(stores.git.gitState.branches).toEqual(['main', 'staging'])
+  })
+
+  /* The other side of it, and the reason the clearing was there: a branch of a
+     repository somebody has left must never be an option in front of them. */
+  it('another project\'s branches go the moment this one is asked about', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('git_branches', ['staging', 'main'])
+    await stores.git.loadBranches('/p')
+
+    ipc.on('git_branches', () => new Promise(() => {}))
+    stores.git.loadBranches('/q')
+
+    expect(stores.git.gitState.branches).toEqual([])
+  })
+
+  it('with no project there is nothing to offer and nothing to ask', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('git_branches', ['main'])
+    await stores.git.loadBranches('/p')
+
+    await stores.git.loadBranches(null)
+
+    expect(stores.git.gitState.branches).toEqual([])
+    expect(ipc.calls('git_branches')).toEqual([{ project: '/p' }])
+  })
+
+  it('a failed listing leaves nothing rather than a list nobody confirmed', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('git_branches', ['main'])
+    await stores.git.loadBranches('/p')
+
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('git_branches', 'it broke')
+    await stores.git.loadBranches('/p')
+
+    expect(stores.git.gitState.branches).toEqual([])
+  })
+
+  it('a stale answer does not overwrite the new project\'s branches', async () => {
+    const { stores } = await loadStores()
+    const pending = new Map()
+    const { mockIPC } = await import('@tauri-apps/api/mocks')
+    mockIPC((cmd, args) => new Promise((resolve) => pending.set(args.project, resolve)))
+
+    const slow = stores.git.loadBranches('/old')
+    const fast = stores.git.loadBranches('/new')
+
+    pending.get('/new')(['new-main'])
+    await fast
+    pending.get('/old')(['old-main'])
+    await slow
+
+    expect(stores.git.gitState.branches).toEqual(['new-main'])
+  })
+})

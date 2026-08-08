@@ -206,6 +206,40 @@ fn strip(line: &str) -> &str {
     line.trim_matches(['│', ' '])
 }
 
+/// The words of a run of lines, in reading order, as one line.
+///
+/// `split_whitespace` both drops the dialog's own padding and collapses any
+/// run of whitespace to one space, so a question wrapped across rows comes
+/// back joined.
+fn joined(lines: &[&str]) -> String {
+    lines.iter().flat_map(|l| l.split_whitespace()).collect::<Vec<_>>().join(" ")
+}
+
+/// The headings of the dialogs that do **not** put their question in the
+/// paragraph directly above the options, one literal per dialog.
+///
+/// There is one so far: the folder-trust dialog, asked once the first time
+/// Claude Code is started somewhere it has not been before. It numbers its
+/// options from 1 and points at one of them like every other dialog, so it is
+/// only the text that goes wrong — under the heading come the path, the
+/// question, a sentence about what the agent will be able to do and a link
+/// caption, and it is the caption, "Security guide", that sits directly above
+/// the options (smetana-xh7).
+///
+/// Neither of the two properties that keep the permission dialog apart from
+/// prose is relaxed to read it. Widening the search past a blank line for the
+/// whole reader would drag a diff preview and a title into the permission
+/// dialog's question; dropping the question mark for the whole reader would
+/// leave the cursor as the only guard, and a loud row is budgeted at one or
+/// two a screen. So the wider search is opened by a literal string this dialog
+/// prints and ordinary output does not, and it stays fenced: the question is
+/// looked for between that heading and the options, never above it and never
+/// in what the agent itself wrote. A wording change on the other side loses
+/// the reading and leaves layer A in place, which is how the rest of this
+/// file already fails.
+const HEADINGS: &[&str] = &["Accessing workspace:"];
+
+
 /// Claude Code's permission dialog: a question line and numbered options.
 ///
 /// It was a box until 2.1, and the frame around it was what told it apart
@@ -221,7 +255,9 @@ fn strip(line: &str) -> &str {
 ///   never does, and a live dialog always does.
 ///
 /// The question is still the text directly above the options and still has
-/// to end in a question mark.
+/// to end in a question mark — except for the handful of dialogs that print
+/// a heading of their own and lay their text out some other way, which
+/// `HEADINGS` names one by one.
 fn question(screen: &[String]) -> Option<Question> {
     let lines: Vec<&str> = screen.iter().map(|l| strip(l)).collect();
 
@@ -270,15 +306,45 @@ fn question(screen: &[String]) -> Option<Question> {
     }
     text_lines.reverse();
 
-    // split_whitespace both drops the dialog's own padding and collapses any
-    // run of whitespace to one space, so a question wrapped across rows comes
-    // back as one line.
-    let text = text_lines.iter().flat_map(|l| l.split_whitespace()).collect::<Vec<_>>().join(" ");
-    if !text.ends_with('?') {
-        return None;
-    }
+    let text = joined(&text_lines);
+    // The paragraph above the options is the question, or this is one of the
+    // few dialogs that put theirs elsewhere and named itself in a heading.
+    // Anything else is declined.
+    let text = if text.ends_with('?') { text } else { headed_question(&lines[..marks[start].0])? };
 
     Some(Question { text, options, selected })
+}
+
+/// The question of a dialog that announced itself with one of `HEADINGS`,
+/// searched only in the lines between that heading and the options.
+///
+/// Paragraphs are walked upwards from the options and the first one carrying a
+/// question mark is the question, cut at that mark: the trust dialog's
+/// question paragraph runs on past it into an aside and a piece of advice
+/// ("(Like your own code…). If not, take a moment to review…"), and what a
+/// person is being asked ends at the mark.
+fn headed_question(above: &[&str]) -> Option<String> {
+    let heading = above.iter().rposition(|line| HEADINGS.iter().any(|h| line.starts_with(h)))?;
+
+    let mut paragraph: Vec<&str> = Vec::new();
+    for line in above[heading + 1..].iter().rev() {
+        if line.is_empty() || is_rule(line) {
+            if let Some(text) = asked(&paragraph) {
+                return Some(text);
+            }
+            paragraph.clear();
+        } else {
+            paragraph.insert(0, line);
+        }
+    }
+    asked(&paragraph)
+}
+
+/// The question a paragraph opens with, if it holds one at all.
+fn asked(paragraph: &[&str]) -> Option<String> {
+    let text = joined(paragraph);
+    let mark = text.find('?')?;
+    Some(text[..=mark].to_owned())
 }
 
 #[cfg(test)]
@@ -415,6 +481,89 @@ mod tests {
         let q = question(&fixture("claude-2.1-permission-edit.txt")).expect("the dialog went unrecognised");
         assert_eq!(q.text, "Do you want to make this edit to tabs.js?");
         assert_eq!(q.options.len(), 3);
+    }
+
+    #[test]
+    fn recognises_the_folder_trust_dialog() {
+        // The one-off question Claude Code asks the first time it is started
+        // somewhere it has not been — which is a new project's very first
+        // agent, and the worst possible moment to stall silently. The
+        // paragraph directly above the options here is "Security guide", a
+        // link caption, so the ordinary reading declines it (smetana-xh7).
+        //
+        // The fixture is the dialog as captured under a PTY and rendered
+        // through terminal/screen.rs, recorded in the task; unlike the two
+        // fixtures above it is the dialog alone, since that is the whole of
+        // what was captured — the surrounding screen would have to be
+        // invented, and an invented screen proves nothing.
+        let q = question(&fixture("claude-2.1-trust-folder.txt")).expect("the dialog went unrecognised");
+        assert_eq!(q.text, "Quick safety check: Is this a project you created or one you trust?");
+        assert_eq!(q.options.len(), 2);
+        assert_eq!(q.options[0].label, "Yes, I trust this folder");
+        assert_eq!(q.options[0].send, "1\r");
+        assert_eq!(q.options[1].label, "No, exit");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn a_numbered_list_under_that_heading_still_needs_the_cursor() {
+        // The heading opens a wider search for the text and nothing else: the
+        // cursor rule is what keeps a numbered list in the agent's own prose
+        // out, and it is untouched by it.
+        let screen: Vec<String> = [
+            "Accessing workspace:",
+            "",
+            "Quick safety check: Is this a project you created or one you trust?",
+            "",
+            "  1. Yes, I trust this folder",
+            "  2. No, exit",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "a list nobody is pointing at was taken for a dialog");
+    }
+
+    #[test]
+    fn an_unheaded_dialog_still_has_to_end_in_a_question_mark() {
+        // Cursor and numbering both present, and the text above the options is
+        // not a question. Without a heading this reader knows, that is prose
+        // with a menu in it and the answer stays no.
+        let screen: Vec<String> = [
+            "⏺ Here is what I would do next",
+            " ❯ 1. Rename the module",
+            "   2. Split the test file",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "the question mark rule was dropped for everyone");
+    }
+
+    #[test]
+    fn the_heading_fences_the_search_off_from_the_output_above_it() {
+        // A question mark in what the agent printed is not the dialog's
+        // question, however close it sits: the search runs between the heading
+        // and the options, never above the heading.
+        let screen: Vec<String> = [
+            "⏺ Shall I carry on with the refactor?",
+            "",
+            "Accessing workspace:",
+            "",
+            "/tmp/project",
+            "",
+            "Security guide",
+            "",
+            "❯ 1. Yes, I trust this folder",
+            "  2. No, exit",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(
+            question(&screen).is_none(),
+            "the agent's own words above the heading were read as the dialog's question"
+        );
     }
 
     #[test]
