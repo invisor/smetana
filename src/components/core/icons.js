@@ -6,6 +6,7 @@
 import {
   Anchor,
   ArrowDownToLine,
+  ArrowRightToLine,
   Bell,
   Bot,
   Bug,
@@ -119,6 +120,11 @@ export const iconNodes = {
   // in the world uses, and there is no `stop` glyph in lucide.
   square: Square,
   'arrow-down-to-line': ArrowDownToLine,
+  // A whole column moved into the queue, in the deferred header. Deliberately
+  // not the play: that glyph means a run starts, and this one only changes a
+  // status. The line at the end is what makes it "all the way into the queue"
+  // rather than a nudge in some direction.
+  'arrow-right-to-line': ArrowRightToLine,
   wrench: Wrench,
   search: Search,
   'refresh-cw': RefreshCw,

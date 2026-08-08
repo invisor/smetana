@@ -20,6 +20,7 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
+import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import RunBar from '../components/run/RunBar.vue'
 import RunModal from '../components/run/RunModal.vue'
@@ -757,6 +758,82 @@ const ADD_TO = 'ready'
 const newTaskOpen = ref(false)
 const creating = ref(false)
 
+/* Where the whole-column press stands. bd's own word, untranslated, because
+   `deferred` is not one of the three statuses the tracker store renames and it
+   reaches the board exactly as bd spells it.
+
+   That column is where a run files its own findings, and the running-tasks
+   skill reserves promoting one of them for a person. This button is the person
+   doing it, in one gesture instead of twelve — which is why it moves issues and
+   starts nothing: a run still takes only what is already open. */
+const PROMOTE_FROM = 'deferred'
+const promoteOpen = ref(false)
+const promoting = ref(false)
+/* The set as it was at the moment of the press, not a live reading of the
+   column: the dialog names a count, and what confirming moves has to be the
+   same set that count described. The watcher can add a card to that column
+   while the dialog is open, and it is not part of what was agreed to. */
+const promoteIds = ref([])
+const promoted = ref(0)
+const promoteFailed = ref(null)
+
+const openPromote = () => {
+  if (promoting.value) return
+  const ids = orderedColumns.value.find((c) => c.status === PROMOTE_FROM)?.tasks.map((t) => t.id)
+  if (!ids?.length) return
+  promoteIds.value = ids
+  promoted.value = 0
+  promoteFailed.value = null
+  promoteOpen.value = true
+}
+
+const closePromote = () => {
+  if (promoting.value) return
+  promoteOpen.value = false
+}
+
+/* One bd call per issue, in sequence — the worker serializes them anyway, and
+   firing twenty at once would only bury the order they land in.
+
+   Nothing is rolled back when one of them fails. The failures are counted and
+   said out loud instead: the ones that landed are genuinely in ready, the board
+   already shows them there, and moving them back would undo a change the person
+   asked for over an error that had nothing to do with them.
+
+   The active project is captured the way `startTheRun` captures it. Somebody
+   can switch projects mid-way through a minute of writes, and the tracker
+   worker points at the new folder from that moment on: every remaining write
+   would be aimed at issues bd is no longer looking at. So the loop stops, and
+   so does the dialog — it is about a board that is no longer on screen. */
+const confirmPromote = async () => {
+  if (promoting.value) return
+  const path = activePath.value
+  promoting.value = true
+  promoted.value = 0
+  promoteFailed.value = null
+  let failed = 0
+  try {
+    for (const id of promoteIds.value) {
+      try {
+        await updateIssue(id, { status: 'open' })
+        promoted.value += 1
+      } catch {
+        // the message already sits in trackerState.lastError; the count is what
+        // this dialog adds to it
+        failed += 1
+      }
+      if (activePath.value !== path) {
+        promoteOpen.value = false
+        return
+      }
+    }
+    promoteFailed.value = failed
+    if (!failed) promoteOpen.value = false
+  } finally {
+    promoting.value = false
+  }
+}
+
 /* A click on a card is an explicit request to see that card, and it takes the
    right column back from whatever an agent's row put in it. Without this,
    picking a filing agent would leave the draft standing over every card clicked
@@ -1469,6 +1546,15 @@ const toastStackStyle = {
           @files="attachFiles"
           @remove="removeAttachment"
         />
+        <PromoteColumnModal
+          :open="promoteOpen"
+          :count="promoteIds.length"
+          :busy="promoting"
+          :moved="promoted"
+          :failed="promoteFailed"
+          @close="closePromote"
+          @confirm="confirmPromote"
+        />
         <RunModal
           :open="runOpen"
           :scope="runScope"
@@ -1552,9 +1638,11 @@ const toastStackStyle = {
           :add-to="ADD_TO"
           :run-from="runOffered ? ADD_TO : null"
           :run-blocked-reason="runBlockedReason"
+          :promote-from="PROMOTE_FROM"
           @select="selectFromBoard"
           @add="newTaskOpen = true"
           @run="openRun({ kind: 'queue' })"
+          @promote="openPromote"
           @run-task="runTask"
           @reorder="project.columnOrder = $event"
         />

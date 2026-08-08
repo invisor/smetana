@@ -21,14 +21,17 @@ const props = defineProps({
      their own. Unlike `runnable` it is the same fragment for every card and for
      the header, so it is a prop of its own rather than a copy in each task
      object. */
-  runBlockedReason: { type: String, default: '' }
+  runBlockedReason: { type: String, default: '' },
+  /* Passed through to the header, which draws the button and decides on the
+     count whether there is anything to draw it for. */
+  promotable: { type: Boolean, default: false }
 })
 
 /* A card's own `runnable` rides in the task object and reaches TaskCard through
    the v-bind below — the board already decides everything else about a card
    that way, and adding a second channel for one flag would put the decision in
    two places. */
-defineEmits(['select', 'add', 'grab', 'move', 'run', 'run-task'])
+defineEmits(['select', 'add', 'grab', 'move', 'run', 'run-task', 'promote'])
 
 /* `moving` reaches the header and stops there. The column being dragged is not
    dimmed or lifted: it is where the pointer already is, and the eye needs it to
@@ -70,8 +73,10 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
       :moving="moving"
       :runnable="runnable"
       :run-blocked-reason="runBlockedReason"
+      :promotable="promotable"
       @add="$emit('add', status)"
       @run="$emit('run', status)"
+      @promote="$emit('promote', status)"
       @grab="$emit('grab', $event)"
       @move="$emit('move', $event)"
     />

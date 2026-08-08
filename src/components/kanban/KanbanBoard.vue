@@ -28,6 +28,16 @@ const props = defineProps({
      capital arriving here renders as two sentences joined by a dash, silently
      and only inside a tooltip. */
   runBlockedReason: { type: String, default: '' },
+  /* The status of the one column whose whole contents can be moved into the
+     queue in one press — `deferred` in practice, and a third prop of the same
+     kind as `addTo` and `runFrom` for the same reason. Null means the board
+     offers nothing of the sort.
+
+     Deliberately not folded into `runFrom`: a run and this press look alike
+     from here — one button on one column — and are opposites. A run takes work
+     out of the queue and does it; this only puts work into the queue and stops
+     there. */
+  promoteFrom: { type: String, default: null },
   reorderable: { type: Boolean, default: true }
 })
 
@@ -35,7 +45,7 @@ const props = defineProps({
    from/to pair: the board is not the owner of the order and has no business
    describing a change to a list it does not keep. Whoever stores it applies the
    answer wholesale and hands it back through `columns`. */
-const emit = defineEmits(['select', 'add', 'reorder', 'run', 'run-task'])
+const emit = defineEmits(['select', 'add', 'reorder', 'run', 'run-task', 'promote'])
 
 const strip = ref(null)
 /* The order under the pointer, and only while the pointer holds it. Idle, this
@@ -208,11 +218,13 @@ const style = {
       :addable="c.status === addTo"
       :runnable="runFrom != null && c.status === runFrom"
       :run-blocked-reason="runBlockedReason"
+      :promotable="promoteFrom != null && c.status === promoteFrom"
       :movable="movable"
       :moving="c.status === held"
       @select="$emit('select', $event)"
       @add="$emit('add', $event)"
       @run="$emit('run', $event)"
+      @promote="$emit('promote', $event)"
       @run-task="$emit('run-task', $event)"
       @grab="onGrab(c.status, $event)"
       @move="onMove(c.status, $event)"

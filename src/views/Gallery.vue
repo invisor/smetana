@@ -33,6 +33,7 @@ import {
   NewTaskModal,
   Panel,
   ProjectList,
+  PromoteColumnModal,
   Select,
   RunBar,
   RunModal,
@@ -268,7 +269,14 @@ const boardColumns = computed(() =>
       { status: 'ready', tasks: [{ id: 'bd-a1b2', title: 'Rename worktree when the branch changes', status: 'ready', type: 'bug', runnable: true }] },
       { status: 'running', tasks: [{ id: 'bd-3c9d', title: 'Virtualise the log list above 10k lines', status: 'running', type: 'feature', assignee: { kind: 'agent', name: 'claude-1' }, spawnedFrom: 'bd-7f31', runnable: true }] },
       { status: 'needs-you', tasks: [{ id: 'bd-7f31', title: 'Approve the migration plan', status: 'needs-you', type: 'epic', needsResponse: true, runnable: true }] },
-      { status: 'done', tasks: [{ id: 'bd-12cd', title: 'Bump tauri to 2.1', status: 'done', type: 'chore' }] }
+      { status: 'done', tasks: [{ id: 'bd-12cd', title: 'Bump tauri to 2.1', status: 'done', type: 'chore' }] },
+      /* Where a run files what it found, and the one column that carries the
+         whole-column press. Its cards are not runnable: a run takes only what
+         is already open, which is exactly what that button is for. */
+      { status: 'deferred', tasks: [
+        { id: 'bd-5a10', title: 'Resizer promises arrow keys it does not have', status: 'deferred', type: 'bug', spawnedFrom: 'bd-a1b2' },
+        { id: 'bd-5a11', title: 'Vendor the mono subset for offline builds', status: 'deferred', type: 'chore' }
+      ] }
     ],
     boardOrder.value
   )
@@ -399,6 +407,17 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <ColumnHeader :status="col.status" :count="col.count" :addable="false" />
         </div>
       </div>
+      <!-- The header that can move its whole column into the queue, and the same
+           header with nothing to move: the button is drawn off the count, so an
+           empty column carries none — the 0 beside it already says why. -->
+      <div :style="{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)' }">
+        <div :style="{ width: '176px' }">
+          <ColumnHeader status="deferred" :count="12" :addable="false" promotable @promote="() => {}" />
+        </div>
+        <div :style="{ width: '176px' }">
+          <ColumnHeader status="deferred" :count="0" :addable="false" promotable @promote="() => {}" />
+        </div>
+      </div>
       <!-- The card at the width the board gives it, since the badge shares its
            bottom row with the dependency marks and the assignee. -->
       <div :style="{ display: 'flex', gap: 'var(--space-4)', alignItems: 'flex-start' }">
@@ -450,10 +469,12 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           selected-id="bd-3c9d"
           add-to="ready"
           run-from="ready"
+          promote-from="deferred"
           @select="() => {}"
           @add="() => {}"
           @run="() => {}"
           @run-task="() => {}"
+          @promote="() => {}"
           @reorder="boardOrder = $event"
         />
       </div>
@@ -502,6 +523,20 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @files="() => {}"
           @remove="() => {}"
         />
+      </div>
+      <!-- The three things the whole-column confirm can be saying. The middle
+           one is the state nobody sees for long in the app and the longest one
+           in wall-clock time: twenty issues at two seconds each. The last is
+           the only one that reports numbers, and the only one whose footer has
+           nothing left to confirm. -->
+      <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <PromoteColumnModal :open="true" :count="12" @close="() => {}" @confirm="() => {}" />
+      </div>
+      <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <PromoteColumnModal :open="true" :count="12" :moved="4" busy @close="() => {}" @confirm="() => {}" />
+      </div>
+      <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <PromoteColumnModal :open="true" :count="12" :moved="9" :failed="3" @close="() => {}" @confirm="() => {}" />
       </div>
       <AttachmentStrip :items="ATTACHMENTS" @remove="() => {}" />
       <!-- Past two rows the strip scrolls instead of growing: nothing bounds
