@@ -26,10 +26,17 @@ const props = defineProps({
      button goes grey rather than away: a control that vanished says nothing
      about why it is not there, and the one thing somebody wants to know at
      that moment is exactly why. */
-  runBlockedReason: { type: String, default: '' }
+  runBlockedReason: { type: String, default: '' },
+  /* Whether this column's whole contents can be moved into the queue in one
+     press — `deferred` in practice, and a prop for the same reason `addable`
+     and `runnable` are ones: there is no fixed set of columns here. Unlike
+     those two the button also needs something to move, so an empty column
+     draws none: the count beside it is already 0, and a control whose only
+     possible answer is "nothing to do" says less than the number does. */
+  promotable: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['add', 'grab', 'move', 'run'])
+const emit = defineEmits(['add', 'grab', 'move', 'run', 'promote'])
 
 const c = computed(() => statusColors(props.status))
 const over = computed(() => props.wipLimit != null && props.count > props.wipLimit)
@@ -126,6 +133,14 @@ const runLabel = computed(() =>
   props.runBlockedReason ? `Run the queue — ${props.runBlockedReason}` : 'Run the queue'
 )
 
+/* Counted, because the number is the whole of what makes this press decidable
+   — and it is the same number the dialog is about to ask over. "Move" rather
+   than "promote": the board never uses that word, and what a person sees happen
+   is a column emptying into another one. */
+const promoteLabel = computed(() =>
+  `Move ${props.count} ${props.count === 1 ? 'task' : 'tasks'} to ready`
+)
+
 const wipStyle = computed(() => ({
   display: 'inline-flex',
   alignItems: 'center',
@@ -165,6 +180,17 @@ const wipStyle = computed(() => ({
         size="sm"
         :disabled="!!runBlockedReason"
         @click="$emit('run')"
+      />
+      <!-- Also before the "+", and for the same reason. In practice no column
+           carries this and the play both — one names the queue, the other names
+           what is waiting outside it — but the order is fixed here rather than
+           left to which of them a board happens to switch on. -->
+      <IconButton
+        v-if="promotable && count > 0"
+        icon="arrow-right-to-line"
+        :label="promoteLabel"
+        size="sm"
+        @click="$emit('promote')"
       />
       <IconButton v-if="addable" icon="plus" :label="`Add task to ${c.key}`" size="sm" @click="$emit('add')" />
     </slot>
