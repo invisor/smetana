@@ -337,7 +337,14 @@ const runError = ref('')
 const runStarting = ref(false)
 
 /* Loaded when the dialog opens rather than on every project switch: it is a
-   directory read, but nobody needs it until they are looking at the field. */
+   directory read, but nobody needs it until they are looking at the field.
+
+   The dialog goes up first and the branches follow it, deliberately: a click on
+   play must not sit there doing nothing for as long as an IPC round trip takes.
+   What used to make that order wrong was the dialog filling its branch field
+   exactly once, on opening, against a list that was still empty — it fills again
+   when the list lands (RunModal, `fillBranch`), and the store no longer empties
+   this project's list to go and read it (stores/git.js). */
 const openRun = async (scopeValue) => {
   runScope.value = scopeValue
   runError.value = ''
