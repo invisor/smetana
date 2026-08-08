@@ -19,7 +19,5 @@ src-tauri/gen/
 src-tauri/binaries/*
 !src-tauri/binaries/LICENSE-bd
 
-CLAUDE.md
-!src-tauri/resources/superpowers/CLAUDE.md
 # Worktrees cut for tracker tasks
 .worktrees/
