@@ -143,9 +143,11 @@ const CURSOR: char = '\u{203A}';
 /// containing one would otherwise read as the selected option and the app would
 /// point a person at the wrong answer.
 ///
-/// The label keeps the shortcut hint Codex prints after it — `(y)`, `(p)`,
-/// `(esc)`. It is what a person reads on the screen, and trimming it would mean
-/// this app deciding which part of somebody else's wording is the real label.
+/// The label is only the head row; a label long enough to wrap continues on the
+/// rows beneath, and `wrapped` below puts it back together. Whatever comes back
+/// keeps the shortcut hint Codex prints after it — `(y)`, `(p)`, `(esc)`. It is
+/// what a person reads on the screen, and trimming it would mean this app
+/// deciding which part of somebody else's wording is the real label.
 fn option_line(line: &str) -> Option<(usize, String, bool)> {
     let rest = line.trim_start();
     let selected = rest.starts_with(CURSOR);
@@ -170,6 +172,51 @@ fn is_blank(line: &str) -> bool {
 /// boundary there is between the transcript and a dialog.
 fn is_entry(line: &str) -> bool {
     !is_blank(line) && !line.starts_with(char::is_whitespace)
+}
+
+/// A transcript entry specifically — a turn of the conversation, rather than
+/// any old thing at column 0.
+///
+/// The distinction earns its keep in exactly one place, and without it that
+/// place cannot work at all. An agent's entry and the trust prompt are the same
+/// shape to the row: something at column 0, a blank, indented prose ending in a
+/// question mark, a blank, the options. Rejecting everything that hangs off a
+/// column-0 line would take the trust prompt with it; rejecting only what hangs
+/// off a turn of the conversation keeps it, because the trust prompt's anchor is
+/// `> You are in …` and a turn's is `•` or `›`.
+///
+/// `◦` is the same bullet in the hollow state Codex alternates it into while a
+/// turn is still running — `codex-0.146-working.txt` caught the filled form of
+/// the very same line. Naming a glyph that never appears would cost nothing
+/// here anyway: everything in this set only ever adds refusals.
+fn is_turn(line: &str) -> bool {
+    is_entry(line) && line.starts_with(['\u{2022}', '\u{25E6}', CURSOR])
+}
+
+/// The whole of an option's label, head row and any rows it wrapped onto.
+///
+/// A continuation row is anything directly under the option that is not blank,
+/// not a transcript entry and not an option of its own — measured on the update
+/// prompt at 60 columns, which wraps its first option over three rows and
+/// numbers none of them. Gathering it is not cosmetic: skipping it, which is
+/// what the first version of this did, cut every long label at whatever column
+/// the pane happened to wrap, so `Update now (runs \`sh -c 'curl -fsSL` was the
+/// whole of what a person would have been offered.
+///
+/// The blank row is what ends the list, and it is also all that stands between
+/// the last option and the footer under it. A dialog that ever drew the two
+/// without one between them would fold the footer into the last label — a
+/// cosmetic cost, and the direction to be wrong in, since the alternative is
+/// guessing at wording.
+fn wrapped(screen: &[String], row: usize, head: &str) -> String {
+    let mut words: Vec<&str> = head.split_whitespace().collect();
+    for line in &screen[row + 1..] {
+        if is_blank(line) || is_entry(line) || option_line(line).is_some() {
+            break;
+        }
+        words.extend(line.split_whitespace());
+    }
+    words.join(" ")
 }
 
 /// Is there a break in the layout strictly between these two rows — a transcript
@@ -238,14 +285,26 @@ fn opening(text: &str) -> Option<String> {
 /// Codex's approval dialog: a paragraph of text and numbered options, drawn
 /// straight onto the transcript with no frame around it.
 ///
-/// Read off Codex CLI 0.146.0 — the command dialog, the edit dialog and the
-/// trust-this-directory prompt are all in `tests/fixtures/`, captured under a
-/// PTY at 120x30 and rendered through the same vt100 the worker reads. Every
-/// discriminator below is a property of those screens, and every one of them
-/// costs a **miss** if that CLI changes it — never a false match, which is the
-/// direction that matters: a session wrongly turned `needs-you` would put a
-/// loud row in a panel budgeted at one or two, and would make
-/// `terminal_run_capture` refuse to write to a session with nothing open on it.
+/// Read off Codex CLI 0.146.0 — the command dialog, the edit dialog, the
+/// trust-this-directory prompt, the update prompt, a session at work and a
+/// draft left in the composer are all in `tests/fixtures/`, captured under a
+/// PTY at 60 and 120 columns and rendered through the same vt100 the worker
+/// reads. Every discriminator below is a property of those screens.
+///
+/// **What this aims at, and what it does not promise.** The direction that
+/// matters is missing rather than matching: a session wrongly turned
+/// `needs-you` claims one of the one or two loud rows the design budgets, and
+/// makes `terminal_run_capture` refuse to write to a session with nothing open
+/// on it. So every rule here is written to fail closed, and a change to that
+/// CLI should cost a miss.
+///
+/// That is an aim and not a guarantee, and saying otherwise here would be worse
+/// than saying nothing — the next person would read it as a contract and stop
+/// checking. It has been untrue twice already. Both times the shape was the
+/// same: something the app had never seen on a screen turned out to be built
+/// out of the same rows a dialog is. The known open case is written out under
+/// the rules below; the unknown ones are why this is a list of properties of
+/// six screens rather than a specification of an interface nobody here owns.
 ///
 /// - the options number themselves 1, 2, 3 … and the **last** such run on the
 ///   screen is the dialog, since anything the agent merely printed sits above
@@ -258,23 +317,43 @@ fn opening(text: &str) -> Option<String> {
 ///   another transcript entry may not;
 /// - the question is in the block directly above the options, and that block is
 ///   what is left after the transcript is cut away: the walk up stops at a
-///   transcript entry drawn at column 0 or at the double blank between two
-///   top-level blocks, and a block that starts glued straight onto a transcript
-///   entry *is* that entry's own continuation and is thrown away whole;
+///   line drawn at column 0 or at the double blank between two top-level
+///   blocks, and if it stopped on a **turn of the conversation** — a `•` or a
+///   `›` rather than any old column-0 line — then everything it gathered is
+///   that turn's own continuation and is thrown away whole;
 /// - and something in that block has to read as a question — a paragraph that
 ///   is one outright for preference, and only failing that a paragraph that
 ///   opens with one.
 ///
-/// The block rules are the second version of this. The first bounded the block
-/// by indentation alone, which holds while the transcript entry above fits on
-/// one row and fails the moment it wraps — at a narrow centre pane, the common
-/// case. `codex-0.146-draft-in-the-composer.txt` is that failure captured: an
-/// agent still working, its answer's last paragraph ending in a question mark
-/// on an indented row, and a two-line numbered draft sitting unsent in the
-/// composer below. It read as a dialog, which is the one thing this file is
-/// supposed to be incapable of — a busy session claiming one of the one or two
-/// loud rows the design budgets, and `terminal_run_capture` refusing to write
-/// to a session with nothing open on it.
+/// The block rules are the third version of this, and both earlier ones were
+/// wrong in the same direction: they matched a screen with nothing on it to
+/// answer.
+///
+/// The first bounded the block by indentation alone, which holds while the turn
+/// above fits on one row and fails the moment it wraps — at a narrow centre
+/// pane, the common case. `codex-0.146-draft-in-the-composer.txt` is that
+/// failure captured: an agent still working, its answer's last paragraph ending
+/// in a question mark on an indented row, and a two-line numbered draft sitting
+/// unsent in the composer below.
+///
+/// The second threw the block away only when its first row was glued to the
+/// turn above with no blank between, which misses whenever that turn's first
+/// paragraph is a single row — the row under it is then the blank before its
+/// *second* paragraph, and the block looks unanchored. `• Done — tests pass.`
+/// followed by a blank, a question and a numbered draft is the whole of it.
+/// Hence a turn, not a gap: the block is refused for what it hangs off, rather
+/// than for how closely.
+///
+/// **Known open: a scrolled screen with no anchor on it at all.** When the turn
+/// that owns the prose has scrolled off the top, the walk reaches row 0 without
+/// meeting anything, and an indented `is that alright with you?` above a
+/// numbered draft still reads as a dialog —
+/// `a_scrolled_screen_with_nothing_to_anchor_it_is_a_known_gap` pins it.
+/// Closing it means requiring a block to be anchored at all, which would then
+/// refuse a dialog drawn at the top of an unscrolled screen — the update prompt
+/// is one, and it starts at row 0. That is a trade between a false match in a
+/// rare scroll position and a miss in an ordinary one, with no measurement
+/// available to settle it, so it is recorded rather than guessed at.
 fn question(screen: &[String]) -> Option<Question> {
     // Every numbered line on the screen, the agent's own among them.
     let marks: Vec<(usize, (usize, String, bool))> = screen
@@ -309,7 +388,10 @@ fn question(screen: &[String]) -> Option<Question> {
         // Verified against 0.146.0 by answering a live dialog with these very
         // bytes: the digit selects and the return confirms, the same as Claude
         // Code, which is what the footer means by "press enter to confirm".
-        options.push(QuestionOption { label: label.clone(), send: format!("{index}\r") });
+        options.push(QuestionOption {
+            label: wrapped(screen, *row, label),
+            send: format!("{index}\r"),
+        });
         expected += 1;
         previous = Some(*row);
     }
@@ -339,13 +421,18 @@ fn question(screen: &[String]) -> Option<Question> {
     }
 
     // What is left may still be the tail of the transcript rather than a block
-    // of its own: an entry's continuation rows are indented exactly as a
-    // dialog's are, and its later paragraphs are parted from its first by the
-    // same single blank a dialog uses inside itself. Being glued straight onto
-    // the entry above — no blank row at all between them — is the one thing
-    // that says so, and it throws the whole run away rather than trimming it,
-    // because a dialog is never glued to anything.
-    if top > 0 && !is_blank(&screen[top]) && is_entry(&screen[top - 1]) {
+    // of its own: a turn's continuation rows are indented exactly as a dialog's
+    // are, and its later paragraphs are parted from its first by the same
+    // single blank a dialog uses inside itself. Hanging off that turn at all is
+    // what says so — not how closely, which was the second version of this rule
+    // and missed every turn whose first paragraph was one row. It throws the
+    // whole run away rather than trimming it, because a dialog hangs off
+    // nothing.
+    //
+    // A dialog reached its own block over the double blank between top-level
+    // blocks, so `top` sits on that blank and this never fires; the trust
+    // prompt reaches it over `> You are in …`, which is not a turn.
+    if top > 0 && is_turn(&screen[top - 1]) {
         return None;
     }
 
@@ -696,9 +783,12 @@ mod tests {
         // above indented exactly as a dialog's is. Everything a dialog has
         // except being one.
         //
-        // What tells them apart is that those rows are glued straight onto the
-        // `•` at column 0 that owns them, with no blank row between, and a
-        // dialog never is.
+        // The agent was asked for two paragraphs each ending in a question
+        // mark, so the shape was provoked rather than stumbled on; every row of
+        // it is Codex's own rendering, which is the part that had to be real.
+        //
+        // What tells them apart is that those rows hang off the `•` at column 0
+        // that owns them, and a dialog hangs off nothing.
         assert!(
             question(&fixture("codex-0.146-draft-in-the-composer.txt")).is_none(),
             "a busy agent with a draft in its composer was read as waiting on a person"
@@ -826,6 +916,65 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_whose_first_paragraph_is_one_row_is_still_a_turn() {
+        // The second version of the block rules refused a block only when its
+        // first row was glued to the turn above with no blank between. When the
+        // turn's first paragraph is a single row, the row under it is the blank
+        // before the turn's *second* paragraph, so nothing looked glued and
+        // this read as a dialog with nothing to answer.
+        let screen: Vec<String> = [
+            "• Done — tests pass.",
+            "",
+            "  Do you want me to also update the changelog?",
+            "",
+            "",
+            "\u{203a} 1. yes update it",
+            "  2. no leave it",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(question(&screen).is_none(), "the agent's own one-line turn was read as a dialog");
+    }
+
+    #[test]
+    fn a_scrolled_screen_with_nothing_to_anchor_it_is_a_known_gap() {
+        // Pinned as it behaves, not as it should: when the turn that owns the
+        // prose has scrolled off the top there is no anchor on the screen at
+        // all, and this reads as a dialog. Closing it means requiring a block
+        // to hang off something, which would refuse a dialog drawn at the top
+        // of an unscrolled screen — `codex-0.146-update-prompt.txt` is one, and
+        // it starts at row 0. Recorded rather than guessed at; if this
+        // assertion ever needs inverting, that is the trade being made.
+        let screen: Vec<String> =
+            ["  is that alright with you?", "", "", "\u{203a} 1. yes", "  2. no"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+        assert!(question(&screen).is_some(), "the known gap closed on its own — read the doc");
+    }
+
+    #[test]
+    fn a_wrapped_option_label_is_gathered_whole() {
+        // A real wrapped label, three rows of it, off the update prompt at 60
+        // columns. Skipping the continuations — which the first version of this
+        // did — left a person being offered
+        // `Update now (runs \`sh -c 'curl -fsSL`, cut at whatever column the
+        // pane happened to wrap. `question` itself says nothing about this
+        // screen, so the two pieces are called directly.
+        let screen = fixture("codex-0.146-update-prompt.txt");
+        let row = screen.iter().position(|l| option_line(l).is_some()).expect("an option is there");
+        let (index, head, selected) = option_line(&screen[row]).expect("an option is there");
+        assert_eq!(index, 1);
+        assert!(selected, "the cursor is on the first option");
+        assert_eq!(
+            wrapped(&screen, row, &head),
+            "Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | \
+             CODEX_NON_INTERACTIVE=1 sh'`)"
+        );
+    }
+
+    #[test]
     fn a_wrapped_option_label_does_not_end_the_list() {
         // A narrow pane wraps the long second option, and the continuation row
         // is neither an option nor the end of the block. Losing option 3 would
@@ -843,14 +992,21 @@ mod tests {
         .collect();
         let q = question(&screen).expect("the dialog went unrecognised");
         assert_eq!(q.options.len(), 3);
+        assert_eq!(
+            q.options[1].label,
+            "Yes, and don't ask again for commands that start with `touch probe.txt` (p)",
+            "the label was cut at the column the pane happened to wrap"
+        );
         assert_eq!(q.options[2].label, "No, and tell Codex what to do differently (esc)");
     }
 
     #[test]
     fn a_question_the_agent_asked_in_prose_above_the_dialog_is_not_the_dialogs() {
-        // The transcript entry directly above ends in a question mark and is
-        // indented in its continuation rows. Column 0 is the boundary between
-        // the two, and without it the question of the dialog would be whatever
+        // The turn directly above ends in a question mark of its own. What
+        // separates it from the dialog here is the double blank Codex puts
+        // between one top-level block and the next — the walk stops on that and
+        // never reaches the `•`, so this pins the blank-pair rule rather than
+        // the column-0 one. Without it the dialog's question would be whatever
         // the agent last said.
         let screen: Vec<String> = [
             "• Should I also rename the test file?",
