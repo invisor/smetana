@@ -301,8 +301,8 @@ where it is, because the branch this checkout is on is exactly the per-worktree 
 opening a linked worktree as a project offered exactly one branch in the run dialog — the branch the
 worktree was already on, which is the single branch nobody needs to merge into — and the reflog
 ordering did not work at all, since the log directory was not there either and every branch fell into
-the alphabetical tail. Live-checked against this repository's own linked worktree: the same 30-branch
-list as the main checkout, in the same reflog order, with HEAD still reading per-worktree.
+the alphabetical tail. Live-checked against this repository's own linked worktree: the same list as
+the main checkout, in the same reflog order, with HEAD still reading per-worktree.
 
 The counters next to it — uncommitted files, running agents — are still fixture.
 
@@ -457,7 +457,9 @@ wrong the other way, for an agent whose spinner animates purely in colour, costs
 of a spinning one.
 
 **Half of `smetana-8h7` is fixed and half is not, and the difference matters when changing this.**
-The silence half is closed. The bell half is not: Claude Code still rings none on a permission prompt,
+The silence half is closed **for repaints that redraw identical text — which is the mechanism the fix
+assumes and not one that has been observed on the dialog it was aimed at**; the caveat below is part
+of the claim, not a footnote to it. The bell half is not: Claude Code still rings none on a permission prompt,
 so a bell is not the fallback here either. What an unmatched layer B now produces is `Idle` — which
 reaches the front end as the `ready` status, whose loudness is `live`, the same as `running`. So the
 whole visible cost of a waiting agent that no profile could read is the dot beside its row turning
@@ -648,14 +650,14 @@ block only when it was glued to the turn above with no blank between missed when
 paragraph was a single row, since the row beneath is then the blank before its *second* paragraph and
 the block looks unanchored. Distinguishing a conversational turn from any old column-0 line is also
 what keeps the trust prompt readable, because that prompt hangs off `> You are in …` rather than off a
-bullet. Two other refinements come from real screens: a long label is gathered across the rows it
-wrapped onto, since cutting it at the pane's wrap column once left the update prompt's first option
-reading as a truncated fragment of the shell command behind it — the update prompt at 60 columns wraps
-that option over three rows and numbers none of them; and a paragraph that is a question outright is
-preferred over one that
-merely opens with a question mark, because in the command dialog the preview sits *below* the
-question, so a command containing `x ? 1 : 2` would otherwise be handed back as what a person is being
-asked.
+bullet.
+
+Two other refinements come from real screens. A long label is gathered across the rows it wrapped
+onto: the update prompt at 60 columns wraps its first option over three rows and numbers none of them,
+and cutting at the pane's wrap column once left that option reading as a truncated fragment of the
+shell command behind it. And a paragraph that is a question outright is preferred over one that merely
+opens with a question mark, because in the command dialog the preview sits *below* the question — so a
+command containing `x ? 1 : 2` would otherwise be handed back as what a person is being asked.
 
 The known gap is recorded rather than papered over: **a scrolled screen with no anchor left on it**.
 When the turn that owns the prose has scrolled off the top, the walk upward reaches row 0 having met
