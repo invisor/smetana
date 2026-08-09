@@ -168,6 +168,16 @@ pub struct Run {
 pub enum RunError {
     #[error("a run is already going in this project")]
     AlreadyRunning,
+    /// The previous run has stopped and the loop task carrying it has not
+    /// finished winding down — it is inside a board read, a usage probe or a
+    /// preflight command and has not looked at the stop channel yet.
+    ///
+    /// Deliberately not `AlreadyRunning`, and the difference is the whole
+    /// reason it exists: nothing is going, the bar says so in the same breath,
+    /// and a refusal claiming otherwise reads as the stop not having taken. The
+    /// project is not free yet, which is a different sentence and a true one.
+    #[error("the previous run in this project is still finishing")]
+    WindingDown,
     #[error("this project has no .smetana/project.toml")]
     NotConfigured,
     /// The config exists and could not be read. The message is the one
