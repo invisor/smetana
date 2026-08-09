@@ -9,6 +9,7 @@
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import { TONE, stopReason } from './stopReason.js'
 
 const props = defineProps({
   /* The whole Run from the worker, or null when nothing has been started. */
@@ -22,54 +23,10 @@ const state = computed(() => props.run?.state ?? null)
 const over = computed(() => state.value?.kind === 'stopped')
 const paused = computed(() => state.value?.kind === 'paused')
 
-/* Loud only where a person has to do something. A run that finished its queue
-   is the ordinary ending and gets the quiet treatment; one that stopped because
-   nothing moved, or because the harness kept failing, is the reason this bar
-   is worth a colour at all. */
-const REASONS = {
-  queue_empty: { text: 'Done — nothing left to take', loud: false, icon: 'check' },
-  cancelled: { text: 'Stopped', loud: false },
-  /* Quiet, like the stop button and for the same reason: a person did this on
-     purpose and there is nothing here to fix. Loudness is not what it owes
-     them — the sentence is. "Mid-batch" is the whole of it: a stop lets the
-     batch in flight finish, while removing the session killed it where it
-     stood, so there are worktrees left half-done for the next run's recovery
-     phase to pick up. The person reading this line is deciding whether to go
-     and look, and nothing else on screen will tell them to.
-
-     `bare` keeps the branch suffix off this one line: "…was removed into
-     staging" is a garden path, and the branch is the least of what somebody
-     needs at that moment. */
-  session_removed: {
-    text: 'Stopped mid-batch — its agent session was removed',
-    loud: false,
-    bare: true
-  },
-  /* The agent asked something and the run had nobody in it to answer — a
-     Codex trust prompt in a folder it has not seen before is the case this
-     was written for. Loud, because it is waiting on a person and nothing
-     else on this bar is. The detail line carries the question itself: what
-     it asked is what decides whether somebody goes and answers it, and it is
-     answered in the agent's own terminal, where the session is still sitting
-     at the prompt. */
-  needs_answer: {
-    text: 'Stopped — the agent is waiting for an answer',
-    loud: true,
-    icon: 'message-circle-question-mark'
-  },
-  no_progress: { text: 'Stuck — a whole batch changed nothing', loud: true },
-  max_iterations: { text: 'Stopped after too many batches', loud: true },
-  unreadable: { text: 'Stopped — the tracker could not be read', loud: true },
-  crashed: { text: 'Stopped — the agent kept failing', loud: true },
-  preflight: { text: 'Could not start', loud: true }
-}
-
-const reason = computed(() => {
-  const kind = state.value?.reason?.kind
-  /* An unknown reason is an ordinary outcome, not a crash: this front end may
-     be older than the worker. It says so plainly rather than drawing nothing. */
-  return REASONS[kind] ?? { text: kind ? `Stopped — ${kind.replace(/_/g, ' ')}` : 'Stopped', loud: true }
-})
+/* What an ending says, in what colour, under what glyph: `stopReason.js`, pure
+   and next door, because a table of which endings read as failures is worth a
+   test and no test in this repository can reach a `.vue`. */
+const reason = computed(() => stopReason(state.value?.reason?.kind))
 
 /* The finished run and the ones that stopped short differ by silhouette, not
    only by colour — the rule the status palette keeps everywhere else in this
@@ -131,7 +88,9 @@ const detail = computed(() => {
 
 const tone = computed(() => {
   if (!over.value) return 'var(--text-primary)'
-  return reason.value.loud ? 'var(--status-failed-fg)' : 'var(--text-secondary)'
+  /* An ending that names no tone of its own is drawn as the ordinary one: red
+     is a claim about what happened, and an omission has not made it. */
+  return reason.value.tone ?? TONE.quiet
 })
 
 const style = computed(() => ({
