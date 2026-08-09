@@ -27,7 +27,20 @@
 //! directory *listings* carry the tests, and one `detect` does the disk reads
 //! and calls them. No worker, for the reason `files/` and `git.rs` have none —
 //! four file reads and two directory listings guard no state.
+//!
+//! **One honest gap, and it is the expensive direction of error.**
+//! `PLAYWRIGHT_BROWSERS_PATH` is read from *this process's* environment, and a
+//! bundled app on macOS is handed launchd's, never what a person set in
+//! `~/.zshrc` — the whole reason `src/shell_env.rs` exists. So somebody who
+//! keeps their browsers somewhere else reads here as having none, and the
+//! toggle is blocked with a tooltip naming a tool they do have. By this
+//! module's own cost model that is the wrong way round: it removes a working
+//! feature rather than leaving things where they were. Asking the login shell
+//! is what would close it, and that belongs with `shell_env` rather than here.
+//! The bug is invisible under `npm run tauri dev` for the same reason it is
+//! there — a binary started from a terminal already has the full environment.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -196,18 +209,40 @@ pub fn is_chrome_profile(name: &str) -> bool {
             .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Is the extension unpacked in any of these profiles?
+///
+/// The listing goes in and the one disk question comes in as `unpacked`, which
+/// is the shape `browsers_downloaded` already has and for the same reason: the
+/// fragile part of this answer is not `is_dir` but the two things around it —
+/// which entries count as profiles, and the fact that only a *profile* is asked
+/// at all. A Chrome user-data directory is mostly not profiles, so walking it
+/// whole would look for the extension under `Crashpad`, and asking every entry
+/// would have quietly worked on this machine while going wrong on a fresh one.
+/// Injecting the predicate is what lets a test pin both without a Chrome
+/// installation to point at.
+pub fn extension_in_profiles(profiles: &[String], mut unpacked: impl FnMut(&str) -> bool) -> bool {
+    // `FnMut`, the way `Iterator::any` takes its own predicate: it costs the
+    // caller nothing and it is what lets the test record which names were asked,
+    // which is half of what there is to pin here.
+    profiles.iter().filter(|name| is_chrome_profile(name)).any(|name| unpacked(name))
+}
+
 /// Where Playwright keeps its browsers.
 ///
-/// `PLAYWRIGHT_BROWSERS_PATH` wins when it is set, and its one non-path value is
-/// handled by name: `0` means the browsers live inside the npm package rather
-/// than in a shared cache, which is a directory nothing here can name without
-/// knowing which `node_modules` the agent will use. Unobservable, so "no".
+/// `configured` is `PLAYWRIGHT_BROWSERS_PATH`, taken as an argument rather than
+/// read here so the branch below is reachable from a test without mutating the
+/// process environment — which `cargo test`'s threads share.
+///
+/// It wins when it is set, and its one non-path value is handled by name: `0`
+/// means the browsers live inside the npm package rather than in a shared cache,
+/// which is a directory nothing here can name without knowing which
+/// `node_modules` the agent will use. Unobservable, so "no".
 ///
 /// The three platform defaults are Playwright's own. macOS is the one this was
 /// established against; the other two are written from Playwright's documented
 /// layout and have not been run.
-fn playwright_cache_dir(home: &Path) -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os("PLAYWRIGHT_BROWSERS_PATH") {
+fn playwright_cache_dir(home: &Path, configured: Option<&OsStr>) -> Option<PathBuf> {
+    if let Some(explicit) = configured {
         if explicit == "0" {
             return None;
         }
@@ -282,14 +317,14 @@ pub fn detect(project: &Path, busy_project: Option<String>) -> BrowserTools {
         || mcp_json_has_playwright(&read(project.join(".mcp.json")))
         || codex_config_has_playwright(&read(home.join(".codex/config.toml")));
 
-    let playwright_browsers = playwright_cache_dir(&home)
+    let configured = std::env::var_os("PLAYWRIGHT_BROWSERS_PATH");
+    let playwright_browsers = playwright_cache_dir(&home, configured.as_deref())
         .is_some_and(|cache| browsers_downloaded(&entries_of(&cache)));
 
     let chrome = chrome_user_data_dir(&home);
-    let extension = entries_of(&chrome)
-        .iter()
-        .filter(|name| is_chrome_profile(name))
-        .any(|profile| chrome.join(profile).join("Extensions").join(EXTENSION_ID).is_dir());
+    let extension = extension_in_profiles(&entries_of(&chrome), |profile| {
+        chrome.join(profile).join("Extensions").join(EXTENSION_ID).is_dir()
+    });
 
     BrowserTools { playwright_mcp, playwright_browsers, extension, busy_project }
 }
@@ -427,6 +462,58 @@ command = "node"
         assert!(!is_chrome_profile("Profile"));
         assert!(!is_chrome_profile("Profile "));
         assert!(!is_chrome_profile("Profile X"));
+    }
+
+    #[test]
+    fn the_extension_is_looked_for_in_profiles_and_nowhere_else() {
+        // Verbatim neighbours from a real Chrome user-data directory. If the
+        // walk ever stops filtering, `Crashpad` gets asked and this fails.
+        let listing: Vec<String> =
+            ["Crashpad", "Default", "GrShaderCache", "Profile 2", "Guest Profile"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+        let mut asked: Vec<String> = Vec::new();
+        let found = extension_in_profiles(&listing, |profile| {
+            asked.push(profile.to_string());
+            profile == "Profile 2"
+        });
+        assert!(found, "the extension in any one profile is enough");
+        assert_eq!(asked, ["Default", "Profile 2"], "only profiles are ever asked");
+    }
+
+    #[test]
+    fn no_profile_carrying_it_is_a_no_rather_than_a_maybe() {
+        let listing = vec!["Default".to_string(), "Profile 2".to_string()];
+        assert!(!extension_in_profiles(&listing, |_| false));
+        // A user-data directory with no profiles at all — or none this reader
+        // recognises — is the same "no", loudly, by the rule at the top.
+        assert!(!extension_in_profiles(&["Crashpad".to_string()], |_| true));
+        assert!(!extension_in_profiles(&[], |_| true));
+    }
+
+    #[test]
+    fn a_configured_browsers_path_wins_over_the_platform_default() {
+        let home = PathBuf::from("/home/someone");
+        let configured = std::ffi::OsString::from("/opt/pw-browsers");
+        assert_eq!(
+            playwright_cache_dir(&home, Some(configured.as_os_str())),
+            Some(PathBuf::from("/opt/pw-browsers"))
+        );
+        // Unset falls to the platform default, which is under the home given.
+        let fallback = playwright_cache_dir(&home, None).expect("a default exists on every platform");
+        assert!(fallback.starts_with(&home) || cfg!(target_os = "windows"), "{fallback:?}");
+        assert!(fallback.ends_with("ms-playwright"), "{fallback:?}");
+    }
+
+    #[test]
+    fn browsers_kept_inside_the_package_are_unobservable_and_so_read_as_none() {
+        // `PLAYWRIGHT_BROWSERS_PATH=0` puts them in whichever node_modules the
+        // agent happens to use, which is not a directory this can name. The
+        // rule at the top of the file says what that means: "no", loudly.
+        let home = PathBuf::from("/home/someone");
+        assert_eq!(playwright_cache_dir(&home, Some(std::ffi::OsStr::new("0"))), None);
     }
 
     #[test]

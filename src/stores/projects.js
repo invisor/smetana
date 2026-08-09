@@ -13,15 +13,17 @@ import { listDir, setRoot } from './files.js'
 import { flushPending, loadProjectLayout, settings } from './settings.js'
 import { confirmUnsaved, resetTabs, restoreTabs } from './tabs.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
+import { basename } from '../paths.js'
 
 /* Path → whether it holds a .beads. health says the same thing about the
    active project, but there is nowhere else to learn it about the other rows. */
 const probes = reactive({})
 
-/* The path separator differs per system, and WebView2 is among the target
-   webviews: we split on both, otherwise on Windows the whole path would become
-   the project's name. */
-export const basename = (path) => path.split(/[/\\]/).filter(Boolean).pop() ?? path
+/* Re-exported rather than defined here: this store was the first of three
+   places to need it, which is how it came to live in one of them. It is one
+   module now (src/paths.js) and this name is kept so its importers do not have
+   to care where it moved to. */
+export { basename }
 
 export const projectRows = computed(() =>
   settings.openProjects.map((path) => ({

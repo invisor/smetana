@@ -201,7 +201,17 @@ export function installMockBackend() {
               repo: {},
               preflight: null,
               merge: null,
-              live_check: null
+              /* Browser, not null, and this is the line that makes the
+                 fixture below reachable. `liveCheckBlock` is scoped to
+                 mode = "browser", so while this was null the blocked toggle
+                 could not be produced under `npm run dev` at all — the machine
+                 answer was read, found nothing, and was then thrown away by a
+                 mode that never matched. Since `?view=gallery` passes the
+                 blocked string to RunModal as a literal, that left the
+                 DesktopApp computed, the live_check.mode accessor and the prop
+                 hand-off covered by nothing anywhere: a typo in the accessor
+                 would have shipped in silence. */
+              live_check: { mode: 'browser', command: null, notes: null }
             }
           }
         : { state: 'missing' }
@@ -213,11 +223,22 @@ export function installMockBackend() {
     /* A machine with neither tool, deliberately, and it is the one choice here
        that is not simply "what the developer's laptop has". Every machine that
        runs `npm run dev` on this project already has Playwright and the
-       extension, so answering what the real command would answer makes the
-       blocked toggle unreachable in a browser — and a control that only appears
+       extension, so answering what the real command would answer would put the
+       blocked toggle out of reach in a browser — and a control that only appears
        on somebody else's laptop is a control nobody checks. The absence is also
        honest for the browser itself: there is no Rust here to drive anything
-       with. Busy-ness stays null, because nothing is running to hold it. */
+       with.
+
+       What this achieves only holds together with the `live_check` fixture in
+       `project_config` above: the two are one fixture in two halves, and either
+       on its own leaves the blocked toggle unreachable. Opening "Run the queue"
+       in the dev server is what exercises the DesktopApp computed, the
+       live_check.mode accessor and the prop hand-off — none of which any gate
+       reaches.
+
+       Busy-ness stays null, and would be inert even if it were not: the busy
+       branch only fires where Playwright is the tool that would be used, and
+       neither tool is here. */
     if (command === 'browser_tools') {
       return {
         playwright_mcp: false,

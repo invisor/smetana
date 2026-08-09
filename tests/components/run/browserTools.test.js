@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { liveCheckBlock, projectName } from '../../../src/components/run/browserTools.js'
+import { liveCheckBlock } from '../../../src/components/run/browserTools.js'
 
 const NOTHING = { playwright_mcp: false, playwright_browsers: false, extension: false, busy_project: null }
 const PLAYWRIGHT = { ...NOTHING, playwright_mcp: true, playwright_browsers: true }
@@ -42,8 +42,9 @@ describe('why the run dialog blocks its live-check toggle', () => {
     expect(liveCheckBlock('browser', { ...EXTENSION, playwright_mcp: true })).toBe('')
   })
 
-  it('blocks with its own words when the tool is there and another run holds it', () => {
+  it('blocks with its own words when Playwright is the tool and another run holds it', () => {
     const reason = liveCheckBlock('browser', { ...PLAYWRIGHT, busy_project: '/Users/someone/other-app' })
+    // Named by its folder, not by a path somebody would read sideways.
     expect(reason).toContain('other-app')
     expect(reason).toContain('driving the browser')
     // Not the "nothing found" sentence: the tool is there.
@@ -57,18 +58,16 @@ describe('why the run dialog blocks its live-check toggle', () => {
     expect(reason).toContain("Playwright's MCP server")
     expect(reason).not.toContain('other-app')
   })
-})
 
-describe('naming the project holding the browser', () => {
-  it('is the folder, not the path somebody would have to read sideways', () => {
-    expect(projectName('/Users/someone/Projects/smetana')).toBe('smetana')
-    expect(projectName('/Users/someone/Projects/smetana/')).toBe('smetana')
-    expect(projectName('C:\\Users\\someone\\smetana')).toBe('smetana')
-  })
-
-  it('a path with no folder in it is left as it is rather than emptied', () => {
-    expect(projectName('smetana')).toBe('smetana')
-    expect(projectName('/')).toBe('')
-    expect(projectName(null)).toBe('')
+  it('never blocks on busy-ness where the extension is the tool that would be used', () => {
+    // Busy-ness is a Playwright fact. The app can see its own Playwright runs
+    // and can see nothing whatever about a Chrome window holding the extension,
+    // so blocking here would disable the toggle over a tool nobody has shown to
+    // be held — guessing about exactly the half it has said it cannot know.
+    expect(liveCheckBlock('browser', { ...EXTENSION, busy_project: '/Users/someone/other-app' })).toBe('')
+    // Both tools present: the extension is still a way through, so still ''.
+    expect(
+      liveCheckBlock('browser', { ...PLAYWRIGHT, extension: true, busy_project: '/Users/someone/other-app' })
+    ).toBe('')
   })
 })

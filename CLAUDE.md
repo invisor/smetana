@@ -40,10 +40,14 @@ npm run test:watch   # the same, in watch mode
 cd src-tauri && cargo test
 ```
 
-Two test runners: `npm test` covers the front end's pure logic — the nine plain modules and the
-stores — and `cargo test` covers the Rust side. Neither covers components: there is no component test
-runner and no linter or formatter, so do not invent one, and do not claim a change is "tested" on the
-basis of a build succeeding.
+Two test runners: `npm test` covers the front end's pure logic — the plain modules and the stores —
+and `cargo test` covers the Rust side. That used to say "the nine plain modules" and had been wrong
+for some time before anybody noticed; `tests/` mirrors `src/`, so the directory is the count and it
+cannot drift the way a number written once does. This is the same habit the stores paragraph below
+warns about, fixed the same way: name where the list lives, not how long it was on the day somebody
+looked. Neither runner covers components: there is no component test runner and no linter or
+formatter, so do not invent one, and do not claim a change is "tested" on the basis of a build
+succeeding.
 
 Front-end tests live in `tests/`, never next to the source. They mock exactly one thing — the IPC
 transport — through the official `mockIPC`, and rebuild the store module graph per test;
@@ -932,9 +936,17 @@ check opens a browser — naming a `command` check as the reason this toggle is 
 invention. **The extension's busy-ness is out of reach entirely, and so is a browser a person is
 driving themselves**: neither is visible from this process, and that gap is written down rather than
 papered over. The sentence a person reads is composed on the front end
-(`components/run/browserTools.js`, pure and tested, the fourth of the `branchChoice.js` family),
+(`components/run/browserTools.js`, pure and tested, one of the `branchChoice.js` family),
 since it is UI copy; the scope is `browser` and nothing else, because a `command` check needs no
 browser and `none` is `liveCheckAvailable`'s own reason with its own words under the switch.
+
+Busy-ness may block **only where Playwright is the tool that would be used**, which means the
+extension is absent. It is a Playwright fact and nothing else: the app sees its own runs, and a
+Playwright run in another project genuinely holds the one persistent profile, while a Chrome window
+holding the extension is not something this process can observe at all. Letting the busy branch fire
+whenever *either* tool was present disabled the toggle on an extension-only machine over a tool
+nobody had shown to be held — guessing about precisely the half the module has already said it
+cannot know.
 
 A pause is a `RunState`, not a `sleep` inside the loop, and that is load-bearing twice over: a run
 that had simply gone quiet for three hours is indistinguishable from one that hung, and the bar is
@@ -1024,7 +1036,7 @@ recreated, or a project reopened, finds the place it was left in.
 index, or a move to where the column already is. The caller leans on that identity to tell "nothing
 happened" from "something did" without comparing contents.
 
-`components/run/branchChoice.js` is the third of that family and was pulled out for the same reason:
+`components/run/branchChoice.js` is the next of that family and was pulled out for the same reason:
 a `.vue` file is the one thing no test in this repository can reach, so the whole of the rule filling
 the run dialog's branch field lives outside the component. `pickBranch` is three steps in one order —
 what this project was left at last time, then its own `[defaults].target_branch`, then whatever the
@@ -1032,6 +1044,16 @@ list puts first, which is the most recently worked-on branch because `git_branch
 A remembered name that is no longer in the list is skipped in silence rather than offered, since a
 branch deleted since it was remembered would sit in the field as an option that fails on the first
 merge.
+
+Two more have joined it since, and the family is now `panelWidths.js`, `columnOrder.js`,
+`branchChoice.js`, `components/run/browserTools.js` (why the live-check toggle is blocked — see the
+runs section) and `src/paths.js`. That last one is the odd member and worth knowing about: the other
+four each sit beside the one view that uses them, and `basename` could not, because its callers are
+two stores and a component module. It had been written out three times over, and the three disagreed:
+the newest answered `''` for a root path where the other two answer the path itself, which would have
+drawn an empty gap in the middle of a tooltip's sentence. That one was caught in review rather than
+on screen, which is luck and not a process. Borrowing the store's copy instead of lifting it out
+would have pulled Vue and Tauri into a family defined by having neither.
 
 The defect it was written for was not the rule being wrong but the rule running **once**, against a
 list that had not arrived yet (smetana-6gs, smetana-o8r): the dialog is shown first and the branches
