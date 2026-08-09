@@ -566,7 +566,10 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
            of the two densities — a frame that clips it turns the one harness
            that would catch a broken modal into a picture of the top half. The
            tallest of the three, measured, leaves about 70px over. Adding a row
-           to this dialog means measuring this number again. -->
+           to this dialog means measuring this number again — the blocked live
+           check below does not add one: its reason is a tooltip on the switch,
+           teleported to the body, and the note under it belongs to the other
+           reason and stays absent here. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', flexWrap: 'wrap' }">
         <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
           <RunModal
@@ -621,6 +624,24 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             @close="() => {}"
             @confirm="() => {}"
             @setup="() => {}"
+          />
+        </div>
+        <!-- The project wants a browser live check and the machine has nothing
+             to drive one with. The switch is off and inactive with no note under
+             it — the reason is on the switch, under the pointer, because it is
+             about this machine rather than about the project. The frame clips
+             nothing that matters: the tooltip is teleported to the body and
+             opens over the page. -->
+        <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <RunModal
+            :open="true"
+            :scope="{ kind: 'queue' }"
+            :count="12"
+            :branches="['main', 'staging']"
+            default-branch="main"
+            live-check-blocked="Nothing here can drive a browser: Playwright's MCP server is not in the agent's configuration and the Claude in Chrome extension was not found in a Chrome profile."
+            @close="() => {}"
+            @confirm="() => {}"
           />
         </div>
       </div>

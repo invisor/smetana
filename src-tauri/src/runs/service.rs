@@ -63,6 +63,17 @@ pub enum Request {
     Start(String, Box<RunSettings>, oneshot::Sender<Result<Run, RunError>>),
     Stop(String, oneshot::Sender<Option<Run>>),
     State(String, oneshot::Sender<Option<Run>>),
+    /// Which **other** projects have a live run that will be driving a browser.
+    /// The run dialog asks before it opens, so it can say that the tool exists
+    /// and something else is holding it — a different sentence from the tool not
+    /// being there at all.
+    ///
+    /// Other projects only: this project's own run is refused long before the
+    /// browser is the reason, by `admit`. What comes back is a candidate list
+    /// rather than an answer — the worker knows a run asked for a live check and
+    /// not what kind of check that project declares, and `browser_tools` reads
+    /// the config to settle it.
+    BrowserBusy(String, oneshot::Sender<Vec<String>>),
 }
 
 /// What a loop task says to the worker. Three messages on one channel so they
@@ -181,6 +192,20 @@ fn handle(
     match request {
         Request::State(project, tx) => {
             let _ = tx.send(current(active, &project));
+        }
+        Request::BrowserBusy(project, tx) => {
+            // `is_over` and not `stopping`: a run winding down still has its
+            // batch in flight, and that batch still has the browser.
+            let holders = active
+                .iter()
+                .filter(|(path, entry)| {
+                    path.as_str() != project
+                        && !entry.run.is_over()
+                        && entry.run.settings.live_check
+                })
+                .map(|(path, _)| path.clone())
+                .collect();
+            let _ = tx.send(holders);
         }
         Request::Stop(project, tx) => {
             let mut answer = None;

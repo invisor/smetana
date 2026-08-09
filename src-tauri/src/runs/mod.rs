@@ -7,6 +7,7 @@
 //! there is nothing for a queue to guard — the same reasoning that keeps
 //! `files/` and `git.rs` out of a worker.
 
+pub mod browser;
 pub mod commands;
 pub mod config;
 pub mod gitignore;

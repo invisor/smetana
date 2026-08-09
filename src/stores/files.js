@@ -23,7 +23,12 @@ export const filesState = reactive({
   lastError: null
 })
 
-export const basenameOf = (path) => path.split('/').filter(Boolean).pop() ?? path
+/* The same function `projects.js` exports as `basename`, kept under this store's
+   own name so its importers do not move. It used to be a second implementation
+   splitting on `/` alone, which meant `setupFor` — a project path, passed
+   through here — lost nothing on macOS and everything on Windows. One module
+   now: src/paths.js, where the trade it makes is written down. */
+export { basename as basenameOf } from '../paths.js'
 
 /* Back-end errors are diagnostics: their text speaks the filesystem's language
    and is addressed to whoever fixes things. The person is shown a short phrase

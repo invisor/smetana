@@ -40,10 +40,14 @@ npm run test:watch   # the same, in watch mode
 cd src-tauri && cargo test
 ```
 
-Two test runners: `npm test` covers the front end's pure logic — the nine plain modules and the
-stores — and `cargo test` covers the Rust side. Neither covers components: there is no component test
-runner and no linter or formatter, so do not invent one, and do not claim a change is "tested" on the
-basis of a build succeeding.
+Two test runners: `npm test` covers the front end's pure logic — the plain modules and the stores —
+and `cargo test` covers the Rust side. That used to say "the nine plain modules" and had been wrong
+for some time before anybody noticed; `tests/` mirrors `src/`, so the directory is the count and it
+cannot drift the way a number written once does. This is the same habit the stores paragraph below
+warns about, fixed the same way: name where the list lives, not how long it was on the day somebody
+looked. Neither runner covers components: there is no component test runner and no linter or
+formatter, so do not invent one, and do not claim a change is "tested" on the basis of a build
+succeeding.
 
 Front-end tests live in `tests/`, never next to the source. They mock exactly one thing — the IPC
 transport — through the official `mockIPC`, and rebuild the store module graph per test;
@@ -816,6 +820,7 @@ other caller.
 | `gitignore.rs` | keeping `.smetana/` out of the repository |
 | `preflight.rs` | bringing the project up before the first batch — declared commands, then declared health checks |
 | `usage.rs` | what the subscription has left, and whether to run at full size, a smaller one, or not yet |
+| `browser.rs` | whether there is anything on this machine to drive a browser with — pure over file contents and directory listings, and where those tests are |
 | `queue.rs` | what is left to do and whether to run another batch — pure, and where the tests are |
 | `service.rs` | the worker: the loop, one run per project |
 | `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
@@ -909,6 +914,40 @@ question a second time after a session exits non-zero, and there it is not a gat
 classification — telling a spent limit apart from a harness that fell over, from the one source of
 truth, with no second mechanism to keep in step.
 
+`browser.rs` answers the question the config could not: `[live_check].mode = "browser"` says what the
+*project* wants and nothing about the machine the run rides on, so a run with the live check on
+started happily where there was nothing to drive a browser with and found out inside the check, as
+INFRA (smetana-29s). Either tool is enough — Playwright, which is two facts and not one (an MCP entry
+in `~/.claude.json`, the project's `.mcp.json` or `~/.codex/config.toml`, **and** the browsers
+actually downloaded under `ms-playwright`), or the Claude in Chrome extension, found by its id in a
+Chrome profile. Every path and id in it is fragile by nature and that is accepted rather than hidden:
+an extension writes itself into no agent's configuration, so from outside the unpacked directory is
+the only evidence there is. Hence the rule the whole file is built on — **anything unobservable reads
+as "no", loudly**, the toggle goes off and the tooltip names what was not found, rather than the
+toggle staying live on a guess. Matching an MCP entry goes the other way on purpose (its name *or*
+what it runs, either alone) because the two mistakes are not the same size: a false "present" leaves
+things exactly where they were before the module existed, while a false "absent" takes a working
+feature away under a tooltip claiming a tool is missing that is sitting right there.
+
+Busy-ness is the second reason and it is deliberately only half a question. `Request::BrowserBusy`
+answers which *other* projects have a live run that asked for a live check, and `browser_tools` then
+reads each one's config, because the worker knows a run wanted a check and not whether that project's
+check opens a browser — naming a `command` check as the reason this toggle is blocked would be an
+invention. **The extension's busy-ness is out of reach entirely, and so is a browser a person is
+driving themselves**: neither is visible from this process, and that gap is written down rather than
+papered over. The sentence a person reads is composed on the front end
+(`components/run/browserTools.js`, pure and tested, one of the `branchChoice.js` family),
+since it is UI copy; the scope is `browser` and nothing else, because a `command` check needs no
+browser and `none` is `liveCheckAvailable`'s own reason with its own words under the switch.
+
+Busy-ness may block **only where Playwright is the tool that would be used**, which means the
+extension is absent. It is a Playwright fact and nothing else: the app sees its own runs, and a
+Playwright run in another project genuinely holds the one persistent profile, while a Chrome window
+holding the extension is not something this process can observe at all. Letting the busy branch fire
+whenever *either* tool was present disabled the toggle on an extension-only machine over a tool
+nobody had shown to be held — guessing about precisely the half the module has already said it
+cannot know.
+
 A pause is a `RunState`, not a `sleep` inside the loop, and that is load-bearing twice over: a run
 that had simply gone quiet for three hours is indistinguishable from one that hung, and the bar is
 where somebody looks to tell those apart — and being a state is what lets the stop button reach it,
@@ -997,7 +1036,7 @@ recreated, or a project reopened, finds the place it was left in.
 index, or a move to where the column already is. The caller leans on that identity to tell "nothing
 happened" from "something did" without comparing contents.
 
-`components/run/branchChoice.js` is the third of that family and was pulled out for the same reason:
+`components/run/branchChoice.js` is the next of that family and was pulled out for the same reason:
 a `.vue` file is the one thing no test in this repository can reach, so the whole of the rule filling
 the run dialog's branch field lives outside the component. `pickBranch` is three steps in one order —
 what this project was left at last time, then its own `[defaults].target_branch`, then whatever the
@@ -1025,6 +1064,22 @@ it inside that window has the choice frozen by `branchChosen`, so the run goes o
 that is not there. Clearing first made that impossible — by keeping Run disabled every time, for
 everybody. The window is a single call, the field self-corrects when the list lands as long as nobody
 has chosen, and the bad case costs a run that fails at the merge.
+
+The family has more members than this section names, and the place to see them all is `tests/` — for
+the reason the note under Commands gives, a list written out here is wrong by the time somebody
+trusts it. What they have in common is the shape rather than the count: each is the whole of one
+rule, pure, with no Vue and no DOM in it, and each lives under the directory of the part of the
+interface it is a rule about.
+
+`src/paths.js` is the one that breaks the second half of that, and it is worth saying why, because
+its location is the one thing about it a reader cannot work out for themselves. `basename` — what a
+path is called, for a project row, a file tab, a dialog's sentence — is not a rule about any one part
+of the interface: two stores and a component module want it at once, so there is no "under" to put it
+and it sits at the top of `src/` instead. It had been written out three times over, and the three
+disagreed — the newest answered `''` for a root path where the other two answer the path itself,
+which would have drawn an empty gap in the middle of a tooltip's sentence. That one was caught in
+review rather than on screen, which is luck and not a process. Borrowing a store's copy instead of
+lifting it out would have pulled Vue and Tauri into a family defined by having neither.
 
 ### Settings
 
