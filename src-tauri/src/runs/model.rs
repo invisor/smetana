@@ -185,8 +185,10 @@ pub enum RunError {
     #[error("a run is already going in this project")]
     AlreadyRunning,
     /// The previous run has stopped and the loop task carrying it has not
-    /// finished winding down — it is inside a board read, a usage probe or a
-    /// preflight command and has not looked at the stop channel yet.
+    /// finished winding down — it is inside a board read or a usage probe and
+    /// has not looked at the stop channel yet. The preflight used to be the
+    /// longest of these by far and is not one any more: `bring_up` watches that
+    /// channel and kills the command in flight (smetana-16w).
     ///
     /// Deliberately not `AlreadyRunning`, and the difference is the whole
     /// reason it exists: nothing is going, the bar says so in the same breath,
