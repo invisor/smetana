@@ -860,8 +860,21 @@ A stop leaves a gap between the run reading `Stopped` and its entry leaving, and
 that gap has its own reason**, `RunError::WindingDown`. Reusing `AlreadyRunning` there put two
 contradictory things on screen at once — a bar saying the run is stopped and a message saying one is
 going — and a person reads that as the stop not having taken. The gap is not always brief: the loop
-may be inside a 60s usage probe, or inside `bring_up`, which never reads the stop channel at all and
-whose declared commands are allowed 600s apiece.
+may be inside a board read or a 60s usage probe, and it holds the project for the whole of it.
+
+**The preflight is the one phase where a stop is not cooperative** (smetana-16w), and that exception
+is the reason the gap is no longer measured in minutes. `bring_up` read the stop channel nowhere at
+all, so a stop pressed during it waited out every declared command at 600s apiece and every health
+check at 120s — on this project the first declared command is `npm install`. It now watches that
+channel: the command in flight is killed where it stands, and a check is given up between looks
+rather than during one, since a look is bounded by seconds of its own (`curl --max-time 5`, a
+two-second connect) where a command has nothing bounding it but the ceiling. Killing is safe here for
+exactly the reason it is refused between batches: a declared command brings infrastructure up and is
+run again from the top next time, where a session interrupted between a merge and a close leaves work
+for the recovery phase. The signal goes to the process group, the way `terminal/pty.rs` sends its
+`SIGHUP`, because the child is a shell and the work is what it started — `npm install` is node and
+everything node forks. Nothing about the ending changes: the run reaches `Stopped { Cancelled }` and
+its entry leaves the map the one way every ending does, when the loop task is gone.
 
 Two smaller rules hold that up, and both were found by driving the race rather than by reading it.
 `may_start_batch` refuses a run that is merely `stopping`, not only one already over — "the batch in

@@ -388,10 +388,18 @@ async fn drive(
     };
 
     if let Some(config) = preflight_config {
-        if let Err(detail) = bring_up(&root, &config).await {
-            run.advance(RunState::Stopped { reason: StopReason::Preflight { detail } });
-            say(&run);
-            return;
+        match bring_up(&root, &config, &mut stop).await {
+            BringUp::Ready => {}
+            BringUp::Cancelled => {
+                run.advance(RunState::Stopped { reason: StopReason::Cancelled });
+                say(&run);
+                return;
+            }
+            BringUp::Failed(detail) => {
+                run.advance(RunState::Stopped { reason: StopReason::Preflight { detail } });
+                say(&run);
+                return;
+            }
         }
     }
 
@@ -606,45 +614,125 @@ async fn headroom(
     }
 }
 
+/// How the preflight ended.
+///
+/// `Cancelled` is kept apart from `Failed` because they are opposite things to
+/// read in the bar: one is somebody's own stop, the other is a project that
+/// would not come up. Folding the first into the second would accuse the
+/// project of a failure the person caused on purpose.
+enum BringUp {
+    Ready,
+    Cancelled,
+    Failed(String),
+}
+
 /// The declared commands, then the declared health checks. Blocking work goes
 /// to a thread: spawning `docker compose` and waiting on it would otherwise
 /// hold the whole async runtime.
-async fn bring_up(root: &Path, config: &config::Preflight) -> Result<(), String> {
-    let root = root.to_path_buf();
+///
+/// This is the one phase of a run that is **not** stopped cooperatively
+/// (smetana-16w). The stop between batches waits for the batch in flight
+/// because a session interrupted between a merge and a close leaves work to
+/// recover; a declared command leaves nothing of the kind — it brings
+/// infrastructure up and is run again from the top next time — while its
+/// ceilings are 600s apiece against a health check's 120s, and the first one on
+/// this project is `npm install`. Waiting those out is a stop that visibly does
+/// nothing for minutes, and the project stays unstartable for all of them,
+/// because the entry only leaves the map when this task is gone.
+async fn bring_up(
+    root: &Path,
+    config: &config::Preflight,
+    stop: &mut mpsc::Receiver<()>,
+) -> BringUp {
+    let cancel = preflight::Cancel::default();
+    let owned = root.to_path_buf();
     let commands = config.commands.clone();
-    let ran = tokio::task::spawn_blocking(move || {
+    let asked = cancel.clone();
+    let mut running = tokio::task::spawn_blocking(move || {
         for command in &commands {
-            preflight::run_command(&root, command).map_err(|err| err.to_string())?;
+            match preflight::run_command(&owned, command, &asked) {
+                Ok(preflight::Ran::Done) => {}
+                Ok(preflight::Ran::Cancelled) => return Ok(preflight::Ran::Cancelled),
+                Err(err) => return Err(err.to_string()),
+            }
         }
-        Ok::<(), String>(())
-    })
-    .await;
+        Ok(preflight::Ran::Done)
+    });
+
+    let ran = tokio::select! {
+        joined = &mut running => joined,
+        _ = stop.recv() => {
+            // The thread owns the child, so killing it is that thread's own
+            // last act and this waits for it — a command left running behind a
+            // run that has ended is the orphan `terminate` exists to prevent.
+            // Bounded by one poll of `run_command`, not by the command.
+            cancel.ask();
+            let _ = running.await;
+            // Whatever the join then said, the answer is the stop: a command
+            // that happened to finish in that same instant does not un-press
+            // the button, and the token is off the channel now — no later look
+            // at it, here or in `drive`, would ever find it again.
+            return BringUp::Cancelled;
+        }
+    };
     match ran {
-        Ok(Ok(())) => {}
-        Ok(Err(detail)) => return Err(detail),
-        Err(err) => return Err(format!("a preflight command could not be run: {err}")),
+        Ok(Ok(preflight::Ran::Done)) => {}
+        Ok(Ok(preflight::Ran::Cancelled)) => return BringUp::Cancelled,
+        Ok(Err(detail)) => return BringUp::Failed(detail),
+        Err(err) => return BringUp::Failed(format!("a preflight command could not be run: {err}")),
     }
 
     for check in &config.health {
-        if !healthy(check.clone()).await {
-            return Err(preflight::PreflightError::Unhealthy { check: preflight::describe(check) }
-                .to_string());
+        match healthy(check.clone(), stop).await {
+            Probe::Up => {}
+            Probe::Cancelled => return BringUp::Cancelled,
+            Probe::Down => {
+                return BringUp::Failed(
+                    preflight::PreflightError::Unhealthy { check: preflight::describe(check) }
+                        .to_string(),
+                )
+            }
         }
     }
-    Ok(())
+    BringUp::Ready
 }
 
-async fn healthy(check: config::HealthCheck) -> bool {
+/// What one health check settled on.
+enum Probe {
+    Up,
+    Down,
+    Cancelled,
+}
+
+/// Wait for one check to come good, giving up on a stop as well as on the
+/// budget.
+///
+/// The stop is read between looks rather than during one, which is the opposite
+/// of what `bring_up` does to a declared command and for a plain reason: a look
+/// is bounded by seconds of its own — `curl --max-time 5`, a two-second connect
+/// — where a command has nothing bounding it but `COMMAND_TIMEOUT`. So the most
+/// a stop waits here is one look, and there is nothing to kill to shorten it.
+async fn healthy(check: config::HealthCheck, stop: &mut mpsc::Receiver<()>) -> Probe {
     let started = tokio::time::Instant::now();
     loop {
+        // The channel and not `run.stopping`, for the reason `headroom` records:
+        // this task holds its own `Run` and the flag is set on the worker's copy.
+        if stop.try_recv().is_ok() {
+            return Probe::Cancelled;
+        }
         let probe = check.clone();
         let up = tokio::task::spawn_blocking(move || preflight::is_healthy(&probe))
             .await
             .unwrap_or(false);
         match preflight::poll_step(up, started.elapsed(), preflight::HEALTH_TIMEOUT) {
-            preflight::Poll::Healthy => return true,
-            preflight::Poll::GiveUp => return false,
-            preflight::Poll::Again => tokio::time::sleep(preflight::HEALTH_INTERVAL).await,
+            preflight::Poll::Healthy => return Probe::Up,
+            preflight::Poll::GiveUp => return Probe::Down,
+            preflight::Poll::Again => {
+                tokio::select! {
+                    _ = tokio::time::sleep(preflight::HEALTH_INTERVAL) => {}
+                    _ = stop.recv() => return Probe::Cancelled,
+                }
+            }
         }
     }
 }

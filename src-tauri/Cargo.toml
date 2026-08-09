@@ -35,9 +35,11 @@ portable-pty = "0.9.0"
 base64 = "0.23.0"
 toml = "1.0.7"
 
-# Only to send a signal to a PTY session's process group on the exit path
-# (`terminal/pty.rs`): portable-pty's own `kill` is SIGKILL to the direct
-# child alone. Nothing else in the tree touches libc, and Windows has no
-# equivalent to send, hence the target gate.
+# Only to signal a process group, in the two places a killed process would
+# otherwise leave what it started behind: a PTY session on the exit path
+# (`terminal/pty.rs`), where portable-pty's own `kill` is SIGKILL to the direct
+# child alone, and a declared preflight command a stop interrupts
+# (`runs/preflight.rs`). Nothing else in the tree touches libc, and Windows has
+# no equivalent to send, hence the target gate.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
