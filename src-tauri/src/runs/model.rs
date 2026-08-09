@@ -102,6 +102,22 @@ pub enum StopReason {
     /// are different acts: this one ended a batch mid-flight, so what it left
     /// behind is the recovery phase's to clean up.
     SessionRemoved,
+    /// The batch's session stopped to ask a person something, in a run that has
+    /// no person in it. The process is still there and still waiting; the run
+    /// is what ends, because a wait on that process would be a wait for ever.
+    ///
+    /// None of its three neighbours: nothing fell over, so it is not `Crashed`;
+    /// nobody pressed the button, so it is not `Cancelled`; nobody took the
+    /// session away, so it is not `SessionRemoved`. What happened is that the
+    /// agent asked, and an unattended run is the one place there is nobody to
+    /// answer.
+    ///
+    /// The question the profile read travels with it, because "the agent is
+    /// waiting" without it sends somebody to the terminal to find out what for.
+    /// A `String` and not an `Option`: this ending is only ever raised off a
+    /// question a profile actually read — see `service::watch_batch` for why a
+    /// bell alone is not enough to end a run over.
+    NeedsAnswer { question: String },
     /// The project would not come up; the string names what failed.
     Preflight { detail: String },
 }
@@ -179,6 +195,55 @@ pub enum RunError {
     BadSettings(String),
     #[error("{0}")]
     Terminal(String),
+}
+
+impl RunMode {
+    /// Whether a session that stops to ask has anybody to answer it.
+    ///
+    /// `Auto` alone is nobody's: its own prompt says "you are on your own —
+    /// there is no one to ask" (`agents::prompt`), and it is the only mode
+    /// `Profile::autonomy` hands the bypass switches to. The other two say "ask
+    /// me" in as many words, and the person who is sitting there answers in the
+    /// terminal — ending their run out from under them at the first question
+    /// would take away the whole of what they chose the mode for.
+    pub fn unattended(self) -> bool {
+        match self {
+            RunMode::Auto => true,
+            RunMode::Supervised | RunMode::Solo => false,
+        }
+    }
+}
+
+/// A question a session has stopped on, believed only once it has been seen
+/// twice running.
+///
+/// Layer B is somebody else's interface read off a screen, and `agents/codex.rs`
+/// records by name the one way it fails open: a scrolled screen with no anchor
+/// left on it, where indented prose above a numbered list still reads as a
+/// dialog. Ending an unattended run over one such frame would cost the run;
+/// looking twice costs one poll. A real dialog stands until somebody answers
+/// it, so it survives the second look, while a frame that only looked like one
+/// has scrolled on.
+///
+/// The text has to match, not merely be present: two different questions a poll
+/// apart is an agent that answered the first one itself and is therefore not
+/// stuck at all.
+#[derive(Default)]
+pub struct Asked {
+    last: Option<String>,
+}
+
+impl Asked {
+    /// What this look saw. `Some` only when it is the same question the look
+    /// before saw.
+    pub fn confirm(&mut self, question: Option<&str>) -> Option<String> {
+        let before = self.last.take();
+        self.last = question.map(str::to_owned);
+        match (before, question) {
+            (Some(before), Some(now)) if before == now => Some(now.to_owned()),
+            _ => None,
+        }
+    }
 }
 
 /// The most agents a run may be told to keep in flight. The ceiling is not the
@@ -429,6 +494,55 @@ mod tests {
         assert_eq!(parsed.min_priority, None, "the dialog shows no floor outside the queue");
         assert_eq!(parsed.max_parallel_tasks, Some(4));
         assert!(!parsed.live_check);
+    }
+
+    #[test]
+    fn only_an_auto_run_has_nobody_to_answer_it() {
+        // The whole of what decides whether a session waiting on a person ends
+        // the run. Supervised and solo both promise the agent it may ask, and
+        // there is somebody sitting in front of the terminal to be asked.
+        assert!(RunMode::Auto.unattended());
+        assert!(!RunMode::Supervised.unattended());
+        assert!(!RunMode::Solo.unattended());
+    }
+
+    #[test]
+    fn a_question_is_believed_only_when_it_is_still_there_a_look_later() {
+        // One frame is not a dialog: layer B's known way of failing open is a
+        // scrolled screen that reads like one, and it scrolls on. A real dialog
+        // stands until it is answered.
+        let mut asked = Asked::default();
+        assert_eq!(asked.confirm(Some("Do you trust the contents of this directory?")), None);
+        assert_eq!(
+            asked.confirm(Some("Do you trust the contents of this directory?")),
+            Some("Do you trust the contents of this directory?".to_string())
+        );
+    }
+
+    #[test]
+    fn a_question_that_went_away_or_changed_starts_the_count_again() {
+        let mut asked = Asked::default();
+        asked.confirm(Some("Trust this directory?"));
+        assert_eq!(asked.confirm(None), None, "the dialog was gone by the second look");
+        assert_eq!(asked.confirm(Some("Trust this directory?")), None, "and the count starts over");
+
+        // A different question a poll later is an agent that answered the first
+        // one itself, which is not an agent that is stuck.
+        let mut moved = Asked::default();
+        moved.confirm(Some("Run this command?"));
+        assert_eq!(moved.confirm(Some("Apply this patch?")), None);
+    }
+
+    #[test]
+    fn an_unanswered_question_reaches_the_front_end_with_what_was_asked() {
+        // The bar draws the question as the detail line; a reason with nothing
+        // in it would say the agent is waiting and not what for.
+        let json = serde_json::to_value(StopReason::NeedsAnswer {
+            question: "Do you trust the contents of this directory?".into(),
+        })
+        .expect("serialize");
+        assert_eq!(json["kind"], "needs_answer");
+        assert_eq!(json["question"], "Do you trust the contents of this directory?");
     }
 
     #[test]
