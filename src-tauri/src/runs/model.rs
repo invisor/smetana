@@ -184,6 +184,16 @@ pub struct Run {
 pub enum RunError {
     #[error("a run is already going in this project")]
     AlreadyRunning,
+    /// The previous run has stopped and the loop task carrying it has not
+    /// finished winding down — it is inside a board read, a usage probe or a
+    /// preflight command and has not looked at the stop channel yet.
+    ///
+    /// Deliberately not `AlreadyRunning`, and the difference is the whole
+    /// reason it exists: nothing is going, the bar says so in the same breath,
+    /// and a refusal claiming otherwise reads as the stop not having taken. The
+    /// project is not free yet, which is a different sentence and a true one.
+    #[error("the previous run in this project is still finishing")]
+    WindingDown,
     #[error("this project has no .smetana/project.toml")]
     NotConfigured,
     /// The config exists and could not be read. The message is the one
@@ -325,16 +335,49 @@ impl Run {
         self.state = state;
     }
 
+    /// Take on where the loop says it has got to. Everything the loop knows is
+    /// adopted; `stopping` is the one field it does not know, because stop is
+    /// asked for on this side and never travels to the loop task at all — its
+    /// copy carries `false` whatever the truth is. Overwriting with that is how
+    /// a stop gets lost: the run then reads as unstopped to `may_start_batch`,
+    /// which is the check standing between it and another batch (smetana-0kb).
+    pub fn adopt(&mut self, reported: Run) {
+        let asked_to_stop = self.stopping;
+        *self = reported;
+        self.stopping |= asked_to_stop;
+    }
+
+    /// May another batch go out? Everything a stop has touched says no: a run
+    /// already over, and — the half that is easy to miss — one that was asked
+    /// to stop and is still finishing the batch in flight. "The batch in flight
+    /// finishes" has always meant that one and no more, and the loop's own
+    /// reading of the stop channel cannot enforce it: a stop landing just after
+    /// it looks starts a whole further round, board read and all, and by the
+    /// time the loop looks again a second batch is out and merging (smetana-0kb).
+    pub fn may_start_batch(&self) -> bool {
+        !self.is_over() && !self.stopping
+    }
+
     /// Stop was asked for. The batch in flight finishes: a run interrupted
     /// between a merge and a close is exactly the state the recovery phase
     /// exists to clean up, and killing a session mid-merge is how you get there
     /// deliberately. A run that has not started a batch yet stops at once.
-    pub fn request_stop(&mut self) {
+    ///
+    /// `starting` is the one fact this struct cannot hold for itself: a batch
+    /// the loop has been cleared to spawn and has not reported yet, so
+    /// `session` is still `None` and a batch is on its way regardless. It has
+    /// to count as a batch in flight, or a stop landing in that window ends the
+    /// run on the screen while the batch it did not know about runs on and
+    /// merges (smetana-0kb). Who knows that is the worker, which is why it is a
+    /// parameter and not a field: it is true for a window measured in the time
+    /// between two messages, and a serialized field would be a second copy of
+    /// it for the front end to read wrong.
+    pub fn request_stop(&mut self, starting: bool) {
         if self.is_over() {
             return;
         }
         self.stopping = true;
-        if self.session.is_none() {
+        if self.session.is_none() && !starting {
             self.advance(RunState::Stopped { reason: StopReason::Cancelled });
         }
     }
@@ -454,15 +497,87 @@ mod tests {
     #[test]
     fn stop_between_batches_is_immediate_and_stop_mid_batch_waits() {
         let mut idle = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
-        idle.request_stop();
+        idle.request_stop(false);
         assert!(idle.is_over(), "nothing is in flight, so there is nothing to wait for");
 
         let mut working = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
         working.session = Some(1);
         working.advance(RunState::Working { iteration: 0 });
-        working.request_stop();
+        working.request_stop(false);
         assert!(working.stopping);
         assert!(!working.is_over(), "the batch in flight finishes — see request_stop");
+    }
+
+    #[test]
+    fn stop_while_a_batch_is_starting_waits_like_one_already_in_flight() {
+        // The window between the loop being cleared to spawn and the session
+        // id coming back: `session` is still None and a batch is on its way
+        // regardless. Reading that as "nothing in flight" is smetana-0kb — the
+        // run reads as stopped everywhere while the batch runs and merges.
+        let mut starting = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        starting.advance(RunState::Deciding);
+        starting.request_stop(true);
+        assert!(starting.stopping);
+        assert!(!starting.is_over(), "a batch is on its way, so this stop waits for it");
+
+        // And the flag alone is what changed: the same run without it stops on
+        // the spot, which is what makes the stop button reach a paused run.
+        let mut idle = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        idle.advance(RunState::Deciding);
+        idle.request_stop(false);
+        assert!(idle.is_over());
+    }
+
+    #[test]
+    fn a_report_from_the_loop_cannot_unask_a_stop() {
+        // The loop's copy of the run was cloned before anybody pressed
+        // anything and never hears about it, so it reports `stopping: false`
+        // for the rest of its life. Adopting that wholesale hands the next
+        // batch a run that looks unstopped.
+        let mut worker = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        worker.session = Some(1);
+        worker.advance(RunState::Working { iteration: 0 });
+        worker.request_stop(false);
+
+        let mut loops_own = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        loops_own.advance(RunState::Deciding);
+        assert!(!loops_own.stopping);
+
+        worker.adopt(loops_own);
+        assert_eq!(worker.state, RunState::Deciding, "where the loop is, is the loop's to say");
+        assert!(worker.stopping, "and whether it was asked to stop is not");
+        assert!(!worker.may_start_batch());
+    }
+
+    #[test]
+    fn a_run_that_was_asked_to_stop_starts_no_further_batch() {
+        let mut run = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        run.session = Some(1);
+        run.advance(RunState::Working { iteration: 0 });
+        assert!(run.may_start_batch(), "nothing has been asked of it yet");
+
+        run.request_stop(false);
+        assert!(!run.is_over(), "the batch in flight finishes");
+        assert!(
+            !run.may_start_batch(),
+            "that batch and no more — the next round must not start another"
+        );
+
+        // And a run that is over is refused for the plainer reason.
+        let mut done = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        done.advance(RunState::Stopped { reason: StopReason::QueueEmpty });
+        assert!(!done.may_start_batch());
+    }
+
+    #[test]
+    fn a_second_stop_changes_nothing_about_a_run_already_stopped() {
+        // The entry now outlives the stop that ended it — it stays in the
+        // worker's map until the loop task is gone — so the stop button can be
+        // pressed again against a run that is already over.
+        let mut run = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        run.request_stop(false);
+        run.request_stop(true);
+        assert_eq!(run.state, RunState::Stopped { reason: StopReason::Cancelled });
     }
 
     #[test]

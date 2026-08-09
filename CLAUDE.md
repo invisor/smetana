@@ -840,6 +840,37 @@ which is also what lets the stop button reach a paused one. `StopReason` keeps `
 but pressing stop let the batch finish while removing the session killed it where it stood, and the
 person reading the bar is deciding whether to go and look at what got left behind.
 
+**A map entry outlives the run it holds, and that is what makes "one run per project" true**
+(smetana-0kb). It leaves in exactly one place — `Report::Ended`, sent by a `Drop` guard when the loop
+task is gone however it went — so "there is an entry" and "a loop task is alive" are one fact rather
+than two that agree most of the time. Removing the entry the moment a stop declared the run over
+looked equivalent and was not: the loop was still between reading the board and spawning, so it put
+a batch out that nothing could then stop, and the project was free to start a second run beside it.
+The spawn itself is **asked for rather than checked**: `may_spawn` puts the question on the channel
+the worker's own `select!` already drains, so the same single task decides it and handles
+`Request::Stop`. That is the whole guarantee, and it is not a FIFO one — the two arrive on different
+channels and a `select!` with both ready picks at random. What it buys is that the two can never
+interleave, so **both orderings are safe and each has its own honest outcome**: stop first and the
+spawn is refused, spawn first and the stop that follows finds a batch in flight and waits for it.
+Yes records that batch as in flight (`Active.starting`, the fact `Run.session` cannot carry yet). A
+second read of the stop channel just before spawning would only have narrowed the window, since
+nothing orders a stop in another task against the microseconds after a check.
+
+A stop leaves a gap between the run reading `Stopped` and its entry leaving, and the **refusal in
+that gap has its own reason**, `RunError::WindingDown`. Reusing `AlreadyRunning` there put two
+contradictory things on screen at once — a bar saying the run is stopped and a message saying one is
+going — and a person reads that as the stop not having taken. The gap is not always brief: the loop
+may be inside a 60s usage probe, or inside `bring_up`, which never reads the stop channel at all and
+whose declared commands are allowed 600s apiece.
+
+Two smaller rules hold that up, and both were found by driving the race rather than by reading it.
+`may_start_batch` refuses a run that is merely `stopping`, not only one already over — "the batch in
+flight finishes" has always meant that one and no more, and a stop landing just after the loop's own
+check would otherwise start a whole further round, board read and all. And a report from the loop is
+**adopted, not assigned** (`Run::adopt`): stop is asked for on the worker's side and never travels to
+the loop task, so the loop's copy says `stopping: false` for the rest of its life, and taking it
+wholesale unasked the stop a moment before the check that reads it.
+
 `queue.rs` is a port of `holiday-curb`'s `loop-state.mjs` with one substitution that changes its cost
 and not its logic: the source shelled out to `bd ready` and `bd list` between every batch, about four
 seconds each, while this reads the snapshot the tracker worker already keeps current from its

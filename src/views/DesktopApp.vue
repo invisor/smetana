@@ -467,6 +467,10 @@ const runFailure = (err) => {
   const detail = err?.detail ?? err?.message ?? String(err)
   if (err?.kind === 'not_configured') return 'This project has no run configuration yet.'
   if (err?.kind === 'already_running') return 'A run is already going in this project.'
+  /* Deliberately not the sentence above. The run this one is about has stopped
+     — the bar says so in the same breath — and only its loop is still winding
+     down, so claiming a run is going would read as the stop not having taken. */
+  if (err?.kind === 'winding_down') return 'The previous run is still finishing. Try again in a moment.'
   return detail || 'The run could not be started.'
 }
 
