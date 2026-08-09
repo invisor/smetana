@@ -282,6 +282,55 @@ fn opening(text: &str) -> Option<String> {
     None
 }
 
+/// The dialogs that name themselves and ask nothing, one literal per dialog.
+///
+/// There is one so far: the update prompt Codex draws on the day a newer
+/// version is out, before the session has started at all. It has everything a
+/// dialog has — numbered options from 1, a cursor on one of them, a block of
+/// its own at the top of the screen — except a question. There is no question
+/// mark anywhere on it: the banner states, the options act
+/// (`codex-0.146-update-prompt.txt`). So the ordinary reading declined it, and
+/// a session that opened on that day simply stood there with nothing on screen
+/// to say a person was needed (smetana-9qp).
+///
+/// This is the same shape `claude.rs` carries for the folder-trust dialog and
+/// it keeps the same two rules, because the thing being protected is the same:
+/// a loud row is budgeted at one or two a screen, and dropping the
+/// question-mark requirement for **everything** would leave the cursor as the
+/// only guard against a numbered list in the agent's own prose. So the
+/// requirement stays in force for every dialog that does not name itself, and
+/// the narrower reading opens only after the ordinary one has declined, fenced
+/// on a literal string this dialog prints and ordinary output does not.
+///
+/// The literal is a substring rather than a prefix, which is where this parts
+/// company with the Claude table: the banner opens with a decorative glyph
+/// (U+2728 and a hair space) and closes with the two version numbers, so the
+/// only stable part is the middle. Matching the glyph would pin a decoration,
+/// and matching the versions would pin the one thing guaranteed to change.
+const HEADINGS: &[&str] = &["Update available!"];
+
+/// The question of a dialog that named itself with one of `HEADINGS`, when
+/// nothing in its block reads as a question at all.
+///
+/// What comes back is the heading's own paragraph, as the screen draws it —
+/// glyph, versions and all. Nothing else on that screen is a candidate: the
+/// only other line is a link to the release notes, and the two things a person
+/// needs in order to answer are which version is on offer and what the options
+/// do, which is exactly the banner and the labels. Composing a question of our
+/// own ("Update Codex now?") would put words on the screen that Codex never
+/// wrote, and trimming the glyph would be this app deciding which part of
+/// somebody else's wording is the real one — the same reason `option_line`
+/// keeps the `(y)` and `(esc)` hints.
+///
+/// The search is fenced by its caller: `paragraphs` is the dialog's own block,
+/// already cut away from the transcript above it, so nothing the agent wrote
+/// can be handed back here.
+fn headed(paragraphs: &[String]) -> Option<String> {
+    let heading =
+        paragraphs.iter().rposition(|p| HEADINGS.iter().any(|heading| p.contains(heading)))?;
+    Some(paragraphs[heading].clone())
+}
+
 /// Codex's approval dialog: a paragraph of text and numbered options, drawn
 /// straight onto the transcript with no frame around it.
 ///
@@ -323,7 +372,9 @@ fn opening(text: &str) -> Option<String> {
 ///   that turn's own continuation and is thrown away whole;
 /// - and something in that block has to read as a question — a paragraph that
 ///   is one outright for preference, and only failing that a paragraph that
-///   opens with one.
+///   opens with one. The one exception is a block that names itself as one of
+///   the dialogs in `HEADINGS`, which are the ones that ask nothing at all;
+///   that reading opens only once this one has declined.
 ///
 /// The block rules are the third version of this, and both earlier ones were
 /// wrong in the same direction: they matched a screen with nothing on it to
@@ -459,11 +510,16 @@ fn question(screen: &[String]) -> Option<Question> {
     // question in the command dialog and a diff sits *above* it in the edit
     // one, so the nearest one that reads as a question is the right answer for
     // both. A whole question beats an opening one anywhere on the screen.
+    //
+    // Only when neither finds anything does `headed` look, and only for a block
+    // that named itself: the dialogs in `HEADINGS` ask nothing, and everything
+    // else on this screen still has to.
     let text = paragraphs
         .iter()
         .rev()
         .find_map(|paragraph| whole(paragraph))
-        .or_else(|| paragraphs.iter().rev().find_map(|paragraph| opening(paragraph)))?;
+        .or_else(|| paragraphs.iter().rev().find_map(|paragraph| opening(paragraph)))
+        .or_else(|| headed(&paragraphs))?;
     Some(Question { text, options, selected })
 }
 
@@ -864,17 +920,75 @@ mod tests {
     }
 
     #[test]
-    fn the_update_prompt_wraps_its_first_option_and_asks_nothing() {
-        // A real screen at 60 columns, and two facts at once. Codex wraps a
-        // long option label over three rows and numbers none of the
-        // continuations, which is why an option run is allowed to skip rows.
-        // And this prompt states rather than asks — no question mark anywhere
-        // on it — so this reader says nothing and layer A is left to speak,
-        // which is the honest answer and a recorded gap rather than a bug: a
-        // session does sit here waiting for a person.
+    fn the_update_prompt_names_itself_and_is_read_without_asking_anything() {
+        // A real screen at 60 columns, and the named exception in one place.
+        // This prompt states rather than asks — there is no question mark
+        // anywhere on it — so the ordinary reading declines, and what answers
+        // is the `HEADINGS` table: the banner is a string this dialog prints
+        // and ordinary output does not. Before that a session started on the
+        // day an update was out simply stood here, read as idle, with nothing
+        // on screen to say a person was needed (smetana-9qp).
+        //
+        // The text is the banner as Codex draws it, glyph and versions and
+        // all — see `headed` for why nothing is composed and nothing trimmed.
+        let q = question(&fixture("codex-0.146-update-prompt.txt"))
+            .expect("the update prompt went unrecognised");
+        assert_eq!(q.text, "\u{2728} Update available! 0.146.0 -> 0.147.0");
+        assert_eq!(q.options.len(), 3);
+        assert_eq!(
+            q.options[0].label,
+            "Update now (runs `sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | \
+             CODEX_NON_INTERACTIVE=1 sh'`)",
+            "the wrapped first option was cut at the column the pane happened to wrap"
+        );
+        assert_eq!(q.options[1].label, "Skip");
+        assert_eq!(q.options[2].label, "Skip until next version");
+        assert_eq!(q.selected, Some(0));
+    }
+
+    #[test]
+    fn the_same_screen_without_its_banner_is_still_refused() {
+        // The general rule did not move. This is the update prompt with the one
+        // line that names it swapped for ordinary prose: same options, same
+        // cursor, same block, and still no question mark anywhere. A dialog
+        // that does not name itself has to ask, and this one does not, so it is
+        // declined exactly as it was before the exception existed.
+        let screen: Vec<String> = [
+            "",
+            "  Release notes: https://github.com/openai/codex/releases/la",
+            "",
+            "\u{203a} 1. Update now",
+            "  2. Skip",
+            "  3. Skip until next version",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
         assert!(
-            question(&fixture("codex-0.146-update-prompt.txt")).is_none(),
-            "a screen with no question on it was given one"
+            question(&screen).is_none(),
+            "the named exception was widened into the general rule"
+        );
+    }
+
+    #[test]
+    fn a_banner_does_not_excuse_a_list_nobody_is_pointing_at() {
+        // The heading opens one narrower reading of the *text* and nothing
+        // else. Every structural guard is still in front of it, and the cursor
+        // is the one that keeps a numbered list in the agent's own output from
+        // reading as a dialog — a heading must not buy its way past that.
+        let screen: Vec<String> = [
+            "",
+            "  \u{2728} Update available! 0.146.0 -> 0.147.0",
+            "",
+            "  1. Update now",
+            "  2. Skip",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert!(
+            question(&screen).is_none(),
+            "an unpointed list under a banner was read as a dialog"
         );
     }
 
@@ -960,8 +1074,9 @@ mod tests {
         // columns. Skipping the continuations — which the first version of this
         // did — left a person being offered
         // `Update now (runs \`sh -c 'curl -fsSL`, cut at whatever column the
-        // pane happened to wrap. `question` itself says nothing about this
-        // screen, so the two pieces are called directly.
+        // pane happened to wrap. The two pieces are called directly here, so
+        // that a regression in the gathering is told apart from one in the
+        // reading around it.
         let screen = fixture("codex-0.146-update-prompt.txt");
         let row = screen.iter().position(|l| option_line(l).is_some()).expect("an option is there");
         let (index, head, selected) = option_line(&screen[row]).expect("an option is there");
