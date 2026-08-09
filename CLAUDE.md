@@ -1045,16 +1045,6 @@ A remembered name that is no longer in the list is skipped in silence rather tha
 branch deleted since it was remembered would sit in the field as an option that fails on the first
 merge.
 
-Two more have joined it since, and the family is now `panelWidths.js`, `columnOrder.js`,
-`branchChoice.js`, `components/run/browserTools.js` (why the live-check toggle is blocked — see the
-runs section) and `src/paths.js`. That last one is the odd member and worth knowing about: the other
-four each sit beside the one view that uses them, and `basename` could not, because its callers are
-two stores and a component module. It had been written out three times over, and the three disagreed:
-the newest answered `''` for a root path where the other two answer the path itself, which would have
-drawn an empty gap in the middle of a tooltip's sentence. That one was caught in review rather than
-on screen, which is luck and not a process. Borrowing the store's copy instead of lifting it out
-would have pulled Vue and Tauri into a family defined by having neither.
-
 The defect it was written for was not the rule being wrong but the rule running **once**, against a
 list that had not arrived yet (smetana-6gs, smetana-o8r): the dialog is shown first and the branches
 are fetched afterwards, so the fill on opening ran against nothing and the field opened on "Pick a
@@ -1074,6 +1064,22 @@ it inside that window has the choice frozen by `branchChosen`, so the run goes o
 that is not there. Clearing first made that impossible — by keeping Run disabled every time, for
 everybody. The window is a single call, the field self-corrects when the list lands as long as nobody
 has chosen, and the bad case costs a run that fails at the merge.
+
+The family has more members than this section names, and the place to see them all is `tests/` — for
+the reason the note under Commands gives, a list written out here is wrong by the time somebody
+trusts it. What they have in common is the shape rather than the count: each is the whole of one
+rule, pure, with no Vue and no DOM in it, and each lives under the directory of the part of the
+interface it is a rule about.
+
+`src/paths.js` is the one that breaks the second half of that, and it is worth saying why, because
+its location is the one thing about it a reader cannot work out for themselves. `basename` — what a
+path is called, for a project row, a file tab, a dialog's sentence — is not a rule about any one part
+of the interface: two stores and a component module want it at once, so there is no "under" to put it
+and it sits at the top of `src/` instead. It had been written out three times over, and the three
+disagreed — the newest answered `''` for a root path where the other two answer the path itself,
+which would have drawn an empty gap in the middle of a tooltip's sentence. That one was caught in
+review rather than on screen, which is luck and not a process. Borrowing a store's copy instead of
+lifting it out would have pulled Vue and Tauri into a family defined by having neither.
 
 ### Settings
 
