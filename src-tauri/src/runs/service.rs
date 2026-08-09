@@ -46,11 +46,31 @@ pub enum Request {
     State(String, oneshot::Sender<Option<Run>>),
 }
 
+/// What a loop task says to the worker. Three messages on one channel so they
+/// arrive in the order the loop sent them, and none of them is the loop writing
+/// state anywhere — the worker is still the only thing that owns the map.
+enum Report {
+    /// Where the loop has got to.
+    State { token: u64, run: Box<Run> },
+    /// May another batch go out? The worker's answer *is* the decision — see
+    /// `may_spawn`.
+    Spawning { token: u64, project: String, allow: oneshot::Sender<bool> },
+    /// The loop task is gone, however it went.
+    Ended { token: u64, project: String },
+}
+
 #[derive(Clone)]
 pub struct RunHandle(pub mpsc::Sender<Request>);
 
 /// The worker's own view of one project's run in flight. `Run` is what leaves
 /// the worker; this is what stays.
+///
+/// An entry is in the map for exactly as long as a loop task is alive in that
+/// project — no longer, and **no shorter**. A run declared stopped keeps its
+/// entry until the loop reports its own ending, because a stopped run whose
+/// loop is still winding down is still a loop that would spawn a batch, and
+/// letting a second run start beside it is how the strictly sequential merge
+/// this limit exists for comes apart (smetana-0kb).
 struct Active {
     /// Which loop task this entry belongs to. The map is keyed by project and a
     /// project's next run may start the moment its last one is out of the map,
@@ -59,14 +79,36 @@ struct Active {
     /// missing: a finished run's state written over a live one's.
     token: u64,
     run: Run,
+    /// A batch has been authorized and the loop has not reported it yet: the
+    /// window in which `run.session` is still `None` and a batch is on its way
+    /// regardless. A stop landing in it has to read as one landing mid-batch,
+    /// or it declares the run over while the batch goes out behind it.
+    starting: bool,
     /// Cancels the loop task. Dropping it is what a stop after the final batch
     /// comes down to.
     stop: mpsc::Sender<()>,
 }
 
+/// Sends `Report::Ended` when the loop task ends, whichever way it ends — a
+/// return, or a panic unwinding through it. That is what makes "there is an
+/// entry in the map" and "a loop task is alive" the same fact rather than two
+/// that agree most of the time; the map's own comment leans on it.
+struct Ending {
+    token: u64,
+    project: String,
+    report: mpsc::UnboundedSender<Report>,
+}
+
+impl Drop for Ending {
+    fn drop(&mut self) {
+        let project = std::mem::take(&mut self.project);
+        let _ = self.report.send(Report::Ended { token: self.token, project });
+    }
+}
+
 pub fn start(app: AppHandle, tracker: TrackerHandle, terminal: TerminalHandle) -> RunHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(8);
-    let (report_tx, mut report_rx) = mpsc::unbounded_channel::<(u64, Run)>();
+    let (report_tx, mut report_rx) = mpsc::unbounded_channel::<Report>();
 
     tauri::async_runtime::spawn(async move {
         // Keyed by the project's path: that key is what makes a run in one
@@ -81,24 +123,13 @@ pub fn start(app: AppHandle, tracker: TrackerHandle, terminal: TerminalHandle) -
                     let Some(request) = request else { break };
                     handle(&app, &mut active, &mut next_token, &tracker, &terminal, &report_tx, request);
                 }
-                // The loop task's own progress. It owns no state the front end
-                // reads — it hands a whole `Run` back here, and this task is
-                // the only thing that writes one out.
+                // The loop task's own progress, its one question, and its
+                // ending. It owns no state the front end reads — it hands a
+                // whole `Run` back here, and this task is the only thing that
+                // writes one out.
                 report = report_rx.recv() => {
-                    let Some((token, run)) = report else { break };
-                    // Nothing under that key any more — a stop already took the
-                    // run out and emitted it — or something newer under it.
-                    // Either way this report is the past, and emitting it would
-                    // put a finished run back on the screen.
-                    let Some(current) = active.get_mut(&run.project) else { continue };
-                    if current.token != token {
-                        continue;
-                    }
-                    current.run = run.clone();
-                    emit(&app, &run);
-                    if run.is_over() {
-                        active.remove(&run.project);
-                    }
+                    let Some(report) = report else { break };
+                    handle_report(&app, &mut active, report);
                 }
             }
         }
@@ -117,7 +148,7 @@ fn handle(
     next_token: &mut u64,
     tracker: &TrackerHandle,
     terminal: &TerminalHandle,
-    report: &mpsc::UnboundedSender<(u64, Run)>,
+    report: &mpsc::UnboundedSender<Report>,
     request: Request,
 ) {
     match request {
@@ -127,7 +158,12 @@ fn handle(
         Request::Stop(project, tx) => {
             let mut answer = None;
             if let Some(current) = active.get_mut(&project) {
-                current.run.request_stop();
+                // `starting` is the fact `run.session` cannot carry: a batch
+                // authorized moments ago and not yet reported. Without it a
+                // stop in that window reads as a run with nothing in flight
+                // and ends it on the spot, while the batch it did not know
+                // about runs to completion and merges (smetana-0kb).
+                current.run.request_stop(current.starting);
                 // A closed channel is the signal; the loop reads it between
                 // batches, which is what makes stopping cooperative. It is
                 // never killed mid-batch: a run interrupted between a merge
@@ -139,17 +175,22 @@ fn handle(
             }
             if let Some(run) = &answer {
                 emit(app, run);
-                if run.is_over() {
-                    active.remove(&project);
-                }
             }
+            // The entry stays whether or not the run is over. It leaves in one
+            // place only — `Report::Ended`, when the loop task is actually gone.
             let _ = tx.send(answer);
         }
         Request::Start(project, settings, tx) => {
             // This project's own run and nothing else. Another project's is not
             // in the way of anything: it has its own board, its own worktrees
             // and its own target branch.
-            if active.get(&project).is_some_and(|a| !a.run.is_over()) {
+            //
+            // The presence of the entry is the whole test, rather than the run
+            // in it still being unstopped: a run declared stopped whose loop
+            // has not finished winding down is still a loop that can put a
+            // batch out, and a second run beside it is two agents merging into
+            // one branch in no particular order.
+            if active.contains_key(&project) {
                 let _ = tx.send(Err(RunError::AlreadyRunning));
                 return;
             }
@@ -179,9 +220,13 @@ fn handle(
             let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
             let token = *next_token;
             *next_token += 1;
-            active.insert(project.clone(), Active { token, run: run.clone(), stop: stop_tx });
+            active.insert(
+                project.clone(),
+                Active { token, run: run.clone(), starting: false, stop: stop_tx },
+            );
 
-            tauri::async_runtime::spawn(drive(
+            let ending = Ending { token, project: project.clone(), report: report.clone() };
+            let driving = drive(
                 token,
                 run.clone(),
                 config.preflight.clone(),
@@ -190,10 +235,70 @@ fn handle(
                 terminal.clone(),
                 report.clone(),
                 stop_rx,
-            ));
+            );
+            tauri::async_runtime::spawn(async move {
+                // Bound rather than dropped: it has to outlive the loop, since
+                // its whole job is to fire when the loop is over.
+                let _ending = ending;
+                driving.await;
+            });
 
             emit(app, &run);
             let _ = tx.send(Ok(run));
+        }
+    }
+}
+
+fn handle_report(app: &AppHandle, active: &mut HashMap<String, Active>, report: Report) {
+    match report {
+        Report::State { token, run } => {
+            let run = *run;
+            // Nothing under that key any more, or something newer under it.
+            // Either way this report is the past, and emitting it would put a
+            // finished run back on the screen.
+            let Some(current) = active.get_mut(&run.project) else { return };
+            if current.token != token {
+                return;
+            }
+            // The loop has said where it is and `run.session` carries that now,
+            // so the stand-in for it has done its job. Cleared on every report,
+            // which is what stops a run that has finished a batch from looking
+            // busy to the next stop.
+            current.starting = false;
+            // A run the worker has already declared stopped is not revived by a
+            // batch that was on its way out — the rule `Run::advance` keeps one
+            // level down, needed here because the loop's own copy knows nothing
+            // of that stop until it next looks at the channel.
+            if current.run.is_over() {
+                return;
+            }
+            // Adopted rather than assigned: `stopping` is this side's field and
+            // the loop's copy always says false — see `Run::adopt`.
+            current.run.adopt(run);
+            emit(app, &current.run);
+        }
+        Report::Spawning { token, project, allow } => {
+            // The authorization, and the whole of the fix's first half: this
+            // task is the one that also handles `Request::Stop`, so the two
+            // cannot interleave. Either the stop got here first and the answer
+            // is no, or this did and the stop that follows finds a batch in
+            // flight and waits for it, which is what stopping has always meant.
+            // What counts as "the stop got here first" is `may_start_batch`,
+            // and it is wider than "already over" for a reason recorded there.
+            let permitted = match active.get_mut(&project) {
+                Some(current) if current.token == token && current.run.may_start_batch() => {
+                    current.starting = true;
+                    true
+                }
+                _ => false,
+            };
+            let _ = allow.send(permitted);
+        }
+        Report::Ended { token, project } => {
+            // The one place an entry leaves the map.
+            if active.get(&project).is_some_and(|a| a.token == token) {
+                active.remove(&project);
+            }
         }
     }
 }
@@ -212,11 +317,11 @@ async fn drive(
     root: PathBuf,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
-    report: mpsc::UnboundedSender<(u64, Run)>,
+    report: mpsc::UnboundedSender<Report>,
     mut stop: mpsc::Receiver<()>,
 ) {
     let say = |run: &Run| {
-        let _ = report.send((token, run.clone()));
+        let _ = report.send(Report::State { token, run: Box::new(run.clone()) });
     };
 
     if let Some(config) = preflight_config {
@@ -282,6 +387,17 @@ async fn drive(
         let Some(tasks) = headroom(&mut run, &say, profile, &mut stop).await else {
             return;
         };
+
+        // Asked rather than checked, and that difference is the fix. Reading
+        // the stop channel once more here would narrow the window and leave it
+        // open: the stop and the spawn are two events in two tasks, and nothing
+        // orders the answer against the microseconds that follow it. The worker
+        // can order them, because it is the single task that handles both.
+        if !may_spawn(&report, token, &run.project).await {
+            run.advance(RunState::Stopped { reason: StopReason::Cancelled });
+            say(&run);
+            return;
+        }
 
         let session = match spawn_batch(&terminal, &run, tasks).await {
             Ok(id) => id,
@@ -463,6 +579,24 @@ async fn board(tracker: &TrackerHandle) -> Option<Vec<crate::tracker::model::Iss
     let (tx, rx) = oneshot::channel();
     tracker.0.send(TrackerRequest::Snapshot(tx)).await.ok()?;
     rx.await.ok().map(|snapshot| snapshot.issues)
+}
+
+/// May another batch go out? The worker answers, and the answer is the decision
+/// itself: yes records the batch as in flight on the worker's own copy of the
+/// run, so a stop arriving after it takes the cooperative path — set `stopping`,
+/// let the batch finish, end at the top of the next round — instead of
+/// declaring the run over while the batch goes out behind it.
+///
+/// A worker that cannot answer is a no. There would be nothing left to report a
+/// batch to, and of the two ways to be wrong here only one of them merges
+/// something nobody asked for.
+async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64, project: &str) -> bool {
+    let (tx, rx) = oneshot::channel();
+    let asked = report.send(Report::Spawning { token, project: project.to_string(), allow: tx });
+    if asked.is_err() {
+        return false;
+    }
+    rx.await.unwrap_or(false)
 }
 
 /// One batch. The agent to run is not this worker's choice — it is whatever

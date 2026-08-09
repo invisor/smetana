@@ -840,6 +840,27 @@ which is also what lets the stop button reach a paused one. `StopReason` keeps `
 but pressing stop let the batch finish while removing the session killed it where it stood, and the
 person reading the bar is deciding whether to go and look at what got left behind.
 
+**A map entry outlives the run it holds, and that is what makes "one run per project" true**
+(smetana-0kb). It leaves in exactly one place — `Report::Ended`, sent by a `Drop` guard when the loop
+task is gone however it went — so "there is an entry" and "a loop task is alive" are one fact rather
+than two that agree most of the time. Removing the entry the moment a stop declared the run over
+looked equivalent and was not: the loop was still between reading the board and spawning, so it put
+a batch out that nothing could then stop, and the project was free to start a second run beside it.
+The spawn itself is **asked for rather than checked**: `may_spawn` puts the question on the same
+queue `Request::Stop` arrives on, and the worker's answer *is* the decision — yes records the batch
+as in flight (`Active.starting`, the fact `Run.session` cannot carry yet), so a stop landing after it
+waits for the batch instead of ending the run under it. A second read of the stop channel just before
+spawning would only have narrowed that window, since nothing orders a stop in another task against
+the microseconds after a check.
+
+Two smaller rules hold that up, and both were found by driving the race rather than by reading it.
+`may_start_batch` refuses a run that is merely `stopping`, not only one already over — "the batch in
+flight finishes" has always meant that one and no more, and a stop landing just after the loop's own
+check would otherwise start a whole further round, board read and all. And a report from the loop is
+**adopted, not assigned** (`Run::adopt`): stop is asked for on the worker's side and never travels to
+the loop task, so the loop's copy says `stopping: false` for the rest of its life, and taking it
+wholesale unasked the stop a moment before the check that reads it.
+
 `queue.rs` is a port of `holiday-curb`'s `loop-state.mjs` with one substitution that changes its cost
 and not its logic: the source shelled out to `bd ready` and `bd list` between every batch, about four
 seconds each, while this reads the snapshot the tracker worker already keeps current from its
