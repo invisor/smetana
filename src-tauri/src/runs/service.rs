@@ -32,12 +32,12 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 
 use super::config::{self, ConfigState};
-use super::model::{Run, RunError, RunSettings, RunState, StopReason};
+use super::model::{Asked, Run, RunError, RunSettings, RunState, StopReason};
 use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
-use crate::terminal::model::Exit;
+use crate::terminal::model::{Exit, SessionState};
 use crate::terminal::service::{Request as TerminalRequest, TerminalHandle};
 use crate::tracker::service::{Request as TrackerRequest, TrackerHandle};
 
@@ -49,6 +49,15 @@ const MAX_ITERATIONS: u32 = 40;
 const MAX_CRASHES: u32 = 5;
 const CRASH_BACKOFF_BASE: Duration = Duration::from_secs(5);
 const CRASH_BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// How often the wait on a batch asks what the session's own state is. Only an
+/// unattended run asks at all — see `watch_batch`.
+///
+/// Slow on purpose: what it is looking for stands until somebody answers it, so
+/// nothing is lost by taking two of these to see it, and every tick costs the
+/// terminal worker a clone of the project's session list. A dialog therefore
+/// ends a run about ten seconds after it is drawn, against the for ever it used
+/// to take.
+const ASK_POLL: Duration = Duration::from_secs(5);
 
 pub enum Request {
     Start(String, Box<RunSettings>, oneshot::Sender<Result<Run, RunError>>),
@@ -467,7 +476,19 @@ async fn drive(
         run.advance(RunState::Working { iteration });
         say(&run);
 
-        let exit = await_exit(&terminal, session).await;
+        let exit = match watch_batch(&terminal, &run, session).await {
+            Batch::Ended(exit) => exit,
+            // The batch has stopped to ask, and this run has nobody in it to
+            // answer. Waiting on the process would be waiting for ever, so the
+            // run ends here and says what it is stuck on. The session is left
+            // alive and still at its prompt: a person who comes back can answer
+            // it in the terminal, which is exactly what the bar tells them.
+            Batch::Unanswered { question } => {
+                run.advance(RunState::Stopped { reason: StopReason::NeedsAnswer { question } });
+                say(&run);
+                return;
+            }
+        };
         // A session somebody removed from the agents panel is not a harness
         // that fell over: nothing is going to go better on the next try, and
         // retrying it would answer "take this away" with another one just like
@@ -689,6 +710,79 @@ async fn spawn_batch(
 /// the session's own row.
 fn agent_id() -> String {
     crate::agents::IDS[0].to_string()
+}
+
+/// What ended the wait on a batch.
+enum Batch {
+    /// The session's process is gone; `Exit` says how.
+    Ended(Exit),
+    /// The session stopped to ask a person something, in a run that has no
+    /// person in it.
+    Unanswered { question: String },
+}
+
+/// Wait for the batch to end — and, where nobody is watching, for the session
+/// to stop and ask instead.
+///
+/// `await_exit` alone waits on the **process**, and a session sitting at a
+/// dialog never exits. Codex draws "Do you trust the contents of this
+/// directory?" the first time it runs anywhere new and waits there, and
+/// `--dangerously-bypass-approvals-and-sandbox` does not skip it (smetana-wnl):
+/// an unattended run in an unfamiliar folder hung on the very first batch,
+/// silently and for ever. The other half of that ticket — writing `trust_level`
+/// into `~/.codex/config.toml` — is refused for the reason `agents/codex.rs`
+/// already refuses to touch a person's home directory, so what is owed here is
+/// that the run ends and says why.
+///
+/// What it watches is the state the terminal worker already keeps for every
+/// session, active or not, asked for over the channel every other caller uses.
+/// Nothing about detection changes and nothing is added to that worker.
+///
+/// **Only a question a profile actually read counts**, never `needs-you` on its
+/// own. Layer A raises that state from a bell alone, a CLI rings one on
+/// finishing a task as readily as on asking something, and a run's session is
+/// nobody's on screen — so its bell is never acknowledged and would stand for
+/// the rest of the session's life. Ending a run on that would end it on the
+/// agent having finished a task well. A question is also the only form of this
+/// a person can be told anything useful about.
+async fn watch_batch(terminal: &TerminalHandle, run: &Run, session: u64) -> Batch {
+    let mut ended = std::pin::pin!(await_exit(terminal, session));
+    // A supervised or solo run has somebody who can answer in the terminal, and
+    // that is the mode's whole point — ending their run at the first question
+    // would be taking it away from them. See `RunMode::unattended`.
+    if !run.settings.mode.unattended() {
+        return Batch::Ended(ended.await);
+    }
+    let mut asked = Asked::default();
+    loop {
+        tokio::select! {
+            exit = &mut ended => return Batch::Ended(exit),
+            _ = tokio::time::sleep(ASK_POLL) => {
+                let seen = asking(terminal, run, session).await;
+                if let Some(question) = asked.confirm(seen.as_deref()) {
+                    return Batch::Unanswered { question };
+                }
+            }
+        }
+    }
+}
+
+/// The question this batch's session has stopped on, as the terminal worker
+/// sees it right now.
+///
+/// `None` for a session that is working, that has gone from the worker's map,
+/// or that is loud with nothing readable behind it — the last of those is the
+/// bell case, and it is deliberately not evidence of anything here.
+async fn asking(terminal: &TerminalHandle, run: &Run, session: u64) -> Option<String> {
+    let (tx, rx) = oneshot::channel();
+    terminal.0.send(TerminalRequest::List(run.project.clone(), tx)).await.ok()?;
+    rx.await
+        .ok()?
+        .into_iter()
+        .find(|s| s.id == session)
+        .filter(|s| s.state == SessionState::NeedsYou)
+        .and_then(|s| s.question)
+        .map(|question| question.text)
 }
 
 /// A terminal worker that is not there to answer counts as a batch that ended
