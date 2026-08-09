@@ -237,6 +237,15 @@ fn handle(
                 ConfigState::Ok { config } => *config,
             };
 
+            // Which agent this run works with, read from the settings file here
+            // and carried for the whole of the run — the same choice
+            // `Intent::Run` makes about the settings themselves, and for the
+            // same reason: a run outlives an edit to that file, and one that
+            // silently changed harness between batches would have asked the
+            // allowance of a subscription it then stopped spending
+            // (smetana-3fi). Re-reading it per batch would buy nothing but that.
+            let agent = crate::settings::agent(app);
+
             let run = Run::new(project.clone(), settings);
             let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
             let token = *next_token;
@@ -252,6 +261,7 @@ fn handle(
                 run.clone(),
                 config.preflight.clone(),
                 PathBuf::from(&project),
+                agent,
                 tracker.clone(),
                 terminal.clone(),
                 report.clone(),
@@ -378,6 +388,7 @@ async fn drive(
     mut run: Run,
     preflight_config: Option<config::Preflight>,
     root: PathBuf,
+    agent: String,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
     report: mpsc::UnboundedSender<Report>,
@@ -395,12 +406,18 @@ async fn drive(
         }
     }
 
-    // Which agent's allowance to ask about. Resolved once, the same way
-    // `terminal/service.rs` resolves the one it spawns, so the run asks the
-    // harness that will actually run rather than the one settings named.
+    // Which agent's allowance to ask about: the one this run was started with,
+    // resolved the same way `terminal/service.rs` resolves the one it spawns —
+    // the same id through the same `pick` over the same `PATH` (`shell_env`
+    // answers once and remembers), so short of an agent being installed or
+    // removed mid-run the gate and the batch land on one harness. That is the
+    // whole of smetana-3fi's second consequence: a readable answer about
+    // somebody else's subscription pauses a run whose own limit is intact, or
+    // sends a full-size batch into one that is already spent.
+    //
     // Nothing installed is not an error here — the gate simply cannot ask, and
     // `spawn_batch` is where that failure belongs and is already reported.
-    let profile = crate::agents::pick(&agent_id(), crate::shell_env::path());
+    let profile = crate::agents::pick(&agent, crate::shell_env::path());
 
     let mut previous: Option<QueueSnapshot> = None;
     let mut crashes: u32 = 0;
@@ -462,7 +479,7 @@ async fn drive(
             return;
         }
 
-        let session = match spawn_batch(&terminal, &run, tasks).await {
+        let session = match spawn_batch(&terminal, &run, tasks, &agent).await {
             Ok(id) => id,
             Err(err) => {
                 run.advance(RunState::Stopped { reason: StopReason::Preflight { detail: err } });
@@ -674,10 +691,11 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64, project: 
     rx.await.unwrap_or(false)
 }
 
-/// One batch. The agent to run is not this worker's choice — it is whatever
-/// `terminal_create` resolves from settings, the same as every other session,
-/// so a run uses the agent the person configured and the substitution rules
-/// stay in one place.
+/// One batch. `agent` is the id from `settings.json`, read when the run started;
+/// what actually spawns is still `terminal_create`'s answer, the same as for
+/// every other session, so the fallback to whatever is installed lives in one
+/// place and the row in the agents panel is where a substitution becomes
+/// visible.
 ///
 /// `tasks` is what *this* batch may take, which is not always what the person
 /// chose: a low allowance caps it (`usage::cap`). The run's own settings are
@@ -687,13 +705,14 @@ async fn spawn_batch(
     terminal: &TerminalHandle,
     run: &Run,
     tasks: Option<u8>,
+    agent: &str,
 ) -> Result<u64, String> {
     let (tx, rx) = oneshot::channel();
     let settings = RunSettings { max_parallel_tasks: tasks, ..run.settings.clone() };
     let intent = Intent::Run { settings };
     terminal
         .0
-        .send(TerminalRequest::Create(run.project.clone(), agent_id(), intent, tx))
+        .send(TerminalRequest::Create(run.project.clone(), agent.to_string(), intent, tx))
         .await
         .map_err(|_| "the terminal worker is not running".to_string())?;
     match rx.await {
@@ -701,15 +720,6 @@ async fn spawn_batch(
         Ok(Err(err)) => Err(err.to_string()),
         Err(_) => Err("the terminal worker did not answer".to_string()),
     }
-}
-
-/// Which agent a batch runs. The settings file holds the answer and the
-/// terminal worker already reads it for every other session; until this worker
-/// is given a way to ask, it names the default and lets `agents::pick` do what
-/// it does everywhere else — fall back to whatever is installed, and say so in
-/// the session's own row.
-fn agent_id() -> String {
-    crate::agents::IDS[0].to_string()
 }
 
 /// What ended the wait on a batch.

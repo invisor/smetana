@@ -37,11 +37,7 @@ pub fn run() {
       // empty list, means we take the directory the app was launched from if it
       // is tracked; otherwise there is no project, and that is a normal state,
       // not a failure.
-      let initial = app
-        .path()
-        .app_config_dir()
-        .ok()
-        .map(|dir| dir.join("settings.json"))
+      let initial = settings::path(app.handle())
         .and_then(|path| settings::file::load(&path).0.last_project)
         .map(std::path::PathBuf::from)
         .or_else(project::default_project);
