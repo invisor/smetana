@@ -15,7 +15,9 @@
 use std::io;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::runs::config::HealthCheck;
@@ -31,6 +33,40 @@ pub const HEALTH_INTERVAL: Duration = Duration::from_secs(2);
 /// forever: a command that blocks is indistinguishable from one that hung, and
 /// the run would sit there with nothing on screen to say why.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The stop button, reaching a command that is already running.
+///
+/// A flag rather than a channel because the thread that owns the child is a
+/// blocking one: it already asks every 200 ms whether the child is done, and
+/// this rides on that same look rather than adding anything to wait on. Cloned
+/// across the two sides — the caller holds one and the thread holds the other.
+#[derive(Clone, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    /// Ask the command in flight to stop. It is asked once and never unasked:
+    /// a run that was stopped stays stopped.
+    pub fn ask(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn asked(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// How a declared command finished.
+///
+/// `Cancelled` is neither a success nor a failure, and that is why it is not an
+/// `Err`: nothing about the project was learned, nothing is wrong with it, and
+/// the run that asked for it is already over. Reporting it as a preflight
+/// failure would put "the project would not come up" in the bar over a stop
+/// somebody pressed themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ran {
+    Done,
+    Cancelled,
+}
 
 /// What to do after one look at a health check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,7 +167,19 @@ fn tcp_open(port: u16) -> bool {
 /// splitting it on spaces ourselves would break the first one that carries a
 /// quoted argument or a pipe. The same reasoning applies to the gates, which
 /// the agent runs the same way.
-pub fn run_command(root: &Path, command: &str) -> Result<(), PreflightError> {
+///
+/// `cancel` is read on the same 200 ms poll that asks whether the child is
+/// done, so a stop pressed during the preflight takes effect within one poll
+/// rather than within `COMMAND_TIMEOUT` (smetana-16w). The command is killed
+/// where it stands: a declared command brings infrastructure up and is expected
+/// to be run again from the top next time, which is not the merge-in-progress
+/// the cooperative stop between batches exists to protect.
+pub fn run_command(root: &Path, command: &str, cancel: &Cancel) -> Result<Ran, PreflightError> {
+    // Asked before anything is started, so a stop that lands between two
+    // declared commands does not start the next one at all.
+    if cancel.asked() {
+        return Ok(Ran::Cancelled);
+    }
     let mut child = shell(root, command)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -143,8 +191,12 @@ pub fn run_command(root: &Path, command: &str) -> Result<(), PreflightError> {
 
     let deadline = Instant::now() + COMMAND_TIMEOUT;
     loop {
+        if cancel.asked() {
+            terminate(&mut child);
+            return Ok(Ran::Cancelled);
+        }
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) if status.success() => return Ok(Ran::Done),
             Ok(Some(status)) => {
                 let output = child.wait_with_output().map(|o| tail(&o.stderr, &o.stdout)).unwrap_or_default();
                 return Err(PreflightError::Command {
@@ -154,7 +206,7 @@ pub fn run_command(root: &Path, command: &str) -> Result<(), PreflightError> {
                 });
             }
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
+                terminate(&mut child);
                 return Err(PreflightError::Command {
                     command: command.to_string(),
                     code: None,
@@ -172,17 +224,54 @@ pub fn run_command(root: &Path, command: &str) -> Result<(), PreflightError> {
     }
 }
 
+/// End the command and whatever it started, then reap it.
+///
+/// The signal goes to the process *group* and not to the child, for the reason
+/// `terminal/pty.rs::hangup` records: the child is a shell, and the work is in
+/// the processes it started — `npm install` is node and everything node forks.
+/// Killing the shell alone leaves those running with nobody waiting on them,
+/// which is the orphan this is here to avoid. `shell` asks for a group of the
+/// child's own, so the group id is the child's pid and the signal reaches
+/// nothing of ours.
+///
+/// It is safe to name that group by pid only because the child has not been
+/// reaped yet — a reaped pid can be reused and would name somebody else's
+/// group, which is why the `wait` comes after.
+#[cfg(unix)]
+fn terminate(child: &mut Child) {
+    // SIGKILL rather than the SIGHUP a session gets: nothing here has a screen
+    // to restore or a buffer to flush, and a declared command that ignored the
+    // signal would hold the stop open for as long as it liked.
+    unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(not(unix))]
+fn terminate(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[cfg(unix)]
 fn shell(root: &Path, command: &str) -> Command {
+    use std::os::unix::process::CommandExt;
+
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command).current_dir(root);
+    // A group of its own, which is what makes `terminate` able to name the
+    // whole tree the command started. Standard input goes with it: a command
+    // in a background group that reads the terminal is stopped by the kernel
+    // (SIGTTIN) and would then sit there until `COMMAND_TIMEOUT`, and a
+    // declared command has nobody to type at it either way.
+    cmd.process_group(0).stdin(Stdio::null());
     cmd
 }
 
 #[cfg(windows)]
 fn shell(root: &Path, command: &str) -> Command {
     let mut cmd = Command::new("cmd");
-    cmd.arg("/C").arg(command).current_dir(root);
+    cmd.arg("/C").arg(command).current_dir(root).stdin(Stdio::null());
     cmd
 }
 
@@ -199,6 +288,7 @@ fn tail(stderr: &[u8], stdout: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn something_already_up_is_never_reported_as_never_having_started() {
@@ -249,7 +339,8 @@ mod tests {
     fn a_command_that_cannot_start_is_told_apart_from_one_that_failed() {
         // Different fixes: one is a missing tool, the other is a broken project.
         let root = std::env::temp_dir();
-        let err = run_command(&root, "definitely-not-a-real-command-8a3f").expect_err("no such command");
+        let err = run_command(&root, "definitely-not-a-real-command-8a3f", &Cancel::default())
+            .expect_err("no such command");
         // A shell reports "not found" as a non-zero exit of the shell itself,
         // so this is a Command failure carrying the shell's own message.
         assert!(matches!(err, PreflightError::Command { .. }), "{err:?}");
@@ -258,12 +349,12 @@ mod tests {
 
     #[test]
     fn a_command_that_succeeds_returns_nothing_to_report() {
-        assert_eq!(run_command(&std::env::temp_dir(), "exit 0"), Ok(()));
+        assert_eq!(run_command(&std::env::temp_dir(), "exit 0", &Cancel::default()), Ok(Ran::Done));
     }
 
     #[test]
     fn a_failing_command_carries_its_own_output() {
-        let err = run_command(&std::env::temp_dir(), "echo the-reason >&2; exit 3")
+        let err = run_command(&std::env::temp_dir(), "echo the-reason >&2; exit 3", &Cancel::default())
             .expect_err("exit 3 is a failure");
         match err {
             PreflightError::Command { code, output, .. } => {
@@ -272,6 +363,82 @@ mod tests {
             }
             other => panic!("expected a command failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_stop_between_commands_does_not_start_the_next_one() {
+        // The cheap half of smetana-16w: an already-asked cancel spends
+        // nothing at all, so a preflight with five declared commands does not
+        // run four of them after the button was pressed.
+        let dir = scratch("between");
+        let marker = dir.join("ran");
+        let cancel = Cancel::default();
+        cancel.ask();
+
+        let command = format!("touch {}", marker.display());
+        assert_eq!(run_command(&dir, &command, &cancel), Ok(Ran::Cancelled));
+        assert!(!marker.exists(), "the command was started after the stop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cancelled_command_ends_now_and_takes_what_it_started_with_it() {
+        // The expensive half, and the whole acceptance criterion: a command
+        // with minutes left in it ends when the stop arrives rather than when
+        // the command does. The process it started goes with it — a signal to
+        // the shell alone would leave `npm install`'s node running with nobody
+        // waiting on it, which is the orphan the group kill exists to prevent.
+        let dir = scratch("cancel");
+        let pid_file = dir.join("grandchild.pid");
+        let cancel = Cancel::default();
+
+        let asking = cancel.clone();
+        let watched = pid_file.clone();
+        let waiter = std::thread::spawn(move || {
+            // Asked only once the grandchild is up, so there is something for
+            // the kill to miss if it names the wrong process.
+            for _ in 0..100 {
+                if std::fs::read_to_string(&watched).is_ok_and(|text| !text.trim().is_empty()) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            asking.ask();
+        });
+
+        let started = Instant::now();
+        let command = format!("sleep 60 & echo $! > {}; wait", pid_file.display());
+        let ran = run_command(&dir, &command, &cancel).expect("a stop is not a failure");
+        waiter.join().expect("the thread that asks");
+
+        assert_eq!(ran, Ran::Cancelled);
+        assert!(started.elapsed() < Duration::from_secs(30), "it waited the command out");
+
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .expect("the pid the shell wrote")
+            .trim()
+            .parse()
+            .expect("a pid");
+        // Not our child any more once the shell is gone, so this asks the
+        // kernel rather than waiting: 0 is the signal that would be sent.
+        let gone = (0..100).any(|_| {
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            false
+        });
+        assert!(gone, "the process the command started outlived it");
+    }
+
+    /// A directory of this test's own under the system temp dir. Named after
+    /// the process as well as the case, so two `cargo test` runs at once do not
+    /// read each other's files.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("smetana-preflight-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        dir
     }
 
     #[test]

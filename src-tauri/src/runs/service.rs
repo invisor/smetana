@@ -237,6 +237,15 @@ fn handle(
                 ConfigState::Ok { config } => *config,
             };
 
+            // Which agent this run works with, read from the settings file here
+            // and carried for the whole of the run — the same choice
+            // `Intent::Run` makes about the settings themselves, and for the
+            // same reason: a run outlives an edit to that file, and one that
+            // silently changed harness between batches would have asked the
+            // allowance of a subscription it then stopped spending
+            // (smetana-3fi). Re-reading it per batch would buy nothing but that.
+            let agent = crate::settings::agent(app);
+
             let run = Run::new(project.clone(), settings);
             let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
             let token = *next_token;
@@ -252,6 +261,7 @@ fn handle(
                 run.clone(),
                 config.preflight.clone(),
                 PathBuf::from(&project),
+                agent,
                 tracker.clone(),
                 terminal.clone(),
                 report.clone(),
@@ -378,6 +388,7 @@ async fn drive(
     mut run: Run,
     preflight_config: Option<config::Preflight>,
     root: PathBuf,
+    agent: String,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
     report: mpsc::UnboundedSender<Report>,
@@ -388,19 +399,33 @@ async fn drive(
     };
 
     if let Some(config) = preflight_config {
-        if let Err(detail) = bring_up(&root, &config).await {
-            run.advance(RunState::Stopped { reason: StopReason::Preflight { detail } });
-            say(&run);
-            return;
+        match bring_up(&root, &config, &mut stop).await {
+            BringUp::Ready => {}
+            BringUp::Cancelled => {
+                run.advance(RunState::Stopped { reason: StopReason::Cancelled });
+                say(&run);
+                return;
+            }
+            BringUp::Failed(detail) => {
+                run.advance(RunState::Stopped { reason: StopReason::Preflight { detail } });
+                say(&run);
+                return;
+            }
         }
     }
 
-    // Which agent's allowance to ask about. Resolved once, the same way
-    // `terminal/service.rs` resolves the one it spawns, so the run asks the
-    // harness that will actually run rather than the one settings named.
+    // Which agent's allowance to ask about: the one this run was started with,
+    // resolved the same way `terminal/service.rs` resolves the one it spawns —
+    // the same id through the same `pick` over the same `PATH` (`shell_env`
+    // answers once and remembers), so short of an agent being installed or
+    // removed mid-run the gate and the batch land on one harness. That is the
+    // whole of smetana-3fi's second consequence: a readable answer about
+    // somebody else's subscription pauses a run whose own limit is intact, or
+    // sends a full-size batch into one that is already spent.
+    //
     // Nothing installed is not an error here — the gate simply cannot ask, and
     // `spawn_batch` is where that failure belongs and is already reported.
-    let profile = crate::agents::pick(&agent_id(), crate::shell_env::path());
+    let profile = crate::agents::pick(&agent, crate::shell_env::path());
 
     let mut previous: Option<QueueSnapshot> = None;
     let mut crashes: u32 = 0;
@@ -462,7 +487,7 @@ async fn drive(
             return;
         }
 
-        let session = match spawn_batch(&terminal, &run, tasks).await {
+        let session = match spawn_batch(&terminal, &run, tasks, &agent).await {
             Ok(id) => id,
             Err(err) => {
                 run.advance(RunState::Stopped { reason: StopReason::Preflight { detail: err } });
@@ -606,45 +631,125 @@ async fn headroom(
     }
 }
 
+/// How the preflight ended.
+///
+/// `Cancelled` is kept apart from `Failed` because they are opposite things to
+/// read in the bar: one is somebody's own stop, the other is a project that
+/// would not come up. Folding the first into the second would accuse the
+/// project of a failure the person caused on purpose.
+enum BringUp {
+    Ready,
+    Cancelled,
+    Failed(String),
+}
+
 /// The declared commands, then the declared health checks. Blocking work goes
 /// to a thread: spawning `docker compose` and waiting on it would otherwise
 /// hold the whole async runtime.
-async fn bring_up(root: &Path, config: &config::Preflight) -> Result<(), String> {
-    let root = root.to_path_buf();
+///
+/// This is the one phase of a run that is **not** stopped cooperatively
+/// (smetana-16w). The stop between batches waits for the batch in flight
+/// because a session interrupted between a merge and a close leaves work to
+/// recover; a declared command leaves nothing of the kind — it brings
+/// infrastructure up and is run again from the top next time — while its
+/// ceilings are 600s apiece against a health check's 120s, and the first one on
+/// this project is `npm install`. Waiting those out is a stop that visibly does
+/// nothing for minutes, and the project stays unstartable for all of them,
+/// because the entry only leaves the map when this task is gone.
+async fn bring_up(
+    root: &Path,
+    config: &config::Preflight,
+    stop: &mut mpsc::Receiver<()>,
+) -> BringUp {
+    let cancel = preflight::Cancel::default();
+    let owned = root.to_path_buf();
     let commands = config.commands.clone();
-    let ran = tokio::task::spawn_blocking(move || {
+    let asked = cancel.clone();
+    let mut running = tokio::task::spawn_blocking(move || {
         for command in &commands {
-            preflight::run_command(&root, command).map_err(|err| err.to_string())?;
+            match preflight::run_command(&owned, command, &asked) {
+                Ok(preflight::Ran::Done) => {}
+                Ok(preflight::Ran::Cancelled) => return Ok(preflight::Ran::Cancelled),
+                Err(err) => return Err(err.to_string()),
+            }
         }
-        Ok::<(), String>(())
-    })
-    .await;
+        Ok(preflight::Ran::Done)
+    });
+
+    let ran = tokio::select! {
+        joined = &mut running => joined,
+        _ = stop.recv() => {
+            // The thread owns the child, so killing it is that thread's own
+            // last act and this waits for it — a command left running behind a
+            // run that has ended is the orphan `terminate` exists to prevent.
+            // Bounded by one poll of `run_command`, not by the command.
+            cancel.ask();
+            let _ = running.await;
+            // Whatever the join then said, the answer is the stop: a command
+            // that happened to finish in that same instant does not un-press
+            // the button, and the token is off the channel now — no later look
+            // at it, here or in `drive`, would ever find it again.
+            return BringUp::Cancelled;
+        }
+    };
     match ran {
-        Ok(Ok(())) => {}
-        Ok(Err(detail)) => return Err(detail),
-        Err(err) => return Err(format!("a preflight command could not be run: {err}")),
+        Ok(Ok(preflight::Ran::Done)) => {}
+        Ok(Ok(preflight::Ran::Cancelled)) => return BringUp::Cancelled,
+        Ok(Err(detail)) => return BringUp::Failed(detail),
+        Err(err) => return BringUp::Failed(format!("a preflight command could not be run: {err}")),
     }
 
     for check in &config.health {
-        if !healthy(check.clone()).await {
-            return Err(preflight::PreflightError::Unhealthy { check: preflight::describe(check) }
-                .to_string());
+        match healthy(check.clone(), stop).await {
+            Probe::Up => {}
+            Probe::Cancelled => return BringUp::Cancelled,
+            Probe::Down => {
+                return BringUp::Failed(
+                    preflight::PreflightError::Unhealthy { check: preflight::describe(check) }
+                        .to_string(),
+                )
+            }
         }
     }
-    Ok(())
+    BringUp::Ready
 }
 
-async fn healthy(check: config::HealthCheck) -> bool {
+/// What one health check settled on.
+enum Probe {
+    Up,
+    Down,
+    Cancelled,
+}
+
+/// Wait for one check to come good, giving up on a stop as well as on the
+/// budget.
+///
+/// The stop is read between looks rather than during one, which is the opposite
+/// of what `bring_up` does to a declared command and for a plain reason: a look
+/// is bounded by seconds of its own — `curl --max-time 5`, a two-second connect
+/// — where a command has nothing bounding it but `COMMAND_TIMEOUT`. So the most
+/// a stop waits here is one look, and there is nothing to kill to shorten it.
+async fn healthy(check: config::HealthCheck, stop: &mut mpsc::Receiver<()>) -> Probe {
     let started = tokio::time::Instant::now();
     loop {
+        // The channel and not `run.stopping`, for the reason `headroom` records:
+        // this task holds its own `Run` and the flag is set on the worker's copy.
+        if stop.try_recv().is_ok() {
+            return Probe::Cancelled;
+        }
         let probe = check.clone();
         let up = tokio::task::spawn_blocking(move || preflight::is_healthy(&probe))
             .await
             .unwrap_or(false);
         match preflight::poll_step(up, started.elapsed(), preflight::HEALTH_TIMEOUT) {
-            preflight::Poll::Healthy => return true,
-            preflight::Poll::GiveUp => return false,
-            preflight::Poll::Again => tokio::time::sleep(preflight::HEALTH_INTERVAL).await,
+            preflight::Poll::Healthy => return Probe::Up,
+            preflight::Poll::GiveUp => return Probe::Down,
+            preflight::Poll::Again => {
+                tokio::select! {
+                    _ = tokio::time::sleep(preflight::HEALTH_INTERVAL) => {}
+                    _ = stop.recv() => return Probe::Cancelled,
+                }
+            }
         }
     }
 }
@@ -674,10 +779,11 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64, project: 
     rx.await.unwrap_or(false)
 }
 
-/// One batch. The agent to run is not this worker's choice — it is whatever
-/// `terminal_create` resolves from settings, the same as every other session,
-/// so a run uses the agent the person configured and the substitution rules
-/// stay in one place.
+/// One batch. `agent` is the id from `settings.json`, read when the run started;
+/// what actually spawns is still `terminal_create`'s answer, the same as for
+/// every other session, so the fallback to whatever is installed lives in one
+/// place and the row in the agents panel is where a substitution becomes
+/// visible.
 ///
 /// `tasks` is what *this* batch may take, which is not always what the person
 /// chose: a low allowance caps it (`usage::cap`). The run's own settings are
@@ -687,13 +793,14 @@ async fn spawn_batch(
     terminal: &TerminalHandle,
     run: &Run,
     tasks: Option<u8>,
+    agent: &str,
 ) -> Result<u64, String> {
     let (tx, rx) = oneshot::channel();
     let settings = RunSettings { max_parallel_tasks: tasks, ..run.settings.clone() };
     let intent = Intent::Run { settings };
     terminal
         .0
-        .send(TerminalRequest::Create(run.project.clone(), agent_id(), intent, tx))
+        .send(TerminalRequest::Create(run.project.clone(), agent.to_string(), intent, tx))
         .await
         .map_err(|_| "the terminal worker is not running".to_string())?;
     match rx.await {
@@ -701,15 +808,6 @@ async fn spawn_batch(
         Ok(Err(err)) => Err(err.to_string()),
         Err(_) => Err("the terminal worker did not answer".to_string()),
     }
-}
-
-/// Which agent a batch runs. The settings file holds the answer and the
-/// terminal worker already reads it for every other session; until this worker
-/// is given a way to ask, it names the default and lets `agents::pick` do what
-/// it does everywhere else — fall back to whatever is installed, and say so in
-/// the session's own row.
-fn agent_id() -> String {
-    crate::agents::IDS[0].to_string()
 }
 
 /// What ended the wait on a batch.

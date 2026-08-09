@@ -52,6 +52,21 @@ pub fn load(path: &Path) -> (Settings, Option<Problem>) {
     }
 }
 
+/// The configured agent id, and nothing else out of the file.
+///
+/// The answer is always one of `agents::IDS`: `parse` validates the field on the
+/// way in, so an id nobody ships comes back as the default rather than reaching
+/// `agents::pick` as an unknown name. A missing or unreadable file answers with
+/// the default too — the first run has no file, and neither of those is a reason
+/// to refuse to start an agent.
+///
+/// One value rather than the resolved view `settings_load` hands the front end:
+/// the callers here want the file's own answer to a single question, and none of
+/// them has a project to resolve against.
+pub fn agent(path: &Path) -> String {
+    load(path).0.agent
+}
+
 /// The write is atomic: a neighbouring file first, then a rename. Otherwise a
 /// break halfway through would leave half a JSON and the next launch would lose
 /// everything. The content is flushed to disk before the rename — without that
@@ -173,6 +188,42 @@ mod tests {
         assert_eq!(settings, Settings::default());
         assert!(matches!(problem, Some(Problem::TooNew)));
         assert!(dir.join("settings.json.bak").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_configured_agent_is_read_off_the_disk() {
+        // The path a run takes to find out which harness to start and whose
+        // allowance to ask about (smetana-3fi). It is not the path
+        // `settings_load` takes, so the round trip through `resolve` and
+        // `merge` that `model.rs` pins says nothing about this one.
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        fs::write(&path, r#"{"version":1,"agent":"codex"}"#).expect("setup");
+
+        assert_eq!(agent(&path), "codex");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_absent_or_unusable_agent_answers_with_the_default_rather_than_nothing() {
+        // Three ways to have no answer, and all of them have to produce an id
+        // `agents::resolve` knows: an unknown name would reach `pick` as a
+        // request for a harness that does not exist, and the run would fall
+        // back to the first installed one having asked nobody's allowance.
+        let dir = temp_dir();
+        let default_agent = Settings::default().agent;
+
+        let missing = dir.join("settings.json");
+        assert_eq!(agent(&missing), default_agent, "a missing file is the first run");
+
+        let unknown = dir.join("unknown.json");
+        fs::write(&unknown, r#"{"version":1,"agent":"cursor"}"#).expect("setup");
+        assert_eq!(agent(&unknown), default_agent, "an id nobody ships loses the field");
+
+        let broken = dir.join("broken.json");
+        fs::write(&broken, "{not json").expect("setup");
+        assert_eq!(agent(&broken), default_agent);
         let _ = fs::remove_dir_all(&dir);
     }
 
