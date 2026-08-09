@@ -45,6 +45,18 @@ const REASONS = {
     loud: false,
     bare: true
   },
+  /* The agent asked something and the run had nobody in it to answer — a
+     Codex trust prompt in a folder it has not seen before is the case this
+     was written for. Loud, because it is waiting on a person and nothing
+     else on this bar is. The detail line carries the question itself: what
+     it asked is what decides whether somebody goes and answers it, and it is
+     answered in the agent's own terminal, where the session is still sitting
+     at the prompt. */
+  needs_answer: {
+    text: 'Stopped — the agent is waiting for an answer',
+    loud: true,
+    icon: 'message-circle-question-mark'
+  },
   no_progress: { text: 'Stuck — a whole batch changed nothing', loud: true },
   max_iterations: { text: 'Stopped after too many batches', loud: true },
   unreadable: { text: 'Stopped — the tracker could not be read', loud: true },
@@ -95,7 +107,10 @@ const branch = computed(() =>
    stop does not end the batch in flight, and a bar that went on saying "Batch
    3" would read as the button having done nothing. */
 const detail = computed(() => {
-  if (over.value) return branch.value
+  /* The one ending that says what it is stuck on. "The agent is waiting for an
+     answer" without the question sends somebody to the terminal to find out
+     what for, and the branch is the least of what they need at that moment. */
+  if (over.value) return state.value.reason?.question || branch.value
   /* While paused the branch is the least of what somebody needs: they came to
      find out when this picks up again, and the harness's own sentence about the
      reset is the only thing that answers it. Without one, say that the run is

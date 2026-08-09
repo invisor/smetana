@@ -898,6 +898,17 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <!-- Somebody's own doing, like a stop, and quiet for that reason — but
              a different act, and the line is where the two are told apart. -->
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'session_removed' } })" />
+        <!-- Nobody was watching and the agent asked something anyway. The
+             question takes the detail line, since what it asked is what decides
+             whether somebody goes and answers it in the terminal. -->
+        <RunBar
+          :run="
+            runFixture({
+              kind: 'stopped',
+              reason: { kind: 'needs_answer', question: 'Do you trust the contents of this directory?' }
+            })
+          "
+        />
       </div>
     </section>
 
