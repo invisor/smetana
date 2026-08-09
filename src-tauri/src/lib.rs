@@ -85,6 +85,7 @@ pub fn run() {
       git::git_head,
       git::git_branches,
       runs::commands::project_config,
+      runs::commands::browser_tools,
       runs::commands::run_start,
       runs::commands::run_stop,
       runs::commands::run_state,

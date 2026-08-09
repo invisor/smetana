@@ -77,6 +77,7 @@ import {
 import {
   configError,
   initRuns,
+  loadBrowserTools,
   loadConfig,
   loadRun,
   needsSetup,
@@ -85,6 +86,7 @@ import {
   startRun,
   stopRun
 } from '../stores/runs.js'
+import { liveCheckBlock } from '../components/run/browserTools.js'
 import { inspector, scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
@@ -349,8 +351,22 @@ const openRun = async (scopeValue) => {
   runScope.value = scopeValue
   runError.value = ''
   runOpen.value = true
-  await loadBranches(activePath.value)
+  /* Both after the dialog is up, and both late for the same reason. What can
+     drive a browser is four file reads and two directory listings plus a
+     question to the run worker — cheap, and nobody needs it until they are
+     looking at the toggle. Together rather than in sequence: neither answer
+     depends on the other, and the toggle's own late-answer watcher is what makes
+     the order stop mattering. */
+  await Promise.all([loadBranches(activePath.value), loadBrowserTools(activePath.value)])
 }
+
+/* Why the live-check toggle cannot be switched on, or '' when it can. Only for
+   `mode = "browser"`: a declared command needs no browser, and `none` is
+   `liveCheckAvailable`'s business and has its own words. The rule is in
+   browserTools.js, which is the part of it a test can reach. */
+const liveCheckBlocked = computed(() =>
+  liveCheckBlock(runConfig.value?.live_check?.mode, runsState.browserTools)
+)
 
 /* What is left to do under an issue. Parenthood in bd is the parent-child
    relation and nothing else: the parent's own type has no part in it, and
@@ -1577,6 +1593,7 @@ const toastStackStyle = {
           :default-parallel="runConfig?.defaults?.max_parallel_tasks ?? 3"
           :remembered="project.runSettings"
           :live-check-available="runConfig?.live_check?.mode !== 'none'"
+          :live-check-blocked="liveCheckBlocked"
           :config-error="configErrorText"
           :error="runError"
           :busy="runStarting"

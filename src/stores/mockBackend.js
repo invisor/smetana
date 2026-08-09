@@ -210,6 +210,22 @@ export function installMockBackend() {
        rather than rejecting: "is a run going here" is a read, and a read that
        throws would leave the panel unable to draw its ordinary empty state. */
     if (command === 'run_state') return null
+    /* A machine with neither tool, deliberately, and it is the one choice here
+       that is not simply "what the developer's laptop has". Every machine that
+       runs `npm run dev` on this project already has Playwright and the
+       extension, so answering what the real command would answer makes the
+       blocked toggle unreachable in a browser — and a control that only appears
+       on somebody else's laptop is a control nobody checks. The absence is also
+       honest for the browser itself: there is no Rust here to drive anything
+       with. Busy-ness stays null, because nothing is running to hold it. */
+    if (command === 'browser_tools') {
+      return {
+        playwright_mcp: false,
+        playwright_browsers: false,
+        extension: false,
+        busy_project: null
+      }
+    }
     /* Enough branches for the dialog's field to be worth looking at. */
     if (command === 'git_branches') return ['main', 'staging', 'feature/runs-project-config']
     /* `attachment_import` and `attachment_write` are deliberately absent too,

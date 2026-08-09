@@ -12,6 +12,7 @@ import Dropdown from '../core/Dropdown.vue'
 import Icon from '../core/Icon.vue'
 import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
+import Tooltip from '../core/Tooltip.vue'
 import { pickBranch } from './branchChoice.js'
 
 const props = defineProps({
@@ -43,6 +44,17 @@ const props = defineProps({
   remembered: { type: Object, default: null },
   /* False when the config declares no way to check a merged task. */
   liveCheckAvailable: { type: Boolean, default: true },
+  /* Why the machine cannot carry out a browser live check — nothing installed
+     to drive one, or something else already driving it — and '' when it can.
+     One string rather than a flag and a label: the tooltip's words and "is it
+     blocked" are the same fact, and two values could disagree.
+
+     A different question from `liveCheckAvailable`, which is about what the
+     project declares. Both can block the toggle and they never say the same
+     thing, so the note under the switch stays exactly what it was and this one
+     is a tooltip on the switch itself. The rule producing it is
+     browserTools.js, where a test can reach it. */
+  liveCheckBlocked: { type: String, default: '' },
   /* The parser's own complaint about .smetana/project.toml, or '' when the file
      reads. This dialog is where a damaged configuration is said out loud, and
      it is the only place: the board offers no other route, and the project row
@@ -190,8 +202,27 @@ watch(
        this list — an out-of-range default would otherwise leave the field
        showing a value it does not have. */
     parallel.value = Math.min(Math.max(props.defaultParallel || 1, 1), PARALLEL_MAX)
-    liveCheck.value = props.liveCheckAvailable && (kept.liveCheck ?? true)
+    liveCheck.value = props.liveCheckAvailable && !props.liveCheckBlocked && (kept.liveCheck ?? true)
     fileFindings.value = kept.fileFindings ?? true
+  },
+  { immediate: true }
+)
+
+/* The machine's answer arrives after the dialog does, exactly as the branch list
+   does and for the same reason — `openRun` shows the dialog and only then goes
+   to disk. So the fill above runs against a blocking reason that is not there
+   yet, and this is what switches the toggle off when one lands (smetana-6gs and
+   smetana-o8r are the same defect one field over).
+
+   No `branchChosen` here, and the difference from the branch field is the whole
+   of why: a branch is a choice between things that all work, so a late answer
+   must not overwrite a person's own pick. This is a statement that the thing
+   cannot be done at all, and somebody having switched it on a moment earlier
+   does not make a browser appear. It wins over a choice, every time. */
+watch(
+  () => props.liveCheckBlocked,
+  (blocked) => {
+    if (blocked) liveCheck.value = false
   },
   { immediate: true }
 )
@@ -342,6 +373,19 @@ const noteStyle = {
   color: 'var(--text-muted)',
   lineHeight: 'var(--leading-normal)'
 }
+/* Written once and read by both branches of the toggle below. The two differ in
+   nothing but the tooltip around one of them, and a label copied twice is a
+   label that ends up saying two things. */
+const LIVE_CHECK_LABEL = 'Check each task for real before closing it'
+
+/* Three reasons, one control: the dialog is locked, the project declares no way
+   to check anything, or this machine has nothing to drive a browser with. The
+   last two are separate props because they are separate sentences — see
+   `liveCheckBlocked`. */
+const liveCheckOff = computed(
+  () => locked.value || !props.liveCheckAvailable || props.liveCheckBlocked !== ''
+)
+
 const takesStyle = {
   fontSize: 'var(--text-xs)',
   color: 'var(--text-secondary)',
@@ -441,11 +485,26 @@ const errorStyle = {
       </div>
 
       <div :style="row">
-        <Switch
-          v-model="liveCheck"
-          :disabled="locked || !liveCheckAvailable"
-          label="Check each task for real before closing it"
-        />
+        <!-- The tooltip is on the switch itself rather than in a note beside it,
+             because what it says is about this control and not about the run:
+             the project's own reason already has the note below, and a second
+             paragraph under the same switch would read as one explanation
+             contradicting itself.
+
+             `Switch` is a `<label>` with spans and a `role="switch"` — never a
+             native disabled `<input>` — so a disabled one still raises the
+             pointer events this needs. `alignSelf` keeps the hover on the
+             control and its label: the wrapper is a flex item in this column and
+             would otherwise stretch across the dialog, putting a tooltip on
+             empty space. -->
+        <Tooltip
+          v-if="liveCheckBlocked"
+          :label="liveCheckBlocked"
+          :style="{ alignSelf: 'flex-start' }"
+        >
+          <Switch v-model="liveCheck" :disabled="liveCheckOff" :label="LIVE_CHECK_LABEL" />
+        </Tooltip>
+        <Switch v-else v-model="liveCheck" :disabled="liveCheckOff" :label="LIVE_CHECK_LABEL" />
         <span v-if="!liveCheckAvailable" :style="noteStyle">
           This project declares no way to check a merged task, so tasks close on a green merge.
         </span>

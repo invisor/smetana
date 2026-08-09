@@ -212,3 +212,85 @@ describe('the run in the active project', () => {
     expect(stores.runs.running.value).toBe(false)
   })
 })
+
+const NO_TOOLS = {
+  playwright_mcp: false,
+  playwright_browsers: false,
+  extension: false,
+  busy_project: null
+}
+
+describe('what this machine can drive a browser with', () => {
+  it('nobody has asked until somebody does, which is not the same as finding nothing', async () => {
+    // Null is a third state beside the four facts, and the run dialog spends it:
+    // it opens before this answer lands, and blocking its live-check toggle on
+    // a fact nobody has established would switch it off on every open.
+    const { stores } = await loadStores()
+    expect(stores.runs.runsState.browserTools).toBe(null)
+  })
+
+  it('the answer lands in the store whole', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('browser_tools', NO_TOOLS)
+    await stores.runs.loadConfig('/p')
+
+    await stores.runs.loadBrowserTools('/p')
+
+    expect(stores.runs.runsState.browserTools).toEqual(NO_TOOLS)
+    expect(ipc.calls('browser_tools')).toEqual([{ project: '/p' }])
+  })
+
+  it('a response for the project we already left is dropped', async () => {
+    // The same guard loadConfig carries, and it matters more here: this answer
+    // decides whether a control is disabled, so a slow read for a project
+    // somebody has left would block the toggle in the one they moved to, over a
+    // machine state that was never about it. Resolved by hand for the reason
+    // spelled out on the loadConfig version of this test.
+    const { stores } = await loadStores()
+    const pending = new Map()
+    const { mockIPC } = await import('@tauri-apps/api/mocks')
+    mockIPC((cmd, args) => new Promise((resolve) => pending.set(args.project, resolve)))
+
+    const slow = stores.runs.loadBrowserTools('/slow')
+    stores.runs.runsState.project = '/fast'
+    const fast = stores.runs.loadBrowserTools('/fast')
+
+    pending.get('/fast')({ ...NO_TOOLS, extension: true })
+    await fast
+    pending.get('/slow')(NO_TOOLS)
+    await slow
+
+    expect(stores.runs.runsState.browserTools.extension).toBe(true)
+  })
+
+  it('switching projects forgets it rather than carrying a guess across', async () => {
+    // Per project the same way the run is: `.mcp.json` is the project's own
+    // file, and busy-ness is about the runs beside this one.
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('browser_tools', NO_TOOLS)
+    await stores.runs.loadConfig('/p')
+    await stores.runs.loadBrowserTools('/p')
+
+    await stores.runs.loadConfig('/other')
+
+    expect(stores.runs.runsState.browserTools).toBe(null)
+  })
+
+  it('a failed command leaves nothing established, which leaves the toggle live', async () => {
+    // The cheaper of the two mistakes: a run that fails inside its check is
+    // where things were before this existed, against taking a working live
+    // check away over a broken IPC call.
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('browser_tools', NO_TOOLS)
+    await stores.runs.loadConfig('/p')
+    await stores.runs.loadBrowserTools('/p')
+
+    ipc.fail('browser_tools', new Error('nope'))
+    await stores.runs.loadBrowserTools('/p')
+
+    expect(stores.runs.runsState.browserTools).toBe(null)
+  })
+})

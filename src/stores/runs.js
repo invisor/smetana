@@ -21,7 +21,14 @@ export const runsState = reactive({
      whole for the same reason `config` is: the panel reads `state.kind` and
      `stopping`, and unpacking those into flags is where a state nobody has
      heard of starts reading as one somebody has. */
-  run: null
+  run: null,
+  /* What this machine can drive a browser with, for this project — four facts,
+     kept whole like the two above. Null means nobody has asked yet, and it is a
+     third thing from "asked and found nothing": the run dialog opens before the
+     answer lands, and blocking its live-check toggle on a fact nobody has
+     established would switch it off on every open. `liveCheckBlock` in
+     components/run/browserTools.js is where that distinction is spent. */
+  browserTools: null
 })
 
 /* Is a run going, as far as anything on screen is concerned? A stopped run is
@@ -53,7 +60,14 @@ export async function loadConfig(project) {
      the only moment at which the run on screen is provably somebody else's.
      Leaving it for loadRun to overwrite would show the old project's run under
      the new name for as long as that call takes. */
-  if (runsState.project !== project) runsState.run = null
+  if (runsState.project !== project) {
+    runsState.run = null
+    /* Per project the same way the run is: `.mcp.json` is the project's own file
+       and busy-ness is about the runs beside this one, so an answer read for
+       another project says nothing here. Cleared rather than kept as a guess —
+       null is "nobody has asked", which is exactly the truth after a switch. */
+    runsState.browserTools = null
+  }
   runsState.project = project
   if (!project) {
     runsState.config = NONE
@@ -86,6 +100,38 @@ export async function loadRun(project) {
     runsState.run = run ?? null
   } catch (err) {
     console.error('[runs] reading the run state failed:', err)
+  }
+}
+
+/* What there is on this machine to drive a browser with, and whether anything
+   else is already driving one. Read when the run dialog opens rather than on
+   every project switch: nobody needs it until they are looking at the toggle,
+   and the answer includes busy-ness, which is only true for as long as it takes
+   to read.
+
+   Guarded against its own stale response exactly as loadConfig and loadRun are,
+   and it matters more here than for most: the answer decides whether a control
+   is disabled, so a slow read for a project somebody has already left would
+   block the toggle in the project they moved to, over a machine state that was
+   never about it. */
+export async function loadBrowserTools(project) {
+  if (!project) {
+    runsState.browserTools = null
+    return
+  }
+  try {
+    const tools = await invoke('browser_tools', { project })
+    if (runsState.project !== project) return
+    runsState.browserTools = tools
+  } catch (err) {
+    /* Every real outcome is a state, so reaching here means the call itself
+       failed. Back to null — "nobody has established anything" — which leaves
+       the toggle live: a run that then fails inside its check is where things
+       were before this existed, and it is the cheaper of the two mistakes
+       against taking a working live check away over a broken IPC call. */
+    console.error('[runs] reading what can drive a browser failed:', err)
+    if (runsState.project !== project) return
+    runsState.browserTools = null
   }
 }
 

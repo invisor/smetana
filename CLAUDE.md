@@ -816,6 +816,7 @@ other caller.
 | `gitignore.rs` | keeping `.smetana/` out of the repository |
 | `preflight.rs` | bringing the project up before the first batch — declared commands, then declared health checks |
 | `usage.rs` | what the subscription has left, and whether to run at full size, a smaller one, or not yet |
+| `browser.rs` | whether there is anything on this machine to drive a browser with — pure over file contents and directory listings, and where those tests are |
 | `queue.rs` | what is left to do and whether to run another batch — pure, and where the tests are |
 | `service.rs` | the worker: the loop, one run per project |
 | `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
@@ -908,6 +909,32 @@ checked before it is spent, so the exhausted case costs no session at all. `serv
 question a second time after a session exits non-zero, and there it is not a gate but a
 classification — telling a spent limit apart from a harness that fell over, from the one source of
 truth, with no second mechanism to keep in step.
+
+`browser.rs` answers the question the config could not: `[live_check].mode = "browser"` says what the
+*project* wants and nothing about the machine the run rides on, so a run with the live check on
+started happily where there was nothing to drive a browser with and found out inside the check, as
+INFRA (smetana-29s). Either tool is enough — Playwright, which is two facts and not one (an MCP entry
+in `~/.claude.json`, the project's `.mcp.json` or `~/.codex/config.toml`, **and** the browsers
+actually downloaded under `ms-playwright`), or the Claude in Chrome extension, found by its id in a
+Chrome profile. Every path and id in it is fragile by nature and that is accepted rather than hidden:
+an extension writes itself into no agent's configuration, so from outside the unpacked directory is
+the only evidence there is. Hence the rule the whole file is built on — **anything unobservable reads
+as "no", loudly**, the toggle goes off and the tooltip names what was not found, rather than the
+toggle staying live on a guess. Matching an MCP entry goes the other way on purpose (its name *or*
+what it runs, either alone) because the two mistakes are not the same size: a false "present" leaves
+things exactly where they were before the module existed, while a false "absent" takes a working
+feature away under a tooltip claiming a tool is missing that is sitting right there.
+
+Busy-ness is the second reason and it is deliberately only half a question. `Request::BrowserBusy`
+answers which *other* projects have a live run that asked for a live check, and `browser_tools` then
+reads each one's config, because the worker knows a run wanted a check and not whether that project's
+check opens a browser — naming a `command` check as the reason this toggle is blocked would be an
+invention. **The extension's busy-ness is out of reach entirely, and so is a browser a person is
+driving themselves**: neither is visible from this process, and that gap is written down rather than
+papered over. The sentence a person reads is composed on the front end
+(`components/run/browserTools.js`, pure and tested, the fourth of the `branchChoice.js` family),
+since it is UI copy; the scope is `browser` and nothing else, because a `command` check needs no
+browser and `none` is `liveCheckAvailable`'s own reason with its own words under the switch.
 
 A pause is a `RunState`, not a `sleep` inside the loop, and that is load-bearing twice over: a run
 that had simply gone quiet for three hours is indistinguishable from one that hung, and the bar is
