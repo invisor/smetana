@@ -252,8 +252,11 @@ describe('agent rows', () => {
 
   /* There is no channel saying "this session took that issue": the agent runs
      `bd update --claim` itself and the app only sees the tracker move. So the
-     connection is made from the two halves already on the front end — the run
-     names the session working, the tracker names what is in progress. */
+     connection is made from the two halves already on the front end — each run
+     names the session working, the tracker names what is in progress and under
+     whom. The owner is the session's own bd actor (`run_actor` in
+     src-tauri/src/terminal/model.rs), and it is what keeps two concurrent
+     runs' rows apart. */
   it('a run is captioned by the issues it has taken', async () => {
     const { stores, emit, nextTick } = await ready()
     await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
@@ -263,9 +266,19 @@ describe('agent rows', () => {
     expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({ label: 'Agent', tasks: [] })
 
     stores.runs.runsState.project = '/p'
-    stores.runs.runsState.run = { project: '/p', session: 7, state: { kind: 'working' } }
-    stores.tracker.trackerState.issues.set('smetana-9', { id: 'smetana-9', status: 'in_progress' })
-    stores.tracker.trackerState.issues.set('smetana-42', { id: 'smetana-42', status: 'in_progress' })
+    stores.runs.runsState.runs = [
+      { token: 1, project: '/p', session: 7, state: { kind: 'working' } }
+    ]
+    stores.tracker.trackerState.issues.set('smetana-9', {
+      id: 'smetana-9',
+      status: 'in_progress',
+      owner: 'smetana-run-7'
+    })
+    stores.tracker.trackerState.issues.set('smetana-42', {
+      id: 'smetana-42',
+      status: 'in_progress',
+      owner: 'smetana-run-7'
+    })
     stores.tracker.trackerState.issues.set('smetana-7', { id: 'smetana-7', status: 'open' })
     await nextTick()
 
@@ -278,6 +291,41 @@ describe('agent rows', () => {
 
     // And it belongs to the run's own session, not to every agent on screen.
     expect(stores.terminals.agentRows.value[0]).toMatchObject({ label: 'Agent', tasks: [] })
+  })
+
+  /* Two runs going at once is the case the owner filter exists for: with the
+     old "everything in_progress" reading, both rows would have carried both
+     batches' work. */
+  it("two concurrent runs' rows each name their own claims", async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
+    await emit('terminal:state', session({ id: 8, work: { kind: 'run' } }))
+    stores.runs.runsState.project = '/p'
+    stores.runs.runsState.runs = [
+      { token: 1, project: '/p', session: 7, state: { kind: 'working' } },
+      { token: 2, project: '/p', session: 8, state: { kind: 'working' } }
+    ]
+    stores.tracker.trackerState.issues.set('smetana-9', {
+      id: 'smetana-9',
+      status: 'in_progress',
+      owner: 'smetana-run-7'
+    })
+    stores.tracker.trackerState.issues.set('smetana-42', {
+      id: 'smetana-42',
+      status: 'in_progress',
+      owner: 'smetana-run-8'
+    })
+    // In progress under a person, not under either run: nobody's caption.
+    stores.tracker.trackerState.issues.set('smetana-3', {
+      id: 'smetana-3',
+      status: 'in_progress',
+      owner: 'flexo'
+    })
+    await nextTick()
+
+    const rows = stores.terminals.agentRows.value
+    expect(rows.find((r) => r.id === 7)).toMatchObject({ tasks: ['smetana-9'] })
+    expect(rows.find((r) => r.id === 8)).toMatchObject({ tasks: ['smetana-42'] })
   })
 })
 
@@ -306,8 +354,14 @@ describe('what a row says about the work behind it', () => {
     const { stores, emit, nextTick } = await ready()
     await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
     stores.runs.runsState.project = '/p'
-    stores.runs.runsState.run = { project: '/p', session: 7, state: { kind: 'working' } }
-    stores.tracker.trackerState.issues.set('smetana-9', { id: 'smetana-9', status: 'in_progress' })
+    stores.runs.runsState.runs = [
+      { token: 1, project: '/p', session: 7, state: { kind: 'working' } }
+    ]
+    stores.tracker.trackerState.issues.set('smetana-9', {
+      id: 'smetana-9',
+      status: 'in_progress',
+      owner: 'smetana-run-7'
+    })
     await nextTick()
 
     // One list, read twice: the caption and the panel on the right cannot

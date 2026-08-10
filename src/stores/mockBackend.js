@@ -231,10 +231,11 @@ export function installMockBackend() {
           }
         : { state: 'missing' }
     }
-    /* No worker in a browser, so nothing is ever running. Answering null
-       rather than rejecting: "is a run going here" is a read, and a read that
-       throws would leave the panel unable to draw its ordinary empty state. */
-    if (command === 'run_state') return null
+    /* No worker in a browser, so nothing is ever running. Answering the empty
+       set rather than rejecting: "which runs are going here" is a read, and a
+       read that throws would leave the panel unable to draw its ordinary
+       empty state. */
+    if (command === 'run_state') return []
     /* A machine with neither tool, deliberately, and it is the one choice here
        that is not simply "what the developer's laptop has". Every machine that
        runs `npm run dev` on this project already has Playwright and the

@@ -90,6 +90,7 @@ describe('the active project\'s run configuration', () => {
 })
 
 const RUN = {
+  token: 1,
   project: '/p',
   settings: {
     scope: { kind: 'queue' },
@@ -106,7 +107,16 @@ const RUN = {
   stopping: false
 }
 
-describe('the run in the active project', () => {
+/* A second run beside the first: same project, another scope, its own token —
+   the shape the worker now allows and the store has to hold. */
+const TASK_RUN = {
+  ...RUN,
+  token: 2,
+  session: 9,
+  settings: { ...RUN.settings, scope: { kind: 'task', id: 'smetana-5' }, min_priority: null }
+}
+
+describe('the runs in the active project', () => {
   it('starting one puts it in the store and hands it back', async () => {
     const { ipc, stores } = await loadStores()
     ipc.on('project_config', OK)
@@ -116,11 +126,25 @@ describe('the run in the active project', () => {
     const started = await stores.runs.startRun('/p', RUN.settings)
 
     expect(started).toEqual(RUN)
-    expect(stores.runs.runsState.run).toEqual(RUN)
-    expect(stores.runs.running.value).toBe(true)
+    expect(stores.runs.runsState.runs).toEqual([RUN])
     // Passed through untouched: this is the shape Rust deserializes, and
     // translating the field names here would put them in two places.
     expect(ipc.calls('run_start')).toEqual([{ project: '/p', settings: RUN.settings }])
+  })
+
+  it('a second run of another scope goes beside the first, not over it', async () => {
+    // The acceptance criterion on the store's side: two runs in one project at
+    // once, each whole, each under its own token.
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('run_start', RUN)
+    await stores.runs.loadConfig('/p')
+    await stores.runs.startRun('/p', RUN.settings)
+
+    ipc.on('run_start', TASK_RUN)
+    await stores.runs.startRun('/p', TASK_RUN.settings)
+
+    expect(stores.runs.runsState.runs).toEqual([RUN, TASK_RUN])
   })
 
   it('a refusal reaches the caller instead of being swallowed', async () => {
@@ -132,7 +156,7 @@ describe('the run in the active project', () => {
     ipc.fail('run_start', { kind: 'broken_config', detail: 'unknown field `gate`' })
 
     await expect(stores.runs.startRun('/p', RUN.settings)).rejects.toBeTruthy()
-    expect(stores.runs.runsState.run).toBe(null)
+    expect(stores.runs.runsState.runs).toEqual([])
   })
 
   it('a stopped run stays on screen, because its reason is what there is to read', async () => {
@@ -143,29 +167,85 @@ describe('the run in the active project', () => {
     await stores.runs.startRun('/p', RUN.settings)
 
     ipc.on('run_stop', { ...RUN, state: { kind: 'stopped', reason: { kind: 'cancelled' } }, session: null })
-    await stores.runs.stopRun('/p')
+    await stores.runs.stopRun(RUN.token)
 
-    expect(stores.runs.runsState.run).not.toBe(null)
-    expect(stores.runs.running.value).toBe(false)
+    expect(stores.runs.runsState.runs).toHaveLength(1)
+    expect(stores.runs.runsState.runs[0].state.kind).toBe('stopped')
+    // And the stop went out under the run's own name, which is its token.
+    expect(ipc.calls('run_stop')).toEqual([{ token: RUN.token }])
   })
 
-  it('a run the worker ended is over whatever it ended for', async () => {
-    // `running` is what the board's play buttons hang off, so it has to be
-    // false for every ending and not only for the ones this front end has a
-    // sentence for: a reason it has never heard of would otherwise leave every
-    // play inactive with no run behind it.
+  it('stopping one run leaves the other on screen and going', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('run_start', RUN)
+    await stores.runs.loadConfig('/p')
+    await stores.runs.startRun('/p', RUN.settings)
+    ipc.on('run_start', TASK_RUN)
+    await stores.runs.startRun('/p', TASK_RUN.settings)
+
+    ipc.on('run_stop', { ...RUN, state: { kind: 'stopped', reason: { kind: 'cancelled' } }, session: null })
+    await stores.runs.stopRun(RUN.token)
+
+    const byToken = Object.fromEntries(stores.runs.runsState.runs.map((r) => [r.token, r.state.kind]))
+    expect(byToken).toEqual({ 1: 'stopped', 2: 'working' })
+  })
+
+  it("a new run takes over its own scope's stopped slot and nobody else's", async () => {
+    // The single-run store overwrote its one slot on every start; per scope is
+    // that same behaviour now that there are several slots. A stopped run of
+    // another scope keeps its place — its reason has not been read against
+    // this start.
     const { emit, ipc, stores } = await loadStores()
     ipc.on('project_config', OK)
     ipc.on('run_start', RUN)
     await stores.runs.initRuns()
     await stores.runs.loadConfig('/p')
     await stores.runs.startRun('/p', RUN.settings)
-    expect(stores.runs.running.value).toBe(true)
+    await emit('run:state', { ...TASK_RUN, state: { kind: 'stopped', reason: { kind: 'queue_empty' } }, session: null })
+    await emit('run:state', { ...RUN, state: { kind: 'stopped', reason: { kind: 'crashed', attempts: 5 } }, session: null })
+
+    const NEXT_QUEUE_RUN = { ...RUN, token: 3, batches: 0, state: { kind: 'preflight' } }
+    ipc.on('run_start', NEXT_QUEUE_RUN)
+    await stores.runs.startRun('/p', NEXT_QUEUE_RUN.settings)
+
+    expect(stores.runs.runsState.runs.map((r) => r.token)).toEqual([TASK_RUN.token, 3])
+  })
+
+  it('an event lands on the run it names and only that one', async () => {
+    // The stale-response guard per run: the token is what tells one run's
+    // event from another's, so a batch ending in one run cannot rewrite its
+    // neighbour.
+    const { emit, ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('run_start', RUN)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+    await stores.runs.startRun('/p', RUN.settings)
+    ipc.on('run_start', TASK_RUN)
+    await stores.runs.startRun('/p', TASK_RUN.settings)
+
+    await emit('run:state', { ...TASK_RUN, state: { kind: 'deciding' }, session: null })
+
+    expect(stores.runs.runsState.runs.find((r) => r.token === RUN.token).state.kind).toBe('working')
+    expect(stores.runs.runsState.runs.find((r) => r.token === TASK_RUN.token).state.kind).toBe('deciding')
+  })
+
+  it('a run the worker ended is over whatever it ended for', async () => {
+    // The ending arrives whole and stays whole: a reason this front end has
+    // never heard of is still `stopped`, and it is the state's kind — never
+    // the reason — that anything downstream (runScopes.js) reads as "over".
+    const { emit, ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('run_start', RUN)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+    await stores.runs.startRun('/p', RUN.settings)
 
     await emit('run:state', { ...RUN, state: { kind: 'stopped', reason: { kind: 'session_removed' } }, session: null })
 
-    expect(stores.runs.running.value).toBe(false)
-    expect(stores.runs.runsState.run.state.reason.kind).toBe('session_removed')
+    expect(stores.runs.runsState.runs[0].state.kind).toBe('stopped')
+    expect(stores.runs.runsState.runs[0].state.reason.kind).toBe('session_removed')
   })
 
   it('a state event for another project is dropped', async () => {
@@ -179,16 +259,16 @@ describe('the run in the active project', () => {
 
     await emit('run:state', { ...RUN, project: '/elsewhere' })
 
-    expect(stores.runs.runsState.run).toBe(null)
+    expect(stores.runs.runsState.runs).toEqual([])
 
     await emit('run:state', RUN)
-    expect(stores.runs.runsState.run).toEqual(RUN)
+    expect(stores.runs.runsState.runs).toEqual([RUN])
   })
 
-  it('switching projects takes the run with it', async () => {
+  it('switching projects takes the runs with it', async () => {
     // Cleared where the project moves, not left for loadRun to overwrite: for
-    // as long as that call takes, the old run would be on screen under the new
-    // project's name.
+    // as long as that call takes, the old runs would be on screen under the
+    // new project's name.
     const { ipc, stores } = await loadStores()
     ipc.on('project_config', OK)
     ipc.on('run_start', RUN)
@@ -197,19 +277,33 @@ describe('the run in the active project', () => {
 
     await stores.runs.loadConfig('/other')
 
-    expect(stores.runs.runsState.run).toBe(null)
+    expect(stores.runs.runsState.runs).toEqual([])
   })
 
-  it('nothing running is a null the panel can draw, not a failure', async () => {
+  it('nothing running is an empty list the panel can draw, not a failure', async () => {
     const { ipc, stores } = await loadStores()
     ipc.on('project_config', OK)
-    ipc.on('run_state', null)
+    ipc.on('run_state', [])
     await stores.runs.loadConfig('/p')
 
     await stores.runs.loadRun('/p')
 
-    expect(stores.runs.runsState.run).toBe(null)
-    expect(stores.runs.running.value).toBe(false)
+    expect(stores.runs.runsState.runs).toEqual([])
+  })
+
+  it('the worker\'s answer replaces the list wholesale', async () => {
+    // `run_state` is the worker's whole truth for the project; what it does
+    // not name has ended and left the map.
+    const { emit, ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+    await emit('run:state', RUN)
+
+    ipc.on('run_state', [TASK_RUN])
+    await stores.runs.loadRun('/p')
+
+    expect(stores.runs.runsState.runs).toEqual([TASK_RUN])
   })
 })
 

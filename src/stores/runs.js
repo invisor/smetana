@@ -8,6 +8,7 @@
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { sameScope } from '../components/run/runScopes.js'
 
 const NONE = { state: 'missing' }
 
@@ -17,11 +18,15 @@ export const runsState = reactive({
      arrived rather than unpacked into flags, so a state this front end has
      not heard of cannot silently read as one of the others. */
   config: NONE,
-  /* The whole `Run` the worker sent, or null when nothing is going here. Kept
-     whole for the same reason `config` is: the panel reads `state.kind` and
-     `stopping`, and unpacking those into flags is where a state nobody has
-     heard of starts reading as one somebody has. */
-  run: null,
+  /* Every `Run` the worker sent for this project, whole, oldest first — a
+     project holds several at once now, and each is named by its own `token`,
+     which is what tells one run's event from another's. Kept whole for the
+     reason `config` is: the panel reads `state.kind` and `stopping`, and
+     unpacking those into flags is where a state nobody has heard of starts
+     reading as one somebody has. A stopped run stays in the list until the
+     project changes or a run of the same scope replaces it, because the
+     reason it stopped is what somebody came back to read. */
+  runs: [],
   /* What this machine can drive a browser with, for this project — four facts,
      kept whole like the two above. Null means nobody has asked yet, and it is a
      third thing from "asked and found nothing": the run dialog opens before the
@@ -31,10 +36,19 @@ export const runsState = reactive({
   browserTools: null
 })
 
-/* Is a run going, as far as anything on screen is concerned? A stopped run is
-   still in `run` — the reason it stopped is what the panel shows — so this is
-   not a null check. */
-export const running = computed(() => runsState.run !== null && runsState.run.state.kind !== 'stopped')
+/* One run replaced or learned about. By token, which is the only name that is
+   never two runs': a late event for a run that ended cannot land on the one
+   that started after it. Insertion keeps the list oldest-first the way the
+   worker answers `run_state`, so a bar segment does not jump when a response
+   and an event interleave. */
+function upsert(run) {
+  const at = runsState.runs.findIndex((r) => r.token === run.token)
+  if (at !== -1) {
+    runsState.runs[at] = run
+    return
+  }
+  runsState.runs = [...runsState.runs, run].sort((a, b) => a.token - b.token)
+}
 
 /* An offer to set the project up, not a warning: most projects are here, and
    `broken` is deliberately excluded — a file that exists and cannot be parsed
@@ -55,13 +69,13 @@ export const configError = computed(() =>
    response winning over the last call would show one project's configuration
    under another project's name. */
 export async function loadConfig(project) {
-  /* The run goes with the project it belonged to, and it goes here rather than
-     in loadRun: this is the function that moves `runsState.project`, so this is
-     the only moment at which the run on screen is provably somebody else's.
-     Leaving it for loadRun to overwrite would show the old project's run under
-     the new name for as long as that call takes. */
+  /* The runs go with the project they belonged to, and they go here rather
+     than in loadRun: this is the function that moves `runsState.project`, so
+     this is the only moment at which a run on screen is provably somebody
+     else's. Leaving them for loadRun to overwrite would show the old project's
+     runs under the new name for as long as that call takes. */
   if (runsState.project !== project) {
-    runsState.run = null
+    runsState.runs = []
     /* Per project the same way the run is: `.mcp.json` is the project's own file
        and busy-ness is about the runs beside this one, so an answer read for
        another project says nothing here. Cleared rather than kept as a guess —
@@ -87,17 +101,20 @@ export async function loadConfig(project) {
   }
 }
 
-/* The run in this project, if any. Called on mount and on switching projects,
-   and guarded the same way loadConfig is and for the same reason. */
+/* The runs in this project, if any. Called on mount and on switching projects,
+   and guarded the same way loadConfig is and for the same reason. The answer
+   replaces the list wholesale: it is the worker's whole truth for this
+   project, and anything on screen that is not in it has ended and been read —
+   or belongs to a project this one no longer is. */
 export async function loadRun(project) {
   if (!project) {
-    runsState.run = null
+    runsState.runs = []
     return
   }
   try {
-    const run = await invoke('run_state', { project })
+    const runs = await invoke('run_state', { project })
     if (runsState.project !== project) return
-    runsState.run = run ?? null
+    runsState.runs = runs ?? []
   } catch (err) {
     console.error('[runs] reading the run state failed:', err)
   }
@@ -142,16 +159,29 @@ export async function loadBrowserTools(project) {
    configuration, a damaged one, or settings that do not go together. */
 export async function startRun(project, settings) {
   const run = await invoke('run_start', { project, settings })
-  if (runsState.project === project) runsState.run = run
+  if (runsState.project === project) {
+    /* The new run takes over its scope's slot: a stopped run of the same
+       scope stays on screen only until its successor exists, exactly what the
+       single-run store did by overwriting its one slot. Stopped runs of other
+       scopes are left alone — their reasons have not been read against this
+       start. */
+    runsState.runs = runsState.runs.filter(
+      (r) => !(r.state.kind === 'stopped' && sameScope(r.settings.scope, run.settings.scope))
+    )
+    upsert(run)
+  }
   return run
 }
 
 /* Cooperative, and this returning is not the run being over: the batch in
    flight finishes first. What comes back has `stopping` set, and the run's own
-   event says when it has actually stopped. */
-export async function stopRun(project) {
-  const run = await invoke('run_stop', { project })
-  if (runsState.project === project) runsState.run = run ?? null
+   event says when it has actually stopped. Named by the run's token — the
+   stop has to reach exactly the run whose button was pressed — and a `null`
+   answer is a run that ended before the stop arrived, which changes nothing
+   on screen. */
+export async function stopRun(token) {
+  const run = await invoke('run_stop', { token })
+  if (run && run.project === runsState.project) upsert(run)
   return run
 }
 
@@ -162,11 +192,14 @@ export async function stopRun(project) {
    The project check is the stale-response guard in its other form: an event
    is not a response to anything, so nothing orders it against a project
    switch, and a batch that ends just as somebody moves to another project
-   would otherwise put its run under the new project's name. */
+   would otherwise put its run under the new project's name. Per run the guard
+   is the token: `upsert` lands the event on the run it names and no other,
+   and the worker only ever emits for runs still in its map, so an ended run's
+   late report cannot come back through here. */
 export async function initRuns() {
   await listen('run:state', (event) => {
     const run = event.payload
     if (!run || run.project !== runsState.project) return
-    runsState.run = run
+    upsert(run)
   })
 }

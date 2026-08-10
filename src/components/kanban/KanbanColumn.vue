@@ -16,11 +16,12 @@ const props = defineProps({
   movable: { type: Boolean, default: false },
   moving: { type: Boolean, default: false },
   runnable: { type: Boolean, default: false },
-  /* Why nothing here can be run just now, in words; empty means it can — a
-     lowercase fragment, since both plays interpolate it into a sentence of
-     their own. Unlike `runnable` it is the same fragment for every card and for
-     the header, so it is a prop of its own rather than a copy in each task
-     object. */
+  /* Why the header's own play cannot be run just now, in words; empty means it
+     can — a lowercase fragment, since the play interpolates it into a sentence
+     of its own. The header's only: each card carries its own reason in the
+     task object, the same channel `runnable` rides, because a run holds one
+     scope now rather than the whole project and one fragment for everything
+     stopped being true. */
   runBlockedReason: { type: String, default: '' },
   /* Passed through to the header, which draws the button and decides on the
      count whether there is anything to draw it for. */
@@ -82,12 +83,14 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
     />
     <div :style="listStyle">
       <template v-if="tasks.length">
+        <!-- No explicit run-blocked-reason here: the card's own rides in `t`,
+             through the same v-bind as `runnable`, and the column-level prop
+             speaks for the header alone. -->
         <TaskCard
           v-for="t in tasks"
           :key="t.id"
           v-bind="t"
           :selected="t.id === selectedId"
-          :run-blocked-reason="runBlockedReason"
           @click="$emit('select', t.id)"
           @run="$emit('run-task', t.id)"
         />
