@@ -43,14 +43,24 @@ export async function appVersion() {
    the app with a web page and leave no way back — there is no address bar and no
    back button in this window.
 
-   The fall-back is what makes the About tab checkable in `npm run dev`: with no
-   Tauri behind it, the plugin call fails and an ordinary new tab is exactly the
-   right answer for a browser. */
+   The fall-back is what makes the About tab checkable in `npm run dev`, and it
+   is gated on there being no Tauri rather than on the call having failed. Those
+   are not the same condition and the difference matters: inside the app, a
+   failure means the opener ACL refused this URL, which is the one thing the
+   plugin exists to do — falling back there would navigate the webview to
+   whatever the scope had just declined. So in the app a refusal is reported and
+   nothing opens; in a browser, where there was never anything to refuse it, an
+   ordinary new tab is the right answer. */
+const inTauri = () => Boolean(window.__TAURI_INTERNALS__)
+
 export async function openExternal(url) {
+  if (!inTauri()) {
+    window.open(url, '_blank', 'noopener')
+    return
+  }
   try {
     await openUrl(url)
   } catch (err) {
-    console.debug('[app] opening the link through the system failed, using the browser:', err)
-    window.open(url, '_blank', 'noopener')
+    console.error('[app] the system refused to open the link:', err)
   }
 }

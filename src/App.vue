@@ -39,9 +39,12 @@ if (!standalone) {
 }
 
 /* `system` is not a stored colour: it means "ask the machine", and the answer
-   changes while the app is running. The settings window resolves its own — it
-   draws from the main window's announcements rather than from this store. */
-const prefersDark = usePrefersDark()
+   changes while the app is running. The settings window resolves its own, since
+   it draws from the main window's announcements rather than from this store —
+   so this listener is not created there at all. Two `matchMedia` subscriptions
+   in one window, one of them feeding a computed nothing renders, is a leak of
+   the quiet kind. */
+const prefersDark = settingsWindow.value ? ref(false) : usePrefersDark()
 const theme = computed(
   () =>
     themeOverride ??
@@ -53,7 +56,17 @@ const density = computed(
 </script>
 
 <template>
-  <SettingsWindow v-if="settingsWindow" />
+  <!-- The overrides go in rather than the resolved values: the settings window
+       decides its own theme from what the app window tells it, and these two say
+       "a person asked for this one instead, for this run". Without them its own
+       chrome — the tab strip, the scrolling body, the column — could not be seen
+       in compact or in the other theme at all, and that is the only check this
+       project has. -->
+  <SettingsWindow
+    v-if="settingsWindow"
+    :theme-override="themeOverride"
+    :density-override="densityOverride"
+  />
   <Gallery v-else-if="gallery" :theme="theme" :density="density" />
   <DesktopApp v-else-if="ready" :theme="theme" :density="density" />
 </template>

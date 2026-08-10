@@ -52,8 +52,12 @@ const headingStyle = {
   font: 'var(--weight-medium) var(--text-ui-size)/var(--leading-snug) var(--font-sans)'
 }
 const factStyle = { display: 'flex', alignItems: 'baseline', gap: 'var(--space-4)' }
+/* A `ch` measure, not pixels: this is a column of words, and it is the first
+   thing that would clip when the app-wide font size grows. `ch` is the width of
+   a "0" in the font actually in use, so the column grows with the text inside
+   it — the same reasoning as the prose width on the About tab. */
 const nameStyle = {
-  flex: '0 0 96px',
+  flex: '0 0 13ch',
   color: 'var(--text-secondary)',
   font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
 }

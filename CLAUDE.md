@@ -68,10 +68,13 @@ since both switches only swap CSS custom properties and a component that hardcod
 look correct in exactly one of them.
 
 `?view=settings` is the settings window (`src/views/SettingsWindow.vue`), which in the app is a
-second OS window loading that same query string. It neither reads nor writes `?theme=`/`?density=`:
-it paints itself from what the app window tells it, and in a browser from `settings_load`. That is
-what makes the settings screen checkable without Tauri — the one thing it cannot do there is change
-anything for good, since the window that owns the file is not on the other end.
+second OS window loading that same query string. It paints itself from what the app window tells it,
+and in a browser from `settings_load` — which is what makes the settings screen checkable without
+Tauri; the one thing it cannot do there is change anything for good, since the window that owns the
+file is not on the other end. `?theme=` and `?density=` override it for one run exactly as they
+override the app, and they are passed in as props rather than read there, so `App.vue` stays the one
+place that knows about them. Without that this window's own chrome — the tab strip, the scrolling
+body, the column — could not be seen in compact or in the other theme at all.
 
 ## Architecture
 
@@ -1141,9 +1144,10 @@ review rather than on screen, which is luck and not a process. Borrowing a store
 lifting it out would have pulled Vue and Tauri into a family defined by having neither.
 
 `src/appearance.js` sits beside it for the same reason and is worth naming for the same reason: what
-a stored theme means right now, and what the type scale looks like at a chosen size, are wanted by
-two windows at once — the app and the settings window — so there is no one part of the interface to
-file them under. Its DOM half is split off into `views/useAppearance.js`, which is what keeps the
+a stored theme means right now, and what factor a chosen font size comes to, are wanted by two
+windows at once — the app and the settings window — so there is no one part of the interface to file
+them under. It is deliberately small: the sizes themselves are the stylesheet's, and this file only
+says by how much. Its DOM half is split off into `views/useAppearance.js`, which is what keeps the
 rules themselves reachable by a test.
 
 ### Settings
@@ -1219,17 +1223,37 @@ main window's `Destroyed`, which is also what lets the app still exit on its las
 Appearance reaches the screen through the document root and nothing else (`views/useAppearance.js`).
 `theme: system` is not a third palette — it is the absence of a choice, so the word is stored as it
 stands, never resolved on the way to disk, and `prefers-color-scheme` is *watched* rather than read
-once: a laptop that switches at sunset must not leave the app wrong all evening. `uiFontSize` scales
-the whole eight-step type scale from `tokens/typography.css` by the chosen size over 13 and writes
-the result back as custom properties on the root, which is why no component knows about it and the
-hierarchy between a label, a row and a heading survives every size. `editor.fontSize` sets
-`--text-code-size` on the same root and is deliberately *not* scaled with the rest — chrome and code
-are two questions. The scale is repeated in `src/appearance.js` and has to follow the stylesheet:
-once the root is overridden, `getComputedStyle` answers with the override, so there is no reading it
-back. Two consequences worth knowing: `--text-code-size` is also what `CodeBlock` and `LogLine` draw
-with, so the editor setting moves them too (both are gallery-only today); and the terminal, which was
-handed a resolved number rather than a token, re-reads it off the `data-ui-font` attribute that
-`paintRoot` stamps for exactly that purpose.
+once: a laptop that switches at sunset must not leave the app wrong all evening.
+
+`uiFontSize` is **a factor in the stylesheet, not a set of sizes in JS**, and the difference is the
+whole of why this works. `paintRoot` writes exactly two custom properties — `--ui-scale` (the chosen
+size ÷ 13) and `--text-code-size` — and `tokens/typography.css` defines each of its eight steps as
+`calc(<n> * var(--ui-scale) * 1px)`. The first version computed the eight sizes in `appearance.js`
+and wrote all of them onto the root; it worked and it quietly killed the stylesheet, because an
+inline custom property beats every rule in a file, so editing a step there would have changed nothing
+on screen with every gate still green. Scaling by a factor is also what keeps a label smaller than a
+row and a heading bigger than both — moving only the semantic aliases (`--text-ui-size` and
+neighbours) flattens the hierarchy at every size but the default.
+
+`tokens/space.css` carries the same factor on **the heights and nothing else**: `--row-h`,
+`--control-h`, `--control-h-sm`, `--control-h-lg`, `--tab-h`, `--titlebar-h`, `--scope-bar-h` and the
+`--icon-*` set, in both densities, each keeping its own number. Compact is why: `--row-h` is 22px
+there and `--text-ui-size` reaches 22px at the top of the range, so a row that did not grow would
+clip its own text. The `--space-*` scale deliberately does **not** scale — padding and gaps are the
+rhythm of the interface, not a container for a glyph, and moving them would shove every panel around
+by tens of pixels for no legibility gained. `tests/styles/tokens.test.js` reads both files and pins
+all of that, since it is the one part of this a test can reach.
+
+Three consequences worth knowing. `editor.fontSize` sets `--text-code-size`, which is the one step
+the factor does not reach (chrome and code are two questions) and is also what `CodeBlock` and
+`LogLine` draw with, so the editor setting moves them too — both gallery-only today. The terminal was
+handed a resolved *number* rather than a token, so it re-reads on the `data-ui-font` attribute
+`paintRoot` stamps for that purpose — and it can no longer read that number out of `--text-xs`: the
+computed value of an unregistered custom property keeps its `calc()` unevaluated, so
+`terminal/theme.js` measures a throwaway element whose `font-size` is the token (`@property` would be
+the tidy answer and needs a newer Safari than the build targets). And **icons do not scale**: the
+`--icon-*` tokens are referenced nowhere, and the ~35 `Icon` call sites pass numeric literals, so
+glyphs stay put while their labels grow.
 
 The four tabs are `components/settings/`, and each is presentational — handed values, emitting what
 was picked — so the whole window renders in `?view=gallery` too. Agents is the one place in the front
@@ -1336,6 +1360,11 @@ Both are attributes on `document.documentElement` (`data-theme`, `data-density`)
 `watchEffect` in each view. Every token is defined against them: `tokens/color-*.css` redefine
 colours under `[data-theme="dark"]`, and `tokens/space.css` redefines *only* the space scale and
 row/control heights under `[data-density="compact"]` — density never changes colour, radius or type.
+
+The root carries one more thing in the same spirit, and it is a value rather than a switch:
+`--ui-scale`, the app-wide font size as a factor, which the type scale and the row and control
+heights are written in terms of. See the settings window above for why it lives in the stylesheet
+rather than in JS.
 
 ### `status/status.js` owns colour and loudness
 

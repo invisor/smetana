@@ -14,8 +14,12 @@ const props = defineProps({
   description: { type: String, default: '' },
   /* How wide the control column is. A dropdown of font sizes and a picker of
      two agents want different widths, and letting each row say so keeps the
-     labels aligned regardless. */
-  controlWidth: { type: String, default: '180px' }
+     labels aligned regardless.
+
+     In `ch` by default, like every other measure in this window: the control
+     inside it is sized by the type, so a ceiling in pixels would start clipping
+     the moment the app-wide font size grew. */
+  controlWidth: { type: String, default: '24ch' }
 })
 
 const rowStyle = {

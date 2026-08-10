@@ -32,6 +32,16 @@ import {
 } from '../stores/settings.js'
 import { appVersion, openExternal } from '../stores/app.js'
 
+/* The query string's two overrides, passed down rather than read here so that
+   `App.vue` stays the one place that knows about them. They win over what the
+   app window says, for this run only and never written back — the same
+   precedence `DesktopApp` gives them, and the only way this window's own chrome
+   can be looked at in the other theme and in compact. */
+const props = defineProps({
+  themeOverride: { type: String, default: null },
+  densityOverride: { type: String, default: null }
+})
+
 /* Everything this window can see and change, flat, in the shape the two windows
    speak in. The defaults are the shipped ones, so the window paints itself
    correctly in the moment before the first answer arrives rather than flashing
@@ -94,8 +104,8 @@ onUnmounted(() => stopWatching?.())
 const prefersDark = usePrefersDark()
 watchEffect(() => {
   paintRoot(document.documentElement, {
-    theme: effectiveTheme(view.theme, prefersDark.value),
-    density: view.density,
+    theme: props.themeOverride ?? effectiveTheme(view.theme, prefersDark.value),
+    density: props.densityOverride ?? view.density,
     uiFontSize: view.uiFontSize,
     editorFontSize: view.editorFontSize
   })
@@ -128,8 +138,14 @@ const bodyStyle = {
   padding: 'var(--space-5) var(--space-6) var(--space-7)'
 }
 /* One column, and not the window's whole width: settings rows are a label and a
-   control, and a label a metre away from its dropdown is unreadable. */
-const columnStyle = { maxWidth: '640px', margin: '0 auto' }
+   control, and a label a metre away from its dropdown is unreadable.
+
+   Measured in `ch` like the prose on the About tab, and for the same reason: a
+   ceiling in pixels would stay put while the type inside it grew, so the app
+   -wide font size would be spent on wrapping rather than on legibility. Two
+   measures in one window in two units, only one of which followed the font, was
+   the state before this. */
+const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
 </script>
 
 <template>

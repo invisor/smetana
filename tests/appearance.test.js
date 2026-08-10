@@ -53,42 +53,34 @@ describe('clampFont', () => {
 })
 
 describe('fontVars', () => {
-  it('at the shipped sizes it repaints the app exactly as the stylesheet does', () => {
-    /* The values are typography.css's own, and this is the test that catches
-       the two drifting apart: a scale edited in the stylesheet and not here
-       would silently redefine the tokens back to the old numbers the first time
-       anybody opened the settings window. */
+  /* What this can and cannot check is worth being plain about. It owns the
+     *factor*; the eight step values live in `tokens/typography.css` and the row
+     and control heights in `tokens/space.css`, and that those files keep the
+     factor plumbed through is `tests/styles/tokens.test.js`'s job. An earlier
+     version of this file asserted a copy of the scale against literals in the
+     same file and claimed to catch the two drifting — it could not, since both
+     sides of the comparison were the copy. */
+  it('at the shipped size the factor is exactly 1, so nothing moves', () => {
     expect(fontVars(UI_FONT_DEFAULT, EDITOR_FONT_DEFAULT)).toEqual({
-      '--text-2xs': '10px',
-      '--text-xs': '11px',
-      '--text-sm': '12px',
-      '--text-md': '13px',
-      '--text-lg': '15px',
-      '--text-xl': '18px',
-      '--text-2xl': '22px',
-      '--text-3xl': '28px',
+      '--ui-scale': '1',
       '--text-code-size': '12px'
     })
   })
 
-  it('the whole scale moves together, so the hierarchy survives every size', () => {
+  it('the factor is the chosen size over the shipped one', () => {
     for (const size of FONT_SIZES) {
-      const vars = fontVars(size, EDITOR_FONT_DEFAULT)
-      const steps = [
-        '--text-2xs',
-        '--text-xs',
-        '--text-sm',
-        '--text-md',
-        '--text-lg',
-        '--text-xl',
-        '--text-2xl',
-        '--text-3xl'
-      ].map((name) => parseFloat(vars[name]))
+      const scale = Number(fontVars(size, EDITOR_FONT_DEFAULT)['--ui-scale'])
+      expect(scale).toBeCloseTo(size / UI_FONT_DEFAULT, 12)
+      // Which is what makes `--text-md`, the step the dropdown names, land on
+      // the size a person picked.
+      expect(13 * scale).toBeCloseTo(size, 12)
+    }
+  })
 
-      expect(parseFloat(vars['--text-md'])).toBe(size)
-      for (let i = 1; i < steps.length; i += 1) {
-        expect(steps[i]).toBeGreaterThanOrEqual(steps[i - 1])
-      }
+  it('the factor is monotonic, so a bigger choice is never smaller on screen', () => {
+    const scales = FONT_SIZES.map((size) => Number(fontVars(size, EDITOR_FONT_DEFAULT)['--ui-scale']))
+    for (let i = 1; i < scales.length; i += 1) {
+      expect(scales[i]).toBeGreaterThan(scales[i - 1])
     }
   })
 

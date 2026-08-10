@@ -21,11 +21,14 @@ export function usePrefersDark() {
 }
 
 /* Everything a window's document root carries about how it looks: both switches
-   every token is defined against, and the type scale at the chosen size.
+   every token is defined against, and the size the type and the rows are drawn
+   at.
 
-   The sizes are written as custom properties on the root, which is `:root` — so
-   they override the stylesheet's own definitions and every `var(--text-…)` in
-   the app resolves to them, with no component changed and nothing rebuilt.
+   That last one is two custom properties and not ten — the factor
+   (`--ui-scale`) and the editor's pinned size. The stylesheet does the
+   arithmetic (`tokens/typography.css`, `tokens/space.css`), so the numbers stay
+   where a reader would look for them; everything in the app resolves through
+   `var()` with no component changed and nothing rebuilt.
 
    `data-ui-font` carries no value anybody reads: it exists so that a font change
    is an *attribute* change on the root. xterm.js is handed resolved numbers

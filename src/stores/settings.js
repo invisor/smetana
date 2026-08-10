@@ -39,9 +39,9 @@ const defaults = () => ({
     leftWidth: LEFT_DEFAULT,
     rightWidth: RIGHT_DEFAULT
   },
-  /* Which agent the app starts. There is no settings screen yet, so this is
-     changed by editing settings.json; the defaults here and in Rust have to
-     agree, the same as appearance and layout do. */
+  /* Which agent the app starts — the Agents tab of the settings window is what
+     changes it, through `applyPatch` below. The defaults here and in Rust have
+     to agree, the same as appearance and layout do. */
   agent: 'claude',
   openProjects: [],
   activeProject: null,
@@ -367,8 +367,17 @@ export async function watchSharedSettings(onState) {
   const stop = await listen(SETTINGS_STATE, (event) => onState(event.payload))
   /* Asked for after the subscription, never before: the answer is an event too,
      and a hello sent first could be answered into a window that is not listening
-     yet. */
-  await emit(SETTINGS_HELLO, null)
+     yet.
+
+     Not awaited, and that is the point of the ordering here: the subscription
+     already exists and has to reach the caller whatever the hello does. Awaiting
+     it meant a rejected hello threw past the `return`, leaving a live listener
+     nobody held the way to stop. A hello that never went is a window drawing the
+     file's values instead of this window's, which is the fall-back it already
+     has. */
+  emit(SETTINGS_HELLO, null).catch((err) => {
+    console.warn('[settings] the app window was not asked for the current values:', err)
+  })
   return stop
 }
 
