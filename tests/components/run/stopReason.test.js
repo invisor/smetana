@@ -8,6 +8,16 @@ describe('how the run bar draws an ending', () => {
     expect(stopReason('session_removed').tone).toBe(TONE.quiet)
   })
 
+  /* A Crew run that took its one batch and merged it did exactly what it was
+     asked, so its ending is as quiet as running out of work — but it is not
+     that sentence: tasks may still sit in Ready, and "nothing left to take"
+     would be a lie about them. */
+  it('says a one-batch run finished its batch rather than that it ran out of work', () => {
+    expect(stopReason('batch_done').tone).toBe(TONE.quiet)
+    expect(stopReason('batch_done').text).toBe('Done — the batch is finished')
+    expect(stopReason('batch_done').text).not.toBe(stopReason('queue_empty').text)
+  })
+
   it('paints the endings something went wrong in as failures', () => {
     expect(stopReason('crashed').tone).toBe(TONE.failed)
     expect(stopReason('no_progress').tone).toBe(TONE.failed)

@@ -84,6 +84,12 @@ pub struct RunSettings {
 pub enum StopReason {
     /// Nothing ready and nothing unfinished. The ordinary ending.
     QueueEmpty,
+    /// The run was allowed one batch, that batch ran to completion, and this is
+    /// it: the run did what it was asked to do. Its own reason rather than a
+    /// reuse, because both neighbours would lie — `QueueEmpty` with tasks still
+    /// sitting in Ready says the work ran out, and `NoProgress` says something
+    /// is stuck when nothing is.
+    BatchDone,
     /// A whole batch ran to completion and changed neither set. Something is
     /// stuck: unmergeable, unfinishable, and not even parked.
     NoProgress,
@@ -222,6 +228,22 @@ impl RunMode {
         match self {
             RunMode::Auto => true,
             RunMode::Supervised | RunMode::Solo => false,
+        }
+    }
+
+    /// Whether the run is one batch and no more.
+    ///
+    /// `Supervised` alone: a lead and its team take one batch of independent
+    /// tasks, merge it, and that is the end — wanting more is answered by
+    /// starting another run, not by this one taking another batch. `Auto` is
+    /// the unattended loop that keeps taking batches until the queue is empty.
+    /// `Solo` is one task, and the queue itself ends it: the scope holds that
+    /// task and nothing else, so finishing it is `QueueEmpty` — calling it a
+    /// one-batch run here would change its recovery, not its ending.
+    pub fn one_batch(self) -> bool {
+        match self {
+            RunMode::Supervised => true,
+            RunMode::Auto | RunMode::Solo => false,
         }
     }
 }
@@ -590,6 +612,10 @@ mod tests {
 
         let json = serde_json::to_value(StopReason::QueueEmpty).expect("serialize");
         assert_eq!(json["kind"], "queue_empty");
+
+        // The front end keys `stopReason.js` on this exact string.
+        let json = serde_json::to_value(StopReason::BatchDone).expect("serialize");
+        assert_eq!(json["kind"], "batch_done");
     }
 
     #[test]
@@ -621,6 +647,15 @@ mod tests {
         assert!(RunMode::Auto.unattended());
         assert!(!RunMode::Supervised.unattended());
         assert!(!RunMode::Solo.unattended());
+    }
+
+    #[test]
+    fn only_a_supervised_run_is_one_batch_and_no_more() {
+        // Auto is the loop that empties the queue; solo is one task, which the
+        // queue itself ends when the task closes.
+        assert!(RunMode::Supervised.one_batch());
+        assert!(!RunMode::Auto.one_batch());
+        assert!(!RunMode::Solo.one_batch());
     }
 
     #[test]
