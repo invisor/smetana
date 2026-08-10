@@ -149,13 +149,15 @@ on its own. **This runs before you take any new work.**
    `bd config set status.custom "ready_to_merge,parked"`.
 2. `bd list --status in_progress --json`. **An issue on this list is not provably an
    orphan.** The assignee is the evidence — `bd show <id>` carries it, and every run
-   claims under its own actor — so a `smetana-run-<id>` that is not this run's own may
-   be a killed run's leftovers, or a run still live on the same board, mid-flight in
-   its own worktrees. Telling a dead run's actor from a live one has no mechanical
-   answer today: the app keeps no run registry a skill can read, and that gap is
-   recorded here rather than papered over. So do not assert orphanhood — apply the
-   caller's policy to every claim that is not yours, and recover only what that policy
-   lets you treat as dead. What you do recover is finished **in place**, one at a time:
+   claims under its own actor — so a `smetana-run-<id>` that is not this run's own
+   (yours is `$BEADS_ACTOR` in your environment) may be a killed run's leftovers, or a
+   run still live on the same board, mid-flight in its own worktrees. Telling a dead
+   run's actor from a live one has no mechanical answer today: the app keeps no run
+   registry a skill can read, and that gap is recorded here rather than papered over.
+   **The default, in every mode: a claim you cannot show dead is left in place** — not
+   recovered, not parked, not noted. It is another run's work until proven otherwise,
+   and interfering with it is worse than skipping recovery. Recover only what the
+   caller's policy lets you treat as dead, and finish it **in place**, one at a time:
    - Its slug is `<id>-<short-kebab-title>` and its worktrees are already at
      `<repo>/.worktrees/<slug>` — the id in the slug is what proves they are this task's.
      None found → park it ("in_progress with no worktree to resume").
