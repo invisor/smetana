@@ -60,12 +60,21 @@ reads (`src/App.vue`):
 |---|---|---|
 | `theme` | `dark`, `light` | `dark` |
 | `density` | `comfortable`, `compact` | `comfortable` |
-| `view` | `gallery` | the app |
+| `view` | `gallery`, `settings` | the app |
 
 `?view=gallery` renders every exported component once (`src/views/Gallery.vue`) — the harness for
 catching a broken component. Check any component change in all four theme × density combinations,
 since both switches only swap CSS custom properties and a component that hardcodes a value will
 look correct in exactly one of them.
+
+`?view=settings` is the settings window (`src/views/SettingsWindow.vue`), which in the app is a
+second OS window loading that same query string. It paints itself from what the app window tells it,
+and in a browser from `settings_load` — which is what makes the settings screen checkable without
+Tauri; the one thing it cannot do there is change anything for good, since the window that owns the
+file is not on the other end. `?theme=` and `?density=` override it for one run exactly as they
+override the app, and they are passed in as props rather than read there, so `App.vue` stays the one
+place that knows about them. Without that this window's own chrome — the tab strip, the scrolling
+body, the column — could not be seen in compact or in the other theme at all.
 
 ## Architecture
 
@@ -151,10 +160,15 @@ answers `tracker_health`. `DesktopApp.vue` renders it where the board would be �
 loud budget belongs to the card that needs a human.
 
 `src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`,
-`src/stores/terminals.js`, `src/stores/git.js`, `src/stores/runs.js` and `src/stores/attachments.js`
+`src/stores/terminals.js`, `src/stores/git.js`, `src/stores/runs.js`, `src/stores/attachments.js`
+and `src/stores/app.js`
 are the **only** files in `src/` that know Tauri exists — components see reactive stores and nothing
-else. `mockBackend.js` below is the ninth and the exception that proves it: it imports Tauri in order
-to stand in for the absence of one. Several of those files open by counting themselves into this list
+else. `mockBackend.js` below is the last and the exception that proves it: it imports Tauri in order
+to stand in for the absence of one. `app.js` is the odd one, and it is a store for exactly this
+reason rather than for holding state: it has none. It is what the app knows about itself and asks
+the desktop for — open the settings window, read this build's version, open a link in the person's
+own browser — and every one of those would otherwise be an `@tauri-apps/api` import inside a
+component. Several of those files open by counting themselves into this list
 (`runs.js` says it is the seventh, `attachments.js` says the same of itself), which is a habit worth
 knowing about before trusting one: an ordinal is written once and the list keeps growing under it.
 The list here is the one to check against the tree. `tracker.js` also
@@ -1054,7 +1068,18 @@ move the new origin and the panel would drift away from the pointer.
 
 Dragging a panel past `COLLAPSE_SLACK` below its minimum folds it into the same 32px rail the header
 button gives, keeping the stored width so it comes back where it left; pulling out of the rail past
-`EXPAND_PULL` reopens it. Double click resets to the shipped 252/340. When the window is too narrow to
+`EXPAND_PULL` reopens it. Double click resets to the shipped 252/340.
+
+`RAIL` is the one width in the app that does **not** grow with the app-wide font size, and it cannot:
+these pure functions do arithmetic with it — a collapsed neighbour's cost, both drag thresholds, the
+clamp against the stored width — so a scale-dependent rail would have to be threaded through every
+one of them and into the geometry each caller builds, to turn a 32px strip into a 59px one. What sits
+in it does grow, though, and that was a real defect: the expand button is an `IconButton size="sm"`
+at `--control-h-sm`, which reaches 44px at the top of the range and hung over the board beside it. So
+the button is capped rather than scaled — `min(var(--control-h-sm), RAIL_CONTROL_MAX)`, which leaves
+both densities exactly as they are at the shipped size (24 and 20, measured) and stops the growth at
+the rail's edge. `Panel.vue` takes both numbers from this file now; it used to write the 32 out a
+second time. When the window is too narrow to
 honour both a panel's minimum and the board's floor, the panel keeps its minimum and the board takes
 the squeeze — the board's content scrolls, a file tree at 90px does not.
 
@@ -1129,6 +1154,13 @@ which would have drawn an empty gap in the middle of a tooltip's sentence. That 
 review rather than on screen, which is luck and not a process. Borrowing a store's copy instead of
 lifting it out would have pulled Vue and Tauri into a family defined by having neither.
 
+`src/appearance.js` sits beside it for the same reason and is worth naming for the same reason: what
+a stored theme means right now, and what factor a chosen font size comes to, are wanted by two
+windows at once — the app and the settings window — so there is no one part of the interface to file
+them under. It is deliberately small: the sizes themselves are the stylesheet's, and this file only
+says by how much. Its DOM half is split off into `views/useAppearance.js`, which is what keeps the
+rules themselves reachable by a test.
+
 ### Settings
 
 What the app remembers between runs lives in one JSON file in `app_config_dir()`
@@ -1138,7 +1170,8 @@ and where the tests are; `file.rs` is the disk (atomic write through a per-call 
 `sync_all`ed and renamed, a `.bak` copy of anything unparseable or too new); `commands.rs` is two
 thin commands.
 
-The file keeps appearance, panel layout — collapsed state and width for each side — and `agent`, the
+The file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed state and
+width for each side), `editor` with its own `fontSize`, and `agent`, the
 id of the CLI agent to start, at the root;
 below that, `openProjects` is the list of
 projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
@@ -1153,7 +1186,8 @@ without the scope, since that comes from whichever play button was pressed and r
 open the dialog claiming to run something nobody clicked. The open tabs are paths
 relative to the project root — the key already carries the absolute part, and a moved folder does
 not turn the list into rubbish. The map never crosses the IPC boundary: `settings_load` returns the
-resolved view for one project (`{ appearance, layout, agent, project, openProjects, activeProject }`) and
+resolved view for one project
+(`{ appearance, layout, editor, agent, project, openProjects, activeProject }`) and
 `settings_save` puts it back, stamps `usedAt` on the active project and trims `projects` toward the
 20 most recently used — but never evicts the current project or anything still in `openProjects`, so
 the cap only bites entries from past visits that were closed, not projects a person still has open.
@@ -1165,14 +1199,89 @@ for the debounce: the store holds the close through `onCloseRequested`, flushes 
 ceiling and then destroys the window itself — the window always closes, a slow back end costs the
 last edit rather than the app.
 
-There is no settings screen and no theme switch: appearance and layout are only ever changed by
-using the app, and `agent` is not changed by using it at all — until there is a screen, switching to
-Codex is a hand edit of the file, which is fine and changes the shape of nothing. The one part of
-`settings.json` the interface does edit directly is the project list —
-adding, switching and removing rows is what writes `openProjects` and `lastProject`.
-`?theme=` and `?density=` still override both for one run and are deliberately **not**
-written back — one visit to the dev server must not repaint the app forever. `?view=gallery`
-neither reads nor writes.
+Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
+an opened tab. Four fields are the exception and they are what the settings window edits —
+`appearance.theme`, `appearance.uiFontSize`, `editor.fontSize` and `agent`. Density is not among
+them, deliberately: nothing has asked for it yet, and a screen full of switches nobody wanted is
+worse than a short one. `?theme=` and `?density=` still override the first two for one run and are
+deliberately **not** written back — one visit to the dev server must not repaint the app forever.
+`?view=gallery` neither reads nor writes.
+
+#### The settings window
+
+The gear in the scope bar opens a **second `WebviewWindow`**, not a modal (`window.rs`:
+`settings_window_open`), and the reason is the whole of why this is a window: a modal cannot be
+dragged outside the app's own bounds, so it cannot sit beside what it is changing. It loads the same
+bundle under `?view=settings`, so there is one front end and one set of tokens; the label `settings`
+is what makes a second press focus the window instead of making another, and it is also the name the
+capability in `capabilities/default.json` lists beside `main` — a window not named there reaches no
+core plugin at all, and the settings UI would come up unable to send an event or read the version.
+
+**The main window stays the only writer.** `settings_save` writes the whole resolved view — the
+panel widths, the project map, the open tabs — so a second window calling it would post its own idea
+of all of that, and the later write would win. So the settings window holds no settings store: it
+asks (`settings:hello`), it is told (`settings:state`), and it sends one edit at a time
+(`settings:apply`), which lands in the main window's reactive object and reaches disk through the
+debounce every panel drag already uses. `stores/settings.js` owns all three, and `applyPatch` is
+where an event is checked — a field that fails takes its previous value, not the shipped default,
+because an event is not a response to anything and a malformed one must cost nothing. The settings
+window applies an edit locally *before* sending it, so a dropdown answers the person who used it in
+the same frame; the announcement that follows is the correction when a value was refused. It also
+follows from all this that the settings window cannot outlive the main one — a viewer with no owner
+would go on accepting choices and keeping none — so `close_settings_with_main` takes it down on the
+main window's `Destroyed`, which is also what lets the app still exit on its last window.
+
+Appearance reaches the screen through the document root and nothing else (`views/useAppearance.js`).
+`theme: system` is not a third palette — it is the absence of a choice, so the word is stored as it
+stands, never resolved on the way to disk, and `prefers-color-scheme` is *watched* rather than read
+once: a laptop that switches at sunset must not leave the app wrong all evening.
+
+`uiFontSize` is **a factor in the stylesheet, not a set of sizes in JS**, and the difference is the
+whole of why this works. `paintRoot` writes exactly two custom properties — `--ui-scale` (the chosen
+size ÷ 13) and `--text-code-size` — and `tokens/typography.css` defines each of its eight steps as
+`calc(<n> * var(--ui-scale) * 1px)`. The first version computed the eight sizes in `appearance.js`
+and wrote all of them onto the root; it worked and it quietly killed the stylesheet, because an
+inline custom property beats every rule in a file, so editing a step there would have changed nothing
+on screen with every gate still green. Scaling by a factor is also what keeps a label smaller than a
+row and a heading bigger than both — moving only the semantic aliases (`--text-ui-size` and
+neighbours) flattens the hierarchy at every size but the default.
+
+`tokens/space.css` carries the same factor on **the heights and nothing else**: `--row-h`,
+`--control-h`, `--control-h-sm`, `--control-h-lg`, `--tab-h`, `--titlebar-h`, `--scope-bar-h` and the
+`--icon-*` set, in both densities, each keeping its own number. Compact is why: `--row-h` is 22px
+there and `--text-ui-size` reaches 22px at the top of the range, so a row that did not grow would
+clip its own text. The `--space-*` scale deliberately does **not** scale — padding and gaps are the
+rhythm of the interface, not a container for a glyph, and moving them would shove every panel around
+by tens of pixels for no legibility gained. `tests/styles/tokens.test.js` reads both files and pins
+all of that, since it is the one part of this a test can reach.
+
+Three consequences worth knowing. `editor.fontSize` sets `--text-code-size`, which is the one step
+the factor does not reach (chrome and code are two questions) and is also what `CodeBlock` and
+`LogLine` draw with, so the editor setting moves them too — both gallery-only today. The terminal was
+handed a resolved *number* rather than a token, so it re-reads on the `data-ui-font` attribute
+`paintRoot` stamps for that purpose — and it can no longer read that number out of `--text-xs`: the
+computed value of an unregistered custom property keeps its `calc()` unevaluated, so
+`terminal/theme.js` measures a throwaway element whose `font-size` is the token (`@property` would be
+the tidy answer and needs a newer Safari than the build targets). And **icons do not scale**: the
+`--icon-*` tokens are referenced nowhere, and the ~35 `Icon` call sites pass numeric literals, so
+glyphs stay put while their labels grow.
+
+The four tabs are `components/settings/`, and each is presentational — handed values, emitting what
+was picked — so the whole window renders in `?view=gallery` too. Agents is the one place in the front
+end that ever *names* an agent: the ids are still `agents::IDS` and Rust still drops one it does not
+ship, so this is a set of labels for ids Rust already knows. The subscription block under it is a
+placeholder with dashes and a sentence saying so — a block of invented numbers under a real setting
+would claim the app knows something it does not, which is what the fixture log pane was removed for.
+About's link goes out through `tauri-plugin-opener` (`opener:allow-open-url`, scoped to
+`https://github.com/*`): inside this webview it would replace the app with a web page, and there is
+no address bar here to come back from. Which branch `openExternal` takes is decided **before** the
+call and not by catching its failure, because the two failures are opposites: in the app a rejected
+`openUrl` is the ACL doing its job, and falling back to `window.open` would navigate to exactly what
+the scope declined, while in a browser a new tab is the whole of what the link can mean. The
+predicate is "is there a real back end", which is **not** `window.__TAURI_INTERNALS__` — `mockIPC`
+sets that property itself, so the obvious test reads true in the dev server and quietly took the
+app's branch there, leaving the link opening nothing at all. `mockBackend.js` publishes what it
+decided (`usingMockBackend`) and that is the only honest answer.
 
 A missing file is the first run, not an error. A broken or too-new file is copied to
 `settings.json.bak` and the app starts from defaults, and saving over it afterwards is fine. One
@@ -1269,6 +1378,11 @@ Both are attributes on `document.documentElement` (`data-theme`, `data-density`)
 `watchEffect` in each view. Every token is defined against them: `tokens/color-*.css` redefine
 colours under `[data-theme="dark"]`, and `tokens/space.css` redefines *only* the space scale and
 row/control heights under `[data-density="compact"]` — density never changes colour, radius or type.
+
+The root carries one more thing in the same spirit, and it is a value rather than a switch:
+`--ui-scale`, the app-wide font size as a factor, which the type scale and the row and control
+heights are written in terms of. See the settings window above for why it lives in the stylesheet
+rather than in JS.
 
 ### `status/status.js` owns colour and loudness
 

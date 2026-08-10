@@ -13,6 +13,26 @@
 /** Collapsed, a panel is this rail — the width `Panel` reserves for one. */
 export const RAIL = 32
 
+/** The biggest the rail's expand button may be drawn.
+ *
+ * The rail is the one width in the app that does **not** grow with the app-wide
+ * font size, and it cannot: `RAIL` is a layout constant these pure functions do
+ * arithmetic with — the neighbour's cost, the collapse and expand thresholds,
+ * the clamp against the stored width — so a scale-dependent rail would have to
+ * be threaded through every one of them and into the geometry each caller
+ * builds, to make a 32px strip 59px wide. A rail is a strip; that is the whole
+ * of what it is for.
+ *
+ * What does grow is what sits in it: the expand button is an `IconButton
+ * size="sm"`, drawn at `--control-h-sm`, which is 44px at the top of the range
+ * and spilled over the neighbouring column. So the button is capped instead —
+ * `min(var(--control-h-sm), RAIL_CONTROL_MAX)`, which leaves both densities
+ * exactly as they are at the shipped size and stops the growth at the rail's
+ * edge. Pinning a control inside fixed chrome is the same answer `Tab`'s 16px
+ * close and `CodeBlock`'s 18px copy already give.
+ */
+export const RAIL_CONTROL_MAX = 24
+
 export const LEFT_MIN = 180
 export const RIGHT_MIN = 240
 export const LEFT_DEFAULT = 252

@@ -38,6 +38,7 @@ export async function loadStores() {
   return {
     ipc,
     emit: event.emit,
+    listen: event.listen,
     nextTick: vue.nextTick,
     stores: { files, settings, tabs, tracker, projects, terminals, git, runs, attachments }
   }

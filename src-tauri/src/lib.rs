@@ -16,6 +16,7 @@ use tauri::Manager;
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
+    .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_window_state::Builder::default().build())
     .plugin(tauri_plugin_dialog::init())
     .setup(|app| {
@@ -62,6 +63,8 @@ pub fn run() {
       // being written along the way too, so that a run cut short without a
       // clean exit does not open at the size from the run before last.
       window::persist_geometry(app.handle());
+      // The settings window writes nothing itself — see `close_settings_with_main`.
+      window::close_settings_with_main(app.handle());
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
@@ -91,6 +94,7 @@ pub fn run() {
       runs::commands::run_state,
       settings::commands::settings_load,
       settings::commands::settings_save,
+      window::settings_window_open,
       terminal::commands::terminal_list,
       terminal::commands::terminal_create,
       terminal::commands::terminal_remove,

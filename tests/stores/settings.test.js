@@ -5,6 +5,7 @@ import { buffer } from '../support/fixtures.js'
 
 let ipc
 let emit
+let listen
 let nextTick
 let settings
 let tabs
@@ -13,6 +14,7 @@ beforeEach(async () => {
   const loaded = await loadStores()
   ipc = loaded.ipc
   emit = loaded.emit
+  listen = loaded.listen
   nextTick = loaded.nextTick
   settings = loaded.stores.settings
   tabs = loaded.stores.tabs
@@ -24,7 +26,12 @@ describe('loading', () => {
 
     await settings.loadSettings()
 
-    expect(settings.settings.appearance).toEqual({ theme: 'dark', density: 'comfortable' })
+    expect(settings.settings.appearance).toEqual({
+      theme: 'dark',
+      density: 'comfortable',
+      uiFontSize: 13
+    })
+    expect(settings.settings.editor).toEqual({ fontSize: 12 })
     expect(settings.settings.openProjects).toEqual([])
     expect(settings.settings.project.activeTab).toBe('kanban')
   })
@@ -214,6 +221,91 @@ describe('writes', () => {
 
     settings.settings.layout.leftCollapsed = true
     await expect(settings.flushPending()).resolves.toBeUndefined()
+  })
+})
+
+describe('the settings window', () => {
+  beforeEach(async () => {
+    ipc.on('settings_load', {})
+    ipc.on('settings_save', null)
+    await settings.loadSettings()
+    await settings.initSettingsBridge()
+  })
+
+  it('an edit made over there lands here and goes to disk from here', async () => {
+    /* The whole point of the one-writer rule: the settings window never calls
+       settings_save, and what reaches the file is this window's own debounced
+       write, carrying everything else it knows about. */
+    await emit(settings.SETTINGS_APPLY, { theme: 'light', uiFontSize: 16, editorFontSize: 18 })
+    await nextTick()
+
+    expect(settings.settings.appearance.theme).toBe('light')
+    expect(settings.settings.appearance.uiFontSize).toBe(16)
+    expect(settings.settings.editor.fontSize).toBe(18)
+
+    await settings.flushPending()
+    const sent = ipc.calls('settings_save').at(-1).settings
+    expect(sent.appearance.theme).toBe('light')
+    expect(sent.appearance.uiFontSize).toBe(16)
+    expect(sent.editor.fontSize).toBe(18)
+  })
+
+  it('system is a theme it accepts', async () => {
+    await emit(settings.SETTINGS_APPLY, { theme: 'system' })
+    await nextTick()
+    expect(settings.settings.appearance.theme).toBe('system')
+  })
+
+  it('a value it cannot honour is skipped, and its neighbours still land', async () => {
+    /* An event is not a response to anything: a malformed one has to cost
+       nothing. Skipped rather than reset to the shipped default, too — the
+       person did not ask for that either. */
+    settings.settings.appearance.uiFontSize = 16
+    await emit(settings.SETTINGS_APPLY, { theme: 'chartreuse', uiFontSize: 900, agent: 'codex' })
+    await nextTick()
+
+    expect(settings.settings.appearance.theme).toBe('dark')
+    expect(settings.settings.appearance.uiFontSize).toBe(16)
+    expect(settings.settings.agent).toBe('codex', 'the field beside them still arrived')
+  })
+
+  it('answers a hello with what this window holds, not with what is on disk', async () => {
+    settings.settings.appearance.uiFontSize = 20
+    const heard = []
+    await listen(settings.SETTINGS_STATE, (event) => heard.push(event.payload))
+
+    await emit(settings.SETTINGS_HELLO, null)
+    await vi.waitFor(() => expect(heard).toHaveLength(1))
+
+    expect(heard[0]).toEqual({
+      theme: 'dark',
+      density: 'comfortable',
+      uiFontSize: 20,
+      editorFontSize: 12,
+      agent: 'claude'
+    })
+  })
+
+  it('announces the new truth after every edit, so a refused value is corrected', async () => {
+    const heard = []
+    await listen(settings.SETTINGS_STATE, (event) => heard.push(event.payload))
+
+    await emit(settings.SETTINGS_APPLY, { uiFontSize: 900 })
+    await vi.waitFor(() => expect(heard).toHaveLength(1))
+
+    expect(heard[0].uiFontSize).toBe(13, 'what it actually holds, not what was asked for')
+  })
+
+  it('reads the file directly for the moment before this window has answered', async () => {
+    ipc.on('settings_load', { appearance: { theme: 'light', uiFontSize: 15 }, agent: 'codex' })
+
+    await expect(settings.readSharedSettings()).resolves.toEqual({
+      theme: 'light',
+      density: 'comfortable',
+      uiFontSize: 15,
+      editorFontSize: 12,
+      agent: 'codex'
+    })
   })
 })
 

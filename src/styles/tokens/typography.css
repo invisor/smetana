@@ -1,10 +1,32 @@
-/* TYPOGRAPHY. Mono is a leading voice, not a caption. */
+/* TYPOGRAPHY. Mono is a leading voice, not a caption.
+
+   The eight steps are written once, here, and the app-wide font size is a
+   *factor* over them rather than a second set of numbers: `paintRoot` sets
+   `--ui-scale` on the document root and nothing else touches these values. The
+   alternative — computing the eight sizes in JS and writing them onto the root —
+   was built first and was worse in a way that hides: an inline custom property
+   beats any stylesheet rule, so this file would have gone dead the moment the
+   app started, and editing a step here would have changed nothing on screen with
+   every test still green.
+
+   The consequence to know about is on the reading side. The computed value of an
+   unregistered custom property is its text with `var()` substituted and `calc()`
+   left unevaluated, so JS reading `--text-xs` gets the expression, not a number
+   (`@property` would fix that and needs a newer Safari than this build targets).
+   `components/terminal/theme.js` is the one place that wanted a number and says
+   how it gets one. */
 :root{
   --font-sans:system-ui,-apple-system,"Segoe UI","Noto Sans",Roboto,sans-serif;
   --font-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 
-  --text-2xs:10px;--text-xs:11px;--text-sm:12px;--text-md:13px;
-  --text-lg:15px;--text-xl:18px;--text-2xl:22px;--text-3xl:28px;
+  /* 1 is the shipped size (13px `--text-md`). The settings window's app-wide
+     font size is chosen ÷ 13. */
+  --ui-scale:1;
+
+  --text-2xs:calc(10 * var(--ui-scale) * 1px);--text-xs:calc(11 * var(--ui-scale) * 1px);
+  --text-sm:calc(12 * var(--ui-scale) * 1px);--text-md:calc(13 * var(--ui-scale) * 1px);
+  --text-lg:calc(15 * var(--ui-scale) * 1px);--text-xl:calc(18 * var(--ui-scale) * 1px);
+  --text-2xl:calc(22 * var(--ui-scale) * 1px);--text-3xl:calc(28 * var(--ui-scale) * 1px);
 
   --leading-tight:1.2;--leading-snug:1.35;--leading-normal:1.5;--leading-code:1.55;
 
@@ -14,6 +36,9 @@
 
   --text-body-size:var(--text-md);
   --text-ui-size:var(--text-sm);
+  /* The editor's own size, and the one step the app-wide factor does not reach:
+     the settings window pins it to a number of its own. Until it does, it is
+     `--text-sm` and scales with everything else. */
   --text-code-size:var(--text-sm);
   --text-label-size:var(--text-xs);
 }

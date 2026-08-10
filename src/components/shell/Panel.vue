@@ -1,6 +1,11 @@
 <script setup>
 import { computed } from 'vue'
 import IconButton from '../core/IconButton.vue'
+/* The rail's width is a layout rule rather than a look, and the rules live in
+   one place because `panelWidths.js` does arithmetic with this number — what a
+   collapsed neighbour costs, where a drag folds and unfolds. It was written out
+   here as a `32px` literal as well, which is the same number in two files. */
+import { RAIL, RAIL_CONTROL_MAX } from '../../views/panelWidths.js'
 
 const props = defineProps({
   title: { type: String, required: true },
@@ -17,7 +22,7 @@ const edge = computed(() => ({
 }))
 
 const collapsedStyle = computed(() => ({
-  width: '32px',
+  width: `${RAIL}px`,
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
@@ -63,6 +68,16 @@ const titleStyle = {
   overflow: 'hidden',
   textOverflow: 'ellipsis'
 }
+/* Capped, not scaled: `--control-h-sm` grows with the app-wide font size and the
+   rail does not, so at the top of the range this button was drawn 44px wide
+   inside a 32px strip and hung over the column beside it. `min()` keeps both
+   densities exactly as they are at the shipped size — 24 comfortable, 20 compact
+   — and stops the growth at the rail's edge. The reasoning, and why the rail
+   itself cannot grow, is on `RAIL_CONTROL_MAX`. */
+const railButtonStyle = {
+  width: `min(var(--control-h-sm), ${RAIL_CONTROL_MAX}px)`,
+  height: `min(var(--control-h-sm), ${RAIL_CONTROL_MAX}px)`
+}
 const railTitleStyle = {
   writingMode: 'vertical-rl',
   fontSize: 'var(--text-2xs)',
@@ -78,6 +93,7 @@ const railTitleStyle = {
       :icon="side === 'left' ? 'panel-left-open' : 'panel-right-open'"
       :label="`Expand ${side} panel`"
       size="sm"
+      :style="railButtonStyle"
       @click="$emit('toggle')"
     />
     <div :style="railTitleStyle">{{ title }}</div>

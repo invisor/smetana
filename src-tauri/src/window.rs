@@ -1,4 +1,21 @@
-//! The window's size and position on disk.
+//! The app's windows: the settings window, and the main window's geometry on
+//! disk.
+//!
+//! # The settings window
+//!
+//! A second `WebviewWindow` rather than a modal, and that is the whole reason it
+//! is a window at all: a modal lives inside the main window's bounds and cannot
+//! be dragged out of them, so a person cannot put the settings beside what they
+//! are changing. It loads the very same bundle with `?view=settings` — the third
+//! branch in `src/App.vue`, beside the app and the gallery — so there is one
+//! front end, one build, and the settings UI stays reachable in `npm run dev`
+//! with no Tauri behind it.
+//!
+//! The label is what makes "open it again" mean "bring it forward": a second
+//! window over the same settings would be two views of one file with no way to
+//! tell which one a person is reading.
+//!
+//! # The main window's geometry
 //!
 //! `tauri-plugin-window-state` keeps them, and there is no point rewriting it
 //! here: multi-monitor setups, minimization and full screen are already handled.
@@ -21,8 +38,41 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+
+/// The settings window's label. It is also the name the capability in
+/// `capabilities/default.json` lists beside `main`: a window not named there
+/// reaches no core plugin at all — no events, no app version — and the settings
+/// UI would come up as a page that cannot talk to anything.
+const SETTINGS_LABEL: &str = "settings";
+
+/// Opens the settings window, or brings the open one forward.
+///
+/// Deliberately not `async`: a synchronous command runs on the main thread,
+/// which is where a window is created on every platform this app targets.
+#[tauri::command]
+pub fn settings_window_open(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(SETTINGS_LABEL) {
+        // Minimized counts as open, and focusing a minimized window leaves a
+        // person pressing the gear with nothing on screen to show for it.
+        let _ = window.unminimize();
+        return window.set_focus().map_err(|err| err.to_string());
+    }
+
+    WebviewWindowBuilder::new(
+        &app,
+        SETTINGS_LABEL,
+        WebviewUrl::App("index.html?view=settings".into()),
+    )
+    .title("Settings")
+    .inner_size(720.0, 560.0)
+    .min_inner_size(520.0, 400.0)
+    .resizable(true)
+    .build()
+    .map(|_| ())
+    .map_err(|err| err.to_string())
+}
 
 /// How long we wait after the last movement. Less, and the write happens in the
 /// middle of a drag; more, and a window closed right after a resize goes back to
@@ -32,6 +82,33 @@ const SETTLE: Duration = Duration::from_millis(500);
 /// The same flags as `Builder::default()`: the plugin does not expose them, and
 /// saving less than it restores means losing fields on every write of ours.
 const FLAGS: StateFlags = StateFlags::all();
+
+/// Takes the settings window down with the main one.
+///
+/// The settings window is a viewer, not an owner: every edit it makes travels to
+/// the main window, which is the only thing that writes `settings.json`. Left
+/// standing after that window is gone it would keep accepting choices and
+/// keeping none of them, with nothing on screen to say so — the one failure this
+/// codebase refuses everywhere else. Closing it is also what lets the app exit
+/// on the last window, the way it did before there was a second one.
+///
+/// `Destroyed` rather than `CloseRequested`: the front end intercepts the close
+/// to flush its last write and destroys the window itself, so the request is
+/// preventable and the destruction is not.
+pub fn close_settings_with_main(app: &AppHandle) {
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let app = app.clone();
+    main.on_window_event(move |event| {
+        if !matches!(event, WindowEvent::Destroyed) {
+            return;
+        }
+        if let Some(settings) = app.get_webview_window(SETTINGS_LABEL) {
+            let _ = settings.close();
+        }
+    });
+}
 
 /// Subscribes the main window to writing its own geometry.
 ///
