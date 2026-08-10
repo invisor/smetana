@@ -108,9 +108,17 @@ fn within_floor(issue: &Issue, scope: &RunScope, min_priority: Option<u8>) -> bo
 /// `closed` and `parked` are counted across the scope and reported, but they
 /// deliberately take no part in the decision below — see `next_action`.
 pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) -> QueueSnapshot {
-    let unfinished_or_open: HashSet<&str> = issues
+    // What satisfies a dependency is the blocker being *finished*, and finished
+    // means `closed` — so the blocking set is everything on the board that is
+    // not. Naming what finishes rather than listing what blocks is the only
+    // form that survives a status set this app does not control: a parked or
+    // blocked blocker, a deferred one, and any custom status bd grows all mean
+    // the work is not done and the dependent must wait (smetana-6sl). Listing
+    // three blocking statuses here read every other status as satisfied, and an
+    // unattended run took work whose parked premise was never built.
+    let not_finished: HashSet<&str> = issues
         .iter()
-        .filter(|i| matches!(i.status.as_str(), OPEN | IN_PROGRESS | READY_TO_MERGE))
+        .filter(|i| i.status != CLOSED)
         .map(|i| i.id.as_str())
         .collect();
 
@@ -120,9 +128,7 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) ->
             CLOSED => out.closed += 1,
             PARKED => out.parked += 1,
             IN_PROGRESS | READY_TO_MERGE => out.unfinished.push(issue.id.clone()),
-            OPEN if within_floor(issue, scope, min_priority)
-                && !blocked(issue, &unfinished_or_open) =>
-            {
+            OPEN if within_floor(issue, scope, min_priority) && !blocked(issue, &not_finished) => {
                 out.ready.push(issue.id.clone());
             }
             _ => {}
@@ -135,11 +141,11 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) ->
 /// is satisfied; one on an issue that is not on the board at all is treated as
 /// satisfied too, since the alternative is a run that stalls on a reference
 /// nobody can resolve and says nothing about why.
-fn blocked(issue: &Issue, unfinished_or_open: &HashSet<&str>) -> bool {
+fn blocked(issue: &Issue, not_finished: &HashSet<&str>) -> bool {
     issue
         .dependencies
         .iter()
-        .any(|d| d.kind == BLOCKS && unfinished_or_open.contains(d.depends_on_id.as_str()))
+        .any(|d| d.kind == BLOCKS && not_finished.contains(d.depends_on_id.as_str()))
 }
 
 /// Order-independent equality: bd's ordering is not stable across calls, and
@@ -321,6 +327,71 @@ mod tests {
         // The same issue once what it waited for has closed.
         let board = vec![waiting, issue("earlier", "closed")];
         assert_eq!(snapshot(&board, &RunScope::Queue, Some(4)).ready, vec!["waiting"]);
+    }
+
+    #[test]
+    fn a_blocker_in_any_unfinished_status_keeps_its_dependent_waiting() {
+        // The defect this pins (smetana-6sl): the blocking set used to list
+        // three statuses, so a dependency on anything else read as satisfied.
+        // An unattended run parks what it cannot settle, and the very next
+        // batch took the dependents of the parked blocker. The rule is the
+        // other way round — only `closed` finishes — so every one of these,
+        // including a custom status this app has never heard of, must block.
+        for status in ["parked", "blocked", "deferred", "pinned", "someday"] {
+            let mut waiting = issue("waiting", "open");
+            waiting.dependencies = vec![Dependency {
+                issue_id: "waiting".into(),
+                depends_on_id: "blocker".into(),
+                kind: "blocks".into(),
+            }];
+            let board = vec![waiting, issue("blocker", status)];
+            assert!(
+                snapshot(&board, &RunScope::Queue, Some(4)).ready.is_empty(),
+                "a blocker in `{status}` is not finished, and its dependent must wait"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dependency_on_an_issue_not_on_the_board_is_satisfied() {
+        // The alternative is a run stalled on a reference nobody can resolve,
+        // with nothing anywhere to say why.
+        let mut waiting = issue("waiting", "open");
+        waiting.dependencies = vec![Dependency {
+            issue_id: "waiting".into(),
+            depends_on_id: "gone".into(),
+            kind: "blocks".into(),
+        }];
+        assert_eq!(snapshot(&[waiting], &RunScope::Queue, Some(4)).ready, vec!["waiting"]);
+    }
+
+    #[test]
+    fn a_chain_of_three_holds_at_every_link() {
+        // a blocks b, b blocks c. While a is anything but closed, only a is
+        // ready; closing a releases b and nothing further, because b itself is
+        // still unfinished. Under the old three-status set the chain broke at
+        // the first parked or blocked link and everything below came loose.
+        let chain = |a_status: &str, b_status: &str| {
+            let a = issue("a", a_status);
+            let mut b = issue("b", b_status);
+            b.dependencies = vec![Dependency {
+                issue_id: "b".into(),
+                depends_on_id: "a".into(),
+                kind: "blocks".into(),
+            }];
+            let mut c = issue("c", "open");
+            c.dependencies = vec![Dependency {
+                issue_id: "c".into(),
+                depends_on_id: "b".into(),
+                kind: "blocks".into(),
+            }];
+            snapshot(&[a, b, c], &RunScope::Queue, Some(4)).ready
+        };
+
+        assert_eq!(chain("open", "open"), vec!["a"], "only the head of the chain is ready");
+        assert!(chain("parked", "open").is_empty(), "a parked head releases nothing below it");
+        assert!(chain("blocked", "blocked").is_empty(), "a blocked middle holds the tail");
+        assert_eq!(chain("closed", "open"), vec!["b"], "closing the first releases only the second");
     }
 
     #[test]
