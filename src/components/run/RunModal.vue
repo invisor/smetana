@@ -458,7 +458,7 @@ const errorStyle = {
             mode === 'auto'
               ? 'Nothing is asked. Anything it cannot resolve is parked with a reason.'
               : mode === 'supervised'
-                ? 'It keeps going on its own and asks when something needs deciding.'
+                ? 'It takes a single batch, asks when something needs deciding, and stops once the batch is merged.'
                 : 'It does the work itself instead of delegating, and asks freely.'
           }}
         </span>
