@@ -31,6 +31,11 @@ export const TONE = {
    is worth a colour at all. */
 export const REASONS = {
   queue_empty: { text: 'Done — nothing left to take', tone: TONE.quiet, icon: 'check' },
+  /* A Crew run's own ending: it takes one batch, merges it, and that is the
+     end. Not `queue_empty`'s sentence, because tasks may well still sit in
+     Ready — the run finished its batch, not the board's work. Quiet like it,
+     though: this is the mode doing exactly what it said. */
+  batch_done: { text: 'Done — the batch is finished', tone: TONE.quiet, icon: 'check' },
   cancelled: { text: 'Stopped', tone: TONE.quiet },
   /* Quiet, like the stop button and for the same reason: a person did this on
      purpose and there is nothing here to fix. Loudness is not what it owes

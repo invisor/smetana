@@ -483,7 +483,12 @@ async fn drive(
         unreadable = 0;
 
         let now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
-        match queue::next_action(&now, previous.as_ref(), iteration, MAX_ITERATIONS, last_batch) {
+        // Narrower than the mode on purpose: what the decision cares about is
+        // whether this run may take a second batch, not who answers a question
+        // — see `RunMode::one_batch`.
+        let once = run.settings.mode.one_batch();
+        match queue::next_action(&now, previous.as_ref(), iteration, MAX_ITERATIONS, last_batch, once)
+        {
             Action::Stop(reason) => {
                 run.advance(RunState::Stopped { reason });
                 say(&run);
