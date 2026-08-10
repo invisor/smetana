@@ -1068,7 +1068,18 @@ move the new origin and the panel would drift away from the pointer.
 
 Dragging a panel past `COLLAPSE_SLACK` below its minimum folds it into the same 32px rail the header
 button gives, keeping the stored width so it comes back where it left; pulling out of the rail past
-`EXPAND_PULL` reopens it. Double click resets to the shipped 252/340. When the window is too narrow to
+`EXPAND_PULL` reopens it. Double click resets to the shipped 252/340.
+
+`RAIL` is the one width in the app that does **not** grow with the app-wide font size, and it cannot:
+these pure functions do arithmetic with it — a collapsed neighbour's cost, both drag thresholds, the
+clamp against the stored width — so a scale-dependent rail would have to be threaded through every
+one of them and into the geometry each caller builds, to turn a 32px strip into a 59px one. What sits
+in it does grow, though, and that was a real defect: the expand button is an `IconButton size="sm"`
+at `--control-h-sm`, which reaches 44px at the top of the range and hung over the board beside it. So
+the button is capped rather than scaled — `min(var(--control-h-sm), RAIL_CONTROL_MAX)`, which leaves
+both densities exactly as they are at the shipped size (24 and 20, measured) and stops the growth at
+the rail's edge. `Panel.vue` takes both numbers from this file now; it used to write the 32 out a
+second time. When the window is too narrow to
 honour both a panel's minimum and the board's floor, the panel keeps its minimum and the board takes
 the squeeze — the board's content scrolls, a file tree at 90px does not.
 
@@ -1263,7 +1274,14 @@ placeholder with dashes and a sentence saying so — a block of invented numbers
 would claim the app knows something it does not, which is what the fixture log pane was removed for.
 About's link goes out through `tauri-plugin-opener` (`opener:allow-open-url`, scoped to
 `https://github.com/*`): inside this webview it would replace the app with a web page, and there is
-no address bar here to come back from.
+no address bar here to come back from. Which branch `openExternal` takes is decided **before** the
+call and not by catching its failure, because the two failures are opposites: in the app a rejected
+`openUrl` is the ACL doing its job, and falling back to `window.open` would navigate to exactly what
+the scope declined, while in a browser a new tab is the whole of what the link can mean. The
+predicate is "is there a real back end", which is **not** `window.__TAURI_INTERNALS__` — `mockIPC`
+sets that property itself, so the obvious test reads true in the dev server and quietly took the
+app's branch there, leaving the link opening nothing at all. `mockBackend.js` publishes what it
+decided (`usingMockBackend`) and that is the only honest answer.
 
 A missing file is the first run, not an error. A broken or too-new file is copied to
 `settings.json.bak` and the app starts from defaults, and saving over it afterwards is fine. One

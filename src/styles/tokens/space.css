@@ -12,7 +12,17 @@
    the interface rather than a container for a glyph, and scaling them with the
    type was considered and refused: at 24px it would have pushed the sidebar and
    the panels around by tens of pixels for no legibility gained. Density remains
-   the switch for how tight things sit. */
+   the switch for how tight things sit.
+
+   That leaves a third group, which is neither of the first two and is listed
+   here so it is not mistaken for an oversight: --card-pad, --panel-pad and
+   --tree-indent are padding and indentation by another name and belong with the
+   space scale; --resizer-w and the --panel-*-w widths are chrome a person drags
+   rather than type. --log-line-h is the one that looks like it belongs above
+   and does not: it is the line box for --text-code-size, which is pinned by the
+   editor's own font size and which the app-wide factor deliberately never
+   reaches, so scaling the box while the text inside it stayed put is precisely
+   what it must not do. */
 :root{
   --space-0:0;--space-1:2px;--space-2:4px;--space-3:6px;--space-4:8px;
   --space-5:12px;--space-6:16px;--space-7:20px;--space-8:24px;--space-9:32px;--space-10:40px;

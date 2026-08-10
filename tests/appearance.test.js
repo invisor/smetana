@@ -71,9 +71,10 @@ describe('fontVars', () => {
     for (const size of FONT_SIZES) {
       const scale = Number(fontVars(size, EDITOR_FONT_DEFAULT)['--ui-scale'])
       expect(scale).toBeCloseTo(size / UI_FONT_DEFAULT, 12)
-      // Which is what makes `--text-md`, the step the dropdown names, land on
-      // the size a person picked.
-      expect(13 * scale).toBeCloseTo(size, 12)
+      // Which is what makes `--text-md` — the step the dropdown names, and the
+      // one whose shipped value is UI_FONT_DEFAULT — land on the size a person
+      // picked.
+      expect(UI_FONT_DEFAULT * scale).toBeCloseTo(size, 12)
     }
   })
 

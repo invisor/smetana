@@ -37,8 +37,10 @@ export function terminalTheme() {
    in the stylesheet (tokens/typography.css), and the computed value of an
    unregistered custom property is its text with `var()` substituted and `calc()`
    left standing: `getComputedStyle` hands back the expression, and `parseFloat`
-   would read the first number in it — 11 — at every setting. `@property` would
-   make it compute to a length and needs a newer Safari than this build targets.
+   of `"calc(11 * 1 * 1px)"` is **NaN** — it wants a leading number and there is
+   none. Not a stale 11, which a terminal would survive: xterm.js would be handed
+   `fontSize: NaN`. `@property` would make it compute to a length and needs a
+   newer Safari than this build targets.
 
    So the browser is asked to do the arithmetic the one way it will: an element
    whose `font-size` *is* the token, whose computed style is therefore a resolved

@@ -10,6 +10,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { usingMockBackend } from './mockBackend.js'
 
 /* Opens the settings window, or brings the open one forward — the decision is
    Rust's (`window::settings_window_open`), because the window either exists or
@@ -39,22 +40,26 @@ export async function appVersion() {
   }
 }
 
+/* Whether there is a real back end behind `invoke`, which is **not** the same
+   question as whether `window.__TAURI_INTERNALS__ ` is defined: `mockIPC` sets
+   that property itself, so it is true in the dev server as well. The store that
+   installs the fixtures publishes what it decided, and that is the only honest
+   answer here. */
+const hasBackEnd = () => Boolean(window.__TAURI_INTERNALS__) && !usingMockBackend()
+
 /* A link goes to the person's own browser. Inside the webview it would replace
    the app with a web page and leave no way back — there is no address bar and no
    back button in this window.
 
-   The fall-back is what makes the About tab checkable in `npm run dev`, and it
-   is gated on there being no Tauri rather than on the call having failed. Those
-   are not the same condition and the difference matters: inside the app, a
-   failure means the opener ACL refused this URL, which is the one thing the
-   plugin exists to do — falling back there would navigate the webview to
-   whatever the scope had just declined. So in the app a refusal is reported and
-   nothing opens; in a browser, where there was never anything to refuse it, an
-   ordinary new tab is the right answer. */
-const inTauri = () => Boolean(window.__TAURI_INTERNALS__)
-
+   Which branch is taken is decided *before* the call rather than by catching its
+   failure, because the two failures mean opposite things. In the app, `openUrl`
+   failing means the opener ACL refused this URL — the one thing the plugin
+   exists to do — and falling back to `window.open` would navigate the webview to
+   exactly what the scope had just declined. In a browser there is no ACL and no
+   system to ask: an ordinary new tab is the whole of what "open this link" can
+   mean, and it is what makes the About tab checkable in `npm run dev`. */
 export async function openExternal(url) {
-  if (!inTauri()) {
+  if (!hasBackEnd()) {
     window.open(url, '_blank', 'noopener')
     return
   }

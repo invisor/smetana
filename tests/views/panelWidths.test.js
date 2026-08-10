@@ -4,6 +4,7 @@ import {
   LEFT_DEFAULT,
   LEFT_MIN,
   RAIL,
+  RAIL_CONTROL_MAX,
   RIGHT_MIN,
   clampWidth,
   maxWidth,
@@ -115,5 +116,26 @@ describe('resolveDrag', () => {
       width: 252,
       collapsed: true
     })
+  })
+})
+
+describe('the rail and what it holds', () => {
+  it('the expand button fits inside the rail', () => {
+    /* The rail is the one width that does not grow with the app-wide font size
+       — see RAIL_CONTROL_MAX for why it cannot — while the button in it is
+       drawn at `--control-h-sm`, which does. `Panel` caps it at this number, so
+       the number has to be one the rail can actually hold: at the top of the
+       range an uncapped button is 44px inside a 32px strip, drawn over the
+       column next door. The rail has no horizontal padding, so fitting is the
+       whole test. */
+    expect(RAIL_CONTROL_MAX).toBeLessThanOrEqual(RAIL)
+  })
+
+  it('the cap is not so small that it changes the shipped look', () => {
+    /* `--control-h-sm` is 24px comfortable and 20px compact today, and `min()`
+       against this cap has to leave both exactly where they are — a cap below
+       24 would shrink the button for everybody at the shipped size to fix a
+       problem that only exists at the top of the range. */
+    expect(RAIL_CONTROL_MAX).toBeGreaterThanOrEqual(24)
   })
 })

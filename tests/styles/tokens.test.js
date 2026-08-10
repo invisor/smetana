@@ -2,47 +2,86 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-/* The stylesheet read as text, which is the only way a test in this project can
-   reach it: nothing here renders CSS, and the two files below are where the app
-   -wide font size actually happens. `appearance.js` says only what the factor is
-   — if these files stop multiplying by it, that factor reaches nothing and
+/* The stylesheets read as text, which is the only way a test in this project can
+   reach them: nothing here renders CSS, and these two files are where the
+   app-wide font size actually happens. `appearance.js` says only what the factor
+   is — if these files stop multiplying by it, that factor reaches nothing and
    every other test stays green.
 
-   This is deliberately a check on the *mechanism* and not on the numbers. The
-   sizes are the design system's to change; what must not change by accident is
-   that each of them is a multiple of `--ui-scale`, and that the space scale is
-   not. */
-/* From the project root rather than from `import.meta.url`: these files are
-   served by Vite, so `import.meta.url` inside a test is an http:// URL and
-   `fileURLToPath` refuses it. Vitest runs the workers with the config's root as
-   the working directory. */
+   Deliberately a check on the *mechanism* and not on the numbers. The sizes are
+   the design system's to change; what must not change by accident is that each
+   size is a multiple of `--ui-scale` and that the space scale is not.
+
+   The lists are **derived from the files** rather than written out here. That is
+   the point: a fixed list of "which tokens exist" would be a third copy of it,
+   and the test whose job is to police a newly added step would be the one thing
+   blind to a newly added step. The one place a set is pinned is which tokens the
+   compact block redefines, and it is pinned precisely because *deletion* is the
+   silent failure there — a height dropped from that block does not error, it
+   quietly inherits the comfortable value and a 22px row becomes 28px.
+
+   `EXPRESSION` matches one spelling and not the family of equivalents. An honest
+   rewrite — `calc(10px * var(--ui-scale))` — will fail this test even though it
+   behaves identically. That is the intended direction of error: refusing a
+   correct edit costs one conversation, while accepting a shape this test cannot
+   reason about costs the guarantee. Nothing here is semantically pinned; if the
+   spelling changes on purpose, change it here too. */
 const read = (name) => readFileSync(resolve(process.cwd(), 'src/styles/tokens', name), 'utf8')
 
-const typography = read('typography.css')
-const space = read('space.css')
+const EXPRESSION = /^calc\(\s*\d+(\.\d+)?\s*\*\s*var\(--ui-scale\)\s*\*\s*1px\s*\)$/
 
-/* The value of one custom property, as written. Naive on purpose: these files
-   are one declaration per token and a parser here would be a second thing to
-   get wrong. */
-const declared = (css, token) => {
-  const found = css.match(new RegExp(`${token}\\s*:\\s*([^;\\n]+)`))
-  return found ? found[1].trim() : null
+const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '')
+
+/* Every `--token: value` in a chunk of CSS, in source order. Naive on purpose:
+   these files are one declaration per token with no nesting, and a real parser
+   here would be a second thing to get wrong. Comments go first so that a token
+   *named* in prose is never mistaken for one declared. */
+const declarations = (css) => {
+  const found = new Map()
+  for (const [, name, value] of stripComments(css).matchAll(/(--[\w-]+)\s*:\s*([^;}\n]+)/g)) {
+    found.set(name, value.trim())
+  }
+  return found
 }
 
-const TYPE_STEPS = [
-  '--text-2xs',
-  '--text-xs',
-  '--text-sm',
-  '--text-md',
-  '--text-lg',
-  '--text-xl',
-  '--text-2xl',
-  '--text-3xl'
-]
+/* Each rule in the file, keyed by selector. */
+const rules = (css) => {
+  const found = new Map()
+  for (const [, selector, body] of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    found.set(selector.trim(), declarations(body))
+  }
+  return found
+}
 
-/* Every height a piece of text sits inside. `--row-h` at 22px in compact with
-   22px text in it is the case this list exists for. */
-const SCALED_SIZES = [
+const typography = rules(read('typography.css')).get(':root')
+const space = rules(read('space.css'))
+const comfortable = space.get(':root')
+const compact = space.get('[data-density="compact"]')
+
+/* What a token has to be named to count as a box that holds text: a height, or
+   one of the icon sizes. Derived from the name so a `--foo-h` added tomorrow is
+   covered without anybody remembering to add it here. */
+const HOLDS_TEXT = /^--(.+-h|icon-(sm|md|lg))$/
+
+/* The one exception, named with its reason. `--log-line-h` is the line box for
+   `--text-code-size`, which is pinned by the editor setting and which the
+   app-wide factor deliberately does not reach — scaling the box while the text
+   inside it stays put is the opposite of what the rest of this exists for. */
+const NOT_SCALED = new Set(['--log-line-h'])
+
+/* Which tokens the compact block redefines. Pinned as a set, since a deletion
+   here is silent — see the header. */
+const COMPACT_TOKENS = [
+  '--space-1',
+  '--space-2',
+  '--space-3',
+  '--space-4',
+  '--space-5',
+  '--space-6',
+  '--space-7',
+  '--space-8',
+  '--space-9',
+  '--space-10',
   '--row-h',
   '--control-h',
   '--control-h-sm',
@@ -50,52 +89,49 @@ const SCALED_SIZES = [
   '--tab-h',
   '--titlebar-h',
   '--scope-bar-h',
-  '--icon-sm',
-  '--icon-md',
-  '--icon-lg'
+  '--card-pad',
+  '--panel-pad',
+  '--log-line-h',
+  '--tree-indent'
 ]
 
 describe('the app-wide font size reaches the stylesheet', () => {
   it('is 1 by default, so a window that sets nothing looks shipped', () => {
-    expect(declared(typography, '--ui-scale')).toBe('1')
+    expect(typography.get('--ui-scale')).toBe('1')
   })
 
   it('multiplies every step of the type scale', () => {
-    for (const step of TYPE_STEPS) {
-      const value = declared(typography, step)
-      expect(value, `${step} is defined`).toBeTruthy()
-      expect(value, `${step} must scale with --ui-scale`).toMatch(
-        /^calc\(\s*\d+(\.\d+)?\s*\*\s*var\(--ui-scale\)\s*\*\s*1px\s*\)$/
-      )
+    /* A step is a `--text-…` that states a size of its own; the semantic aliases
+       (`--text-ui-size: var(--text-sm)`) state a step instead and inherit its
+       scaling. Derived, so a ninth step added without the factor fails here. */
+    const steps = [...typography].filter(
+      ([name, value]) => name.startsWith('--text-') && !value.startsWith('var(')
+    )
+
+    expect(steps.length, 'the type scale is still written in this file').toBeGreaterThanOrEqual(8)
+    for (const [name, value] of steps) {
+      expect(value, `${name} must scale with --ui-scale`).toMatch(EXPRESSION)
     }
   })
 
-  it('multiplies every row and control height, in both densities', () => {
-    // Split at the density block so each half is checked on its own: scaling
-    // only the comfortable set would leave compact — the tighter of the two, and
-    // the one that clips first — behind.
-    // The selector where it opens a rule, at the start of a line — the file's
-    // own header comment names it too, and splitting there left "comfortable"
-    // as the comment and nothing else.
-    const at = space.search(/^\[data-density="compact"\]/m)
-    expect(at, 'the compact block is still in this file').toBeGreaterThan(0)
-    const blocks = { comfortable: space.slice(0, at), compact: space.slice(at) }
-
-    for (const [density, css] of Object.entries(blocks)) {
-      for (const token of SCALED_SIZES) {
-        const value = declared(css, token)
-        // Compact redefines only some of them; what it does redefine must scale.
-        if (value === null) continue
-        expect(value, `${token} in ${density} must scale with --ui-scale`).toMatch(
-          /^calc\(\s*\d+(\.\d+)?\s*\*\s*var\(--ui-scale\)\s*\*\s*1px\s*\)$/
-        )
+  it('multiplies every row, control and icon size, in both densities', () => {
+    for (const [density, block] of [
+      ['comfortable', comfortable],
+      ['compact', compact]
+    ]) {
+      const boxes = [...block].filter(([name]) => HOLDS_TEXT.test(name) && !NOT_SCALED.has(name))
+      expect(boxes.length, `${density} still defines boxes that hold text`).toBeGreaterThan(0)
+      for (const [name, value] of boxes) {
+        expect(value, `${name} in ${density} must scale with --ui-scale`).toMatch(EXPRESSION)
       }
     }
+  })
 
-    // And the comfortable block, which is the complete set, defines them all.
-    for (const token of SCALED_SIZES) {
-      expect(declared(blocks.comfortable, token), `${token} is defined`).toBeTruthy()
-    }
+  it('the compact block redefines exactly the tokens it used to', () => {
+    /* Deleting a height from here passes every other check in this file and
+       changes the app: compact silently inherits the comfortable value, so a
+       22px row becomes 28px with nothing anywhere to say so. */
+    expect([...compact.keys()].sort()).toEqual([...COMPACT_TOKENS].sort())
   })
 
   it('leaves the space scale alone', () => {
@@ -103,10 +139,17 @@ describe('the app-wide font size reaches the stylesheet', () => {
        and gaps are the rhythm of the interface, and scaling them with the type
        moves every panel by tens of pixels at the top of the range for no
        legibility gained. Density is the switch for how tight things sit. */
-    for (let i = 0; i <= 10; i += 1) {
-      const value = declared(space, `--space-${i}`)
-      expect(value, `--space-${i} is defined`).toBeTruthy()
-      expect(value, `--space-${i} must not scale with the font size`).not.toContain('--ui-scale')
+    for (const [density, block] of [
+      ['comfortable', comfortable],
+      ['compact', compact]
+    ]) {
+      const spaces = [...block].filter(([name]) => name.startsWith('--space-'))
+      expect(spaces.length, `${density} still defines the space scale`).toBeGreaterThan(0)
+      for (const [name, value] of spaces) {
+        expect(value, `${name} in ${density} must not scale with the font size`).not.toContain(
+          '--ui-scale'
+        )
+      }
     }
   })
 })

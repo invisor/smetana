@@ -144,8 +144,18 @@ function fixtureIssues() {
   })
 }
 
+/* Whether the fixtures are what is answering. `window.__TAURI_INTERNALS__` is
+   **not** the way to ask that question from anywhere else in the app: `mockIPC`
+   sets that very property itself (`mocks.js` calls `mockInternals`), so it is
+   true in a browser too, and code that read it as "there is a back end" got the
+   dev server exactly backwards. This flag is the decision made below, published
+   so nobody has to guess at it. */
+let mocked = false
+export const usingMockBackend = () => mocked
+
 export function installMockBackend() {
   if (window.__TAURI_INTERNALS__) return false
+  mocked = true
 
   const issues = fixtureIssues()
   const columns = fixtureColumns.map((c) => {
