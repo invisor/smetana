@@ -313,9 +313,13 @@ const configErrorText = computed(() =>
    board and they know what the epic is — and taking the button away is not a
    way to have that conversation with them.
 
-   Done is the one exclusion left: the run would claim a closed issue, and there
-   is nothing there to do. */
-const runnableTask = (task) => runOffered.value && task.status !== 'done'
+   Two exclusions. Done: the run would claim a closed issue, and there is
+   nothing there to do. Blocked: the column is computed from unfinished
+   blockers, so the run would put an agent on work whose prerequisite is not
+   merged yet — and nothing here can go stale, because the blocker closing is
+   what moves the card into Ready and brings the button with it. */
+const runnableTask = (task) =>
+  runOffered.value && task.status !== 'done' && task.status !== 'blocked'
 
 /* Why every play on the board is inactive, or '' when none of them is.
    Strictly sequential work inside a project is the invariant — one stand, one
