@@ -26,6 +26,14 @@ const CLOSED: &str = "closed";
 /// The dependency kind that actually blocks. bd also records `parent-child`,
 /// `related` and `discovered-from`, and none of those means "wait".
 const BLOCKS: &str = "blocks";
+/// The label on the merge lock — the issue two leads claim to serialize their
+/// merges into one target branch (smetana-uox). Only an `open` issue is
+/// claimable, so the lock has to sit in `open` while free — which means
+/// `bd ready` returns it and, unfiltered, it would count as ready work here;
+/// held, it is `in_progress` and would count as unfinished. Either reading
+/// turns coordination into work: a lead would try to implement it, and a run
+/// would keep taking batches to "recover" it.
+const LOCK_LABEL: &str = "smetana-lock";
 
 /// The board, as a run cares about it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -137,7 +145,7 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) ->
         .collect();
 
     let mut out = QueueSnapshot::default();
-    for issue in issues.iter().filter(|i| in_scope(i, scope)) {
+    for issue in issues.iter().filter(|i| in_scope(i, scope) && !is_lock(i)) {
         match issue.status.as_str() {
             CLOSED => out.closed += 1,
             PARKED => out.parked += 1,
@@ -149,6 +157,17 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) ->
         }
     }
     out
+}
+
+/// Coordination, not work: the merge lock never enters the snapshot's counts —
+/// free (`open`) it is not ready work, held (`in_progress`) it is not a killed
+/// batch's orphan to recover. It deliberately stays in the `not_finished`
+/// blocking set above: nothing should ever depend on the lock — it never
+/// closes — and if something does by mistake, holding the dependent back fails
+/// closed, where releasing it would take work whose premise was a wiring
+/// error.
+fn is_lock(issue: &Issue) -> bool {
+    issue.labels.iter().any(|l| l == LOCK_LABEL)
 }
 
 /// Waiting on something that has not finished. A dependency on a closed issue
@@ -304,6 +323,66 @@ mod tests {
         assert_eq!(s.unfinished, vec!["e", "f"]);
         assert_eq!(s.closed, 1);
         assert_eq!(s.parked, 1);
+    }
+
+    #[test]
+    fn the_merge_lock_is_neither_ready_nor_unfinished() {
+        // Free, the lock sits `open` because only an open issue is claimable;
+        // held, it is `in_progress`. The first must not enter `ready` — a lead
+        // would take it as work — and the second must not enter `unfinished`,
+        // or a run would keep taking batches to "recover" its own lock.
+        let mut free = issue("lock-free", "open");
+        free.labels = vec!["smetana-lock".into()];
+        let mut held = issue("lock-held", "in_progress");
+        held.labels = vec!["smetana-lock".into()];
+        let board = vec![free, held, issue("real", "open")];
+
+        let s = snapshot(&board, &RunScope::Queue, Some(4));
+        assert_eq!(s.ready, vec!["real"]);
+        assert!(s.unfinished.is_empty(), "a held lock is not a killed batch's orphan");
+    }
+
+    #[test]
+    fn the_merge_lock_is_invisible_whatever_its_status() {
+        // The rule is the label, not the status pair above: whatever state a
+        // lock ends up in — somebody parking it or closing it by hand included
+        // — it never enters the snapshot anywhere.
+        for status in ["open", "in_progress", "ready_to_merge", "parked", "closed"] {
+            let mut lock = issue("lock", status);
+            lock.labels = vec!["smetana-lock".into()];
+            assert_eq!(
+                snapshot(&[lock], &RunScope::Queue, Some(4)),
+                QueueSnapshot::default(),
+                "a lock in `{status}` leaked into the snapshot"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blocks_dependency_on_the_lock_keeps_its_dependent_waiting() {
+        // Nothing should ever depend on the lock — it never closes — so a
+        // dependency on it is a wiring error, and it fails closed: the lock is
+        // filtered out of the snapshot's counts, not out of the blocking set.
+        // Moving the filter up into the `not_finished` collection has to be
+        // done on purpose, against this test.
+        let mut waiting = issue("waiting", "open");
+        waiting.dependencies = vec![Dependency {
+            issue_id: "waiting".into(),
+            depends_on_id: "lock".into(),
+            kind: "blocks".into(),
+        }];
+        let mut lock = issue("lock", "open");
+        lock.labels = vec!["smetana-lock".into()];
+        assert!(snapshot(&[waiting, lock], &RunScope::Queue, Some(4)).ready.is_empty());
+    }
+
+    #[test]
+    fn an_ordinary_label_hides_nothing() {
+        // `spawned` is the label filed findings already carry; only the lock's
+        // own label may make an issue invisible to the queue.
+        let mut labelled = issue("labelled", "open");
+        labelled.labels = vec!["spawned".into()];
+        assert_eq!(snapshot(&[labelled], &RunScope::Queue, Some(4)).ready, vec!["labelled"]);
     }
 
     #[test]

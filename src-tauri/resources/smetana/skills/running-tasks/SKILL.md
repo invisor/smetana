@@ -147,7 +147,15 @@ on its own. **This runs before you take any new work.**
 1. Pin the tracker, and set the custom statuses once — idempotent, and always the full
    set, because a partial value clobbers the others:
    `bd config set status.custom "ready_to_merge,parked"`.
-2. `bd list --status in_progress --json`. **An issue on this list is not provably an
+   In the same breath, make sure the merge lock exists — look for it, create it only
+   when it is not there: `bd list -l smetana-lock --json` answering nothing → create it
+   exactly as `merging`'s lock section says. Idempotent the same way the statuses are:
+   an existing lock is left alone, held or free — a held one is another lead
+   mid-merge, not a problem to fix here.
+2. `bd list --status in_progress --json`. Anything carrying the `smetana-lock` label
+   never enters recovery: a held lock is another lead mid-merge or a stale claim, both
+   `merging`'s lock section's business — and parking it would leave it unclaimable for
+   everybody. **An issue on this list is not provably an
    orphan.** The assignee is the evidence — `bd show <id>` carries it, and every run
    claims under its own actor — so a `smetana-run-<id>` that is not this run's own
    (yours is `$BEADS_ACTOR` in your environment) may be a killed run's leftovers, or a
@@ -185,8 +193,11 @@ on its own. **This runs before you take any new work.**
    you given none, the config's number is the answer.
 4. Per task: claim it the way `provisioning` says — the whole queue atomically with
    `bd ready --claim`, a narrower scope by id, and a claim refused because another run
-   holds it is skipped, not retried. Then load the spec through `provisioning`. Vague or
-   empty → policy (park, or ask). Provision, serialized on you.
+   holds it is skipped, not retried. The merge lock sits `open`, so `bd ready` hands it
+   over like a task: **anything carrying the `smetana-lock` label is never taken** —
+   `provisioning` says how each claim form skips it. Then load the spec through
+   `provisioning`. Vague or empty → policy (park, or ask). Provision, serialized on
+   you.
 
 ## Phase 1 — delegate, then review
 
@@ -224,6 +235,11 @@ independent pass, and it is still against `reviewing`.
 
 Every `ready_to_merge` task enters: Phase R's recovered orphans and this run's survivors
 together. Follow `merging` per task, with your mode's policy wherever it says to stop.
+
+**The whole phase runs under the merge lock.** Claim it per `merging`'s lock section
+before the first task, and release it after the last — on every ending of this phase,
+a batch that parked everything included. Two runs merging into one branch serialize on
+that claim; waiting for it, and breaking a stale one, are report lines, never silence.
 
 1. **Order** — topological over the survivors (`bd dep tree <id>`), tie-broken by
    priority and then by id. A cycle among them → park every task in it.
