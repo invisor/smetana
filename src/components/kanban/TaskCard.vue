@@ -108,11 +108,22 @@ const newStyle = {
   display: 'inline-flex', alignItems: 'center', gap: '3px', color: 'var(--attn-loud)',
   font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)'
 }
+/* `overflowWrap` is what the two inspectors already carry, and the card wanted it
+   for the same reason: a title is bd's text, and bd's text contains identifiers.
+   A browser breaks a line at spaces and hyphens and at nothing else, so
+   `some_test_name_like_this` is one word to it — wider than a 212px column, and
+   drawn straight over the card's own border and the column beside it, since
+   nothing here clips. `anywhere` rather than `break-word` to match the inspectors,
+   and because it is the one of the two that also lets the flex column shrink
+   below that word: `break-word` breaks the line but still reports the whole token
+   as the minimum width, which is how the overflow comes back the moment a panel
+   drag makes the board narrower than one identifier. */
 const titleStyle = {
   fontSize: 'var(--text-sm)',
   lineHeight: 'var(--leading-snug)',
   color: 'var(--text-primary)',
-  textWrap: 'pretty'
+  textWrap: 'pretty',
+  overflowWrap: 'anywhere'
 }
 </script>
 

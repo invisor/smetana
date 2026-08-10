@@ -1250,6 +1250,16 @@ is what makes a second press focus the window instead of making another, and it 
 capability in `capabilities/default.json` lists beside `main` — a window not named there reaches no
 core plugin at all, and the settings UI would come up unable to send an event or read the version.
 
+It is built as a **child of the main window** (`parent`), which is what keeps it in front of the
+thing it is changing: without it, the first click on the board buried the settings behind the app,
+and the only way back was the gear that opened it. `parent` says exactly that and nothing wider, in
+each platform's own words — an owner window on Windows, transient-for on Linux, a child `NSWindow`
+on macOS. `always_on_top` would have been the other way there and is a different claim: it floats
+over every other application on the machine, and an app somebody has switched away from has no
+business sitting on top of their browser. The price on macOS is that a child moves when its parent
+moves; it can still be dragged anywhere, including clear of the app, which is the whole reason this
+is a window and not a modal.
+
 **The main window stays the only writer.** `settings_save` writes the whole resolved view — the
 panel widths, the project map, the open tabs — so a second window calling it would post its own idea
 of all of that, and the later write would win. So the settings window holds no settings store: it
@@ -1300,7 +1310,20 @@ the tidy answer and needs a newer Safari than the build targets). And **icons do
 glyphs stay put while their labels grow.
 
 The four tabs are `components/settings/`, and each is presentational — handed values, emitting what
-was picked — so the whole window renders in `?view=gallery` too. Agents is the one place in the front
+was picked — so the whole window renders in `?view=gallery` too. Every list on them is `Dropdown`,
+and with that **`Select` is drawn nowhere outside the gallery any more.** This window was the last
+place taking `Select`'s bargain — one element, accessible for free — and what it actually bought
+here was a menu the operating system paints: its own colours, font and row height, none of them
+reachable by a token, none of them following the theme, the density or the app-wide font size that
+this very window exists to change. A theme picker whose own list ignores the theme is the plainest
+version of that. `Select` stays in the library and in the gallery, because it is not broken; nothing
+in the app reaches for it. The switch is also what turned up the defect a short list had been hiding
+in `Dropdown`: its options are flex items in a column, so past the eighth the `--row-h` height
+became a starting point and fifteen rows shared the ceiling at 15px each instead of scrolling at 28.
+`flexShrink: 0` is the fix, and a list that genuinely scrolls then needed `reveal` — the cursor's
+row brought into view on opening and on walking off either end, since the shipped font size is
+fourth of fifteen and anything above about 17px opened on a list with no visible answer in it.
+Agents is the one place in the front
 end that ever *names* an agent: the ids are still `agents::IDS` and Rust still drops one it does not
 ship, so this is a set of labels for ids Rust already knows. The subscription block under it is a
 placeholder with dashes and a sentence saying so — a block of invented numbers under a real setting
@@ -1473,6 +1496,14 @@ alias exists in `vite.config.js` but is currently unused, so prefer relative pat
 ## Constraints
 
 - **No gradients, images, glass, blur or emoji.** Partly taste, partly the WebKitGTK constraint.
+  One raster is drawn in the whole interface and it is the app icon itself, on the About tab
+  (`src/assets/app-icon.png`, imported by `components/settings/AboutSettings.vue`). The exception is
+  the artwork rather than the medium: this picture is the app's identity, the same one the Dock and
+  the installer draw, so a version of it redrawn from tokens would be a second copy to keep in step
+  with the first. It carries its own black ground and its own squircle, which is what lets one file
+  serve both themes with no border and no radius from the component. Anything else wanting a picture
+  is still a design-system question. `scripts/make-app-icon.py` builds it and the bundle icons from
+  one source, so the two cannot drift; `app-icon.png` at the repository root is that 1024 master.
 - Sentence case everywhere; identifiers in mono (`--font-mono`), prose in sans.
 - The primary button is ink on paper with no brand hue — the entire saturated range belongs to
   status.

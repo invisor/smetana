@@ -15,6 +15,22 @@
 //! window over the same settings would be two views of one file with no way to
 //! tell which one a person is reading.
 //!
+//! It is built as a **child of the main window**, which is the one thing that
+//! keeps it in front of what it is changing. Without it the settings sank
+//! behind the app on the first click into the board — a window whose entire
+//! purpose is to be looked at beside another one, buried under that one, with
+//! only the gear to dig it out again. `parent` says exactly that and no more,
+//! in each platform's own words: an owner window on Windows, transient-for on
+//! Linux, a child `NSWindow` on macOS. `always_on_top` was the other way to
+//! reach it and is a different claim — it would float this window over every
+//! other application on the machine, and settings for an app somebody has
+//! switched away from have no business on top of their browser.
+//!
+//! What comes with it on macOS is the child moving when the parent moves. That
+//! is the OS's bargain and it is worth taking: it keeps the pairing a person
+//! arranged, and the window can still be dragged anywhere, including off the
+//! app entirely, which is the whole reason this is a window and not a modal.
+//!
 //! # The main window's geometry
 //!
 //! `tauri-plugin-window-state` keeps them, and there is no point rewriting it
@@ -60,7 +76,7 @@ pub fn settings_window_open(app: AppHandle) -> Result<(), String> {
         return window.set_focus().map_err(|err| err.to_string());
     }
 
-    WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         &app,
         SETTINGS_LABEL,
         WebviewUrl::App("index.html?view=settings".into()),
@@ -68,10 +84,16 @@ pub fn settings_window_open(app: AppHandle) -> Result<(), String> {
     .title("Settings")
     .inner_size(720.0, 560.0)
     .min_inner_size(520.0, 400.0)
-    .resizable(true)
-    .build()
-    .map(|_| ())
-    .map_err(|err| err.to_string())
+    .resizable(true);
+
+    // No main window is not an error here, any more than it is in
+    // `close_settings_with_main`: there is simply nothing to stay in front of,
+    // and a settings window with no parent is better than none at all.
+    if let Some(main) = app.get_webview_window("main") {
+        builder = builder.parent(&main).map_err(|err| err.to_string())?;
+    }
+
+    builder.build().map(|_| ()).map_err(|err| err.to_string())
 }
 
 /// How long we wait after the last movement. Less, and the write happens in the

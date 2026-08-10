@@ -13,6 +13,7 @@ import Modal from '../overlays/Modal.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import TypeBadge from './TypeBadge.vue'
 import { priorityLabel } from './issueType.js'
+import { statusLabel } from '../status/status.js'
 
 const props = defineProps({
   /* The issue in bd's own shape, straight out of the tracker store. */
@@ -41,11 +42,13 @@ const STATUSES = [
    in_progress, bd's own tooling to hooked. With no matching option the select
    would render its first entry and quietly claim the issue is Ready. So the
    status it actually has is appended when it is not already there: choosing it
-   again is a no-op, and the panel tells the truth either way. */
+   again is a no-op, and the panel tells the truth either way. The value is bd's
+   own string, since that is what goes back to bd; the label is written the way
+   the three above are, so a `parked` cannot sit in lower case under them. */
 const statusOptions = computed(() =>
   STATUSES.some((s) => s.value === props.issue.status)
     ? STATUSES
-    : [...STATUSES, { value: props.issue.status, label: props.issue.status }]
+    : [...STATUSES, { value: props.issue.status, label: statusLabel(props.issue.status) }]
 )
 
 /* bd hands dates over as RFC 3339 in UTC. The panel is narrow, so the year is

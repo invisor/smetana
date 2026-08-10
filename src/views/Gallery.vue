@@ -399,10 +399,12 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '260px' }">
           <Textarea v-model="prose" :rows="3" placeholder="What needs doing" />
         </div>
-        <!-- Both, side by side. Select is still the library's control for a
-             short list in an ordinary form; Dropdown is what the product uses
-             where the panel has to carry something of its own or escape a
-             scrolling ancestor. -->
+        <!-- Both, side by side, and this is now the only place either sits
+             beside the other: Dropdown is what the product draws everywhere,
+             and Select is here alone. It is kept because it is not broken and
+             because the difference is worth being able to see — the one below
+             is painted in tokens, this one is painted by the operating system
+             and follows neither the theme nor the app-wide font size. -->
         <Select v-model="choice" :options="['ready', 'running', 'done']" />
         <div :style="{ width: '160px' }">
           <Dropdown v-model="choice" :options="['ready', 'running', 'done']" />
@@ -492,6 +494,19 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         </div>
         <div :style="{ width: '212px' }">
           <TaskCard id="bd-12cd" title="Bump tauri to 2.1" status="done" type="chore" />
+        </div>
+        <!-- A title with an identifier in it, which is the ordinary case on a
+             board an agent files to and the case that has no spaces in it to
+             break at. Kept here because it is the only way this stays checkable:
+             every other fixture wraps at a space and would pass with the rule
+             taken back out. -->
+        <div :style="{ width: '212px' }">
+          <TaskCard
+            id="bd-ybh0"
+            title="Fix why check_whether_the_shell_on_this_machine_answers hangs under load"
+            status="ready"
+            type="bug"
+          />
         </div>
         <!-- Runnable, and not runnable now: the play stays where it was, grey,
              and carries the reason. A button that vanished while a run was

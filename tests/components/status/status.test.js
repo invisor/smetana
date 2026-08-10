@@ -7,6 +7,7 @@ import {
   normalizeStatus,
   statusCode,
   statusColors,
+  statusLabel,
   statusSlot
 } from '../../../src/components/status/status.js'
 
@@ -105,6 +106,22 @@ describe('statusCode', () => {
 
   it('from three words it takes the first two', () => {
     expect(statusCode('waiting-for-review')).toBe('WF')
+  })
+})
+
+describe('statusLabel', () => {
+  it('capitalises a bd status the picker has to append', () => {
+    expect(statusLabel('parked')).toBe('Parked')
+  })
+
+  it('writes a multi-word status as sentence case prose', () => {
+    expect(statusLabel('in_progress')).toBe('In progress')
+    expect(statusLabel('ready_to_merge')).toBe('Ready to merge')
+  })
+
+  it('leaves nothing behind for an absent status', () => {
+    expect(statusLabel('')).toBe('')
+    expect(statusLabel(null)).toBe('')
   })
 })
 

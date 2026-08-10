@@ -9,7 +9,7 @@
    knows something it does not, which is the same mistake the fixture log pane in
    the right column was removed for. */
 import { computed } from 'vue'
-import Select from '../core/Select.vue'
+import Dropdown from '../core/Dropdown.vue'
 import SettingsRow from './SettingsRow.vue'
 
 const props = defineProps({
@@ -85,7 +85,7 @@ const FACTS = [
       label="Agent"
       description="Which CLI agent new sessions start. Sessions already running keep the one they started with."
     >
-      <Select
+      <Dropdown
         :model-value="props.agent"
         :options="AGENTS"
         @update:model-value="emit('update:agent', $event)"

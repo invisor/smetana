@@ -1,12 +1,20 @@
 <script setup>
 /* A value picked from a list, drawn by us rather than by the platform.
 
-   `Select` is still the right thing for a short list in an ordinary form —
-   it is one element, it is accessible for free, and it costs nothing. This
-   exists for the two things a native select cannot do: put anything of our own
-   in the panel, and filter a long list. `BranchSelect` needs both; the run
-   dialog's other fields need neither, and use this so that three controls
-   stacked in one dialog do not read as three different kinds of thing.
+   **This is the product's list control, and `Select` is now drawn nowhere but
+   the gallery.** `Select` was kept for a short list in an ordinary form — one
+   element, accessible for free, costing nothing — and the settings window was
+   the last place taking that bargain. What it actually bought there was a menu
+   the operating system paints: its own colours, its own font, its own row
+   height, none of them reachable by a token, none of them following the theme,
+   the density or the app-wide font size that the very window it opened over
+   exists to change. A theme switcher whose own list ignores the theme is the
+   plainest version of that. The component stays in the library and in the
+   gallery — it is not broken — but nothing in the app reaches for it.
+
+   Beyond looking like the rest of the app, this does two things a native select
+   cannot: put anything of our own in the panel, and filter a long list.
+   `BranchSelect` needs both.
 
    The panel is teleported out and positioned in window coordinates, for the
    reason `Tooltip` was: an ancestor with `overflow` clips an absolutely
@@ -46,6 +54,7 @@ const cursor = ref(0)
 const root = ref(null)
 const field = ref(null)
 const panel = ref(null)
+const list = ref(null)
 const filterField = ref(null)
 /* Where the panel goes, in window coordinates. Null until measured — the one
    state it must not be seen in, since it would be sitting in the corner. */
@@ -101,6 +110,7 @@ const show = async () => {
   emit('open')
   await nextTick()
   place()
+  reveal()
   /* Whichever of the two can take the keyboard. Without focus landing
      somewhere inside the panel the arrow keys would go to the page, and a list
      that cannot be walked by keyboard is a list a native select did better. */
@@ -124,6 +134,31 @@ function place() {
     top: Math.max(EDGE, Math.min(top, window.innerHeight - box.height - EDGE))
   }
 }
+
+/* Brings the cursor's row inside the eight the list shows.
+
+   Wanted in two moments: opening on a value that sits below the eighth row —
+   the settings window's font sizes are fifteen and the shipped one is fourth,
+   so anything above about 17px opened on a list with no visible answer in it —
+   and walking past either end with the arrow keys. Measured in window
+   coordinates rather than through `offsetTop`, which would be relative to
+   whichever ancestor happens to be positioned, and adjusted by hand rather
+   than with `scrollIntoView`: that one is free to scroll every scrollable
+   ancestor, and this panel hangs off the body while the field it belongs to
+   may be deep inside a scrolling one. */
+function reveal() {
+  const box = list.value
+  const row = box?.children[cursor.value]
+  if (!row) return
+  const rowAt = row.getBoundingClientRect()
+  const listAt = box.getBoundingClientRect()
+  if (rowAt.top < listAt.top) box.scrollTop -= listAt.top - rowAt.top
+  else if (rowAt.bottom > listAt.bottom) box.scrollTop += rowAt.bottom - listAt.bottom
+}
+
+watch(cursor, () => {
+  if (open.value) reveal()
+})
 
 const hide = () => {
   open.value = false
@@ -254,6 +289,14 @@ const optionStyle = (option, index) => ({
   alignItems: 'center',
   gap: 'var(--space-3)',
   height: 'var(--row-h)',
+  /* The list above is a column flex container, and a flex item shrinks by
+     default — so past the eighth row `height` stopped being a height and became
+     a starting point, and fifteen rows shared the ceiling between them at 15px
+     each instead of scrolling at 28. The list never overflowed, so nothing
+     scrolled and nothing looked broken; it just quietly drew a denser list the
+     longer it got. The font-size lists in the settings window are fifteen rows
+     and are where it finally showed. */
+  flexShrink: 0,
   padding: '0 var(--space-4)',
   border: 'none',
   width: '100%',
@@ -311,7 +354,7 @@ const hintStyle = {
         :aria-label="searchLabel"
         @keydown="onKeydown"
       />
-      <div :style="listStyle">
+      <div ref="list" :style="listStyle">
         <button
           v-for="(option, i) in matches"
           :key="option.value"

@@ -55,6 +55,18 @@ export function statusCode(s) {
   return normalizeStatus(s).slice(0, 2).toUpperCase()
 }
 
+/* How a status is written when it is prose rather than a badge — sentence case
+   in sans, the way `kanban/issueType.js` writes a type. A status badge is
+   uppercase mono and needs none of this; the status picker in the task
+   inspector does, because the three options it ships are written by hand
+   (Ready, Pinned, Done) and the fourth is whatever bd is holding. Spelling that
+   one as it arrives put a lower-case `parked` under three capitalised
+   neighbours. `in_progress` reads as "In progress". */
+export function statusLabel(s) {
+  const n = normalizeStatus(s).replace(/-/g, ' ')
+  return n ? n[0].toUpperCase() + n.slice(1) : ''
+}
+
 /* attention level - drives loudness everywhere */
 export function attentionLevel(s) {
   const n = normalizeStatus(s)

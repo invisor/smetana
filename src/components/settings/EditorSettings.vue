@@ -2,7 +2,7 @@
 /* The Editor tab: the code editor in the centre column, and nothing else. Its
    size is deliberately not the app's — chrome and code are two questions, and
    the app-wide size on the General tab leaves this one where it was. */
-import Select from '../core/Select.vue'
+import Dropdown from '../core/Dropdown.vue'
 import SettingsRow from './SettingsRow.vue'
 import { FONT_SIZES } from '../../appearance.js'
 
@@ -12,6 +12,8 @@ const props = defineProps({
 
 const emit = defineEmits(['update:fontSize'])
 
+/* Numbers, and they stay numbers on the way out — see the note on the same list
+   in `GeneralSettings`. */
 const sizeOptions = FONT_SIZES.map((size) => ({ value: size, label: `${size} px` }))
 </script>
 
@@ -21,10 +23,10 @@ const sizeOptions = FONT_SIZES.map((size) => ({ value: size, label: `${size} px`
       label="Editor font size"
       description="Applies to the code editor only, not to the rest of the app."
     >
-      <Select
+      <Dropdown
         :model-value="props.fontSize"
         :options="sizeOptions"
-        @update:model-value="emit('update:fontSize', Number($event))"
+        @update:model-value="emit('update:fontSize', $event)"
       />
     </SettingsRow>
   </div>
