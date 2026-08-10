@@ -545,8 +545,8 @@ A session's row is captioned by the **work** it was started for, never by the pr
 payload is drawn and which was only a briefing for the agent. `Intent::work()` lives in `agents/mod.rs`
 rather than in `terminal::model` because it is knowledge about `Intent`, and the answer moves whenever
 a variant does: a `NewTask` carries its prose, type and priority across for the draft panel to draw
-and leaves its `images` and its brainstorming switch behind, since those are instructions to the agent
-and nothing on screen would show them.
+and leaves its `images` and its Brainstorming, Spec and Plan switches behind, since those are
+instructions to the agent and nothing on screen would show them.
 
 `SessionWork::Run` carries nothing at all, and that absence is honest rather than lazy: **which issues
 a batch has taken cannot be known here.** The agent claims one by running `bd update <id> --claim`
@@ -629,7 +629,7 @@ harness leaks into the code that decides what we want done: `prompt.rs` takes an
 
 | file | what it does |
 |---|---|
-| `mod.rs` | `Profile`, `Intent`, `Brainstorm`, `SkillDelivery`, `ImageDelivery`, `TaskDraft`, `Autonomy`, `Launch` — the vocabulary, the registry, and `IDS` |
+| `mod.rs` | `Profile`, `Intent`, `Stage`, `SkillDelivery`, `ImageDelivery`, `TaskDraft`, `Autonomy`, `Launch` — the vocabulary, the registry, `cascade` and `IDS` |
 | `library.rs` | where the bundled skills are, whether the person already has their own superpowers, and reading a `SKILL.md` for inlining |
 | `prompt.rs` | an intent becomes the text the agent opens on — pure; the skill text, where one is needed, is read by the caller and passed in |
 | `claude.rs` | Claude Code: `--plugin-dir`, and layer B, its permission dialog read off the screen |
@@ -747,8 +747,9 @@ thing that gets called again in six months.
 
 The dialog collects one piece of prose, not a title and a description: the person writes what needs
 doing in a single `Textarea`, and the title bd wants is written by the agent, which is the only party
-that has read the text. Three `Select`s sit under it, and all three default to **Auto** — type,
-priority and Brainstorming. Auto travels as `null`, never as the word, so `TaskDraft`'s
+that has read the text. Five `Dropdown`s sit under it in two rows, and every one of them defaults to
+**Auto** — type, priority and Brainstorming, then Spec and Plan. For the first two, Auto travels as
+`null`, never as the word, so `TaskDraft`'s
 `Option<String>`/`Option<u8>` cannot carry a type bd would reject; `prompt.rs` then names the pinned
 fields as settled and hands the rest to the agent *by name* ("Decide the priority yourself"), because
 an agent simply told nothing about a field would have to invent one anyway and would not know that
@@ -763,6 +764,38 @@ filing skill reaches the agent in all three positions, by name for `PluginDir` a
 `Inline`. `Auto` differs from `On` only in what it hands over for the brainstorming process: a name
 for `PluginDir`, which is already loaded and costs one index line, and the absolute path to the
 vendored `SKILL.md` for `Inline`, so a one-line change does not pay for 10 KB it will not use.
+
+**Spec and Plan hang off it, and they cascade rather than sitting beside it.** They are the two
+stages the filing session used to stop short of: writing down the design the discussion produced, and
+writing the implementation plan (`superpowers:writing-plans`). Spec is a person's to choose only
+while Brainstorming is `On`, and Plan only while Spec is — there is nothing for a design document to
+record when no discussion happened, and nothing for a plan to plan when no design was written. A
+stage nobody may touch **reads as its parent rather than as a placeholder**: under an `Off` it shows
+Off, under an `Auto` it shows Auto, so the screen states exactly what will be sent. The rule is
+`components/kanban/taskStages.js`, another of the `branchChoice.js` family, and `agents::cascade`
+applies the same rule again on the far side of the wire — not a duplicate to tidy away, since what
+arrives there is a payload and a payload can carry a spec chosen under a discussion since switched
+off. `prompt.rs` normalises before it writes any prose, so such a spec produces no words about a
+spec at all.
+
+The output is files, and the task is filed **last**: the design goes to
+`.smetana/docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and the plan to
+`.smetana/docs/plans/YYYY-MM-DD-<topic>.md` — superpowers' own layout moved under the folder
+`runs/gitignore.rs` keeps out of the repository, so nothing is committed and the prompt says so.
+Filing last means an interrupted session leaves no card promising documents nobody wrote. The paths
+copied into the issue are **absolute**, for the reason `IMAGES` already gives plus one of its own:
+an ignored file does not travel into the worktree `provisioning` cuts, so a relative path resolves
+from nowhere an implementer actually stands — and the issue still has to say in prose what was
+decided, because the files are on one machine. Spec needs no skill text of its own (the design
+document is part of the brainstorming process, which is already named or already pasted whenever
+Spec is reachable at all); Plan is its own skill and follows exactly the trade Brainstorming's own
+`Auto` makes — the name for `PluginDir`, the body for `Inline` on `On`, the path alone on `Auto`.
+
+One `Stage` covers all three switches, matching `STAGES` on the front end, and the collapse was the
+point rather than a tidy-up. While Brainstorming had an enum of its own, only one of the two
+directions was loud: a fourth position added to `Brainstorm` broke the `From` impl's match at compile
+time, but the same position added to `Stage` alone compiled perfectly and left the discussion switch
+a position short of its children.
 
 **What a filed task owes is set by the far end of the app, not by the dialog.** `provisioning` says
 the description *is* the spec and a description that never says what "done" looks like is not
@@ -782,8 +815,8 @@ real is `provisioning`'s job at the other end. `running-tasks` holds its own fil
 adds the test that follows from it: a finding nobody can state acceptance criteria for is a digest
 line, not a task.
 
-The other half is what the discussion produces. `Brainstorm::On` buys half an hour of narrowing down
-what somebody meant, and none of it is anywhere but that conversation — the session ends, and the
+The other half is what the discussion produces. Brainstorming on `On` buys half an hour of narrowing
+down what somebody meant, and none of it is anywhere but that conversation — the session ends, and the
 agent that picks the task up months later has the person's original four sentences and nothing else.
 So `DISCUSS` requires the outcome, rejected options included, to be written into the issue itself.
 

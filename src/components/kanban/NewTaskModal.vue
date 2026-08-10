@@ -5,6 +5,7 @@ import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
 import Textarea from '../core/Textarea.vue'
 import AttachmentStrip from './AttachmentStrip.vue'
+import { cascade, DEFAULT_STAGE, STAGES } from './taskStages.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -38,14 +39,15 @@ const PRIORITIES = [
   { value: '4', label: 'P4 · lowest' }
 ]
 
-/* Whether the agent talks the task through before filing it. Auto leaves the
+/* The three stages of the work before a task is filed — whether the agent
+   talks it through, writes the design the discussion produced, and writes the
+   implementation plan — all offering the same three positions. Auto leaves the
    judgement to the agent: nothing here has read the text, and guessing from
-   the length of a title would be wrong in both directions. */
-const BRAINSTORM = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'on', label: 'On' },
-  { value: 'off', label: 'Off' }
-]
+   the length of a title would be wrong in both directions.
+
+   Which of them a person may touch, and what a disabled one shows, is
+   `taskStages.js` — the rule lives outside this file because no test in this
+   repository can reach a `.vue`. */
 
 /* One field, not a title and a description: bd wants a title, but writing one
    is the agent's job — it is the only party here that has read what the person
@@ -53,7 +55,27 @@ const BRAINSTORM = [
 const text = ref('')
 const issueType = ref('auto')
 const priority = ref('auto')
-const brainstorm = ref('auto')
+const brainstorm = ref(DEFAULT_STAGE)
+/* What was last chosen for each, which is not what is drawn: under a parent
+   that is not On the control shows the parent's own position instead. */
+const spec = ref(DEFAULT_STAGE)
+const plan = ref(DEFAULT_STAGE)
+
+const stages = computed(() => cascade(brainstorm.value, spec.value, plan.value))
+
+/* A child opens on Auto whenever its parent moves, rather than coming back
+   carrying a choice made under a different parent: turning Brainstorming off
+   and on again is a fresh decision about the spec, not a return to an old one.
+   Resetting the spec cascades into the plan through the second watcher, and
+   the plan is reset here as well so the chain never depends on the spec having
+   happened to change. */
+watch(brainstorm, () => {
+  spec.value = DEFAULT_STAGE
+  plan.value = DEFAULT_STAGE
+})
+watch(spec, () => {
+  plan.value = DEFAULT_STAGE
+})
 
 const valid = computed(() => text.value.trim().length > 0)
 
@@ -72,7 +94,12 @@ const submit = () => {
     /* Paths, not thumbnails: what the agent is handed, and what it has to
        write into the issue, is where the file is. */
     images: props.attachments.map((item) => item.path),
-    brainstorm: brainstorm.value
+    /* What the screen says, not what the refs hold: a stage under a parent
+       that is not On is settled by that parent, and sending the remembered
+       choice instead would ask for a spec nobody can see asked for. */
+    brainstorm: brainstorm.value,
+    spec: stages.value.spec.value,
+    plan: stages.value.plan.value
   })
 }
 
@@ -142,7 +169,9 @@ watch(
     text.value = ''
     issueType.value = 'auto'
     priority.value = 'auto'
-    brainstorm.value = 'auto'
+    brainstorm.value = DEFAULT_STAGE
+    spec.value = DEFAULT_STAGE
+    plan.value = DEFAULT_STAGE
   },
   { immediate: true }
 )
@@ -218,8 +247,34 @@ const errorStyle = {
         </div>
         <div :style="field">
           <div :style="label">Brainstorming</div>
-          <Dropdown v-model="brainstorm" :options="BRAINSTORM" />
+          <Dropdown v-model="brainstorm" :options="STAGES" />
         </div>
+      </div>
+      <!-- A second row rather than five fields across one: the modal's width
+           divided five ways is too narrow to read, and the empty third cell
+           keeps every field one column wide. Neither of these is on v-model,
+           because what a person chose and what the control shows are different
+           facts here — a disabled stage draws its parent's position. -->
+      <div :style="row">
+        <div :style="field">
+          <div :style="label">Spec</div>
+          <Dropdown
+            :model-value="stages.spec.value"
+            :options="STAGES"
+            :disabled="!stages.spec.interactive"
+            @update:model-value="spec = $event"
+          />
+        </div>
+        <div :style="field">
+          <div :style="label">Plan</div>
+          <Dropdown
+            :model-value="stages.plan.value"
+            :options="STAGES"
+            :disabled="!stages.plan.interactive"
+            @update:model-value="plan = $event"
+          />
+        </div>
+        <div :style="field" />
       </div>
     </div>
     <template #footer>

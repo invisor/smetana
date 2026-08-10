@@ -60,7 +60,7 @@ impl Profile for Claude {
         // harder reason: Claude Code has no flag for one. It opens an image
         // when the prompt names its path, which is what `ImageDelivery::InPrompt`
         // — the default this profile keeps — asks `prompt.rs` to write.
-        let text = prompt::SkillText { filing: None, brainstorming: None };
+        let text = prompt::SkillText { filing: None, brainstorming: None, plans: None };
         if let Some(built) = prompt::build(
             &launch.intent,
             self.delivery(),
@@ -351,7 +351,7 @@ fn asked(paragraph: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
     use crate::agents::library::Skills;
-    use crate::agents::{Brainstorm, Intent, Launch, Profile, TaskDraft};
+    use crate::agents::{Intent, Launch, Profile, Stage, TaskDraft};
     use std::path::PathBuf;
 
     fn skills(superpowers_installed: bool) -> Skills {
@@ -410,7 +410,9 @@ mod tests {
 
     fn new_task(images: Vec<String>) -> Intent {
         Intent::NewTask {
-            brainstorm: Brainstorm::On,
+            brainstorm: Stage::On,
+            spec: Stage::On,
+            plan: Stage::On,
             draft: TaskDraft {
                 text: "Swap the red for green".into(),
                 issue_type: Some("bug".into()),
