@@ -555,10 +555,17 @@ async fn drive(
             // that cannot start needs a person, not more batches.
             Batch::Unanswered { question } => match questions.ended_by(&question) {
                 OnQuestion::Park => {
-                    // The kill first: the lead is stuck at its dialog, but
-                    // whatever it delegated may still be working, and parking
-                    // under live claimants would race them. `Remove` signals
-                    // the whole process group, the way every session ends.
+                    // The kill first, stated honestly: `Remove` is
+                    // `Pty::kill()`, which reaches the direct child alone —
+                    // the lead dies at its dialog, while anything it
+                    // delegated is orphaned rather than signalled (`pty.rs`
+                    // records exactly this about `kill`; the group-wide
+                    // SIGHUP is `hangup`, the shutdown path's). So parking
+                    // can still race a surviving sub-agent's last bd writes;
+                    // the ~2s resync in `fresh_board` absorbs most of them,
+                    // and a claim that lands after the parking stays
+                    // `in_progress`, which the next batch reads as unfinished
+                    // work to recover rather than losing.
                     remove_session(&terminal, session).await;
                     park_claims(&tracker, session, &question).await;
                     last_batch = LastBatch::Asked;
@@ -569,7 +576,12 @@ async fn drive(
                     // `in_progress` by this path — but the session is left
                     // alive and still at its prompt: the terminal is where a
                     // person answers it, which is exactly what the bar tells
-                    // them.
+                    // them. The race the Park arm kills for is tolerated
+                    // here, and the trade is deliberate: a lead stopped by
+                    // the same startup dialog twice has typically delegated
+                    // nothing yet, so there is usually nobody left to race —
+                    // and killing would take away the very terminal the
+                    // person is being sent to.
                     park_claims(&tracker, session, &question).await;
                     run.advance(RunState::Stopped {
                         reason: StopReason::NeedsAnswer { question },
@@ -872,7 +884,8 @@ async fn park_claims(tracker: &TrackerHandle, session: u64, question: &str) {
 
 /// End a stuck batch's session the way the remove button in the agents panel
 /// does. Awaited rather than fired off, so the parking that follows starts
-/// after the kill has gone in instead of racing whatever the lead delegated.
+/// after the kill has gone in rather than beside it — what that kill does and
+/// does not reach is recorded at the call site.
 async fn remove_session(terminal: &TerminalHandle, session: u64) {
     let (tx, rx) = oneshot::channel();
     if terminal.0.send(TerminalRequest::Remove(session, tx)).await.is_ok() {
