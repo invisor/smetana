@@ -1,6 +1,6 @@
 ---
 name: provisioning
-description: Use when picking tracker work up and preparing somewhere to do it — pinning the tracker, reading a task's spec, claiming it, and cutting one worktree per repository the task touches
+description: Use when picking tracker work up and preparing somewhere to do it — pinning the tracker, claiming a task, reading its spec, and cutting one worktree per repository the task touches
 ---
 
 # Picking work up and provisioning for it

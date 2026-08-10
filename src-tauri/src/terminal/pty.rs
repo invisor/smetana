@@ -114,8 +114,11 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
         // held by a *different* actor, and its default actor — `$BEADS_ACTOR`,
         // else `git user.name`, else `$USER` — is identical for two runs on one
         // machine, so without a per-run name both would "successfully" claim
-        // the same task. The session id is already unique per session, which
-        // makes it unique per batch.
+        // the same task. The session id is unique within this app instance,
+        // which is what makes the name unique per batch here; ids restart at 1
+        // on every launch, so a run after a restart — or in a second app
+        // instance — can mint the same name. That cross-instance gap is open
+        // and recorded rather than solved.
         //
         // The environment variable rather than `bd --actor` on every call: the
         // skills would have to thread the flag through each bd invocation they
@@ -506,6 +509,15 @@ mod tests {
     fn no_other_intent_is_given_a_bd_actor() {
         let intents = [
             Intent::Bare,
+            Intent::NewTask {
+                brainstorm: agents::Brainstorm::Off,
+                draft: agents::TaskDraft {
+                    text: "the tab bar overlaps the board".into(),
+                    issue_type: None,
+                    priority: None,
+                    images: vec![],
+                },
+            },
             Intent::EditTask { id: "smetana-7".into(), title: "x y".into() },
             Intent::Setup,
         ];
