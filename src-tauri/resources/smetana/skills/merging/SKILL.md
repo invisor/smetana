@@ -23,6 +23,83 @@ this codebase — read it before every merge, not once.
 
 Below, **STOP** means "hand this to the caller's policy". Never guess past one.
 
+## The merge lock — one lead in a target branch at a time
+
+Everything below assumes it is the only thing moving the target branch, and with two
+runs going in one project nothing in git makes that true: two leads merging at the same
+moment leave a half-merged target rather than a clean refusal. The lock is an issue in
+the project's own tracker — bd is already the shared, atomic, cross-process store every
+run talks to — marked by the `smetana-lock` label, which is what keeps it from ever
+being taken as work: `provisioning` skips the label when claiming, and so does the
+app's own queue.
+
+**Claim it before the first task's Step 0, hold it across every task of the batch, and
+release it after the last — on every way out.** A single task merged on its own is a
+batch of one. A gate that went red, a task that parked, a STOP that ends the phase:
+whatever ends this batch's merging, the release below is the last thing done on the way
+out. The one exit that cannot release — the run being killed — is what the staleness
+rule exists for.
+
+Find it by its label:
+
+```bash
+bd list -l smetana-lock --json
+```
+
+Nothing there → create it, then **list again and take the lowest id**: two leads racing
+the creation converge on one lock, and the loser's duplicate is inert — it carries the
+label, so nothing ever takes it as work.
+
+```bash
+bd create --title "Merge lock" --type chore --priority 4 -l smetana-lock \
+  --silent --body-file - <<'EOF'
+The merge lock (label: smetana-lock). A lead claims this issue before its first merge
+into the target branch and releases it after its last. It is coordination, not work —
+never implement it, never close it.
+EOF
+```
+
+The claim is the whole of the mutual exclusion — atomic, and refused when a different
+actor holds it:
+
+```bash
+bd update <lock-id> --claim
+```
+
+- **Accepted** → merge. A re-claim of a lock your own actor already holds is accepted
+  too, so recovering over your own claim is safe.
+- **Refused** ("already claimed by <actor>") → another lead is mid-merge. **Wait and
+  retry** — once a minute is enough; a merge phase is minutes, not hours. When the
+  claim finally lands, carry on — and **the report must say this batch waited on the
+  lock, and roughly how long**.
+- **Refused past the staleness rule** → break it, below.
+
+**Staleness: 60 minutes.** A run killed mid-merge leaves the lock claimed forever, and
+the evidence is `started_at` in `bd show <lock-id> --json` — the moment the standing
+claim was taken. A whole batch's merge phase with gates fits well under an hour in this
+project, so a claim older than 60 minutes is a dead run's. Break it — release, then
+claim:
+
+```bash
+bd update <lock-id> --status open --assignee ""
+bd update <lock-id> --claim
+```
+
+**Breaking a lock is a report line, never a silent step**: name the actor it was taken
+from and how old the claim was. The claim after the break can still be refused —
+another waiting lead may land first — and that refusal goes back to waiting, never to a
+second break.
+
+Release — unconditional, the same on success and on failure (`open` because only an
+open issue is claimable; an empty assignee so nothing still names a holder):
+
+```bash
+bd update <lock-id> --status open --assignee ""
+```
+
+The lock serializes leads, not repositories: one claim covers the whole batch, however
+many repositories `[project].repos` lists.
+
 ## Step 0 — What is being merged, and in what order
 
 The task's slug is `<issue-id>-<short-kebab-title>`. Find its worktrees by walking

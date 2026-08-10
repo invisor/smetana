@@ -50,6 +50,20 @@ custom statuses this process uses already excluded — and answers with it, so w
 back is already yours and there is no window at all. An empty answer means no ready
 work, which is an outcome, not a failure.
 
+**The merge lock is on the board and is never work.** `merging`'s lock section says
+what it is; what matters here is that it sits `open` under the `smetana-lock` label, so
+`bd ready` returns it and the atomic form above can hand it to you as if it were a
+task. An answer carrying that label was not work: put it back at once, and take the
+rest of this batch through the listing form instead — list, drop everything labelled
+`smetana-lock`, claim by id:
+
+```bash
+bd update <id> --status open --assignee ""   # put the lock back
+```
+
+In the listing form the same rule is one more drop, next to the scope's own: anything
+carrying `smetana-lock` is never claimed, whatever the scope.
+
 **A narrower scope** — an issue id, an epic whose children are the work, or a priority
 floor — cannot go through the atomic form, because the first ready issue is not
 necessarily one of yours. List first: `bd ready --json -n 50`, drop what the scope
