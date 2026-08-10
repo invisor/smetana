@@ -34,6 +34,15 @@ pub struct Issue {
     pub updated_at: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The three prose fields beside the description (smetana-dbr): the spec's
+    /// own sections, and `notes` is where a run writes why it parked a task —
+    /// dropping that one made the reason readable only through `bd show`.
+    #[serde(default)]
+    pub acceptance_criteria: Option<String>,
+    #[serde(default)]
+    pub design: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
     #[serde(default)]
     pub priority: Option<i64>,
     #[serde(default)]

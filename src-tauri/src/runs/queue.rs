@@ -221,26 +221,16 @@ mod tests {
     use crate::tracker::model::Dependency;
 
     fn issue(id: &str, status: &str) -> Issue {
+        // `..Default::default()` rather than every field spelled out: this is
+        // what `Issue`'s `Default` exists for, and an exhaustive literal here
+        // breaks the build every time the tracker's vocabulary grows a field.
         Issue {
             id: id.into(),
             title: id.into(),
             status: status.into(),
             updated_at: "2026-08-05".into(),
-            description: None,
             priority: Some(1),
-            issue_type: None,
-            owner: None,
-            created_at: None,
-            created_by: None,
-            started_at: None,
-            closed_at: None,
-            close_reason: None,
-            comment_count: None,
-            dependency_count: None,
-            dependent_count: None,
-            parent: None,
-            labels: vec![],
-            dependencies: vec![],
+            ..Default::default()
         }
     }
 

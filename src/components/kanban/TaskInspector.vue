@@ -166,6 +166,15 @@ const rowValue = (mono) => ({
   overflowWrap: 'anywhere'
 })
 
+/* One of bd's prose fields under its heading: acceptance criteria, design,
+   notes. Prose like the description, not a row in the table — a note is a
+   paragraph and may be several, since every `bd note` appends another. */
+const proseSection = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-2)'
+}
+
 const closeReasonBox = {
   display: 'flex',
   flexDirection: 'column',
@@ -228,6 +237,25 @@ const footer = {
     <div :style="titleStyle">{{ issue.title }}</div>
 
     <div v-if="issue.description" :style="descriptionStyle">{{ issue.description }}</div>
+
+    <!-- bd's other prose, in a fixed order: the two that are the spec first,
+         the log that grows last. Read-only like the description — rewriting
+         any of them is an agent's job. Absent fields draw nothing at all, so
+         an issue without them looks exactly as it did before they existed. -->
+    <div v-if="issue.acceptance_criteria" :style="proseSection">
+      <span :style="rowLabel">Acceptance criteria</span>
+      <span :style="descriptionStyle">{{ issue.acceptance_criteria }}</span>
+    </div>
+
+    <div v-if="issue.design" :style="proseSection">
+      <span :style="rowLabel">Design</span>
+      <span :style="descriptionStyle">{{ issue.design }}</span>
+    </div>
+
+    <div v-if="issue.notes" :style="proseSection">
+      <span :style="rowLabel">Notes</span>
+      <span :style="descriptionStyle">{{ issue.notes }}</span>
+    </div>
 
     <!-- Only when there is a record to separate: with the controls moved below
          it, an issue carrying neither fields nor a close reason would otherwise

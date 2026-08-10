@@ -107,6 +107,21 @@ function fixtureIssues() {
         i % 3 === 0
           ? 'The watcher reports the failure and the sweep picks the work up on the next tick, so the board is stale rather than wrong. What is missing is a way to say so on screen.'
           : null,
+      /* The prose fields ride with the description so the same issues show a
+         full inspector and the rest a sparse one. The note is two lines on
+         purpose — every `bd note` appends, and the panel owes the whole log. */
+      acceptance_criteria:
+        i % 3 === 0
+          ? 'The failure is visible on screen while it lasts and gone when the sweep catches up.'
+          : null,
+      design:
+        i % 3 === 0
+          ? 'A quiet notice over the board rather than in place of it: the cards stay readable while the app says the data may be stale.'
+          : null,
+      notes:
+        i % 3 === 0
+          ? 'parked: needs a decision on the storage format\nparked: still waiting on the decision'
+          : null,
       priority: (i % 4) + 1,
       // All six of bd's types plus a custom one, so the board in `npm run dev`
       // shows both halves of the type palette without anyone editing this file.
