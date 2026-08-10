@@ -13,7 +13,9 @@ use crate::runs::model::{RunMode, RunScope, RunSettings};
 /// attaches none.
 const DISCUSS: &str =
     "Before creating anything, agree the design with me first — ask one question at a time — \
-     and only then file the task, or tasks, the discussion produces.";
+     and only then file the task, or tasks, the discussion produces. Everything you settle \
+     with me goes into the task itself, including the options you rejected and why: I will \
+     not be there when it is picked up, and this conversation reaches nobody who is.";
 
 /// The test the agent applies in `Auto`. Nothing in the app has read the text
 /// of the task, so the judgement is the agent's, and the rule has to be sharp
@@ -33,6 +35,22 @@ pub struct SkillText<'a> {
     /// superpowers' brainstorming skill. Read only when the switch is `On`.
     pub brainstorming: Option<&'a str>,
 }
+
+/// The standard every filed task is held to, said in the prompt rather than
+/// left to the filing skill — the same reasoning `DISCUSS` carries: an `Inline`
+/// harness may find no skill text to attach, and this is the sentence the
+/// feature turns on. A task filed thin is not a smaller task; it is a run
+/// stopped overnight on a question nobody is awake to answer, or a task parked
+/// unstarted.
+///
+/// `--validate` is named here and not only in the skill because it is the one
+/// mechanical part of the standard: bd itself refuses a description missing the
+/// sections its type requires, and prose can be skimmed where a refusal cannot.
+const STANDARD: &str =
+    "Whoever picks this up works alone and can ask nobody — file it so that it can be \
+     carried out and checked off with no further question. Pass --validate to bd create: \
+     it refuses a description missing the sections the type requires, and it is the only \
+     check standing between a thin task and a run stuck on it at night.";
 
 /// What the agent is told to produce when a project has no configuration yet.
 /// The file's path is named here rather than left to the skill: a session that
@@ -294,6 +312,8 @@ fn new_task(
     out.push_str("\n\n");
     out.push_str(&images(&draft.images, image_delivery));
     out.push_str(&fields(draft));
+    out.push_str("\n\n");
+    out.push_str(STANDARD);
     out.push_str("\n\n");
 
     // How to file one properly is not part of the brainstorming question: an
@@ -709,6 +729,36 @@ mod tests {
             let text = build(&new_task(Brainstorm::Off), delivery, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
             assert!(!text.contains(DISCUSS), "{delivery:?}: off must not carry the discussion prose");
             assert!(!text.contains(JUDGE), "{delivery:?}: off must not carry the judgement prose");
+        }
+    }
+
+    #[test]
+    fn the_standard_holds_in_every_position_of_the_switch_and_both_deliveries() {
+        // The whole point of the feature: a task filed thin costs a night, so
+        // the bar is not the filing skill's to keep alone. An Inline harness
+        // may find no skill text at all — `nothing()` is that case — and the
+        // standard still has to reach the agent, which is why it is a constant
+        // in the prompt rather than a paragraph in a file that may be missing.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
+                let text =
+                    build(&new_task(mode), delivery, ImageDelivery::InPrompt, &skills(), None, nothing())
+                        .unwrap();
+                assert!(text.contains(STANDARD), "{delivery:?}/{mode:?}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_standard_is_only_asked_of_a_task_being_filed() {
+        // It names `bd create`, which none of the others runs: a run files
+        // through `running-tasks` under its own rules, and editing an issue is
+        // an update. Leaking it would tell those sessions to validate a call
+        // they are not making.
+        for intent in [Intent::Bare, Intent::Setup, Intent::EditTask { id: "x-1".into(), title: "T".into() }] {
+            let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both())
+                .unwrap_or_default();
+            assert!(!text.contains(STANDARD), "{intent:?}: {text}");
         }
     }
 

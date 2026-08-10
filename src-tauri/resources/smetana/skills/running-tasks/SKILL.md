@@ -89,13 +89,34 @@ part, not permission to file. Send it back as "BLOCKING or digest — pick one".
 ### The depth budget
 
 - **Depth 3 or more — never file anything**, whatever the severity. Digest and move on.
-- **Depth 1 or 2, BLOCKING only** — `bd create` is allowed, and the task must carry
-  `--status deferred`, the label `spawned`, a priority **one step worse than its
-  parent's** (floored at the lowest), and the lineage marker as its first line.
+- **Depth 1 or 2, BLOCKING only** — `bd create` is allowed, and the task must carry the
+  label `spawned`, a priority **one step worse than its parent's** (floored at the
+  lowest), the lineage marker as its first line, and `deferred` as its status.
+
+Two calls, because **`bd create` has no `--status` flag** — passing one fails the whole
+command with `unknown flag: --status` and files nothing:
+
+```bash
+id=$(bd create --title "<title>" --type <type> --priority <N> -l spawned \
+       --validate --silent --body-file - <<'EOF'
+<the lineage marker, then the spec>
+EOF
+)
+bd update "$id" --status deferred
+```
 
 `deferred` is one of bd's own statuses and `bd ready` excludes it. **This is the rule that
 breaks the loop**: a filed task waits there until a person moves it to `open`. You never
 promote one — not in this run, not in a later one — and you never claim one.
+
+**How it is written is `filing-a-task`'s business, and that skill applies here in full**
+— the required sections, `--validate`, and above all its standard: whoever picks this up
+can finish it without asking anybody. You are filing it having just read the code and
+seen the defect; the person promoting it in a week has neither, and neither has the run
+that eventually takes it. So the test is the same one that skill sets, applied a step
+earlier: **if you cannot state acceptance criteria for a finding, it is a digest line and
+not a task.** Not knowing enough to specify it is not a reason to file it thinly — it is
+the finding failing the bar for being work at all.
 
 When the run was started with findings switched off, nothing is filed at all: everything
 goes to the digest.
@@ -236,8 +257,9 @@ Only when the run has the live check on. Mechanics are in `live-checking`.
      - **depth 0** — a human-authored task broke where a person would see it. Priority 1,
        left `open`. **This is the one filed task that may enter the ready queue on its own
        authority**: the defect is reproduced, user-visible, and already merged.
-     - **depth 1 or more** — priority one step worse than the failing task's, `--status
-       deferred -l spawned`. A fix for a filed task is not worth keeping a run going for.
+     - **depth 1 or more** — priority one step worse than the failing task's, label
+       `spawned`, then `bd update <id> --status deferred` as the second call above. A fix
+       for a filed task is not worth keeping a run going for.
   3. An epic-gate failure additionally links the fix as a child of the epic, so the gate
      re-arms when it closes.
   4. `bd note <id> "closed with follow-up <fix-id>"`, close, remove worktrees. After an

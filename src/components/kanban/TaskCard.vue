@@ -23,6 +23,10 @@ const props = defineProps({
   assignee: { type: Object, default: null },
   blockedBy: { type: Number, default: 0 },
   blocks: { type: Number, default: 0 },
+  /* The ids behind those counts, for the hint on the marks. Optional: a board
+     that has only the numbers still draws the card. */
+  blockedByIds: { type: Array, default: () => [] },
+  blockingIds: { type: Array, default: () => [] },
   spawnedFrom: { type: String, default: undefined },
   needsResponse: { type: Boolean, default: false },
   state: { type: String, default: 'default' },
@@ -163,7 +167,14 @@ const titleStyle = {
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)', flexWrap: 'wrap' }">
         <TypeBadge v-if="type" :type="type" size="sm" />
         <span :style="{ flex: 1 }" />
-        <DependencyMark :blocked-by="blockedBy" :blocks="blocks" :spawned-from="spawnedFrom" size="sm" />
+        <DependencyMark
+          :blocked-by="blockedBy"
+          :blocks="blocks"
+          :blocked-by-ids="blockedByIds"
+          :blocking-ids="blockingIds"
+          :spawned-from="spawnedFrom"
+          size="sm"
+        />
         <Assignee v-if="assignee" :kind="assignee.kind" :name="assignee.name" />
       </div>
     </div>

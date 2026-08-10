@@ -47,6 +47,13 @@ failure.
 acceptance criteria and design notes. A description that is empty, or that does not say
 what "done" would look like, is not something to start on: apply the caller's policy.
 
+`filing-a-task` is the other end of this, and it guarantees the shape: bd's own
+`--validate` refuses to create a task whose description is missing the sections its type
+requires, so `## Acceptance Criteria` (or `## Success Criteria` on an epic) is present on
+anything filed since. **Present is not the same as real**, and that is what you are
+judging: criteria somebody could check, against criteria that restate the title. Any
+task old enough to predate the rule has neither.
+
 **Which repositories the task touches** comes from `repo:<name>` labels, where `<name>`
 is one of the names in `[project].repos`. No label present means nobody has decided yet:
 work it out from the spec and what each repository actually contains, then write the

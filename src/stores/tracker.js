@@ -32,27 +32,36 @@ export const issueById = (id) => trackerState.issues.get(id)
 /* Parentage in bd is expressed as a parent-child dependency, and that lands in
    dependency_count. Blockers cannot be counted from the counters — every child
    issue would get a false "blocked by 1". We count edges of type blocks; bd
-   gives only the outgoing ones, so we assemble the reverse side ourselves. */
-const dependencyCounts = computed(() => {
+   gives only the outgoing ones, so we assemble the reverse side ourselves.
+
+   The ids and not merely how many: a card's tooltip names the tasks that block
+   it, and "1 task blocks this one" is the one thing a person looking at a
+   blocked card already knows. The counts below are `.length` of these, so the
+   number and the names cannot disagree — they are one fact projected twice. */
+const dependencyEdges = computed(() => {
   const blockedBy = new Map()
-  const blocks = new Map()
+  const blocking = new Map()
   for (const issue of trackerState.issues.values()) {
     const edges = (issue.dependencies ?? []).filter((d) => d.type === 'blocks')
-    if (edges.length) blockedBy.set(issue.id, edges.length)
+    if (edges.length) blockedBy.set(issue.id, edges.map((d) => d.depends_on_id))
     for (const edge of edges) {
-      blocks.set(edge.depends_on_id, (blocks.get(edge.depends_on_id) ?? 0) + 1)
+      const downstream = blocking.get(edge.depends_on_id) ?? []
+      downstream.push(issue.id)
+      blocking.set(edge.depends_on_id, downstream)
     }
   }
-  return { blockedBy, blocks }
+  return { blockedBy, blocking }
 })
 
 export const boardColumns = computed(() => {
-  const { blockedBy, blocks } = dependencyCounts.value
+  const { blockedBy, blocking } = dependencyEdges.value
   const buckets = new Map(trackerState.columns.map((c) => [c.name, []]))
 
   for (const issue of trackerState.issues.values()) {
     // A status that is not in bd's set still has to be visible.
     if (!buckets.has(issue.status)) buckets.set(issue.status, [])
+    const blockedByIds = blockedBy.get(issue.id) ?? []
+    const blockingIds = blocking.get(issue.id) ?? []
     buckets.get(issue.status).push({
       id: issue.id,
       title: issue.title,
@@ -61,8 +70,10 @@ export const boardColumns = computed(() => {
          vocabulary, not the design system's, and a custom type has to survive
          the trip to be drawn at all. */
       type: issue.issue_type ?? undefined,
-      blockedBy: blockedBy.get(issue.id) ?? 0,
-      blocks: blocks.get(issue.id) ?? 0,
+      blockedBy: blockedByIds.length,
+      blockedByIds,
+      blocks: blockingIds.length,
+      blockingIds,
       spawnedFrom: issue.parent ?? undefined
     })
   }

@@ -72,8 +72,8 @@ function formatDate(value) {
    store. What is countable from one issue is what blocks it. Parentage travels
    as a parent-child edge and is excluded: every subtask would otherwise read as
    blocked by its own parent. */
-const blockedBy = computed(
-  () => (props.issue.dependencies ?? []).filter((d) => d.type === 'blocks').length
+const blockedBy = computed(() =>
+  (props.issue.dependencies ?? []).filter((d) => d.type === 'blocks').map((d) => d.depends_on_id)
 )
 
 /* Only the rows the issue actually has. A fixed list with blanks in it would
@@ -88,7 +88,10 @@ const rows = computed(() => {
     ['Owner', issue.owner, true],
     ['Labels', issue.labels?.length ? issue.labels.join(', ') : null, false],
     ['Parent', issue.parent, true],
-    ['Blocked by', blockedBy.value || null, false],
+    /* The ids, not how many: this panel has the room, and the number alone
+       leaves a person with nowhere to go next. Mono, like every other
+       identifier here. */
+    ['Blocked by', blockedBy.value.join(', ') || null, true],
     ['Comments', issue.comment_count || null, false],
     ['Created', formatDate(issue.created_at), true],
     ['Created by', issue.created_by, true],

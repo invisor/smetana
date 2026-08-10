@@ -98,6 +98,37 @@ describe('boardColumns', () => {
     expect(first.blockedBy).toBe(0)
   })
 
+  it('names the blockers on both sides, and the counts are those names counted', async () => {
+    // The card's hint says which task blocks it, so the ids have to survive the
+    // trip. Asserting the count against the list's own length is the point: the
+    // two are one fact projected twice and must not be able to disagree.
+    await start(
+      snapshot({
+        issues: [
+          issue({ id: 'bd-1' }),
+          issue({ id: 'bd-9' }),
+          issue({
+            id: 'bd-2',
+            dependencies: [
+              edge({ issue_id: 'bd-2', depends_on_id: 'bd-1' }),
+              edge({ issue_id: 'bd-2', depends_on_id: 'bd-9' })
+            ]
+          })
+        ]
+      })
+    )
+
+    const tasks = tracker.boardColumns.value.flatMap((column) => column.tasks)
+    const blocked = tasks.find((task) => task.id === 'bd-2')
+    const blocker = tasks.find((task) => task.id === 'bd-1')
+
+    expect(blocked.blockedByIds).toEqual(['bd-1', 'bd-9'])
+    expect(blocked.blockedBy).toBe(blocked.blockedByIds.length)
+    expect(blocker.blockingIds).toEqual(['bd-2'])
+    expect(blocker.blocks).toBe(blocker.blockingIds.length)
+    expect(blocked.blockingIds).toEqual([])
+  })
+
   it('parentage does not count as a blocker: otherwise every child would get a false "blocked"', async () => {
     await start(
       snapshot({

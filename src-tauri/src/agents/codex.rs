@@ -556,7 +556,12 @@ mod tests {
     /// A line from the middle of each shipped `SKILL.md`, far enough in to be
     /// the body rather than the front matter: finding it in the prompt is the
     /// only proof that the file was read and pasted, not merely named.
-    const FILING_BODY: &str = "The title says what needs doing";
+    /// A sentinel from the shipped file, and deliberately its heading rather
+    /// than a sentence out of the body: the prose gets rewritten, and a test
+    /// that fails on wording says nothing about what it is actually guarding —
+    /// that the body travelled at all. It must also be a string the prompt
+    /// itself never writes, or the test would pass with the skill missing.
+    const FILING_BODY: &str = "# Filing a task in bd";
     const BRAINSTORMING_BODY: &str = "ask questions one at a time";
 
     fn argv(launch: &Launch) -> Vec<String> {

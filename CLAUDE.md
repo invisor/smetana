@@ -119,9 +119,13 @@ out as a delta without waiting for the watcher. `generation` advances by exactly
 delta; the front end resyncs when it sees a gap. `store.rs` and the argument builders in `bd.rs` are
 pure and carry the unit tests.
 
-`Issue` carries every field bd emits, not only the ones the board draws: the panel on the right
-(`components/kanban/TaskInspector.vue`) shows all of them, and a field left out of the struct is
-invisible there with nothing to say it went missing. That panel is read-only apart from the status —
+`Issue` is meant to carry every field bd emits, not only the ones the board draws: the panel on the
+right (`components/kanban/TaskInspector.vue`) shows all of them, and a field left out of the struct
+is invisible there with nothing to say it went missing. **Three fields currently break that and the
+cost is exactly what the rule predicts** (smetana-dbr): bd emits `notes`, `design` and
+`acceptance_criteria`, the struct has none of them, and `notes` is where `running-tasks` writes the
+reason a run parked a task — so the one sentence explaining why the night left a task alone is
+readable only through `bd show` in a terminal. That panel is read-only apart from the status —
 rewriting a title or a description is an agent's job, and "Ask agent to edit" starts one on the
 issue. The status picker offers three of bd's eleven statuses (Ready, Pinned, Done); the rest belong
 to agents, so the one the issue actually holds is appended as a fourth option when it falls outside
@@ -754,6 +758,29 @@ filing skill reaches the agent in all three positions, by name for `PluginDir` a
 `Inline`. `Auto` differs from `On` only in what it hands over for the brainstorming process: a name
 for `PluginDir`, which is already loaded and costs one index line, and the absolute path to the
 vendored `SKILL.md` for `Inline`, so a one-line change does not pay for 10 KB it will not use.
+
+**What a filed task owes is set by the far end of the app, not by the dialog.** `provisioning` says
+the description *is* the spec and a description that never says what "done" looks like is not
+something to start on — so a thin task is not a smaller task, it is a supervised run stopping
+overnight on a question or an automatic one parking the work. The two ends used to disagree, since
+the filing skill asked for a paragraph of prose and nothing more. They are held together now by
+`bd create --validate`, which refuses a description missing the sections its type requires
+(`## Acceptance Criteria`, plus `## Steps to Reproduce` on a bug, `## Success Criteria` on an epic,
+three headings on a decision, and nothing at all on a chore). That flag is the whole mechanical part
+of the standard, which is why `STANDARD` in `prompt.rs` names it in the prompt rather than leaving it
+to the skill: an `Inline` harness may find no skill text to read, and prose can be skimmed where a
+refusal cannot. **It is a floor and not the standard**, and the skill says so in as many words —
+measured against the pinned sidecar, it matches the wording of a heading and nothing else, so an
+empty section, a `###` and lower case all pass. It converts "no acceptance criteria" from an
+invisible default into something somebody has to do on purpose; judging whether the criteria are
+real is `provisioning`'s job at the other end. `running-tasks` holds its own filing — the depth-budget one — to the same skill and
+adds the test that follows from it: a finding nobody can state acceptance criteria for is a digest
+line, not a task.
+
+The other half is what the discussion produces. `Brainstorm::On` buys half an hour of narrowing down
+what somebody meant, and none of it is anywhere but that conversation — the session ends, and the
+agent that picks the task up months later has the person's original four sentences and nothing else.
+So `DISCUSS` requires the outcome, rejected options included, to be written into the issue itself.
 
 ### Attachments: pictures on a task nobody has filed yet
 

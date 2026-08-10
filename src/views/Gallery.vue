@@ -387,7 +387,15 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <StatusDot v-for="s in statuses" :key="s" :status="s" :size="10" />
       </div>
       <div :style="rowStyle">
-        <DependencyMark :blocked-by="2" :blocks="5" spawned-from="bd-7f31" />
+        <!-- With ids the hint names the tasks; without them it falls back to
+             the count, which is the state a fixture board is in. -->
+        <DependencyMark
+          :blocked-by="2"
+          :blocks="5"
+          :blocked-by-ids="['bd-91ac', 'bd-4d2e']"
+          spawned-from="bd-7f31"
+        />
+        <DependencyMark :blocked-by="1" :blocks="3" />
         <DependencySpine state="active" :height="24" />
         <Assignee kind="agent" name="claude-1" />
         <Assignee kind="human" name="you" />
@@ -439,6 +447,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             status="running"
             type="feature"
             :blocked-by="2"
+            :blocked-by-ids="['bd-91ac', 'bd-4d2e']"
             spawned-from="bd-7f31"
             :assignee="{ kind: 'agent', name: 'claude-1' }"
           />
