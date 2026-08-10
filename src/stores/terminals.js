@@ -11,7 +11,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { runsState } from './runs.js'
 import { settings } from './settings.js'
-import { trackerState } from './tracker.js'
+import { isLockIssue, trackerState } from './tracker.js'
 
 export const terminalState = reactive({
   sessions: [],
@@ -181,6 +181,10 @@ const CAPTION = {
    holds the only other copy; drift costs a caption going quiet, which the row
    survives as a bare "Agent".
 
+   The merge lock is claimed under that same actor while a batch merges, and it
+   is coordination rather than work, so it is left out here exactly as the board
+   leaves it out — see `isLockIssue` in tracker.js.
+
    Sorted, so a second issue appearing does not reorder the first. */
 function claimedBy(sessionId) {
   /* Before the find, not after: a run between batches carries `session: null`,
@@ -190,7 +194,9 @@ function claimedBy(sessionId) {
   if (!run) return []
   const actor = `smetana-run-${sessionId}`
   return [...trackerState.issues.values()]
-    .filter((issue) => issue.status === 'in_progress' && issue.owner === actor)
+    .filter(
+      (issue) => issue.status === 'in_progress' && issue.owner === actor && !isLockIssue(issue)
+    )
     .map((issue) => issue.id)
     .sort()
 }

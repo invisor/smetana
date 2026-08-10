@@ -178,6 +178,78 @@ describe('boardColumns', () => {
   })
 })
 
+/* The merge lock is coordination between two leads, not work, so nothing on
+   screen draws it — while the store keeps it whole, because the dependency
+   reasoning here and `queue.rs` both need it to be there. */
+describe('the merge lock', () => {
+  const lock = (over = {}) =>
+    issue({
+      id: 'bd-lock',
+      title: 'Merge lock',
+      issue_type: 'chore',
+      labels: ['smetana-lock'],
+      ...over
+    })
+
+  const ids = () => tracker.boardColumns.value.flatMap((column) => column.tasks).map((t) => t.id)
+
+  it('is in no column while it is free', async () => {
+    await start(snapshot({ issues: [lock(), issue({ id: 'bd-1' })] }))
+
+    expect(ids()).toEqual(['bd-1'])
+  })
+
+  /* Two columns, not one: a free lock is `open` and a held one is
+     `in_progress`, which is why the skip is before the bucketing rather than
+     inside a column. */
+  it('is in no column while it is held, nor under a status nobody expected', async () => {
+    await start(
+      snapshot({
+        issues: [
+          lock({ status: 'in_progress', owner: 'smetana-run-7' }),
+          issue({ id: 'bd-1', status: 'in_progress' })
+        ]
+      })
+    )
+    expect(ids()).toEqual(['bd-1'])
+
+    await emit('tracker:delta', delta({ upserted: [lock({ status: 'awaiting-review' })] }))
+    expect(ids()).toEqual(['bd-1'])
+  })
+
+  it('an issue without the label is drawn as it always was', async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', labels: ['chore', 'smetana'] })] }))
+
+    expect(ids()).toEqual(['bd-1'])
+  })
+
+  /* The filter is on the way out to the interface, never on the way in. A lock
+     dropped from the store would read as a blocker that is not on the board,
+     which `holds` treats as satisfied — so anything wired to depend on it would
+     quietly become ready. */
+  it('stays in the store, and an unfinished lock still blocks what depends on it', async () => {
+    await start(
+      snapshot({
+        issues: [
+          lock({ status: 'in_progress' }),
+          issue({
+            id: 'bd-2',
+            dependencies: [edge({ issue_id: 'bd-2', depends_on_id: 'bd-lock' })]
+          })
+        ]
+      })
+    )
+
+    expect(tracker.issueById('bd-lock')).toMatchObject({ id: 'bd-lock', title: 'Merge lock' })
+
+    const board = tracker.boardColumns.value
+    expect(board.find((c) => c.status === 'blocked').tasks.map((t) => t.id)).toEqual(['bd-2'])
+    expect(board.flatMap((c) => c.tasks).find((t) => t.id === 'bd-2').blockedByIds).toEqual([
+      'bd-lock'
+    ])
+  })
+})
+
 describe('deltas', () => {
   it('add and remove issues and move the generation', async () => {
     await start(snapshot({ generation: 5, issues: [issue({ id: 'bd-1' })] }))
