@@ -555,6 +555,16 @@ fn handle(
         Request::Remove(id, tx) => {
             if let Some(mut live) = sessions.remove(&id) {
                 live.pty.kill();
+                // Announced, because not every removal is the front end's own
+                // doing any more: a run kills the session of a batch that
+                // stopped on a question (`runs/service.rs`), and without an
+                // event the panel would keep drawing that session's last
+                // state — `needs-you`, with a question nobody can answer
+                // behind a process that is gone — until the next project
+                // switch. The front end's own remove has already dropped the
+                // row by the time this arrives, and filtering an absent id is
+                // a no-op, which is what makes one event serve both callers.
+                let _ = app.emit("terminal:removed", serde_json::json!({ "id": id }));
             }
             if *active == Some(id) {
                 *active = None;

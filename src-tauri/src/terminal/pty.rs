@@ -125,7 +125,10 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
         // document, and one forgotten call silently reverts to the shared
         // default. And only for a `Run`: a person filing or editing a task
         // through an agent keeps their own name in the audit trail.
-        cmd.env("BEADS_ACTOR", format!("smetana-run-{id}"));
+        // `run_actor` and not a format string here: the runs worker derives
+        // the same name to find what this session claimed, and two copies of
+        // the format would drift silently.
+        cmd.env("BEADS_ACTOR", crate::terminal::model::run_actor(id));
     }
     // What the agent's own `PATH` is built on: the login shell's, because a
     // bundled app inherits launchd's, which holds nothing a person installed —
