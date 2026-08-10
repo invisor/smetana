@@ -131,11 +131,9 @@ describe('the rail and what it holds', () => {
     expect(RAIL_CONTROL_MAX).toBeLessThanOrEqual(RAIL)
   })
 
-  it('the cap is not so small that it changes the shipped look', () => {
-    /* `--control-h-sm` is 24px comfortable and 20px compact today, and `min()`
-       against this cap has to leave both exactly where they are — a cap below
-       24 would shrink the button for everybody at the shipped size to fix a
-       problem that only exists at the top of the range. */
-    expect(RAIL_CONTROL_MAX).toBeGreaterThanOrEqual(24)
-  })
+  /* The other half of the cap — that it is neither below nor above what
+     `--control-h-sm` measures at the shipped size — is asserted in
+     `tests/styles/tokens.test.js`, against the token as parsed out of the
+     stylesheet rather than against a copy of its value written out here. This
+     file keeps the half that is about these two constants alone. */
 })

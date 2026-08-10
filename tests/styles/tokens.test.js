@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { RAIL_CONTROL_MAX } from '../../src/views/panelWidths.js'
 
 /* The stylesheets read as text, which is the only way a test in this project can
    reach them: nothing here renders CSS, and these two files are where the
@@ -58,10 +59,18 @@ const space = rules(read('space.css'))
 const comfortable = space.get(':root')
 const compact = space.get('[data-density="compact"]')
 
-/* What a token has to be named to count as a box that holds text: a height, or
-   one of the icon sizes. Derived from the name so a `--foo-h` added tomorrow is
-   covered without anybody remembering to add it here. */
-const HOLDS_TEXT = /^--(.+-h|icon-(sm|md|lg))$/
+/* What a token has to be named to count as a box that holds text: a height —
+   including the `-sm`/`-lg` variants of one — or one of the icon sizes. Derived
+   from the name so a `--foo-h` added tomorrow is covered without anybody
+   remembering to add it here.
+
+   The size suffixes are not decoration on that pattern. Requiring the name to
+   *end* in `-h` is what the first version did, and it silently dropped
+   `--control-h-sm` and `--control-h-lg` — two tokens sitting in the file right
+   now, one of them the very token the collapsed rail's button is drawn at. The
+   baseline passed either way, because both are correctly plugged in; it passed
+   without looking at them, which is the failure that matters in a guard. */
+const HOLDS_TEXT = /^--(.+-h(-(sm|lg))?|icon-(sm|md|lg))$/
 
 /* The one exception, named with its reason. `--log-line-h` is the line box for
    `--text-code-size`, which is pinned by the editor setting and which the
@@ -120,7 +129,14 @@ describe('the app-wide font size reaches the stylesheet', () => {
       ['compact', compact]
     ]) {
       const boxes = [...block].filter(([name]) => HOLDS_TEXT.test(name) && !NOT_SCALED.has(name))
-      expect(boxes.length, `${density} still defines boxes that hold text`).toBeGreaterThan(0)
+      /* A floor, like the type scale's, and for the same reason: a pattern that
+         quietly stops matching most of the set would otherwise leave this test
+         green while checking almost nothing. Comfortable holds the complete set;
+         compact redefines a subset of it. */
+      const floor = density === 'comfortable' ? 8 : 1
+      expect(boxes.length, `${density} still defines boxes that hold text`).toBeGreaterThanOrEqual(
+        floor
+      )
       for (const [name, value] of boxes) {
         expect(value, `${name} in ${density} must scale with --ui-scale`).toMatch(EXPRESSION)
       }
@@ -132,6 +148,29 @@ describe('the app-wide font size reaches the stylesheet', () => {
        changes the app: compact silently inherits the comfortable value, so a
        22px row becomes 28px with nothing anywhere to say so. */
     expect([...compact.keys()].sort()).toEqual([...COMPACT_TOKENS].sort())
+  })
+
+  it('the rail caps its button at the shipped small control, not at a number of its own', () => {
+    /* `RAIL_CONTROL_MAX` exists so the collapsed rail's expand button stops
+       growing at the rail's edge, and it is set to what that button measures
+       today — `--control-h-sm` at the shipped size, in comfortable. That was a
+       copy of the token's value with nothing holding the two together, and this
+       is the join: the assertion lives here because this is the file that
+       already reads the stylesheet, and `panelWidths.js` is pure with no imports
+       of its own, so nothing is dragged anywhere by importing it.
+
+       Equality rather than a floor, and it is the stronger statement on purpose.
+       Below the token, the cap would shrink the button for everybody at the
+       shipped size to fix something that only happens at the top of the range;
+       above it, the cap would let the button grow past what the rail was
+       measured to hold — and if `--control-h-sm` is ever raised beyond the rail
+       itself, this and the fits-in-the-rail test in `panelWidths.test.js`
+       disagree on purpose, which is a decision somebody has to make rather than
+       a number to nudge. */
+    const shipped = comfortable.get('--control-h-sm')
+    const base = Number(shipped.match(/\d+(\.\d+)?/)[0])
+    expect(base, '--control-h-sm still states a size of its own').toBeGreaterThan(0)
+    expect(RAIL_CONTROL_MAX).toBe(base)
   })
 
   it('leaves the space scale alone', () => {
