@@ -12,7 +12,7 @@ provision, delegate, review, merge, and close. You own every tracker command and
 Three other skills carry the mechanics, and this one carries the policy. Read each when
 you reach it, and follow it exactly:
 
-- `provisioning` — pinning the tracker, reading a spec, claiming, cutting worktrees
+- `provisioning` — pinning the tracker, claiming, reading a spec, cutting worktrees
 - `merging` — integrating one task and getting it into the target branch
 - `live-checking` — verifying a merged task beyond its gates
 - `reviewing` — what the reviewer you spawn is working from
@@ -147,8 +147,17 @@ on its own. **This runs before you take any new work.**
 1. Pin the tracker, and set the custom statuses once — idempotent, and always the full
    set, because a partial value clobbers the others:
    `bd config set status.custom "ready_to_merge,parked"`.
-2. `bd list --status in_progress --json`. Each one is an orphan. Finish them **in place**,
-   one at a time:
+2. `bd list --status in_progress --json`. **An issue on this list is not provably an
+   orphan.** The assignee is the evidence — `bd show <id>` carries it, and every run
+   claims under its own actor — so a `smetana-run-<id>` that is not this run's own
+   (yours is `$BEADS_ACTOR` in your environment) may be a killed run's leftovers, or a
+   run still live on the same board, mid-flight in its own worktrees. Telling a dead
+   run's actor from a live one has no mechanical answer today: the app keeps no run
+   registry a skill can read, and that gap is recorded here rather than papered over.
+   **The default, in every mode: a claim you cannot show dead is left in place** — not
+   recovered, not parked, not noted. It is another run's work until proven otherwise,
+   and interfering with it is worse than skipping recovery. Recover only what the
+   caller's policy lets you treat as dead, and finish it **in place**, one at a time:
    - Its slug is `<id>-<short-kebab-title>` and its worktrees are already at
      `<repo>/.worktrees/<slug>` — the id in the slug is what proves they are this task's.
      None found → park it ("in_progress with no worktree to resume").
@@ -158,7 +167,7 @@ on its own. **This runs before you take any new work.**
      review loop, same five-pass ceiling. Clean → `ready_to_merge`. Not clean after the
      fifth → park, with what the reviewer still objects to.
 3. Leave anything already at `ready_to_merge` alone. Phase 2 takes it.
-4. Only when nothing is `in_progress` any more, go on to Phase 0. Phase 2 then merges the
+4. Only when nothing you may recover is left at `in_progress`, go on to Phase 0. Phase 2 then merges the
    recovered orphans and this run's new survivors together, in one ordered pass. An orphan
    a killed run had already merged fast-forwards to a no-op — that is the expected signal,
    not an error.
@@ -174,8 +183,10 @@ on its own. **This runs before you take any new work.**
 3. **How many at once** — the number the run gave you, whatever it is: it is this run's
    choice and it wins over `[defaults].max_parallel_tasks`, upwards as well as down. Were
    you given none, the config's number is the answer.
-4. Per task: load the spec through `provisioning`. Vague or empty → policy (park, or ask)
-   **before** claiming. Then claim and provision, serialized on you.
+4. Per task: claim it the way `provisioning` says — the whole queue atomically with
+   `bd ready --claim`, a narrower scope by id, and a claim refused because another run
+   holds it is skipped, not retried. Then load the spec through `provisioning`. Vague or
+   empty → policy (park, or ask). Provision, serialized on you.
 
 ## Phase 1 — delegate, then review
 
