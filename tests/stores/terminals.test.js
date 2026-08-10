@@ -71,6 +71,40 @@ describe('the session list', () => {
   })
 })
 
+/* Not every removal is this window's own doing: a run kills the session of a
+   batch that stopped on a question (smetana-8pe), and the worker announces it
+   with terminal:removed. Without the listener the row kept the session's last
+   emitted state — needs-you, a question nobody can answer behind a process
+   that is gone — and over a night those dead loud rows accumulated. */
+describe('a session removed by the worker', () => {
+  it('the removed event drops the row and repairs the selection', async () => {
+    const { stores, emit, nextTick } = await ready()
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+    await emit('terminal:removed', { id: 1 })
+    await nextTick()
+    expect(stores.terminals.terminalState.sessions).toHaveLength(0)
+    expect(stores.terminals.terminalState.activeId).toBe(null)
+  })
+
+  it('an event about an id already gone changes nothing', async () => {
+    /* The front end's own removeSession has already dropped the row by the
+       time the worker's event arrives, so the same event serves both callers
+       only if replaying it is a no-op — the list stays, and a selection
+       pointing elsewhere is not touched. */
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2 }))
+    await nextTick()
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+
+    await emit('terminal:removed', { id: 2 })
+    await emit('terminal:removed', { id: 2 })
+    await emit('terminal:removed', { id: 99 })
+    await nextTick()
+    expect(stores.terminals.terminalState.sessions.map((s) => s.id)).toEqual([1])
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+  })
+})
+
 /* A run's sessions are not started from this window: the run worker asks the
    terminal worker directly, and the only thing the front end ever sees is a
    state event. Without this the row appeared in the panel unselected, the

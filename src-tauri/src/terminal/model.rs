@@ -3,6 +3,15 @@
 
 pub type SessionId = u64;
 
+/// The name a run's session carries in bd's audit trail. `pty.rs` puts it in
+/// the environment as `BEADS_ACTOR`, and the runs worker derives the same
+/// string to ask the board what that session claimed — one function so the two
+/// cannot drift, because a drifted copy fails silently: the list comes back
+/// empty and a parked batch's claims stay `in_progress` forever.
+pub fn run_actor(session: SessionId) -> String {
+    format!("smetana-run-{session}")
+}
+
 /// Session states. What goes out to the front end is a translation to the
 /// design system's statuses, done by the store: `running` → running,
 /// `needs-you` → needs-you, `idle` → ready, `exited` → done or failed

@@ -359,6 +359,24 @@ export async function initTerminals() {
       lastRunStart.value = session.id
     }
   })
+  await listen('terminal:removed', (event) => {
+    /* A session the worker took out of its map, on anybody's ask. The case
+       this listener exists for is a removal this window never asked for — a
+       run killing the session of a batch that stopped on a question
+       (smetana-8pe) — where without it the row would keep the session's last
+       emitted state, `needs-you` with a question nobody can answer behind a
+       process that is gone, and over a night those dead loud rows would
+       accumulate past the 1–2 budget. After this window's own removeSession
+       the row is already gone and both steps below are no-ops, which is what
+       lets one event serve both callers. The selection repair mirrors
+       removeSession's for the same reason it exists there: a selection left
+       naming a vanished row would black the terminal out. */
+    const { id } = event.payload
+    terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
+    if (terminalState.activeId === id) {
+      terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
+    }
+  })
   await listen('terminal:output', (event) => {
     const { id, seq: next, data } = event.payload
     if (id !== terminalState.activeId) return

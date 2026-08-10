@@ -94,6 +94,9 @@ pub fn update_args(id: &str, patch: &IssuePatch) -> Vec<String> {
     if let Some(v) = &patch.assignee {
         push("-a", v.clone());
     }
+    if let Some(v) = &patch.append_notes {
+        push("--append-notes", v.clone());
+    }
     for label in &patch.add_labels {
         push("--add-label", label.clone());
     }
@@ -355,6 +358,31 @@ mod tests {
             ..Default::default() };
         assert_eq!(update_args("smetana-1", &patch),
             vec!["update", "--json", "-s", "in_progress", "--title", "new one", "--", "smetana-1"]);
+    }
+
+    /// The park a run performs is one update, not two calls: `--append-notes`
+    /// rides beside `-s`, and appends rather than replaces — `bd note` itself
+    /// is shorthand for exactly this flag, so an earlier park's note survives.
+    #[test]
+    fn parking_carries_the_status_and_the_appended_note_in_one_update() {
+        let patch = IssuePatch {
+            status: Some("parked".into()),
+            append_notes: Some("parked: Do you trust this directory?".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            update_args("smetana-1", &patch),
+            vec![
+                "update",
+                "--json",
+                "-s",
+                "parked",
+                "--append-notes",
+                "parked: Do you trust this directory?",
+                "--",
+                "smetana-1"
+            ]
+        );
     }
 
     /// `-f` turns a preview into an actual deletion; without it bd would print

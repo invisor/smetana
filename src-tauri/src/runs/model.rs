@@ -108,9 +108,14 @@ pub enum StopReason {
     /// are different acts: this one ended a batch mid-flight, so what it left
     /// behind is the recovery phase's to clean up.
     SessionRemoved,
-    /// The batch's session stopped to ask a person something, in a run that has
-    /// no person in it. The process is still there and still waiting; the run
-    /// is what ends, because a wait on that process would be a wait for ever.
+    /// The same question stopped two batches in a row, in a run that has no
+    /// person in it. One question costs one batch, not the run: the first time
+    /// a session stops to ask, the run kills it, parks what it claimed with the
+    /// question as the note, and takes the next batch (smetana-8pe). Coming
+    /// back to the very same question is a machine that cannot start — a
+    /// harness dialog no batch will get past — and that needs a person rather
+    /// than more batches. The second session is left alive and still at its
+    /// prompt, because the terminal is where the person answers it.
     ///
     /// None of its three neighbours: nothing fell over, so it is not `Crashed`;
     /// nobody pressed the button, so it is not `Cancelled`; nobody took the
@@ -277,6 +282,53 @@ impl Asked {
             (Some(before), Some(now)) if before == now => Some(now.to_owned()),
             _ => None,
         }
+    }
+}
+
+/// What one confirmed question costs: the batch, or the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnQuestion {
+    /// Kill the session, park what it claimed with the question as the note,
+    /// and take the next batch. The lead's own layer already says park and
+    /// carry on; a lead stuck at a harness dialog just cannot do it itself.
+    Park,
+    /// The same question has now ended two batches in a row: a machine that
+    /// cannot start. The run stops with `NeedsAnswer`.
+    Stop,
+}
+
+/// Batches ended by an unanswered question, counted in a row.
+///
+/// The spin this exists to prevent: a harness dialog — Codex's folder trust is
+/// the recorded one (smetana-wnl) — reappears in every batch, and parking a
+/// whole batch each time would chew the queue and call it progress. So the
+/// first question costs one batch, and the *same* question a second time in a
+/// row costs the run. A different question is not the spin: the machine got
+/// past the first one, so batches are getting somewhere.
+///
+/// A batch that ends any other way breaks the row — "in a row" is literal,
+/// because a completed batch in between proves the question was not standing
+/// in front of everything.
+#[derive(Default)]
+pub struct RepeatedQuestion {
+    last: Option<String>,
+}
+
+impl RepeatedQuestion {
+    /// A batch just stopped on this question.
+    pub fn ended_by(&mut self, question: &str) -> OnQuestion {
+        if self.last.as_deref() == Some(question) {
+            OnQuestion::Stop
+        } else {
+            self.last = Some(question.to_owned());
+            OnQuestion::Park
+        }
+    }
+
+    /// A batch ended some other way — exit, crash, spent allowance. The row is
+    /// broken, so the next question is again worth one batch.
+    pub fn cleared(&mut self) {
+        self.last = None;
     }
 }
 
@@ -683,6 +735,42 @@ mod tests {
         let mut moved = Asked::default();
         moved.confirm(Some("Run this command?"));
         assert_eq!(moved.confirm(Some("Apply this patch?")), None);
+    }
+
+    #[test]
+    fn the_first_question_costs_the_batch_and_the_same_one_again_costs_the_run() {
+        // The park-and-continue half and the two-in-a-row stop, which are the
+        // whole of what smetana-8pe changes: a lead stuck at a dialog loses its
+        // batch, and only a dialog that stands in front of every batch — the
+        // same question twice running — ends the run.
+        let mut questions = RepeatedQuestion::default();
+        assert_eq!(questions.ended_by("Do you trust this directory?"), OnQuestion::Park);
+        assert_eq!(
+            questions.ended_by("Do you trust this directory?"),
+            OnQuestion::Stop,
+            "a machine that cannot start needs a person, not more batches"
+        );
+    }
+
+    #[test]
+    fn a_different_question_is_not_the_spin() {
+        // The machine got past the first dialog, so batches are getting
+        // somewhere: each new question is again worth one batch, however many
+        // there are.
+        let mut questions = RepeatedQuestion::default();
+        assert_eq!(questions.ended_by("Run this command?"), OnQuestion::Park);
+        assert_eq!(questions.ended_by("Apply this patch?"), OnQuestion::Park);
+        assert_eq!(questions.ended_by("Run this command?"), OnQuestion::Park);
+    }
+
+    #[test]
+    fn a_batch_that_ended_some_other_way_breaks_the_row() {
+        // "In a row" is literal: a completed batch between two identical
+        // questions proves the dialog was not standing in front of everything.
+        let mut questions = RepeatedQuestion::default();
+        assert_eq!(questions.ended_by("Do you trust this directory?"), OnQuestion::Park);
+        questions.cleared();
+        assert_eq!(questions.ended_by("Do you trust this directory?"), OnQuestion::Park);
     }
 
     #[test]

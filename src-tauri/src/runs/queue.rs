@@ -16,8 +16,10 @@ use crate::tracker::model::Issue;
 const IN_PROGRESS: &str = "in_progress";
 /// Our custom status for work that is reviewed and not yet merged.
 const READY_TO_MERGE: &str = "ready_to_merge";
-/// Our custom status for a dead end left for a person.
-const PARKED: &str = "parked";
+/// Our custom status for a dead end left for a person. `pub` because parking is
+/// also something the run itself does to a stuck batch's claims — see
+/// `service::park_claims` — and a second copy of the string would drift.
+pub const PARKED: &str = "parked";
 /// bd's own status for work that is available.
 const OPEN: &str = "open";
 const CLOSED: &str = "closed";
@@ -61,6 +63,9 @@ pub enum RunReason {
     RecoverUnfinished,
     RetryAfterCrash,
     RetryAfterLimit,
+    /// The batch before this one stopped on a question and its claims were
+    /// parked; this batch takes what is left.
+    AfterQuestion,
 }
 
 /// How the batch before this one ended, as far as the decision cares.
@@ -81,6 +86,15 @@ pub enum LastBatch {
     Crashed,
     /// It could not run, or could not finish: the allowance was spent.
     Limited,
+    /// Its session stopped on a question nobody was there to answer, so the
+    /// run killed it and parked its claims (smetana-8pe). Like `Crashed` and
+    /// `Limited` it must not read as a stuck queue — the batch never got to
+    /// finish its work — but it is neither of them: nothing fell over and
+    /// nothing needs waiting out, so it is retried at once and reported as
+    /// itself. The spin a repeating question could cause is not this type's to
+    /// stop: `RepeatedQuestion` in `model.rs` ends the run on the second
+    /// identical question before the decision here is ever asked.
+    Asked,
 }
 
 /// Is this issue inside what the run was asked to work on?
@@ -167,6 +181,33 @@ fn blocked(issue: &Issue, not_finished: &HashSet<&str>) -> bool {
         .any(|d| d.kind == BLOCKS && not_finished.contains(d.depends_on_id.as_str()))
 }
 
+/// What a run's batch has claimed and not finished: `in_progress` under the
+/// batch's own bd actor. Exact because of smetana-4fh — every claim a run's
+/// session makes carries `BEADS_ACTOR=smetana-run-<session-id>`, and bd writes
+/// the actor into `owner` — so this is `bd list --status in_progress -a <actor>`
+/// read off the snapshot.
+///
+/// Deliberately not `ready_to_merge`, although the batch also holds those: a
+/// reviewed task waiting for its merge is finished work, and parking it would
+/// throw the review away — the recovery phase's `unfinished` set is what picks
+/// it up. Parking is only for work the stuck lead never got to settle.
+pub fn claimed_by(issues: &[Issue], actor: &str) -> Vec<String> {
+    issues
+        .iter()
+        .filter(|i| i.status == IN_PROGRESS && i.owner.as_deref() == Some(actor))
+        .map(|i| i.id.clone())
+        .collect()
+}
+
+/// The note a parked task carries, in the wording the `running-tasks` skill
+/// already uses for the lead's own parking (`parked: <one concrete line>`), so
+/// a person scanning notes reads one vocabulary whoever did the parking. The
+/// question is the whole of what the run knows: a lead stuck at a harness
+/// dialog has not told anybody which of its tasks it was thinking about.
+pub fn parking_note(question: &str) -> String {
+    format!("parked: {question}")
+}
+
 /// Order-independent equality: bd's ordering is not stable across calls, and
 /// two passes returning the same work in a different order is not progress.
 fn same_set(a: &[String], b: &[String]) -> bool {
@@ -188,8 +229,9 @@ fn same_set(a: &[String], b: &[String]) -> bool {
 ///   stuck one has made progress, and stopping there would call a working run
 ///   stuck.
 /// - **A batch that did not run to completion suppresses the no-progress
-///   stop.** An unchanged board after a crash, or after an allowance ran out,
-///   means the batch never got to move anything — not that the board is stuck.
+///   stop.** An unchanged board after a crash, after an allowance ran out, or
+///   after a session was killed at a question it stopped on, means the batch
+///   never got to move anything — not that the board is stuck.
 /// - **A run allowed one batch stops once that batch has run to completion**
 ///   (`once`, derived from the mode — the decision cares about whether a second
 ///   batch may go out, not about who answers a question). `prev` is what says a
@@ -225,6 +267,7 @@ pub fn next_action(
     match last {
         LastBatch::Crashed => return Action::Run(RunReason::RetryAfterCrash),
         LastBatch::Limited => return Action::Run(RunReason::RetryAfterLimit),
+        LastBatch::Asked => return Action::Run(RunReason::AfterQuestion),
         LastBatch::Completed => {}
     }
     Action::Run(if now.ready.is_empty() {
@@ -556,6 +599,67 @@ mod tests {
         assert_eq!(
             next_action(&snap(&["a"], &[]), None, 20, 20, LastBatch::Limited, false),
             Action::Stop(StopReason::MaxIterations)
+        );
+    }
+
+    #[test]
+    fn an_unchanged_board_after_a_parked_batch_is_taken_again_not_called_stuck() {
+        // The session was killed at its question before it could move
+        // anything, so an unchanged board says nothing about the queue. The
+        // spin a repeating question could cause is ended by `RepeatedQuestion`
+        // in the loop, not by this decision.
+        let before = snap(&["a"], &[]);
+        assert_eq!(
+            next_action(&snap(&["a"], &[]), Some(&before), 1, 20, LastBatch::Asked, false),
+            Action::Run(RunReason::AfterQuestion)
+        );
+    }
+
+    #[test]
+    fn a_parked_batch_does_not_outrank_an_empty_board_or_the_cap() {
+        // The same rule Limited keeps: both endings say the run is over, and
+        // there is nothing for another batch to do about either.
+        assert_eq!(
+            next_action(&snap(&[], &[]), None, 1, 20, LastBatch::Asked, false),
+            Action::Stop(StopReason::QueueEmpty)
+        );
+        assert_eq!(
+            next_action(&snap(&["a"], &[]), None, 20, 20, LastBatch::Asked, false),
+            Action::Stop(StopReason::MaxIterations)
+        );
+    }
+
+    #[test]
+    fn only_the_stuck_leads_own_claims_are_its_batchs_to_park() {
+        // `bd list --status in_progress -a <actor>` read off the snapshot:
+        // in_progress under this run's actor and nothing else. Another
+        // session's claims are another batch's business, a person's claim is
+        // nobody's to park, and ready_to_merge is finished work whose review
+        // parking would throw away.
+        let actor = "smetana-run-42";
+        let mut mine = issue("mine", "in_progress");
+        mine.owner = Some(actor.into());
+        let mut merged = issue("merged", "ready_to_merge");
+        merged.owner = Some(actor.into());
+        let mut theirs = issue("theirs", "in_progress");
+        theirs.owner = Some("smetana-run-43".into());
+        let mut hand = issue("hand", "in_progress");
+        hand.owner = Some("flexo".into());
+        let unowned = issue("unowned", "in_progress");
+        let mut open = issue("open", "open");
+        open.owner = Some(actor.into());
+
+        let board = vec![mine, merged, theirs, hand, unowned, open];
+        assert_eq!(claimed_by(&board, actor), vec!["mine"]);
+    }
+
+    #[test]
+    fn the_parking_note_speaks_the_skills_own_vocabulary() {
+        // `running-tasks` writes `parked: <one concrete line>`; the run's own
+        // parking has to read as the same act to the person scanning notes.
+        assert_eq!(
+            parking_note("Do you trust the contents of this directory?"),
+            "parked: Do you trust the contents of this directory?"
         );
     }
 
