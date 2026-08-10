@@ -1,6 +1,6 @@
 ---
 name: provisioning
-description: Use when picking tracker work up and preparing somewhere to do it — pinning the tracker, reading a task's spec, claiming it, and cutting one worktree per repository the task touches
+description: Use when picking tracker work up and preparing somewhere to do it — pinning the tracker, claiming a task, reading its spec, and cutting one worktree per repository the task touches
 ---
 
 # Picking work up and provisioning for it
@@ -29,17 +29,43 @@ export BEADS_DIR="<project root>/.beads"
 Every later `bd` failing with "no beads database found" means this was lost — re-export
 it rather than running bd from somewhere else.
 
-## Find ready work
+## Find and claim work
 
-`bd ready --plain -n <N>` lists open, unblocked issues, highest priority first. It
-already excludes the custom statuses this process uses, so nothing parked or waiting to
-merge comes back.
+Finding and claiming are one step, not two: `.beads/` is shared, another run may be
+reading the same board, and a window between seeing a task and taking it is exactly
+where two runs pick up the same issue. The claim is the lock — `--claim` sets the
+assignee and moves the issue to `in_progress` in one call, and bd refuses a claim held
+by a different actor. Claim before provisioning, never after. Which form the claim
+takes is decided by the scope you were given.
 
-You may have been given something narrower instead: an issue id, an epic whose children
-are the work, or a priority floor. A floor is applied by you, not by bd — `bd ready
---json -n 50`, drop everything with `priority` above the floor, take what you need from
-what is left. Say plainly when nothing survives the filter; that is an outcome, not a
-failure.
+**The queue** — nothing narrower than "whatever is ready": take and claim in one atomic
+call, one task at a time, repeated until you have as many as the batch allows:
+
+```bash
+bd ready --claim --json
+```
+
+It claims the first ready issue — open, unblocked, highest priority first, with the
+custom statuses this process uses already excluded — and answers with it, so what comes
+back is already yours and there is no window at all. An empty answer means no ready
+work, which is an outcome, not a failure.
+
+**A narrower scope** — an issue id, an epic whose children are the work, or a priority
+floor — cannot go through the atomic form, because the first ready issue is not
+necessarily one of yours. List first: `bd ready --json -n 50`, drop what the scope
+excludes (a floor is applied by you, not by bd — drop everything with `priority` above
+it), then claim each task you take by id:
+
+```bash
+bd update <id> --claim
+```
+
+**A refused claim is an ordinary outcome, not an error.** "Already claimed by
+smetana-run-42" means another run got there first: skip the task and take the next — do
+not retry it, do not park it, and do not report it as a failure. A re-claim of an issue
+you already hold is accepted, so recovery over your own claims is safe.
+
+Say plainly when nothing survives the scope; that too is an outcome, not a failure.
 
 ## Read the spec
 
@@ -61,12 +87,6 @@ answer back so the next reader does not repeat the guess —
 `bd label add <id> repo:<name>`. Backfill only after the caller's policy has approved
 the choice. A single-repository project is `repos = ["."]` and there is nothing to
 decide.
-
-## Claim it
-
-`bd update <id> --claim` sets the assignee and moves the issue to `in_progress` in one
-step. This is the lock: `.beads/` is shared, and the claim is what stops two runs
-picking up the same issue. Claim before provisioning, never after.
 
 ## Names, computed once per task
 
