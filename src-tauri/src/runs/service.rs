@@ -32,13 +32,14 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 
 use super::config::{self, ConfigState};
-use super::model::{Asked, Run, RunError, RunSettings, RunState, StopReason};
+use super::model::{Asked, OnQuestion, RepeatedQuestion, Run, RunError, RunSettings, RunState, StopReason};
 use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
 use crate::terminal::model::{Exit, SessionState};
 use crate::terminal::service::{Request as TerminalRequest, TerminalHandle};
+use crate::tracker::model::IssuePatch;
 use crate::tracker::service::{Request as TrackerRequest, TrackerHandle};
 
 /// The backstop against a board that churns without finishing anything. It is
@@ -55,8 +56,8 @@ const CRASH_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// Slow on purpose: what it is looking for stands until somebody answers it, so
 /// nothing is lost by taking two of these to see it, and every tick costs the
 /// terminal worker a clone of the project's session list. A dialog therefore
-/// ends a run about ten seconds after it is drawn, against the for ever it used
-/// to take.
+/// costs its batch about ten seconds after it is drawn, against the for ever it
+/// used to take.
 const ASK_POLL: Duration = Duration::from_secs(5);
 
 pub enum Request {
@@ -456,6 +457,10 @@ async fn drive(
     let mut crashes: u32 = 0;
     let mut unreadable: u32 = 0;
     let mut last_batch = LastBatch::Completed;
+    // Batches ended by an unanswered question, counted in a row: the first
+    // costs its batch, the same question again costs the run. Loop state like
+    // `last_batch`, because the loop is the only thing that sees every ending.
+    let mut questions = RepeatedQuestion::default();
 
     for iteration in 0.. {
         if stop.try_recv().is_ok() || run.stopping {
@@ -532,17 +537,47 @@ async fn drive(
         say(&run);
 
         let exit = match watch_batch(&terminal, &run, session).await {
-            Batch::Ended(exit) => exit,
-            // The batch has stopped to ask, and this run has nobody in it to
-            // answer. Waiting on the process would be waiting for ever, so the
-            // run ends here and says what it is stuck on. The session is left
-            // alive and still at its prompt: a person who comes back can answer
-            // it in the terminal, which is exactly what the bar tells them.
-            Batch::Unanswered { question } => {
-                run.advance(RunState::Stopped { reason: StopReason::NeedsAnswer { question } });
-                say(&run);
-                return;
+            Batch::Ended(exit) => {
+                // Ended some other way, so the questions-in-a-row count starts
+                // over — see `RepeatedQuestion` for why "in a row" is literal.
+                questions.cleared();
+                exit
             }
+            // The batch has stopped to ask, and this run has nobody in it to
+            // answer. Waiting on the process would be waiting for ever, and
+            // ending the run here cost the whole night for one question
+            // (smetana-8pe) — the lead's own layer parks what it cannot settle
+            // and carries on, and a lead stuck at a harness dialog just cannot
+            // do that for itself. So the question costs one batch: the session
+            // is killed, whatever it claimed is parked with the question as the
+            // note, and the loop goes round for the next batch. Only the same
+            // question ending two batches in a row ends the run — a machine
+            // that cannot start needs a person, not more batches.
+            Batch::Unanswered { question } => match questions.ended_by(&question) {
+                OnQuestion::Park => {
+                    // The kill first: the lead is stuck at its dialog, but
+                    // whatever it delegated may still be working, and parking
+                    // under live claimants would race them. `Remove` signals
+                    // the whole process group, the way every session ends.
+                    remove_session(&terminal, session).await;
+                    park_claims(&tracker, session, &question).await;
+                    last_batch = LastBatch::Asked;
+                    continue;
+                }
+                OnQuestion::Stop => {
+                    // The claims are parked here too — nothing may be left
+                    // `in_progress` by this path — but the session is left
+                    // alive and still at its prompt: the terminal is where a
+                    // person answers it, which is exactly what the bar tells
+                    // them.
+                    park_claims(&tracker, session, &question).await;
+                    run.advance(RunState::Stopped {
+                        reason: StopReason::NeedsAnswer { question },
+                    });
+                    say(&run);
+                    return;
+                }
+            },
         };
         // A session somebody removed from the agents panel is not a harness
         // that fell over: nothing is going to go better on the next try, and
@@ -791,6 +826,60 @@ async fn board(tracker: &TrackerHandle) -> Option<Vec<crate::tracker::model::Iss
     rx.await.ok().map(|snapshot| snapshot.issues)
 }
 
+/// The board read fresh, for parking: a full resync first, because the claims
+/// being looked for are writes the *agent* made with its own bd, which the
+/// snapshot only learns of through the watcher — a claim written moments before
+/// the session was killed may not have landed yet, and a missed claim here is a
+/// task left `in_progress` under a dead actor. The cached snapshot is the
+/// fallback when the resync fails, being better than parking nothing; `None`
+/// when the tracker cannot be asked at all.
+async fn fresh_board(tracker: &TrackerHandle) -> Option<Vec<crate::tracker::model::Issue>> {
+    let (tx, rx) = oneshot::channel();
+    tracker.0.send(TrackerRequest::Resync(tx)).await.ok()?;
+    match rx.await.ok()? {
+        Ok(snapshot) => Some(snapshot.issues),
+        Err(_) => board(tracker).await,
+    }
+}
+
+/// Park what a stuck batch's session claimed: everything `in_progress` under
+/// the session's own bd actor (smetana-4fh is what makes that set exact) goes
+/// to `parked` with the question as its note — one `bd update` apiece through
+/// the tracker worker, whose snapshot learns of each write the way it learns of
+/// every write, as a delta out of `finish`.
+///
+/// Parking the whole batch is coarser than the lead's own parking, and
+/// deliberately so: this path only runs when the lead itself is stuck, and a
+/// lead at a harness dialog has not told anybody which of its tasks it was
+/// thinking about. A park that fails is left alone rather than retried — the
+/// task stays `in_progress`, which the queue reads as unfinished work for the
+/// next batch to recover, so the failure costs a recovery rather than a task.
+async fn park_claims(tracker: &TrackerHandle, session: u64, question: &str) {
+    let actor = crate::terminal::model::run_actor(session);
+    let Some(issues) = fresh_board(tracker).await else { return };
+    for id in queue::claimed_by(&issues, &actor) {
+        let patch = IssuePatch {
+            status: Some(queue::PARKED.to_string()),
+            append_notes: Some(queue::parking_note(question)),
+            ..Default::default()
+        };
+        let (tx, rx) = oneshot::channel();
+        if tracker.0.send(TrackerRequest::Update(id, patch, tx)).await.is_ok() {
+            let _ = rx.await;
+        }
+    }
+}
+
+/// End a stuck batch's session the way the remove button in the agents panel
+/// does. Awaited rather than fired off, so the parking that follows starts
+/// after the kill has gone in instead of racing whatever the lead delegated.
+async fn remove_session(terminal: &TerminalHandle, session: u64) {
+    let (tx, rx) = oneshot::channel();
+    if terminal.0.send(TerminalRequest::Remove(session, tx)).await.is_ok() {
+        let _ = rx.await;
+    }
+}
+
 /// May another batch go out? The worker answers, and the answer is the decision
 /// itself: yes records the batch as in flight on the worker's own copy of the
 /// run, so a stop arriving after it takes the cooperative path — set `stopping`,
@@ -860,7 +949,10 @@ enum Batch {
 /// silently and for ever. The other half of that ticket — writing `trust_level`
 /// into `~/.codex/config.toml` — is refused for the reason `agents/codex.rs`
 /// already refuses to touch a person's home directory, so what is owed here is
-/// that the run ends and says why.
+/// that the run notices. What the noticing costs is the caller's decision, and
+/// it is one batch rather than the night (smetana-8pe): the loop parks that
+/// batch's claims and carries on, and only the same question twice in a row
+/// ends the run.
 ///
 /// What it watches is the state the terminal worker already keeps for every
 /// session, active or not, asked for over the channel every other caller uses.

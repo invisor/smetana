@@ -118,6 +118,12 @@ pub struct IssuePatch {
     pub priority: Option<i64>,
     #[serde(default)]
     pub assignee: Option<String>,
+    /// Appended to the issue's notes with a newline, never replacing them —
+    /// bd's `--append-notes`. This is how a run records why it parked a task:
+    /// the note is the one sentence a person reads about a night's decision,
+    /// and an overwrite would eat every earlier one.
+    #[serde(default)]
+    pub append_notes: Option<String>,
     #[serde(default)]
     pub add_labels: Vec<String>,
     #[serde(default)]
