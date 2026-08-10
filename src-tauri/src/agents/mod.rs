@@ -52,15 +52,40 @@ pub enum ImageDelivery {
     InPrompt,
 }
 
-/// Whether the agent must talk the task through before filing it. `Auto`
-/// leaves the judgement to the agent on purpose: nothing in the app has read
-/// the text, and a heuristic on title length would misfire in both directions.
+/// One position of one stage of the work a filing session does before the
+/// task exists: talking it through, writing down the design that discussion
+/// produced, writing the implementation plan. All three switches in the
+/// new-task dialog offer these same three, and `Auto` means the same thing in
+/// each — the agent's judgement, because nothing in the app has read the text,
+/// and a heuristic on title length would misfire in both directions.
+///
+/// One type for all three deliberately, matching `STAGES` on the front end,
+/// which is likewise one list for the three dropdowns: while the discussion
+/// had a copy of this enum to itself, a fourth position added to one of them
+/// compiled perfectly and left the other two a position short.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Brainstorm {
+pub enum Stage {
     Auto,
     On,
     Off,
+}
+
+/// The cascade the dialog draws (`src/components/kanban/taskStages.js`),
+/// applied again on this side of the wire, and it is not a duplicate to be
+/// tidied away: what arrives here is a payload, and a payload can carry a spec
+/// that was chosen under a Brainstorming that has since been turned off. A
+/// stage under a parent that is not `On` is settled by that parent — there is
+/// nothing for a design document to record when no discussion happened, and
+/// nothing for a plan to plan when no design was written.
+///
+/// Returns the spec and the plan as they will actually be carried out, which
+/// is what every reader downstream — the prose in `prompt.rs`, the skill Codex
+/// reads off disk — has to work from.
+pub fn cascade(brainstorm: Stage, spec: Stage, plan: Stage) -> (Stage, Stage) {
+    let under = |parent: Stage, chosen: Stage| if parent == Stage::On { chosen } else { parent };
+    let spec = under(brainstorm, spec);
+    (spec, under(spec, plan))
 }
 
 /// What the new-task dialog collected. Not an issue: nothing here is written
@@ -100,7 +125,14 @@ pub enum Intent {
     /// impose on them.
     Bare,
     NewTask {
-        brainstorm: Brainstorm,
+        brainstorm: Stage,
+        /// Whether the design the discussion produced is written to a file.
+        /// Meaningful only under `Stage::On`, and `cascade` is what says
+        /// so — never read either of these two raw.
+        spec: Stage,
+        /// Whether an implementation plan is written. Meaningful only under a
+        /// spec that is itself `On`.
+        plan: Stage,
         draft: TaskDraft,
     },
     EditTask {
@@ -129,9 +161,10 @@ impl Intent {
     ///
     /// A draft's three fields come along and its `images` do not: the right
     /// panel draws the prose, the type and the priority, and the paths of the
-    /// attachments are for the agent to open and to copy into the issue. So is
-    /// `brainstorm`, which is an instruction about how to work rather than
-    /// anything about the task.
+    /// attachments are for the agent to open and to copy into the issue. So
+    /// are `brainstorm`, `spec` and `plan`: they are instructions about how to
+    /// work rather than anything about the task, and nothing on screen would
+    /// draw them.
     pub fn work(&self) -> crate::terminal::model::SessionWork {
         use crate::terminal::model::SessionWork as W;
         match self {
@@ -315,12 +348,14 @@ mod tests {
         // side of the boundary would otherwise surface as a session that simply
         // refuses to start, with the switch position as the only clue.
         for (literal, expected) in
-            [("auto", Brainstorm::Auto), ("on", Brainstorm::On), ("off", Brainstorm::Off)]
+            [("auto", Stage::Auto), ("on", Stage::On), ("off", Stage::Off)]
         {
             let json = format!(
                 r#"{{
                     "kind": "newTask",
                     "brainstorm": "{literal}",
+                    "spec": "on",
+                    "plan": "off",
                     "draft": {{
                         "text": "Fix the thing",
                         "issue_type": "bug",
@@ -331,8 +366,10 @@ mod tests {
             );
             let intent: Intent = serde_json::from_str(&json).expect("deserializes");
             match intent {
-                Intent::NewTask { brainstorm, draft } => {
+                Intent::NewTask { brainstorm, spec, plan, draft } => {
                     assert_eq!(brainstorm, expected, "{literal}");
+                    assert_eq!(spec, Stage::On, "{literal}");
+                    assert_eq!(plan, Stage::Off, "{literal}");
                     assert_eq!(draft.text, "Fix the thing");
                     assert_eq!(draft.issue_type.as_deref(), Some("bug"));
                     assert_eq!(draft.priority, Some(2));
@@ -352,6 +389,8 @@ mod tests {
         let json = r#"{
             "kind": "newTask",
             "brainstorm": "off",
+            "spec": "off",
+            "plan": "off",
             "draft": { "text": "Fix the thing", "issue_type": null, "priority": null }
         }"#;
         let intent: Intent = serde_json::from_str(json).expect("deserializes");
@@ -370,6 +409,8 @@ mod tests {
         let json = r#"{
             "kind": "newTask",
             "brainstorm": "auto",
+            "spec": "auto",
+            "plan": "auto",
             "draft": { "text": "Fix the thing", "issue_type": null, "priority": null }
         }"#;
         let intent: Intent = serde_json::from_str(json).expect("deserializes");
@@ -417,7 +458,9 @@ mod tests {
     fn a_filing_intent_carries_its_draft_across_and_leaves_the_briefing_behind() {
         use crate::terminal::model::SessionWork as W;
         let intent = Intent::NewTask {
-            brainstorm: Brainstorm::On,
+            brainstorm: Stage::On,
+            spec: Stage::On,
+            plan: Stage::On,
             draft: TaskDraft {
                 text: "The log drops lines above 10k".into(),
                 issue_type: Some("bug".into()),
@@ -426,7 +469,7 @@ mod tests {
             },
         };
         // The prose, the type and the priority are what the right panel draws
-        // back. The images and the brainstorming switch are the agent's
+        // back. The images and the three stage switches are the agent's
         // briefing and stop here — nothing on screen would show them.
         assert_eq!(
             intent.work(),
@@ -442,7 +485,9 @@ mod tests {
     fn a_filing_intent_left_on_auto_carries_the_absence_rather_than_a_value() {
         use crate::terminal::model::SessionWork as W;
         let intent = Intent::NewTask {
-            brainstorm: Brainstorm::Auto,
+            brainstorm: Stage::Auto,
+            spec: Stage::Auto,
+            plan: Stage::Auto,
             draft: TaskDraft {
                 text: "Something".into(),
                 issue_type: None,
@@ -454,6 +499,36 @@ mod tests {
             intent.work(),
             W::NewTask { text: "Something".into(), issue_type: None, priority: None }
         );
+    }
+
+    #[test]
+    fn a_stage_is_only_the_persons_to_choose_under_an_on_parent() {
+        // The same nine combinations `tests/components/kanban/taskStages.test.js`
+        // pins on the front end. The payload's own spec and plan are `On`
+        // throughout, so wherever the parent settles the answer, that `On` is
+        // exactly what must not survive the crossing.
+        for (brainstorm, spec) in [
+            (Stage::Auto, Stage::Auto),
+            (Stage::Auto, Stage::On),
+            (Stage::Auto, Stage::Off),
+            (Stage::Off, Stage::Auto),
+            (Stage::Off, Stage::On),
+            (Stage::Off, Stage::Off),
+        ] {
+            let settled = brainstorm;
+            assert_eq!(
+                cascade(brainstorm, spec, Stage::On),
+                (settled, settled),
+                "{brainstorm:?}/{spec:?}: a stage under a parent that is not On reads as it"
+            );
+        }
+
+        // Under a discussion, the spec is the person's, and the plan follows
+        // whatever the spec ended up being.
+        assert_eq!(cascade(Stage::On, Stage::On, Stage::On), (Stage::On, Stage::On));
+        assert_eq!(cascade(Stage::On, Stage::On, Stage::Off), (Stage::On, Stage::Off));
+        assert_eq!(cascade(Stage::On, Stage::Auto, Stage::On), (Stage::Auto, Stage::Auto));
+        assert_eq!(cascade(Stage::On, Stage::Off, Stage::On), (Stage::Off, Stage::Off));
     }
 
     #[test]

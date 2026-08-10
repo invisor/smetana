@@ -16,7 +16,9 @@
 use portable_pty::CommandBuilder;
 
 use super::library::read_skill;
-use super::{prompt, Autonomy, Brainstorm, ImageDelivery, Intent, Launch, Profile, SkillDelivery};
+use super::{
+    cascade, prompt, Autonomy, ImageDelivery, Intent, Launch, Profile, SkillDelivery, Stage,
+};
 use crate::runs::model::RunMode;
 use crate::terminal::model::{Question, QuestionOption};
 
@@ -50,12 +52,22 @@ impl Profile for Codex {
         // it: `Auto` is handed the path and decides for itself.
         let discussing = matches!(
             launch.intent,
-            Intent::NewTask { brainstorm: Brainstorm::On, .. }
+            Intent::NewTask { brainstorm: Stage::On, .. }
+        );
+        // The plan's own process, and only where a plan was actually asked
+        // for: the cascade decides that, never the raw switch, so an `On`
+        // sitting under a discussion nobody wanted costs nothing here either.
+        let planning = matches!(
+            &launch.intent,
+            Intent::NewTask { brainstorm, spec, plan, .. }
+                if cascade(*brainstorm, *spec, *plan).1 == Stage::On
         );
         let filing =
             filing_a_task.then(|| read_skill(&launch.skills.smetana, "filing-a-task")).flatten();
         let brainstorming_text =
             discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
+        let plans_text =
+            planning.then(|| read_skill(&launch.skills.superpowers, "writing-plans")).flatten();
         // Before the prompt, which is positional — see the same line in
         // `claude.rs` for why the order is not left to the parser.
         if let Intent::Run { settings } = &launch.intent {
@@ -79,6 +91,7 @@ impl Profile for Codex {
         let text = prompt::SkillText {
             filing: filing.as_deref(),
             brainstorming: brainstorming_text.as_deref(),
+            plans: plans_text.as_deref(),
         };
         if let Some(built) = prompt::build(
             &launch.intent,
@@ -527,7 +540,7 @@ fn question(screen: &[String]) -> Option<Question> {
 mod tests {
     use super::*;
     use crate::agents::library::Skills;
-    use crate::agents::{Brainstorm, Intent, Launch, TaskDraft};
+    use crate::agents::{Intent, Launch, Stage, TaskDraft};
     use std::path::PathBuf;
 
     /// The real bundle resources, the way `claude.rs` reaches its own screen
@@ -563,6 +576,7 @@ mod tests {
     /// itself never writes, or the test would pass with the skill missing.
     const FILING_BODY: &str = "# Filing a task in bd";
     const BRAINSTORMING_BODY: &str = "ask questions one at a time";
+    const PLANS_BODY: &str = "# Writing Plans";
 
     fn argv(launch: &Launch) -> Vec<String> {
         Codex
@@ -573,13 +587,19 @@ mod tests {
             .collect()
     }
 
-    fn new_task(brainstorm: Brainstorm) -> Intent {
+    fn new_task(brainstorm: Stage) -> Intent {
         with_images(brainstorm, Vec::new())
     }
 
-    fn with_images(brainstorm: Brainstorm, images: Vec<String>) -> Intent {
+    fn with_images(brainstorm: Stage, images: Vec<String>) -> Intent {
+        staged(brainstorm, Stage::Off, Stage::Off, images)
+    }
+
+    fn staged(brainstorm: Stage, spec: Stage, plan: Stage, images: Vec<String>) -> Intent {
         Intent::NewTask {
             brainstorm,
+            spec,
+            plan,
             draft: TaskDraft {
                 text: "Swap the red for green".into(),
                 issue_type: Some("bug".into()),
@@ -593,7 +613,7 @@ mod tests {
     fn nothing_but_the_binary_and_the_prompt() {
         // Codex has no per-session flag for a skill library — verified against
         // 0.146.0 — so anything else on this command line would be a mistake.
-        let args = argv(&launch(new_task(Brainstorm::Off)));
+        let args = argv(&launch(new_task(Stage::Off)));
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "codex");
     }
@@ -605,13 +625,13 @@ mod tests {
 
     #[test]
     fn it_never_names_a_skill_registry_it_does_not_have() {
-        let args = argv(&launch(new_task(Brainstorm::On)));
+        let args = argv(&launch(new_task(Stage::On)));
         assert!(!args.last().unwrap().contains("superpowers:"));
     }
 
     #[test]
     fn auto_points_at_the_file_instead_of_pasting_it() {
-        let args = argv(&launch(new_task(Brainstorm::Auto)));
+        let args = argv(&launch(new_task(Stage::Auto)));
         let pointer = resources("superpowers").join("skills/brainstorming/SKILL.md");
         assert!(args.last().unwrap().contains(&pointer.display().to_string()));
     }
@@ -621,9 +641,9 @@ mod tests {
         // The branch's headline behaviour for a harness with no skill registry:
         // how this project wants a task worded is not part of the brainstorming
         // question, so the text travels in all three positions of the switch.
-        // Reading it under `Brainstorm::On` alone would still satisfy every
+        // Reading it under `Stage::On` alone would still satisfy every
         // other test in this file.
-        for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
+        for mode in [Stage::Off, Stage::Auto, Stage::On] {
             let args = argv(&launch(new_task(mode)));
             assert!(
                 args.last().unwrap().contains(FILING_BODY),
@@ -637,14 +657,14 @@ mod tests {
         // 10 KB the agent may never use: `Off` has no business with it at all,
         // and `Auto` is handed the path instead so it pays only if it decides
         // the task warrants a conversation.
-        for mode in [Brainstorm::Off, Brainstorm::Auto] {
+        for mode in [Stage::Off, Stage::Auto] {
             let args = argv(&launch(new_task(mode)));
             assert!(
                 !args.last().unwrap().contains(BRAINSTORMING_BODY),
                 "{mode:?}: the whole process was pasted in unasked"
             );
         }
-        let args = argv(&launch(new_task(Brainstorm::On)));
+        let args = argv(&launch(new_task(Stage::On)));
         assert!(
             args.last().unwrap().contains(BRAINSTORMING_BODY),
             "on must carry the process itself, there being no registry to name it in"
@@ -652,9 +672,45 @@ mod tests {
     }
 
     #[test]
+    fn the_plan_process_is_pasted_in_only_when_the_cascade_leaves_it_on() {
+        // 7 KB, and the same rule the brainstorming body follows: `On` gets
+        // the process, `Auto` gets the path, `Off` gets nothing — and none of
+        // it is read from disk at all unless the two stages above it left the
+        // plan standing.
+        let asked = argv(&launch(staged(Stage::On, Stage::On, Stage::On, Vec::new())));
+        assert!(
+            asked.last().unwrap().contains(PLANS_BODY),
+            "on must carry the process itself, there being no registry to name it in"
+        );
+
+        for intent in [
+            staged(Stage::On, Stage::On, Stage::Auto, Vec::new()),
+            staged(Stage::On, Stage::On, Stage::Off, Vec::new()),
+            // The cascade's own cases: a plan asked for under a spec, or a
+            // discussion, that is not On costs nothing either.
+            staged(Stage::On, Stage::Off, Stage::On, Vec::new()),
+            staged(Stage::Off, Stage::On, Stage::On, Vec::new()),
+            staged(Stage::Auto, Stage::On, Stage::On, Vec::new()),
+        ] {
+            let args = argv(&launch(intent));
+            assert!(
+                !args.last().unwrap().contains(PLANS_BODY),
+                "the whole process was pasted in unasked"
+            );
+        }
+    }
+
+    #[test]
+    fn an_auto_plan_is_pointed_at_the_shipped_file() {
+        let args = argv(&launch(staged(Stage::On, Stage::On, Stage::Auto, Vec::new())));
+        let pointer = resources("superpowers").join("skills/writing-plans/SKILL.md");
+        assert!(args.last().unwrap().contains(&pointer.display().to_string()), "{args:?}");
+    }
+
+    #[test]
     fn every_attached_image_rides_as_its_own_flag_in_front_of_the_prompt() {
         let args = argv(&launch(with_images(
-            Brainstorm::Off,
+            Stage::Off,
             vec!["/data/a.png".into(), "/data/b.png".into()],
         )));
 
@@ -669,13 +725,13 @@ mod tests {
     fn the_paths_are_in_the_prompt_as_well_as_on_the_command_line() {
         // Not a duplicate: the flag is what Codex looks at, the path in the
         // prompt is what has to reach the issue description.
-        let args = argv(&launch(with_images(Brainstorm::Off, vec!["/data/a.png".into()])));
+        let args = argv(&launch(with_images(Stage::Off, vec!["/data/a.png".into()])));
         assert!(args.last().unwrap().contains("/data/a.png"), "{args:?}");
     }
 
     #[test]
     fn a_task_with_no_images_gets_no_image_flag() {
-        let args = argv(&launch(new_task(Brainstorm::Off)));
+        let args = argv(&launch(new_task(Stage::Off)));
         assert!(!args.iter().any(|a| a == "-i"), "{args:?}");
     }
 

@@ -513,7 +513,9 @@ mod tests {
         let intents = [
             Intent::Bare,
             Intent::NewTask {
-                brainstorm: agents::Brainstorm::Off,
+                brainstorm: agents::Stage::Off,
+                spec: agents::Stage::Off,
+                plan: agents::Stage::Off,
                 draft: agents::TaskDraft {
                     text: "the tab bar overlaps the board".into(),
                     issue_type: None,

@@ -545,9 +545,22 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       </div>
       <!-- Tall enough for the whole dialog, footer included: a frame that
            clips it turns the one harness that would catch a broken modal into
-           a picture of the top half. It grew from 400px with the images row;
-           adding another row means measuring it again. -->
-      <div :style="{ position: 'relative', height: '520px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           a picture of the top half. It grew from 400px with the images row
+           and from 520px with the Spec/Plan row; adding another row means
+           measuring it again.
+
+           What the number is made of, at comfortable, which is the taller of
+           the two densities. The dialog itself is about 460px — a ~62px
+           header, a body of ~352px (a 5-row textarea at 104, the images block
+           at 96 with two thumbnails, two field rows at 44 each, three 12px
+           gaps and the 12px bottom padding) and a ~45px footer. The second
+           field row is what cost the last 56 of that: a 10px label, a 6px gap
+           under it, a 28px control and the 12px gap above the row. On top of
+           the dialog sits the scrim's own `paddingTop: 8vh`, and `vh` is the
+           window's rather than this box's — 72px in a 900px-tall window, 115px
+           in a 1440px one — so the frame has to hold the sum, and the headroom
+           here is what keeps the footer on screen on a tall display. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <NewTaskModal
           :open="true"
           :attachments="ATTACHMENTS"
@@ -560,8 +573,11 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       </div>
       <!-- The same dialog with nothing attached and something being dragged
            over the window: the empty state and the invitation are the two
-           halves nobody sees together in the app. -->
-      <div :style="{ position: 'relative', height: '520px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           halves nobody sees together in the app. The same height as the cell
+           above rather than the shorter one this state would fit in — the pair
+           is read as a pair, and two frames of different heights side by side
+           read as a difference in the dialog. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <NewTaskModal
           :open="true"
           :dragging="true"

@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use super::library::Skills;
-use super::{Brainstorm, ImageDelivery, Intent, SkillDelivery, TaskDraft};
+use super::{cascade, ImageDelivery, Intent, SkillDelivery, Stage, TaskDraft};
 use crate::runs::model::{RunMode, RunScope, RunSettings};
 
 /// The sentence that makes the agent talk the task through. It has to stand on
@@ -25,15 +25,19 @@ const JUDGE: &str =
      reading, discuss it with me before creating anything. If it is a single obvious change, \
      just file it.";
 
-/// The skills a harness cannot look up for itself, already read. Both are
+/// The skills a harness cannot look up for itself, already read. All are
 /// `None` for a `PluginDir` harness — it has the plugins loaded and is told
-/// the skills by name — and either may be `None` for an `Inline` one when the
-/// file could not be read, which is an ordinary outcome, not an error.
+/// the skills by name — and any of them may be `None` for an `Inline` one when
+/// the file could not be read, which is an ordinary outcome, not an error.
 pub struct SkillText<'a> {
     /// The app's own filing-a-task skill.
     pub filing: Option<&'a str>,
     /// superpowers' brainstorming skill. Read only when the switch is `On`.
     pub brainstorming: Option<&'a str>,
+    /// superpowers' writing-plans skill. Read only when the plan stage is
+    /// `On` after the cascade — an `Auto` is handed the path instead, so a
+    /// stage the agent may decline costs one line rather than 7 KB.
+    pub plans: Option<&'a str>,
 }
 
 /// The standard every filed task is held to, said in the prompt rather than
@@ -51,6 +55,62 @@ const STANDARD: &str =
      carried out and checked off with no further question. Pass --validate to bd create: \
      it refuses a description missing the sections the type requires, and it is the only \
      check standing between a thin task and a run stuck on it at night.";
+
+/// The design document, when the person asked for one outright.
+///
+/// The path is superpowers' own layout moved under `.smetana/`, and that move
+/// is the point: `.smetana/` is this app's folder in a project and
+/// `runs::gitignore` keeps it out of the repository, so writing there commits
+/// nothing and asks nobody to decide whether it should. It hangs off
+/// the discussion and is unreachable without it — the dialog cannot offer this
+/// unless Brainstorming is On, and `cascade` settles it the same way here.
+const SPEC: &str =
+    "Write the design the discussion produces to \
+     .smetana/docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md — today's date, and a short \
+     slug of what this is about for the topic.";
+
+/// The same stage on `Auto`: the test stated, the judgement left to the agent,
+/// the way `JUDGE` does one level up.
+///
+/// It must not presume a conversation, and that is the whole shape of this
+/// sentence. Brainstorming defaults to `Auto`, so the cascade makes this the
+/// default spec position too — and `JUDGE` above it expressly allows "if it is
+/// a single obvious change, just file it". In that branch nothing was settled
+/// with anybody, and a condition opening "if what we settle" would point at a
+/// discussion that never happened.
+const SPEC_JUDGE: &str =
+    "Whether or not we end up discussing this, decide whether it is worth a design document — \
+     more than one moving part, or a decision somebody will want the reasoning for later. If it \
+     is, write that design to .smetana/docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md, with \
+     today's date and a short slug of the topic. If it is small enough to say in the issue \
+     itself, do not write one.";
+
+/// The implementation plan, when it was asked for outright.
+const PLAN: &str = "Then write the implementation plan to \
+     .smetana/docs/plans/YYYY-MM-DD-<topic>.md, dated and named the same way.";
+
+/// And on `Auto`, held to the same rule as `SPEC_JUDGE`: it asks about the
+/// work, not about a document or a conversation that may not exist.
+const PLAN_JUDGE: &str =
+    "If the work is worth breaking into steps before anyone starts on it, write the \
+     implementation plan to .smetana/docs/plans/YYYY-MM-DD-<topic>.md, dated and named the same \
+     way. If it is not, do not write one.";
+
+/// What every file written this way owes, said once for both of them.
+///
+/// The task is filed last so that a session interrupted halfway leaves no card
+/// on the board promising documents nobody wrote. The paths are absolute for
+/// the reason `IMAGES` gives about a screenshot, plus one of their own:
+/// `.smetana/` is ignored, so an ignored file does not travel into the
+/// worktree `smetana:provisioning` cuts, and a relative path resolves from
+/// nowhere an implementer actually stands. And the issue still has to say what
+/// was decided in prose, because the files are on one machine only.
+const PAPERWORK: &str =
+    "File the task last, once everything you are writing has been written, and copy the absolute \
+     path of each file you wrote into the issue description. .smetana/ is not in the repository: \
+     nothing in it is committed, do not try to commit it, and on any other machine those paths \
+     lead nowhere — so the issue must also say in its own prose what was decided and what the \
+     plan is, and stand on that alone.";
 
 /// What the agent is told to produce when a project has no configuration yet.
 /// The file's path is named here rather than left to the skill: a session that
@@ -70,13 +130,29 @@ pub fn build(
     text: SkillText,
 ) -> Option<String> {
     let brainstorming = skills.superpowers.join("skills/brainstorming");
+    let plans = skills.superpowers.join("skills/writing-plans");
     match intent {
         Intent::Bare => None,
         // Deliberately unfinished: the agent is being told what to work on,
         // not what to change, and only the person knows the second half.
         Intent::EditTask { id, title } => Some(format!("Update bd issue {id} (\"{title}\"): ")),
-        Intent::NewTask { brainstorm, draft } => {
-            Some(new_task(*brainstorm, draft, delivery, images, &brainstorming, text))
+        Intent::NewTask { brainstorm, spec, plan, draft } => {
+            // The cascade first, and nothing below reads the raw two: a
+            // payload can carry a spec chosen under a discussion that has
+            // since been switched off, and prose about a document nobody
+            // asked for is worse than none.
+            let (spec, plan) = cascade(*brainstorm, *spec, *plan);
+            Some(new_task(
+                *brainstorm,
+                spec,
+                plan,
+                draft,
+                delivery,
+                images,
+                &brainstorming,
+                &plans,
+                text,
+            ))
         }
         Intent::Setup => Some(setup(delivery, skills, facts)),
         Intent::Run { settings } => Some(run(settings, delivery, skills)),
@@ -298,12 +374,83 @@ fn images(paths: &[String], delivery: ImageDelivery) -> String {
     out
 }
 
+/// The two stages under the discussion, already cascaded. Empty when both are
+/// `Off` — a task filed with no paperwork asked for must carry no prose about
+/// paperwork at all, or an agent starts looking for a place to put a document
+/// nobody wanted.
+///
+/// The order is the order of the work: the design, then the plan, then how
+/// either reaches whoever picks the task up. A skill body, where one is
+/// carried, goes last so that 7 KB of process does not push the instructions
+/// off the top of what the agent reads first.
+fn stages(
+    spec: Stage,
+    plan: Stage,
+    delivery: SkillDelivery,
+    plans: &Path,
+    plans_text: Option<&str>,
+) -> String {
+    if spec == Stage::Off && plan == Stage::Off {
+        return String::new();
+    }
+    let mut out = String::new();
+    match spec {
+        Stage::On => out.push_str(SPEC),
+        Stage::Auto => out.push_str(SPEC_JUDGE),
+        Stage::Off => {}
+    }
+    if spec != Stage::Off && plan != Stage::Off {
+        out.push(' ');
+    }
+    match plan {
+        Stage::On => out.push_str(PLAN),
+        Stage::Auto => out.push_str(PLAN_JUDGE),
+        Stage::Off => {}
+    }
+
+    // How the plan's own process reaches this harness. The design document is
+    // part of the brainstorming process, which is already named or already
+    // pasted whole whenever the spec stage is reachable at all, so only the
+    // plan needs a skill of its own.
+    match (plan, delivery) {
+        (Stage::Off, _) => {}
+        (Stage::On, SkillDelivery::PluginDir) => {
+            out.push_str(" Use the superpowers:writing-plans skill for it.");
+        }
+        (Stage::Auto, SkillDelivery::PluginDir) => {
+            out.push_str(" If you write one, use the superpowers:writing-plans skill for it.");
+        }
+        (Stage::Auto, SkillDelivery::Inline) => {
+            let _ = write!(
+                out,
+                " If you write one, the process is at {} — read it first.",
+                plans.join("SKILL.md").display()
+            );
+        }
+        // `On` inline: the body itself, appended at the end below.
+        (Stage::On, SkillDelivery::Inline) => {}
+    }
+
+    out.push_str("\n\n");
+    out.push_str(PAPERWORK);
+
+    if let (Stage::On, SkillDelivery::Inline, Some(process)) = (plan, delivery, plans_text) {
+        out.push_str("\n\nFollow this process for the plan:\n\n");
+        out.push_str(process);
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
 fn new_task(
-    brainstorm: Brainstorm,
+    brainstorm: Stage,
+    spec: Stage,
+    plan: Stage,
     draft: &TaskDraft,
     delivery: SkillDelivery,
     image_delivery: ImageDelivery,
     brainstorming: &Path,
+    plans: &Path,
     text: SkillText,
 ) -> String {
     let mut out = String::new();
@@ -333,25 +480,25 @@ fn new_task(
     }
 
     match (brainstorm, delivery) {
-        (Brainstorm::Off, _) => {
+        (Stage::Off, _) => {
             out.push_str("File it now. No design discussion is wanted for this one.");
         }
-        (Brainstorm::On, SkillDelivery::PluginDir) => {
+        (Stage::On, SkillDelivery::PluginDir) => {
             out.push_str("Use the superpowers:brainstorming skill. ");
             out.push_str(DISCUSS);
         }
-        (Brainstorm::On, SkillDelivery::Inline) => {
+        (Stage::On, SkillDelivery::Inline) => {
             out.push_str(DISCUSS);
             if let Some(process) = text.brainstorming {
                 out.push_str("\n\nFollow this process:\n\n");
                 out.push_str(process);
             }
         }
-        (Brainstorm::Auto, SkillDelivery::PluginDir) => {
+        (Stage::Auto, SkillDelivery::PluginDir) => {
             out.push_str(JUDGE);
             out.push_str(" If you decide to discuss it, use the superpowers:brainstorming skill.");
         }
-        (Brainstorm::Auto, SkillDelivery::Inline) => {
+        (Stage::Auto, SkillDelivery::Inline) => {
             out.push_str(JUDGE);
             let _ = write!(
                 out,
@@ -360,13 +507,21 @@ fn new_task(
             );
         }
     }
+
+    // Last, because it is the last of the work: what the discussion produced,
+    // written down, and only then the task itself.
+    let paperwork = stages(spec, plan, delivery, plans, text.plans);
+    if !paperwork.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(&paperwork);
+    }
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{Brainstorm, Intent, TaskDraft};
+    use crate::agents::{Intent, Stage, TaskDraft};
     use std::path::PathBuf;
 
     fn draft() -> TaskDraft {
@@ -378,8 +533,17 @@ mod tests {
         }
     }
 
-    fn new_task(brainstorm: Brainstorm) -> Intent {
-        Intent::NewTask { brainstorm, draft: draft() }
+    /// The switch under test on its own: both later stages off, so nothing
+    /// they produce can land in a prompt these cases are not about.
+    fn new_task(brainstorm: Stage) -> Intent {
+        Intent::NewTask { brainstorm, spec: Stage::Off, plan: Stage::Off, draft: draft() }
+    }
+
+    /// All three switches, as the dialog sends them — the cascade is applied
+    /// on this side, so a combination the dialog cannot draw is a fair thing
+    /// to pass in.
+    fn staged(brainstorm: Stage, spec: Stage, plan: Stage) -> Intent {
+        Intent::NewTask { brainstorm, spec, plan, draft: draft() }
     }
 
     fn skills() -> crate::agents::library::Skills {
@@ -392,15 +556,16 @@ mod tests {
 
     const BRAINSTORMING: &str = "# Brainstorming\n\nAsk one question at a time.";
     const FILING: &str = "# Filing a task\n\nThe title says what needs doing.";
+    const PLANS: &str = "# Writing plans\n\nEvery step names the file it touches.";
 
     /// Nothing read: what a PluginDir harness always gets, and what an Inline
     /// harness gets when the files cannot be read.
     fn nothing() -> SkillText<'static> {
-        SkillText { filing: None, brainstorming: None }
+        SkillText { filing: None, brainstorming: None, plans: None }
     }
 
-    fn both() -> SkillText<'static> {
-        SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING) }
+    fn every_skill() -> SkillText<'static> {
+        SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING), plans: Some(PLANS) }
     }
 
     /// A floor only where the scope allows one and a number of agents only
@@ -601,12 +766,13 @@ mod tests {
     #[test]
     fn editing_an_issue_is_never_given_a_filing_skill() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
+        let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
     }
 
     fn drafted(draft: TaskDraft) -> String {
-        let intent = Intent::NewTask { brainstorm: Brainstorm::Off, draft };
+        let intent =
+            Intent::NewTask { brainstorm: Stage::Off, spec: Stage::Off, plan: Stage::Off, draft };
         build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap()
     }
 
@@ -650,7 +816,9 @@ mod tests {
 
     fn with_images(image_delivery: ImageDelivery) -> String {
         let intent = Intent::NewTask {
-            brainstorm: Brainstorm::Off,
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
             draft: TaskDraft {
                 images: vec![
                     "/data/attachments/20260806-121314-mock.png".into(),
@@ -699,7 +867,9 @@ mod tests {
         // single line is a prompt somebody wrote without looking, the same
         // objection the run's "at most 1 tasks" already carries.
         let intent = Intent::NewTask {
-            brainstorm: Brainstorm::Off,
+            brainstorm: Stage::Off,
+            spec: Stage::Off,
+            plan: Stage::Off,
             draft: TaskDraft { images: vec!["/data/a.png".into()], ..draft() },
         };
         let text =
@@ -726,7 +896,7 @@ mod tests {
         // so a leak of either into the Off arm would say nothing about the
         // process and still pass a substring check on that word alone.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            let text = build(&new_task(Brainstorm::Off), delivery, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
+            let text = build(&new_task(Stage::Off), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
             assert!(!text.contains(DISCUSS), "{delivery:?}: off must not carry the discussion prose");
             assert!(!text.contains(JUDGE), "{delivery:?}: off must not carry the judgement prose");
         }
@@ -740,7 +910,7 @@ mod tests {
         // standard still has to reach the agent, which is why it is a constant
         // in the prompt rather than a paragraph in a file that may be missing.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
+            for mode in [Stage::Off, Stage::Auto, Stage::On] {
                 let text =
                     build(&new_task(mode), delivery, ImageDelivery::InPrompt, &skills(), None, nothing())
                         .unwrap();
@@ -756,7 +926,7 @@ mod tests {
         // an update. Leaking it would tell those sessions to validate a call
         // they are not making.
         for intent in [Intent::Bare, Intent::Setup, Intent::EditTask { id: "x-1".into(), title: "T".into() }] {
-            let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both())
+            let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill())
                 .unwrap_or_default();
             assert!(!text.contains(STANDARD), "{intent:?}: {text}");
         }
@@ -767,8 +937,8 @@ mod tests {
         // Mirrors an_inline_harness_carries_the_filing_skill_whatever_the_switch_says
         // from the PluginDir side of the same guarantee: filing applies to
         // every NewTask whatever the switch says.
-        for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
-            let text = build(&new_task(mode), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
+        for mode in [Stage::Off, Stage::Auto, Stage::On] {
+            let text = build(&new_task(mode), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
             assert!(text.contains("smetana:filing-a-task"), "{mode:?}");
             assert!(!text.contains(FILING), "{mode:?}: no registry should carry the skill body");
         }
@@ -779,8 +949,8 @@ mod tests {
         // The rules for filing a task are not part of the brainstorming
         // question: an agent that files without discussion still has to file
         // it properly.
-        for mode in [Brainstorm::Off, Brainstorm::Auto, Brainstorm::On] {
-            let text = build(&new_task(mode), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
+        for mode in [Stage::Off, Stage::Auto, Stage::On] {
+            let text = build(&new_task(mode), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
             assert!(text.contains("The title says what needs doing"), "{mode:?}");
             assert!(!text.contains("smetana:filing-a-task"), "{mode:?}: no registry to name");
         }
@@ -789,13 +959,13 @@ mod tests {
     #[test]
     fn switched_on_a_plugin_dir_harness_is_told_the_skill_name() {
         let text =
-            build(&new_task(Brainstorm::On), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
+            build(&new_task(Stage::On), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
         assert!(text.contains("superpowers:brainstorming"));
     }
 
     #[test]
     fn switched_on_an_inline_harness_carries_the_whole_process() {
-        let text = build(&new_task(Brainstorm::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
+        let text = build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
         assert!(text.contains("Ask one question at a time."));
         assert!(
             !text.contains("superpowers:brainstorming"),
@@ -806,25 +976,204 @@ mod tests {
     #[test]
     fn on_inline_degrades_to_the_rule_when_the_skill_cannot_be_read() {
         let text =
-            build(&new_task(Brainstorm::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
+            build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
         assert!(text.contains("agree the design"), "the instruction survives a missing file");
     }
 
     #[test]
     fn auto_leaves_the_judgement_to_the_agent() {
         let text =
-            build(&new_task(Brainstorm::Auto), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
+            build(&new_task(Stage::Auto), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
         assert!(text.contains("more than one"), "auto states the test the agent applies");
     }
 
     #[test]
     fn auto_on_an_inline_harness_points_at_the_file_rather_than_pasting_it() {
-        let text = build(&new_task(Brainstorm::Auto), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, both()).unwrap();
+        let text = build(&new_task(Stage::Auto), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
         assert!(text.contains("/app/resources/superpowers/skills/brainstorming/SKILL.md"));
         assert!(
             !text.contains("Ask one question at a time."),
             "auto must not pay for 10 KB the agent may not use"
         );
+    }
+
+    /// A prompt for a filing session with all three switches set.
+    fn staged_prompt(
+        brainstorm: Stage,
+        spec: Stage,
+        plan: Stage,
+        delivery: SkillDelivery,
+    ) -> String {
+        build(
+            &staged(brainstorm, spec, plan),
+            delivery,
+            ImageDelivery::InPrompt,
+            &skills(),
+            None,
+            every_skill(),
+        )
+        .unwrap()
+    }
+
+    /// Every piece of prose the two stages can produce. Checked against the
+    /// constants rather than retyped substrings, for the reason
+    /// `switched_off_it_asks_for_no_discussion` gives: a retyped fragment
+    /// drifts away from the prose it guards and keeps passing.
+    fn no_paperwork(text: &str, whose: &str) {
+        for prose in [SPEC, SPEC_JUDGE, PLAN, PLAN_JUDGE, PAPERWORK] {
+            assert!(!text.contains(prose), "{whose} must carry no paperwork prose: {text}");
+        }
+    }
+
+    #[test]
+    fn both_stages_off_ask_for_no_documents_at_all() {
+        // A heading with nothing under it is the images objection again: an
+        // agent told where a design document would go starts looking for a
+        // reason to write one. Every way of arriving at Off is here — the
+        // switches themselves, a discussion switched off under them, and a
+        // spec switched off under the discussion.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for (brainstorm, spec, plan) in [
+                (Stage::Off, Stage::Off, Stage::Off),
+                (Stage::Off, Stage::On, Stage::On),
+                (Stage::On, Stage::Off, Stage::Off),
+                (Stage::On, Stage::Off, Stage::On),
+            ] {
+                let text = staged_prompt(brainstorm, spec, plan, delivery);
+                no_paperwork(&text, &format!("{delivery:?}/{brainstorm:?}/{spec:?}/{plan:?}"));
+            }
+        }
+    }
+
+    #[test]
+    fn no_other_intent_is_asked_for_a_spec_or_a_plan() {
+        // The two stages belong to filing and to nothing else: a run files
+        // through `running-tasks` under its own rules, editing an issue is an
+        // update, and a setup session writes one named file.
+        for intent in [
+            Intent::Bare,
+            Intent::Setup,
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
+            Intent::Run {
+                settings: run_settings(RunMode::Solo, RunScope::Task { id: "x-2".into() }),
+            },
+        ] {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text =
+                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill())
+                        .unwrap_or_default();
+                no_paperwork(&text, &format!("{intent:?}/{delivery:?}"));
+            }
+        }
+    }
+
+    #[test]
+    fn the_cascade_is_applied_before_any_prose_is_written() {
+        // The payload is not the screen: a person can turn Brainstorming off
+        // after choosing a spec, and what arrives here would then ask for a
+        // design document from a session that discusses nothing.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let orphaned = staged_prompt(Stage::Off, Stage::On, Stage::On, delivery);
+            no_paperwork(&orphaned, &format!("{delivery:?}: spec On under brainstorming Off"));
+
+            // And one level down: a plan under a spec nobody settled is the
+            // same defect one link along the chain.
+            let planless = staged_prompt(Stage::On, Stage::Off, Stage::On, delivery);
+            assert!(!planless.contains(PLAN), "{delivery:?}: {planless}");
+            assert!(!planless.contains(PLAN_JUDGE), "{delivery:?}: {planless}");
+            no_paperwork(&planless, &format!("{delivery:?}: plan On under spec Off"));
+        }
+    }
+
+    #[test]
+    fn each_document_is_named_by_the_path_it_goes_to() {
+        // The one thing the agent cannot work out for itself: superpowers puts
+        // these at the project root, and this app wants them under .smetana/.
+        let text = staged_prompt(Stage::On, Stage::On, Stage::On, SkillDelivery::PluginDir);
+        assert!(
+            text.contains(".smetana/docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md"),
+            "{text}"
+        );
+        assert!(text.contains(".smetana/docs/plans/YYYY-MM-DD-<topic>.md"), "{text}");
+
+        // An Auto stage names the same place — the judgement is whether to
+        // write one, never where it goes.
+        let judged = staged_prompt(Stage::On, Stage::Auto, Stage::Auto, SkillDelivery::PluginDir);
+        assert!(
+            judged.contains(".smetana/docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md"),
+            "{judged}"
+        );
+        assert!(judged.contains(".smetana/docs/plans/YYYY-MM-DD-<topic>.md"), "{judged}");
+    }
+
+    #[test]
+    fn the_task_is_filed_last_and_the_paths_reach_the_issue_absolute() {
+        // Filing last is what makes an interrupted session leave nothing
+        // behind; the absolute paths are what make the files reachable from
+        // the worktree an implementer actually stands in, since an ignored
+        // folder does not travel into one.
+        for stages in [(Stage::On, Stage::On), (Stage::Auto, Stage::Auto), (Stage::On, Stage::Off)] {
+            let text = staged_prompt(Stage::On, stages.0, stages.1, SkillDelivery::PluginDir);
+            assert!(text.contains(PAPERWORK), "{stages:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn nothing_is_ever_asked_to_be_committed() {
+        // `.smetana/` is kept out of the repository by runs::gitignore, so
+        // there is nothing to commit — and an agent that tried would be
+        // fighting a rule the app enforces in code.
+        let text = staged_prompt(Stage::On, Stage::On, Stage::On, SkillDelivery::PluginDir);
+        assert!(text.contains("not in the repository"), "{text}");
+        assert!(text.contains("do not try to commit it"), "{text}");
+        assert!(text.contains("stand on that alone"), "the issue owes its own prose: {text}");
+    }
+
+    #[test]
+    fn a_plan_reaches_each_harness_the_way_that_harness_takes_a_skill() {
+        // The same trade `Stage` already makes, one stage down: a name
+        // for a registry, the body for a harness without one, and only where
+        // the stage was actually asked for.
+        let named = staged_prompt(Stage::On, Stage::On, Stage::On, SkillDelivery::PluginDir);
+        assert!(named.contains("superpowers:writing-plans"), "{named}");
+        assert!(!named.contains(PLANS), "a registry carries no skill body: {named}");
+
+        let carried = staged_prompt(Stage::On, Stage::On, Stage::On, SkillDelivery::Inline);
+        assert!(carried.contains(PLANS), "{carried}");
+        assert!(
+            !carried.contains("superpowers:writing-plans"),
+            "an inline harness has no skill registry: {carried}"
+        );
+    }
+
+    #[test]
+    fn an_auto_plan_is_pointed_at_the_file_rather_than_handed_it() {
+        // 7 KB the agent may decline to use, against one line naming where it
+        // is — the same choice `Stage::Auto` makes for brainstorming.
+        let text = staged_prompt(Stage::On, Stage::On, Stage::Auto, SkillDelivery::Inline);
+        assert!(
+            text.contains("/app/resources/superpowers/skills/writing-plans/SKILL.md"),
+            "{text}"
+        );
+        assert!(!text.contains(PLANS), "auto must not pay for a skill it may not use: {text}");
+    }
+
+    #[test]
+    fn an_asked_for_plan_survives_a_skill_that_cannot_be_read() {
+        // The instruction stands on its own, the way DISCUSS does: an Inline
+        // harness may find no file there at all.
+        let text = build(
+            &staged(Stage::On, Stage::On, Stage::On),
+            SkillDelivery::Inline,
+            ImageDelivery::InPrompt,
+            &skills(),
+            None,
+            nothing(),
+        )
+        .unwrap();
+        assert!(text.contains(PLAN), "{text}");
+        assert!(text.contains(PAPERWORK), "{text}");
     }
 
     const FACTS: &str = "- backend — npm\n    npm run test\n";
@@ -856,7 +1205,7 @@ mod tests {
             ImageDelivery::InPrompt,
             &skills(),
             Some(FACTS),
-            SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING) },
+            every_skill(),
         )
         .expect("builds");
         assert!(text.contains("/app/resources/smetana/skills/project-setup/SKILL.md"), "{text}");

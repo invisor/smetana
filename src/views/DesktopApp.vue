@@ -989,14 +989,17 @@ const inspectedIssue = computed(() =>
    that has read the repository can turn four sentences into a task worth
    picking up. The card appears when the agent has run bd create — through the
    watcher, the same as any other change made outside this window. */
-const submitNewTask = async ({ brainstorm, ...draft }) => {
+const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
   const path = activePath.value
   if (!path) return
   creating.value = true
   project.sideTab = 'agents'
   project.activeTab = 'terminal'
   try {
-    const started = createSession(path, { kind: 'newTask', brainstorm, draft })
+    /* The three stages ride beside the draft rather than in it: they are the
+       agent's briefing about how to work, and nothing on screen draws them —
+       the same place `brainstorm` has always had. */
+    const started = createSession(path, { kind: 'newTask', brainstorm, spec, plan, draft })
     /* Filing a task opens its draft on the right, the same as picking the row
        would: it is the same selection arriving by another route, and the action
        giving two different answers depending on what the column happened to be
