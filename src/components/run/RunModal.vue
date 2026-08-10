@@ -104,9 +104,9 @@ const soloAllowed = computed(() => props.scope?.kind === 'task')
 const hasFloor = computed(() => props.scope?.kind === 'queue')
 
 const MODES = [
-  { value: 'auto', label: 'On its own' },
-  { value: 'supervised', label: 'With a lead' },
-  { value: 'solo', label: 'Plain, one task' }
+  { value: 'auto', label: 'Autopilot' },
+  { value: 'supervised', label: 'Crew' },
+  { value: 'solo', label: 'Solo' }
 ]
 const modes = computed(() => (soloAllowed.value ? MODES : MODES.filter((m) => m.value !== 'solo')))
 
@@ -471,10 +471,8 @@ const errorStyle = {
       <div :style="row">
         <span :style="labelStyle">How many at once</span>
         <Dropdown v-model="parallel" :options="PARALLEL" :disabled="locked || mode === 'solo'" />
-        <!-- Named by what the mode does rather than by "solo": the word is not
-             on screen — the option above reads "Plain, one task". -->
         <span v-if="mode === 'solo'" :style="noteStyle">
-          This mode does the work itself, so there is nobody to spawn.
+          Solo does the work itself, so there is nobody to spawn.
         </span>
       </div>
 

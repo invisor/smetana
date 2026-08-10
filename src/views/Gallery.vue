@@ -882,9 +882,9 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <Dropdown
             v-model="choice"
             :options="[
-              { value: 'ready', label: 'On its own' },
-              { value: 'running', label: 'With a lead' },
-              { value: 'done', label: 'Plain, one task' }
+              { value: 'ready', label: 'Autopilot' },
+              { value: 'running', label: 'Crew' },
+              { value: 'done', label: 'Solo' }
             ]"
           />
         </div>
