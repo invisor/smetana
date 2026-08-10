@@ -49,6 +49,7 @@ import {
   boardColumns,
   deleteIssue,
   initTracker,
+  isLockIssue,
   issueById,
   toUiStatus,
   trackerState,
@@ -1054,15 +1055,20 @@ onUnmounted(() => stopDrops?.())
    the tracker rather than the issue, and the selection must not be wiped: the
    debounce would carry a null to disk at once, and one launch with a broken bd
    — from Finder, say — would lose the remembered issue forever. So we ask about
-   health too. */
+   health too.
+
+   A merge lock counts as gone: the board does not draw it, so a settings file
+   written before it was hidden would otherwise leave the inspector showing an
+   issue with no card behind it. */
 watch(
   () => [trackerState.ready, trackerState.health.state, trackerState.issues.size],
   () => {
+    const selected = project.selectedTask ? issueById(project.selectedTask) : null
     if (
       trackerState.ready &&
       trackerState.health.state === 'ok' &&
       project.selectedTask &&
-      !issueById(project.selectedTask)
+      (!selected || isLockIssue(selected))
     ) {
       project.selectedTask = null
     }
