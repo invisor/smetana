@@ -1492,14 +1492,12 @@ const toastStackStyle = {
         <!-- One segment per run, oldest first — a project holds several now,
              and each segment's stop names its own run by token. The scope
              bar's own gap spaces the segments; RunBar draws nothing for a
-             run it was not given, so an empty list costs no width. -->
-        <RunBar
-          v-for="r in runsState.runs"
-          :key="r.token"
-          :run="r"
-          :busy="runStarting"
-          @stop="stopTheRun(r.token)"
-        />
+             run it was not given, so an empty list costs no width. `busy` is
+             deliberately not bound: the run a confirm is starting has no
+             segment until the worker answers, so `runStarting` is about none
+             of these, and passing it disabled the other live runs' stop
+             buttons over a start that never touches them. -->
+        <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
       </template>
     </ScopeIndicator>
 

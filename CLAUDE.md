@@ -857,9 +857,11 @@ other caller.
 | `service.rs` | the worker: the loop, one run per scope per project |
 | `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
 
-`service.rs` is the same single-tokio-task shape as the other two workers and carries no tests, the
-same as they do — the deciding is `queue.rs` and that is pure, and so is the map's own lifecycle at
-the bottom of the file. A project holds several runs at once, and the map is keyed by each run's own
+`service.rs` is the same single-tokio-task shape as the other two workers. The deciding is
+`queue.rs` and that is pure; the map's own lifecycle — `absorb`, `permit`, `admit` and the
+browser-candidate list — is pure too, and unlike the other workers this file carries a test module
+of its own at the bottom for exactly that part, because both ways of getting the lifecycle wrong
+are silent. A project holds several runs at once, and the map is keyed by each run's own
 `token` (smetana-5hf): what is refused is a second run over the **same scope** — two runs both told
 to take the whole queue are two leads racing for the same tasks, and the refusal names the scope it
 found in the way — while a queue run beside a task run, or two runs over different epics, divide the

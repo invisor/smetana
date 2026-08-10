@@ -290,6 +290,22 @@ const boardColumns = computed(() =>
   )
 )
 
+/* The same board while runs are going. The board-level prop greys the column
+   header's play only, so a card's own grey has to ride the task object — the
+   channel DesktopApp uses — and this is the one place in the gallery that
+   state is rendered at all: one card carries a task-run reason of its own,
+   in the runScopes.js vocabulary. */
+const busyBoardColumns = computed(() =>
+  boardColumns.value.map((column) => ({
+    ...column,
+    tasks: column.tasks.map((task) =>
+      task.id === 'bd-a1b2'
+        ? { ...task, runBlockedReason: 'a run over task bd-a1b2 is already going' }
+        : task
+    )
+  }))
+)
+
 /* Every glyph a column header can draw: bd's built-in vocabulary, the two
    reserved statuses no bd column carries but a custom one might, the two custom
    statuses that have a glyph of their own — `ready_to_merge` in bd's own
@@ -473,7 +489,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             status="ready"
             type="task"
             runnable
-            run-blocked-reason="a run is already going in this project"
+            run-blocked-reason="a run over task bd-77e0 is already going"
           />
         </div>
       </div>
@@ -495,15 +511,17 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @reorder="boardOrder = $event"
         />
       </div>
-      <!-- The same board with a run already going in the project: every play on
-           it, the column header's included, is inactive and carries the reason
-           rather than disappearing. -->
+      <!-- The same board with runs already going in the project: the refusal
+           is per scope now, so the column header's play is greyed by the
+           board-level prop over a queue run, one card's play by its own
+           task-run reason riding the task object, and both carry their
+           sentence rather than disappearing. -->
       <div :style="{ display: 'flex', height: '300px', border: 'var(--border-w) solid var(--border)' }">
         <KanbanBoard
-          :columns="boardColumns"
+          :columns="busyBoardColumns"
           add-to="ready"
           run-from="ready"
-          run-blocked-reason="a run is already going in this project"
+          run-blocked-reason="a run over the queue is already going"
           :reorderable="false"
           @select="() => {}"
           @add="() => {}"
