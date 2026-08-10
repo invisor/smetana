@@ -87,8 +87,19 @@ bd update <lock-id> --claim
 
 **Breaking a lock is a report line, never a silent step**: name the actor it was taken
 from and how old the claim was. The claim after the break can still be refused —
-another waiting lead may land first — and that refusal goes back to waiting, never to a
-second break.
+another waiting lead may land first — and that refusal goes back to waiting, not to
+another break: the new claim carries a fresh `started_at`, so the ordinary 60-minute
+rule re-arms and applies to it like any other.
+
+The break is release-then-claim and bd has no compare-and-swap, so the pair is not
+atomic: two waiters seeing the same stale lock can interleave, and the second release
+silently unseats the first's fresh claim — and a broken holder that was alive after
+all resumes merging unaware. **So holdership is re-verified, never assumed**: after
+any accepted claim that followed a break, and after any pause inside the merge phase —
+a STOP answered, a wait of any kind — `bd show <lock-id> --json` and confirm the
+assignee is your own actor before (re)entering a task's Step 0; not yours → back to
+waiting. This shrinks the window to seconds rather than closing it, and that is the
+honest limit of what bd offers.
 
 Release — unconditional, the same on success and on failure (`open` because only an
 open issue is claimable; an empty assignee so nothing still names a holder):

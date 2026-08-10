@@ -145,9 +145,13 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) ->
     out
 }
 
-/// Coordination, not work: the merge lock is invisible to the queue whatever
-/// its status — free (`open`) it is not ready work, held (`in_progress`) it is
-/// not a killed batch's orphan to recover.
+/// Coordination, not work: the merge lock never enters the snapshot's counts —
+/// free (`open`) it is not ready work, held (`in_progress`) it is not a killed
+/// batch's orphan to recover. It deliberately stays in the `not_finished`
+/// blocking set above: nothing should ever depend on the lock — it never
+/// closes — and if something does by mistake, holding the dependent back fails
+/// closed, where releasing it would take work whose premise was a wiring
+/// error.
 fn is_lock(issue: &Issue) -> bool {
     issue.labels.iter().any(|l| l == LOCK_LABEL)
 }
@@ -309,6 +313,24 @@ mod tests {
                 "a lock in `{status}` leaked into the snapshot"
             );
         }
+    }
+
+    #[test]
+    fn a_blocks_dependency_on_the_lock_keeps_its_dependent_waiting() {
+        // Nothing should ever depend on the lock — it never closes — so a
+        // dependency on it is a wiring error, and it fails closed: the lock is
+        // filtered out of the snapshot's counts, not out of the blocking set.
+        // Moving the filter up into the `not_finished` collection has to be
+        // done on purpose, against this test.
+        let mut waiting = issue("waiting", "open");
+        waiting.dependencies = vec![Dependency {
+            issue_id: "waiting".into(),
+            depends_on_id: "lock".into(),
+            kind: "blocks".into(),
+        }];
+        let mut lock = issue("lock", "open");
+        lock.labels = vec!["smetana-lock".into()];
+        assert!(snapshot(&[waiting, lock], &RunScope::Queue, Some(4)).ready.is_empty());
     }
 
     #[test]

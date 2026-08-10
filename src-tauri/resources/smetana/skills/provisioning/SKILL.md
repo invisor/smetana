@@ -42,26 +42,23 @@ takes is decided by the scope you were given.
 call, one task at a time, repeated until you have as many as the batch allows:
 
 ```bash
-bd ready --claim --json
+bd ready --claim --exclude-label smetana-lock --json
 ```
 
-It claims the first ready issue — open, unblocked, highest priority first, with the
-custom statuses this process uses already excluded — and answers with it, so what comes
-back is already yours and there is no window at all. An empty answer means no ready
-work, which is an outcome, not a failure.
+It claims the first ready issue that is not the merge lock — open, unblocked, highest
+priority first, with the custom statuses this process uses already excluded and the
+lock excluded by its label — and answers with it, so what comes back is already yours
+and there is no window at all. An empty answer means no ready work, which is an
+outcome, not a failure.
 
 **The merge lock is on the board and is never work.** `merging`'s lock section says
 what it is; what matters here is that it sits `open` under the `smetana-lock` label, so
-`bd ready` returns it and the atomic form above can hand it to you as if it were a
-task. An answer carrying that label was not work: put it back at once, and take the
-rest of this batch through the listing form instead — list, drop everything labelled
-`smetana-lock`, claim by id:
-
-```bash
-bd update <id> --status open --assignee ""   # put the lock back
-```
-
-In the listing form the same rule is one more drop, next to the scope's own: anything
+without the exclusion `bd ready` would hand it over like a task — that is what
+`--exclude-label` above is for, and it leaves the lock untouched. On a bd without the
+flag, a lock claimed by accident is put back at once
+(`bd update <id> --status open --assignee ""`) and the rest of the batch goes by id
+through the listing form — a fallback, not the rule: the pinned sidecar has the flag.
+In the listing form the exclusion is one more drop, next to the scope's own: anything
 carrying `smetana-lock` is never claimed, whatever the scope.
 
 **A narrower scope** — an issue id, an epic whose children are the work, or a priority

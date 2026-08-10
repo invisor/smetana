@@ -152,7 +152,10 @@ on its own. **This runs before you take any new work.**
    exactly as `merging`'s lock section says. Idempotent the same way the statuses are:
    an existing lock is left alone, held or free — a held one is another lead
    mid-merge, not a problem to fix here.
-2. `bd list --status in_progress --json`. **An issue on this list is not provably an
+2. `bd list --status in_progress --json`. Anything carrying the `smetana-lock` label
+   never enters recovery: a held lock is another lead mid-merge or a stale claim, both
+   `merging`'s lock section's business — and parking it would leave it unclaimable for
+   everybody. **An issue on this list is not provably an
    orphan.** The assignee is the evidence — `bd show <id>` carries it, and every run
    claims under its own actor — so a `smetana-run-<id>` that is not this run's own
    (yours is `$BEADS_ACTOR` in your environment) may be a killed run's leftovers, or a
