@@ -83,5 +83,12 @@ export { default as RunBar } from './run/RunBar.vue'
 export { default as RunModal } from './run/RunModal.vue'
 export { default as SetupProjectModal } from './run/SetupProjectModal.vue'
 
+// settings
+export { default as AboutSettings } from './settings/AboutSettings.vue'
+export { default as AgentSettings } from './settings/AgentSettings.vue'
+export { default as EditorSettings } from './settings/EditorSettings.vue'
+export { default as GeneralSettings } from './settings/GeneralSettings.vue'
+export { default as SettingsRow } from './settings/SettingsRow.vue'
+
 // terminal
 export { default as TerminalView } from './terminal/TerminalView.vue'

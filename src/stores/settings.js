@@ -9,7 +9,12 @@
    responsible for the schema and the disk. */
 import { nextTick, reactive, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { emit, listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+/* Pure, no Vue and no DOM: what the theme control offers and what a font size
+   is allowed to be. Imported so the settings window and this store cannot
+   disagree about which values are legal. */
+import { EDITOR_FONT_DEFAULT, THEME_CHOICES, UI_FONT_DEFAULT, clampFont } from '../appearance.js'
 /* tabs.js imports settings.js and we import it back: the cycle is closed but
    harmless. Both sides touch each other only inside functions, and by the time
    of the first call both modules have been evaluated. */
@@ -22,16 +27,21 @@ import { LEFT_DEFAULT, RIGHT_DEFAULT } from '../views/panelWidths.js'
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
 const defaults = () => ({
-  appearance: { theme: 'dark', density: 'comfortable' },
+  /* `uiFontSize` scales the whole type scale rather than naming one size — see
+     `fontVars` in `../appearance.js` — and the editor's own size sits in its own
+     section because it is pinned rather than scaled. Both mirror Rust's
+     `UI_FONT_DEFAULT` / `EDITOR_FONT_DEFAULT`. */
+  appearance: { theme: 'dark', density: 'comfortable', uiFontSize: UI_FONT_DEFAULT },
+  editor: { fontSize: EDITOR_FONT_DEFAULT },
   layout: {
     leftCollapsed: false,
     rightCollapsed: false,
     leftWidth: LEFT_DEFAULT,
     rightWidth: RIGHT_DEFAULT
   },
-  /* Which agent the app starts. There is no settings screen yet, so this is
-     changed by editing settings.json; the defaults here and in Rust have to
-     agree, the same as appearance and layout do. */
+  /* Which agent the app starts — the Agents tab of the settings window is what
+     changes it, through `applyPatch` below. The defaults here and in Rust have
+     to agree, the same as appearance and layout do. */
   agent: 'claude',
   openProjects: [],
   activeProject: null,
@@ -218,6 +228,7 @@ export async function loadSettings() {
     const stored = await invoke('settings_load', { project: null })
     const base = defaults()
     applySection(settings.appearance, base.appearance, stored.appearance)
+    applySection(settings.editor, base.editor, stored.editor)
     applySection(settings.layout, base.layout, stored.layout)
     applySection(settings.project, base.project, stored.project)
     settings.openProjects = stored.openProjects ?? []
@@ -236,6 +247,146 @@ export async function loadSettings() {
     watching = true
   }
   return settings
+}
+
+/* ---- the settings window ------------------------------------------------
+
+   The settings window is a second webview over the same settings file, and the
+   rule that keeps the two from destroying each other is that **the main window
+   stays the only writer**. `settings_save` writes the whole resolved view — the
+   panel widths, the project map, the open tabs — so a settings window calling it
+   would post its own idea of everything else, and whichever write landed last
+   would win. The window that has the whole picture is the one that saves it.
+
+   So the traffic is three events and nothing else:
+
+   - `settings:hello` — the settings window has opened and wants the truth;
+   - `settings:state` — the main window's answer, and its announcement after any
+     change: the flat five fields the settings window draws;
+   - `settings:apply` — one edit, from the settings window to the main window.
+
+   The payload is flat rather than a slice of the settings tree, because it is a
+   message and not the settings: three of its five fields live in three different
+   sections, and a nested shape would invite somebody to send a whole section and
+   quietly blank the fields they left out. */
+export const SETTINGS_APPLY = 'settings:apply'
+export const SETTINGS_STATE = 'settings:state'
+export const SETTINGS_HELLO = 'settings:hello'
+
+/* Both the store's live values and a raw `settings_load` answer go through here,
+   so the settings window cannot be shown one shape by the main window and
+   another by the disk. Missing sections take the defaults: a file written before
+   these fields existed is the ordinary case, not an error. */
+function toShared(source) {
+  const base = defaults()
+  const appearance = { ...base.appearance, ...source.appearance }
+  const editor = { ...base.editor, ...source.editor }
+  return {
+    theme: appearance.theme,
+    density: appearance.density,
+    uiFontSize: appearance.uiFontSize,
+    editorFontSize: editor.fontSize,
+    agent: source.agent ?? base.agent
+  }
+}
+
+/* What the settings window draws, taken from this window's live state — which
+   may be newer than the disk, since a save is 400 ms behind. */
+export const sharedSettings = () => toShared(settings)
+
+/* One edit from the settings window, landing in the main window's state — from
+   where the ordinary debounce carries it to disk. Nothing else in the app writes
+   these fields, so this is the whole of the settings screen's power.
+
+   Every field is checked, and a field that fails its check is skipped rather
+   than reset: this arrives as an event, and an event is not a response to
+   anything — a malformed one must cost nothing. The fallbacks are the values
+   already held, not the shipped defaults, for the same reason.
+
+   `agent` is the exception that proves the rule: the list of agent ids lives in
+   `agents::IDS` and Rust is the only party that holds it, so anything non-empty
+   travels and an id nobody ships is dropped on the way to the file — which is
+   exactly what `Settings::validate` already does for a hand-edited one. */
+export function applyPatch(patch) {
+  if (!patch || typeof patch !== 'object') return
+  if (THEME_CHOICES.some((choice) => choice.value === patch.theme)) {
+    settings.appearance.theme = patch.theme
+  }
+  if ('uiFontSize' in patch) {
+    settings.appearance.uiFontSize = clampFont(patch.uiFontSize, settings.appearance.uiFontSize)
+  }
+  if ('editorFontSize' in patch) {
+    settings.editor.fontSize = clampFont(patch.editorFontSize, settings.editor.fontSize)
+  }
+  if (typeof patch.agent === 'string' && patch.agent) {
+    settings.agent = patch.agent
+  }
+}
+
+function announce() {
+  emit(SETTINGS_STATE, sharedSettings()).catch((err) => {
+    console.error('[settings] telling the settings window failed:', err)
+  })
+}
+
+let bridged = false
+
+/* The main window's half. Called once, from the app view: from here on an edit
+   made in the settings window is an ordinary change to this object, and the
+   watcher already installed by loadSettings takes it to disk. */
+export async function initSettingsBridge() {
+  if (bridged) return
+  bridged = true
+  try {
+    await listen(SETTINGS_APPLY, (event) => {
+      applyPatch(event.payload)
+      /* Announced rather than assumed: the window that sent the edit applied it
+         to its own copy a moment ago, and this is what corrects it when a value
+         was refused — otherwise a rejected size would sit on screen looking
+         chosen. */
+      announce()
+    })
+    await listen(SETTINGS_HELLO, announce)
+  } catch (err) {
+    /* A browser, or an ACL. The app is fully usable without the settings
+       window; nothing else depends on these subscriptions. */
+    console.warn('[settings] the settings window bridge did not start:', err)
+    bridged = false
+  }
+}
+
+/* The settings window's half. It holds no store of its own — these three
+   functions are the whole of its contact with the settings. */
+export function sendSettingsPatch(patch) {
+  return emit(SETTINGS_APPLY, patch).catch((err) => {
+    console.error('[settings] sending the change to the app window failed:', err)
+  })
+}
+
+export async function watchSharedSettings(onState) {
+  const stop = await listen(SETTINGS_STATE, (event) => onState(event.payload))
+  /* Asked for after the subscription, never before: the answer is an event too,
+     and a hello sent first could be answered into a window that is not listening
+     yet.
+
+     Not awaited, and that is the point of the ordering here: the subscription
+     already exists and has to reach the caller whatever the hello does. Awaiting
+     it meant a rejected hello threw past the `return`, leaving a live listener
+     nobody held the way to stop. A hello that never went is a window drawing the
+     file's values instead of this window's, which is the fall-back it already
+     has. */
+  emit(SETTINGS_HELLO, null).catch((err) => {
+    console.warn('[settings] the app window was not asked for the current values:', err)
+  })
+  return stop
+}
+
+/* The disk, read directly, for the moment before the main window has answered —
+   and for `npm run dev`, where there is no main window to answer at all. A read
+   and never a write: the one-writer rule is about `settings_save`. */
+export async function readSharedSettings() {
+  const stored = await invoke('settings_load', { project: null })
+  return toShared(stored ?? {})
 }
 
 /* One project's layout — and only that. This is how the projects store picks

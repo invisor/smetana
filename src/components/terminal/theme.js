@@ -31,14 +31,35 @@ export function terminalTheme() {
   return theme
 }
 
-/* xterm wants the font size as a number, not a CSS string — the token is
-   read and parsed here so no literal has to appear in the component. No
-   fallback number either: --text-xs is defined unconditionally, and a
-   missing token is a design-system bug that should surface as a broken
-   terminal, not be quietly papered over with a size this file invented. */
+/* xterm wants the font size as a number, not a CSS string — and a custom
+   property is no longer one to read. The type scale is
+   `calc(<n> * var(--ui-scale) * 1px)` so the app-wide font size can be a factor
+   in the stylesheet (tokens/typography.css), and the computed value of an
+   unregistered custom property is its text with `var()` substituted and `calc()`
+   left standing: `getComputedStyle` hands back the expression, and `parseFloat`
+   of `"calc(11 * 1 * 1px)"` is **NaN** — it wants a leading number and there is
+   none. Not a stale 11, which a terminal would survive: xterm.js would be handed
+   `fontSize: NaN`. `@property` would make it compute to a length and needs a
+   newer Safari than this build targets.
+
+   So the browser is asked to do the arithmetic the one way it will: an element
+   whose `font-size` *is* the token, whose computed style is therefore a resolved
+   length. It is thrown away immediately; this runs on a theme or font change,
+   not per frame. Deliberately no fallback number — a token that stops resolving
+   is a design-system bug and should surface as a broken terminal rather than as
+   a size this file invented. */
+function readSize(name) {
+  const probe = document.createElement('div')
+  probe.style.cssText = `position:absolute;visibility:hidden;font-size:var(${name})`
+  document.documentElement.appendChild(probe)
+  const size = parseFloat(getComputedStyle(probe).fontSize)
+  probe.remove()
+  return size
+}
+
 export function terminalFont() {
   return {
     fontFamily: read('--font-mono'),
-    fontSize: parseFloat(read('--text-xs'))
+    fontSize: readSize('--text-xs')
   }
 }

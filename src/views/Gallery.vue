@@ -5,7 +5,9 @@
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import {
+  AboutSettings,
   AgentList,
+  AgentSettings,
   AppShell,
   Assignee,
   AttachmentStrip,
@@ -21,9 +23,11 @@ import {
   Dropdown,
   DependencySpine,
   DraftInspector,
+  EditorSettings,
   EmptyState,
   FileEditor,
   FileTree,
+  GeneralSettings,
   Icon,
   IconButton,
   Input,
@@ -36,6 +40,7 @@ import {
   PromoteColumnModal,
   Select,
   RunBar,
+  SettingsRow,
   RunModal,
   SetupProjectModal,
   Skeleton,
@@ -343,6 +348,15 @@ const menuItems = [
    Pointing terminalState at session 1 makes it attach on mount, which the
    mock backend answers with terminalFixture.js's captured output. */
 terminalState.activeId = 1
+
+/* The settings window's own state lives in that window and reaches it as
+   events from the app window; here the four tabs are simply driven by local
+   refs, so every control is live enough to look at in all four theme x density
+   combinations. */
+const galleryTheme = ref('system')
+const galleryUiFont = ref(13)
+const galleryEditorFont = ref(12)
+const galleryAgent = ref('claude')
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -1016,6 +1030,39 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         </div>
         <div :style="{ width: '360px' }">
           <LogView :lines="logLines" :height="220" stream-state="paused" :follow="false" />
+        </div>
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Settings window</div>
+      <!-- The four tabs of the settings window, side by side rather than behind
+           a tab bar: this harness is for seeing every component at once, and a
+           tab strip here would hide three of the four behind a click. The values
+           are local refs — in the app they arrive from the main window and go
+           back to it as events, and neither end exists here. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', flexWrap: 'wrap', alignItems: 'flex-start' }">
+        <div :style="{ width: '380px' }">
+          <GeneralSettings
+            :theme="galleryTheme"
+            :ui-font-size="galleryUiFont"
+            @update:theme="galleryTheme = $event"
+            @update:ui-font-size="galleryUiFont = $event"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <EditorSettings :font-size="galleryEditorFont" @update:font-size="galleryEditorFont = $event" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <AgentSettings :agent="galleryAgent" @update:agent="galleryAgent = $event" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <AboutSettings version="0.1.0" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <SettingsRow label="A row on its own" description="Label, one line of explanation, and whatever control the setting needs.">
+            <Switch :model-value="switched" label="" @update:model-value="switched = $event" />
+          </SettingsRow>
         </div>
       </div>
     </section>

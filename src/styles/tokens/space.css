@@ -1,17 +1,39 @@
 /* SPACING + SIZING, TWO DENSITIES.
    Density changes only the space scale and row/control heights - never colour,
-   radius or type. Default is comfortable; [data-density="compact"] on the root. */
+   radius or type. Default is comfortable; [data-density="compact"] on the root.
+
+   The heights carry `--ui-scale` as well (see tokens/typography.css): the
+   app-wide font size grows the type, and a row that stayed 22px tall while its
+   text grew to 22px would clip it - at the top of the range that is exactly what
+   compact does. So every height a piece of text sits inside scales with the
+   type, each keeping its own number in each density.
+
+   The space scale deliberately does **not**. Padding and gaps are the rhythm of
+   the interface rather than a container for a glyph, and scaling them with the
+   type was considered and refused: at 24px it would have pushed the sidebar and
+   the panels around by tens of pixels for no legibility gained. Density remains
+   the switch for how tight things sit.
+
+   That leaves a third group, which is neither of the first two and is listed
+   here so it is not mistaken for an oversight: --card-pad, --panel-pad and
+   --tree-indent are padding and indentation by another name and belong with the
+   space scale; --resizer-w and the --panel-*-w widths are chrome a person drags
+   rather than type. --log-line-h is the one that looks like it belongs above
+   and does not: it is the line box for --text-code-size, which is pinned by the
+   editor's own font size and which the app-wide factor deliberately never
+   reaches, so scaling the box while the text inside it stayed put is precisely
+   what it must not do. */
 :root{
   --space-0:0;--space-1:2px;--space-2:4px;--space-3:6px;--space-4:8px;
   --space-5:12px;--space-6:16px;--space-7:20px;--space-8:24px;--space-9:32px;--space-10:40px;
 
-  --row-h:28px;
-  --control-h:28px;
-  --control-h-sm:24px;
-  --control-h-lg:34px;
-  --tab-h:32px;
-  --titlebar-h:36px;
-  --scope-bar-h:30px;
+  --row-h:calc(28 * var(--ui-scale) * 1px);
+  --control-h:calc(28 * var(--ui-scale) * 1px);
+  --control-h-sm:calc(24 * var(--ui-scale) * 1px);
+  --control-h-lg:calc(34 * var(--ui-scale) * 1px);
+  --tab-h:calc(32 * var(--ui-scale) * 1px);
+  --titlebar-h:calc(36 * var(--ui-scale) * 1px);
+  --scope-bar-h:calc(30 * var(--ui-scale) * 1px);
   --card-pad:10px;
   --panel-pad:12px;
   --log-line-h:18px;
@@ -20,19 +42,19 @@
   --panel-left-w:248px;
   --panel-right-w:320px;
   --resizer-w:5px; /* @kind spacing */
-  --icon-sm:14px;--icon-md:16px;--icon-lg:20px; /* @kind spacing */
+  --icon-sm:calc(14 * var(--ui-scale) * 1px);--icon-md:calc(16 * var(--ui-scale) * 1px);--icon-lg:calc(20 * var(--ui-scale) * 1px); /* @kind spacing */
 }
 [data-density="compact"]{
   --space-1:2px;--space-2:3px;--space-3:4px;--space-4:6px;
   --space-5:8px;--space-6:12px;--space-7:14px;--space-8:18px;--space-9:24px;--space-10:32px;
 
-  --row-h:22px;
-  --control-h:24px;
-  --control-h-sm:20px;
-  --control-h-lg:28px;
-  --tab-h:26px;
-  --titlebar-h:30px;
-  --scope-bar-h:24px;
+  --row-h:calc(22 * var(--ui-scale) * 1px);
+  --control-h:calc(24 * var(--ui-scale) * 1px);
+  --control-h-sm:calc(20 * var(--ui-scale) * 1px);
+  --control-h-lg:calc(28 * var(--ui-scale) * 1px);
+  --tab-h:calc(26 * var(--ui-scale) * 1px);
+  --titlebar-h:calc(30 * var(--ui-scale) * 1px);
+  --scope-bar-h:calc(24 * var(--ui-scale) * 1px);
   --card-pad:7px;
   --panel-pad:8px;
   --log-line-h:15px;

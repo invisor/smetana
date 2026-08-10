@@ -372,6 +372,39 @@ describe('what a row says about the work behind it', () => {
     })
   })
 
+  /* A batch claims the merge lock under its own actor while it merges, and the
+     lock is coordination rather than work — so it is left out of the claimed
+     list and out of the caption, exactly as the board leaves it out. The second
+     issue is the other half of the assertion: the filter is the label and not
+     the actor. */
+  it('the merge lock it holds is not among its claims, while the rest of them are', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
+    stores.runs.runsState.project = '/p'
+    stores.runs.runsState.runs = [
+      { token: 1, project: '/p', session: 7, state: { kind: 'working' } }
+    ]
+    stores.tracker.trackerState.issues.set('smetana-lock-1', {
+      id: 'smetana-lock-1',
+      title: 'Merge lock',
+      status: 'in_progress',
+      owner: 'smetana-run-7',
+      labels: ['smetana-lock']
+    })
+    stores.tracker.trackerState.issues.set('smetana-9', {
+      id: 'smetana-9',
+      status: 'in_progress',
+      owner: 'smetana-run-7',
+      labels: ['chore']
+    })
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      claimed: ['smetana-9'],
+      tasks: ['smetana-9']
+    })
+  })
+
   /* The whole reason the draft rides in `SessionWork` rather than in a map
      beside the start ticket: a start becomes a session about a second later,
      and the panel must not go blank across the handover. */

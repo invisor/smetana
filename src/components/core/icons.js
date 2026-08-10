@@ -20,6 +20,7 @@ import {
   Copy,
   CornerDownRight,
   Dot,
+  ExternalLink,
   File,
   FileCode,
   FilePen,
@@ -104,6 +105,10 @@ export const iconNodes = {
   check: Check,
   x: X,
   info: Info,
+  // The About tab's link. The glyph is the whole of what says the link leaves
+  // the app for the person's own browser, since there is no address bar here to
+  // make that obvious afterwards.
+  'external-link': ExternalLink,
   dot: Dot,
   // bd's own statuses that are not reserved here: deferred, pinned, hooked.
   clock: Clock,

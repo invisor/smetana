@@ -17,7 +17,12 @@ pub const MAX_PROJECTS: usize = 20;
 /// keeping the list in the panel a list, and the file readable.
 pub const MAX_OPEN: usize = 50;
 
-const THEMES: [&str; 2] = ["dark", "light"];
+/// `system` is not a third colour scheme: it is the absence of a choice, and the
+/// effective theme is then whatever the OS says at this moment. The word is
+/// stored as it stands and never resolved on this side — the front end watches
+/// `prefers-color-scheme` and repaints when the machine changes its mind, so
+/// writing a resolved `dark` into the file would freeze somebody's evening.
+const THEMES: [&str; 3] = ["system", "dark", "light"];
 const DENSITIES: [&str; 2] = ["comfortable", "compact"];
 /// A closed list — and it is duplicated on the other side of the IPC: the same
 /// three tabs are listed in `src/views/DesktopApp.vue` (the `SIDE_TABS`
@@ -44,13 +49,50 @@ const MAX_COLUMNS: usize = 60;
 pub struct Appearance {
     pub theme: String,
     pub density: String,
+    /// How big the app's own type is, in pixels. Not one size among many: the
+    /// front end scales the whole eight-step type scale by this number over its
+    /// default, so the hierarchy between a label, a row and a heading survives
+    /// the change. The terminal rides along with it, since its font size comes
+    /// off the same scale.
+    pub ui_font_size: u32,
 }
 
 impl Default for Appearance {
     fn default() -> Self {
-        Self { theme: "dark".into(), density: "comfortable".into() }
+        Self {
+            theme: "dark".into(),
+            density: "comfortable".into(),
+            ui_font_size: UI_FONT_DEFAULT,
+        }
     }
 }
+
+/// The code editor's own type size, deliberately its own section rather than a
+/// third field under `appearance`: it answers a different question — how big
+/// code should be — and it is pinned rather than scaled, so the app-wide size
+/// does not move it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EditorSettings {
+    pub font_size: u32,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self { font_size: EDITOR_FONT_DEFAULT }
+    }
+}
+
+/// The shipped sizes, in pixels: today's `--text-md` for the app and today's
+/// `--text-code-size` for the editor. Repeated in the front end
+/// (`src/appearance.js`), for the same reason the panel widths are: with no back
+/// end the app still has to open looking the same.
+pub const UI_FONT_DEFAULT: u32 = 13;
+pub const EDITOR_FONT_DEFAULT: u32 = 12;
+/// The range both dropdowns offer. Sanity bounds rather than taste: below the
+/// floor the interface stops being readable, above the ceiling it stops fitting.
+const MIN_FONT: u32 = 10;
+const MAX_FONT: u32 = 24;
 
 /// Collapsed state and width of the side panels — also about the screen, not
 /// about content.
@@ -213,6 +255,9 @@ pub struct Settings {
     pub version: u32,
     pub appearance: Appearance,
     pub layout: Layout,
+    /// The code editor's own preferences. A section of its own at the root, for
+    /// the reason `EditorSettings` records.
+    pub editor: EditorSettings,
     /// Which CLI agent the app starts. A habit of the person's, not a property
     /// of the repository, so it sits at the root rather than under a project.
     ///
@@ -235,6 +280,7 @@ impl Default for Settings {
             version: CURRENT_VERSION,
             appearance: Appearance::default(),
             layout: Layout::default(),
+            editor: EditorSettings::default(),
             agent: "claude".into(),
             last_project: None,
             open_projects: Vec::new(),
@@ -255,6 +301,8 @@ impl Default for Settings {
 pub struct ResolvedSettings {
     pub appearance: Appearance,
     pub layout: Layout,
+    /// The code editor's own preferences. See `Settings::editor`.
+    pub editor: EditorSettings,
     /// Which CLI agent the app starts. See `Settings::agent`.
     pub agent: String,
     pub project: ProjectState,
@@ -273,6 +321,7 @@ impl Default for ResolvedSettings {
         Self {
             appearance: Appearance::default(),
             layout: Layout::default(),
+            editor: EditorSettings::default(),
             agent: "claude".into(),
             project: ProjectState::default(),
             open_projects: Vec::new(),
@@ -310,6 +359,7 @@ pub fn parse(text: &str) -> Outcome {
         version: CURRENT_VERSION,
         appearance: section(&object, "appearance"),
         layout: section(&object, "layout"),
+        editor: section(&object, "editor"),
         agent: object.get("agent").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| "claude".into()),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
@@ -346,6 +396,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
     ResolvedSettings {
         appearance: file.appearance.clone(),
         layout: file.layout.clone(),
+        editor: file.editor.clone(),
         agent: file.agent.clone(),
         project: active
             .as_deref()
@@ -364,6 +415,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.version = CURRENT_VERSION;
     file.appearance = resolved.appearance;
     file.layout = resolved.layout;
+    file.editor = resolved.editor;
     file.agent = resolved.agent;
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
@@ -466,6 +518,7 @@ impl Settings {
         one_of(&mut self.agent, &crate::agents::IDS, "claude");
         self.appearance.validate();
         self.layout.validate();
+        self.editor.validate();
         for state in self.projects.values_mut() {
             state.validate();
         }
@@ -479,6 +532,7 @@ impl ResolvedSettings {
         one_of(&mut self.agent, &crate::agents::IDS, "claude");
         self.appearance.validate();
         self.layout.validate();
+        self.editor.validate();
         self.project.validate();
         sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
         active_in(&mut self.active_project, &self.open_projects);
@@ -506,6 +560,23 @@ impl Appearance {
     fn validate(&mut self) {
         one_of(&mut self.theme, &THEMES, "dark");
         one_of(&mut self.density, &DENSITIES, "comfortable");
+        font_in_range(&mut self.ui_font_size, UI_FONT_DEFAULT);
+    }
+}
+
+impl EditorSettings {
+    fn validate(&mut self) {
+        font_in_range(&mut self.font_size, EDITOR_FONT_DEFAULT);
+    }
+}
+
+/// A hand-edited size outside what the dropdown offers takes the shipped one —
+/// the same rule as `one_of` and `in_range`: the field is damaged, not the
+/// section around it. Clamping instead would keep a `2` as a `10` and leave a
+/// file claiming a size nobody picked.
+fn font_in_range(value: &mut u32, fallback: u32) {
+    if !(MIN_FONT..=MAX_FONT).contains(value) {
+        *value = fallback;
     }
 }
 
@@ -644,6 +715,74 @@ mod tests {
     }
 
     #[test]
+    fn system_is_a_theme_the_file_keeps_as_it_stands() {
+        // The word is the whole point: resolving it to dark on the way in would
+        // freeze the app at whatever the machine happened to say once.
+        let settings = settings_of(r#"{"version":1,"appearance":{"theme":"system"}}"#);
+        assert_eq!(settings.appearance.theme, "system");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolve(&settings, None), "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.appearance.theme, "system", "and it survives the way back to disk");
+    }
+
+    #[test]
+    fn a_file_written_before_the_font_sizes_opens_at_the_shipped_ones() {
+        // Every settings file on a person's disk right now is this file.
+        let settings = settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.appearance.ui_font_size, UI_FONT_DEFAULT);
+        assert_eq!(settings.editor.font_size, EDITOR_FONT_DEFAULT);
+    }
+
+    #[test]
+    fn a_font_size_outside_the_range_loses_only_itself() {
+        let settings = settings_of(
+            r#"{"version":1,"appearance":{"uiFontSize":80,"density":"compact"},"editor":{"fontSize":2}}"#,
+        );
+        assert_eq!(settings.appearance.ui_font_size, UI_FONT_DEFAULT);
+        assert_eq!(settings.editor.font_size, EDITOR_FONT_DEFAULT);
+        assert_eq!(settings.appearance.density, "compact", "the neighbouring field must survive");
+    }
+
+    #[test]
+    fn both_ends_of_the_range_are_legal_sizes() {
+        let settings = settings_of(
+            r#"{"version":1,"appearance":{"uiFontSize":10},"editor":{"fontSize":24}}"#,
+        );
+        assert_eq!(settings.appearance.ui_font_size, 10);
+        assert_eq!(settings.editor.font_size, 24);
+    }
+
+    /// The same walk `a_chosen_agent_does_not_quietly_become_claude_again` makes,
+    /// and for the same reason: a section added to the structs but not wired into
+    /// `parse`, `resolve` and `merge` reads as the default forever, and the
+    /// struct-alone tests cannot see it.
+    #[test]
+    fn the_font_sizes_survive_disk_to_front_end_and_back() {
+        let file = settings_of(
+            r#"{"version":1,"appearance":{"uiFontSize":16},"editor":{"fontSize":18}}"#,
+        );
+        assert_eq!(file.appearance.ui_font_size, 16, "parse must read them off the disk");
+        assert_eq!(file.editor.font_size, 18);
+
+        let resolved = resolve(&file, None);
+        assert_eq!(resolved.appearance.ui_font_size, 16, "resolve must carry them to the front end");
+        assert_eq!(resolved.editor.font_size, 18);
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.appearance.ui_font_size, 16, "merge must carry them back into the file");
+        assert_eq!(written.editor.font_size, 18);
+    }
+
+    #[test]
+    fn a_broken_editor_section_does_not_take_the_rest_of_the_file() {
+        let settings = settings_of(r#"{"version":1,"editor":"large","appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.editor, EditorSettings::default());
+        assert_eq!(settings.appearance.theme, "light");
+    }
+
+    #[test]
     fn broken_section_does_not_take_the_rest_of_the_file() {
         let settings = settings_of(r#"{"version":1,"appearance":5,"layout":{"leftCollapsed":true}}"#);
         assert_eq!(settings.appearance, Appearance::default());
@@ -697,15 +836,15 @@ mod tests {
     fn merge_writes_into_the_current_project_and_stamps_it() {
         let mut file = Settings::default();
         let resolved = ResolvedSettings {
-            appearance: Appearance { theme: "light".into(), density: "comfortable".into() },
+            appearance: Appearance { theme: "light".into(), ..Appearance::default() },
             layout: Layout { left_collapsed: true, left_width: 420, ..Layout::default() },
-            agent: "claude".into(),
             project: ProjectState {
                 selected_task: Some("bd-a1b2".into()),
                 ..ProjectState::default()
             },
             open_projects: vec!["/work/smetana".into()],
             active_project: Some("/work/smetana".into()),
+            ..ResolvedSettings::default()
         };
 
         merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
@@ -724,12 +863,11 @@ mod tests {
     fn a_value_the_front_end_should_not_have_sent_does_not_reach_the_file() {
         let mut file = Settings::default();
         let resolved = ResolvedSettings {
-            appearance: Appearance { theme: "neon".into(), density: "comfortable".into() },
-            layout: Layout::default(),
-            agent: "claude".into(),
+            appearance: Appearance { theme: "neon".into(), ..Appearance::default() },
             project: ProjectState { side_tab: "tarot".into(), ..ProjectState::default() },
             open_projects: vec!["/p".into()],
             active_project: Some("/p".into()),
+            ..ResolvedSettings::default()
         };
 
         merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());

@@ -18,6 +18,33 @@ const OPEN = 'open'
 const CLOSED = 'closed'
 const BLOCKED = 'blocked'
 
+/* The merge lock is coordination between two leads, not work: the `merging`
+   skill creates an ordinary bd issue carrying this label to serialize merges,
+   and nobody using the app needs to see it. So it is left out of every list on
+   screen — the board below, the claimed tasks in terminals.js and a remembered
+   selection in views/DesktopApp.vue — and nowhere else.
+
+   The label is one string with copies in several places, and the copies are not
+   equal. In code it is here and `LOCK_LABEL` in src-tauri/src/runs/queue.rs,
+   which keeps the lock out of a run's queue. The bundled skills under
+   src-tauri/resources/smetana/skills/ carry the literal as well —
+   merging/SKILL.md is the one that mints it (`bd create ... -l smetana-lock`),
+   and the skills that must never take a lock as work name it in order to avoid
+   it. So renaming the label has a direction: the minting side has to move, or
+   the board goes on growing locks under a string nothing here hides. The
+   duplication itself is accepted, the same way terminals.js holds the
+   `smetana-run-` actor prefix beside terminal/model.rs; the cost of drift is a
+   card reappearing on the board, not lost data.
+
+   The filter is on the way out to the interface, never on the way in.
+   `trackerState.issues` keeps the lock whole, because `holds` below treats an
+   issue missing from the board as a satisfied blocker and queue.rs deliberately
+   leaves the lock in the blocking set so that anything wired to depend on it
+   fails closed. Dropping it from the store would quietly undo both. */
+export const LOCK_LABEL = 'smetana-lock'
+
+export const isLockIssue = (issue) => Boolean(issue?.labels?.includes(LOCK_LABEL))
+
 export const trackerState = reactive({
   ready: false,
   /* A project switch is under way. While it is, deltas are ignored: they may
@@ -68,6 +95,11 @@ export const boardColumns = computed(() => {
   const buckets = new Map(trackerState.columns.map((c) => [c.name, []]))
 
   for (const issue of trackerState.issues.values()) {
+    /* Before the bucketing rather than inside one column: a free lock is `open`
+       and would sit in Ready, a held one is `in_progress` and would sit in
+       Running, so there is no single column to hide it from. */
+    if (isLockIssue(issue)) continue
+
     const blockedByIds = blockedBy.get(issue.id) ?? []
     const blockingIds = blocking.get(issue.id) ?? []
 
