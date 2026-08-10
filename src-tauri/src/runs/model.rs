@@ -11,6 +11,13 @@
 use serde::{Deserialize, Serialize};
 
 /// How much of the board a run is allowed to take.
+///
+/// Equality is the whole of what "the same scope" means to `service::admit`:
+/// two queue runs race for the same tasks, two runs on one task are the same
+/// work twice, while a queue run beside a task run — or two runs over
+/// different epics — divide the board rather than fight over it. The derived
+/// `PartialEq` says exactly that, so there is no second function to keep in
+/// step with it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunScope {
@@ -20,6 +27,20 @@ pub enum RunScope {
     Task { id: String },
     /// The issues whose parent is this one.
     Epic { id: String },
+}
+
+impl RunScope {
+    /// The scope as a person reads it, for the refusal that has to name which
+    /// run is already going. The front end composes the same words
+    /// (`components/run/runScopes.js`), so a person meets one vocabulary
+    /// whichever side of the wire the sentence was made on.
+    pub fn describe(&self) -> String {
+        match self {
+            RunScope::Queue => "the queue".to_string(),
+            RunScope::Task { id } => format!("task {id}"),
+            RunScope::Epic { id } => format!("epic {id}"),
+        }
+    }
 }
 
 /// What happens where the process needs a decision.
@@ -163,6 +184,12 @@ pub enum RunState {
 /// so the front end never reconstructs a run from pieces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
+    /// Which run this is, for a project that may hold several at once. The
+    /// worker's map is keyed by it, a stop names one, and every `run:state`
+    /// event carries it — the same job `generation` does for the tracker, and
+    /// the same defect without it: a late report from an ended run written
+    /// over the one that replaced it.
+    pub token: u64,
     pub project: String,
     pub settings: RunSettings,
     pub state: RunState,
@@ -193,18 +220,23 @@ pub struct Run {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum RunError {
-    #[error("a run is already going in this project")]
-    AlreadyRunning,
-    /// The previous run has stopped and the loop task carrying it has not
-    /// finished winding down — it is inside a board read or a usage probe and
-    /// has not looked at the stop channel yet. The preflight used to be the
-    /// longest of these by far and is not one any more: `bring_up` watches that
-    /// channel and kills the command in flight (smetana-16w).
+    /// A live run over the very same scope. Not "this project is busy" any
+    /// more — a project holds several runs at once, and only two runs told to
+    /// take the same work are refused. `scope` is `RunScope::describe`'s
+    /// sentence fragment, because a refusal that cannot say *which* run is in
+    /// the way sends somebody to the bar to guess.
+    #[error("a run over {scope} is already going in this project")]
+    AlreadyRunning { scope: String },
+    /// The previous run over this scope has stopped and the loop task carrying
+    /// it has not finished winding down — it is inside a board read or a usage
+    /// probe and has not looked at the stop channel yet. The preflight used to
+    /// be the longest of these by far and is not one any more: `bring_up`
+    /// watches that channel and kills the command in flight (smetana-16w).
     ///
     /// Deliberately not `AlreadyRunning`, and the difference is the whole
     /// reason it exists: nothing is going, the bar says so in the same breath,
     /// and a refusal claiming otherwise reads as the stop not having taken. The
-    /// project is not free yet, which is a different sentence and a true one.
+    /// scope is not free yet, which is a different sentence and a true one.
     #[error("the previous run in this project is still finishing")]
     WindingDown,
     #[error("this project has no .smetana/project.toml")]
@@ -382,8 +414,9 @@ impl RunSettings {
 }
 
 impl Run {
-    pub fn new(project: String, settings: RunSettings) -> Self {
+    pub fn new(token: u64, project: String, settings: RunSettings) -> Self {
         Run {
+            token,
             project,
             settings,
             state: RunState::Preflight,
@@ -556,7 +589,7 @@ mod tests {
     fn a_stopped_run_stays_stopped() {
         // A batch on its way out can still report; putting a finished run back
         // on the screen is the defect this prevents.
-        let mut run = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut run = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         run.advance(RunState::Stopped { reason: StopReason::QueueEmpty });
         run.advance(RunState::Working { iteration: 7 });
         assert_eq!(run.state, RunState::Stopped { reason: StopReason::QueueEmpty });
@@ -564,7 +597,7 @@ mod tests {
 
     #[test]
     fn stopping_forgets_the_session() {
-        let mut run = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut run = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         run.session = Some(3);
         run.advance(RunState::Stopped { reason: StopReason::Cancelled });
         assert_eq!(run.session, None, "a row pointing at a dead session is worse than no row");
@@ -572,11 +605,11 @@ mod tests {
 
     #[test]
     fn stop_between_batches_is_immediate_and_stop_mid_batch_waits() {
-        let mut idle = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut idle = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         idle.request_stop(false);
         assert!(idle.is_over(), "nothing is in flight, so there is nothing to wait for");
 
-        let mut working = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut working = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         working.session = Some(1);
         working.advance(RunState::Working { iteration: 0 });
         working.request_stop(false);
@@ -590,7 +623,7 @@ mod tests {
         // id coming back: `session` is still None and a batch is on its way
         // regardless. Reading that as "nothing in flight" is smetana-0kb — the
         // run reads as stopped everywhere while the batch runs and merges.
-        let mut starting = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut starting = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         starting.advance(RunState::Deciding);
         starting.request_stop(true);
         assert!(starting.stopping);
@@ -598,7 +631,7 @@ mod tests {
 
         // And the flag alone is what changed: the same run without it stops on
         // the spot, which is what makes the stop button reach a paused run.
-        let mut idle = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut idle = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         idle.advance(RunState::Deciding);
         idle.request_stop(false);
         assert!(idle.is_over());
@@ -610,12 +643,12 @@ mod tests {
         // anything and never hears about it, so it reports `stopping: false`
         // for the rest of its life. Adopting that wholesale hands the next
         // batch a run that looks unstopped.
-        let mut worker = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut worker = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         worker.session = Some(1);
         worker.advance(RunState::Working { iteration: 0 });
         worker.request_stop(false);
 
-        let mut loops_own = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut loops_own = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         loops_own.advance(RunState::Deciding);
         assert!(!loops_own.stopping);
 
@@ -627,7 +660,7 @@ mod tests {
 
     #[test]
     fn a_run_that_was_asked_to_stop_starts_no_further_batch() {
-        let mut run = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut run = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         run.session = Some(1);
         run.advance(RunState::Working { iteration: 0 });
         assert!(run.may_start_batch(), "nothing has been asked of it yet");
@@ -640,7 +673,7 @@ mod tests {
         );
 
         // And a run that is over is refused for the plainer reason.
-        let mut done = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut done = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         done.advance(RunState::Stopped { reason: StopReason::QueueEmpty });
         assert!(!done.may_start_batch());
     }
@@ -650,7 +683,7 @@ mod tests {
         // The entry now outlives the stop that ended it — it stays in the
         // worker's map until the loop task is gone — so the stop button can be
         // pressed again against a run that is already over.
-        let mut run = Run::new("/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let mut run = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         run.request_stop(false);
         run.request_stop(true);
         assert_eq!(run.state, RunState::Stopped { reason: StopReason::Cancelled });
@@ -783,6 +816,33 @@ mod tests {
         .expect("serialize");
         assert_eq!(json["kind"], "needs_answer");
         assert_eq!(json["question"], "Do you trust the contents of this directory?");
+    }
+
+    #[test]
+    fn a_run_reaches_the_front_end_with_its_token() {
+        // The token is how the front end tells one run's event from another's
+        // now that a project holds several; a `Run` that serialized without it
+        // would leave every event unattributable.
+        let run = Run::new(7, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
+        let json = serde_json::to_value(&run).expect("serialize");
+        assert_eq!(json["token"], 7);
+    }
+
+    #[test]
+    fn a_scope_describes_itself_the_way_the_refusal_needs_it() {
+        assert_eq!(RunScope::Queue.describe(), "the queue");
+        assert_eq!(RunScope::Task { id: "smetana-1".into() }.describe(), "task smetana-1");
+        assert_eq!(RunScope::Epic { id: "smetana-2".into() }.describe(), "epic smetana-2");
+    }
+
+    #[test]
+    fn the_refusal_reaches_the_front_end_with_the_scope_it_names() {
+        // `runFailure` in DesktopApp.vue reads `kind` and `detail.scope` off
+        // this exact shape to compose its own sentence.
+        let json = serde_json::to_value(RunError::AlreadyRunning { scope: "the queue".into() })
+            .expect("serialize");
+        assert_eq!(json["kind"], "already_running");
+        assert_eq!(json["detail"]["scope"], "the queue");
     }
 
     #[test]

@@ -161,23 +161,36 @@ const CAPTION = {
   setup: 'Project setup'
 }
 
-/* The issues a run's session has taken, if this session is that one.
+/* The issues a run's session has taken, if this session is one of a run's.
 
    There is no channel that says so: the agent claims an issue by running
    `bd update <id> --claim` itself, which sets the assignee and moves it to
    in_progress, and the app hears about it only as the tracker changing under
    the watcher. So the connection is made here, from the two halves that are
-   already on the front end — the run knows which session is working, the
-   tracker knows what is in progress. An explicit "this session claimed this
-   issue" would be steadier, and it needs the agent to tell the app; until
-   then this is the honest reconstruction rather than a guess.
+   already on the front end — each run knows which session is working, the
+   tracker knows what is in progress and under whom. An explicit "this session
+   claimed this issue" would be steadier, and it needs the agent to tell the
+   app; until then this is the honest reconstruction rather than a guess.
+
+   The owner filter is what keeps two concurrent runs' rows apart: a run's
+   session writes with its own bd actor (`BEADS_ACTOR`, smetana-4fh), and bd
+   stamps that actor as the issue's owner, so "everything in_progress" — which
+   was the whole filter while a project held one run — would caption both rows
+   with both batches' work. The actor's shape is `run_actor` in
+   src-tauri/src/terminal/model.rs, written out here a second time because Rust
+   holds the only other copy; drift costs a caption going quiet, which the row
+   survives as a bare "Agent".
 
    Sorted, so a second issue appearing does not reorder the first. */
 function claimedBy(sessionId) {
-  const run = runsState.run
-  if (!run || run.session == null || run.session !== sessionId) return []
+  /* Before the find, not after: a run between batches carries `session: null`,
+     and a null id would land on it. */
+  if (sessionId == null) return []
+  const run = runsState.runs.find((r) => r.session === sessionId)
+  if (!run) return []
+  const actor = `smetana-run-${sessionId}`
   return [...trackerState.issues.values()]
-    .filter((issue) => issue.status === 'in_progress')
+    .filter((issue) => issue.status === 'in_progress' && issue.owner === actor)
     .map((issue) => issue.id)
     .sort()
 }

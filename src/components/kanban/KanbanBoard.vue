@@ -24,9 +24,11 @@ const props = defineProps({
      reason, and the board is not the place that knows it.
 
      A lowercase fragment, and this is the prop a caller actually binds — the
-     plays interpolate it into "Run this — …" and "Run the queue — …", so a
-     capital arriving here renders as two sentences joined by a dash, silently
-     and only inside a tooltip. */
+     play interpolates it into "Run the queue — …", so a capital arriving here
+     renders as two sentences joined by a dash, silently and only inside a
+     tooltip. The queue play's alone now: each card's reason rides its own
+     task object, since a run holds one scope rather than the whole project
+     and the same fragment for every play stopped being true. */
   runBlockedReason: { type: String, default: '' },
   /* The status of the one column whose whole contents can be moved into the
      queue in one press — `deferred` in practice, and a third prop of the same

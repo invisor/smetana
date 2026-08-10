@@ -854,19 +854,27 @@ other caller.
 | `usage.rs` | what the subscription has left, and whether to run at full size, a smaller one, or not yet |
 | `browser.rs` | whether there is anything on this machine to drive a browser with — pure over file contents and directory listings, and where those tests are |
 | `queue.rs` | what is left to do and whether to run another batch — pure, and where the tests are |
-| `service.rs` | the worker: the loop, one run per project |
+| `service.rs` | the worker: the loop, one run per scope per project |
 | `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
 
-`service.rs` is the same single-tokio-task shape as the other two workers and carries no tests, the
-same as they do — the deciding is `queue.rs` and that is pure. One run per project, keyed by the
-project's path: a second run in the same project is refused rather than queued, and a run in another
-project is none of this one's business, since different projects are different folders, boards and
-target branches. The one thing they do share is a subscription limit, and a run does not reserve one
-(smetana-tra). The loop runs on a task of its own so the worker stays answerable while a batch runs
-for an hour, and it reports whole `Run` values back through a channel — the worker is the only thing
-that ever writes one out. Each entry carries a `token` for the reason the tracker carries
-`generation`: a project's next run may start the moment the last one leaves the map, and a late report
-from the old one must not be written over the live one.
+`service.rs` is the same single-tokio-task shape as the other two workers. The deciding is
+`queue.rs` and that is pure; the map's own lifecycle — `absorb`, `permit`, `admit` and the
+browser-candidate list — is pure too, and unlike the other workers this file carries a test module
+of its own at the bottom for exactly that part, because both ways of getting the lifecycle wrong
+are silent. A project holds several runs at once, and the map is keyed by each run's own
+`token` (smetana-5hf): what is refused is a second run over the **same scope** — two runs both told
+to take the whole queue are two leads racing for the same tasks, and the refusal names the scope it
+found in the way — while a queue run beside a task run, or two runs over different epics, divide the
+board between them. Which tasks each may touch is not this worker's question: bd's atomic claim
+under per-session actors (smetana-4fh) is the exclusivity, and a second mechanism here could only
+disagree with it. A run in another project is none of this one's business, since different projects
+are different folders, boards and target branches. The one thing all runs share is a subscription
+limit, and a run does not reserve one (smetana-tra). The loop runs on a task of its own so the
+worker stays answerable while a batch runs for an hour, and it reports whole `Run` values back
+through a channel — the worker is the only thing that ever writes one out. The `token` is on the
+`Run` itself and does the job `generation` does for the tracker: a stop names one run by it, every
+`run:state` event carries it, and a late report from an ended run finds no entry rather than the run
+that started after it.
 
 **Stopping is cooperative, and that is a decision with a cost attached.** `request_stop` sets a flag
 and the loop reads it between batches; the batch in flight is allowed to finish. A run interrupted
@@ -877,12 +885,12 @@ which is also what lets the stop button reach a paused one. `StopReason` keeps `
 but pressing stop let the batch finish while removing the session killed it where it stood, and the
 person reading the bar is deciding whether to go and look at what got left behind.
 
-**A map entry outlives the run it holds, and that is what makes "one run per project" true**
+**A map entry outlives the run it holds, and that is what makes "one run per scope" true**
 (smetana-0kb). It leaves in exactly one place — `Report::Ended`, sent by a `Drop` guard when the loop
 task is gone however it went — so "there is an entry" and "a loop task is alive" are one fact rather
 than two that agree most of the time. Removing the entry the moment a stop declared the run over
 looked equivalent and was not: the loop was still between reading the board and spawning, so it put
-a batch out that nothing could then stop, and the project was free to start a second run beside it.
+a batch out that nothing could then stop, and the scope was free to start a second run beside it.
 The spawn itself is **asked for rather than checked**: `may_spawn` puts the question on the channel
 the worker's own `select!` already drains, so the same single task decides it and handles
 `Request::Stop`. That is the whole guarantee, and it is not a FIFO one — the two arrive on different
@@ -897,7 +905,8 @@ A stop leaves a gap between the run reading `Stopped` and its entry leaving, and
 that gap has its own reason**, `RunError::WindingDown`. Reusing `AlreadyRunning` there put two
 contradictory things on screen at once — a bar saying the run is stopped and a message saying one is
 going — and a person reads that as the stop not having taken. The gap is not always brief: the loop
-may be inside a board read or a 60s usage probe, and it holds the project for the whole of it.
+may be inside a board read or a 60s usage probe, and it holds its scope for the whole of it — only
+its scope, since the rest of the project's runs were never this one's to hold.
 
 **The preflight is the one phase where a stop is not cooperative** (smetana-16w), and that exception
 is the reason the gap is no longer measured in minutes. `bring_up` read the stop channel nowhere at
@@ -962,10 +971,12 @@ things exactly where they were before the module existed, while a false "absent"
 feature away under a tooltip claiming a tool is missing that is sitting right there.
 
 Busy-ness is the second reason and it is deliberately only half a question. `Request::BrowserBusy`
-answers which *other* projects have a live run that asked for a live check, and `browser_tools` then
-reads each one's config, because the worker knows a run wanted a check and not whether that project's
-check opens a browser — naming a `command` check as the reason this toggle is blocked would be an
-invention. **The extension's busy-ness is out of reach entirely, and so is a browser a person is
+answers which projects have a live run that asked for a live check — counted per run, and the asking
+project among them, since a live-check run in this very project is exactly what holds Playwright's
+one profile against a second run beside it now that a project holds several — and `browser_tools`
+then reads each candidate's config, because the worker knows a run wanted a check and not whether
+that project's check opens a browser — naming a `command` check as the reason this toggle is blocked
+would be an invention. **The extension's busy-ness is out of reach entirely, and so is a browser a person is
 driving themselves**: neither is visible from this process, and that gap is written down rather than
 papered over. The sentence a person reads is composed on the front end
 (`components/run/browserTools.js`, pure and tested, one of the `branchChoice.js` family),
@@ -1011,14 +1022,19 @@ On the front end, `runs.js` is deliberately small — a file read with no worker
 from switching projects and from a setup session finishing. It keeps the back end's `config` and
 `Run` objects **whole** rather than unpacking them into flags, which is the same instinct
 `tracker.js` follows with statuses: a state this front end has not heard of must not silently read as
-one it has. It is guarded against its own stale response exactly as `git.js` and `terminals.js` are,
-and the `run:state` listener carries that guard in its other form — an event is not a response to
-anything, so nothing orders it against a project switch, and a batch ending just as somebody moves
-project would otherwise post its run under the new project's name. `RunBar` draws it in the scope bar
-and keeps a stopped run there until the project changes: the reason it stopped is what somebody came
-back to read, an unknown reason is an ordinary outcome rather than a crash (this front end may be
-older than the worker), and the endings differ by glyph as well as by colour, the rule the status
-palette keeps everywhere else.
+one it has. The runs ride as a set keyed by `token` — events and stop answers land by `upsert`, so a
+late word about one run can never write over another. It is guarded against its own stale response
+exactly as `git.js` and `terminals.js` are, and the `run:state` listener carries that guard in its
+other form — an event is not a response to anything, so nothing orders it against a project switch,
+and a batch ending just as somebody moves project would otherwise post its run under the new
+project's name. `RunBar` draws one segment per run in the scope bar, each stop button naming its own
+token, and keeps a stopped run there until the project changes or a run of the same scope replaces
+it: the reason it stopped is what somebody came back to read, an unknown reason is an ordinary
+outcome rather than a crash (this front end may be older than the worker), and the endings differ by
+glyph as well as by colour, the rule the status palette keeps everywhere else. The scope rule itself
+— what "the same run" means, and the words a greyed play carries — is `components/run/runScopes.js`,
+one of the `branchChoice.js` family and shared with the worker's `admit` by vocabulary rather than
+by code.
 
 ### Panel widths
 

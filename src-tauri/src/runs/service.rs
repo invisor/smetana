@@ -18,11 +18,18 @@
 //! early lets a second run start beside a live loop, and one that never leaves
 //! makes the project unstartable until the app is restarted.
 //!
-//! One run per project, keyed by the project's path — a second run in the same
-//! project is refused rather than queued, and a run in another project is none
-//! of this one's business. Different projects are different folders, stacks,
-//! boards and target branches; the only thing they share is a subscription
-//! limit, and a run does not reserve one (smetana-tra).
+//! A project holds as many runs as it has scopes to give them, and the map is
+//! keyed by each run's own `token` — a second run over the **same** scope is
+//! refused rather than queued (smetana-5hf: two runs both told to take the
+//! whole queue is not parallelism, it is two leads racing for the same tasks),
+//! while a queue run beside a task run, or two runs over different epics,
+//! divide the board between them. Which tasks each one may touch is not this
+//! worker's to police: bd's atomic claim under per-session actors is the
+//! exclusivity (smetana-4fh), and a second mechanism here could only disagree
+//! with it. A run in another project is none of this one's business.
+//! Different projects are different folders, stacks, boards and target
+//! branches; the only thing they share is a subscription limit, and a run does
+//! not reserve one (smetana-tra).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -32,7 +39,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 
 use super::config::{self, ConfigState};
-use super::model::{Asked, OnQuestion, RepeatedQuestion, Run, RunError, RunSettings, RunState, StopReason};
+use super::model::{
+    Asked, OnQuestion, RepeatedQuestion, Run, RunError, RunScope, RunSettings, RunState, StopReason,
+};
 use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::usage::{self, Decision};
@@ -62,19 +71,28 @@ const ASK_POLL: Duration = Duration::from_secs(5);
 
 pub enum Request {
     Start(String, Box<RunSettings>, oneshot::Sender<Result<Run, RunError>>),
-    Stop(String, oneshot::Sender<Option<Run>>),
-    State(String, oneshot::Sender<Option<Run>>),
-    /// Which **other** projects have a live run that will be driving a browser.
-    /// The run dialog asks before it opens, so it can say that the tool exists
-    /// and something else is holding it — a different sentence from the tool not
+    /// Stop one run, named by its token. A project holds several runs now, so
+    /// a stop aimed at a project would be ambiguous in exactly the case this
+    /// task exists for; `None` back means no such run — it ended and left the
+    /// map before the stop arrived, which is a stop with nothing left to do.
+    Stop(u64, oneshot::Sender<Option<Run>>),
+    /// Every run in this project still in the map — live, stopping, or stopped
+    /// and winding down — oldest first.
+    State(String, oneshot::Sender<Vec<Run>>),
+    /// Which projects have a live run that will be driving a browser. The run
+    /// dialog asks before it opens, so it can say that the tool exists and
+    /// something else is holding it — a different sentence from the tool not
     /// being there at all.
     ///
-    /// Other projects only: this project's own run is refused long before the
-    /// browser is the reason, by `admit`. What comes back is a candidate list
-    /// rather than an answer — the worker knows a run asked for a live check and
-    /// not what kind of check that project declares, and `browser_tools` reads
-    /// the config to settle it.
-    BrowserBusy(String, oneshot::Sender<Vec<String>>),
+    /// Counted per run rather than per project, and the asking project is not
+    /// excluded any more: a live-check run in this very project is exactly the
+    /// thing that holds Playwright's one profile against a second one beside
+    /// it, now that `admit` no longer refuses that second run for being in the
+    /// same project. What comes back is a candidate list rather than an answer
+    /// — the worker knows a run asked for a live check and not what kind of
+    /// check that project declares, and `browser_tools` reads the config to
+    /// settle it.
+    BrowserBusy(oneshot::Sender<Vec<String>>),
 }
 
 /// What a loop task says to the worker. Three messages on one channel so they
@@ -85,30 +103,29 @@ enum Report {
     State { token: u64, run: Box<Run> },
     /// May another batch go out? The worker's answer *is* the decision — see
     /// `may_spawn`.
-    Spawning { token: u64, project: String, allow: oneshot::Sender<bool> },
+    Spawning { token: u64, allow: oneshot::Sender<bool> },
     /// The loop task is gone, however it went.
-    Ended { token: u64, project: String },
+    Ended { token: u64 },
 }
 
 #[derive(Clone)]
 pub struct RunHandle(pub mpsc::Sender<Request>);
 
-/// The worker's own view of one project's run in flight. `Run` is what leaves
-/// the worker; this is what stays.
+/// The worker's own view of one run in flight. `Run` is what leaves the
+/// worker; this is what stays.
 ///
-/// An entry is in the map for exactly as long as a loop task is alive in that
-/// project — no longer, and **no shorter**. A run declared stopped keeps its
-/// entry until the loop reports its own ending, because a stopped run whose
-/// loop is still winding down is still a loop that would spawn a batch, and
-/// letting a second run start beside it is how the strictly sequential merge
-/// this limit exists for comes apart (smetana-0kb).
+/// An entry is in the map for exactly as long as its loop task is alive — no
+/// longer, and **no shorter**. A run declared stopped keeps its entry until
+/// the loop reports its own ending, because a stopped run whose loop is still
+/// winding down is still a loop that would spawn a batch, and letting a second
+/// run of the same scope start beside it is how the exclusivity this map keeps
+/// comes apart (smetana-0kb).
+///
+/// The map is keyed by the run's own `token` — issued once, never reused — so
+/// a late report from an ended run finds no entry rather than somebody else's:
+/// the same job `generation` does for the tracker, and the same defect if it
+/// were missing, a finished run's state written over a live one's.
 struct Active {
-    /// Which loop task this entry belongs to. The map is keyed by project and a
-    /// project's next run may start the moment its last one is out of the map,
-    /// so a late report has to be told from the run that replaced it — the same
-    /// job `generation` does for the tracker, and the same defect if it is
-    /// missing: a finished run's state written over a live one's.
-    token: u64,
     run: Run,
     /// A batch has been authorized and the loop has not reported it yet: the
     /// window in which `run.session` is still `None` and a batch is on its way
@@ -134,14 +151,12 @@ struct Active {
 /// until the app is restarted.
 struct Ending {
     token: u64,
-    project: String,
     report: mpsc::UnboundedSender<Report>,
 }
 
 impl Drop for Ending {
     fn drop(&mut self) {
-        let project = std::mem::take(&mut self.project);
-        let _ = self.report.send(Report::Ended { token: self.token, project });
+        let _ = self.report.send(Report::Ended { token: self.token });
     }
 }
 
@@ -150,10 +165,11 @@ pub fn start(app: AppHandle, tracker: TrackerHandle, terminal: TerminalHandle) -
     let (report_tx, mut report_rx) = mpsc::unbounded_channel::<Report>();
 
     tauri::async_runtime::spawn(async move {
-        // Keyed by the project's path: that key is what makes a run in one
-        // project invisible to another, and it is the same path the tracker,
-        // the settings and the front end name a project by.
-        let mut active: HashMap<String, Active> = HashMap::new();
+        // Keyed by each run's token: several runs share a project now, and the
+        // token is the one name that is never two runs'. Which project an
+        // entry belongs to is `run.project`, the same path the tracker, the
+        // settings and the front end name a project by.
+        let mut active: HashMap<u64, Active> = HashMap::new();
         let mut next_token: u64 = 1;
 
         loop {
@@ -183,7 +199,7 @@ fn emit(app: &AppHandle, run: &Run) {
 
 fn handle(
     app: &AppHandle,
-    active: &mut HashMap<String, Active>,
+    active: &mut HashMap<u64, Active>,
     next_token: &mut u64,
     tracker: &TrackerHandle,
     terminal: &TerminalHandle,
@@ -192,25 +208,14 @@ fn handle(
 ) {
     match request {
         Request::State(project, tx) => {
-            let _ = tx.send(current(active, &project));
+            let _ = tx.send(runs_in(active, &project));
         }
-        Request::BrowserBusy(project, tx) => {
-            // `is_over` and not `stopping`: a run winding down still has its
-            // batch in flight, and that batch still has the browser.
-            let holders = active
-                .iter()
-                .filter(|(path, entry)| {
-                    path.as_str() != project
-                        && !entry.run.is_over()
-                        && entry.run.settings.live_check
-                })
-                .map(|(path, _)| path.clone())
-                .collect();
-            let _ = tx.send(holders);
+        Request::BrowserBusy(tx) => {
+            let _ = tx.send(browser_candidates(active));
         }
-        Request::Stop(project, tx) => {
+        Request::Stop(token, tx) => {
             let mut answer = None;
-            if let Some(current) = active.get_mut(&project) {
+            if let Some(current) = active.get_mut(&token) {
                 // `starting` is the fact `run.session` cannot carry: a batch
                 // authorized moments ago and not yet reported. Without it a
                 // stop in that window reads as a run with nothing in flight
@@ -234,10 +239,12 @@ fn handle(
             let _ = tx.send(answer);
         }
         Request::Start(project, settings, tx) => {
-            // This project's own run and nothing else. Another project's is not
-            // in the way of anything: it has its own board, its own worktrees
-            // and its own target branch.
-            if let Err(err) = admit(active, &project) {
+            // This project's own run over this very scope and nothing else.
+            // Another project's is not in the way of anything, and neither is
+            // another scope's in this one: a queue run beside a task run
+            // divide the board, and which tasks each may touch is bd's atomic
+            // claim to keep, not this map's.
+            if let Err(err) = admit(active, &project, &settings.scope) {
                 let _ = tx.send(Err(err));
                 return;
             }
@@ -272,16 +279,13 @@ fn handle(
             // (smetana-3fi). Re-reading it per batch would buy nothing but that.
             let agent = crate::settings::agent(app);
 
-            let run = Run::new(project.clone(), settings);
-            let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
             let token = *next_token;
             *next_token += 1;
-            active.insert(
-                project.clone(),
-                Active { token, run: run.clone(), starting: false, stop: stop_tx },
-            );
+            let run = Run::new(token, project.clone(), settings);
+            let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
+            active.insert(token, Active { run: run.clone(), starting: false, stop: stop_tx });
 
-            let ending = Ending { token, project: project.clone(), report: report.clone() };
+            let ending = Ending { token, report: report.clone() };
             let driving = drive(
                 token,
                 run.clone(),
@@ -306,7 +310,7 @@ fn handle(
     }
 }
 
-fn handle_report(app: &AppHandle, active: &mut HashMap<String, Active>, report: Report) {
+fn handle_report(app: &AppHandle, active: &mut HashMap<u64, Active>, report: Report) {
     if let Some(run) = absorb(active, report) {
         emit(app, &run);
     }
@@ -323,17 +327,16 @@ fn handle_report(app: &AppHandle, active: &mut HashMap<String, Active>, report: 
 /// start beside a live loop, and one that never leaves makes the project
 /// unstartable until the app is restarted. Neither shows up anywhere else in
 /// the tree.
-fn absorb(active: &mut HashMap<String, Active>, report: Report) -> Option<Run> {
+fn absorb(active: &mut HashMap<u64, Active>, report: Report) -> Option<Run> {
     match report {
         Report::State { token, run } => {
             let run = *run;
-            // Nothing under that key any more, or something newer under it.
-            // Either way this report is the past, and emitting it would put a
-            // finished run back on the screen.
-            let current = active.get_mut(&run.project)?;
-            if current.token != token {
-                return None;
-            }
+            // Nothing under that token any more: the run ended and its entry
+            // left. The report is the past, and emitting it would put a
+            // finished run back on the screen. A token is issued once and
+            // never reused, so — unlike the project-keyed map this grew out of
+            // — there is no "something newer under the key" case to guard.
+            let current = active.get_mut(&token)?;
             // The loop has said where it is and `run.session` carries that now,
             // so the stand-in for it has done its job. Cleared on every report,
             // which is what stops a run that has finished a batch from looking
@@ -351,15 +354,15 @@ fn absorb(active: &mut HashMap<String, Active>, report: Report) -> Option<Run> {
             current.run.adopt(run);
             Some(current.run.clone())
         }
-        Report::Spawning { token, project, allow } => {
-            let _ = allow.send(permit(active, token, &project));
+        Report::Spawning { token, allow } => {
+            let _ = allow.send(permit(active, token));
             None
         }
-        Report::Ended { token, project } => {
-            // The one place an entry leaves the map.
-            if active.get(&project).is_some_and(|a| a.token == token) {
-                active.remove(&project);
-            }
+        Report::Ended { token } => {
+            // The one place an entry leaves the map. By its own token, so an
+            // ending can only ever take its own entry out — the guard that
+            // used to need a token comparison is the key itself now.
+            active.remove(&token);
             None
         }
     }
@@ -377,9 +380,9 @@ fn absorb(active: &mut HashMap<String, Active>, report: Report) -> Option<Run> {
 ///
 /// What counts as "the stop got here first" is `may_start_batch`, and it is
 /// wider than "already over" for a reason recorded there.
-fn permit(active: &mut HashMap<String, Active>, token: u64, project: &str) -> bool {
-    match active.get_mut(project) {
-        Some(current) if current.token == token && current.run.may_start_batch() => {
+fn permit(active: &mut HashMap<u64, Active>, token: u64) -> bool {
+    match active.get_mut(&token) {
+        Some(current) if current.run.may_start_batch() => {
             current.starting = true;
             true
         }
@@ -387,23 +390,65 @@ fn permit(active: &mut HashMap<String, Active>, token: u64, project: &str) -> bo
     }
 }
 
-/// Whether this project can take a new run. Presence in the map is the test,
-/// not the state of the run in it — an entry is there for exactly as long as a
-/// loop task is alive — but the two cases are told apart in the answer, because
-/// they are different things to be told. A live run is a reason to leave it
-/// alone; a run that stopped a second ago and is still winding down is a reason
-/// to try again shortly, and calling that one "already going" contradicts the
-/// bar, which says stopped at the same moment.
-fn admit(active: &HashMap<String, Active>, project: &str) -> Result<(), RunError> {
-    match active.get(project) {
-        None => Ok(()),
-        Some(entry) if entry.run.is_over() => Err(RunError::WindingDown),
-        Some(_) => Err(RunError::AlreadyRunning),
+/// Whether this project can take a new run over this scope. Presence of a
+/// same-project, same-scope entry is the test, not the state of the run in it
+/// — an entry is there for exactly as long as a loop task is alive — but the
+/// two cases are told apart in the answer, because they are different things
+/// to be told. A live run is a reason to leave it alone, and the refusal names
+/// the scope it holds; a run that stopped a second ago and is still winding
+/// down is a reason to try again shortly, and calling that one "already going"
+/// contradicts the bar, which says stopped at the same moment.
+///
+/// "Same scope" is `RunScope`'s own equality — Queue against Queue, or the
+/// same id under the same kind. Everything else runs beside this project's
+/// other runs: which tasks each may touch is bd's claim to arbitrate, and a
+/// second exclusion here could only disagree with it.
+fn admit(active: &HashMap<u64, Active>, project: &str, scope: &RunScope) -> Result<(), RunError> {
+    let mut winding_down = false;
+    for entry in active.values() {
+        if entry.run.project != project || entry.run.settings.scope != *scope {
+            continue;
+        }
+        if entry.run.is_over() {
+            winding_down = true;
+        } else {
+            return Err(RunError::AlreadyRunning { scope: scope.describe() });
+        }
+    }
+    if winding_down {
+        Err(RunError::WindingDown)
+    } else {
+        Ok(())
     }
 }
 
-fn current(active: &HashMap<String, Active>, project: &str) -> Option<Run> {
-    active.get(project).map(|a| a.run.clone())
+/// Every run this project holds, oldest first. Tokens only ever grow, so
+/// sorting by them is starting order — the map itself has no order to offer.
+fn runs_in(active: &HashMap<u64, Active>, project: &str) -> Vec<Run> {
+    let mut runs: Vec<Run> = active
+        .values()
+        .filter(|a| a.run.project == project)
+        .map(|a| a.run.clone())
+        .collect();
+    runs.sort_by_key(|run| run.token);
+    runs
+}
+
+/// The projects whose live runs asked for a live check — the candidate list
+/// `Request::BrowserBusy` answers with. Per run and deduplicated to projects
+/// only because that is what the caller reads configs by; the asking project
+/// is deliberately in it (see the request's own comment). `is_over` and not
+/// `stopping`: a run winding down still has its batch in flight, and that
+/// batch still has the browser.
+fn browser_candidates(active: &HashMap<u64, Active>) -> Vec<String> {
+    let mut projects: Vec<String> = active
+        .values()
+        .filter(|a| !a.run.is_over() && a.run.settings.live_check)
+        .map(|a| a.run.project.clone())
+        .collect();
+    projects.sort();
+    projects.dedup();
+    projects
 }
 
 /// The loop itself, on a task of its own so the worker above stays answerable
@@ -516,7 +561,7 @@ async fn drive(
         // open: the stop and the spawn are two events in two tasks, and nothing
         // orders the answer against the microseconds that follow it. The worker
         // can order them, because it is the single task that handles both.
-        if !may_spawn(&report, token, &run.project).await {
+        if !may_spawn(&report, token).await {
             run.advance(RunState::Stopped { reason: StopReason::Cancelled });
             say(&run);
             return;
@@ -902,9 +947,9 @@ async fn remove_session(terminal: &TerminalHandle, session: u64) {
 /// A worker that cannot answer is a no. There would be nothing left to report a
 /// batch to, and of the two ways to be wrong here only one of them merges
 /// something nobody asked for.
-async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64, project: &str) -> bool {
+async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64) -> bool {
     let (tx, rx) = oneshot::channel();
-    let asked = report.send(Report::Spawning { token, project: project.to_string(), allow: tx });
+    let asked = report.send(Report::Spawning { token, allow: tx });
     if asked.is_err() {
         return false;
     }
@@ -1030,16 +1075,18 @@ async fn await_exit(terminal: &TerminalHandle, session: u64) -> Exit {
 }
 
 /// The map's lifecycle, which is the half of smetana-0kb that no other test in
-/// the tree reaches. Everything here is `absorb`, `permit` and `admit` over a
-/// plain `HashMap` — no worker, no runtime, no `AppHandle`.
+/// the tree reaches — plus the scope rule that turned "one run per project"
+/// into "one run per scope" (smetana-5hf). Everything here is `absorb`,
+/// `permit`, `admit`, `runs_in` and `browser_candidates` over a plain
+/// `HashMap` — no worker, no runtime, no `AppHandle`.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runs::model::{RunMode, RunScope};
 
-    fn settings() -> RunSettings {
+    fn settings(scope: RunScope) -> RunSettings {
         RunSettings {
-            scope: RunScope::Queue,
+            scope,
             mode: RunMode::Auto,
             target_branch: "main".into(),
             create_target: false,
@@ -1050,19 +1097,27 @@ mod tests {
         }
     }
 
-    /// One project, one entry, the way `Request::Start` leaves things.
-    fn map(token: u64) -> HashMap<String, Active> {
+    fn task(id: &str) -> RunScope {
+        RunScope::Task { id: id.into() }
+    }
+
+    fn epic(id: &str) -> RunScope {
+        RunScope::Epic { id: id.into() }
+    }
+
+    /// One entry, the way `Request::Start` leaves things.
+    fn insert(active: &mut HashMap<u64, Active>, token: u64, project: &str, scope: RunScope) {
         let (stop, _rx) = mpsc::channel::<()>(1);
-        let mut active = HashMap::new();
         active.insert(
-            "/p".to_string(),
-            Active {
-                token,
-                run: Run::new("/p".into(), settings()),
-                starting: false,
-                stop,
-            },
+            token,
+            Active { run: Run::new(token, project.into(), settings(scope)), starting: false, stop },
         );
+    }
+
+    /// One queue run in `/p`, the smallest map most tests want.
+    fn map(token: u64) -> HashMap<u64, Active> {
+        let mut active = HashMap::new();
+        insert(&mut active, token, "/p", RunScope::Queue);
         active
     }
 
@@ -1073,9 +1128,9 @@ mod tests {
     #[test]
     fn a_batch_is_cleared_for_a_live_run_and_remembered_as_starting() {
         let mut active = map(1);
-        assert!(permit(&mut active, 1, "/p"));
+        assert!(permit(&mut active, 1));
         assert!(
-            active["/p"].starting,
+            active[&1].starting,
             "the window in which the batch is on its way and `session` is still None"
         );
     }
@@ -1086,60 +1141,117 @@ mod tests {
         // over lets a stop landing just after the loop's own check start a
         // whole further round, board read and all.
         let mut active = map(1);
-        active.get_mut("/p").expect("the entry").run.session = Some(9);
-        active.get_mut("/p").expect("the entry").run.request_stop(false);
-        assert!(!active["/p"].run.is_over(), "the batch in flight is still finishing");
+        active.get_mut(&1).expect("the entry").run.session = Some(9);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
+        assert!(!active[&1].run.is_over(), "the batch in flight is still finishing");
 
-        assert!(!permit(&mut active, 1, "/p"), "that batch and no more");
-        assert!(!active["/p"].starting, "a refusal records nothing");
+        assert!(!permit(&mut active, 1), "that batch and no more");
+        assert!(!active[&1].starting, "a refusal records nothing");
     }
 
     #[test]
-    fn a_batch_is_refused_for_a_stale_token_and_for_a_project_with_no_entry() {
+    fn a_batch_is_refused_for_a_token_that_is_not_in_the_map() {
+        // An older loop asking after its run has ended and left, or a token
+        // that never existed: either way there is nothing to authorize.
         let mut active = map(7);
-        assert!(!permit(&mut active, 6, "/p"), "an older loop asking after its run was replaced");
-        assert!(!permit(&mut active, 7, "/other"), "no entry, so nothing to authorize");
-        assert!(!active["/p"].starting);
+        assert!(!permit(&mut active, 6));
+        assert!(!active[&7].starting);
     }
 
     #[test]
-    fn only_the_loop_that_owns_the_entry_ends_it() {
-        // The stale-token guard on the removal. Without it a report from the
-        // run that was replaced takes the live run's entry out, and the project
-        // then accepts a second run beside a loop that is still going.
+    fn an_ending_removes_its_own_entry_and_nobody_elses() {
+        // The identity guard in its new form: the token is the key, so an
+        // ending can only take out the entry it belongs to — the comparison
+        // the project-keyed map needed is the lookup itself now.
         let mut active = map(7);
-        absorb(&mut active, Report::Ended { token: 6, project: "/p".into() });
-        assert!(active.contains_key("/p"), "that ending belongs to a run that is already gone");
+        absorb(&mut active, Report::Ended { token: 6 });
+        assert!(active.contains_key(&7), "that ending belongs to a run that is already gone");
 
-        absorb(&mut active, Report::Ended { token: 7, project: "/p".into() });
-        assert!(!active.contains_key("/p"), "and the one that owns it does end it");
+        absorb(&mut active, Report::Ended { token: 7 });
+        assert!(!active.contains_key(&7), "and the one that owns it does end it");
     }
 
     #[test]
-    fn a_stopped_run_holds_its_project_until_its_loop_reports_the_ending() {
-        // Both halves of the acceptance criterion in one place: the stop is
-        // immediate on screen, the project stays taken while the loop winds
-        // down, and it is the ending — not the stop — that frees it.
+    fn a_stopped_run_holds_its_scope_until_its_loop_reports_the_ending() {
+        // The stop is immediate on screen, the scope stays taken while the
+        // loop winds down, and it is the ending — not the stop — that frees
+        // it. The rest of the project is not held with it: another scope is
+        // admitted straight through the winding down.
         let mut active = map(1);
-        active.get_mut("/p").expect("the entry").run.request_stop(false);
-        assert!(active["/p"].run.is_over(), "nothing was in flight, so the stop is immediate");
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
+        assert!(active[&1].run.is_over(), "nothing was in flight, so the stop is immediate");
 
-        assert_eq!(admit(&active, "/p"), Err(RunError::WindingDown));
-        assert!(!permit(&mut active, 1, "/p"), "and no batch goes out of a stopped run");
+        assert_eq!(admit(&active, "/p", &RunScope::Queue), Err(RunError::WindingDown));
+        assert_eq!(admit(&active, "/p", &task("a-1")), Ok(()), "another scope is not held by it");
+        assert!(!permit(&mut active, 1), "and no batch goes out of a stopped run");
 
-        absorb(&mut active, Report::Ended { token: 1, project: "/p".into() });
-        assert_eq!(admit(&active, "/p"), Ok(()), "the loop is gone, so the project is free");
+        absorb(&mut active, Report::Ended { token: 1 });
+        assert_eq!(
+            admit(&active, "/p", &RunScope::Queue),
+            Ok(()),
+            "the loop is gone, so the scope is free"
+        );
     }
 
     #[test]
-    fn a_project_taken_by_a_live_run_is_refused_as_already_running() {
+    fn a_second_run_of_the_same_scope_is_refused_and_the_refusal_names_it() {
         // The two refusals are different sentences on purpose: this one means
-        // leave it alone, `WindingDown` means try again in a moment. Saying
-        // "already going" of a run the bar has just called stopped reads as the
-        // stop not having taken.
-        let active = map(1);
-        assert_eq!(admit(&active, "/p"), Err(RunError::AlreadyRunning));
-        assert_eq!(admit(&active, "/elsewhere"), Ok(()), "another project is nobody's business");
+        // leave it alone, `WindingDown` means try again in a moment. And it
+        // names what is in the way, because with several runs in a project "a
+        // run is already going" no longer says which.
+        let mut active = map(1);
+        insert(&mut active, 2, "/p", task("a-1"));
+        insert(&mut active, 3, "/p", epic("a-2"));
+
+        assert_eq!(
+            admit(&active, "/p", &RunScope::Queue),
+            Err(RunError::AlreadyRunning { scope: "the queue".into() })
+        );
+        assert_eq!(
+            admit(&active, "/p", &task("a-1")),
+            Err(RunError::AlreadyRunning { scope: "task a-1".into() })
+        );
+        assert_eq!(
+            admit(&active, "/p", &epic("a-2")),
+            Err(RunError::AlreadyRunning { scope: "epic a-2".into() })
+        );
+    }
+
+    #[test]
+    fn a_different_scope_runs_beside_this_projects_other_runs() {
+        // A queue run beside a task run, and runs over different ids, divide
+        // the board rather than fight over it — which tasks each may touch is
+        // bd's atomic claim to arbitrate, not this map's.
+        let mut active = map(1);
+        insert(&mut active, 2, "/p", task("a-1"));
+
+        assert_eq!(admit(&active, "/p", &task("a-2")), Ok(()));
+        assert_eq!(admit(&active, "/p", &epic("a-9")), Ok(()));
+        assert_eq!(admit(&active, "/elsewhere", &RunScope::Queue), Ok(()), "another project is nobody's business");
+    }
+
+    #[test]
+    fn state_answers_every_run_the_project_holds_oldest_first() {
+        let mut active = map(4);
+        insert(&mut active, 2, "/p", task("a-1"));
+        insert(&mut active, 3, "/elsewhere", RunScope::Queue);
+
+        let runs = runs_in(&active, "/p");
+        assert_eq!(runs.iter().map(|r| r.token).collect::<Vec<_>>(), vec![2, 4]);
+        assert!(runs.iter().all(|r| r.project == "/p"), "another project's run is not in it");
+    }
+
+    #[test]
+    fn stopping_one_run_leaves_the_projects_other_run_going() {
+        // The acceptance criterion at map level: the stop reaches exactly the
+        // run it names, and the neighbour's next batch is still authorized.
+        let mut active = map(1);
+        insert(&mut active, 2, "/p", task("a-1"));
+        active.get_mut(&1).expect("the entry").run.session = Some(9);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
+
+        assert!(!permit(&mut active, 1), "the stopped run takes no further batch");
+        assert!(permit(&mut active, 2), "and the other run never hears about it");
     }
 
     #[test]
@@ -1148,22 +1260,26 @@ mod tests {
         // set after the loop has reported, it would make a stop between batches
         // wait for a batch that is not there.
         let mut active = map(1);
-        assert!(permit(&mut active, 1, "/p"));
+        assert!(permit(&mut active, 1));
 
-        let mut reported = Run::new("/p".into(), settings());
+        let mut reported = Run::new(1, "/p".into(), settings(RunScope::Queue));
         reported.advance(RunState::Deciding);
         absorb(&mut active, state(1, &reported));
-        assert!(!active["/p"].starting);
+        assert!(!active[&1].starting);
     }
 
     #[test]
-    fn a_report_from_a_replaced_run_changes_nothing_and_is_not_emitted() {
+    fn a_report_from_an_ended_run_changes_nothing_and_is_not_emitted() {
+        // The token guard in its new form: the ended run's entry is gone, so
+        // its late report finds nothing — and the run that started after it in
+        // the same project is not written over (the map used to key by project,
+        // where exactly that could happen).
         let mut active = map(7);
-        let mut reported = Run::new("/p".into(), settings());
+        let mut reported = Run::new(6, "/p".into(), settings(RunScope::Queue));
         reported.advance(RunState::Working { iteration: 3 });
 
         assert!(absorb(&mut active, state(6, &reported)).is_none(), "nothing to put on the wire");
-        assert_eq!(active["/p"].run.state, RunState::Preflight, "and nothing written either");
+        assert_eq!(active[&7].run.state, RunState::Preflight, "and nothing written either");
     }
 
     #[test]
@@ -1171,12 +1287,12 @@ mod tests {
         // The loop's copy knows nothing of a stop until it next looks at the
         // channel, so it keeps reporting progress for a moment afterwards.
         let mut active = map(1);
-        active.get_mut("/p").expect("the entry").run.request_stop(false);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
 
-        let mut reported = Run::new("/p".into(), settings());
+        let mut reported = Run::new(1, "/p".into(), settings(RunScope::Queue));
         reported.advance(RunState::Working { iteration: 1 });
         assert!(absorb(&mut active, state(1, &reported)).is_none(), "nothing goes on the wire");
-        assert!(active["/p"].run.is_over(), "and a finished run does not come back on screen");
+        assert!(active[&1].run.is_over(), "and a finished run does not come back on screen");
     }
 
     #[test]
@@ -1184,15 +1300,41 @@ mod tests {
         // `adopt` through the path that actually runs: a cooperative stop, then
         // the loop's next report, then the check that guards the next batch.
         let mut active = map(1);
-        active.get_mut("/p").expect("the entry").run.session = Some(4);
-        active.get_mut("/p").expect("the entry").run.request_stop(false);
+        active.get_mut(&1).expect("the entry").run.session = Some(4);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
 
-        let mut reported = Run::new("/p".into(), settings());
+        let mut reported = Run::new(1, "/p".into(), settings(RunScope::Queue));
         reported.advance(RunState::Deciding);
         let emitted = absorb(&mut active, state(1, &reported)).expect("a run to put on the wire");
 
         assert_eq!(emitted.state, RunState::Deciding, "where the loop is, is the loop's to say");
         assert!(emitted.stopping, "and whether it was asked to stop is not");
-        assert!(!permit(&mut active, 1, "/p"), "so the next batch is still refused");
+        assert!(!permit(&mut active, 1), "so the next batch is still refused");
+    }
+
+    #[test]
+    fn browser_busy_counts_runs_and_the_asking_project_is_among_them() {
+        // The other half of what this task changed about the browser question:
+        // a live-check run in this very project is exactly what holds
+        // Playwright's one profile against a second run beside it, so the
+        // asking project is no longer filtered out — and a project appears
+        // once however many of its runs want the browser.
+        let mut active = map(1);
+        insert(&mut active, 2, "/p", task("a-1"));
+        insert(&mut active, 3, "/elsewhere", RunScope::Queue);
+
+        assert_eq!(browser_candidates(&active), vec!["/elsewhere".to_string(), "/p".to_string()]);
+    }
+
+    #[test]
+    fn a_run_that_is_over_or_never_wanted_the_browser_is_not_a_candidate() {
+        // `is_over` and not `stopping`: a run winding down still has its batch
+        // in flight, and that batch still has the browser.
+        let mut active = map(1);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
+        insert(&mut active, 2, "/p", task("a-1"));
+        active.get_mut(&2).expect("the entry").run.settings.live_check = false;
+
+        assert_eq!(browser_candidates(&active), Vec::<String>::new());
     }
 }

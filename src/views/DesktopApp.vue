@@ -81,12 +81,12 @@ import {
   loadConfig,
   loadRun,
   needsSetup,
-  running,
   runsState,
   startRun,
   stopRun
 } from '../stores/runs.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
+import { scopeBusyReason } from '../components/run/runScopes.js'
 import { inspector, scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
@@ -321,21 +321,25 @@ const configErrorText = computed(() =>
 const runnableTask = (task) =>
   runOffered.value && task.status !== 'done' && task.status !== 'blocked'
 
-/* Why every play on the board is inactive, or '' when none of them is.
-   Strictly sequential work inside a project is the invariant — one stand, one
-   set of ports, one database, and merges in one order — so a second run here is
-   refused by the worker. It was refused only at the very end, though: somebody
-   pressed play, filled the dialog in and confirmed before hearing it. This is
-   the same refusal, said where the decision is made. It is the project's own
-   run and nothing else: a run in another project is no reason to grey anything
-   here, which is the other half of what this task changed.
+/* Why the queue's own play is inactive, or '' when it is not. A project holds
+   several runs now, so a run going is no longer a reason to grey every play —
+   only the play that would start the same run again: two runs both told to
+   take the whole queue are two leads racing for the same tasks, and the worker
+   refuses exactly that (runs/service.rs `admit`). This is the same refusal,
+   said where the decision is made rather than after somebody has filled the
+   dialog in and confirmed. It is the project's own runs and nothing else: a
+   run in another project is no reason to grey anything here.
+
+   Each card's play carries its own reason the same way, computed per card in
+   `orderedColumns` below and riding the task object like `runnable` does —
+   one string for the whole board stopped being honest the moment a queue run
+   beside a task run became legal.
 
    Lowercase, because it is never shown on its own: both plays interpolate it
    into "Run this — …" / "Run the queue — …", and a capital there would read as
-   two sentences joined by a dash. */
-const runBlockedReason = computed(() =>
-  running.value ? 'a run is already going in this project' : ''
-)
+   two sentences joined by a dash. The rule and the words live in runScopes.js,
+   which is the part of this a test can reach. */
+const runBlockedReason = computed(() => scopeBusyReason({ kind: 'queue' }, runsState.runs))
 
 const runOpen = ref(false)
 const runScope = ref({ kind: 'queue' })
@@ -386,16 +390,18 @@ const childrenOf = (id) =>
     (issue) => issue.parent === id && toUiStatus(issue.status) !== 'done'
   )
 
-/* An issue with children is run as its children — that is what the epic scope
-   means, and the parent issue itself is never the work. */
+/* The scope a card's play would start: an issue with children is run as its
+   children — that is what the epic scope means, and the parent issue itself is
+   never the work. One function rather than two copies, because the play's own
+   grey (the per-card reason in `orderedColumns`) has to be about the very
+   scope the click would send, or a card would grey over one run and start
+   another. */
+const cardScope = (id) => ({ kind: childrenOf(id).length ? 'epic' : 'task', id })
+
 const runTask = (id) => {
   const issue = issueById(id)
   if (!issue) return
-  openRun({
-    kind: childrenOf(id).length ? 'epic' : 'task',
-    id,
-    title: issue.title
-  })
+  openRun({ ...cardScope(id), title: issue.title })
 }
 
 /* The issue above the one in the dialog, if there is one. Read here rather
@@ -486,7 +492,13 @@ const startTheRun = async (chosen) => {
 const runFailure = (err) => {
   const detail = err?.detail ?? err?.message ?? String(err)
   if (err?.kind === 'not_configured') return 'This project has no run configuration yet.'
-  if (err?.kind === 'already_running') return 'A run is already going in this project.'
+  /* Named, because "a run is already going" stopped being an answer when a
+     project could hold several: the person has to hear which of them is in the
+     way. The fragment is the worker's own (RunScope::describe), riding in the
+     error's detail. */
+  if (err?.kind === 'already_running') {
+    return `A run over ${err.detail?.scope ?? 'this scope'} is already going in this project.`
+  }
   /* Deliberately not the sentence above. The run this one is about has stopped
      — the bar says so in the same breath — and only its loop is still winding
      down, so claiming a run is going would read as the stop not having taken. */
@@ -494,8 +506,10 @@ const runFailure = (err) => {
   return detail || 'The run could not be started.'
 }
 
-const stopTheRun = () => {
-  if (activePath.value) stopRun(activePath.value)
+/* By token, because the button lives on one bar segment and the stop has to
+   reach exactly that run — its neighbours in the same project keep going. */
+const stopTheRun = (token) => {
+  stopRun(token)
 }
 
 const setupFor = ref(null)
@@ -1128,8 +1142,19 @@ const orderedColumns = computed(() =>
     ...column,
     /* `runnable` rides in the task object, the way every other thing a card is
        drawn from does — the column v-binds the whole of it, and a second
-       channel for one flag would put the decision in two places. */
-    tasks: column.tasks.map((task) => ({ ...task, runnable: runnableTask(task) }))
+       channel for one flag would put the decision in two places. The per-card
+       `runBlockedReason` rides beside it for the same reason, and it is per
+       card because the refusal is per scope now: the card's own play is greyed
+       only over a live run on this very task or epic, never over the queue's
+       or a neighbour's. */
+    tasks: column.tasks.map((task) => {
+      const runnable = runnableTask(task)
+      return {
+        ...task,
+        runnable,
+        runBlockedReason: runnable ? scopeBusyReason(cardScope(task.id), runsState.runs) : ''
+      }
+    })
   }))
 )
 
@@ -1464,7 +1489,15 @@ const toastStackStyle = {
       :branch="branchLabel"
     >
       <template #status>
-        <RunBar :run="runsState.run" :busy="runStarting" @stop="stopTheRun" />
+        <!-- One segment per run, oldest first — a project holds several now,
+             and each segment's stop names its own run by token. The scope
+             bar's own gap spaces the segments; RunBar draws nothing for a
+             run it was not given, so an empty list costs no width. `busy` is
+             deliberately not bound: the run a confirm is starting has no
+             segment until the worker answers, so `runStarting` is about none
+             of these, and passing it disabled the other live runs' stop
+             buttons over a start that never touches them. -->
+        <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
       </template>
     </ScopeIndicator>
 
