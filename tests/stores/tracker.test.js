@@ -129,6 +129,35 @@ describe('boardColumns', () => {
     expect(blocked.blockingIds).toEqual([])
   })
 
+  it('an open task with an unfinished blocker sits in the blocked column, and closing the blocker releases it', async () => {
+    // The whole of the unblocking mechanism: it is worked out here on every
+    // snapshot, the way `bd ready` does it, so there is no stored status and
+    // nothing that has to be written for the card to move.
+    const blocked = () =>
+      tracker.boardColumns.value.find((c) => c.status === 'blocked')?.tasks.map((t) => t.id) ?? []
+    const ready = () =>
+      tracker.boardColumns.value.find((c) => c.status === 'ready')?.tasks.map((t) => t.id) ?? []
+
+    await start(
+      snapshot({
+        issues: [
+          issue({ id: 'bd-1' }),
+          issue({ id: 'bd-2', dependencies: [edge({ issue_id: 'bd-2', depends_on_id: 'bd-1' })] })
+        ]
+      })
+    )
+
+    expect(blocked()).toEqual(['bd-2'])
+    expect(ready()).toEqual(['bd-1'])
+
+    await emit('tracker:delta', delta({ upserted: [issue({ id: 'bd-1', status: 'closed' })] }))
+
+    expect(blocked()).toEqual([])
+    expect(ready()).toEqual(['bd-2'])
+    const card = tracker.boardColumns.value.flatMap((c) => c.tasks).find((t) => t.id === 'bd-2')
+    expect(card.blockedBy).toBe(0)
+  })
+
   it('parentage does not count as a blocker: otherwise every child would get a false "blocked"', async () => {
     await start(
       snapshot({

@@ -14,6 +14,10 @@ const UI_STATUS = { open: 'ready', in_progress: 'running', closed: 'done' }
 
 export const toUiStatus = (name) => UI_STATUS[name] ?? name
 
+const OPEN = 'open'
+const CLOSED = 'closed'
+const BLOCKED = 'blocked'
+
 export const trackerState = reactive({
   ready: false,
   /* A project switch is under way. While it is, deltas are ignored: they may
@@ -39,10 +43,16 @@ export const issueById = (id) => trackerState.issues.get(id)
    blocked card already knows. The counts below are `.length` of these, so the
    number and the names cannot disagree — they are one fact projected twice. */
 const dependencyEdges = computed(() => {
+  /* A blocker only blocks while it is unfinished, so a closed one is dropped
+     here and the card stops being blocked the moment it closes. One absent from
+     the board counts as satisfied too — the same rule `runs/queue.rs` applies,
+     and the alternative is a card stuck behind a reference nobody can resolve. */
+  const holds = (id) => trackerState.issues.has(id) && trackerState.issues.get(id).status !== CLOSED
+
   const blockedBy = new Map()
   const blocking = new Map()
   for (const issue of trackerState.issues.values()) {
-    const edges = (issue.dependencies ?? []).filter((d) => d.type === 'blocks')
+    const edges = (issue.dependencies ?? []).filter((d) => d.type === 'blocks' && holds(d.depends_on_id))
     if (edges.length) blockedBy.set(issue.id, edges.map((d) => d.depends_on_id))
     for (const edge of edges) {
       const downstream = blocking.get(edge.depends_on_id) ?? []
@@ -58,14 +68,24 @@ export const boardColumns = computed(() => {
   const buckets = new Map(trackerState.columns.map((c) => [c.name, []]))
 
   for (const issue of trackerState.issues.values()) {
-    // A status that is not in bd's set still has to be visible.
-    if (!buckets.has(issue.status)) buckets.set(issue.status, [])
     const blockedByIds = blockedBy.get(issue.id) ?? []
     const blockingIds = blocking.get(issue.id) ?? []
-    buckets.get(issue.status).push({
+
+    /* Blocked is a column, not a status anybody writes. bd has no `blocked`
+       status on these issues — they are `open` with an unfinished blocker, and
+       `bd ready` works out the difference on every query rather than storing
+       it. The board does the same: closing a blocker moves its dependants into
+       Ready by itself, with nothing to update and nothing that can be left
+       stale. Storing it instead would put a write between a blocker closing and
+       the work becoming available. */
+    const column = blockedByIds.length && issue.status === OPEN ? BLOCKED : issue.status
+
+    // A status that is not in bd's set still has to be visible.
+    if (!buckets.has(column)) buckets.set(column, [])
+    buckets.get(column).push({
       id: issue.id,
       title: issue.title,
-      status: toUiStatus(issue.status),
+      status: toUiStatus(column),
       /* bd's own word, untranslated: the card's badge is the tracker's
          vocabulary, not the design system's, and a custom type has to survive
          the trip to be drawn at all. */
