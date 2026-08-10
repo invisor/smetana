@@ -54,7 +54,9 @@ import {
   trackerState,
   updateIssue
 } from '../stores/tracker.js'
-import { settings } from '../stores/settings.js'
+import { initSettingsBridge, settings } from '../stores/settings.js'
+import { openSettingsWindow } from '../stores/app.js'
+import { paintRoot } from './useAppearance.js'
 import {
   activePath,
   addProject,
@@ -129,12 +131,26 @@ const props = defineProps({
   density: { type: String, default: 'comfortable' }
 })
 
-// Both switches live on the document root: every token is defined against them.
-watchEffect(() => {
-  const el = document.documentElement
-  el.setAttribute('data-theme', props.theme)
-  el.setAttribute('data-density', props.density)
-})
+/* Both switches live on the document root: every token is defined against them.
+   So does the type scale, which the settings window's app-wide font size
+   rewrites there token by token — that way no component knows about it and the
+   editor and the terminal come along for free (see `useAppearance.js`). The
+   theme arrives already resolved: `system` is App.vue's to answer, since it is
+   the machine's answer and not a stored one. */
+watchEffect(() =>
+  paintRoot(document.documentElement, {
+    theme: props.theme,
+    density: props.density,
+    uiFontSize: settings.appearance.uiFontSize,
+    editorFontSize: settings.editor.fontSize
+  })
+)
+
+/* This window is the only writer of settings.json, and this is what makes the
+   settings window's edits arrive here rather than going to the file behind our
+   back — from here they are ordinary changes to the same reactive object every
+   panel writes to, and the store's debounce takes them to disk. */
+onMounted(initSettingsBridge)
 
 /* Everything that survives a restart lives in settings: the panels in layout,
    the selection inside a project in project. Local refs are left only for what
@@ -1487,6 +1503,7 @@ const toastStackStyle = {
       :repo="activePath ? basename(activePath) : '—'"
       worktree=""
       :branch="branchLabel"
+      @settings="openSettingsWindow"
     >
       <template #status>
         <!-- One segment per run, oldest first — a project holds several now,

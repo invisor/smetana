@@ -60,12 +60,18 @@ reads (`src/App.vue`):
 |---|---|---|
 | `theme` | `dark`, `light` | `dark` |
 | `density` | `comfortable`, `compact` | `comfortable` |
-| `view` | `gallery` | the app |
+| `view` | `gallery`, `settings` | the app |
 
 `?view=gallery` renders every exported component once (`src/views/Gallery.vue`) — the harness for
 catching a broken component. Check any component change in all four theme × density combinations,
 since both switches only swap CSS custom properties and a component that hardcodes a value will
 look correct in exactly one of them.
+
+`?view=settings` is the settings window (`src/views/SettingsWindow.vue`), which in the app is a
+second OS window loading that same query string. It neither reads nor writes `?theme=`/`?density=`:
+it paints itself from what the app window tells it, and in a browser from `settings_load`. That is
+what makes the settings screen checkable without Tauri — the one thing it cannot do there is change
+anything for good, since the window that owns the file is not on the other end.
 
 ## Architecture
 
@@ -151,10 +157,15 @@ answers `tracker_health`. `DesktopApp.vue` renders it where the board would be �
 loud budget belongs to the card that needs a human.
 
 `src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`,
-`src/stores/terminals.js`, `src/stores/git.js`, `src/stores/runs.js` and `src/stores/attachments.js`
+`src/stores/terminals.js`, `src/stores/git.js`, `src/stores/runs.js`, `src/stores/attachments.js`
+and `src/stores/app.js`
 are the **only** files in `src/` that know Tauri exists — components see reactive stores and nothing
-else. `mockBackend.js` below is the ninth and the exception that proves it: it imports Tauri in order
-to stand in for the absence of one. Several of those files open by counting themselves into this list
+else. `mockBackend.js` below is the last and the exception that proves it: it imports Tauri in order
+to stand in for the absence of one. `app.js` is the odd one, and it is a store for exactly this
+reason rather than for holding state: it has none. It is what the app knows about itself and asks
+the desktop for — open the settings window, read this build's version, open a link in the person's
+own browser — and every one of those would otherwise be an `@tauri-apps/api` import inside a
+component. Several of those files open by counting themselves into this list
 (`runs.js` says it is the seventh, `attachments.js` says the same of itself), which is a habit worth
 knowing about before trusting one: an ordinal is written once and the list keeps growing under it.
 The list here is the one to check against the tree. `tracker.js` also
@@ -1129,6 +1140,12 @@ which would have drawn an empty gap in the middle of a tooltip's sentence. That 
 review rather than on screen, which is luck and not a process. Borrowing a store's copy instead of
 lifting it out would have pulled Vue and Tauri into a family defined by having neither.
 
+`src/appearance.js` sits beside it for the same reason and is worth naming for the same reason: what
+a stored theme means right now, and what the type scale looks like at a chosen size, are wanted by
+two windows at once — the app and the settings window — so there is no one part of the interface to
+file them under. Its DOM half is split off into `views/useAppearance.js`, which is what keeps the
+rules themselves reachable by a test.
+
 ### Settings
 
 What the app remembers between runs lives in one JSON file in `app_config_dir()`
@@ -1138,7 +1155,8 @@ and where the tests are; `file.rs` is the disk (atomic write through a per-call 
 `sync_all`ed and renamed, a `.bak` copy of anything unparseable or too new); `commands.rs` is two
 thin commands.
 
-The file keeps appearance, panel layout — collapsed state and width for each side — and `agent`, the
+The file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed state and
+width for each side), `editor` with its own `fontSize`, and `agent`, the
 id of the CLI agent to start, at the root;
 below that, `openProjects` is the list of
 projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
@@ -1153,7 +1171,8 @@ without the scope, since that comes from whichever play button was pressed and r
 open the dialog claiming to run something nobody clicked. The open tabs are paths
 relative to the project root — the key already carries the absolute part, and a moved folder does
 not turn the list into rubbish. The map never crosses the IPC boundary: `settings_load` returns the
-resolved view for one project (`{ appearance, layout, agent, project, openProjects, activeProject }`) and
+resolved view for one project
+(`{ appearance, layout, editor, agent, project, openProjects, activeProject }`) and
 `settings_save` puts it back, stamps `usedAt` on the active project and trims `projects` toward the
 20 most recently used — but never evicts the current project or anything still in `openProjects`, so
 the cap only bites entries from past visits that were closed, not projects a person still has open.
@@ -1165,14 +1184,62 @@ for the debounce: the store holds the close through `onCloseRequested`, flushes 
 ceiling and then destroys the window itself — the window always closes, a slow back end costs the
 last edit rather than the app.
 
-There is no settings screen and no theme switch: appearance and layout are only ever changed by
-using the app, and `agent` is not changed by using it at all — until there is a screen, switching to
-Codex is a hand edit of the file, which is fine and changes the shape of nothing. The one part of
-`settings.json` the interface does edit directly is the project list —
-adding, switching and removing rows is what writes `openProjects` and `lastProject`.
-`?theme=` and `?density=` still override both for one run and are deliberately **not**
-written back — one visit to the dev server must not repaint the app forever. `?view=gallery`
-neither reads nor writes.
+Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
+an opened tab. Four fields are the exception and they are what the settings window edits —
+`appearance.theme`, `appearance.uiFontSize`, `editor.fontSize` and `agent`. Density is not among
+them, deliberately: nothing has asked for it yet, and a screen full of switches nobody wanted is
+worse than a short one. `?theme=` and `?density=` still override the first two for one run and are
+deliberately **not** written back — one visit to the dev server must not repaint the app forever.
+`?view=gallery` neither reads nor writes.
+
+#### The settings window
+
+The gear in the scope bar opens a **second `WebviewWindow`**, not a modal (`window.rs`:
+`settings_window_open`), and the reason is the whole of why this is a window: a modal cannot be
+dragged outside the app's own bounds, so it cannot sit beside what it is changing. It loads the same
+bundle under `?view=settings`, so there is one front end and one set of tokens; the label `settings`
+is what makes a second press focus the window instead of making another, and it is also the name the
+capability in `capabilities/default.json` lists beside `main` — a window not named there reaches no
+core plugin at all, and the settings UI would come up unable to send an event or read the version.
+
+**The main window stays the only writer.** `settings_save` writes the whole resolved view — the
+panel widths, the project map, the open tabs — so a second window calling it would post its own idea
+of all of that, and the later write would win. So the settings window holds no settings store: it
+asks (`settings:hello`), it is told (`settings:state`), and it sends one edit at a time
+(`settings:apply`), which lands in the main window's reactive object and reaches disk through the
+debounce every panel drag already uses. `stores/settings.js` owns all three, and `applyPatch` is
+where an event is checked — a field that fails takes its previous value, not the shipped default,
+because an event is not a response to anything and a malformed one must cost nothing. The settings
+window applies an edit locally *before* sending it, so a dropdown answers the person who used it in
+the same frame; the announcement that follows is the correction when a value was refused. It also
+follows from all this that the settings window cannot outlive the main one — a viewer with no owner
+would go on accepting choices and keeping none — so `close_settings_with_main` takes it down on the
+main window's `Destroyed`, which is also what lets the app still exit on its last window.
+
+Appearance reaches the screen through the document root and nothing else (`views/useAppearance.js`).
+`theme: system` is not a third palette — it is the absence of a choice, so the word is stored as it
+stands, never resolved on the way to disk, and `prefers-color-scheme` is *watched* rather than read
+once: a laptop that switches at sunset must not leave the app wrong all evening. `uiFontSize` scales
+the whole eight-step type scale from `tokens/typography.css` by the chosen size over 13 and writes
+the result back as custom properties on the root, which is why no component knows about it and the
+hierarchy between a label, a row and a heading survives every size. `editor.fontSize` sets
+`--text-code-size` on the same root and is deliberately *not* scaled with the rest — chrome and code
+are two questions. The scale is repeated in `src/appearance.js` and has to follow the stylesheet:
+once the root is overridden, `getComputedStyle` answers with the override, so there is no reading it
+back. Two consequences worth knowing: `--text-code-size` is also what `CodeBlock` and `LogLine` draw
+with, so the editor setting moves them too (both are gallery-only today); and the terminal, which was
+handed a resolved number rather than a token, re-reads it off the `data-ui-font` attribute that
+`paintRoot` stamps for exactly that purpose.
+
+The four tabs are `components/settings/`, and each is presentational — handed values, emitting what
+was picked — so the whole window renders in `?view=gallery` too. Agents is the one place in the front
+end that ever *names* an agent: the ids are still `agents::IDS` and Rust still drops one it does not
+ship, so this is a set of labels for ids Rust already knows. The subscription block under it is a
+placeholder with dashes and a sentence saying so — a block of invented numbers under a real setting
+would claim the app knows something it does not, which is what the fixture log pane was removed for.
+About's link goes out through `tauri-plugin-opener` (`opener:allow-open-url`, scoped to
+`https://github.com/*`): inside this webview it would replace the app with a web page, and there is
+no address bar here to come back from.
 
 A missing file is the first run, not an error. A broken or too-new file is copied to
 `settings.json.bak` and the app starts from defaults, and saving over it afterwards is fine. One

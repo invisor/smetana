@@ -103,13 +103,23 @@ onMounted(() => {
 
   /* A data-theme change on the root does not repaint the terminal by
      itself — its colours were already handed over as resolved strings.
-     Recompute and reassign. */
+     Recompute and reassign.
+
+     `data-ui-font` is the same problem one field over: the app-wide font size
+     rewrites the type scale on the root, and the terminal's size came off that
+     scale as a number (`--text-xs`, read once). The attribute carries no value
+     anybody reads — it exists so that a font change is an attribute change here
+     too, and the re-read below then picks up the new size. `applySize` is what
+     turns it into rows and columns the PTY agrees with. */
   observer = new MutationObserver(() => {
     term.options.theme = terminalTheme()
     Object.assign(term.options, terminalFont())
     applySize()
   })
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-density'] })
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme', 'data-density', 'data-ui-font']
+  })
 
   sizes = new ResizeObserver(applySize)
   sizes.observe(host.value)

@@ -174,6 +174,15 @@ export function installMockBackend() {
        panel movement over something already obvious: state does not survive a
        reload in a browser. */
     if (command === 'settings_save') return null
+    /* Making a window is Tauri's, not the front end's, so a browser has nothing
+       to do here and the gear is a no-op. Answered rather than refused, and that
+       is the difference from a write: nothing was promised and nothing was lost
+       — the settings UI is reachable in a browser at `?view=settings`, which is
+       how it is checked by eye. */
+    if (command === 'settings_window_open') {
+      console.info('[mockBackend] a second window needs Tauri — open ?view=settings instead')
+      return null
+    }
     if (command === 'tracker_set_project') return snapshot
     if (command === 'tracker_probe') {
       return MOCK_PROJECTS.map((path) => ({ path, tracked: path !== UNTRACKED }))
