@@ -174,8 +174,10 @@ on its own. **This runs before you take any new work.**
 3. **How many at once** — the number the run gave you, whatever it is: it is this run's
    choice and it wins over `[defaults].max_parallel_tasks`, upwards as well as down. Were
    you given none, the config's number is the answer.
-4. Per task: load the spec through `provisioning`. Vague or empty → policy (park, or ask)
-   **before** claiming. Then claim and provision, serialized on you.
+4. Per task: claim it the way `provisioning` says — the whole queue atomically with
+   `bd ready --claim`, a narrower scope by id, and a claim refused because another run
+   holds it is skipped, not retried. Then load the spec through `provisioning`. Vague or
+   empty → policy (park, or ask). Provision, serialized on you.
 
 ## Phase 1 — delegate, then review
 

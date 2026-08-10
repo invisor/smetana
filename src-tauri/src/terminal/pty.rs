@@ -64,7 +64,7 @@ const UTF8_LOCALE: &str = "C.UTF-8";
 /// and anything sent into an input that is not reading yet is simply lost —
 /// there is no acknowledgement to wait for and no way to tell that it went. As
 /// an argument it is handed over by the OS before the process starts.
-pub fn build_command(launch: &Launch) -> CommandBuilder {
+pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
     cmd.env("TERM", "xterm-256color");
@@ -109,6 +109,20 @@ pub fn build_command(launch: &Launch) -> CommandBuilder {
         for (key, value) in launch.profile.autonomy(settings.mode).env {
             cmd.env(key, value);
         }
+        // The run's name in bd's audit trail, and the whole of what makes bd's
+        // claim a mutual exclusion. bd refuses `--claim` only when the issue is
+        // held by a *different* actor, and its default actor — `$BEADS_ACTOR`,
+        // else `git user.name`, else `$USER` — is identical for two runs on one
+        // machine, so without a per-run name both would "successfully" claim
+        // the same task. The session id is already unique per session, which
+        // makes it unique per batch.
+        //
+        // The environment variable rather than `bd --actor` on every call: the
+        // skills would have to thread the flag through each bd invocation they
+        // document, and one forgotten call silently reverts to the shared
+        // default. And only for a `Run`: a person filing or editing a task
+        // through an agent keeps their own name in the audit trail.
+        cmd.env("BEADS_ACTOR", format!("smetana-run-{id}"));
     }
     // What the agent's own `PATH` is built on: the login shell's, because a
     // bundled app inherits launchd's, which holds nothing a person installed —
@@ -211,7 +225,7 @@ impl Pty {
 
         let child = pair
             .slave
-            .spawn_command(build_command(launch))
+            .spawn_command(build_command(id, launch))
             .map_err(|e| TerminalError::Spawn(format!("{}: {e}", launch.profile.binary())))?;
 
         // The slave side must be dropped here, not kept alongside the master:
@@ -304,10 +318,14 @@ mod tests {
     use crate::agents::{self, Intent, Launch};
 
     fn launch(id: &str) -> Launch {
+        with_intent(id, Intent::EditTask { id: "smetana-7".into(), title: "x y".into() })
+    }
+
+    fn with_intent(id: &str, intent: Intent) -> Launch {
         Launch {
             profile: agents::resolve(id).unwrap(),
             cwd: std::path::PathBuf::from("/tmp/project"),
-            intent: Intent::EditTask { id: "smetana-7".into(), title: "x y".into() },
+            intent,
             skills: Skills {
                 smetana: std::path::PathBuf::from("/app/resources/smetana"),
                 superpowers: std::path::PathBuf::from("/app/resources/superpowers"),
@@ -317,16 +335,32 @@ mod tests {
         }
     }
 
+    fn run_intent() -> Intent {
+        use crate::runs::model::{RunMode, RunScope, RunSettings};
+        Intent::Run {
+            settings: RunSettings {
+                scope: RunScope::Queue,
+                mode: RunMode::Auto,
+                target_branch: "staging".into(),
+                create_target: false,
+                min_priority: Some(2),
+                max_parallel_tasks: Some(3),
+                live_check: false,
+                file_findings: true,
+            },
+        }
+    }
+
     #[test]
     fn the_binary_comes_from_the_profile() {
-        assert_eq!(build_command(&launch("claude")).get_argv()[0], "claude");
-        assert_eq!(build_command(&launch("codex")).get_argv()[0], "codex");
+        assert_eq!(build_command(7, &launch("claude")).get_argv()[0], "claude");
+        assert_eq!(build_command(7, &launch("codex")).get_argv()[0], "codex");
     }
 
     #[test]
     fn every_agent_is_given_a_terminal_it_can_paint_in() {
         for id in agents::IDS {
-            let cmd = build_command(&launch(id));
+            let cmd = build_command(7, &launch(id));
             // `iter_extra_env_as_str` and not `get_env`, for the reason the
             // test below spells out: `get_env` answers out of the snapshot of
             // this process's own environment, where a `TERM` is all but certain.
@@ -356,7 +390,7 @@ mod tests {
     #[test]
     fn every_agent_is_told_what_encoding_the_stream_carries() {
         for id in agents::IDS {
-            let cmd = build_command(&launch(id));
+            let cmd = build_command(7, &launch(id));
             let told: Vec<_> = cmd
                 .iter_extra_env_as_str()
                 .filter(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
@@ -381,7 +415,7 @@ mod tests {
             return;
         }
         for id in agents::IDS {
-            let cmd = build_command(&launch(id));
+            let cmd = build_command(7, &launch(id));
             let (key, value) = cmd
                 .iter_extra_env_as_str()
                 .find(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key))
@@ -420,7 +454,7 @@ mod tests {
         // sidecar exists to serve.
         let dir = sidecar_dir().expect("the test binary has a location");
         for id in agents::IDS {
-            let cmd = build_command(&launch(id));
+            let cmd = build_command(7, &launch(id));
             let path = cmd.get_env("PATH").expect("PATH must reach the agent");
             let mut entries = std::env::split_paths(path);
             assert_eq!(entries.next(), Some(dir.clone()), "{id}");
@@ -437,7 +471,7 @@ mod tests {
         let base: Vec<_> = crate::shell_env::path()
             .map(|p| std::env::split_paths(p).collect())
             .unwrap_or_default();
-        let cmd = build_command(&launch("claude"));
+        let cmd = build_command(7, &launch("claude"));
         let given: Vec<_> =
             std::env::split_paths(cmd.get_env("PATH").expect("PATH must reach the agent")).collect();
         assert_eq!(given[1..], base[..]);
@@ -445,8 +479,40 @@ mod tests {
 
     #[test]
     fn the_prompt_is_an_argument_and_not_bytes_written_afterwards() {
-        let cmd = build_command(&launch("codex"));
+        let cmd = build_command(7, &launch("codex"));
         let argv = cmd.get_argv();
         assert_eq!(argv.last().unwrap().to_string_lossy(), "Update bd issue smetana-7 (\"x y\"): ");
+    }
+
+    /// The actor is what bd's `--claim` mutual exclusion rests on: its default
+    /// — `$BEADS_ACTOR`, else `git user.name`, else `$USER` — is identical for
+    /// two runs on one machine, so a run must carry a name of its own. Read
+    /// through `iter_extra_env_as_str` and never `get_env`, for the reason the
+    /// locale test spells out: `get_env` also answers out of the snapshot of
+    /// this process's own environment.
+    #[test]
+    fn a_run_session_carries_the_runs_own_bd_actor() {
+        for id in agents::IDS {
+            let cmd = build_command(42, &with_intent(id, run_intent()));
+            let actor = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "BEADS_ACTOR");
+            assert_eq!(actor, Some(("BEADS_ACTOR", "smetana-run-42")), "{id}");
+        }
+    }
+
+    /// The other half of the rule: a person filing or editing a task through
+    /// an agent keeps their own name in bd's audit trail, so no other intent
+    /// is given an actor.
+    #[test]
+    fn no_other_intent_is_given_a_bd_actor() {
+        let intents = [
+            Intent::Bare,
+            Intent::EditTask { id: "smetana-7".into(), title: "x y".into() },
+            Intent::Setup,
+        ];
+        for intent in intents {
+            let cmd = build_command(42, &with_intent("claude", intent));
+            let actor = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "BEADS_ACTOR");
+            assert_eq!(actor, None);
+        }
     }
 }
