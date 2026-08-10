@@ -119,13 +119,18 @@ out as a delta without waiting for the watcher. `generation` advances by exactly
 delta; the front end resyncs when it sees a gap. `store.rs` and the argument builders in `bd.rs` are
 pure and carry the unit tests.
 
-`Issue` is meant to carry every field bd emits, not only the ones the board draws: the panel on the
-right (`components/kanban/TaskInspector.vue`) shows all of them, and a field left out of the struct
-is invisible there with nothing to say it went missing. **Three fields currently break that and the
-cost is exactly what the rule predicts** (smetana-dbr): bd emits `notes`, `design` and
-`acceptance_criteria`, the struct has none of them, and `notes` is where `running-tasks` writes the
-reason a run parked a task — so the one sentence explaining why the night left a task alone is
-readable only through `bd show` in a terminal. That panel is read-only apart from the status —
+`Issue` carries every field bd emits, not only the ones the board draws: the panel on the right
+(`components/kanban/TaskInspector.vue`) shows all of them, and a field left out of the struct is
+invisible there with nothing to say it went missing. Three fields broke that for a while and the
+cost was exactly what the rule predicts (smetana-dbr): bd emits `notes`, `design` and
+`acceptance_criteria`, the struct had none of them, and `notes` is where `running-tasks` writes the
+reason a run parked a task — so the one sentence explaining why the night left a task alone was
+readable only through `bd show` in a terminal. All three are back, drawn as prose under the
+description in the spec-then-log order (acceptance criteria, design, notes). The one thing still
+deliberately dropped is not on `Issue` but on its edges: a dependency in bd's JSON carries its own
+`created_at`, `created_by` and `metadata`, and `Dependency` keeps only the ids and the kind,
+because the panel draws an edge as a "Blocked by" id and bookkeeping about the edge itself has
+nothing there to be drawn as. That panel is read-only apart from the status —
 rewriting a title or a description is an agent's job, and "Ask agent to edit" starts one on the
 issue. The status picker offers three of bd's eleven statuses (Ready, Pinned, Done); the rest belong
 to agents, so the one the issue actually holds is appended as a fourth option when it falls outside

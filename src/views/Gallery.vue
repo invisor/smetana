@@ -194,6 +194,14 @@ const FULL_ISSUE = {
   status: 'in_progress',
   description:
     'The health notice renders only while the columns are empty, so a version mismatch is invisible exactly when there are cards — a person is looking at stale data with nothing to say so.',
+  acceptance_criteria:
+    'The notice is visible over a board with cards on it, and it never covers the card that needs a human.',
+  design:
+    'A quiet strip above the columns rather than a replacement of them: the board stays usable while it says the data may be stale.',
+  // Two lines on purpose: every `bd note` appends, and the panel owes the
+  // whole log, latest line included.
+  notes:
+    'parked: needs a decision on where the strip sits\nparked: still waiting on the design call',
   priority: 1,
   issue_type: 'bug',
   owner: 'merazent@gmail.com',

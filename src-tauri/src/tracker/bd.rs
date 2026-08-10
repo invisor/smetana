@@ -255,6 +255,8 @@ mod tests {
       {"id":"smetana-3km","title":"contract check","status":"open","priority":2,
        "issue_type":"task","owner":"flexo","labels":["alpha"],"parent":"smetana-29j",
        "description":"the shape bd hands over","created_by":"flexo",
+       "acceptance_criteria":"AC body","design":"Design body",
+       "notes":"parked: needs a decision\nparked: still waiting",
        "created_at":"2026-07-31T00:58:55Z","updated_at":"2026-07-31T00:58:55Z",
        "dependencies":[
          {"issue_id":"smetana-3km","depends_on_id":"smetana-1or","type":"blocks",
@@ -299,6 +301,15 @@ mod tests {
     fn the_inspectors_fields_survive_the_parse() {
         let issues = parse_issues(LIST).unwrap();
         assert_eq!(issues[1].description.as_deref(), Some("the shape bd hands over"));
+        assert_eq!(issues[1].acceptance_criteria.as_deref(), Some("AC body"));
+        assert_eq!(issues[1].design.as_deref(), Some("Design body"));
+        // The whole note, appended lines included — a truncated note would
+        // silently drop the latest "parked:" line, the one a person reads.
+        assert_eq!(
+            issues[1].notes.as_deref(),
+            Some("parked: needs a decision\nparked: still waiting")
+        );
+        assert_eq!(issues[0].notes, None);
         assert_eq!(issues[1].created_by.as_deref(), Some("flexo"));
         assert_eq!(issues[1].created_at.as_deref(), Some("2026-07-31T00:58:55Z"));
         assert_eq!(issues[0].comment_count, Some(0));
