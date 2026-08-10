@@ -48,9 +48,11 @@ resolve from the code, the spec or the skills:
 4. **Carry on with the rest of the batch.** One task parking never ends the run.
 
 `parked` is a custom status, so `bd ready` never returns it and the run cannot spin on it.
-It is deliberately not the built-in `blocked`, which means "waiting on a dependency" and
-is somebody else's answer to a different question. In Auto you never ask a question of
-anybody — there is nobody there.
+It is deliberately not the built-in `blocked`, which is a hand-set flag for an impediment
+outside the tracker and is never cleared by bd itself. A task waiting on another task is
+neither of these: it stays `open` with a `blocks` dependency, `bd ready` hides it while
+the blocker lives, and closing the blocker releases it with nothing to update. In Auto
+you never ask a question of anybody — there is nobody there.
 
 ## Findings do not become work on their own authority
 
