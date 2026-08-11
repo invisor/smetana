@@ -172,14 +172,21 @@ const CAPTION = {
    claimed this issue" would be steadier, and it needs the agent to tell the
    app; until then this is the honest reconstruction rather than a guess.
 
-   The owner filter is what keeps two concurrent runs' rows apart: a run's
-   session writes with its own bd actor (`BEADS_ACTOR`, smetana-4fh), and bd
-   stamps that actor as the issue's owner, so "everything in_progress" — which
-   was the whole filter while a project held one run — would caption both rows
-   with both batches' work. The actor's shape is `run_actor` in
+   The actor filter is what keeps two concurrent runs' rows apart: a run's
+   session writes with its own bd actor (`BEADS_ACTOR`, smetana-4fh), and a
+   `--claim` stamps that actor as the issue's **assignee**, so "everything
+   in_progress" — which was the whole filter while a project held one run — would
+   caption both rows with both batches' work. The actor's shape is `run_actor` in
    src-tauri/src/terminal/model.rs, written out here a second time because Rust
    holds the only other copy; drift costs a caption going quiet, which the row
    survives as a bare "Agent".
+
+   It is `assignee` and not `owner`, and confusing the two is the whole of
+   smetana-a5b: `owner` is the issue's owner and a claim never touches it, so
+   while this read `owner` the filter matched nothing on any board and every run
+   row read a bare "Agent" — the reported symptom. Both fields ride on the issue
+   (`Issue` in src-tauri/src/tracker/model.rs); only this one answers "who is
+   holding it right now".
 
    The merge lock is claimed under that same actor while a batch merges, and it
    is coordination rather than work, so it is left out here exactly as the board
@@ -195,7 +202,7 @@ function claimedBy(sessionId) {
   const actor = `smetana-run-${sessionId}`
   return [...trackerState.issues.values()]
     .filter(
-      (issue) => issue.status === 'in_progress' && issue.owner === actor && !isLockIssue(issue)
+      (issue) => issue.status === 'in_progress' && issue.assignee === actor && !isLockIssue(issue)
     )
     .map((issue) => issue.id)
     .sort()

@@ -16,10 +16,16 @@ pub struct Dependency {
 ///
 /// The whole shape travels to the front end, not just what the board draws:
 /// the task inspector shows every field bd knows, and a field left out here is
-/// invisible there with nothing to say it went missing. `owner` is bd's name
-/// for it — the field was called `assignee` for a while and was therefore
-/// always `None`, since bd never emits that key. On the way back it is
-/// `assignee` again, because that is what `bd update -a` is called.
+/// invisible there with nothing to say it went missing.
+///
+/// **`owner` and `assignee` are two different people and bd emits both**
+/// (smetana-a5b). `owner` is whoever owns the issue; `assignee` is who holds it
+/// right now, and it is what `bd update <id> --claim` sets — so a run's actor
+/// (`smetana-run-<session-id>`) lands in `assignee` and never in `owner`. This
+/// doc comment used to say bd never emits `assignee` at all, which was false,
+/// and that one sentence is how four separate lookups came to filter on `owner`
+/// and therefore match nothing, always. `IssuePatch` calls the write-side field
+/// `assignee` too, because that is what `bd update -a` sets.
 ///
 /// The counts are bd's own and are kept apart from `dependencies`: they count
 /// the whole graph, while the edge list carries only the outgoing links.
@@ -49,6 +55,10 @@ pub struct Issue {
     pub issue_type: Option<String>,
     #[serde(default)]
     pub owner: Option<String>,
+    /// Who holds the issue right now — what `--claim` sets. See the note above:
+    /// this is not `owner`, and reading one for the other is smetana-a5b.
+    #[serde(default)]
+    pub assignee: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]

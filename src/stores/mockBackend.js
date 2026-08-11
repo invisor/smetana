@@ -127,6 +127,12 @@ function fixtureIssues() {
       // shows both halves of the type palette without anyone editing this file.
       issue_type: ['task', 'bug', 'feature', 'chore', 'epic', 'decision', 'tech-debt'][i % 7],
       owner: i % 2 === 0 ? 'merazent@gmail.com' : null,
+      /* Only what a run has claimed carries one, which is what bd does: a
+         `--claim` writes the actor into `assignee` and leaves `owner` alone
+         (smetana-a5b). So an in_progress fixture shows the inspector's Assignee
+         row holding a run actor beside an owner who is a person, and everything
+         else shows the row absent. */
+      assignee: status === 'in_progress' ? 'smetana-run-7' : null,
       started_at: closed || status === 'in_progress' ? '2026-07-30T11:02:00Z' : null,
       closed_at: closed ? '2026-07-31T00:00:00Z' : null,
       close_reason: closed ? 'Delivered and merged into main' : null,
@@ -250,11 +256,58 @@ export function installMockBackend() {
           }
         : { state: 'missing' }
     }
-    /* No worker in a browser, so nothing is ever running. Answering the empty
-       set rather than rejecting: "which runs are going here" is a read, and a
-       read that throws would leave the panel unable to draw its ordinary
-       empty state. */
-    if (command === 'run_state') return []
+    /* One run, working, holding the session whose `work.kind` is `run` in
+       `terminal_list`. A read rather than a rejection, the way it always was —
+       "which runs are going here" is a question, and one that threw would leave
+       the panel unable to draw at all — but the answer is no longer the empty
+       set, and that is smetana-a5b's doing.
+
+       The whole visible form of that bug is an agent row captioned "Agent" where
+       the ids the run claimed belong, and `claimedBy` in terminals.js
+       reconstructs those ids from two halves: a run naming the session that is
+       working, and the tracker's in_progress issues naming their `assignee`.
+       With no run on this side the reconstruction had nothing to start from, so
+       the one case the bug was about was unreachable in a browser and could only
+       ever be looked at in the real app.
+
+       The session id here, the id in `terminal_list` and the `assignee` on the
+       in_progress fixture issues are one fact written in three places
+       (`smetana-run-7`, the shape `run_actor` mints). Drift between any two of
+       them costs the caption — which is exactly the symptom — so they are worth
+       checking together.
+
+       Only in the one project `project_config` above calls set up, and the other
+       projects keep the empty answer they always had. A run bar drawn over a
+       project the very same stub reports as unconfigured would put two
+       contradictory things on screen at once — `needsSetup` offering to set the
+       project up, under a bar saying a batch is already merging into a branch.
+
+       A stop reaches `run_stop`, which is absent and therefore refused like every
+       other write here. That is the same bargain the tracker's writes take. */
+    if (command === 'run_state') {
+      if (payload?.project && payload.project !== MOCK_PROJECTS[0]) return []
+      return [
+        {
+          token: 1,
+          project: payload?.project ?? MOCK_PROJECTS[0],
+          settings: {
+            scope: { kind: 'queue' },
+            mode: 'supervised',
+            target_branch: 'develop',
+            create_target: false,
+            min_priority: 2,
+            max_parallel_tasks: 2,
+            live_check: true,
+            file_findings: true
+          },
+          state: { kind: 'working', iteration: 0 },
+          session: 7,
+          batches: 1,
+          stopping: false,
+          reduced: null
+        }
+      ]
+    }
     /* A machine with neither tool, deliberately, and it is the one choice here
        that is not simply "what the developer's laptop has". Every machine that
        runs `npm run dev` on this project already has Playwright and the
@@ -293,7 +346,8 @@ export function installMockBackend() {
     /* `run_start` and `run_stop` are deliberately absent: they fall through to
        the refusal at the bottom, like every other write. A run that looked like
        it had started would be worse than none — there is no worker, no session
-       and no board behind it. */
+       and no board behind it. Reading what a run is *doing* is a different
+       question, and `run_state` above answers it. */
     /* The stub knows nothing about the filesystem and will not invent
        anything: the path comes back as is. The real back end would climb from
        here to the tracked repository's root, and that is the only way the
@@ -356,6 +410,25 @@ export function installMockBackend() {
             issueType: null,
             priority: 1
           }
+        },
+        /* A run's session, in the middle rather than at the end: the selection
+           repair in `loadSessions` lands on the *last* row, and that is spoken
+           for above. The id is the one `run_state` names as its session and the
+           one the in_progress fixture issues carry as their `assignee` — all
+           three have to agree for the caption to say anything, which is the whole
+           of smetana-a5b. With them agreeing, this row is captioned with the ids
+           it claimed instead of a bare "Agent", and picking it shows the claimed
+           tasks in the right-hand column. */
+        {
+          id: 7,
+          agent: 'claude',
+          cwd: MOCK_PROJECTS[0],
+          project: payload?.project ?? MOCK_PROJECTS[0],
+          state: 'running',
+          question: null,
+          startedAt: new Date(Date.now() - 64 * 60000).toISOString(),
+          exitCode: null,
+          work: { kind: 'run' }
         },
         {
           id: 2,
