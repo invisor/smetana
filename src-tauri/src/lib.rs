@@ -92,6 +92,7 @@ pub fn run() {
       runs::commands::run_start,
       runs::commands::run_stop,
       runs::commands::run_state,
+      runs::commands::target_branches,
       settings::commands::settings_load,
       settings::commands::settings_save,
       window::settings_window_open,
