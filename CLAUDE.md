@@ -533,7 +533,9 @@ is left. The wait is bounded because the window is already closing. The two seco
 waits are a different thing again, and deliberately longer: they are the ceiling on a *wedged worker*,
 the same one `settings.js` puts on its close-time flush, and for the same reason — the window always
 closes, and a worker that never answers costs the cleanup, not the app. Anything that outruns all
-that, or that the app never got a chance to signal, is an orphan in the process list.
+that, or that the app never got a chance to signal, is an orphan in the process list — for the
+sessions a *run* started, the next launch finds them again through the registry under Runs below,
+which is the one place a session's pid is written down.
 
 `src/stores/terminals.js` is one of those files, and it keeps the
 same cost-driven split as the worker: `sessions` and `agentRows` hold every session's state, cheap and
@@ -897,6 +899,9 @@ other caller.
 | `config.rs` | `.smetana/project.toml`: the shape of the project a run works in |
 | `survey.rs` | what a project looks like from outside, before anyone has configured it |
 | `gitignore.rs` | keeping `.smetana/` out of the repository |
+| `registry.rs` | `.smetana/runs.json`: what a live run leaves on disk, and the rules for reading it — pure, and where those tests are |
+| `procs.rs` | the process table and the two signals: the only `unsafe` in `runs/` |
+| `recovery.rs` | the disk half of the registry, and the start-up sweep for what an unclean exit left running |
 | `preflight.rs` | bringing the project up before the first batch — declared commands, then declared health checks |
 | `usage.rs` | what the subscription has left, and whether to run at full size, a smaller one, or not yet |
 | `browser.rs` | whether there is anything on this machine to drive a browser with — pure over file contents and directory listings, and where those tests are |
@@ -1064,6 +1069,64 @@ the docs will reasonably conclude the folder belongs there too, or reasonably co
 and the answer then differs from project to project. The app decides once, in code. `amend` is pure
 and carries the tests; it treats `.smetana`, `.smetana/`, `/.smetana` and even the negation
 `!.smetana` as already covered, that last one because it can only have been typed on purpose.
+
+### What an unclean exit leaves, and who clears it
+
+Everything a run knows lives in memory, and sessions are deliberately kept out of
+`settings.json` because a session row with a dead process behind it is worse than an
+empty list. The orderly ending is `RunEvent::Exit`. A crash, a force quit, a `kill -9`
+and — in development — every Rust rebuild reach none of it, and what they strand is
+tasks claimed by a run that no longer exists and agent processes nobody will signal.
+This is the same shape as the window-geometry defect `window.rs` was written for, where
+the only write happened at `Exit`.
+
+**The app writes a registry and deals with processes; the tracker half stays with
+`smetana:running-tasks` Phase R.** The split follows what each half can see: the app can
+see the process table and the tracker cannot, and Phase R already recovers claimed tasks
+correctly with the worktrees in front of it. So the app never rewrites `in_progress`,
+never parks anything, and writes to bd nowhere as part of recovery. An app that did both
+would be a second mechanism doing Phase R's job, and two mechanisms on one fact drift.
+
+The registry is `.smetana/runs.json` in the project folder, beside `project.toml` and
+outside the repository. Phase R reads it with an ordinary file read, needing nothing from
+the app and no path passed through a prompt — which a file beside `settings.json` in
+`app_config_dir()` could not be, being platform-dependent and therefore findable by a
+skill only if the app told it. It is not visible from a worktree, and that costs nothing:
+an ignored file does not travel into the worktree `provisioning` cuts, and the lead reads
+it from the project checkout.
+
+**A record proves its own liveness, and an actor id alone cannot.** `BEADS_ACTOR` is
+`smetana-run-<session-id>` and session ids restart at 1 on every launch, so after a
+restart a fresh session takes a dead run's name. Every record therefore carries a
+`writer` — the app process that wrote it — as a pid *plus* that process's start time,
+which is what survives pid reuse; each batch carries its actor and, the same way, the
+process group it started. Nothing in the file is read as a date to decide liveness: the
+one timestamp says when the run began and is used for nothing but ageing a record out
+after a week. The stamp is read per platform in `procs.rs` (macOS `proc_pidinfo`, Linux
+`/proc/<pid>/stat` against `btime`) rather than through a crate, since `libc` is already
+here for `killpg`; a platform that cannot answer keeps no registry at all, because a
+record nobody could ever show stale is worse than none.
+
+At start-up the run worker sweeps every project the settings file lists as open, before
+it serves its first request — one writer, so the read-modify-write is safe, and no batch
+can go out beside a sweep about to hang up a leftover agent in the same worktree. For a
+record whose writer is provably dead it signals the recorded process groups exactly as a
+clean exit does: `SIGHUP` to the group, a bounded wait, then a kill for what is left.
+**Anything the registry does not name is never touched** — the app cannot show it started
+it — and neither is a group whose pid has since been reused, nor anything under a writer
+that is alive or unreadable. The sweep is silent: no dialog and no interface element,
+because the app is finishing its own interrupted shutdown rather than taking a new
+decision, and a modal about housekeeping after every rebuild would be the loudness budget
+spent on the opposite of a card needing a human. What was killed goes to the log.
+
+The record itself **outlives the processes on purpose**, for up to `ABANDONED_DAYS`: its
+actors are the evidence Phase R reads, and deleting it the moment the processes were
+dealt with would send that half of the recovery back to its old default of leaving every
+claim in place. The record is removed when its run ends cleanly, and never otherwise.
+`smetana:merging`'s 60-minute lock staleness rule is untouched by all this and cannot be
+replaced by the registry: the file names runs this app started on this machine, while the
+lock can be held by a lead a person started by hand in a terminal, which never appears in
+it.
 
 On the front end, `runs.js` is deliberately small — a file read with no worker behind it, freshness
 from switching projects and from a setup session finishing. It keeps the back end's `config` and
