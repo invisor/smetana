@@ -1066,22 +1066,42 @@ and carries the tests; it treats `.smetana`, `.smetana/`, `/.smetana` and even t
 `!.smetana` as already covered, that last one because it can only have been typed on purpose.
 
 On the front end, `runs.js` is deliberately small — a file read with no worker behind it, freshness
-from switching projects and from a setup session finishing. It keeps the back end's `config` and
-`Run` objects **whole** rather than unpacking them into flags, which is the same instinct
-`tracker.js` follows with statuses: a state this front end has not heard of must not silently read as
-one it has. The runs ride as a set keyed by `token` — events and stop answers land by `upsert`, so a
-late word about one run can never write over another. It is guarded against its own stale response
-exactly as `git.js` and `terminals.js` are, and the `run:state` listener carries that guard in its
-other form — an event is not a response to anything, so nothing orders it against a project switch,
-and a batch ending just as somebody moves project would otherwise post its run under the new
-project's name. `RunBar` draws one segment per run in the scope bar, each stop button naming its own
-token, and keeps a stopped run there until the project changes or a run of the same scope replaces
-it: the reason it stopped is what somebody came back to read, an unknown reason is an ordinary
-outcome rather than a crash (this front end may be older than the worker), and the endings differ by
-glyph as well as by colour, the rule the status palette keeps everywhere else. The scope rule itself
-— what "the same run" means, and the words a greyed play carries — is `components/run/runScopes.js`,
-one of the `branchChoice.js` family and shared with the worker's `admit` by vocabulary rather than
-by code.
+from switching projects, from window focus, and from any of the project's sessions starting or
+stopping work. It keeps the back end's `config` and `Run` objects **whole** rather than unpacking
+them into flags, which is the same instinct `tracker.js` follows with statuses: a state this front
+end has not heard of must not silently read as one it has. The runs ride as a set keyed by `token` —
+events and stop answers land by `upsert`, so a late word about one run can never write over another.
+It is guarded against its own stale response exactly as `git.js` and `terminals.js` are, and the
+`run:state` listener carries that guard in its other form — an event is not a response to anything,
+so nothing orders it against a project switch, and a batch ending just as somebody moves project
+would otherwise post its run under the new project's name. `RunBar` draws one segment per run in the
+scope bar, each stop button naming its own token, and keeps a stopped run there until the project
+changes or a run of the same scope replaces it: the reason it stopped is what somebody came back to
+read, an unknown reason is an ordinary outcome rather than a crash (this front end may be older than
+the worker), and the endings differ by glyph as well as by colour, the rule the status palette keeps
+everywhere else. The scope rule itself — what "the same run" means, and the words a greyed play
+carries — is `components/run/runScopes.js`, one of the `branchChoice.js` family and shared with the
+worker's `admit` by vocabulary rather than by code.
+
+That third freshness channel is `components/run/configFreshness.js`, another of the `branchChoice.js`
+family, and it is the only one that fires while somebody sits and watches a setup agent write
+`.smetana/project.toml` — they never leave the window, so focus never returns and no project switch
+happens. `workingKey` is a value over the set of the project's sessions that are still `starting` or
+`running`, and a `watch` on it re-reads the file on **both** edges: every time one of them stops,
+exits or leaves the list, and every time one starts. So a session going idle, picking up again and
+then exiting costs two reads rather than one, which is the frequency to weigh before touching this
+channel — a small toml parse against a `catchUp` that re-lists every expanded directory. The mark
+still clears on a read that came back `ok`, never on the optimism that a session ended. What it
+replaces was a watcher created inside `startSetup` over a single session id, which tore itself down
+for good on its first callback for another project or for a session already gone from
+`terminalState.sessions`, with nothing to re-establish it — so a window that then never switched
+project and never lost focus kept the "Not set up for runs" triangle over a configuration that
+existed, and kept the board's play buttons hidden behind the same `configured` (smetana-0ag). The
+width is the fix: a key over a set cannot be lost, since it is recomputed from whatever the store
+holds now, and it is scoped to one project, so a setup running in A can neither clear nor set the
+mark on B. That the key is a **string** is what keeps the two array reassignments quiet —
+`terminal:removed` and `loadSessions` both replace `terminalState.sessions` wholesale, and an
+unchanged set of working sessions produces an unchanged key and no read at all.
 
 ### Panel widths
 

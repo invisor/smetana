@@ -89,6 +89,7 @@ import {
   stopRun
 } from '../stores/runs.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
+import { workingKey } from '../components/run/configFreshness.js'
 import { scopeBusyReason } from '../components/run/runScopes.js'
 import { inspector, scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
@@ -571,33 +572,42 @@ const setupFromRun = () => {
    watching it never leaves and never returns — window focus, which is how
    every other outside writer (an agent on a branch, a person in a terminal)
    gets noticed, simply never fires. terminalState.sessions already carries
-   state for every session, active or not (see stores/terminals.js), so that
-   is the signal to watch instead of a timer: once the session leaves
-   starting/running — it stopped to ask a question, or it is done — the file
-   may have changed, and loadConfig reads it again. Kept as a plain variable,
-   not a ref: nothing in the template reads it, it only guards against two
-   setup sessions leaving two watchers running at once. */
-let stopSetupWatch = null
+   state for every session, active or not (see stores/terminals.js), so that is
+   the signal to watch instead of a timer: every time a session of this project
+   stops working, or one starts, the file may have changed and loadConfig reads
+   it again. Both edges, deliberately — the key is what is working now, not
+   what has just finished — so a session going idle, picking up again and then
+   exiting costs two reads rather than one. That is the frequency to weigh
+   before touching this channel, and it is a small toml parse against a
+   `catchUp` that re-lists every expanded directory.
 
-function watchSetupSession(id, path) {
-  if (stopSetupWatch) stopSetupWatch()
-  stopSetupWatch = watch(
-    () => terminalState.sessions.find((s) => s.id === id)?.state,
-    (state) => {
-      // The project moved on, or the session is gone from the list (removed,
-      // or a project switch repopulated it under a different one) — either
-      // way there is nothing left to watch for, and watching on would risk
-      // reloading another project's config under this one's mark.
-      if (activePath.value !== path || !state) {
-        stopSetupWatch()
-        stopSetupWatch = null
-        return
-      }
-      if (state === 'starting' || state === 'running') return
-      loadConfig(path)
-    }
-  )
-}
+   The rule is `workingKey`, and it lives outside this file for the reason the
+   whole `branchChoice.js` family does. What it replaces was a watcher created
+   inside `startSetup`, over one session id, which tore itself down for good on
+   its first callback for another project or for a session already gone from
+   `terminalState.sessions` — and nothing anywhere re-established it, so a
+   window that then never switched project and never lost focus went on drawing
+   "Not set up for runs" over a configuration that existed, with the board's
+   play buttons hidden behind the same `configured` (smetana-0ag).
+
+   Declared at module-body scope like the rest of the watchers here, so Vue ties
+   its lifetime to the component's and there is nothing left to stop by hand.
+   The mark still clears on a read and never on the optimism that a session
+   ended: this only asks the question again, and `needsSetup` moves when the
+   answer comes back `ok`.
+
+   A project switch moves the key too, and pays for up to two extra reads of a
+   small file — the sessions of the project just left stop matching, then
+   loadSessions brings the new project's in. The activePath watcher below reads
+   the same file at the same moment; loadConfig is idempotent and guarded
+   against its own stale response, so the duplicate costs the read and nothing
+   else. */
+watch(
+  () => workingKey(terminalState.sessions, activePath.value),
+  () => {
+    if (activePath.value) loadConfig(activePath.value)
+  }
+)
 
 const startSetup = async () => {
   const path = setupFor.value
@@ -606,22 +616,14 @@ const startSetup = async () => {
   try {
     project.sideTab = 'agents'
     project.activeTab = 'terminal'
-    const session = await createSession(path, { kind: 'setup' })
+    await createSession(path, { kind: 'setup' })
     closeSetup()
-    watchSetupSession(session.id, path)
   } catch {
     // already reported by createSession; the dialog stays open
   } finally {
     settingUp.value = false
   }
 }
-
-/* Created inside an event handler rather than synchronously during setup(),
-   so Vue never ties its lifetime to the component's the way it does for the
-   watchers declared at module-body scope elsewhere in this file — it needs
-   its own stop on unmount, or a setup started just before navigating away
-   would keep polling terminalState forever. */
-onUnmounted(() => stopSetupWatch?.())
 
 /* Whose work the right column is showing under the question block: the id of
    the agent row a person opened, or null for the board's own selection. It
