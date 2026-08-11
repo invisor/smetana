@@ -1079,19 +1079,20 @@ watch(
   { immediate: true }
 )
 
-/* The status write is the panel's only write, and it is tracked in flight for
-   the same reason `creating` is: a bd call takes about two seconds, and a
-   select left live for those two seconds invites a second choice that races
-   the first. */
-const settingStatus = ref(false)
-const setSelectedStatus = async (status) => {
-  settingStatus.value = true
+/* The status write, tracked by the id it was asked for rather than by a bare
+   boolean — the reason `deletingId` below already is one. The menu acts on
+   whichever card it was opened from rather than on the selected one, a bd call
+   takes about two seconds, and a flag shared between issues would grey the
+   wrong card's menu for those two seconds. */
+const writingId = ref(null)
+const setTaskStatus = async (id, status) => {
+  writingId.value = id
   try {
-    await updateIssue(project.selectedTask, { status })
+    await updateIssue(id, { status })
   } catch {
     // the message already sits in trackerState.lastError
   } finally {
-    settingStatus.value = false
+    writingId.value = null
   }
 }
 
@@ -1099,15 +1100,44 @@ const setSelectedStatus = async (status) => {
    for, not a bare boolean: the selection can move while bd is still working,
    and a flag shared between issues would grey out the wrong one's dialog. */
 const deletingId = ref(null)
+
+/* Which issue's deletion is being confirmed, or null. An id rather than a
+   boolean for the same reason: the dialog names the issue, and the board can
+   change under it. The dialog itself lives here rather than in the panel now —
+   the panel does nothing to an issue any more, and at view level there is no
+   `overflow` box to be clipped by, so it needs no `Teleport` either. */
+const confirmingDelete = ref(null)
+const confirmedIssue = computed(() =>
+  confirmingDelete.value ? issueById(confirmingDelete.value) : null
+)
+
 const deleteTask = async (id) => {
   deletingId.value = id
   try {
     await deleteIssue(id)
     if (project.selectedTask === id) project.selectedTask = null
+    confirmingDelete.value = null
   } catch {
-    // the message already sits in trackerState.lastError
+    /* The message already sits in trackerState.lastError — and the dialog stays
+       open over it deliberately: closing it would hide the explanation. */
   } finally {
     deletingId.value = null
+  }
+}
+
+/* The card's menu asked for something; this is where it is carried out. The
+   issue is resolved from the store rather than carried in the payload — the
+   store holds the current title and a card's copy may be a delta behind. */
+const onTaskAction = ({ kind, id, value }) => {
+  if (kind === 'run') return runTask(id)
+  if (kind === 'status') return setTaskStatus(id, value)
+  if (kind === 'delete') {
+    confirmingDelete.value = id
+    return
+  }
+  if (kind === 'ask-agent') {
+    const issue = issueById(id)
+    if (issue) askAgentToEdit(issue)
   }
 }
 
@@ -1177,6 +1207,10 @@ const orderedColumns = computed(() =>
       return {
         ...task,
         runnable,
+        /* A write in flight on this very issue, which greys its whole menu —
+           per id, since the menu belongs to the card rather than to the
+           selection. */
+        busy: writingId.value === task.id || deletingId.value === task.id,
         runBlockedReason: runnable ? scopeBusyReason(cardScope(task.id), runsState.runs) : ''
       }
     })
@@ -1478,6 +1512,14 @@ const blocksLine = {
   font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)',
   color: 'var(--status-blocked-fg)'
 }
+/* The issue's title inside the delete dialog, in the same words the panel's
+   own dialog drew it in — this is what a person reads to check they are about
+   to delete the thing they meant. */
+const deleteTitleStyle = {
+  font: 'var(--weight-medium) var(--text-md)/var(--leading-snug) var(--font-sans)',
+  color: 'var(--text-primary)',
+  textWrap: 'pretty'
+}
 /* the hatch is the dependency signature, reused at swatch size */
 const hatchSwatch = {
   width: '16px',
@@ -1673,6 +1715,27 @@ const toastStackStyle = {
           @close="closeSetup"
           @confirm="startSetup"
         />
+        <!-- Delete, asked for from a card's own menu. It used to live inside
+             TaskInspector and had to be teleported out of Panel's scroll
+             container to be drawn at all; here there is no `overflow` box over
+             it, so it is written plainly like every other dialog in this view.
+             The issue is read from the store by id rather than held, so the
+             dialog names what the board holds now. -->
+        <Modal
+          :open="!!confirmedIssue"
+          :closable="!deletingId"
+          :title="`Delete ${confirmedIssue?.id}?`"
+          description="bd deletes the issue outright and rewrites references to it in whatever was linked to it. Anything that depended on this issue is left without the dependency. There is no undo."
+          @close="confirmingDelete = null"
+        >
+          <div :style="deleteTitleStyle">{{ confirmedIssue?.title }}</div>
+          <template #footer>
+            <Button variant="ghost" :disabled="!!deletingId" @click="confirmingDelete = null">Cancel</Button>
+            <Button variant="danger" :disabled="!!deletingId" @click="deleteTask(confirmedIssue.id)">
+              {{ deletingId ? 'Deleting…' : 'Delete' }}
+            </Button>
+          </template>
+        </Modal>
         <Modal
           v-if="unsaved"
           :open="true"
@@ -1734,7 +1797,7 @@ const toastStackStyle = {
           @add="newTaskOpen = true"
           @run="openRun({ kind: 'queue' })"
           @promote="openPromote"
-          @run-task="runTask"
+          @task-action="onTaskAction"
           @reorder="project.columnOrder = $event"
         />
       </div>
@@ -1777,11 +1840,6 @@ const toastStackStyle = {
               v-if="inspectedIssue"
               :issue="inspectedIssue"
               :ui-status="toUiStatus(inspectedIssue.status)"
-              :busy="settingStatus"
-              :deleting="deletingId === inspectedIssue.id"
-              @status="setSelectedStatus"
-              @delete="deleteTask"
-              @ask-agent="askAgentToEdit"
             />
 
             <template v-else-if="rightPanel === 'board'">

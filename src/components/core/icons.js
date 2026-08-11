@@ -20,6 +20,7 @@ import {
   Copy,
   CornerDownRight,
   Dot,
+  Ellipsis,
   ExternalLink,
   File,
   FileCode,
@@ -142,6 +143,10 @@ export const iconNodes = {
   'panel-right-open': PanelRightOpen,
   'chevron-down': ChevronDown,
   'chevron-right': ChevronRight,
+  // The card's overflow menu, where the play used to be. Three dots and not a
+  // vertical `ellipsis-vertical`: the card's top row is horizontal and the
+  // glyph it replaced sat in it the same way.
+  ellipsis: Ellipsis,
   'chevrons-right': ChevronsRight,
   bell: Bell,
   settings: Settings,

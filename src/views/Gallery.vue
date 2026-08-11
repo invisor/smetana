@@ -4,6 +4,7 @@
    reachable at ?view=gallery. */
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
+import { taskMenuItems } from '../components/kanban/taskMenu.js'
 import {
   AboutSettings,
   AgentList,
@@ -33,6 +34,7 @@ import {
   Input,
   KanbanBoard,
   LogView,
+  MenuButton,
   Modal,
   NewTaskModal,
   Panel,
@@ -283,17 +285,20 @@ const boardColumns = computed(() =>
     [
       /* Everything unfinished is runnable, including the child of the epic;
          the done one is not. That is the whole of the rule the board applies —
-         see `runnableTask`. */
-      { status: 'ready', tasks: [{ id: 'bd-a1b2', title: 'Rename worktree when the branch changes', status: 'ready', type: 'bug', runnable: true }] },
-      { status: 'running', tasks: [{ id: 'bd-3c9d', title: 'Virtualise the log list above 10k lines', status: 'running', type: 'feature', assignee: { kind: 'agent', name: 'claude-1' }, spawnedFrom: 'bd-7f31', runnable: true }] },
-      { status: 'needs-you', tasks: [{ id: 'bd-7f31', title: 'Approve the migration plan', status: 'needs-you', type: 'epic', needsResponse: true, runnable: true }] },
-      { status: 'done', tasks: [{ id: 'bd-12cd', title: 'Bump tauri to 2.1', status: 'done', type: 'chore' }] },
+         see `runnableTask`. `bdStatus` rides beside it because a card's menu
+         offers to move the issue and bd's own word is what it would write —
+         the deferred pair is where the two vocabularies differ, so the submenu
+         there appends the status the issue actually holds. */
+      { status: 'ready', tasks: [{ id: 'bd-a1b2', title: 'Rename worktree when the branch changes', status: 'ready', bdStatus: 'open', type: 'bug', runnable: true }] },
+      { status: 'running', tasks: [{ id: 'bd-3c9d', title: 'Virtualise the log list above 10k lines', status: 'running', bdStatus: 'in_progress', type: 'feature', assignee: { kind: 'agent', name: 'claude-1' }, spawnedFrom: 'bd-7f31', runnable: true }] },
+      { status: 'needs-you', tasks: [{ id: 'bd-7f31', title: 'Approve the migration plan', status: 'needs-you', bdStatus: 'open', type: 'epic', needsResponse: true, runnable: true }] },
+      { status: 'done', tasks: [{ id: 'bd-12cd', title: 'Bump tauri to 2.1', status: 'done', bdStatus: 'closed', type: 'chore' }] },
       /* Where a run files what it found, and the one column that carries the
          whole-column press. Its cards are not runnable: a run takes only what
          is already open, which is exactly what that button is for. */
       { status: 'deferred', tasks: [
-        { id: 'bd-5a10', title: 'Resizer promises arrow keys it does not have', status: 'deferred', type: 'bug', spawnedFrom: 'bd-a1b2' },
-        { id: 'bd-5a11', title: 'Vendor the mono subset for offline builds', status: 'deferred', type: 'chore' }
+        { id: 'bd-5a10', title: 'Resizer promises arrow keys it does not have', status: 'deferred', bdStatus: 'deferred', type: 'bug', spawnedFrom: 'bd-a1b2' },
+        { id: 'bd-5a11', title: 'Vendor the mono subset for offline builds', status: 'deferred', bdStatus: 'deferred', type: 'chore' }
       ] }
     ],
     boardOrder.value
@@ -347,6 +352,26 @@ const menuItems = [
   { label: 'Discard worktree', icon: 'x', tone: 'danger' },
   { label: 'Rebase', icon: 'git-branch', disabled: true }
 ]
+
+/* Built by the rule rather than written out, so the menu drawn here cannot
+   drift from the one the board draws. The second is a card with a write in
+   flight on it, which is the state every row is greyed in — and it carries the
+   longest label the menu can produce, over an id the length bd actually issues
+   (a project prefix and a three-character suffix, so eleven), because that
+   sentence is what `TaskCard`'s width was measured against. A shorter id here
+   would let the width regress without the gallery showing it. */
+const CARD_MENU = taskMenuItems({
+  bdStatus: 'closed',
+  runnable: true,
+  runBlockedReason: '',
+  busy: false
+})
+const BUSY_CARD_MENU = taskMenuItems({
+  bdStatus: 'open',
+  runnable: true,
+  runBlockedReason: 'a run over task smetana-hth is already going',
+  busy: true
+})
 
 /* TerminalView has no props of its own to feed a fixture through, unlike
    FileTree above — it reads the active session straight from the store.
@@ -479,6 +504,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             id="bd-a1b2"
             title="Rename worktree when the branch changes"
             status="needs-you"
+            bd-status="open"
             type="bug"
             needs-response
             runnable
@@ -490,6 +516,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             id="bd-3c9d"
             title="Virtualise the log list above 10k lines"
             status="running"
+            bd-status="in_progress"
             type="feature"
             :blocked-by="2"
             :blocked-by-ids="['bd-91ac', 'bd-4d2e']"
@@ -498,7 +525,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           />
         </div>
         <div :style="{ width: '212px' }">
-          <TaskCard id="bd-12cd" title="Bump tauri to 2.1" status="done" type="chore" />
+          <TaskCard id="bd-12cd" title="Bump tauri to 2.1" status="done" bd-status="closed" type="chore" />
         </div>
         <!-- A title with an identifier in it, which is the ordinary case on a
              board an agent files to and the case that has no spaces in it to
@@ -510,20 +537,36 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             id="bd-ybh0"
             title="Fix why check_whether_the_shell_on_this_machine_answers hangs under load"
             status="ready"
+            bd-status="open"
             type="bug"
           />
         </div>
-        <!-- Runnable, and not runnable now: the play stays where it was, grey,
-             and carries the reason. A button that vanished while a run was
-             going would look like the board had lost the feature. -->
+        <!-- Runnable, and not runnable now: the menu's Run row stays where it
+             was, grey, and carries the reason in its own label. A row that
+             vanished while a run was going would look like the board had lost
+             the feature. -->
         <div :style="{ width: '212px' }">
           <TaskCard
             id="bd-77e0"
             title="Fold the settings debounce into the store"
             status="ready"
+            bd-status="open"
             type="task"
             runnable
-            run-blocked-reason="a run over task bd-77e0 is already going"
+            run-blocked-reason="a run over task smetana-hth is already going"
+          />
+        </div>
+        <!-- A write in flight on this issue: every row of its menu is greyed,
+             and only this card's. -->
+        <div :style="{ width: '212px' }">
+          <TaskCard
+            id="bd-5g1x"
+            title="Move the queue gate before the batch"
+            status="ready"
+            bd-status="pinned"
+            type="task"
+            runnable
+            busy
           />
         </div>
       </div>
@@ -540,7 +583,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @select="() => {}"
           @add="() => {}"
           @run="() => {}"
-          @run-task="() => {}"
+          @task-action="() => {}"
           @promote="() => {}"
           @reorder="boardOrder = $event"
         />
@@ -560,7 +603,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @select="() => {}"
           @add="() => {}"
           @run="() => {}"
-          @run-task="() => {}"
+          @task-action="() => {}"
         />
       </div>
       <!-- Tall enough for the whole dialog, footer included: a frame that
@@ -735,22 +778,10 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
            with less in it. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
         <div :style="{ width: '320px' }">
-          <TaskInspector
-            :issue="FULL_ISSUE"
-            ui-status="running"
-            @status="() => {}"
-            @delete="() => {}"
-            @ask-agent="() => {}"
-          />
+          <TaskInspector :issue="FULL_ISSUE" ui-status="running" />
         </div>
         <div :style="{ width: '320px' }">
-          <TaskInspector
-            :issue="SPARSE_ISSUE"
-            ui-status="ready"
-            @status="() => {}"
-            @delete="() => {}"
-            @ask-agent="() => {}"
-          />
+          <TaskInspector :issue="SPARSE_ISSUE" ui-status="ready" />
         </div>
       </div>
       <!-- The other thing that stands in the inspector's slot: a task an agent
@@ -1091,6 +1122,24 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       <div :style="headStyle">Overlays and states</div>
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <ContextMenu :items="menuItems" />
+        <!-- The same rows a card's menu holds, built by the same rule, with the
+             trigger a card draws: this is the one place the submenu, the
+             keyboard walk and the flipping can be looked at without a board
+             behind them.
+
+             At the card's own width, not the component's default. The second
+             one is the case that width exists for — the greyed Run row carries
+             the whole of `scopeBusyReason`'s sentence, and at 200 it is
+             ellipsised with no tooltip to recover it. Checking the fix means
+             seeing it at the size the board actually draws. -->
+        <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', alignItems: 'flex-start' }">
+          <MenuButton :items="CARD_MENU" :width="400" label="Actions for bd-a1b2" @select="() => {}" />
+          <MenuButton :items="BUSY_CARD_MENU" :width="400" label="Actions for bd-77e0" @select="() => {}" />
+        </div>
+        <!-- And one at the component's own default, which is what a caller with
+             short verbs gets: the width is the caller's business, so both ends
+             of it belong here. -->
+        <MenuButton :items="menuItems" label="Worktree actions" @select="() => {}" />
         <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
           <Toast tone="warning" title="claude-1 needs you" description="bd-a1b2 · worktree name collision · 4m" />
           <Toast tone="error" title="claude-2 failed" description="exit 101 in wt/bd-3c9d" />

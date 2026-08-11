@@ -1,12 +1,13 @@
 <script setup>
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
-import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
+import MenuButton from '../overlays/MenuButton.vue'
 import DependencyBand from '../status/DependencyBand.vue'
 import DependencyMark from '../status/DependencyMark.vue'
 import Assignee from './Assignee.vue'
 import TypeBadge from './TypeBadge.vue'
+import { taskMenuItems } from './taskMenu.js'
 import { attentionLevel } from '../status/status.js'
 
 const props = defineProps({
@@ -17,6 +18,10 @@ const props = defineProps({
      status still decides is the card's loudness — the border, the flash, the
      dimming of anything done — so the prop stays. */
   status: { type: String, default: 'ready' },
+  /* bd's own status, which the column is not: a blocked card sits in the
+     `blocked` column while bd holds it at `open`. The menu's Move to… offers
+     bd's vocabulary, so it needs bd's word. */
+  bdStatus: { type: String, default: '' },
   /* bd's issue type, drawn in the corner the status used to hold. Absent on a
      card the tracker has not typed, and then nothing is drawn. */
   type: { type: String, default: undefined },
@@ -36,14 +41,24 @@ const props = defineProps({
      product rule and it depends on things this component has never heard of. */
   runnable: { type: Boolean, default: false },
   /* Why it cannot be run just now, in words; empty means it can. A lowercase
-     fragment, because it is interpolated into `runLabel` below rather than
-     standing on its own. The button is drawn inactive rather than taken away,
-     and the sentence is what it is drawn for — a play that simply disappeared
-     while a run was going would read as the board having lost a feature. */
-  runBlockedReason: { type: String, default: '' }
+     fragment, because `taskMenu.js` interpolates it into the row's own label
+     rather than standing it on its own. The row is drawn greyed rather than
+     taken away, and the sentence is what it is drawn for — a Run that simply
+     disappeared while a run was going would read as the board having lost a
+     feature. */
+  runBlockedReason: { type: String, default: '' },
+  /* A write on this issue is in flight — a status change or a deletion. Every
+     row greys, for the reason the panel's own select used to: a bd call takes
+     about two seconds and a live menu invites a second choice racing the
+     first. */
+  busy: { type: Boolean, default: false }
 })
 
-defineEmits(['click', 'run'])
+/* One event for all four actions rather than four events forwarded three times
+   each. The payload names what was asked for; the board is not the thing that
+   carries it out, and a card that emitted `delete` would be describing a write
+   it has no way to make. */
+defineEmits(['click', 'action'])
 
 const hover = ref(false)
 const level = computed(() => attentionLevel(props.status))
@@ -53,12 +68,51 @@ const changed = computed(() => props.state === 'changed')
 /* An agent waiting on an answer is the one thing allowed to shout. */
 const loud = computed(() => props.needsResponse || level.value === 'loud')
 
-/* One sentence for the tooltip and for the accessible name both. Two strings
-   would mean the panel a person reads and the name a screen reader announces
-   disagreeing about the same button — and `ColumnHeader` composes its own play
-   the same way, so the two paths say the same thing in the same words. */
-const runLabel = computed(() =>
-  props.runBlockedReason ? `Run this — ${props.runBlockedReason}` : 'Run this'
+/* How wide the menu is, and it is a measurement rather than a taste.
+
+   `ContextMenu` applies its `width` as a hard width and clips each label with
+   an ellipsis; a menu row has no tooltip and no `title`, so whatever does not
+   fit is gone with no way back. The longest label the card can produce is the
+   greyed Run row, which carries `scopeBusyReason`'s whole sentence — the reason
+   moved out of the play's tooltip, where it used to grow to fit, and into the
+   row itself.
+
+   Measured through CoreText at `--text-sm` (12px) in the system sans, which is
+   what `--font-sans` resolves to in the webview: "Run this — a run over task
+   smetana-hth is already going" is 315px, and 337px for a 14-character issue
+   id. `ContextMenu` spends 48px of its width on chrome before the label —
+   2×`--border-w`, 2×`--space-2` of panel padding, 2×`--space-4` of row padding,
+   the 14px icon column and one `--space-4` gap — so 400 leaves the label 352px.
+   That covers every id up to about 14 characters with room to spare for the
+   other two webviews' fonts, where Segoe UI and Noto Sans have their own
+   metrics and none of this could be measured from here.
+
+   Compact needs no number of its own: density shrinks the space scale and
+   leaves `--text-sm` alone, so the chrome costs 40px there instead of 48 and
+   the label is 8px wider than it is here. Comfortable is the binding case.
+
+   The app-wide font size is the one thing this does not follow — it is a number
+   in px and the type grows past it. The long reason fits to a `uiFontSize` of
+   14 and is ellipsised above that, which is the same failure the old tooltip
+   never had; widening the panel to cover the top of the range would mean a
+   460px menu hanging off a 212px card for everybody, to serve a setting almost
+   nobody moves.
+
+   Costing nothing on a narrow board: the panel is fixed-position, right-aligned
+   to the trigger and clamped to the window by `EDGE`, so it opens leftwards
+   over the card and only a window under ~416px could not hold it. */
+const MENU_W = 400
+
+/* What the menu offers, and every refusal in it. The rule is `taskMenu.js`,
+   which is the part of this a test can reach — a card is a `.vue` and nothing
+   in this repository can open one. */
+const menuItems = computed(() =>
+  taskMenuItems({
+    bdStatus: props.bdStatus,
+    runnable: props.runnable,
+    runBlockedReason: props.runBlockedReason,
+    busy: props.busy
+  })
 )
 
 const borderColor = computed(() => {
@@ -141,27 +195,21 @@ const titleStyle = {
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
         <span :style="idStyle">{{ id }}</span>
         <span :style="{ flex: 1 }" />
-        <!-- Drawn whether or not the pointer is here. Starting a task is the
-             one thing a person comes to this board to do, and a control that
-             only exists under the pointer has to be found before it can be
-             used. It is quiet — a muted glyph on no surface until it is
-             hovered itself — which is what lets it be always there without
-             joining the card's argument for attention. -->
-        <!-- No `Tooltip` around it: `IconButton` carries its own, and a second
-             one here would draw two panels over one glyph. The reason the
-             wrapper was here in the first place still holds and is now the
-             button's — a native `title` is browser chrome, not page content, it
-             waits a second, cannot be styled, and what a disabled control does
-             with it is the engine's business, which is three different engines
-             here. `Tooltip`'s wrapper span takes the hover even though its only
-             child is disabled. -->
-        <IconButton
-          v-if="runnable"
-          icon="play"
-          :label="runLabel"
+        <!-- Drawn whether or not the pointer is here, and on every card rather
+             than only a runnable one. Acting on a task is what a person comes
+             to this board to do, and a control that only exists under the
+             pointer has to be found before it can be used. It is quiet — a
+             muted glyph on no surface until it is hovered itself — which is
+             what lets it be always there without joining the card's argument
+             for attention. Edit, Delete and Move to… are meaningful on a done
+             card and on a blocked one, so what a card cannot do is a greyed
+             row inside, never a missing button outside. -->
+        <MenuButton
+          :items="menuItems"
+          :label="`Actions for ${id}`"
+          :width="MENU_W"
           size="sm"
-          :disabled="!!runBlockedReason"
-          @click.stop="$emit('run')"
+          @select="$emit('action', { kind: $event.kind, id, value: $event.value })"
         />
         <Tooltip v-if="needsResponse" label="Agent is waiting for your answer">
           <span :style="askStyle">

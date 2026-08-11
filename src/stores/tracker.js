@@ -118,6 +118,12 @@ export const boardColumns = computed(() => {
       id: issue.id,
       title: issue.title,
       status: toUiStatus(column),
+      /* bd's own word for what the issue holds, untranslated and not the
+         column: Blocked is computed from an unfinished blocker and bd keeps
+         such an issue at `open`, so a card's column is not a status anything
+         could write back. The card's menu offers to move the issue, and this
+         is the value it offers. */
+      bdStatus: issue.status,
       /* bd's own word, untranslated: the card's badge is the tracker's
          vocabulary, not the design system's, and a custom type has to survive
          the trip to be drawn at all. */
