@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { REASONS, TONE, stopReason } from '../../../src/components/run/stopReason.js'
+import { REASONS, TONE, endingDetail, stopReason } from '../../../src/components/run/stopReason.js'
 
 describe('how the run bar draws an ending', () => {
   it('paints a run that ran out of work as the ordinary ending', () => {
@@ -67,5 +67,42 @@ describe('how the run bar draws an ending', () => {
     expect(stopReason('queue_empty').icon).toBe('check')
     expect(stopReason('needs_answer').icon).toBe('message-circle-question-mark')
     expect(stopReason('crashed').icon).toBeUndefined()
+  })
+})
+
+describe('what the second line says about an ending', () => {
+  /* The defect this was written for: the worker names what would not come up
+     — `sh: docker: command not found` — and the bar drew the target branch
+     instead, so "Could not start into develop" pointed at a branch that had
+     nothing to do with it and the one sentence explaining the failure was on
+     the wire and nowhere on screen. */
+  it('says what would not start rather than which branch it was aimed at', () => {
+    expect(endingDetail({ kind: 'preflight', detail: '`docker compose up -d` exited 127' }, 'into develop')).toBe(
+      '`docker compose up -d` exited 127'
+    )
+  })
+
+  /* The same field carries a batch that could not be spawned at all, which is
+     the other thing the worker reports as `preflight` — a machine with no
+     agent installed says so here or nowhere. */
+  it('carries a batch that could not be started either', () => {
+    expect(endingDetail({ kind: 'preflight', detail: 'no coding agent is installed' }, 'into main')).toBe(
+      'no coding agent is installed'
+    )
+  })
+
+  /* The question outranks it: an ending that has both is the agent waiting,
+     and what it asked is what decides whether somebody goes and answers. */
+  it('prefers the question an agent is waiting on', () => {
+    expect(endingDetail({ kind: 'needs_answer', question: 'Trust this folder?' }, 'into develop')).toBe(
+      'Trust this folder?'
+    )
+  })
+
+  /* Every other ending keeps the line it has always had. */
+  it('falls back to the branch, and to nothing when there is none', () => {
+    expect(endingDetail({ kind: 'queue_empty' }, 'into develop')).toBe('into develop')
+    expect(endingDetail({ kind: 'crashed', attempts: 3 }, '')).toBe('')
+    expect(endingDetail(undefined, 'into develop')).toBe('into develop')
   })
 })

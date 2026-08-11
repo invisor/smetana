@@ -1056,6 +1056,21 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             })
           "
         />
+        <!-- The project would not come up, and the detail line is the whole of
+             what somebody can act on: without it this reads as "Could not start
+             into develop", a sentence naming the target branch, which had
+             nothing to do with the tool that was missing. -->
+        <RunBar
+          :run="
+            runFixture({
+              kind: 'stopped',
+              reason: {
+                kind: 'preflight',
+                detail: '`docker compose -f backend/docker-compose.yml up -d` exited 127: sh: docker: command not found'
+              }
+            })
+          "
+        />
       </div>
     </section>
 
