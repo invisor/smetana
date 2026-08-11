@@ -4,9 +4,11 @@ import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
 
 /* Shown when a project is added and has no .smetana/project.toml, and again
-   whenever somebody asks for the setup from the run dialog. It states what will
-   happen before anything happens: a session starts, a folder is read, and a
-   file appears in the person's repository. None of that should arrive
+   whenever somebody asks for the setup from the right-click menu on the
+   project's own row — which is where that second route now lives, the run
+   dialog having carried it until the row grew a menu to hold it. It states what
+   will happen before anything happens: a session starts, a folder is read, and
+   a file appears in the person's repository. None of that should arrive
    unannounced — adding a project to a list is otherwise a read. */
 const props = defineProps({
   open: { type: Boolean, default: false },

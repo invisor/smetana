@@ -58,9 +58,10 @@ const props = defineProps({
   /* The parser's own complaint about .smetana/project.toml, or '' when the file
      reads. This dialog is where a damaged configuration is said out loud, and
      it is the only place: the board offers no other route, and the project row
-     carries a mark with nothing on it that could name a section. The message is
-     the parser's verbatim — it already points at the key and the line, which is
-     more than a summary written here would say. */
+     carries a mark and a menu, neither of which has the room to name a section
+     — the menu offers the way out of the state, not a reading of it. The
+     message is the parser's verbatim: it already points at the key and the
+     line, which is more than a summary written here would say. */
   configError: { type: String, default: '' },
   /* What the worker refused with, if it did. */
   error: { type: String, default: '' },
@@ -71,13 +72,11 @@ const props = defineProps({
    already been chosen in the fields below is still what somebody wants, and
    making them set it all again is a poor reward for taking the advice.
 
-   `setup` re-runs the project's setup agent. It is offered here whatever state
-   the configuration is in, and that is the point: the gear on the project row
-   only ever appears while there is no file, so a project that is set up has no
-   other way back to it — and the shape of a project changes, repositories get
-   added. A damaged file needs the same route for a different reason, which is
-   why one button serves both. */
-const emit = defineEmits(['close', 'confirm', 'rescope', 'setup'])
+   There was a "Set up again" here as well, and it is gone: re-running the setup
+   agent is an action on a project, and it now sits with the project's other two
+   in the right-click menu on its row. A dialog about one run was never the
+   place to keep the only route to it. */
+const emit = defineEmits(['close', 'confirm', 'rescope'])
 
 /* Nothing here can be answered while the configuration cannot be read: the
    defaults every field is filled from come out of that file, so the values on
@@ -522,18 +521,6 @@ const errorStyle = {
       <span v-if="error" :style="errorStyle">{{ error }}</span>
     </div>
     <template #footer>
-      <!-- Pushed to the far side by its own margin rather than by a change to
-           Modal: the footer is right-aligned for every dialog in the system, and
-           this is the one button in one of them that is neither the action nor
-           its refusal. -->
-      <Button
-        variant="ghost"
-        :disabled="busy"
-        :style="{ marginRight: 'auto' }"
-        @click="$emit('setup')"
-      >
-        Set up again
-      </Button>
       <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>
       <Button variant="primary" :disabled="locked || !branch" @click="confirm">
         {{ busy ? 'Starting…' : 'Run' }}

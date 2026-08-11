@@ -741,7 +741,9 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <!-- The damaged configuration, with the parser's own message in it —
              the caret line and its leading spaces are the point, so this
              fixture keeps them. Every field below the notice is disabled and so
-             is Run; "Set up again" is not, because it is the way out. -->
+             is Run: this dialog says what is wrong and offers nothing that
+             would repair it. The way out is "Set up again" in the right-click
+             menu on the project's own row, down in the Projects section. -->
         <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
           <RunModal
             :open="true"
@@ -751,7 +753,6 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :config-error="BROKEN_CONFIG"
             @close="() => {}"
             @confirm="() => {}"
-            @setup="() => {}"
           />
         </div>
         <!-- The project wants a browser live check and the machine has nothing
@@ -897,7 +898,16 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       <div :style="headStyle">Projects</div>
       <!-- ProjectList carries no header of its own — the surrounding Panel owns
            "Projects" and the "+" in its actions slot, so the demo wraps it the
-           same way DesktopApp.vue does, to catch the pairing breaking too. -->
+           same way DesktopApp.vue does, to catch the pairing breaking too.
+
+           Right-click the rows: every one of them opens the row's three actions
+           at the pointer, and the two that are only meaningful for the project
+           the window is pointed at are greyed with the reason in the row on
+           every other. The setup item is the frames' second job here — it reads
+           "Set up" where there is no configuration and "Set up again" where
+           there is one, damaged or not — and the last frame is where the
+           placement can be checked, since nothing else on this page opens a
+           panel from a point rather than from a control. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false">
@@ -920,12 +930,17 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             <template #actions>
               <IconButton icon="plus" label="Add project" size="sm" />
             </template>
+            <!-- The one frame with a run configuration that reads. Nothing on
+                 the row says so — a project that is set up has nothing to
+                 report — so it is only visible in the right-click menu, where
+                 this active row is the one that reads "Set up again". -->
             <ProjectList
               :projects="[
                 { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
                 { path: '/Users/you/notes', name: 'notes', tracked: false }
               ]"
               active-path="/Users/you/notes"
+              configured
             />
           </Panel>
         </div>
@@ -971,6 +986,33 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
               <IconButton icon="plus" label="Add project" size="sm" />
             </template>
             <ProjectList :projects="[]" />
+          </Panel>
+        </div>
+        <!-- A list past the fifth row, which is where it starts to scroll, and
+             the frame the menu's placement is checked in. Right-click the last
+             row a person can see: the panel is teleported to the body and fixed
+             in window coordinates, so neither the list's own scroll container
+             nor this frame may clip it, and it flips above the pointer when the
+             window has no room below. Scroll the list under an open menu and it
+             closes — the point it was opened at no longer names a row. -->
+        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="plus" label="Add project" size="sm" />
+            </template>
+            <ProjectList
+              :projects="[
+                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
+                { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true },
+                { path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true },
+                { path: '/Users/you/dev/tracker-notes', name: 'tracker-notes', tracked: false },
+                { path: '/Users/you/dev/scratch', name: 'scratch', tracked: true },
+                { path: '/Users/you/dev/archive', name: 'archive', tracked: true }
+              ]"
+              active-path="/Users/you/dev/holiday-curb"
+              can-add-agent
+              configured
+            />
           </Panel>
         </div>
       </div>
