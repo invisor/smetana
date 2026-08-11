@@ -74,6 +74,7 @@ export { default as FileTreeRow } from './files/FileTreeRow.vue'
 
 // overlays
 export { default as ContextMenu } from './overlays/ContextMenu.vue'
+export { default as MenuButton } from './overlays/MenuButton.vue'
 export { default as Modal } from './overlays/Modal.vue'
 export { default as Toast } from './overlays/Toast.vue'
 

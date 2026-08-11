@@ -27,8 +27,14 @@ export function scopeLabel(scope) {
 }
 
 /* Why a play aimed at this scope is inactive, or '' when it is not. Lowercase
-   because it is never shown on its own — TaskCard interpolates it into
-   "Run this — …" and the column header into "Run the queue — …".
+   because it is never shown on its own — `kanban/taskMenu.js` interpolates it
+   into the card menu's "Run this — …" row and the column header into
+   "Run the queue — …".
+
+   The card's copy is read on a menu row, which has no tooltip to fall back on,
+   so the sentence has to fit: `TaskCard` sizes its menu against the longest
+   thing composed here. Anything materially longer than what `scopeLabel`
+   produces below would be ellipsised with no way to recover it.
 
    Only a live run blocks. A stopped one is a reason to read the bar, not a
    reason to refuse — and an ending this front end has never heard of is still

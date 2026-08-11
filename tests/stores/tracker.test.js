@@ -158,6 +158,25 @@ describe('boardColumns', () => {
     expect(card.blockedBy).toBe(0)
   })
 
+  it('carries bd\'s own status beside the column the card is drawn in', async () => {
+    // Blocked is a column, not a status anybody writes: the issue is `open`
+    // with an unfinished blocker. A menu offering to move it needs the word bd
+    // would accept back, so the two travel separately.
+    await start(
+      snapshot({
+        issues: [
+          issue({ id: 'bd-1' }),
+          issue({ id: 'bd-2', dependencies: [edge({ issue_id: 'bd-2', depends_on_id: 'bd-1' })] })
+        ]
+      })
+    )
+
+    const card = tracker.boardColumns.value.flatMap((c) => c.tasks).find((t) => t.id === 'bd-2')
+
+    expect(card.status).toBe('blocked')
+    expect(card.bdStatus).toBe('open')
+  })
+
   it('parentage does not count as a blocker: otherwise every child would get a false "blocked"', async () => {
     await start(
       snapshot({
