@@ -144,6 +144,7 @@ const choice = ref('running')
    the dialog around it is not what needs looking at. */
 const pickedBranch = ref('staging')
 const branchIsNew = ref(false)
+const groupedBranch = ref('develop')
 const checked = ref(true)
 const switched = ref(true)
 
@@ -1010,6 +1011,30 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             v-model="pickedBranch"
             v-model:create="branchIsNew"
             :branches="['main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7']"
+          />
+        </div>
+        <div :style="{ width: '320px' }">
+          <!-- Captions and per-row notes. Deliberately long enough to scroll,
+               since the caption rows are what `reveal` has to walk past: the
+               cursor is brought into view by index into this list's children, so
+               a row that is not a sibling of the options would desync it. -->
+          <Dropdown
+            v-model="groupedBranch"
+            mono
+            searchable
+            search-label="Search branches"
+            :options="[
+              { header: true, label: 'Everywhere' },
+              { value: 'develop', label: 'develop' },
+              { value: 'main', label: 'main' },
+              { value: 'staging', label: 'staging' },
+              { header: true, label: 'Not everywhere' },
+              { value: 'release/7', label: 'release/7', note: 'not in admin, extension' },
+              { value: 'spike/auth', label: 'spike/auth', note: 'not in frontend, admin, extension' },
+              { value: 'hotfix/2026-08', label: 'hotfix/2026-08', note: 'not in extension' },
+              { value: 'chore/deps', label: 'chore/deps', note: 'not in backend' },
+              { value: 'wip/editor', label: 'wip/editor', note: 'not in admin' }
+            ]"
           />
         </div>
       </div>
