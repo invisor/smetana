@@ -95,12 +95,17 @@ gone, because invented output under a real issue claimed the app knew something 
 session's actual output is the terminal tab. `LogView` itself stays in the library and in the
 gallery — the component is fine, the fixture in the product was not.
 
-That right column draws one of three things, and which one is **derived rather than stored**
+That right column draws one of four things, and which one is **derived rather than stored**
 (`rightPanel` in `DesktopApp.vue`). `DraftInspector` shows a task still being filed — the person's
 own words, read-only, with no issue behind them. `ClaimedTasks` shows what a run has taken, with the
 card for whichever of them is picked, the list staying above the card because the choice between them
 is the point and a card that replaced the list would take the way back with it. Otherwise it is
-`TaskInspector` on the selected issue. Deriving it is what stops the halves drifting: `selectedTask`
+`TaskInspector` on the selected issue. With nothing picked on the board it is an `EmptyState` saying
+so, and that is the fourth: the slot used to hold a fixture issue — an id, a `needs-you` badge and a
+downstream count, none of it real — so a newly added project opened by announcing that somebody had
+filed a task needing a human (smetana-agh). It is deliberately not drawn under a run's claimed list,
+where the list is the content and an empty state beneath it would call the panel empty when it is
+not. Deriving it is what stops the halves drifting: `selectedTask`
 is remembered per project in `settings.json`, so a panel choice that wrote to it would turn a glance
 at an agent into an edit of a preference, and a stored version had the run case highlighting a card
 on the board that the inspector then refused to draw.
