@@ -1122,7 +1122,20 @@ spent on the opposite of a card needing a human. What was killed goes to the log
 The record itself **outlives the processes on purpose**, for up to `ABANDONED_DAYS`: its
 actors are the evidence Phase R reads, and deleting it the moment the processes were
 dealt with would send that half of the recovery back to its old default of leaving every
-claim in place. The record is removed when its run ends cleanly, and never otherwise.
+claim in place.
+
+A record is removed when its run's **loop task ends — however it ended**, which is not
+the same as "finished": `Report::Ended` comes from the same `Drop` guard the worker's map
+leans on, so a cancellation, a crash and a failed preflight all take the record with them,
+and none of them needs to be enumerated anywhere. The one condition on that is the
+processes rather than the reason. `runs::service` ends a run with `NeedsAnswer` **without
+killing the session** — the person is being sent to that terminal to answer, and killing
+would take away the very thing they were sent to — so `registry::forget_run` keeps a
+record that still names something running, trimmed to the batches that are actually still
+there. Deleting it would leave a live agent, still claiming under its actor, named
+nowhere: a `kill -9` a minute later orphans exactly the process this file exists to
+reclaim. Conditioning on the stop reason instead would have been a `match` somebody has
+to remember to extend.
 `smetana:merging`'s 60-minute lock staleness rule is untouched by all this and cannot be
 replaced by the registry: the file names runs this app started on this machine, while the
 lock can be held by a lead a person started by hand in a terminal, which never appears in

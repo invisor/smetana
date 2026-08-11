@@ -24,6 +24,7 @@
 //! a human. What was killed goes to the log.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -42,6 +43,9 @@ use super::registry::{self, Batch, Liveness, Orphan, Proc, Record, Registry};
 /// sweep is about to kill would be two agents in one worktree.
 const GRACE: Duration = Duration::from_millis(1200);
 const POLL: Duration = Duration::from_millis(50);
+
+/// Names temp files apart — see `write`.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Where a project's registry lives: beside `project.toml`, inside the folder
 /// `gitignore.rs` keeps out of the repository.
@@ -92,11 +96,12 @@ pub fn note_batch(root: &Path, token: u64, actor: String, group: Option<Proc>) {
     update(root, |held| registry::note_batch(held, writer, token, Batch { actor, group }));
 }
 
-/// The run ended the way runs are meant to: there is nothing left to recover,
-/// so the record goes.
+/// The run's loop task is gone, however it went. The record goes with it unless
+/// it still names a process that is running — see `registry::forget_run`, which
+/// is where that condition and its reason live.
 pub fn forget_run(root: &Path, token: u64) {
     let Some(writer) = writer() else { return };
-    update(root, |held| registry::forget_run(held, writer, token));
+    update(root, |held| registry::forget_run(held, writer, token, &procs::look));
 }
 
 /// The evidence to write down about a session's process group — the pid the
@@ -140,7 +145,14 @@ async fn recover_one(root: &Path) {
     if !path(root).exists() {
         return;
     }
-    let held = read(root);
+    let held = match read(root) {
+        Held::Read(registry) => registry,
+        // The replacement is done here rather than left to whenever a run next
+        // starts, so that the line the read just logged is true when it is
+        // logged and the `.bak` is not taken again on every launch.
+        Held::Damaged => return write(root, &Registry::default()),
+        Held::Unreadable => return,
+    };
     // What the app is deliberately *not* doing, said out loud: these claims are
     // the next run's Phase R to recover, and the app writes to the tracker
     // nowhere. Somebody reading the log after a crash otherwise has no way to
@@ -218,38 +230,66 @@ fn gone(orphan: &Orphan) -> bool {
 /// Read, change, write — and write nothing when nothing changed, so that a
 /// no-op cannot lose a record another instance wrote between the two.
 fn update(root: &Path, change: impl FnOnce(&mut Registry) -> bool) {
-    let mut held = read(root);
-    if change(&mut held) {
+    let (mut held, replacing) = match read(root) {
+        Held::Read(registry) => (registry, false),
+        // A copy is already beside it; this write is the replacement, and it
+        // goes out whether or not the change itself asked for one.
+        Held::Damaged => (Registry::default(), true),
+        Held::Unreadable => return,
+    };
+    if change(&mut held) || replacing {
         write(root, &held);
     }
 }
 
-/// The file, or an empty registry.
-///
-/// A file this app cannot read — damaged, or written by a newer app — is kept
-/// as `runs.json.bak` and replaced, the answer `settings/file.rs` already gives
-/// to the same question. Leaving it in place instead would be a project in
-/// which no run can ever be recorded again, and a registry with no readers is
-/// not evidence of anything.
-fn read(root: &Path) -> Registry {
+/// What came back from the file, in the three states that need different
+/// answers — the same three `settings/file.rs` keeps apart, and for the reason
+/// it records: overwriting a file nobody could read would destroy it sight
+/// unseen. Here what would be destroyed is Phase R's evidence and the pids of
+/// processes that are still running.
+enum Held {
+    /// The file as it stands, or an empty registry where there is no file yet.
+    Read(Registry),
+    /// Damaged, or written by a newer app. A copy is in `runs.json.bak` and the
+    /// caller replaces what is left — leaving it instead would be a project in
+    /// which no run can ever be recorded again, and a registry with no readers
+    /// is not evidence of anything.
+    Damaged,
+    /// There is a file and it could not be read at all: no permissions, a
+    /// directory in its place, a failing disk. Nothing may be written over it,
+    /// and there is nothing to copy either — `fs::copy` would fail the same
+    /// way the read did.
+    Unreadable,
+}
+
+fn read(root: &Path) -> Held {
     let path = path(root);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Registry::default(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Held::Read(Registry::default())
+        }
         Err(err) => {
-            eprintln!("[runs] could not read {}: {err}", path.display());
-            return Registry::default();
+            eprintln!(
+                "[runs] {} could not be read ({err}); nothing will be written over it",
+                path.display()
+            );
+            return Held::Unreadable;
         }
     };
     match registry::parse(&text) {
-        Some(registry) => registry,
+        Some(registry) => Held::Read(registry),
         None => {
             let backup = path.with_extension("json.bak");
             if let Err(err) = std::fs::copy(&path, &backup) {
                 eprintln!("[runs] could not save a copy to {}: {err}", backup.display());
             }
-            eprintln!("[runs] {} could not be read and was replaced", path.display());
-            Registry::default()
+            eprintln!(
+                "[runs] {} could not be read; a copy is in {} and it is being replaced",
+                path.display(),
+                backup.display()
+            );
+            Held::Damaged
         }
     }
 }
@@ -272,7 +312,15 @@ fn write(root: &Path, held: &Registry) {
         eprintln!("[runs] could not create {}: {err}", dir.display());
         return;
     }
-    let temp = dir.join(format!("runs.{}.tmp", std::process::id()));
+    // The counter beside the pid, copied from `settings/file.rs` along with its
+    // reason: two overlapping writes would otherwise share one name, and the
+    // first would rename what the second had not finished writing. Every write
+    // here is a synchronous call on the run worker's single task today, so the
+    // overlap cannot happen — but the guard costs one atomic and the reason for
+    // dropping it would have to be rediscovered by whoever first calls this
+    // from somewhere else.
+    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp = dir.join(format!("runs.{}.{n}.tmp", std::process::id()));
     if let Err(err) = write_all(&temp, &text) {
         eprintln!("[runs] could not write {}: {err}", temp.display());
         let _ = std::fs::remove_file(&temp);
@@ -306,11 +354,13 @@ mod tests {
         root
     }
 
-    /// The round trip through the disk, and the one property the interface
-    /// criterion rests on: while a run is live the file names it, and its
-    /// ending takes the record away.
+    /// The round trip through the disk: while a run is live the file names it,
+    /// and its ending takes the record away once nothing it named is still
+    /// running. The other half of that condition — an ending that leaves a
+    /// session alive at its prompt — is `registry`'s to pin, since it is a rule
+    /// and not a file operation.
     #[test]
-    fn a_live_run_is_named_in_the_file_and_a_clean_ending_removes_it() {
+    fn a_live_run_is_named_in_the_file_and_an_ending_removes_it() {
         let root = temp_root();
         if writer().is_none() {
             eprintln!("this platform keeps no registry; nothing to check");
@@ -318,7 +368,11 @@ mod tests {
         }
 
         note_run(&root, 3, "develop");
-        note_batch(&root, 3, "smetana-run-7".into(), procs::own());
+        // A group that is provably gone, because no kernel hands out
+        // `i32::MAX`: this test is about the disk, and a batch that is still
+        // running is deliberately a record that stays.
+        let dead = Proc { pid: i32::MAX, started: 1, command: "claude".into() };
+        note_batch(&root, 3, "smetana-run-7".into(), Some(dead));
 
         let text = std::fs::read_to_string(path(&root)).expect("the file exists");
         let held = registry::parse(&text).expect("and reads");
@@ -443,7 +497,7 @@ mod tests {
             matches!(procs::look(bystander), registry::Seen::Running { .. }),
             "a process the registry never named is not the app's to signal"
         );
-        let held = read(&root);
+        let Held::Read(held) = read(&root) else { panic!("the file is still readable") };
         assert_eq!(held.runs.len(), 1, "the record stays: its actors are Phase R's evidence");
 
         unsafe { libc::killpg(bystander, libc::SIGKILL) };
@@ -451,16 +505,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn a_damaged_file_is_kept_as_a_copy_and_replaced() {
+    #[tokio::test]
+    async fn a_damaged_file_is_kept_as_a_copy_and_replaced_where_it_stood() {
         let root = temp_root();
         std::fs::create_dir_all(root.join(".smetana")).expect("setup");
         std::fs::write(path(&root), "{not json").expect("setup");
 
-        assert_eq!(read(&root), Registry::default());
+        assert!(matches!(read(&root), Held::Damaged));
         assert_eq!(
             std::fs::read_to_string(root.join(".smetana").join("runs.json.bak")).expect("a copy"),
             "{not json"
+        );
+
+        // The replacement is the caller's, and both callers do it — otherwise
+        // the log line saying so is untrue and the copy is retaken on every
+        // launch until a run happens to start.
+        recover(&[root.clone()]).await;
+        assert!(
+            matches!(read(&root), Held::Read(registry) if registry == Registry::default()),
+            "the sweep leaves a file this app can read"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The refusal `settings/file.rs` already makes for the same reason:
+    /// overwriting a file nobody could read destroys it sight unseen, and here
+    /// what it holds is Phase R's evidence and the pids of live orphans.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_read_is_never_written_over() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc::geteuid() } == 0 {
+            // Root reads whatever it likes, so the setup below would not hold.
+            eprintln!("running as root; the unreadable case cannot be set up");
+            return;
+        }
+        let root = temp_root();
+        std::fs::create_dir_all(root.join(".smetana")).expect("setup");
+        let path = path(&root);
+        std::fs::write(&path, "the bytes that must survive").expect("setup");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("setup");
+
+        assert!(matches!(read(&root), Held::Unreadable));
+        note_run(&root, 1, "main");
+        assert!(!root.join(".smetana").join("runs.json.bak").exists(), "there was nothing to copy");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("cleanup");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read it back"),
+            "the bytes that must survive"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

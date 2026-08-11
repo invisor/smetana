@@ -276,12 +276,56 @@ pub fn note_batch(registry: &mut Registry, writer: &Proc, token: u64, batch: Bat
     true
 }
 
-/// The run ended the way runs are supposed to end, so there is nothing left to
-/// recover and the record goes. Answers whether one was there.
-pub fn forget_run(registry: &mut Registry, writer: &Proc, token: u64) -> bool {
-    let before = registry.runs.len();
-    registry.runs.retain(|held| !same_run(held, writer, token));
-    registry.runs.len() != before
+/// The run's loop task is gone — **however it went**, which is not the same as
+/// "it finished". `Report::Ended` comes from a `Drop` guard, so a cancellation,
+/// a crash, a failed preflight and a run that stopped on an unanswered question
+/// all arrive here. Answers whether the file changed.
+///
+/// The record goes only when nothing it names is still running, and that
+/// condition is the point rather than caution. `runs::service` ends a run with
+/// `NeedsAnswer` **without killing the session** — the person is being sent to
+/// that terminal to answer, and killing would take away the very thing they
+/// were sent to. Deleting the record there would leave a live agent, still
+/// claiming tasks under its actor, named nowhere: a `kill -9` a minute later
+/// orphans exactly the process this file exists to reclaim, and the next start
+/// has nothing to find it by.
+///
+/// A condition on the processes rather than on the stop reason, because the
+/// reasons are a list somebody adds to: a future ending that leaves a session
+/// alive is covered by this and would not be covered by a `match`. What is left
+/// behind is one record with one batch in it, which the next start sweeps or
+/// ages out like any other.
+pub fn forget_run(
+    registry: &mut Registry,
+    writer: &Proc,
+    token: u64,
+    table: &impl Fn(i32) -> Seen,
+) -> bool {
+    let before = registry.runs.clone();
+    let mut kept: Vec<Record> = Vec::with_capacity(before.len());
+    for mut record in registry.runs.drain(..) {
+        if !same_run(&record, writer, token) {
+            kept.push(record);
+            continue;
+        }
+        // What is worth keeping is the batches that are still running, and one
+        // this platform cannot ask about counts as running: keeping a record
+        // too long costs it ageing out in a week, dropping one too early costs
+        // an orphan nobody can name. A batch whose group could not be read when
+        // it was written down is dropped, because that only happens when the
+        // session was already gone by the time it was asked about.
+        record.batches.retain(|batch| {
+            batch
+                .group
+                .as_ref()
+                .is_some_and(|group| liveness(group, table(group.pid)) != Liveness::Dead)
+        });
+        if !record.batches.is_empty() {
+            kept.push(record);
+        }
+    }
+    registry.runs = kept;
+    registry.runs != before
 }
 
 fn same_run(record: &Record, writer: &Proc, token: u64) -> bool {
@@ -523,9 +567,58 @@ mod tests {
         ));
         assert_eq!(held.runs[0].batches[0].actor, "smetana-run-4");
 
-        assert!(forget_run(&mut held, &writer, 1));
-        assert!(held.runs.is_empty(), "an orderly ending leaves nothing to recover");
-        assert!(!forget_run(&mut held, &writer, 1), "and the second ending finds nothing");
+        assert!(forget_run(&mut held, &writer, 1, &table(&[])));
+        assert!(held.runs.is_empty(), "an ending with nothing left running takes the record");
+        assert!(!forget_run(&mut held, &writer, 1, &table(&[])), "and the second finds nothing");
+    }
+
+    #[test]
+    fn a_run_that_ended_with_a_session_still_at_its_prompt_keeps_its_record() {
+        // The ending `runs::service` reaches on an unanswered question: the
+        // session is deliberately left alive, because the person is being sent
+        // to that terminal to answer it. Forgetting the record there would
+        // leave a live agent — still claiming under its actor — named nowhere,
+        // and a `kill -9` a minute later would orphan the one process this
+        // whole file exists to reclaim.
+        let writer = stamp(10, 1);
+        let mut held = Registry::default();
+        note_run(&mut held, record(1, writer.clone(), &[]));
+        note_batch(
+            &mut held,
+            &writer,
+            1,
+            Batch { actor: "smetana-run-4".into(), group: Some(stamp(20, 2)) },
+        );
+        note_batch(
+            &mut held,
+            &writer,
+            1,
+            Batch { actor: "smetana-run-9".into(), group: Some(stamp(21, 3)) },
+        );
+
+        // The earlier batch's agent is long gone; the one at the prompt is not.
+        let ended = forget_run(&mut held, &writer, 1, &table(&[(21, Seen::Running { started: 3 })]));
+
+        assert!(ended, "the file changed");
+        assert_eq!(held.runs.len(), 1, "the record stays while it names something alive");
+        assert_eq!(
+            held.runs[0].batches.iter().map(|batch| batch.actor.as_str()).collect::<Vec<_>>(),
+            vec!["smetana-run-9"],
+            "and it is trimmed to what is actually still running"
+        );
+    }
+
+    #[test]
+    fn an_ending_leaves_every_other_run_alone() {
+        let ours = stamp(10, 1);
+        let mut held = Registry::default();
+        note_run(&mut held, record(1, ours.clone(), &[Some(stamp(20, 2))]));
+        note_run(&mut held, record(2, ours.clone(), &[Some(stamp(21, 3))]));
+
+        forget_run(&mut held, &ours, 1, &table(&[(21, Seen::Running { started: 3 })]));
+
+        assert_eq!(held.runs.len(), 1);
+        assert_eq!(held.runs[0].token, 2, "the other run's live batch is not this ending's to read");
     }
 
     #[test]
@@ -547,7 +640,7 @@ mod tests {
             1,
             Batch { actor: "smetana-run-1".into(), group: None }
         ), "a batch belongs to the run of the app that started it");
-        assert!(forget_run(&mut held, &ours, 1));
+        assert!(forget_run(&mut held, &ours, 1, &table(&[])));
         assert_eq!(held.runs.len(), 1);
         assert_eq!(held.runs[0].writer, theirs, "the other app's record is untouched");
     }

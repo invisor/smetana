@@ -355,10 +355,14 @@ fn handle_report(app: &AppHandle, active: &mut HashMap<u64, Active>, report: Rep
 }
 
 /// What a report changes in `.smetana/runs.json`: a batch is added to its run's
-/// record, and an orderly ending takes the whole record away. Everything else
-/// leaves the file alone — a run's state is not evidence of anything after the
-/// process is gone, and rewriting the file on every progress report would be a
-/// write per board read for nothing.
+/// record, and an ending — any ending, since `Report::Ended` comes from a `Drop`
+/// guard — takes the record away, unless it still names a process that is
+/// running. That last condition is `registry::forget_run`'s, and the ending it
+/// exists for is `NeedsAnswer`, which deliberately leaves its session alive.
+///
+/// Everything else leaves the file alone: a run's state is not evidence of
+/// anything after the process is gone, and rewriting the file on every progress
+/// report would be a write per board read for nothing.
 fn record(active: &HashMap<u64, Active>, report: &Report) {
     let (token, project) = match report {
         Report::Started { token, .. } | Report::Ended { token } => match active.get(token) {

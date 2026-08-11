@@ -178,12 +178,18 @@ on its own. **This runs before you take any new work.**
    ```
 
    No such process → the app that wrote that record is gone, and every actor under it
-   is dead. A process that is there but is plainly not Smetana (the recorded `command`
-   is what it should look like) → the pid has been reused since; the record is dead
-   too. Smetana under that pid → that run is live, and its claims are not yours to
-   touch. The app has already dealt with the *processes* of a dead record at its next
-   start — it hangs up the process groups it recorded — but it writes to the tracker
-   nowhere. The claims are yours.
+   is dead. A process that is there but is plainly not Smetana → the pid has been reused
+   since; the record is dead too. Smetana under that pid → that run is live, and its
+   claims are not yours to touch. Judge that last one, do not string-compare it: the
+   recorded `command` is the kernel's short name for the process, while `ps -o comm=`
+   prints the full executable path on macOS and the short name on Linux, so the two are
+   equal on one platform and not the other. What you are deciding is whether the process
+   under that pid is plausibly the app.
+
+   The app has usually dealt with the *processes* of a dead record already — at its next
+   start it hangs up the process groups it recorded, for every project it had open, so a
+   project nobody has reopened since may still have them running. It writes to the
+   tracker nowhere either way. The claims are yours.
 
    So: **an actor named under a dead writer is a claim you may recover.** **The
    default everywhere else, in every mode: a claim you cannot show dead is left in
