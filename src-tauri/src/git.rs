@@ -79,7 +79,11 @@ pub fn parse_gitdir(contents: &str, project: &Path) -> Option<PathBuf> {
 /// things live in it: `HEAD`, `ORIG_HEAD`, the index and `logs/HEAD`. Anything
 /// shared — `refs/heads/`, `packed-refs`, `logs/refs/heads/` — is in the common
 /// directory instead, which is what [`common_dir`] resolves.
-fn git_dir(project: &Path) -> Option<PathBuf> {
+///
+/// Public because `runs::commands::target_branches` needs to tell a directory
+/// that is not a repository from a repository with nothing in it: both hand
+/// back an empty branch list, and only this can say which happened.
+pub fn git_dir(project: &Path) -> Option<PathBuf> {
     let dot_git = project.join(".git");
     if dot_git.is_dir() {
         return Some(dot_git);
@@ -213,6 +217,74 @@ fn loose_branches(heads: &Path, prefix: &str, out: &mut Vec<String>) {
     }
 }
 
+/// A branch a run could merge into, and the repositories that do not have it.
+///
+/// `missing_in` rather than `present_in` because the absence is what the dialog
+/// draws and what somebody has to decide about: an empty list is the ordinary
+/// case and there is nothing to do with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BranchOption {
+    pub name: String,
+    /// In the order the repositories were given, which is `[project].repos`'s
+    /// order and therefore the project's own statement about what depends on
+    /// what.
+    pub missing_in: Vec<String>,
+}
+
+/// One list per repository, folded into one list of options.
+///
+/// Three rules, and the middle one is the only new judgement here. A branch's
+/// freshness is the **most recent** touch across the repositories that have it:
+/// `develop` opened an hour ago in `backend` and a month ago in `admin` is an
+/// hour old, because it is one branch to the person merging into it. Ordering
+/// inside a group is `by_recency`'s and deliberately not a second rule written
+/// here. And complete comes before partial, which is the whole of the structure
+/// the field draws.
+///
+/// A repository that git cannot see must never reach this — see
+/// `runs::commands::target_branches`, which is where that is decided, because
+/// an empty list here cannot say whether the directory had no branches or was
+/// not a repository at all.
+pub fn combine(per_repo: Vec<(String, Vec<(String, Option<i64>)>)>) -> Vec<BranchOption> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let repos: Vec<&str> = per_repo.iter().map(|(name, _)| name.as_str()).collect();
+    let mut best: BTreeMap<String, Option<i64>> = BTreeMap::new();
+    let mut present: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    for (repo, list) in &per_repo {
+        for (name, at) in list {
+            let slot = best.entry(name.clone()).or_default();
+            *slot = match (*slot, *at) {
+                (Some(x), Some(y)) => Some(x.max(y)),
+                (Some(x), None) => Some(x),
+                (None, y) => y,
+            };
+            present.entry(name.clone()).or_default().insert(repo.as_str());
+        }
+    }
+
+    let missing_for = |name: &str| -> Vec<String> {
+        let has = present.get(name);
+        repos
+            .iter()
+            .filter(|repo| !has.is_some_and(|set| set.contains(*repo)))
+            .map(|repo| (*repo).to_string())
+            .collect()
+    };
+
+    let (complete, partial): (Vec<_>, Vec<_>) =
+        best.iter().map(|(name, at)| (name.clone(), *at)).partition(|(name, _)| missing_for(name).is_empty());
+
+    let mut out = Vec::new();
+    for group in [complete, partial] {
+        for name in by_recency(group) {
+            let missing_in = missing_for(&name);
+            out.push(BranchOption { name, missing_in });
+        }
+    }
+    out
+}
+
 /// The local branches, most recently worked on first, without duplicates.
 ///
 /// The order is the whole point of the list: on a project with a couple of
@@ -236,6 +308,15 @@ fn loose_branches(heads: &Path, prefix: &str, out: &mut Vec<String>) {
 /// has no ref file for it at all, and offering nothing to merge into would be
 /// worse than offering the one branch that exists.
 pub fn branches(project: &Path) -> Vec<String> {
+    by_recency(branches_with_recency(project))
+}
+
+/// The same three sources as `branches`, with each name's reflog stamp still
+/// attached. Split out for `combine`, which has to compare those stamps across
+/// repositories before anything can be ordered — `branches` throws them away,
+/// and a list already collapsed to names cannot say which of two repositories
+/// saw `develop` more recently.
+pub fn branches_with_recency(project: &Path) -> Vec<(String, Option<i64>)> {
     let Some(dir) = git_dir(project) else { return Vec::new() };
     let common = common_dir(&dir);
     let mut out = Vec::new();
@@ -249,14 +330,7 @@ pub fn branches(project: &Path) -> Vec<String> {
     out.sort();
     out.dedup();
     let logs = common.join("logs/refs/heads");
-    let touched = out
-        .into_iter()
-        .map(|name| {
-            let at = touched_at(&logs, &name);
-            (name, at)
-        })
-        .collect();
-    by_recency(touched)
+    out.into_iter().map(|name| { let at = touched_at(&logs, &name); (name, at) }).collect()
 }
 
 #[tauri::command]
@@ -596,5 +670,77 @@ c0ffee refs/remotes/origin/main
 
         assert_eq!(branches(&dir), vec!["alpha", "feature/runs", "main", "staging", "zeta"]);
         fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_branch_every_repository_has_comes_before_one_that_is_short() {
+        // The two groups are the whole of the visible structure: a branch a run
+        // can merge into everywhere is a different kind of answer from one that
+        // would have to be cut somewhere first.
+        let out = combine(vec![
+            ("backend".into(), vec![("develop".into(), Some(20)), ("release/7".into(), Some(30))]),
+            ("admin".into(), vec![("develop".into(), Some(10))]),
+        ]);
+        assert_eq!(
+            out,
+            vec![
+                BranchOption { name: "develop".into(), missing_in: vec![] },
+                BranchOption { name: "release/7".into(), missing_in: vec!["admin".into()] },
+            ]
+        );
+    }
+
+    #[test]
+    fn freshness_is_the_most_recent_touch_anywhere() {
+        // `develop` was opened an hour ago in one repository and a month ago in
+        // another. Taking the first repository's answer, or the least of them,
+        // buries the branch somebody is actually in behind one they have not
+        // touched.
+        let out = combine(vec![
+            ("backend".into(), vec![("stale".into(), Some(50)), ("develop".into(), Some(10))]),
+            ("admin".into(), vec![("stale".into(), Some(20)), ("develop".into(), Some(99))]),
+        ]);
+        assert_eq!(out.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["develop", "stale"]);
+    }
+
+    #[test]
+    fn a_branch_with_no_reflog_anywhere_still_sorts_into_the_alphabetical_tail() {
+        // `by_recency`'s own rule, and this must go on being its rule rather
+        // than a second one written here.
+        let out = combine(vec![(
+            "backend".into(),
+            vec![("zeta".into(), Some(1)), ("beta".into(), None), ("alpha".into(), None)],
+        )]);
+        assert_eq!(out.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["zeta", "alpha", "beta"]);
+    }
+
+    #[test]
+    fn the_repositories_a_branch_is_missing_from_are_named_in_the_order_given() {
+        // The config's order, which is its statement about what depends on what.
+        // A set would print them in whatever order it hashed to, and the field
+        // would read differently between two runs of the same project.
+        let out = combine(vec![
+            ("backend".into(), vec![("release/7".into(), Some(1))]),
+            ("frontend".into(), vec![]),
+            ("admin".into(), vec![]),
+        ]);
+        assert_eq!(out[0].missing_in, vec!["frontend".to_string(), "admin".to_string()]);
+    }
+
+    #[test]
+    fn one_repository_answers_exactly_as_the_single_project_list_always_did() {
+        // The no-regression case, and it is the common one: this project's own
+        // config is `repos = ["."]`, and so is every project that is one
+        // repository. Nothing may be partial when there is nothing to be short
+        // of.
+        let list = vec![("main".into(), Some(2)), ("develop".into(), Some(9))];
+        let out = combine(vec![(".".into(), list.clone())]);
+        assert_eq!(out.iter().map(|o| o.name.clone()).collect::<Vec<_>>(), by_recency(list));
+        assert!(out.iter().all(|o| o.missing_in.is_empty()), "{out:?}");
+    }
+
+    #[test]
+    fn no_repositories_at_all_is_an_empty_list_and_not_a_panic() {
+        assert_eq!(combine(vec![]), vec![]);
     }
 }
