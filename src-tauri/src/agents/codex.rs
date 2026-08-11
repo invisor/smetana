@@ -64,6 +64,11 @@ impl Profile for Codex {
         );
         let filing =
             filing_a_task.then(|| read_skill(&launch.skills.smetana, "filing-a-task")).flatten();
+        // The whole of what a resolving session does, so it is read whenever
+        // one is being started and never otherwise.
+        let resolving = matches!(launch.intent, Intent::ResolveTask { .. })
+            .then(|| read_skill(&launch.skills.smetana, "resolving-questions"))
+            .flatten();
         let brainstorming_text =
             discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
         let plans_text =
@@ -90,6 +95,7 @@ impl Profile for Codex {
         }
         let text = prompt::SkillText {
             filing: filing.as_deref(),
+            resolving: resolving.as_deref(),
             brainstorming: brainstorming_text.as_deref(),
             plans: plans_text.as_deref(),
         };

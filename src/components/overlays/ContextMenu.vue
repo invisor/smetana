@@ -10,6 +10,14 @@ const props = defineProps({
      second panel — placement is the anchoring component's business, not this
      one's, and this component has never known where on the screen it is. */
   items: { type: Array, default: () => [] },
+  /* A ceiling, not a width. The panel is as wide as its widest row wants to be
+     and no wider — a four-verb menu that took 400px because one of its rows
+     *might* one day carry a sentence is 400px of empty panel over the board for
+     the whole of the ordinary case. The number is what a row may not exceed,
+     past which the label still clips with an ellipsis, which is the reason a
+     ceiling exists at all: a row has no tooltip and no `title`, so a caller
+     that lets a label grow without limit is a caller that hangs a menu off the
+     screen. */
   width: { type: Number, default: 200 },
   /* Which row reads as current. -1 lets the component keep its own pointer
      tracking, which is what a bare ContextMenu in the gallery wants; a caller
@@ -26,7 +34,13 @@ const hover = ref(-1)
 const active = computed(() => (props.cursor >= 0 ? props.cursor : hover.value))
 
 const menuStyle = computed(() => ({
-  width: `${props.width}px`,
+  /* Sized by the widest row and clamped at `width`. `max-content` under the
+     system's border-box reset is the content's own width plus this panel's
+     padding and border, so the ceiling means the same thing it always did — the
+     whole panel, chrome included — and a row that reaches it clips exactly
+     where it used to. */
+  width: 'max-content',
+  maxWidth: `${props.width}px`,
   padding: 'var(--space-2)',
   background: 'var(--surface-overlay)',
   color: 'var(--text-primary)',
@@ -55,6 +69,17 @@ const itemStyle = (it, i) => {
     cursor: it.disabled ? 'not-allowed' : 'default'
   }
 }
+
+/* The 14px column either side of a label. `flex: none` rather than a bare
+   width: these are flex items, so at the ceiling the default shrink would let
+   them give ground before the label does — and the label is the one thing on
+   the row with an ellipsis to fall back on. */
+const gutterStyle = (it) => ({
+  flex: 'none',
+  width: '14px',
+  display: 'flex',
+  color: it.disabled ? 'var(--text-muted)' : 'var(--text-secondary)'
+})
 
 const labelStyle = {
   padding: 'var(--space-2) var(--space-4)',
@@ -94,7 +119,7 @@ const onHover = (i) => {
         @mouseleave="onHover(-1)"
         @click="onSelect(it)"
       >
-        <span :style="{ width: '14px', display: 'flex', color: it.disabled ? 'var(--text-muted)' : 'var(--text-secondary)' }">
+        <span :style="gutterStyle(it)">
           <Icon v-if="it.icon" :name="it.icon" :size="14" />
         </span>
         <span :style="{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }">
@@ -104,10 +129,18 @@ const onHover = (i) => {
           v-if="it.shortcut"
           :style="{ color: 'var(--text-muted)', fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)' }"
         >{{ it.shortcut }}</kbd>
-        <!-- The only thing on the row that says there is more behind it.
-             Colour is never the signal here, and a row that opened a second
-             panel with nothing to announce it would be found by accident. -->
-        <Icon v-if="it.children" name="chevron-right" :size="14" />
+        <!-- The far gutter, and it is drawn on every row whether or not that
+             row has a chevron to put in it. It mirrors the icon column, so a
+             label sits between two equal margins instead of running up against
+             the panel's edge — which is what a content-sized panel does to it
+             otherwise, since the width is now the label's own and nothing is
+             left over. The chevron is the only thing on the row that says there
+             is more behind it: colour is never the signal here, and a row that
+             opened a second panel with nothing to announce it would be found by
+             accident. -->
+        <span :style="gutterStyle(it)">
+          <Icon v-if="it.children" name="chevron-right" :size="14" />
+        </span>
       </div>
     </template>
   </div>

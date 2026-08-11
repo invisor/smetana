@@ -17,6 +17,7 @@ import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
+import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
@@ -32,6 +33,7 @@ import Modal from '../components/overlays/Modal.vue'
 import Toast from '../components/overlays/Toast.vue'
 import ProjectList from '../components/shell/ProjectList.vue'
 import Skeleton from '../components/core/Skeleton.vue'
+import Icon from '../components/core/Icon.vue'
 import IconButton from '../components/core/IconButton.vue'
 import { TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
@@ -330,13 +332,22 @@ const configErrorText = computed(() =>
    board and they know what the epic is — and taking the button away is not a
    way to have that conversation with them.
 
-   Two exclusions. Done: the run would claim a closed issue, and there is
+   Three exclusions. Done: the run would claim a closed issue, and there is
    nothing there to do. Blocked: the column is computed from unfinished
    blockers, so the run would put an agent on work whose prerequisite is not
    merged yet — and nothing here can go stale, because the blocker closing is
-   what moves the card into Ready and brings the button with it. */
+   what moves the card into Ready and brings the button with it. Parked: an
+   agent already gave this task up over something it could not settle, and
+   starting another one on it walks the next agent into the same question. That
+   is the same refusal the Ready warning makes, and it has to be made here too —
+   otherwise the play is the way around the dialog, one row above it in the very
+   same menu. `bdStatus` rather than the normalized status, because parking is
+   bd's own custom word and this is the front end's one reading of it. */
 const runnableTask = (task) =>
-  runOffered.value && task.status !== 'done' && task.status !== 'blocked'
+  runOffered.value &&
+  task.status !== 'done' &&
+  task.status !== 'blocked' &&
+  !isParked(task.bdStatus)
 
 /* Why the queue's own play is inactive, or '' when it is not. A project holds
    several runs now, so a run going is no longer a reason to grey every play —
@@ -669,9 +680,10 @@ watch(lastHandover, (handover) => {
 
    Each kind answers for itself, and three of them answer "nothing":
 
-   - an edit opens its issue on the board's own selection, which is what
-     highlights the card: the panel and the board are one selection, so this is
-     the one kind that writes `project.selectedTask`;
+   - an edit, and answering a parked task's questions, open their issue on the
+     board's own selection, which is what highlights the card: the panel and the
+     board are one selection, so these are the kinds that write
+     `project.selectedTask`;
    - a filing opens its draft. It does *not* clear the board's selection, and
      that restraint is the point: `selectedTask` is remembered per project in
      settings.json, so glancing at a filing agent would otherwise forget the
@@ -690,7 +702,7 @@ function selectAgent(id) {
   project.activeTab = 'terminal'
   const row = agentRows.value.find((candidate) => candidate.id === id)
   const work = row?.work
-  if (work?.kind === 'editTask') {
+  if (work?.kind === 'editTask' || work?.kind === 'resolveTask') {
     project.selectedTask = work.id
     rightFocus.value = null
   } else if (work?.kind === 'newTask' || row?.claimed?.length) {
@@ -1130,15 +1142,59 @@ const deleteTask = async (id) => {
    store holds the current title and a card's copy may be a delta behind. */
 const onTaskAction = ({ kind, id, value }) => {
   if (kind === 'run') return runTask(id)
-  if (kind === 'status') return setTaskStatus(id, value)
+  if (kind === 'status') {
+    /* The one status write that is asked about first. The status comes from the
+       store rather than from the menu that sent this: the card's copy may be a
+       delta behind, and of the two ways to be wrong here, asking about a task
+       somebody has already unparked costs a dialog while writing over a fresh
+       parking costs the question. `issueById` hands back bd's own issue, where
+       that field is plain `status` — `bdStatus` is the name it takes on a card,
+       one layer up in `boardColumns`. */
+    const issue = issueById(id)
+    if (needsReadyWarning(issue?.status, value)) {
+      confirmingReady.value = id
+      return
+    }
+    return setTaskStatus(id, value)
+  }
   if (kind === 'delete') {
     confirmingDelete.value = id
+    return
+  }
+  if (kind === 'resolve') {
+    const issue = issueById(id)
+    if (issue) askAgentToResolve(issue)
     return
   }
   if (kind === 'ask-agent') {
     const issue = issueById(id)
     if (issue) askAgentToEdit(issue)
   }
+}
+
+/* Which issue's move to Ready is being asked about, or null. An id rather than
+   the issue, for the reason `confirmingDelete` above already carries: the
+   dialog names what the board holds now, not what it held when the menu was
+   opened. */
+const confirmingReady = ref(null)
+const readyIssue = computed(() =>
+  confirmingReady.value ? issueById(confirmingReady.value) : null
+)
+/* What is still unanswered, drawn in the dialog. A parked task with no note is
+   an ordinary outcome — somebody can park one by hand — and the dialog says so
+   in prose rather than drawing an empty list. */
+const readyQuestions = computed(() => openQuestions(readyIssue.value?.notes))
+
+const moveToReadyAnyway = () => {
+  const id = confirmingReady.value
+  confirmingReady.value = null
+  if (id) setTaskStatus(id, READY)
+}
+
+const resolveFromDialog = () => {
+  const issue = readyIssue.value
+  confirmingReady.value = null
+  if (issue) askAgentToResolve(issue)
 }
 
 const askAgentToEdit = async (issue) => {
@@ -1148,6 +1204,23 @@ const askAgentToEdit = async (issue) => {
   project.activeTab = 'terminal'
   try {
     await createSession(path, { kind: 'editTask', id: issue.id, title: issue.title })
+  } catch {
+    // already reported — see newAgent above
+  }
+}
+
+/* A session that asks the person what the run could not settle, writes the
+   answers into the issue and unparks it. Started exactly the way editing is,
+   and the questions are deliberately not carried in the payload: they are in
+   the issue's own notes, the agent reads the issue anyway, and a copy sent from
+   here would be the board as it was when a menu opened. */
+const askAgentToResolve = async (issue) => {
+  const path = activePath.value
+  if (!path) return
+  project.sideTab = 'agents'
+  project.activeTab = 'terminal'
+  try {
+    await createSession(path, { kind: 'resolveTask', id: issue.id, title: issue.title })
   } catch {
     // already reported — see newAgent above
   }
@@ -1520,6 +1593,32 @@ const deleteTitleStyle = {
   color: 'var(--text-primary)',
   textWrap: 'pretty'
 }
+/* The parked questions, quoted verbatim in the Ready dialog. Prose rather than
+   a table for the reason the inspector's own notes section carries: a note is
+   somebody's sentence, and a row would promise a field it is not. The triangle
+   beside each is `status/status.js`'s glyph for parked, so the dialog and the
+   card the person came from say the same thing the same way. */
+const questionListStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-3)',
+  marginTop: 'var(--space-4)'
+}
+const questionStyle = {
+  display: 'flex',
+  gap: 'var(--space-4)',
+  alignItems: 'flex-start',
+  fontSize: 'var(--text-sm)',
+  lineHeight: 'var(--leading-normal)',
+  color: 'var(--text-primary)',
+  overflowWrap: 'anywhere'
+}
+const questionGlyphStyle = {
+  flex: 'none',
+  display: 'flex',
+  marginTop: '2px',
+  color: 'var(--attn-loud)'
+}
 /* the hatch is the dependency signature, reused at swatch size */
 const hatchSwatch = {
   width: '16px',
@@ -1734,6 +1833,33 @@ const toastStackStyle = {
             <Button variant="danger" :disabled="!!deletingId" @click="deleteTask(confirmedIssue.id)">
               {{ deletingId ? 'Deleting…' : 'Delete' }}
             </Button>
+          </template>
+        </Modal>
+        <!-- Parked, on its way back to Ready. The questions themselves are
+             quoted rather than summarised: this is the one moment somebody
+             decides whether they matter, and a dialog that only said "there are
+             questions" would send them to the card to find out. Three ways out
+             and the recommended one last, where every other dialog here puts
+             the action it expects. -->
+        <Modal
+          :open="!!readyIssue"
+          :title="`Move ${readyIssue?.id} to ready with the question unanswered?`"
+          :description="readyQuestions.length
+            ? 'An agent parked this because it could not settle something on its own. Moving it to ready puts it back in the queue, and whoever takes it next meets the same question.'
+            : 'An agent parked this and left no note saying why. Moving it to ready puts it back in the queue, and whatever stopped the last agent is still there.'"
+          @close="confirmingReady = null"
+        >
+          <div :style="deleteTitleStyle">{{ readyIssue?.title }}</div>
+          <div v-if="readyQuestions.length" :style="questionListStyle">
+            <div v-for="(question, i) in readyQuestions" :key="i" :style="questionStyle">
+              <span :style="questionGlyphStyle"><Icon name="triangle-alert" :size="14" /></span>
+              <span>{{ question }}</span>
+            </div>
+          </div>
+          <template #footer>
+            <Button variant="ghost" @click="confirmingReady = null">Cancel</Button>
+            <Button variant="secondary" @click="moveToReadyAnyway">Move anyway</Button>
+            <Button variant="primary" @click="resolveFromDialog">Answer questions</Button>
           </template>
         </Modal>
         <Modal

@@ -32,14 +32,13 @@ const props = defineProps({
   label: { type: String, default: 'More actions' },
   size: { type: String, default: 'sm' },
   disabled: { type: Boolean, default: false },
+  /* Both of these are ceilings rather than widths — `ContextMenu` draws itself
+     as wide as its widest row and no wider. They stay two numbers rather than
+     one because the two panels hold different kinds of text: a menu row can
+     carry a whole sentence (see `TaskCard`'s `MENU_W`) where a submenu holds
+     one-word answers, and a submenu allowed to grow to the menu's ceiling would
+     start `placeSub`'s flip firing over room it was never going to use. */
   width: { type: Number, default: 200 },
-  /* The submenu is sized apart from the menu, and deliberately: `ContextMenu`
-     clips a label rather than wrapping it, so a panel is only ever as wide as
-     its longest row needs — and a menu row can carry a whole sentence (see
-     `TaskCard`'s `MENU_W`) where a submenu holds one-word answers. Inheriting
-     `width` would put 400px of empty panel beside 400px of menu, doubling what
-     has to fit on screen before the flip in `placeSub` starts firing for
-     nothing. */
   subWidth: { type: Number, default: 200 }
 })
 

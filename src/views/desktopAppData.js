@@ -42,6 +42,22 @@ export const columns = [
       }
     ]
   },
+  /* A run gave this one up over something it could not settle. Custom, like
+     awaiting-review below, but unlike it this one is load-bearing rather than
+     decorative: it is the only card in the browser whose menu offers "Answer
+     questions", whose play is greyed, and whose move to Ready asks first — and
+     the questions the dialog quotes are the `parked:` lines the mock backend
+     hangs off this very status. */
+  {
+    status: 'parked',
+    tasks: [
+      {
+        id: 'bd-29j1',
+        title: 'Show the tracker state on a non-empty board too',
+        status: 'parked'
+      }
+    ]
+  },
   {
     // not a reserved status: colour comes from the FNV-1a hash, plus the "AR" code
     status: 'awaiting-review',

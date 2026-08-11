@@ -92,4 +92,35 @@ describe('taskMenuItems', () => {
     }
     expect(find(items, 'move').children.every((c) => c.disabled)).toBe(true)
   })
+
+  it('offers answering the questions on a parked card, above the play', () => {
+    // Above, because it is the thing to do with a parked task and the play is
+    // the thing not to: the caller greys the run for exactly this card, so the
+    // live row has to be the one a person reaches first.
+    const items = taskMenuItems({ ...base, bdStatus: 'parked', runnable: false })
+    expect(kinds(items)).toEqual(['resolve', 'run', 'ask-agent', 'move', 'delete'])
+    expect(find(items, 'resolve').disabled).toBeFalsy()
+  })
+
+  it('offers it on no other card at all', () => {
+    // Absent rather than greyed: a fifth row that is dead on all but a handful
+    // of cards is a row a person learns to read past.
+    for (const bdStatus of ['open', 'in_progress', 'closed', 'pinned', 'deferred', '']) {
+      expect(find(taskMenuItems({ ...base, bdStatus }), 'resolve')).toBeUndefined()
+    }
+  })
+
+  it('greys it too while a write is in flight', () => {
+    const items = taskMenuItems({ ...base, bdStatus: 'parked', busy: true })
+    expect(find(items, 'resolve').disabled).toBe(true)
+  })
+
+  it('offers parked back as the status it holds, checked and refused', () => {
+    // The submenu is where the warning is triggered from, so Ready has to be a
+    // live option on a parked card — and parked itself an appended fourth.
+    const children = find(taskMenuItems({ ...base, bdStatus: 'parked' }), 'move').children
+    expect(children.map((c) => c.value)).toEqual(['open', 'pinned', 'closed', 'parked'])
+    expect(children[0]).toMatchObject({ value: 'open', disabled: false })
+    expect(children.at(-1)).toMatchObject({ label: 'Parked', disabled: true, icon: 'check' })
+  })
 })

@@ -9,13 +9,14 @@
    person is offered and the rule for appending a fourth now exist in one copy;
    two copies would have drifted the first time bd grew a status. */
 import { statusLabel } from '../status/status.js'
+import { isParked, READY } from './parked.js'
 
 /* The three a person is given, and no more. bd has eleven statuses in this
    build and most of them are an agent's business: `in_progress` is claimed by
    whoever starts work, `hooked` says an agent owns the molecule, `deferred`
    and `blocked` are answers to questions this menu is not asking. */
 export const STATUSES = [
-  { value: 'open', label: 'Ready' },
+  { value: READY, label: 'Ready' },
   { value: 'pinned', label: 'Pinned' },
   { value: 'closed', label: 'Done' }
 ]
@@ -41,13 +42,13 @@ export const statusOptions = (bdStatus) => {
 }
 
 /* The card's play used to interpolate its reason into a tooltip, which grows to
-   whatever it holds. A menu row does not: `ContextMenu` gives it a hard width
-   and clips the label with an ellipsis, and a row has no tooltip and no `title`
-   to recover the rest from. So the room is bought rather than assumed — the
-   caller sizes the panel against the longest sentence `runScopes.js` composes,
-   and `TaskCard`'s `MENU_W` is where that measurement is written down. The
-   fragment is lowercase, which is why it joins with a dash rather than as a
-   second sentence. */
+   whatever it holds. A menu row grows too — `ContextMenu` sizes itself by its
+   widest row — but only up to the caller's ceiling, past which the label is
+   clipped with an ellipsis and a row has no tooltip and no `title` to recover
+   the rest from. So the ceiling is measured rather than guessed against the
+   longest sentence `runScopes.js` composes, and `TaskCard`'s `MENU_W` is where
+   that measurement is written down. The fragment is lowercase, which is why it
+   joins with a dash rather than as a second sentence. */
 const runLabel = (reason) => (reason ? `Run this — ${reason}` : 'Run this')
 
 export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
@@ -57,6 +58,20 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
   const frozen = Boolean(busy)
 
   return [
+    /* First, above the play, and only on a parked card. A parked task is one an
+       agent could not settle on its own, so answering is the thing to do with
+       it and running it is the thing not to — which is why this row is here and
+       the play below is dead. Absent rather than greyed everywhere else: the
+       menu is four verbs, and a fifth that is dead on all but a handful of
+       cards is a row a person learns to read past. */
+    ...(isParked(bdStatus)
+      ? [{
+          kind: 'resolve',
+          label: 'Answer questions',
+          icon: 'message-circle-question-mark',
+          disabled: frozen
+        }]
+      : []),
     {
       kind: 'run',
       label: runLabel(runBlockedReason),
@@ -68,11 +83,19 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
       disabled: frozen || !runnable || Boolean(runBlockedReason)
     },
     {
-      /* "Edit", in the words that say what actually happens: nothing in this
-         app edits an issue's text in place, an agent session opens on it. */
+      /* The verb, and only the verb. The label used to spell out the mechanism
+         — "Ask agent to edit", since nothing in this app edits an issue's text
+         in place and an agent session opens on it — and it was the longest row
+         in a menu of one-word verbs, which is a sentence's worth of panel spent
+         on something the person finds out the moment the terminal tab opens.
+         `kind` still says `ask-agent`, because that is what the caller does.
+
+         The glyph carries what the words dropped: a pen, not the robot, so the
+         row reads as the action rather than as who performs it — `AgentList`
+         and the scope bar are where `bot` means an agent. */
       kind: 'ask-agent',
-      label: 'Ask agent to edit',
-      icon: 'bot',
+      label: 'Edit',
+      icon: 'square-pen',
       disabled: frozen
     },
     {

@@ -89,6 +89,11 @@ pub enum SessionWork {
     /// as an identifier, and a title would not fit a row anyway. The right
     /// panel looks the issue itself up by this id.
     EditTask { id: String },
+    /// The parked issue whose open questions this session is asking about.
+    /// Its own variant rather than an `EditTask`, because a row is captioned by
+    /// the work and this is different work: an edit is a person's own change to
+    /// an issue, this is a run's unanswered question being put to them.
+    ResolveTask { id: String },
     Setup,
     /// One batch of a run. Which issues it has taken is not known here and
     /// cannot be: the agent claims them by running `bd update --claim` itself,

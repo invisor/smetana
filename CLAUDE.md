@@ -625,8 +625,9 @@ runs is the `agent` field in `settings.json`.
 
 The split that makes this a module rather than a `match` in the terminal worker: **what the app wants
 done is the same for every agent, and how it reaches one is not.** An `Intent` — `Bare` from the
-"+ New agent" row, `NewTask` from the new-task dialog, `EditTask` from the inspector's "Ask agent to
-edit", `Setup` from the dialog a person gets when they add a project, and `Run` for one batch of a
+"+ New agent" row, `NewTask` from the new-task dialog, `EditTask` from a card's "Edit",
+`ResolveTask` from a parked card's "Answer questions", `Setup` from the dialog a person gets when
+they add a project, and `Run` for one batch of a
 run — is where the product decision lives, and it is written once. `Run` is the only one no person
 sends: `runs::service` builds it, and it carries the whole of what the run was asked to do rather
 than a reference to it, because a session outlives a settings change and a batch that quietly
@@ -640,6 +641,17 @@ so its skills ride as text in the prompt (`Inline`). Writing into someone's home
 repointing `CODEX_HOME` would reach into their own setup, and neither is done. Nothing about either
 harness leaks into the code that decides what we want done: `prompt.rs` takes an `Intent` and a
 `SkillDelivery` and is pure, which is where the tests are.
+
+**Every prompt is a whole instruction, and a test pins it.** A prompt rides as the agent's positional
+argument, and both harnesses submit that argument as the session's first message rather than leaving
+it in the composer — so there is no such thing as a prompt somebody finishes by hand. `EditTask`'s
+was written the other way round: it stopped mid-sentence at `Update bd issue smetana-t9o ("…"): ` on
+the theory that only the person knows what to change, so the person would type the second half. They
+never got the chance, and what reached the agent was an instruction cut off at a colon, whose first
+move was to ask whether the message had been truncated. The sentence is finished now, and finished by
+**asking** rather than by guessing: an agent that decides for itself rewrites an issue nobody asked it
+to touch, and one that reports the prompt as broken has spent a session saying so. `no_prompt_stops_mid_sentence`
+walks every intent and both deliveries and refuses a prompt ending in dangling punctuation.
 
 | file | what it does |
 |---|---|
@@ -722,11 +734,14 @@ is installed the session fails with `NoAgent` — a write failing loudly, which 
 else here.
 
 Two directories under `src-tauri/resources/` are the library itself, both bundle resources.
-`smetana/` is ours — seven skills now (`filing-a-task`, `provisioning`, `running-tasks`, `reviewing`,
-`merging`, `live-checking`, `project-setup`), laid out as a plugin in its own right
+`smetana/` is ours — the directory is the list, for the reason the test-count note under Commands
+gives, and today it holds `filing-a-task`, `resolving-questions`, `provisioning`, `running-tasks`,
+`reviewing`, `merging`, `live-checking` and `project-setup`. They are laid out as a plugin in its own
+right
 (`.claude-plugin/plugin.json`, `skills/<name>/SKILL.md`) because that is what `--plugin-dir` accepts
-and what makes them answer to `smetana:filing-a-task` and the rest. Three intents name one apiece —
-filing names `filing-a-task`, setting a project up names `project-setup`, a run's batch names
+and what makes them answer to `smetana:filing-a-task` and the rest. Four intents name one apiece —
+filing names `filing-a-task`, answering a parked task's questions names `resolving-questions`,
+setting a project up names `project-setup`, a run's batch names
 `running-tasks` — and that last one is the process the remaining four hang off: an agent carrying out
 a batch reaches `provisioning`, `reviewing`, `merging` and `live-checking` because `running-tasks`
 sends it to them, not because the prompt lists them. Which is the point of a skill library over a
@@ -833,6 +848,40 @@ The other half is what the discussion produces. Brainstorming on `On` buys half 
 down what somebody meant, and none of it is anywhere but that conversation — the session ends, and the
 agent that picks the task up months later has the person's original four sentences and nothing else.
 So `DISCUSS` requires the outcome, rejected options included, to be written into the issue itself.
+
+### Answering what a run could not
+
+A task an automatic run could not settle is `parked` with the question written into its notes as a
+`parked:` line — `runs::queue::parking_note` on the app's side, `running-tasks` when a lead does it
+by hand. That is where the night's work stops, and until now the way back was a person reading the
+note in the inspector and deciding what to do about it themselves. `ResolveTask` is the other half:
+an agent session that puts those questions to the person at the terminal, writes what they answer
+into the issue, and unparks it.
+
+The rules are `smetana:resolving-questions`, and three of them are in `prompt.rs` as well, for the
+reason `STANDARD` is: an `Inline` harness may find no skill text at all. Ask one at a time and
+**answer none of them yourself** — the task is parked precisely because guessing was not good enough
+for the agent that stopped. The answers go into the **description**, because that is the spec
+`provisioning` reads and a decision recorded only in the notes is one the implementer never sees, and
+a `resolved:` line goes into the notes beside each `parked:` one. And the status is the **last**
+write, the same rule filing keeps: a session interrupted halfway leaves the task parked rather than
+back in the queue with the answer written nowhere.
+
+The front end's half is `components/kanban/parked.js`, another of the `branchChoice.js` family, and
+it holds the pairing rule the notes are read by: **everything below the last `resolved:` line is
+still open.** Not a question matched to its own answer, which would need the two written in step and
+nothing enforces that — a person settling three questions in one sentence writes one `resolved:`,
+and a positional pairing would then call two of them unanswered. What is true instead is the
+sequence, because a resolving session answers everything open at that moment and only then unparks.
+
+Three places act on it and they have to agree, which is why the rule is one pure file rather than
+three conditions. A parked card's menu offers "Answer questions" first, above the play. The play
+itself is dead there (`runnableTask` in `DesktopApp.vue`), and that is not tidiness: without it the
+play is the way around the dialog, one row above it in the same menu. And moving a parked card to
+Ready asks first, quoting the open questions verbatim — three ways out, `Move anyway` writing the
+status exactly as the menu always did, with no note invented on the person's behalf. Only Ready
+asks: Done decides the question no longer matters and Pinned takes the task off the queue, while
+Ready is the one that hands it to an agent with the question still open.
 
 ### Attachments: pictures on a task nobody has filed yet
 

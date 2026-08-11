@@ -118,10 +118,17 @@ function fixtureIssues() {
         i % 3 === 0
           ? 'A quiet notice over the board rather than in place of it: the cards stay readable while the app says the data may be stale.'
           : null,
+      /* A parked issue carries its questions whatever its index says: the card
+         menu, the greyed play and the Ready warning all hang off this status,
+         and the dialog quotes these very lines. Leaving it to `i % 3` would
+         make the one fixture the feature exists for depend on where its column
+         happened to land in the list. */
       notes:
-        i % 3 === 0
-          ? 'parked: needs a decision on the storage format\nparked: still waiting on the decision'
-          : null,
+        status === 'parked'
+          ? 'parked: needs a decision on where the strip sits\nparked: still waiting on the design call'
+          : i % 3 === 0
+            ? 'parked: needs a decision on the storage format\nresolved: sqlite, decided on 2026-08-01'
+            : null,
       priority: (i % 4) + 1,
       // All six of bd's types plus a custom one, so the board in `npm run dev`
       // shows both halves of the type palette without anyone editing this file.

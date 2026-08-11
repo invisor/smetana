@@ -139,6 +139,19 @@ pub enum Intent {
         id: String,
         title: String,
     },
+    /// Answer what a run could not settle on its own, and unpark the task.
+    /// Started from a parked card's own menu, and from the dialog a person
+    /// gets when they move one to Ready with the question still open.
+    ///
+    /// It carries the id and the title and nothing else — deliberately not the
+    /// questions. They are `parked:` lines in the issue's own notes, the agent
+    /// reads the issue anyway, and a copy sent from the front end would be the
+    /// board as it stood when a menu opened rather than as it stands when the
+    /// session starts.
+    ResolveTask {
+        id: String,
+        title: String,
+    },
     /// Work out what this project is made of and write
     /// `.smetana/project.toml`. Started from the dialog a person gets when
     /// they add a project, and from the project row afterwards.
@@ -175,6 +188,7 @@ impl Intent {
                 priority: draft.priority,
             },
             Intent::EditTask { id, .. } => W::EditTask { id: id.clone() },
+            Intent::ResolveTask { id, .. } => W::ResolveTask { id: id.clone() },
             Intent::Setup => W::Setup,
             Intent::Run { .. } => W::Run,
         }

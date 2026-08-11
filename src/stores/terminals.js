@@ -158,6 +158,11 @@ const CAPTION = {
   bare: 'Agent',
   newTask: 'Creating a task',
   editTask: 'Editing',
+  /* Shorter than the menu row it is started from ("Answer questions"), and
+     deliberately: the id sits beside it in mono, so the row already reads
+     "Answering smetana-8av" and the word "questions" would only push the id
+     toward the ellipsis. */
+  resolveTask: 'Answering',
   setup: 'Project setup'
 }
 
@@ -218,7 +223,10 @@ function claimedBy(sessionId) {
    a row that says "Agent" is still a row. */
 function captionOf(work, claimed) {
   const kind = work?.kind
-  if (kind === 'editTask') return { label: CAPTION.editTask, tasks: [work.id] }
+  // The two that are about one named issue, and so caption themselves with it.
+  if (kind === 'editTask' || kind === 'resolveTask') {
+    return { label: CAPTION[kind], tasks: [work.id] }
+  }
   if (kind === 'run' && claimed.length) return { label: null, tasks: claimed }
   return { label: CAPTION[kind] ?? CAPTION.bare, tasks: [] }
 }

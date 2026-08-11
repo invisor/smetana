@@ -32,6 +32,8 @@ const JUDGE: &str =
 pub struct SkillText<'a> {
     /// The app's own filing-a-task skill.
     pub filing: Option<&'a str>,
+    /// The app's own resolving-questions skill.
+    pub resolving: Option<&'a str>,
     /// superpowers' brainstorming skill. Read only when the switch is `On`.
     pub brainstorming: Option<&'a str>,
     /// superpowers' writing-plans skill. Read only when the plan stage is
@@ -112,6 +114,82 @@ const PAPERWORK: &str =
      lead nowhere — so the issue must also say in its own prose what was decided and what the \
      plan is, and stand on that alone.";
 
+/// What a resolving session is for, said in the prompt rather than left to the
+/// skill — the same reasoning `STANDARD` and `DISCUSS` carry: an `Inline`
+/// harness may find no skill text to attach, and this is the whole of what the
+/// session is being started to do.
+///
+/// The three parts that must survive a missing skill are here and nowhere else.
+/// Where the questions are, because an agent hunting for them in the
+/// description would answer the wrong thing. One at a time and never on the
+/// person's behalf, because the entire reason the task is parked is that
+/// guessing was not good enough for the agent that gave up on it. And the order
+/// at the end: the status is the last write, so a session interrupted halfway
+/// leaves the task parked rather than back in the queue with the answer
+/// nowhere — the same rule `PAPERWORK` keeps for filing.
+const RESOLVE: &str =
+    "This task is parked: an agent working it could not settle something on its own and left \
+     the questions in the issue's notes, one to a line, each starting `parked:`. Read the issue \
+     first, then put those questions to me — one at a time, in your own words, with whatever \
+     context from the issue I need to answer them. Answer none of them yourself and assume \
+     nothing: the task is parked precisely because guessing was not good enough. If my answer \
+     opens a further question, ask that too.";
+
+/// What the answers owe the issue, and it is two places rather than one.
+///
+/// The description, because that is the spec: `smetana:provisioning` reads it
+/// to decide whether the task can be started at all, and a decision recorded
+/// only in the notes is a decision the implementer never sees. The notes,
+/// because a `parked:` line with no answer beside it reads as a question still
+/// open — to the next person scanning them, and to this app, which reads
+/// exactly that pairing when it asks whether moving a task to Ready needs a
+/// warning.
+const RESOLVE_WRITE: &str =
+    "When every question has an answer, write the outcome into the issue itself. Fold each \
+     decision into the description, which is the spec whoever picks this up works from, and make \
+     sure the acceptance criteria now say what done looks like — if an answer settled that, this \
+     is where it goes. Then add one note per question, `resolved: <the answer, in one line>`, so \
+     no `parked:` line is left looking unanswered. Only then set the status: \
+     `bd update <id> --status open`. That write is last, so a session interrupted halfway leaves \
+     the task parked rather than back in the queue with the answer written nowhere.";
+
+/// The one ending that is not a resolution, said out loud because the obvious
+/// failure here is a session that unparks a task to have finished something.
+/// A task left parked has cost nothing; a task in the queue with its question
+/// still open is the very state the app now interrupts a person to prevent.
+const RESOLVE_GIVE_UP: &str =
+    "If I cannot answer, or we run out of things to say, leave the task parked and change \
+     nothing about its status. Say what is still open. A task left parked costs nothing; one put \
+     back in the queue with the question still open costs the next agent the same night.";
+
+/// What an edit session is for, and it has to stand on its own.
+///
+/// This prompt used to stop mid-sentence — `Update bd issue smetana-7 ("x y"): `
+/// — on the theory that the agent is being told what to work on and only the
+/// person knows the second half, so the person would type it. They never got
+/// the chance. A prompt rides as the agent's **positional argument**
+/// (`terminal/pty.rs` says why), and both harnesses this app runs submit that
+/// argument as the session's first message rather than leaving it in the
+/// composer to be finished — so what actually arrived was an instruction cut
+/// off at a colon, and the session's first move was to ask whether the message
+/// had been truncated. The unfinished half was unreachable by construction, not
+/// merely unfilled.
+///
+/// So the sentence is completed here, and completed by *asking* rather than by
+/// guessing. Both other endings cost more: an agent that decides for itself
+/// what to change rewrites an issue nobody asked it to touch, and an agent that
+/// reports the prompt as broken has spent a whole session saying so. Asking is
+/// also what the person is there for — this intent is started from a card's own
+/// menu, by somebody sitting at the terminal.
+///
+/// Nothing else is imposed. An edit is an update, so the filing standard, the
+/// paperwork rules and the unpark write all stay out of it, and the tests below
+/// pin that each of them does.
+const EDIT: &str =
+    "Read the issue first, then ask me what to change about it, one question at a time. Nothing \
+     outside this prompt says what the change is: do not guess at it, do not decide it yourself, \
+     and change nothing about the issue until I have answered.";
+
 /// What the agent is told to produce when a project has no configuration yet.
 /// The file's path is named here rather than left to the skill: a session that
 /// could not read the skill must still write to the right place.
@@ -133,9 +211,12 @@ pub fn build(
     let plans = skills.superpowers.join("skills/writing-plans");
     match intent {
         Intent::Bare => None,
-        // Deliberately unfinished: the agent is being told what to work on,
-        // not what to change, and only the person knows the second half.
-        Intent::EditTask { id, title } => Some(format!("Update bd issue {id} (\"{title}\"): ")),
+        Intent::EditTask { id, title } => {
+            Some(format!("Update bd issue {id} (\"{title}\"). {EDIT}"))
+        }
+        Intent::ResolveTask { id, title } => {
+            Some(resolve_task(id, title, delivery, skills, text.resolving))
+        }
         Intent::NewTask { brainstorm, spec, plan, draft } => {
             // The cascade first, and nothing below reads the raw two: a
             // payload can carry a spec chosen under a discussion that has
@@ -260,6 +341,49 @@ fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> Stri
                 skills.smetana.join("skills/running-tasks/SKILL.md").display()
             );
         }
+    }
+    out
+}
+
+/// What a session opens on when it is sent to unpark a task.
+///
+/// The issue is named and nothing about it is quoted: the agent reads it with
+/// bd, and prose copied in here would be the board as it stood when a menu was
+/// opened. The skill carries the depth — what makes an answer worth writing
+/// down, where in a description it belongs — and the three constants above
+/// carry what has to survive a skill that cannot be read at all.
+fn resolve_task(
+    id: &str,
+    title: &str,
+    delivery: SkillDelivery,
+    skills: &Skills,
+    resolving: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    let _ = write!(out, "Resolve bd issue {id} (\"{title}\").\n\n");
+    out.push_str(RESOLVE);
+    out.push_str("\n\n");
+    out.push_str(RESOLVE_WRITE);
+    out.push_str("\n\n");
+    out.push_str(RESOLVE_GIVE_UP);
+    out.push_str("\n\n");
+    match delivery {
+        SkillDelivery::PluginDir => {
+            out.push_str("Use the smetana:resolving-questions skill — it is the process.");
+        }
+        SkillDelivery::Inline => match resolving {
+            // The body, not the path: unlike an `Auto` stage the agent may
+            // decline, this skill is the whole of what the session was started
+            // to do, so there is no branch in which it goes unread.
+            Some(process) => {
+                out.push_str("The process:\n\n");
+                out.push_str(process);
+            }
+            None => {
+                let skill = skills.smetana.join("skills/resolving-questions/SKILL.md");
+                let _ = write!(out, "The process is at {} — read it first.", skill.display());
+            }
+        },
     }
     out
 }
@@ -556,16 +680,22 @@ mod tests {
 
     const BRAINSTORMING: &str = "# Brainstorming\n\nAsk one question at a time.";
     const FILING: &str = "# Filing a task\n\nThe title says what needs doing.";
+    const RESOLVING: &str = "# Resolving\n\nEverything below the last resolved line is open.";
     const PLANS: &str = "# Writing plans\n\nEvery step names the file it touches.";
 
     /// Nothing read: what a PluginDir harness always gets, and what an Inline
     /// harness gets when the files cannot be read.
     fn nothing() -> SkillText<'static> {
-        SkillText { filing: None, brainstorming: None, plans: None }
+        SkillText { filing: None, resolving: None, brainstorming: None, plans: None }
     }
 
     fn every_skill() -> SkillText<'static> {
-        SkillText { filing: Some(FILING), brainstorming: Some(BRAINSTORMING), plans: Some(PLANS) }
+        SkillText {
+            filing: Some(FILING),
+            resolving: Some(RESOLVING),
+            brainstorming: Some(BRAINSTORMING),
+            plans: Some(PLANS),
+        }
     }
 
     /// A floor only where the scope allows one and a number of agents only
@@ -757,10 +887,45 @@ mod tests {
     }
 
     #[test]
-    fn editing_an_issue_names_it_and_stops_mid_sentence() {
+    fn editing_an_issue_names_it_and_asks_what_to_change() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
         let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
-        assert_eq!(text, "Update bd issue smetana-7 (\"x y\"): ");
+        assert_eq!(text, format!("Update bd issue smetana-7 (\"x y\"). {EDIT}"));
+        assert!(text.contains("ask me what to change"), "{text}");
+    }
+
+    #[test]
+    fn no_prompt_stops_mid_sentence() {
+        // Every prompt is submitted as the session's first message, not left in
+        // a composer for somebody to finish: it rides as the agent's positional
+        // argument, and both harnesses send it straight through. The edit
+        // prompt used to end `("x y"): ` on the opposite assumption, so the
+        // session opened by asking whether the message had been cut off.
+        //
+        // Trailing punctuation is the whole test, and it is deliberately not a
+        // check for some phrase: what makes a prompt broken here is that it
+        // hands over mid-instruction, which is exactly what a dangling colon,
+        // comma or dash looks like.
+        for intent in [
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            Intent::Setup,
+            new_task(Stage::Auto),
+            new_task(Stage::On),
+            new_task(Stage::Off),
+            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
+        ] {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text =
+                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill())
+                        .unwrap();
+                let end = text.trim_end();
+                assert!(
+                    !end.ends_with([':', ',', '—', '-']),
+                    "{intent:?}/{delivery:?} hands the agent an unfinished instruction: {end}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -768,6 +933,98 @@ mod tests {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
         let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
+    }
+
+    fn resolving(delivery: SkillDelivery, text: SkillText) -> String {
+        let intent =
+            Intent::ResolveTask { id: "smetana-29j".into(), title: "Show the state".into() };
+        build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, text).unwrap()
+    }
+
+    #[test]
+    fn resolving_names_the_issue_and_says_where_the_questions_are() {
+        // The questions are deliberately not in the payload — they are the
+        // issue's own notes — so the prompt has to say so, or the agent hunts
+        // for them in the description and answers the wrong thing.
+        let text = resolving(SkillDelivery::PluginDir, nothing());
+        assert!(text.contains("smetana-29j"), "{text}");
+        assert!(text.contains("Show the state"), "{text}");
+        assert!(text.contains("parked:"), "{text}");
+    }
+
+    #[test]
+    fn resolving_survives_a_skill_that_cannot_be_read() {
+        // The three rules that make this session what it is stand on their own,
+        // the way DISCUSS and STANDARD do: an Inline harness may find no file.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = resolving(delivery, nothing());
+            assert!(text.contains(RESOLVE), "{delivery:?}: {text}");
+            assert!(text.contains(RESOLVE_WRITE), "{delivery:?}: {text}");
+            assert!(text.contains(RESOLVE_GIVE_UP), "{delivery:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn resolving_writes_the_status_last_and_never_invents_an_answer() {
+        // The two failures this session has: unparking a task whose answer went
+        // nowhere, and answering on the person's behalf — which is the very
+        // thing the agent that parked it refused to do.
+        let text = resolving(SkillDelivery::PluginDir, nothing());
+        assert!(text.contains("bd update <id> --status open"), "{text}");
+        assert!(text.contains("That write is last"), "{text}");
+        assert!(text.contains("one at a time"), "{text}");
+        assert!(text.contains("Answer none of them yourself"), "{text}");
+    }
+
+    #[test]
+    fn resolving_reaches_each_harness_the_way_that_harness_takes_a_skill() {
+        let named = resolving(SkillDelivery::PluginDir, every_skill());
+        assert!(named.contains("smetana:resolving-questions"), "{named}");
+        assert!(!named.contains(RESOLVING), "a registry carries no skill body: {named}");
+
+        // The body rather than the path, unlike an Auto stage: there is no
+        // branch of this session in which the process goes unread.
+        let carried = resolving(SkillDelivery::Inline, every_skill());
+        assert!(carried.contains(RESOLVING), "{carried}");
+        assert!(!carried.contains("smetana:resolving-questions"), "{carried}");
+
+        // And the path when the file could not be read, which is an ordinary
+        // outcome rather than an error.
+        let pointed = resolving(SkillDelivery::Inline, nothing());
+        assert!(
+            pointed.contains("/app/resources/smetana/skills/resolving-questions/SKILL.md"),
+            "{pointed}"
+        );
+    }
+
+    #[test]
+    fn resolving_is_never_handed_the_filing_skill_or_asked_to_file_anything() {
+        // It updates one issue that already exists. `STANDARD` names `bd create`
+        // and would send this session to validate a call it is not making.
+        let text = resolving(SkillDelivery::Inline, every_skill());
+        assert!(!text.contains(STANDARD), "{text}");
+        assert!(!text.contains(FILING), "{text}");
+        no_paperwork(&text, "resolving");
+    }
+
+    #[test]
+    fn no_other_intent_is_told_to_unpark_anything() {
+        // The status write is the dangerous half: leaking it would have an edit
+        // session or a setup put a parked task back in the queue.
+        for intent in [
+            Intent::Bare,
+            Intent::Setup,
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
+        ] {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text =
+                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill())
+                        .unwrap_or_default();
+                assert!(!text.contains(RESOLVE_WRITE), "{intent:?}/{delivery:?}: {text}");
+                assert!(!text.contains("smetana:resolving-questions"), "{intent:?}/{delivery:?}");
+            }
+        }
     }
 
     fn drafted(draft: TaskDraft) -> String {

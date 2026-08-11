@@ -372,6 +372,16 @@ const BUSY_CARD_MENU = taskMenuItems({
   runBlockedReason: 'a run over task smetana-hth is already going',
   busy: true
 })
+/* The parked card, which is the only shape of this menu with five rows: the
+   answer row on top and the play under it dead, since `runnableTask` in
+   DesktopApp refuses a parked task for the same reason the Ready dialog asks
+   about one. */
+const PARKED_CARD_MENU = taskMenuItems({
+  bdStatus: 'parked',
+  runnable: false,
+  runBlockedReason: '',
+  busy: false
+})
 
 /* TerminalView has no props of its own to feed a fixture through, unlike
    FileTree above — it reads the active session straight from the store.
@@ -1133,8 +1143,9 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
              ellipsised with no tooltip to recover it. Checking the fix means
              seeing it at the size the board actually draws. -->
         <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', alignItems: 'flex-start' }">
-          <MenuButton :items="CARD_MENU" :width="400" label="Actions for bd-a1b2" @select="() => {}" />
-          <MenuButton :items="BUSY_CARD_MENU" :width="400" label="Actions for bd-77e0" @select="() => {}" />
+          <MenuButton :items="CARD_MENU" :width="424" label="Actions for bd-a1b2" @select="() => {}" />
+          <MenuButton :items="BUSY_CARD_MENU" :width="424" label="Actions for bd-77e0" @select="() => {}" />
+          <MenuButton :items="PARKED_CARD_MENU" :width="424" label="Actions for bd-29j1" @select="() => {}" />
         </div>
         <!-- And one at the component's own default, which is what a caller with
              short verbs gets: the width is the caller's business, so both ends

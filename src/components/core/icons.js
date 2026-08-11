@@ -57,6 +57,7 @@ import {
   Sparkles,
   Square,
   SquareCheck,
+  SquarePen,
   Tag,
   Terminal,
   Trash2,
@@ -132,6 +133,10 @@ export const iconNodes = {
   // rather than a nudge in some direction.
   'arrow-right-to-line': ArrowRightToLine,
   wrench: Wrench,
+  // The card menu's Edit. `file-pen` is a page with a pen on it and belongs to
+  // the file it is about; this one is the bare verb, which is what a row acting
+  // on an issue wants.
+  'square-pen': SquarePen,
   search: Search,
   'refresh-cw': RefreshCw,
   copy: Copy,

@@ -487,7 +487,13 @@ mod tests {
     fn the_prompt_is_an_argument_and_not_bytes_written_afterwards() {
         let cmd = build_command(7, &launch("codex"));
         let argv = cmd.get_argv();
-        assert_eq!(argv.last().unwrap().to_string_lossy(), "Update bd issue smetana-7 (\"x y\"): ");
+        // What is checked is where the prompt is, not how it is worded: the
+        // wording belongs to `prompt.rs` and is pinned by its own tests, and a
+        // second copy of it here would only have to be edited twice.
+        assert!(
+            argv.last().unwrap().to_string_lossy().starts_with("Update bd issue smetana-7 (\"x y\")"),
+            "{argv:?}"
+        );
     }
 
     /// The actor is what bd's `--claim` mutual exclusion rests on: its default
