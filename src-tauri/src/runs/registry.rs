@@ -295,6 +295,23 @@ pub fn note_batch(registry: &mut Registry, writer: &Proc, token: u64, batch: Bat
 /// alive is covered by this and would not be covered by a `match`. What is left
 /// behind is one record with one batch in it, which the next start sweeps or
 /// ages out like any other.
+///
+/// **`Dead` is the only answer that drops a batch, and the asymmetry with
+/// `sweep` is deliberate.** There, `Unknown` means signal nothing; here it means
+/// keep the record. Both are the same instinct pointed at different costs — a
+/// pid held by another user, or a short `proc_pidinfo` return, must never get
+/// something signalled and must never get a live agent forgotten — so anyone
+/// tidying `!= Liveness::Dead` into `== Liveness::Alive` reintroduces exactly
+/// the defect above, silently and with every other test still green.
+///
+/// Two consequences of keeping, both harmless and both surprising. Nothing in
+/// the live app ever revisits a kept record: this fires once per `(writer,
+/// token)` and no run reports its ending twice, so a record kept here leaves
+/// only through the next start's sweep or `aged_out`. And a session killed
+/// through `remove_session` may still be an unreaped zombie when the ending
+/// arrives — `procs::look` reads a zombie as reachable — so a record is
+/// sometimes kept for a process that is already over, which the next start then
+/// clears having signalled nothing.
 pub fn forget_run(
     registry: &mut Registry,
     writer: &Proc,
@@ -308,17 +325,16 @@ pub fn forget_run(
             kept.push(record);
             continue;
         }
-        // What is worth keeping is the batches that are still running, and one
-        // this platform cannot ask about counts as running: keeping a record
-        // too long costs it ageing out in a week, dropping one too early costs
-        // an orphan nobody can name. A batch whose group could not be read when
-        // it was written down is dropped, because that only happens when the
-        // session was already gone by the time it was asked about.
-        record.batches.retain(|batch| {
-            batch
-                .group
-                .as_ref()
-                .is_some_and(|group| liveness(group, table(group.pid)) != Liveness::Dead)
+        // Only a batch that can be *shown* to be over is dropped. Keeping a
+        // record too long costs it ageing out in a week; dropping one too early
+        // costs an orphan nobody can name. A batch with no group at all is kept
+        // for the same reason rather than dropped: `group_of` answers `None`
+        // when the terminal worker could not be asked as readily as when the
+        // session was already gone, `sweep` never signals such a batch, so
+        // keeping it is more evidence for Phase R at no risk to anything.
+        record.batches.retain(|batch| match &batch.group {
+            None => true,
+            Some(group) => liveness(group, table(group.pid)) != Liveness::Dead,
         });
         if !record.batches.is_empty() {
             kept.push(record);
@@ -553,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_is_remembered_while_it_lives_and_forgotten_when_it_ends_cleanly() {
+    fn a_run_is_remembered_while_it_lives_and_forgotten_when_nothing_it_named_is_left() {
         let writer = stamp(10, 1);
         let mut held = Registry::default();
 
@@ -605,6 +621,35 @@ mod tests {
             held.runs[0].batches.iter().map(|batch| batch.actor.as_str()).collect::<Vec<_>>(),
             vec!["smetana-run-9"],
             "and it is trimmed to what is actually still running"
+        );
+    }
+
+    #[test]
+    fn an_ending_keeps_every_batch_it_cannot_show_is_over() {
+        // `Unknown` means the opposite here of what it means in `sweep` — there
+        // it is "signal nothing", here it is "keep the record" — and both are
+        // the safe direction. Pinned by name because `!= Dead` reads like it
+        // could be tidied into `== Alive`: that edit compiles, leaves the rest
+        // of this file green, and silently forgets a live agent on a pid held
+        // by another user.
+        let writer = stamp(10, 1);
+        let mut held = Registry::default();
+        note_run(&mut held, record(1, writer.clone(), &[]));
+        for (actor, group) in [
+            ("gone", Some(stamp(20, 2))),
+            ("unreadable", Some(stamp(21, 3))),
+            ("never-read", None),
+        ] {
+            note_batch(&mut held, &writer, 1, Batch { actor: actor.into(), group });
+        }
+
+        forget_run(&mut held, &writer, 1, &table(&[(21, Seen::Unknown)]));
+
+        assert_eq!(held.runs.len(), 1, "the record survives what could not be shown over");
+        assert_eq!(
+            held.runs[0].batches.iter().map(|batch| batch.actor.as_str()).collect::<Vec<_>>(),
+            vec!["unreadable", "never-read"],
+            "and only the batch this app can prove is gone is dropped"
         );
     }
 

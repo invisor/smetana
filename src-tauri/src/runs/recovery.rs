@@ -254,6 +254,15 @@ enum Held {
     /// caller replaces what is left — leaving it instead would be a project in
     /// which no run can ever be recorded again, and a registry with no readers
     /// is not evidence of anything.
+    ///
+    /// **The too-new half of that is accepted rather than overlooked**, and
+    /// replacing at every start rather than at the next run widened it: an
+    /// older app now wipes a newer one's live records when it launches. It is
+    /// the same answer `settings/file.rs` gives a too-new file, the cost is
+    /// bounded by two app versions being run against one project at once, and
+    /// this module already accepts that two instances there are unordered.
+    /// Distinguishing the two would mean a second staleness rule for a file
+    /// whose whole design is that liveness is proved by the record.
     Damaged,
     /// There is a file and it could not be read at all: no permissions, a
     /// directory in its place, a failing disk. Nothing may be written over it,
