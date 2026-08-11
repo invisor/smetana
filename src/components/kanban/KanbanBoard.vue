@@ -47,7 +47,7 @@ const props = defineProps({
    from/to pair: the board is not the owner of the order and has no business
    describing a change to a list it does not keep. Whoever stores it applies the
    answer wholesale and hands it back through `columns`. */
-const emit = defineEmits(['select', 'add', 'reorder', 'run', 'run-task', 'promote'])
+const emit = defineEmits(['select', 'add', 'reorder', 'run', 'task-action', 'promote'])
 
 const strip = ref(null)
 /* The order under the pointer, and only while the pointer holds it. Idle, this
@@ -227,7 +227,7 @@ const style = {
       @add="$emit('add', $event)"
       @run="$emit('run', $event)"
       @promote="$emit('promote', $event)"
-      @run-task="$emit('run-task', $event)"
+      @task-action="$emit('task-action', $event)"
       @grab="onGrab(c.status, $event)"
       @move="onMove(c.status, $event)"
     />

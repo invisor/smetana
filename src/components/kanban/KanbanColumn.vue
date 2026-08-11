@@ -32,7 +32,7 @@ const props = defineProps({
    the v-bind below — the board already decides everything else about a card
    that way, and adding a second channel for one flag would put the decision in
    two places. */
-defineEmits(['select', 'add', 'grab', 'move', 'run', 'run-task', 'promote'])
+defineEmits(['select', 'add', 'grab', 'move', 'run', 'task-action', 'promote'])
 
 /* `moving` reaches the header and stops there. The column being dragged is not
    dimmed or lifted: it is where the pointer already is, and the eye needs it to
@@ -85,14 +85,18 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
       <template v-if="tasks.length">
         <!-- No explicit run-blocked-reason here: the card's own rides in `t`,
              through the same v-bind as `runnable`, and the column-level prop
-             speaks for the header alone. -->
+             speaks for the header alone. `bdStatus` and `busy` ride the same
+             way, for the same reason. -->
+        <!-- One `action` carrying its own id, rather than four events wrapped
+             here to add one. The header's `run` and `promote` above are about
+             a column and stay where they are. -->
         <TaskCard
           v-for="t in tasks"
           :key="t.id"
           v-bind="t"
           :selected="t.id === selectedId"
           @click="$emit('select', t.id)"
-          @run="$emit('run-task', t.id)"
+          @action="$emit('task-action', $event)"
         />
       </template>
       <EmptyState v-else compact icon="minus" title="Empty" :description="emptyDescription" />

@@ -128,7 +128,9 @@ const moveLabel = computed(() => `Column ${label.value}. Alt with left or right 
 
 /* One sentence for the tooltip and for the accessible name both — the panel a
    person reads and the name a screen reader announces must not disagree about
-   the same button. `TaskCard` composes its own play the same way. */
+   the same button. This is the last play on the board: a card has no play any
+   more, and the same fragment reaches it as a menu row's own label, composed by
+   `kanban/taskMenu.js` in the same shape ("Run this — …"). */
 const runLabel = computed(() =>
   props.runBlockedReason ? `Run the queue — ${props.runBlockedReason}` : 'Run the queue'
 )
