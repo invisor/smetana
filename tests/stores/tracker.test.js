@@ -206,7 +206,7 @@ describe('the merge lock', () => {
     await start(
       snapshot({
         issues: [
-          lock({ status: 'in_progress', owner: 'smetana-run-7' }),
+          lock({ status: 'in_progress', assignee: 'smetana-run-7' }),
           issue({ id: 'bd-1', status: 'in_progress' })
         ]
       })
@@ -405,6 +405,33 @@ describe('writes', () => {
 
     await pending
     expect(tracker.trackerState.issues.get('bd-1').title).toBe('the new one')
+  })
+
+  /* smetana-a5b: the patch's `assignee` is bd's `-a` and belongs on the issue's
+     own `assignee`, not on `owner`. While it landed on `owner`, an assignee edit
+     painted over the owner on screen — the wrong name, under the wrong label,
+     until a delta arrived and quietly corrected it. */
+  it('an assignee edit shows on the assignee and leaves the owner alone', async () => {
+    await start(
+      snapshot({
+        issues: [issue({ id: 'bd-1', owner: 'merazent@gmail.com', assignee: null })]
+      })
+    )
+    ipc.on('tracker_update', () =>
+      issue({ id: 'bd-1', owner: 'merazent@gmail.com', assignee: 'smetana-run-7' })
+    )
+
+    const pending = tracker.updateIssue('bd-1', { assignee: 'smetana-run-7' })
+    expect(tracker.trackerState.issues.get('bd-1')).toMatchObject({
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-7'
+    })
+
+    await pending
+    expect(tracker.trackerState.issues.get('bd-1')).toMatchObject({
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-7'
+    })
   })
 
   it('a refusal rolls the edit back if nobody touched it', async () => {

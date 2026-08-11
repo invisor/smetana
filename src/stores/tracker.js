@@ -327,9 +327,12 @@ export function updateIssue(id, patch) {
   if (patch.title !== undefined) optimistic.title = patch.title
   if (patch.status !== undefined) optimistic.status = patch.status
   if (patch.priority !== undefined) optimistic.priority = patch.priority
-  // The patch says `assignee` because that is bd's `-a` flag; the issue says
-  // `owner` because that is what bd emits. The two names are the same person.
-  if (patch.assignee !== undefined) optimistic.owner = patch.assignee
+  // bd's `-a` flag sets the assignee, and the issue carries `assignee` as its
+  // own field beside `owner` — two different people (smetana-a5b): `owner` owns
+  // the issue, `assignee` is whoever holds it right now, which is what a
+  // `--claim` writes. This once applied the patch to `owner`, so an assignee
+  // edit painted over the owner on screen until the delta arrived and undid it.
+  if (patch.assignee !== undefined) optimistic.assignee = patch.assignee
   return write(id, optimistic, () => invoke('tracker_update', { id, patch }))
 }
 

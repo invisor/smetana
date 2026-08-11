@@ -210,6 +210,11 @@ const FULL_ISSUE = {
   priority: 1,
   issue_type: 'bug',
   owner: 'merazent@gmail.com',
+  // A different value from the owner on purpose: bd emits both keys and they
+  // hold two different people (smetana-a5b). This issue is in_progress, so an
+  // agent session's actor is what holds it. SPARSE_ISSUE below has neither, which
+  // is where the panel drawing no such row is checkable.
+  assignee: 'smetana-run-7',
   created_at: '2026-07-28T09:15:00Z',
   created_by: 'flexo',
   started_at: '2026-07-30T11:02:00Z',

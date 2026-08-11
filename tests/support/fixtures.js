@@ -12,8 +12,11 @@ export const issue = (over = {}) => ({
   description: null,
   priority: 2,
   issue_type: 'task',
-  // bd's own name for it — the struct calls it `owner` because bd does.
+  // Two fields and two people, both of them bd's own names for what they hold
+  // (smetana-a5b): `owner` owns the issue, `assignee` is whoever holds it right
+  // now — what `bd update --claim` writes, so a run's actor lands there.
   owner: null,
+  assignee: null,
   started_at: null,
   closed_at: null,
   close_reason: null,

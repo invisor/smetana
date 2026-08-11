@@ -254,9 +254,14 @@ describe('agent rows', () => {
      `bd update --claim` itself and the app only sees the tracker move. So the
      connection is made from the two halves already on the front end — each run
      names the session working, the tracker names what is in progress and under
-     whom. The owner is the session's own bd actor (`run_actor` in
-     src-tauri/src/terminal/model.rs), and it is what keeps two concurrent
-     runs' rows apart. */
+     whom. The **assignee** is the session's own bd actor (`run_actor` in
+     src-tauri/src/terminal/model.rs) — that is what `bd update --claim` writes —
+     and it is what keeps two concurrent runs' rows apart.
+
+     Every claimed fixture below carries a person in `owner` and the actor in
+     `assignee`, which is what bd actually emits. That is deliberately the shape
+     a filter on `owner` cannot pass: reading one field for the other is
+     smetana-a5b, and it made every run row read a bare "Agent". */
   it('a run is captioned by the issues it has taken', async () => {
     const { stores, emit, nextTick } = await ready()
     await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
@@ -272,12 +277,14 @@ describe('agent rows', () => {
     stores.tracker.trackerState.issues.set('smetana-9', {
       id: 'smetana-9',
       status: 'in_progress',
-      owner: 'smetana-run-7'
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-7'
     })
     stores.tracker.trackerState.issues.set('smetana-42', {
       id: 'smetana-42',
       status: 'in_progress',
-      owner: 'smetana-run-7'
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-7'
     })
     stores.tracker.trackerState.issues.set('smetana-7', { id: 'smetana-7', status: 'open' })
     await nextTick()
@@ -293,7 +300,7 @@ describe('agent rows', () => {
     expect(stores.terminals.agentRows.value[0]).toMatchObject({ label: 'Agent', tasks: [] })
   })
 
-  /* Two runs going at once is the case the owner filter exists for: with the
+  /* Two runs going at once is the case the actor filter exists for: with the
      old "everything in_progress" reading, both rows would have carried both
      batches' work. */
   it("two concurrent runs' rows each name their own claims", async () => {
@@ -308,24 +315,55 @@ describe('agent rows', () => {
     stores.tracker.trackerState.issues.set('smetana-9', {
       id: 'smetana-9',
       status: 'in_progress',
-      owner: 'smetana-run-7'
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-7'
     })
     stores.tracker.trackerState.issues.set('smetana-42', {
       id: 'smetana-42',
       status: 'in_progress',
-      owner: 'smetana-run-8'
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-8'
     })
-    // In progress under a person, not under either run: nobody's caption.
+    // Claimed by a person, not by either run: nobody's caption.
     stores.tracker.trackerState.issues.set('smetana-3', {
       id: 'smetana-3',
       status: 'in_progress',
-      owner: 'flexo'
+      owner: 'merazent@gmail.com',
+      assignee: 'flexo'
     })
     await nextTick()
 
     const rows = stores.terminals.agentRows.value
     expect(rows.find((r) => r.id === 7)).toMatchObject({ tasks: ['smetana-9'] })
     expect(rows.find((r) => r.id === 8)).toMatchObject({ tasks: ['smetana-42'] })
+  })
+
+  /* smetana-a5b from the other side, and the whole of why that bug was invisible
+     in this file: an issue whose `owner` happens to be the run's actor was never
+     claimed by it, because a claim writes `assignee` and leaves `owner` alone. A
+     fixture setting only `owner` used to make the caption pass here while the
+     app captioned every run row "Agent", so this is the test that has to fail if
+     the filter ever moves back. */
+  it('an issue carrying the actor in owner alone is not one of the run\'s claims', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 7, work: { kind: 'run' } }))
+    stores.runs.runsState.project = '/p'
+    stores.runs.runsState.runs = [
+      { token: 1, project: '/p', session: 7, state: { kind: 'working' } }
+    ]
+    stores.tracker.trackerState.issues.set('smetana-9', {
+      id: 'smetana-9',
+      status: 'in_progress',
+      owner: 'smetana-run-7',
+      assignee: null
+    })
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Agent',
+      tasks: [],
+      claimed: []
+    })
   })
 })
 
@@ -360,7 +398,8 @@ describe('what a row says about the work behind it', () => {
     stores.tracker.trackerState.issues.set('smetana-9', {
       id: 'smetana-9',
       status: 'in_progress',
-      owner: 'smetana-run-7'
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-7'
     })
     await nextTick()
 
@@ -388,13 +427,15 @@ describe('what a row says about the work behind it', () => {
       id: 'smetana-lock-1',
       title: 'Merge lock',
       status: 'in_progress',
-      owner: 'smetana-run-7',
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-7',
       labels: ['smetana-lock']
     })
     stores.tracker.trackerState.issues.set('smetana-9', {
       id: 'smetana-9',
       status: 'in_progress',
-      owner: 'smetana-run-7',
+      owner: 'merazent@gmail.com',
+      assignee: 'smetana-run-7',
       labels: ['chore']
     })
     await nextTick()

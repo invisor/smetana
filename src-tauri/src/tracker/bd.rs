@@ -256,7 +256,8 @@ mod tests {
        "issue_type":"feature","created_at":"2026-07-30T21:31:27Z","updated_at":"2026-07-30T21:31:27Z",
        "dependency_count":0,"dependent_count":0,"comment_count":0},
       {"id":"smetana-3km","title":"contract check","status":"open","priority":2,
-       "issue_type":"task","owner":"flexo","labels":["alpha"],"parent":"smetana-29j",
+       "issue_type":"task","owner":"flexo","assignee":"smetana-run-42",
+       "labels":["alpha"],"parent":"smetana-29j",
        "description":"the shape bd hands over","created_by":"flexo",
        "acceptance_criteria":"AC body","design":"Design body",
        "notes":"parked: needs a decision\nparked: still waiting",
@@ -288,13 +289,23 @@ mod tests {
         assert!(issues[0].labels.is_empty());
     }
 
-    /// bd calls it `owner`; the struct called it `assignee` for a while, which
-    /// meant it silently stayed None on every issue bd ever returned. The name
-    /// is the whole test.
+    /// bd emits `owner` and `assignee` as two separate keys holding two
+    /// different people, and both names stay pinned here. The struct once called
+    /// the owner `assignee`, which left it None on every issue bd returned; the
+    /// correction then went too far the other way and dropped `assignee`
+    /// altogether, which is smetana-a5b — the actor a `--claim` writes lands
+    /// there and nowhere else, so four lookups on `owner` matched nothing.
     #[test]
-    fn the_owner_arrives_under_bds_own_name() {
+    fn the_owner_and_the_assignee_arrive_under_bds_own_names() {
         let issues = parse_issues(LIST).unwrap();
         assert_eq!(issues[1].owner.as_deref(), Some("flexo"));
+        assert_eq!(issues[1].assignee.as_deref(), Some("smetana-run-42"));
+        // Two keys, two values: a parse that folded either onto the other would
+        // pass an equality test against one name alone.
+        assert_ne!(issues[1].owner, issues[1].assignee);
+        // Absent from bd's output means absent here, for both.
+        assert_eq!(issues[0].owner, None);
+        assert_eq!(issues[0].assignee, None);
     }
 
     /// Everything the task inspector shows has to survive deserialization —

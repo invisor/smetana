@@ -183,9 +183,15 @@ fn blocked(issue: &Issue, not_finished: &HashSet<&str>) -> bool {
 
 /// What a run's batch has claimed and not finished: `in_progress` under the
 /// batch's own bd actor. Exact because of smetana-4fh — every claim a run's
-/// session makes carries `BEADS_ACTOR=smetana-run-<session-id>`, and bd writes
-/// the actor into `owner` — so this is `bd list --status in_progress -a <actor>`
-/// read off the snapshot.
+/// session makes carries `BEADS_ACTOR=smetana-run-<session-id>`, and
+/// `bd update --claim` writes that actor into **`assignee`** — so this is
+/// `bd list --status in_progress -a <actor>` read off the snapshot.
+///
+/// `owner` is a different field holding a different person and a claim never
+/// touches it (smetana-a5b): this filter read `owner` for a while, matched
+/// nothing on every board there has ever been, and so silently parked nothing at
+/// all — a stuck batch left its tasks `in_progress` overnight with no note
+/// saying why.
 ///
 /// Deliberately not `ready_to_merge`, although the batch also holds those: a
 /// reviewed task waiting for its merge is finished work, and parking it would
@@ -194,7 +200,7 @@ fn blocked(issue: &Issue, not_finished: &HashSet<&str>) -> bool {
 pub fn claimed_by(issues: &[Issue], actor: &str) -> Vec<String> {
     issues
         .iter()
-        .filter(|i| i.status == IN_PROGRESS && i.owner.as_deref() == Some(actor))
+        .filter(|i| i.status == IN_PROGRESS && i.assignee.as_deref() == Some(actor))
         .map(|i| i.id.clone())
         .collect()
 }
@@ -636,21 +642,47 @@ mod tests {
         // session's claims are another batch's business, a person's claim is
         // nobody's to park, and ready_to_merge is finished work whose review
         // parking would throw away.
+        //
+        // Every claimed fixture carries the actor in `assignee` and a *different*
+        // value in `owner`, which is what bd actually emits after a `--claim`
+        // (smetana-a5b). That is deliberately the shape a filter on `owner`
+        // cannot pass, and `claimed_by_refuses_the_actor_in_owner_alone` below
+        // pins the other direction.
         let actor = "smetana-run-42";
+        let owner = "merazent@gmail.com";
         let mut mine = issue("mine", "in_progress");
-        mine.owner = Some(actor.into());
+        mine.assignee = Some(actor.into());
+        mine.owner = Some(owner.into());
         let mut merged = issue("merged", "ready_to_merge");
-        merged.owner = Some(actor.into());
+        merged.assignee = Some(actor.into());
+        merged.owner = Some(owner.into());
         let mut theirs = issue("theirs", "in_progress");
-        theirs.owner = Some("smetana-run-43".into());
+        theirs.assignee = Some("smetana-run-43".into());
+        theirs.owner = Some(owner.into());
         let mut hand = issue("hand", "in_progress");
-        hand.owner = Some("flexo".into());
-        let unowned = issue("unowned", "in_progress");
+        hand.assignee = Some("flexo".into());
+        hand.owner = Some(owner.into());
+        let unclaimed = issue("unclaimed", "in_progress");
         let mut open = issue("open", "open");
-        open.owner = Some(actor.into());
+        open.assignee = Some(actor.into());
+        open.owner = Some(owner.into());
 
-        let board = vec![mine, merged, theirs, hand, unowned, open];
+        let board = vec![mine, merged, theirs, hand, unclaimed, open];
         assert_eq!(claimed_by(&board, actor), vec!["mine"]);
+    }
+
+    #[test]
+    fn claimed_by_refuses_the_actor_in_owner_alone() {
+        // smetana-a5b, from the other side: an issue whose `owner` happens to be
+        // the run's actor was never claimed by it — a claim writes `assignee`.
+        // While this filter read `owner`, it matched nothing on any real board
+        // and `park_claims` therefore parked nothing; a fixture setting only
+        // `owner` must never make it pass again.
+        let actor = "smetana-run-42";
+        let mut owner_only = issue("owner-only", "in_progress");
+        owner_only.owner = Some(actor.into());
+
+        assert!(claimed_by(&[owner_only], actor).is_empty());
     }
 
     #[test]

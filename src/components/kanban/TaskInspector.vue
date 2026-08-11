@@ -89,6 +89,12 @@ const rows = computed(() => {
        only the rows an issue actually has. */
     ['Priority', priorityLabel(issue.priority), false],
     ['Owner', issue.owner, true],
+    /* Beside the owner rather than instead of it: bd emits both and they are
+       two different people (smetana-a5b). `owner` owns the issue; `assignee` is
+       who holds it right now — an agent session's actor while a run has it
+       claimed — and it was invisible here for as long as the field was missing
+       from the struct. An identifier either way, so mono. */
+    ['Assignee', issue.assignee, true],
     ['Labels', issue.labels?.length ? issue.labels.join(', ') : null, false],
     ['Parent', issue.parent, true],
     /* The ids, not how many: this panel has the room, and the number alone
