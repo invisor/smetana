@@ -50,6 +50,15 @@ the four skills says to stop over one of those:
 3. Leave that task's worktrees where they are — somebody will want to look.
 4. **Carry on with the rest of the batch.** One task parking never ends the run.
 
+**A technical obstacle is not a question either, and it does not park.** The merge
+refused because the main checkout is dirty, a lock is held, a remote is ahead — nobody
+is being asked anything and nothing about the code is in doubt. Leave the task at
+`ready_to_merge`, which is what it honestly is, note the obstacle in one line, and carry
+on. That state is picked up on its own: Phase 2 takes every `ready_to_merge` survivor,
+so the next run retries the merge the moment the obstacle is gone, with nobody having to
+remember. It cannot spin, either — a batch that changes nothing leaves the ready and
+unfinished sets identical, and the run stops itself with `NoProgress` (`queue.rs`).
+
 **A check this run could not run is not a question, and must never park finished work.**
 Nobody is being asked anything: the code is written, reviewed and merged, and what is
 missing is a pair of eyes or a tool that was not there. File the looking as its own task
@@ -59,9 +68,10 @@ that produced it. Phase 3's INFRA branch below is this rule's one named instance
 
 The distinction is the cost of getting it wrong in each direction. A parked question
 costs one answer and the work waits for it, which is right, because work built on a
-guess is worse than work not built. A parked check costs the whole task: it is finished
-and it sits out of the queue with nothing anybody can do to it, and — the reason this
-paragraph exists — **nothing ever unparks a task when its blocker goes away by itself.**
+guess is worse than work not built. A parked check, or a parked obstacle, costs the whole
+task: it is finished and it sits out of the queue with nothing anybody can do to it,
+and — the reason this paragraph exists —
+**nothing ever unparks a task when its blocker goes away by itself.**
 Five tasks sat parked for a day in exactly that way, over a dirty main checkout that was
 committed three hours later; `bd ready` never returned them again, and it took a person
 noticing that their features had gone missing from the app.
@@ -297,7 +307,9 @@ that claim; waiting for it, and breaking a stale one, are report lines, never si
    priority and then by id. A cycle among them → park every task in it.
 2. **One task completely before the next.** `merging` says why.
 3. A partially merged multi-repository task rolls its merged repositories back before it
-   parks — `merging` has the mechanics. The target branch never holds half a task.
+   stops — `merging` has the mechanics, and which stop it is follows the rule above: a
+   question parks, an obstacle stays `ready_to_merge`. The target branch never holds
+   half a task.
 
 When every repository of a task passed: `bd note <id> "merged: <one line>"`, then
 
