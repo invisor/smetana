@@ -14,9 +14,14 @@
    dialog's event to hear: Tauri intercepts file drops before the webview sees
    them, and what comes back is a window-level event with absolute paths in it.
 
-   Nothing here deletes a file. Taking a thumbnail out forgets the path; the
-   bytes stay in the app's data directory, which grows — tidying it is
-   deliberately not part of this. */
+   Taking a thumbnail out forgets the path and leaves the file, and so does
+   closing the dialog — nothing about handling a picture here ever deletes one.
+   The two functions at the bottom are the exception that proves it: they are
+   the settings window asking what the store weighs and, when a person presses
+   the button, telling Rust to sweep the active project's folder. Which project
+   that is and which files are still wanted are both decided in Rust, off the
+   tracker worker's own answer; nothing about the deleting is decided here, and
+   no path travels from this file into it. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -169,6 +174,38 @@ export async function attachFiles(files) {
     } catch (err) {
       fail(err)
     }
+  }
+}
+
+/* What the store holds, for the settings window's Storage tab: the whole
+   directory's size, and how much of the active project's share of it no open
+   task refers to any more. A read, so a browser answers it from a fixture and
+   the section can be looked at under `npm run dev`.
+
+   The answer travels whole, in Rust's shape, and is handed to the pure module
+   that turns it into sentences (`components/settings/storage.js`) — unpacking
+   it into flags here would put half the rule in a store and half in a
+   component. */
+export async function surveyStorage() {
+  try {
+    return await invoke('attachments_survey')
+  } catch (err) {
+    console.error('[attachments] the storage could not be read:', err)
+    throw new Error(messageOf(err))
+  }
+}
+
+/* The one call in the app that deletes somebody's pictures, and it exists only
+   at the end of a person's press. What goes is Rust's decision, made against
+   the active project's board and inside that project's own folder — this
+   function names no file and no directory, which is what keeps the button from
+   ever reaching another project's images or the store's own root. */
+export async function clearStorage() {
+  try {
+    return await invoke('attachments_clean')
+  } catch (err) {
+    console.error('[attachments] the storage was not cleared:', err)
+    throw new Error(messageOf(err))
   }
 }
 

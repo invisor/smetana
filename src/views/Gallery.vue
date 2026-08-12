@@ -48,6 +48,7 @@ import {
   Skeleton,
   StatusBadge,
   StatusDot,
+  StorageSettings,
   Switch,
   TabBar,
   TaskCard,
@@ -390,13 +391,28 @@ const PARKED_CARD_MENU = taskMenuItems({
 terminalState.activeId = 1
 
 /* The settings window's own state lives in that window and reaches it as
-   events from the app window; here the four tabs are simply driven by local
-   refs, so every control is live enough to look at in all four theme x density
+   events from the app window; here the tabs are simply driven by local refs, so
+   every control is live enough to look at in all four theme x density
    combinations. */
 const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
 const galleryAgent = ref('claude')
+/* `attachments_survey`'s answer in Rust's own shape — a store bigger than this
+   project's share of it, some of that share in use and some of it not. */
+const gallerySurvey = {
+  store: { files: 14, bytes: 22 * 1024 * 1024 },
+  project: '/Users/you/Projects/smetana',
+  kept: { files: 5, bytes: 6 * 1024 * 1024 },
+  removable: { files: 6, bytes: 9 * 1024 * 1024 }
+}
+const galleryEmptySurvey = {
+  store: { files: 5, bytes: 6 * 1024 * 1024 },
+  project: '/Users/you/Projects/smetana',
+  kept: { files: 5, bytes: 6 * 1024 * 1024 },
+  removable: { files: 0, bytes: 0 }
+}
+const galleryCleaned = { removed: { files: 6, bytes: 9 * 1024 * 1024 }, failed: 0 }
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -1116,6 +1132,18 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         </div>
         <div :style="{ width: '380px' }">
           <AgentSettings :agent="galleryAgent" @update:agent="galleryAgent = $event" />
+        </div>
+        <!-- The Storage tab in both of the states worth looking at: something
+             to delete, with the count and the size a person reads before
+             pressing, and nothing to delete, where the button is dead and the
+             description says which of the two empties it is. Nothing is behind
+             either of them here — pressing emits and the harness does nothing,
+             which is the whole point of a presentational component. -->
+        <div :style="{ width: '380px' }">
+          <StorageSettings :survey="gallerySurvey" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <StorageSettings :survey="galleryEmptySurvey" :cleaned="galleryCleaned" />
         </div>
         <div :style="{ width: '380px' }">
           <AboutSettings version="0.1.0" />

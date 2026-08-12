@@ -17,11 +17,12 @@
    same frame, and it is what makes this screen work in a browser at all, where
    nothing answers. The announcement that follows is the correction — a value the
    main window refuses comes straight back and overwrites what is drawn here. */
-import { onMounted, onUnmounted, reactive, ref, watchEffect } from 'vue'
+import { onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
 import TabBar from '../components/shell/TabBar.vue'
 import GeneralSettings from '../components/settings/GeneralSettings.vue'
 import EditorSettings from '../components/settings/EditorSettings.vue'
 import AgentSettings from '../components/settings/AgentSettings.vue'
+import StorageSettings from '../components/settings/StorageSettings.vue'
 import AboutSettings from '../components/settings/AboutSettings.vue'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
@@ -31,6 +32,7 @@ import {
   watchSharedSettings
 } from '../stores/settings.js'
 import { appVersion, openExternal } from '../stores/app.js'
+import { clearStorage, surveyStorage } from '../stores/attachments.js'
 
 /* The query string's two overrides, passed down rather than read here so that
    `App.vue` stays the one place that knows about them. They win over what the
@@ -117,9 +119,67 @@ const TABS = [
   { id: 'general', label: 'General', kind: 'pinned' },
   { id: 'editor', label: 'Editor', kind: 'pinned' },
   { id: 'agents', label: 'Agents', kind: 'pinned' },
+  { id: 'storage', label: 'Storage', kind: 'pinned' },
   { id: 'about', label: 'About', kind: 'pinned' }
 ]
 const tab = ref('general')
+
+/* The Storage tab, and the one part of this window that is not a setting at
+   all: it asks the back end two questions of its own rather than reading the
+   state the app window announces. That is not a second writer of
+   `settings.json` — nothing here reaches that file. The store is the app's own
+   data directory, Rust owns it, and both calls are answered against the tracker
+   worker's idea of the active project, so this window never names a project or
+   a path of its own.
+
+   Read on opening the tab rather than on mounting the window: the answer costs
+   a queue behind the tracker worker, which may be two seconds into a bd call,
+   and three of the five tabs have no use for it. */
+const storage = reactive({ survey: null, busy: false, error: null, cleaned: null })
+
+const readStorage = async () => {
+  storage.busy = true
+  /* What a previous press did is news about that press, and coming back to the
+     tab later is a fresh look at the store rather than a repeat of it. */
+  storage.cleaned = null
+  try {
+    storage.survey = await surveyStorage()
+    storage.error = null
+  } catch (err) {
+    storage.error = err.message
+  } finally {
+    storage.busy = false
+  }
+}
+
+/* The press. What goes is decided in Rust, against the board and inside the
+   active project's own folder — this function hands over no path and no name,
+   which is what keeps the button unable to reach another project's images.
+   The command answers with fresh numbers, so the screen corrects itself with no
+   second round trip. */
+const clear = async () => {
+  storage.busy = true
+  storage.error = null
+  try {
+    const cleaned = await clearStorage()
+    storage.cleaned = cleaned
+    storage.survey = cleaned.survey
+  } catch (err) {
+    /* A refusal leaves the numbers exactly as they were: they still describe
+       the store, since nothing was deleted. */
+    storage.error = err.message
+  } finally {
+    storage.busy = false
+  }
+}
+
+watch(
+  tab,
+  (which) => {
+    if (which === 'storage' && !storage.busy) readStorage()
+  },
+  { immediate: true }
+)
 
 const rootStyle = {
   display: 'flex',
@@ -172,6 +232,14 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           v-else-if="tab === 'agents'"
           :agent="view.agent"
           @update:agent="change({ agent: $event })"
+        />
+        <StorageSettings
+          v-else-if="tab === 'storage'"
+          :survey="storage.survey"
+          :busy="storage.busy"
+          :error="storage.error"
+          :cleaned="storage.cleaned"
+          @clear="clear"
         />
         <AboutSettings v-else :version="version" @open="openExternal" />
       </div>

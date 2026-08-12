@@ -90,6 +90,7 @@ export { default as AgentSettings } from './settings/AgentSettings.vue'
 export { default as EditorSettings } from './settings/EditorSettings.vue'
 export { default as GeneralSettings } from './settings/GeneralSettings.vue'
 export { default as SettingsRow } from './settings/SettingsRow.vue'
+export { default as StorageSettings } from './settings/StorageSettings.vue'
 
 // terminal
 export { default as TerminalView } from './terminal/TerminalView.vue'

@@ -886,10 +886,12 @@ Ready is the one that hands it to an agent with the question still open.
 ### Attachments: pictures on a task nobody has filed yet
 
 A screenshot is the fastest way to say what is wrong, so the new-task dialog takes images:
-`src-tauri/src/attachments.rs`, `src/stores/attachments.js` and
-`components/kanban/AttachmentStrip.vue`. The Rust side is the same no-worker shape as `files/` and
-`git.rs`, for the same reason — writing a couple of megabytes guards no state — and it is two
-commands over pure functions that carry the tests.
+`src-tauri/src/attachments/`, `src/stores/attachments.js` and
+`components/kanban/AttachmentStrip.vue`, plus the Storage tab of the settings window
+(`components/settings/StorageSettings.vue` over the pure `settings/storage.js`). The Rust side is the
+same no-worker shape as `files/` and `git.rs`, for the same reason — writing a couple of megabytes
+guards no state — and it is four commands over pure functions that carry the tests: `mod.rs` is the
+disk and the vocabulary, `cleanup.rs` is the whole of the deleting rule with no filesystem in it.
 
 Three gestures put a picture in the list and they arrive as only two kinds of thing. A file already
 on disk arrives as a path and Rust copies it (`attachment_import`); the clipboard exists inside the
@@ -929,8 +931,53 @@ not first read into an ArrayBuffer and encoded a third larger again. Drift there
 above Rust's is harmless, below Rust's makes every file between the two impossible to attach at all
 by a refusal Rust would never have sent. The front end's copy must never be the smaller.
 
-Nothing here ever deletes. Taking a thumbnail out of the dialog forgets the path and leaves the file;
-tidying the store is deliberately outside this work, so the directory grows.
+**The store is laid out by project, and that layout is the boundary the one deleting thing in this
+app works inside.** A picture goes into `attachments/<key>/`, where the key is
+`cleanup::project_key`: the folder's own name through the same `slug` a stored file's name gets, and
+the FNV-1a hash of the whole absolute path after it. Three properties are wanted at once and each
+one rules something out — it is derivable from the path alone, since nothing is written down
+anywhere that could be lost; it is the same on every run, which is why the hash is written out here
+rather than taken from `DefaultHasher`, whose value is documented as free to move between Rust
+releases and would strand every picture under the old name; and it is safe as a single path segment,
+because this string is joined onto the store's root and everything deleted is found by walking the
+result. The name half is for a person opening the directory in Finder; the hash is what actually
+tells two projects called `app` apart.
+
+**Nothing deletes on its own, at any moment.** Not on start, not on a schedule, not when the
+new-task dialog closes on images nobody filed — taking a thumbnail out forgets the path and leaves
+the file, exactly as before. The one thing that deletes is `attachments_clean`, and it happens only
+at the end of a person's press on the Storage tab, after `attachments_survey` has told them how many
+files and how many bytes it is about to take. Deleting is irreversible, so it is somebody's decision
+rather than a policy's.
+
+**What survives is what an unfinished task still names.** `cleanup::removable` is the rule, pure,
+over a list of files and a snapshot of the board: a file whose absolute path appears in any of an
+issue's four prose fields — description, acceptance criteria, design, notes — stays if that issue is
+anything but `closed`; a file only closed issues name goes; a file nothing names at all goes, and
+that third case is most of the rubbish and the whole reason the directory stops growing. The four
+fields are deliberately more than the prompt asks for, because the agent decides where the link
+lands and naming a field too many costs a file kept for nothing while naming one too few costs
+somebody's screenshot. There is no record of which task a picture belongs to and there cannot be
+one: the paths ride out in a prompt, the agent runs `bd create` itself, and nothing comes back
+saying which id it wrote — the same missing channel `claimedBy` in `terminals.js` reconstructs
+around.
+
+**The button reaches one project's folder and physically cannot reach another's.** The directory is
+`store_root()/project_key(dir)` where `dir` comes from the tracker worker — `Request::Current`,
+which answers with the folder being watched *and* the board it holds in one message, so the two
+cannot name different projects across a switch. Everything deleted is that directory joined with a
+name out of that directory's own `read_dir`, checked once more by `plain_name`; no subdirectory is
+entered and no string from the front end reaches the sweep at all. Reading every open project's
+tracker instead was refused: a project closed in the list would still go unread, and its live tasks
+would lose their pictures while looking like nobody's. The files sitting in the root of
+`attachments/` from before the split are out of reach for exactly that reason and stay for good —
+they belong to no project, so there is no board to ask about them. They are finite and no longer
+growing; there is no migration and no second button.
+
+An attachment made while no project is open, or while the worker cannot say which one it is, also
+lands in that root. That is the honest place for it rather than a fallback: the root is the part of
+the store nothing sweeps, and a file whose project is unknown must not be filed under one that would
+later find nothing referring to it.
 
 ### Runs: a batch of the board, carried out by sessions
 
@@ -1358,8 +1405,9 @@ the tidy answer and needs a newer Safari than the build targets). And **icons do
 `--icon-*` tokens are referenced nowhere, and the ~35 `Icon` call sites pass numeric literals, so
 glyphs stay put while their labels grow.
 
-The four tabs are `components/settings/`, and each is presentational — handed values, emitting what
-was picked — so the whole window renders in `?view=gallery` too. Every list on them is `Dropdown`,
+The tabs are `components/settings/` — the directory is the list, for the reason the note under
+Commands gives — and each is presentational, handed values and emitting what was picked, so the whole
+window renders in `?view=gallery` too. Every list on them is `Dropdown`,
 and with that **`Select` is drawn nowhere outside the gallery any more.** This window was the last
 place taking `Select`'s bargain — one element, accessible for free — and what it actually bought
 here was a menu the operating system paints: its own colours, font and row height, none of them
@@ -1377,6 +1425,17 @@ end that ever *names* an agent: the ids are still `agents::IDS` and Rust still d
 ship, so this is a set of labels for ids Rust already knows. The subscription block under it is a
 placeholder with dashes and a sentence saying so — a block of invented numbers under a real setting
 would claim the app knows something it does not, which is what the fixture log pane was removed for.
+
+**Storage is the one tab that is not a setting**, and it is the exception that keeps the rule
+readable. Nothing on it reaches `settings.json`: it asks Rust what the attachment store weighs
+(`attachments_survey`) and, on a press, tells Rust to sweep the active project's folder
+(`attachments_clean`) — two commands about the app's own data directory, so the main window is still
+the only writer of settings and this window still holds no settings store. It is read when the tab is
+opened rather than when the window mounts, since the answer queues behind the tracker worker, which
+may be two seconds into a bd call, and four of the five tabs have no use for it. The window hands
+over no path and no project, which is what leaves the deleting confined in Rust; the component takes
+the survey whole in Rust's own shape and `settings/storage.js` — pure, tested, another of the
+`branchChoice.js` family — turns it into the sentence somebody reads before an irreversible press.
 About's link goes out through `tauri-plugin-opener` (`opener:allow-open-url`, scoped to
 `https://github.com/*`): inside this webview it would replace the app with a web page, and there is
 no address bar here to come back from. Which branch `openExternal` takes is decided **before** the
