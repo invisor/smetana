@@ -307,27 +307,45 @@ way `terminals.js` does, so the bar cannot name one project's branch under anoth
 
 The same file still holds the no-spawn rule at the one place it is genuinely inconvenient — a branch
 list is not one line the way `HEAD` is, it is `refs/heads` walked for loose refs, `packed-refs` for
-the ones git has folded away, and the two reconciled, all three still read from the common directory
-exactly as before, so a linked worktree still offers its whole list and the `smetana-5t7` account of
-`commondir` below is unchanged. What it exports for a branch list has changed shape, though.
-`branches_with_recency` is the same three sources with each name's reflog stamp kept rather than
-thrown away, and `combine` is a new pure function folding several repositories' lists — each already
-ordered by `by_recency` — into one. `BranchOption { name, missing_in }` is what a folded list is made
-of: a name, and the repositories from `[project].repos` that do not have it, empty meaning every one
-of them does.
+the ones git has folded away, and each branch's own reflog under `logs/refs/heads`, three reads where
+`head` is one and still cheaper than a process. All three are read from the common directory exactly
+as before, so a linked worktree still offers its whole list and the `smetana-5t7` account of
+`commondir` below is unchanged. The reflog is what orders the result rather than the alphabet, because
+the branch somebody merges into every day is nowhere in particular alphabetically; a branch with no
+reflog anywhere does not sort as "very old", it falls outside the recency group entirely, into the
+alphabetical tail a fresh clone leaves nearly everything in. Nothing in that reading is an error
+either, the same as everywhere else in this file: a folder outside git offers an empty list rather
+than a failure, and the current branch is offered whatever the refs themselves say — a repository
+whose only branch has no commits yet has no ref file for it at all, and a merge-target field offering
+nothing would be worse than one offering the single branch that exists.
+
+What the file exports for a branch list is two functions rather than one. `branches_with_recency`
+reads those same three sources but sorts the names alphabetically and dedups them before stamping
+each with its own reflog time — the ordering itself is left undone, deliberately, because it is
+`by_recency`'s rule and not a second one written here. `combine` is the pure function that applies it:
+it folds several repositories' lists into one, splits complete from partial, and calls `by_recency`
+itself, once, on each of the two groups it builds. Its one genuinely new judgement is where a branch's
+freshness comes from across repositories — `develop` opened an hour ago in `backend` and a month ago
+in `admin` is an hour old, because it is one branch to the person merging into it, and taking the
+first repository's answer, or the least of them, would bury the branch somebody is actually in behind
+one they touched in a repository they happen to have opened. `BranchOption { name, missing_in }` is
+what a folded list is made of: a name, and the repositories from `[project].repos` that do not have
+it, in the order those repositories were given — the project's own statement about what depends on
+what, since a set would print them in whatever order it hashed to and the field would read
+differently between two runs of the same project — empty meaning every one of them does.
 
 **`git.rs` no longer answers the dialog.** `runs::commands::target_branches` does, because "what may
 this run merge into" is a question about a run rather than about one directory: it reads
 `.smetana/project.toml` itself, through `config::load`, and walks `[project].repos`, calling
 `branches_with_recency` once per repository and folding the results through `combine`. `git.rs` keeps
-its shape — a leaf, no worker, no spawn — and gains nothing about project configuration; it does not
-know a `project.toml` exists. The config is read inside that one command rather than taken from the
-front end, and that is the design rather than a shortcut: `runs.js` holds its own copy of the config,
-filled by its own `project_config` call, and the run dialog is shown before that call has landed —
-the whole of `smetana-6gs`, where the branch-filling rule ran once against a list that was not there
-yet. A repository list threaded down from the front end instead of read in Rust would be the same
-race wearing a different name; reading both facts inside the one command leaves no order between them
-to get wrong.
+its shape — a leaf, no worker, no spawn — and no code in it reads project configuration: `combine`
+takes a list of `(name, branches)` pairs and never learns where they came from. The config is read
+inside that one command rather than taken from the front end, and that is the design rather than a
+shortcut: `runs.js` holds its own copy of the config, filled by its own `project_config` call, and the
+run dialog is shown before that call has landed — the whole of `smetana-6gs` and `smetana-o8r`, where
+the branch-filling rule ran once against a list that was not there yet. A repository list threaded
+down from the front end instead of read in Rust would be the same race wearing a different name;
+reading both facts inside the one command leaves no order between them to get wrong.
 
 What the field draws from that is two groups, headed "Everywhere" and "Not everywhere", and no
 captions at all when nothing is partial — which is every single-repository project, and therefore the
@@ -1225,7 +1243,7 @@ what this project was left at last time, then its own `[defaults].target_branch`
 list puts first, which is the most recently worked-on branch because `target_branches` orders by
 reflog. A remembered name that is no longer in the list is skipped in silence rather than offered,
 since a branch deleted since it was remembered would sit in the field as an option that fails on the
-first merge. The list itself holds `{ name, missing_in }` records rather than bare strings now:
+first merge. The list itself holds `{ name, missing_in }` records rather than bare strings:
 `needsCutting` is the single rule behind both the field's hint and the run's `create_target`, and
 `branchOptions` is what splits the two groups the field draws — with no captions at all when nothing
 is partial, which is every single-repository project.
