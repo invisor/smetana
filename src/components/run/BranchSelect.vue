@@ -13,6 +13,7 @@ import { computed, nextTick, ref } from 'vue'
 import Dropdown from '../core/Dropdown.vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import { branchOptions, needsCutting } from './branchChoice.js'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -29,10 +30,22 @@ const naming = ref(false)
 const draft = ref('')
 const nameField = ref(null)
 
-/* A name typed here is new until it turns out not to be: somebody who types the
-   name of a branch that already exists means that branch, and telling the run
-   to create it would fail on the first command. */
-const isNew = computed(() => props.modelValue !== '' && !props.branches.includes(props.modelValue))
+/* A name typed here is new until it turns out not to be, and a branch picked
+   from the list may still need cutting where a repository lacks it — one rule
+   for both, next door and pinned by its own tests. */
+const isNew = computed(() => props.modelValue !== '' && needsCutting(props.branches, props.modelValue))
+
+const options = computed(() => branchOptions(props.branches))
+
+/* Two different facts and two different sentences: a name nothing has, and a
+   branch that three repositories out of four already carry. The names
+   themselves are in the row's own note, where there is room for them. */
+const hint = computed(() => {
+  if (!isNew.value) return ''
+  const found = props.branches.find((b) => b?.name === props.modelValue)
+  const short = found?.missing_in?.length ?? 0
+  return short ? `will be created in ${short}` : 'will be created'
+})
 
 const startNaming = async (closePanel) => {
   closePanel()
@@ -52,7 +65,7 @@ const commitName = () => {
   naming.value = false
   if (!name) return
   emit('update:modelValue', name)
-  emit('update:create', !props.branches.includes(name))
+  emit('update:create', needsCutting(props.branches, name))
 }
 
 /* The X, and Escape. Nothing typed is applied and the control goes back to
@@ -65,7 +78,7 @@ const cancelNaming = () => {
 
 const pick = (branch) => {
   emit('update:modelValue', branch)
-  emit('update:create', false)
+  emit('update:create', needsCutting(props.branches, branch))
 }
 
 /* The naming field borrows the dropdown's own field silhouette so the control
@@ -133,13 +146,13 @@ const newRowStyle = {
   <Dropdown
     v-else
     :model-value="modelValue"
-    :options="branches"
+    :options="options"
     :disabled="disabled"
     searchable
     search-label="Search branches"
     mono
     placeholder="Pick a branch"
-    :hint="isNew ? 'will be created' : ''"
+    :hint="hint"
     @update:model-value="pick"
   >
     <template #header="{ close }">

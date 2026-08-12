@@ -13,7 +13,7 @@ import Icon from '../core/Icon.vue'
 import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
 import Tooltip from '../core/Tooltip.vue'
-import { pickBranch } from './branchChoice.js'
+import { needsCutting, pickBranch } from './branchChoice.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -140,18 +140,18 @@ const branchChosen = ref(false)
    itself is in branchChoice.js, where a test can reach it. */
 const fillBranch = () => {
   branch.value = pickBranch(props.branches, props.remembered?.targetBranch, props.defaultBranch)
-  /* Everything this fills with is a branch that exists — pickBranch offers
-     nothing else — so there is never anything to create.
+  /* Derived, never forced. This said `false` and its comment said why —
+     "everything this fills with is a branch that exists, `pickBranch` offers
+     nothing else, so there is never anything to create" — and that stopped
+     being true the moment a branch could exist in three repositories out of
+     four. `pickBranch` will happily fill the field with a remembered
+     `release/7` that two of them lack, and forcing the flag false then sends
+     the run out telling the agent not to cut it: a `provisioning` STOP in the
+     first batch, in the one mode where nobody was going to be asked anything.
 
-     Note what makes that safe, since it is not local: `createBranch` is guarded
-     by `branchChosen`, which this function does not set, and the two only stay
-     in step because BranchSelect never raises `create` on its own — both paths
-     that do (`pick` and `commitName`) emit `update:modelValue` first, so
-     `chooseBranch` has already run by the time `create` arrives and no fill can
-     land between the two. If that ever stops being true, the fix is here: an
-     `@update:create` handler setting `branchChosen` would make the invariant
-     local instead of borrowed. */
-  createBranch.value = false
+     `branchChosen` is untouched by all this and still guards a late fill from
+     overwriting a choice somebody has already made — see `chooseBranch`. */
+  createBranch.value = branch.value !== '' && needsCutting(props.branches, branch.value)
 }
 
 /* Somebody's own answer, and the one thing the late fill below will not touch

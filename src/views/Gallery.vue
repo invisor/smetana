@@ -146,6 +146,9 @@ const pickedBranch = ref('staging')
 const branchIsNew = ref(false)
 const groupedBranch = ref('develop')
 const narrowBranch = ref('spike/auth')
+/* Records for the branch fields below — the shape the field takes now, stood
+   in here the same way git.js wraps the old command's plain strings. */
+const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
 const checked = ref(true)
 const switched = ref(true)
 
@@ -716,7 +719,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'queue' }"
             :count="12"
-            :branches="['main', 'staging', 'feature/runs-project-config']"
+            :branches="everywhere('main', 'staging', 'feature/runs-project-config')"
             default-branch="staging"
             @close="() => {}"
             @confirm="() => {}"
@@ -728,7 +731,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :scope="{ kind: 'task', id: 'smetana-9', title: 'Rename the worktree when the branch changes' }"
             :count="1"
             :part-of="{ id: 'smetana-4', title: 'Worktree lifecycle', siblings: 2 }"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             :live-check-available="false"
             :default-parallel="5"
@@ -743,7 +746,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'task', id: 'smetana-77', title: 'Fold the settings debounce into the store' }"
             :count="1"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             :remembered="{ mode: 'solo' }"
             @close="() => {}"
@@ -758,7 +761,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <RunModal
             :open="true"
             :count="12"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="staging"
             :config-error="BROKEN_CONFIG"
             @close="() => {}"
@@ -777,7 +780,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'queue' }"
             :count="12"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             live-check-blocked="Nothing here can drive a browser: Playwright's MCP server is not in the agent's configuration and the Claude in Chrome extension was not found in a Chrome profile."
             @close="() => {}"
@@ -1011,7 +1014,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <BranchSelect
             v-model="pickedBranch"
             v-model:create="branchIsNew"
-            :branches="['main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7']"
+            :branches="everywhere('main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7')"
           />
         </div>
         <div :style="{ width: '320px' }">

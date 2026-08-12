@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
 
+/* What the store holds: a branch and the repositories that do not have it. A
+   single-repository project is short of nothing, which is every fixture here. */
+const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
+
 describe('the active project\'s branch', () => {
   it('the branch is read and lands in the store', async () => {
     const { ipc, stores } = await loadStores()
@@ -75,7 +79,7 @@ describe('the branches offered to the run dialog', () => {
 
     await stores.git.loadBranches('/p')
 
-    expect(stores.git.gitState.branches).toEqual(['staging', 'main'])
+    expect(stores.git.gitState.branches).toEqual(everywhere('staging', 'main'))
   })
 
   /* Half of smetana-6gs: the dialog opens and asks for the branches in the same
@@ -90,10 +94,10 @@ describe('the branches offered to the run dialog', () => {
     ipc.on('git_branches', () => new Promise((resolve) => (answer = resolve)))
     const again = stores.git.loadBranches('/p')
 
-    expect(stores.git.gitState.branches).toEqual(['staging', 'main'])
+    expect(stores.git.gitState.branches).toEqual(everywhere('staging', 'main'))
     answer(['main', 'staging'])
     await again
-    expect(stores.git.gitState.branches).toEqual(['main', 'staging'])
+    expect(stores.git.gitState.branches).toEqual(everywhere('main', 'staging'))
   })
 
   /* The other side of it, and the reason the clearing was there: a branch of a
@@ -146,6 +150,6 @@ describe('the branches offered to the run dialog', () => {
     pending.get('/old')(['old-main'])
     await slow
 
-    expect(stores.git.gitState.branches).toEqual(['new-main'])
+    expect(stores.git.gitState.branches).toEqual(everywhere('new-main'))
   })
 })

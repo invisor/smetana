@@ -92,7 +92,11 @@ export async function loadBranches(project) {
   try {
     const list = await invoke('git_branches', { project })
     if (branchesFor !== project) return
-    gitState.branches = list
+    /* One shape for the field whichever command answered. Task 5 replaces the
+       call with `target_branches`, which sends these records itself; until then
+       a single-repository answer is exactly a list of branches nothing is short
+       of, which is what this says. */
+    gitState.branches = list.map((name) => ({ name, missing_in: [] }))
   } catch (err) {
     if (branchesFor !== project) return
     // An empty list, like a folder outside git: the dialog then has nothing to
