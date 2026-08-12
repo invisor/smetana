@@ -19,7 +19,8 @@ clean textual merge resolves to a dependency set neither branch ever installed.
 Read `.smetana/project.toml` first. `[project].repos` gives the merge order,
 `[repo.<name>].gates` gives what green means, `[merge].regenerate` gives the paths that
 are never merged by hand, and `[merge].hazards` is prose written by somebody who knows
-this codebase — read it before every merge, not once.
+this codebase — read it before every merge, not once. It is also the one part of that file
+this process writes: Step 6 is where it grows.
 
 Below, **STOP** means "hand this to the caller's policy". Never guess past one.
 
@@ -137,7 +138,8 @@ done
 ```
 
 No worktree anywhere → STOP ("no worktree for this task"). Otherwise run Steps 1–5 for
-each repository in `$set`, one at a time, from inside its worktree.
+each repository in `$set`, one at a time, from inside its worktree — then Step 6 once, for
+the task as a whole, from `<root>`.
 
 ## Step 1 — Preconditions, re-derived per repository
 
@@ -229,6 +231,55 @@ git -C "$main_checkout" merge --no-ff "$branch" -m "merge: $branch into <target>
 pushing is not this process's business, and the caller's final report is where the human
 is reminded.
 
+## Step 6 — Record a new pair in `[merge].hazards`
+
+Once **every** repository in `$set` has reached Step 5, and only then: if this task's
+review reported a new pair of files that must move together — `reviewing`'s `PAIRED-FILES`
+block, two files carrying the same closed list, constant or table — append it to
+`[merge].hazards` in **`<root>/.smetana/project.toml`**, in the file's own voice. What the
+two files are, by path from their repository root — and by repository as well wherever
+`[project].repos` lists more than one, since a pair can straddle two of them and "the
+repository root" then names neither; whoever reads the entry next stands in a different
+checkout and has only what the entry says. Then what goes wrong when only one of them
+moves, and how that shows up. If the prose there already carries a list of pairs, the
+entry is one more item on it.
+
+**`<root>`, not `$main_checkout`.** That is the same placeholder Step 0 and the rollback
+below use — the project folder, the one holding `[project].repos` — and after five steps
+spent re-deriving a per-repository main checkout it is the wrong one that comes to hand. In
+a multi-repository project `<repo>/.smetana/project.toml` is a file nothing reads and git
+cannot see: the write succeeds, the list never grows, and that is this whole rule failing
+silently in the one place it was written to stop.
+
+The pair may have been reported passes ago and a phase away — the review loop runs several
+rounds before a task is `ready_to_merge`, and merging is a separate phase — so a
+`PAIRED-FILES` block is carried forward with the task rather than disposed of where it was
+read. **A pair reported at any pass of this task's review still counts here.**
+
+**Appending is a report line, never a silent step**: name the two files, so the person
+reading the report can see the list grew and check what was written.
+
+Nothing to record is the ordinary case, and there are two of them: no pair was reported for
+this task, or the task stopped halfway and rolled its merged repositories back, in which
+case there is no landed pair to describe.
+
+**Why the write is here and not with the worker who created the pair.** `.smetana/` is kept
+out of the repository, so git never materialises it in a worktree and the worker never had
+the file in front of them — this is presence, not permission; the file is perfectly
+writable by anyone standing where it is. You are at `<root>`, where it is, and you are
+also the one who knows the change actually landed: a list that grew for a branch
+somebody later abandoned would describe a pair that does not exist. That is the same
+boundary this process already draws for the tracker and for the worktrees, and it is why
+`reviewing` obliges the reviewer to report the pair rather than record it — the list grows
+only from those reports, so one that never arrives leaves a list that looks complete.
+
+Two things about the write itself. It happens while you still hold the merge lock, so two
+leads in one project are serialized here by the same claim everything else in this phase
+runs under, with the same honest limit. And `hazards` is a multi-line string in a TOML
+file that a run refuses to start on when it is damaged — so re-read the file after
+appending and confirm it still parses; a malformed `project.toml` costs the next run
+rather than degrading quietly.
+
 ## When a multi-repository task fails halfway
 
 If an earlier repository of this task already reached Step 5 and a later one of the
@@ -247,7 +298,7 @@ that everything else is cut from is worse than no task.
 
 Never overlap two tasks' merges. Step 3's regeneration reads the state of the target
 branch, and a second task landing in the middle of that makes the regenerated output a
-mixture nobody asked for. Finish one task completely — Steps 0 through 5, every
+mixture nobody asked for. Finish one task completely — Steps 0 through 6, every
 repository — before starting the next.
 
 ## Removing worktrees, when the caller's policy says to
