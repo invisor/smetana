@@ -307,6 +307,11 @@ pub fn combine(per_repo: Vec<(String, Vec<(String, Option<i64>)>)>) -> Vec<Branc
 /// neither source lists it — a repository with exactly one commitless branch
 /// has no ref file for it at all, and offering nothing to merge into would be
 /// worse than offering the one branch that exists.
+///
+/// Nothing in production calls this any more — the run dialog reaches these same three
+/// sources through `branches_with_recency` and `by_recency`, one repository at a time. It
+/// stays because this file's own tests read the sources through it, and the linked-worktree
+/// case below is the one they would lose first.
 pub fn branches(project: &Path) -> Vec<String> {
     by_recency(branches_with_recency(project))
 }

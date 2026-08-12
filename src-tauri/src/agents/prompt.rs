@@ -811,7 +811,7 @@ mod tests {
     fn a_branch_that_may_have_to_be_cut_says_so_and_says_what_from() {
         // `create_target` no longer means "the branch does not exist" — it
         // means cutting it where it does not exist is sanctioned. The
-        // difference is the whole of the multi-repository case: `release/7` can
+        // difference is the whole of the multi-repository case: `release/8` can
         // sit in two repositories of four, and a prompt claiming it does not
         // exist is false about the two that have it.
         let settings = RunSettings {

@@ -2,8 +2,9 @@
 
    Three steps in one order: what this project was left at last time, then the
    project's own `[defaults].target_branch`, then whatever the list puts first —
-   which is the branch most recently worked on, because `git_branches` orders by
-   the reflog rather than alphabetically.
+   which is the branch most recently worked on, because `target_branches` orders
+   by the reflog, and across several repositories by the most recent touch in
+   any of them.
 
    A name that is not in the list is skipped rather than offered: a branch
    deleted since it was remembered would otherwise sit in the field as an option

@@ -128,7 +128,7 @@ For each repository the task touches, in the order `[project].repos` gives:
 
    - Present → carry on to the cut below.
    - Absent, and the run's prompt said to cut it where it does not exist yet →
-     make it from this repository's own HEAD:
+     make it from this repository's own current branch (HEAD):
      `git -C <repo> branch <target-branch>`. That repository's HEAD and not
      another repository's, and not the branch of the same name somewhere else:
      there is no relationship between two repositories' histories to preserve.
