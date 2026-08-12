@@ -345,15 +345,22 @@ const hintStyle = {
 }
 
 /* A row's own note. The field's `hintStyle` colour and size, deliberately not
-   `hintStyle` itself: that one sits in a field where nothing competes with it,
-   and it carries `white-space: nowrap` with no clip and no shrink rule. Dropped
-   into an option row it wins the flex negotiation outright and the label —
-   `flex: 1, minWidth: 0` — shrinks toward nothing instead, so a long note eats
-   the very branch name it is describing. This one gives way first. */
+   `hintStyle` itself: dropped into an option row it would win the flex
+   negotiation outright and the label — `flex: 1`, so a flex-basis of zero and
+   no base size of its own to defend — would shrink toward nothing instead, a
+   long note eating the very branch name it is describing.
+
+   The ceiling is what makes that impossible, and it is a ceiling rather than a
+   shrink rule for a reason worth keeping: with the label at flex-basis zero the
+   row never overflows, so nothing ever asks the note to shrink and its own
+   `text-overflow` would never fire. Capped, it is the note that runs out of
+   room and clips, and the name keeps at least half the row whatever it is
+   called. */
 const noteStyle = {
   fontSize: 'var(--text-2xs)',
   color: 'var(--text-muted)',
   fontFamily: 'var(--font-sans)',
+  maxWidth: '50%',
   minWidth: 0,
   overflow: 'hidden',
   textOverflow: 'ellipsis',

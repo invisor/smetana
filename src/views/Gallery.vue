@@ -145,6 +145,7 @@ const choice = ref('running')
 const pickedBranch = ref('staging')
 const branchIsNew = ref(false)
 const groupedBranch = ref('develop')
+const narrowBranch = ref('spike/auth')
 const checked = ref(true)
 const switched = ref(true)
 
@@ -1034,6 +1035,26 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
               { value: 'hotfix/2026-08', label: 'hotfix/2026-08', note: 'not in extension' },
               { value: 'chore/deps', label: 'chore/deps', note: 'not in backend' },
               { value: 'wip/editor', label: 'wip/editor', note: 'not in admin' }
+            ]"
+          />
+        </div>
+        <!-- The same list in a field too narrow for its longest note. The
+             example above is wide enough that nothing ever overflows, so it
+             cannot show which of the two gives way — and that is exactly the
+             thing worth looking at: the branch name has to survive whole and
+             the note has to clip. -->
+        <div :style="{ width: '210px' }">
+          <Dropdown
+            v-model="narrowBranch"
+            mono
+            searchable
+            search-label="Search branches"
+            :options="[
+              { header: true, label: 'Everywhere' },
+              { value: 'develop', label: 'develop' },
+              { header: true, label: 'Not everywhere' },
+              { value: 'release/7', label: 'release/7', note: 'not in admin, extension' },
+              { value: 'spike/auth', label: 'spike/auth', note: 'not in frontend, admin, extension' }
             ]"
           />
         </div>
