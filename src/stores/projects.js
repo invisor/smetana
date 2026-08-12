@@ -10,6 +10,7 @@ import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listDir, setRoot } from './files.js'
+import { measureStorage } from './notifications.js'
 import { flushPending, loadProjectLayout, settings } from './settings.js'
 import { confirmUnsaved, resetTabs, restoreTabs } from './tabs.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
@@ -78,6 +79,16 @@ async function moveTo(path) {
   }
   await setProject(path)
   refreshProbes()
+  /* Last, and both halves of that matter. The store is weighed per project and
+     the answer is written into that project's own settings entry, so this has
+     to come after `loadProjectLayout` — before it, the number would be compared
+     against, and written over, the layout of the project just left. And after
+     `setProject`, because `attachments_survey` is answered against the tracker
+     worker's idea of the active project: asked earlier it would answer about
+     the old folder, which the guard in `notifications.js` would then throw
+     away, costing the new project its measurement until the next window focus.
+     Not awaited — nothing about the move waits on the bell. */
+  measureStorage(path)
 }
 
 /* The move. The order matters: first we flush the departing project's state,

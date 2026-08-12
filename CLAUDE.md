@@ -995,6 +995,67 @@ lands in that root. That is the honest place for it rather than a fallback: the 
 the store nothing sweeps, and a file whose project is unknown must not be filed under one that would
 later find nothing referring to it.
 
+### The bell: what the app has to say right now
+
+The bell in the scope bar opens a panel of notifications, and the badge counts what is in it —
+`components/notifications/` (the pure `notifications.js`, `NotificationPanel.vue`,
+`NotificationCard.vue`) over `src/stores/notifications.js`. Today there is exactly one source, so
+the badge is 0 or 1.
+
+**The list is derived, not an inbox.** A notification is computed from the state of its source and
+thrown away when that state goes away; nothing accumulates on disk — no history, no message log, no
+read/unread ledger, and the bell's own label says "1 notification" rather than "unread" for exactly
+that reason. A durable inbox was considered and dropped: everything this app has any use for
+announcing is a statement about something it can look at right now, so a stored copy is a second
+source of truth that goes stale the moment the first one moves, and the failure is a bell shouting
+about a folder somebody emptied an hour ago. The cost is named rather than discovered: there is
+nothing to say about the past, and a source that genuinely needs history brings its own storage. A
+card that is up stands until it is answered or stops being true, and every measurement under it
+rewrites its prose from the size just read — a card describing a folder as it was half an hour ago is
+the same staleness one sentence smaller.
+
+The one thing that survives a restart is a number per project — `storageWarnedMib` in
+`settings.json`, beside `columnOrder` and `runSettings`, per project because the folder it is about
+is. **A threshold is announced once and arms itself again when the size falls back below it**: after
+*every* measurement the remembered number becomes the highest threshold the folder still reaches, so
+crossing 10 MiB says so once and stays quiet for the next 40, while cleaning down to 3 MiB clears the
+memory and the next crossing of 10 speaks again. Remembering only "already warned" would spend the
+whole mechanism on the first crossing of each step and say nothing ever after — which is exactly what
+the fixture bell did before this. Dismissing is the same write, which is why there is no dismissed
+flag: there is nothing a second one could express that this number does not.
+
+The ladder is 10, 50 and 100 MiB, weighed against **the active project's subdirectory** of the
+attachment store rather than the whole of it, and that follows from the Storage tab: the clean-up
+button reaches this project's folder and nothing else, so a warning summing in a neighbouring
+project and the unreachable files in the store's root would name a number a person cannot bring
+down. Announcing every project's folder was dropped as well, though it is honest: the only action
+for somebody else's folder is "switch project first", and it needs the stable project key mapped
+back to a path. A neighbouring project's folder stays quiet until somebody works in it.
+
+The size comes from `attachments_survey` — **the same command the Storage tab reads**, never a
+second one, because two commands measuring one folder eventually disagree and the screen a person is
+sent to would then argue with the card that sent them. `projectBytes` in `settings/storage.js` is
+the reading of it: `kept` plus `removable`, and `null` — not zero — whenever the board could not be
+read, which is the case worth knowing about. The survey counts nothing in that state by design, so a
+zero taken as a size would announce nothing about a folder that may be full *and* re-arm the ladder
+off a number nobody measured; it would also offer a Clean up button that Rust refuses. So an
+unreadable board changes nothing at all: no card made, none taken away, and the remembered threshold
+left where it is. Freshness is the answer the file tree and the branch already give — no watcher:
+at start once the project is resolved, on a project switch (in `projects.js`, after the new layout
+has landed *and* after `tracker_set_project`, since the survey is answered against the worker's idea
+of the active project), on window focus, and after an attachment is saved.
+
+Clean up opens the settings window **on the Storage section**, which is the one new piece of wiring:
+`settings_window_open` takes a `tab`, a window being built gets it as `?tab=storage` on the URL it
+already loads, and a window already open — which is focused rather than rebuilt — is told by the
+`settings:show` event. That event lives in `stores/app.js` rather than in `settings.js`'s three-event
+contract because nothing about it reaches `settings.json`: the main window is still the only writer.
+The closed list of sections stays in `SettingsWindow.vue` alone; Rust guards the *shape* of the name
+so nothing can smuggle a second parameter into the URL, and an unknown section opens on General.
+
+There are no toasts. The bell is the whole surface: a folder that has grown is not a person waiting
+on an answer, and the loud budget on that screen is one or two rows.
+
 ### Runs: a batch of the board, carried out by sessions
 
 A *run* is the app driving itself — read the board, start an agent session on a batch of it, wait for
@@ -1321,9 +1382,13 @@ id of the CLI agent to start, at the root;
 below that, `openProjects` is the list of
 projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
 a map from each project's absolute path to its content state (side tab, active tab, selected task,
-selected path, expanded folders, `openTabs`, `previewTab`, `columnOrder`, `runSettings`, `usedAt`).
-The last two are per project for the same reason the rest are: a status has no meaning in another
-repository's column order and a branch name has none in another repository. `runSettings` is what the
+selected path, expanded folders, `openTabs`, `previewTab`, `columnOrder`, `runSettings`,
+`storageWarnedMib`, `usedAt`). Three of those are per project for the same reason the rest are: a
+status has no meaning in another repository's column order, a branch name has none in another
+repository, and the attachment folder the bell weighs is a different folder for every project. The
+ladder `storageWarnedMib` is validated against is a closed list written out twice, in `model.rs` and
+in `components/notifications/notifications.js`; a value off it loses itself and costs one repeated
+warning. `runSettings` is what the
 run dialog opens on next time and is a mirror of `runs::model::RunSettings` **minus the scope** —
 deliberately its own type rather than a reuse, since this one lives in a file people edit by hand and
 has to tolerate anything while the other crosses the IPC boundary and must not, and deliberately

@@ -84,8 +84,7 @@ export const scope = {
   worktree: 'wt/bd-a1b2',
   branch: 'feat/worktree-rename',
   dirtyCount: 3,
-  agentsActive: 2,
-  notifications: 2
+  agentsActive: 2
 }
 
 export const inspector = {
