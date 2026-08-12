@@ -308,11 +308,14 @@ pub fn combine(per_repo: Vec<(String, Vec<(String, Option<i64>)>)>) -> Vec<Branc
 /// has no ref file for it at all, and offering nothing to merge into would be
 /// worse than offering the one branch that exists.
 ///
-/// Nothing in production calls this any more — the run dialog reaches these same three
-/// sources through `branches_with_recency` and `by_recency`, one repository at a time. It
-/// stays because this file's own tests read the sources through it, and the linked-worktree
-/// case below is the one they would lose first.
-pub fn branches(project: &Path) -> Vec<String> {
+/// **A test helper, and compiled only for the tests.** Nothing in production calls it any
+/// more — the run dialog reaches these same three sources through `branches_with_recency`
+/// and `by_recency`, one repository at a time. It stays because this file's own tests read
+/// the sources through it, and the linked-worktree case below is the one they would lose
+/// first. The `cfg` is what says so out loud: without it the compiler calls it dead code
+/// on every build, and a warning nobody can act on is how a real one goes unread.
+#[cfg(test)]
+fn branches(project: &Path) -> Vec<String> {
     by_recency(branches_with_recency(project))
 }
 
