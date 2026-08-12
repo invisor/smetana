@@ -195,12 +195,43 @@ impl Intent {
     }
 }
 
+/// The languages a session is started with: the one the agent talks to the
+/// person in, and the one the prose of a bd issue it writes is in.
+///
+/// Two fields rather than one, because they answer different questions and a
+/// person may want them apart: a lead who reads Russian may still keep a
+/// tracker their whole team reads in English.
+///
+/// It travels on the `Launch` rather than through `terminal_create`'s
+/// signature, so that a session started by a person and a batch started by a
+/// run get the same answer by construction — `terminal::service` reads it once,
+/// from the file, where both paths already meet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Languages {
+    /// What the agent says to the person is written in.
+    pub agent: String,
+    /// What the agent writes into bd is written in. The `##` section headings
+    /// are the exception and stay English whatever this says — `prompt.rs`
+    /// records why.
+    pub task: String,
+}
+
+impl Default for Languages {
+    fn default() -> Self {
+        Self { agent: DEFAULT_LANGUAGE.into(), task: DEFAULT_LANGUAGE.into() }
+    }
+}
+
 /// Everything a spawn needs before any agent has looked at it.
 pub struct Launch {
     pub profile: &'static dyn Profile,
     pub cwd: PathBuf,
     pub intent: Intent,
     pub skills: library::Skills,
+    /// What the session speaks and what it writes into the tracker. Read from
+    /// `settings.json` by the caller, for the reason `facts` is: `prompt.rs`
+    /// stays pure and the disk stays outside it.
+    pub languages: Languages,
     /// What a survey of the project found, already rendered. Only a `Setup`
     /// intent has any, and it is read by the caller for the same reason skill
     /// text is: `prompt.rs` stays pure and the disk stays outside it.
@@ -275,6 +306,54 @@ pub struct Autonomy {
 /// something else.
 pub const IDS: [&str; 2] = ["claude", "codex"];
 
+/// The languages a person may pick, as BCP-47 ids with the English name of
+/// each, and the only copy of that list — `settings/model.rs` validates against
+/// it rather than repeating it, exactly as it does for `IDS` above and for the
+/// reason recorded there.
+///
+/// The name is carried beside the id because it is not decoration: it is what
+/// `prompt.rs` writes into the prompt. An agent told to answer in `zh-Hans` is
+/// being handed a tag out of a settings file, where "Chinese (Simplified)" is
+/// a sentence.
+///
+/// English is first, and `the_default_language_leads_the_table` pins that:
+/// `language_name` falls back to the head of this list, and a table reordered
+/// under it would silently start naming some other language as the default.
+pub const LANGUAGES: [(&str, &str); 12] = [
+    ("en", "English"),
+    ("ru", "Russian"),
+    ("zh-Hans", "Chinese (Simplified)"),
+    ("es", "Spanish"),
+    ("hi", "Hindi"),
+    ("pt", "Portuguese"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("it", "Italian"),
+    ("tr", "Turkish"),
+];
+
+/// What both language settings mean when nobody has chosen and what a value off
+/// the table falls back to. English rather than an "Auto" that adds nothing to
+/// the prompt: an Auto default would be today's behaviour exactly, so the
+/// setting would do nothing for anybody until they went and changed it.
+pub const DEFAULT_LANGUAGE: &str = "en";
+
+/// Whether this is a language the app ships. `settings/model.rs` asks, so that
+/// a hand-edited file loses one field rather than a section.
+pub fn known_language(id: &str) -> bool {
+    LANGUAGES.iter().any(|(known, _)| *known == id)
+}
+
+/// The English name to write into a prompt for a language id, and total rather
+/// than optional: an id nobody ships reads as the default's name. `build` is
+/// pure and takes whatever it is handed, and an unknown tag written into the
+/// prompt raw would be an instruction nobody can follow.
+pub fn language_name(id: &str) -> &'static str {
+    LANGUAGES.iter().find(|(known, _)| *known == id).map_or(LANGUAGES[0].1, |(_, name)| *name)
+}
+
 pub fn resolve(id: &str) -> Option<&'static dyn Profile> {
     match id {
         "claude" => Some(&claude::Claude),
@@ -320,6 +399,33 @@ mod tests {
     #[test]
     fn an_unknown_id_resolves_to_nothing() {
         assert!(resolve("cursor").is_none());
+    }
+
+    #[test]
+    fn the_default_language_leads_the_table() {
+        // `language_name` falls back to the head of the list, so a table
+        // reordered under it would quietly start naming Russian, or Hindi, as
+        // what an unknown id means.
+        assert_eq!(LANGUAGES[0].0, DEFAULT_LANGUAGE);
+        assert!(known_language(DEFAULT_LANGUAGE));
+    }
+
+    #[test]
+    fn every_shipped_language_has_a_name_and_nothing_else_does() {
+        for (id, name) in LANGUAGES {
+            assert!(known_language(id), "{id}");
+            assert_eq!(language_name(id), name, "{id}");
+        }
+        assert!(!known_language("xx"));
+        assert_eq!(language_name("xx"), "English", "an id nobody ships reads as the default");
+    }
+
+    #[test]
+    fn a_session_with_nothing_chosen_speaks_the_default() {
+        assert_eq!(
+            Languages::default(),
+            Languages { agent: DEFAULT_LANGUAGE.into(), task: DEFAULT_LANGUAGE.into() }
+        );
     }
 
     #[test]

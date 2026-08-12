@@ -33,3 +33,14 @@ pub fn path(app: &AppHandle) -> Option<PathBuf> {
 pub fn agent(app: &AppHandle) -> String {
     path(app).map(|path| file::agent(&path)).unwrap_or_else(|| model::Settings::default().agent)
 }
+
+/// What a session started now should speak, and what it should write into bd.
+///
+/// Beside `agent` above and read the same way, from the disk on each call, and
+/// it is deliberately read here rather than taken from `terminal_create`'s
+/// arguments: `terminal::service` builds every session in the app, a person's
+/// and a run's alike, so reading it once there is what keeps the two from
+/// disagreeing. See the `Create` arm for the debounce this lives with.
+pub fn languages(app: &AppHandle) -> crate::agents::Languages {
+    path(app).map(|path| file::languages(&path)).unwrap_or_default()
+}

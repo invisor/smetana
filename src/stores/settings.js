@@ -43,6 +43,13 @@ const defaults = () => ({
      changes it, through `applyPatch` below. The defaults here and in Rust have
      to agree, the same as appearance and layout do. */
   agent: 'claude',
+  /* The language a session talks to the person in, and the language the prose
+     of a bd issue it writes is in — both BCP-47 ids, both at the root beside
+     `agent` because which language somebody wants to be spoken to in is a habit
+     of theirs rather than a property of a repository. The list of legal ids is
+     `agents::LANGUAGES` in Rust; these two defaults mirror its `en`. */
+  agentLanguage: 'en',
+  taskLanguage: 'en',
   openProjects: [],
   activeProject: null,
   project: {
@@ -243,6 +250,8 @@ export async function loadSettings() {
     settings.openProjects = stored.openProjects ?? []
     settings.activeProject = stored.activeProject ?? null
     settings.agent = stored.agent ?? base.agent
+    settings.agentLanguage = stored.agentLanguage ?? base.agentLanguage
+    settings.taskLanguage = stored.taskLanguage ?? base.taskLanguage
   } catch (err) {
     console.error('[settings] the read failed, taking the defaults:', err)
   }
@@ -271,13 +280,14 @@ export async function loadSettings() {
 
    - `settings:hello` — the settings window has opened and wants the truth;
    - `settings:state` — the main window's answer, and its announcement after any
-     change: the flat five fields the settings window draws;
+     change: the flat set of fields the settings window draws, which is whatever
+     `toShared` below builds;
    - `settings:apply` — one edit, from the settings window to the main window.
 
    The payload is flat rather than a slice of the settings tree, because it is a
-   message and not the settings: three of its five fields live in three different
-   sections, and a nested shape would invite somebody to send a whole section and
-   quietly blank the fields they left out. */
+   message and not the settings: its fields come from several different sections
+   of that tree, and a nested shape would invite somebody to send a whole section
+   and quietly blank the fields they left out. */
 export const SETTINGS_APPLY = 'settings:apply'
 export const SETTINGS_STATE = 'settings:state'
 export const SETTINGS_HELLO = 'settings:hello'
@@ -295,7 +305,9 @@ function toShared(source) {
     density: appearance.density,
     uiFontSize: appearance.uiFontSize,
     editorFontSize: editor.fontSize,
-    agent: source.agent ?? base.agent
+    agent: source.agent ?? base.agent,
+    agentLanguage: source.agentLanguage ?? base.agentLanguage,
+    taskLanguage: source.taskLanguage ?? base.taskLanguage
   }
 }
 
@@ -315,7 +327,9 @@ export const sharedSettings = () => toShared(settings)
    `agent` is the exception that proves the rule: the list of agent ids lives in
    `agents::IDS` and Rust is the only party that holds it, so anything non-empty
    travels and an id nobody ships is dropped on the way to the file — which is
-   exactly what `Settings::validate` already does for a hand-edited one. */
+   exactly what `Settings::validate` already does for a hand-edited one. The two
+   languages are checked the same way and for the same reason: `agents::LANGUAGES`
+   is Rust's list, so what is guarded here is the shape and not the vocabulary. */
 export function applyPatch(patch) {
   if (!patch || typeof patch !== 'object') return
   if (THEME_CHOICES.some((choice) => choice.value === patch.theme)) {
@@ -329,6 +343,12 @@ export function applyPatch(patch) {
   }
   if (typeof patch.agent === 'string' && patch.agent) {
     settings.agent = patch.agent
+  }
+  if (typeof patch.agentLanguage === 'string' && patch.agentLanguage) {
+    settings.agentLanguage = patch.agentLanguage
+  }
+  if (typeof patch.taskLanguage === 'string' && patch.taskLanguage) {
+    settings.taskLanguage = patch.taskLanguage
   }
 }
 

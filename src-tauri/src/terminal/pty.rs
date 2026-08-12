@@ -351,6 +351,7 @@ mod tests {
                 superpowers_installed: true,
             },
             facts: None,
+            languages: agents::Languages::default(),
         }
     }
 
@@ -504,7 +505,7 @@ mod tests {
         // wording belongs to `prompt.rs` and is pinned by its own tests, and a
         // second copy of it here would only have to be edited twice.
         assert!(
-            argv.last().unwrap().to_string_lossy().starts_with("Update bd issue smetana-7 (\"x y\")"),
+            argv.last().unwrap().to_string_lossy().contains("Update bd issue smetana-7 (\"x y\")"),
             "{argv:?}"
         );
     }
