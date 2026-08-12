@@ -407,6 +407,11 @@ const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
 const galleryAgent = ref('claude')
+/* The Agents tab's two language pickers. Not both on English: the longest label
+   either list holds is the one worth looking at, and a tab showing "English"
+   twice would never draw it. */
+const galleryAgentLanguage = ref('ru')
+const galleryTaskLanguage = ref('zh-Hans')
 /* `attachments_survey`'s answer in Rust's own shape — a store bigger than this
    project's share of it, some of that share in use and some of it not. */
 const gallerySurvey = {
@@ -1280,7 +1285,14 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <EditorSettings :font-size="galleryEditorFont" @update:font-size="galleryEditorFont = $event" />
         </div>
         <div :style="{ width: '380px' }">
-          <AgentSettings :agent="galleryAgent" @update:agent="galleryAgent = $event" />
+          <AgentSettings
+            :agent="galleryAgent"
+            :agent-language="galleryAgentLanguage"
+            :task-language="galleryTaskLanguage"
+            @update:agent="galleryAgent = $event"
+            @update:agent-language="galleryAgentLanguage = $event"
+            @update:task-language="galleryTaskLanguage = $event"
+          />
         </div>
         <!-- The Storage tab in the three states worth looking at: something to
              delete, with the count and the size a person reads before pressing;

@@ -786,6 +786,50 @@ substitution happens silently and the only way to see it is the terminal itself.
 is installed the session fails with `NoAgent` — a write failing loudly, which is the rule everywhere
 else here.
 
+`agents::LANGUAGES` is the same idea one field over: the twelve languages a person may choose,
+as BCP-47 ids **with the English name of each**, and the only copy of that list —
+`settings/model.rs` validates `agentLanguage` and `taskLanguage` against it exactly as it validates
+`agent` against `IDS`, and the name is carried beside the id because the name is what goes into the
+prompt. `zh-Hans` is a tag out of a settings file; "Chinese (Simplified)" is a sentence. Both
+default to `en` rather than to an Auto position, which would have meant "say nothing about
+language" — today's behaviour exactly, so an update would change nothing for anybody until they went
+and chose. The visible price of that is deliberate: `Intent::Bare` no longer opens on nothing, since
+it now carries the one sentence naming the conversation language, and the alternative was that the
+one session where a person talks to the agent most is the one session the setting cannot reach.
+
+Neither language crosses the IPC. `terminal_create`'s signature is unchanged and the run worker
+threads no new argument: `settings::languages(app)` reads the file where `settings::agent(app)`
+already does, and `terminal::service`'s `Create` arm calls it while building the `Launch`. That is
+the one place every session in the app is built, so a person's session and a run's batch get the
+same answer by construction rather than because two call sites were kept in step. From the `Launch`
+the two ids reach `prompt::build`, which stays pure.
+
+Two costs come with reading it there and both are accepted. A session started in the same fraction
+of a second as a language change reads the previous language, since the front end writes settings on
+a 400 ms debounce — the same lag `settings::agent(app)` already lives with in `runs::service`. And a
+run reads the languages **per batch**, where it snapshots its agent and its whole `RunSettings` once
+and carries them, so a language changed at 2am reaches the next batch and one run's issues can end up
+in two languages. Snapshotting them onto `Intent::Run` instead would put the languages back on a
+second road into a session, which is exactly what reading them in the one place exists to prevent.
+
+What each moves is not the same. The conversation language goes into **every** intent; the task
+language goes only where the agent writes into bd — `NewTask`, `EditTask`, `ResolveTask` and `Run` —
+and it carries a caveat that is not optional, because what the setting must never move is a string
+some other piece of software matches on. The `##` section headings, because
+`bd create --validate` matches the wording of a heading and nothing else, so a translated
+`## Acceptance Criteria` is not a difference of style but bd refusing the issue. And the markers a
+note begins with: `parked:` and `resolved:` are matched as literals by
+`components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked card's
+dialog then says nothing is open while the Ready warning goes quiet — the failure is silent and lands
+on somebody trying to answer a parked task. What the setting moves is the title, the body of the
+description, the criteria themselves and what follows the colon in a note; not the markup and not the
+markers. Specifications and plans are English whatever either setting says (`IN_ENGLISH` in
+`prompt.rs`, appended once to whichever stages were asked for): they are read by whoever picks the
+work up months later and by every agent after them, and the repository they sit beside is English
+throughout. A setting for the language of *code comments* was asked for and refused, for the reason
+the top of this document gives — it would either do nothing in any repository with a convention, or
+produce exactly the regression the Language section names.
+
 Two directories under `src-tauri/resources/` are the library itself, both bundle resources.
 `smetana/` is ours — the directory is the list, for the reason the test-count note under Commands
 gives, and today it holds `filing-a-task`, `resolving-questions`, `provisioning`, `running-tasks`,
@@ -1130,6 +1174,8 @@ other caller.
 | `usage.rs` | what the subscription has left, and whether to run at full size, a smaller one, or not yet |
 | `browser.rs` | whether there is anything on this machine to drive a browser with — pure over file contents and directory listings, and where those tests are |
 | `queue.rs` | what is left to do and whether to run another batch — pure, and where the tests are |
+| `summary.rs` | what the run did, as a diff of the board between its first read and its last — pure, and where those tests are |
+| `report.rs` | that summary and the batches' own accounts, rendered into a self-contained HTML document — pure, and where those tests are |
 | `service.rs` | the worker: the loop, one run per scope per project |
 | `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
 
@@ -1300,6 +1346,74 @@ the docs will reasonably conclude the folder belongs there too, or reasonably co
 and the answer then differs from project to project. The app decides once, in code. `amend` is pure
 and carries the tests; it treats `.smetana`, `.smetana/`, `/.smetana` and even the negation
 `!.smetana` as already covered, that last one because it can only have been typed on purpose.
+
+### The run's own account of itself
+
+A run used to end saying one word — `Queue empty`, `Crashed`, `Cancelled` — and that was the whole
+of what the app had to say about however many hours it just spent. `summary.rs` and `report.rs` are
+the other half: the app keeping its own record and writing it out as an HTML document under
+`.smetana/reports/YYYY-MM-DD-HHMMSS.html`. Timestamped rather than keyed by the run's `token`,
+because that counts from zero on every app start and would collide across restarts, and nothing
+ever deletes one — they are small text, and deciding when a record of a night's work stops
+mattering is not this app's call. One second is not one run, though, since a project holds several
+at once (smetana-5hf), so `claim_report` *makes* the file with `create_new` and walks a `-2`, `-3`
+suffix rather than checking whether the path exists: the two runs are on two loop tasks, so the
+creation itself has to be the exclusive step, and the token is deliberately not the disambiguator
+— leaning on it here would reintroduce exactly the restart collision the timestamp was chosen to
+avoid.
+
+**Three facts about what the app can know decide the whole shape.** It can see the board and its own
+clock, so *which* tasks moved and *how long* the run took are its to work out. It cannot see what was
+*done* — nothing comes back from a session but an exit code, the same missing channel `claimedBy` in
+`terminals.js` reconstructs around and `SessionWork::Run` already refuses to invent — so the lead is
+asked for it: one JSON file per batch at `.smetana/runs/<token>/batch-<n>.json`, named in the `Run`
+prompt and in `running-tasks`, in addition to the prose report that skill already ends with. And it
+cannot see per-task time: a batch may hold several tasks with no signal at either end of one of
+them, so a task gets a duration of its own **only when its batch held exactly one**, where the two
+are the same number and nothing is inferred.
+
+Attribution is a **board diff**, not an actor match: a task is this run's when it is `closed` now and
+was not `closed` at the baseline, which is the first board read inside the loop, after the preflight.
+`queue::claimed_by` reads the run's own `BEADS_ACTOR` and would have been the obvious alternative,
+but it misses two real cases — an orphan Phase R recovered from a *previous* killed run carries that
+dead run's actor, and an epic closed in Phase 3 was never claimed by anybody. The diff's own cost is
+named instead: a task a person closes by hand in another window while the run is going is credited to
+the run. The report's scope is deliberately wider than `queue::in_scope` — an epic run reports the
+epic itself, since Phase 3 closes it and a summary leaving it out is missing the ending, and the
+priority floor is not applied, since it decides what may be *taken*. The merge lock is excluded
+through `queue::is_lock` itself rather than a second copy of the label.
+
+`RunSummary.tasks` is an `Option`, and that is the point of the type: `None` means the diff could not
+be computed — the run died in the preflight so there is no baseline, or the final board read failed —
+and it is **never** rendered as "0 closed, 0 parked". Same rule as `projectBytes` and
+`cleanup::refusal`: an unreadable board and an empty board are opposite facts. A batch that left no
+file, or an unparseable one, is likewise named in the document as having left no account of itself
+rather than drawn as an empty row, while its tasks still appear from the board.
+
+**Every ending the loop task reaches goes through one `finish(...)` in `service.rs`, and that
+consolidation is the feature.** There were about a dozen exits into `RunState::Stopped` in that
+function, and a dozen call sites is how the next ending somebody adds quietly arrives with no report
+behind it — so `finish` is the only thing that ever makes a `RunSummary`, and `advance` clears the
+field on every transition that is not `Stopped`, which is what makes "`None` in every state but
+`Stopped`" a property of the type rather than a habit. `finish` reads the board once more through
+`fresh_board`, for the ~2 s resync the run's own last writes need, at a moment when nothing is
+waiting on it. `did` is agent-written text going into a document a person opens and is HTML-escaped
+without exception.
+
+**The loop is not the only thing that reaches `Stopped`, though, and that is the one wrinkle worth
+knowing before touching either half.** `request_stop` ends a run with nothing in flight *at once* —
+which is what makes the button immediate and what lets it reach a paused one — so for a stop landing
+between batches, on a run waiting out a spent allowance overnight, or during the preflight, the
+worker's copy is already `Stopped { Cancelled }` by the time the loop looks at the channel. The loop
+then runs `finish`, writes the document correctly, and reports a run `absorb` refuses, because
+nothing revives a stopped run. Left there, the file sat on disk and the `Run` on the wire said there
+was none. So `Run::take_summary_from` is `adopt`'s narrow opposite number: from a report about a run
+this side has already ended it takes **the summary and nothing else**, once, and emits the result.
+The ending deliberately does not travel with it — somebody pressed stop and was told `Cancelled`,
+while the loop may have got as far as reading the board and finding the queue empty a moment later,
+and rewriting the reason under them would put a different run's story on the bar. Neither of the two
+properties the map rests on moves: the stop is still immediate, and an entry still leaves in exactly
+one place, `Report::Ended`.
 
 ### What an unclean exit leaves, and who clears it
 
@@ -1534,8 +1648,9 @@ and where the tests are; `file.rs` is the disk (atomic write through a per-call 
 thin commands.
 
 The file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed state and
-width for each side), `editor` with its own `fontSize`, and `agent`, the
-id of the CLI agent to start, at the root;
+width for each side), `editor` with its own `fontSize`, `agent`, the
+id of the CLI agent to start, and `agentLanguage` and `taskLanguage`, the two languages that agent
+works in, at the root;
 below that, `openProjects` is the list of
 projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
 a map from each project's absolute path to its content state (side tab, active tab, selected task,
@@ -1554,7 +1669,8 @@ open the dialog claiming to run something nobody clicked. The open tabs are path
 relative to the project root — the key already carries the absolute part, and a moved folder does
 not turn the list into rubbish. The map never crosses the IPC boundary: `settings_load` returns the
 resolved view for one project
-(`{ appearance, layout, editor, agent, project, openProjects, activeProject }`) and
+(`{ appearance, layout, editor, agent, agentLanguage, taskLanguage, project, openProjects,
+activeProject }`) and
 `settings_save` puts it back, stamps `usedAt` on the active project and trims `projects` toward the
 20 most recently used — but never evicts the current project or anything still in `openProjects`, so
 the cap only bites entries from past visits that were closed, not projects a person still has open.
@@ -1567,8 +1683,9 @@ ceiling and then destroys the window itself — the window always closes, a slow
 last edit rather than the app.
 
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
-an opened tab. Four fields are the exception and they are what the settings window edits —
-`appearance.theme`, `appearance.uiFontSize`, `editor.fontSize` and `agent`. Density is not among
+an opened tab. A handful of fields are the exception and they are what the settings window edits —
+`appearance.theme`, `appearance.uiFontSize`, `editor.fontSize`, `agent` and the two languages beside
+it. Density is not among
 them, deliberately: nothing has asked for it yet, and a screen full of switches nobody wanted is
 worse than a short one. `?theme=` and `?density=` still override the first two for one run and are
 deliberately **not** written back — one visit to the dev server must not repaint the app forever.
@@ -1660,7 +1777,11 @@ row brought into view on opening and on walking off either end, since the shippe
 fourth of fifteen and anything above about 17px opened on a list with no visible answer in it.
 Agents is the one place in the front
 end that ever *names* an agent: the ids are still `agents::IDS` and Rust still drops one it does not
-ship, so this is a set of labels for ids Rust already knows. The subscription block under it is a
+ship, so this is a set of labels for ids Rust already knows. The two language pickers under it are
+the same doubling against `agents::LANGUAGES`, accepted for the same reason — Rust validates the
+ids, so drift costs a stale label rather than a lost setting — and all three rows share one control
+column, wider than the shipped default because `Dropdown` ellipsises a label that does not fit and
+"Chinese (Simplified)" is the longest either list holds. The subscription block under it is a
 placeholder with dashes and a sentence saying so — a block of invented numbers under a real setting
 would claim the app knows something it does not, which is what the fixture log pane was removed for.
 
@@ -1744,7 +1865,7 @@ bound with `:style`, and every value in it is a `var(--token)` reference (see `c
 - Never hardcode a colour, radius, spacing or font value. If a token does not exist for what you
   need, that is a design-system question, not a licence to write `#hex` or `8px`.
 
-Two exceptions, and exactly two. The first is `components/files/editor/theme.js`. CodeMirror renders
+Three exceptions, and exactly three. The first is `components/files/editor/theme.js`. CodeMirror renders
 its own DOM, and the only way to reach it is CSS rules, so this one file is allowed to produce them,
 through `EditorView.theme()`. The rule is narrowed, not lifted — every value inside is still a
 `var(--token)` reference, and no `#hex`, no `px` and no gradient belongs there. `@codemirror/search`'s
@@ -1760,6 +1881,14 @@ parallel in the editor — flipping `data-theme` does **not** repaint the termin
 why `TerminalView.vue` carries a `MutationObserver` on the root's attributes. The rule is narrowed the
 same way: every value still comes from a token, and no `#hex`, `px` or font literal belongs in that
 file.
+
+The third is `src-tauri/src/runs/report.rs`, and it is the widest of the three because it is the
+only one whose output is not this app's screen at all: it renders the run report, a self-contained
+HTML document somebody opens in a browser with nothing of ours loaded, so there is no stylesheet
+around it and nothing would resolve a custom property. A token reference there would simply be an
+unresolved variable. What replaces the rule rather than lifting it: no external stylesheet, no font
+off a network, no script and no image — the document reaches nowhere at all, which is also what
+makes it safe to hand to a sandboxed frame.
 
 `styles/styles.css` is an `@import` list only; the tokens live in `styles/tokens/`. `tokens/base.css`
 holds element defaults (focus ring, selection, scrollbar) and the only three global classes in the

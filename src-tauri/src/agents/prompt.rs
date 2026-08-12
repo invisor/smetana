@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use super::library::Skills;
-use super::{cascade, ImageDelivery, Intent, SkillDelivery, Stage, TaskDraft};
+use super::{cascade, ImageDelivery, Intent, Languages, SkillDelivery, Stage, TaskDraft};
 use crate::runs::model::{RunMode, RunScope, RunSettings};
 
 /// The sentence that makes the agent talk the task through. It has to stand on
@@ -70,6 +70,24 @@ const SPEC: &str =
     "Write the design the discussion produces to \
      .smetana/docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md — today's date, and a short \
      slug of what this is about for the topic.";
+
+/// Specifications and plans are English whatever either language setting says,
+/// and this is the sentence that says so — once, at the end of whichever of the
+/// four stage constants here were emitted, rather than written into each of
+/// them and then repeated when two of them meet.
+///
+/// A design document and a plan are read by whoever picks the work up months
+/// later and by every agent after them, and the repository they sit beside is
+/// English throughout — so this is the one piece of writing `taskLanguage`
+/// deliberately does not move. It names the conversation as well as the
+/// setting, because by then the agent is talking to the person in their own
+/// language and would otherwise carry that language into the file by mimicry.
+/// It names a directory rather than a document, so that the same sentence is
+/// true whether one file was asked for or both.
+const IN_ENGLISH: &str =
+    " Everything written under .smetana/docs/ is in English, whatever language we are talking in: \
+     it is read by whoever picks this up months from now, and the repository it sits beside is \
+     English throughout.";
 
 /// The same stage on `Auto`: the test stated, the judgement left to the agent,
 /// the way `JUDGE` does one level up.
@@ -197,9 +215,107 @@ const SETUP: &str = "Work out what this project is made of and write .smetana/pr
      the file Smetana reads before it runs anything here. Check the commands before you write \
      them in, and ask me about anything the folder does not answer.";
 
-/// What the session opens on. `None` means nothing is imposed and the agent
-/// starts on an empty prompt.
+/// The language the agent talks to the person in, and it goes into every
+/// intent — `Bare` included, which is why that one no longer opens on nothing.
+///
+/// That follows from an English default with no Auto position: an Auto would
+/// mean "say nothing about language", which is today's behaviour exactly, so
+/// the setting would do nothing for anybody until they changed it. The price is
+/// visible and was taken deliberately — "+ New agent" opens having submitted
+/// one sentence — because the alternative is that the one session where a
+/// person talks to the agent most is the one session the setting cannot reach.
+fn conversation(language: &str) -> String {
+    format!(
+        "Talk to me in {language}: everything you say to me in this session, whatever language \
+         the code, the files and the tracker in front of you happen to be written in."
+    )
+}
+
+/// The language the prose of a bd issue is written in, and it goes only where
+/// the agent writes into bd.
+///
+/// The caveat is not optional and is why this is prose rather than one clause.
+/// What this setting moves is prose; what it must not move is any string
+/// another piece of software matches on, and an issue carries two families of
+/// those.
+///
+/// The `##` section headings, because `bd create --validate` matches the
+/// wording of a heading and nothing else — a translated `## Acceptance
+/// Criteria` is not a stylistic difference, it is bd refusing to create the
+/// issue.
+///
+/// And the notes' markers, because this app reads them itself. `parked:` is
+/// written by `runs::queue::parking_note` and by `smetana:running-tasks` when a
+/// lead parks by hand, `resolved:` by a resolving session, and
+/// `components/kanban/parked.js` matches both — `/^\s*parked:\s*(.+)$/i` and
+/// `/^\s*resolved:\s*/i`. Case and leading space are free there; the word and
+/// its colon are not. A translated marker fails silently and in the worst
+/// place: `openQuestions` returns nothing, so the parked card's "Answer
+/// questions" dialog says there is nothing open, and moving that card to Ready
+/// stops warning about the question that parked it. This paragraph is what
+/// opens that hole — it is the sentence asking for the notes in another
+/// language — so it is the sentence that has to close it.
+fn task_language(language: &str) -> String {
+    format!(
+        "Write the prose of any bd issue you create or change in {language}: the title, the body \
+         of the description, the acceptance criteria themselves, the notes. Two things stay in \
+         English, because they are matched as literal strings rather than read. The `##` section \
+         headings, exactly as they are written today — ## Acceptance Criteria, ## Steps to \
+         Reproduce, ## Success Criteria, ## Decision, ## Rationale, ## Alternatives Considered: \
+         `bd create --validate` matches the wording of a heading and nothing else, so a \
+         translated heading is not a difference of style, it is bd refusing the issue. And the \
+         markers a note begins with — a note still opens `parked:` or `resolved:` in English, and \
+         only what follows the colon is written in {language}, because the app reads those two \
+         words to tell an open question from an answered one."
+    )
+}
+
+/// Whether this session writes into the tracker, which is the whole of what
+/// `taskLanguage` is about. A setup session writes one toml file and a bare one
+/// has no work at all — telling either how to word an issue would be prose
+/// about something that is not going to happen.
+fn writes_to_the_tracker(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::NewTask { .. } | Intent::EditTask { .. } | Intent::ResolveTask { .. } | Intent::Run { .. }
+    )
+}
+
+/// What the session opens on. Never `None` any more: the conversation language
+/// is said in every intent, so even the "+ New agent" row opens on one
+/// sentence. The `Option` stays because it is the profiles' contract for "is
+/// there a positional argument", and a caller that stops reading the signature
+/// here is one that stops passing the prompt.
 pub fn build(
+    intent: &Intent,
+    delivery: SkillDelivery,
+    images: ImageDelivery,
+    skills: &Skills,
+    facts: Option<&str>,
+    text: SkillText,
+    languages: &Languages,
+) -> Option<String> {
+    // The language rules come first, before the work rather than after it, for
+    // the reason `stages` gives about a skill body: what is said last can be
+    // pushed off the top of what the agent reads first by 7 KB of process, and
+    // these two paragraphs are short enough to cost nothing at the front.
+    let mut out = conversation(crate::agents::language_name(&languages.agent));
+    if writes_to_the_tracker(intent) {
+        out.push_str("\n\n");
+        out.push_str(&task_language(crate::agents::language_name(&languages.task)));
+    }
+    if let Some(body) = body(intent, delivery, images, skills, facts, text) {
+        out.push_str("\n\n");
+        out.push_str(&body);
+    }
+    Some(out)
+}
+
+/// The work itself, with nothing about language in it. `None` is the bare
+/// session: a person with their own reason, and nothing to impose on them
+/// beyond the one sentence `build` puts in front of this.
+#[allow(clippy::too_many_arguments)]
+fn body(
     intent: &Intent,
     delivery: SkillDelivery,
     images: ImageDelivery,
@@ -236,7 +352,9 @@ pub fn build(
             ))
         }
         Intent::Setup => Some(setup(delivery, skills, facts)),
-        Intent::Run { settings } => Some(run(settings, delivery, skills)),
+        Intent::Run { settings, reports, batch } => {
+            Some(run(settings, reports, *batch, delivery, skills))
+        }
     }
 }
 
@@ -249,7 +367,13 @@ pub fn build(
 /// reads out of `.smetana/project.toml` itself, which is also what keeps a
 /// batch reading the config as it is now rather than as it was when the run
 /// started.
-fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> String {
+fn run(
+    settings: &RunSettings,
+    reports: &Path,
+    batch: u32,
+    delivery: SkillDelivery,
+    skills: &Skills,
+) -> String {
     let mut out = String::from("Work this project's bd tracker. ");
 
     match &settings.scope {
@@ -348,6 +472,26 @@ fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> Stri
             );
         }
     }
+
+    // The one fact about this batch no skill can carry, because it names a path
+    // that exists for this run and this batch alone. The app can see the board
+    // and its own clock and nothing else — what a session *did* comes back from
+    // it as an exit code and nothing more — so the account is asked for here.
+    // Stated as a record rather than a gate on purpose: the report's skeleton is
+    // built from the board whatever happens, and a batch that leaves no file is
+    // named in the document rather than drawn as an empty row.
+    let _ = write!(
+        out,
+        "\n\nWhen this batch is finished, and before you hand back, write your own account of it \
+         to {} — the directory already exists. Smetana reads that file and nobody else does, so \
+         it is JSON in exactly this shape: {{\"tasks\": [{{\"id\": \"<bd id>\", \"did\": \"one or \
+         two sentences on what you actually did\"}}], \"notes\": \"anything about the batch as a \
+         whole, or leave it out\"}}. Put a line in it for every task you touched, the ones you \
+         parked included, saying what stopped them. This is in addition to the report you hand \
+         back in this conversation and replaces no part of it. If the file cannot be written, \
+         carry on regardless — it is a record, not a gate.",
+        reports.join(format!("batch-{batch}.json")).display()
+    );
     out
 }
 
@@ -561,6 +705,10 @@ fn stages(
         (Stage::On, SkillDelivery::Inline) => {}
     }
 
+    // Last of the paragraph, and unconditional: whichever stages were asked
+    // for, what they produce is English.
+    out.push_str(IN_ENGLISH);
+
     out.push_str("\n\n");
     out.push_str(PAPERWORK);
 
@@ -689,6 +837,19 @@ mod tests {
     const RESOLVING: &str = "# Resolving\n\nEverything below the last resolved line is open.";
     const PLANS: &str = "# Writing plans\n\nEvery step names the file it touches.";
 
+    /// The shipped pair: both settings on their default. What almost every
+    /// test here is about is not the language, so this is the fixture that
+    /// keeps the language out of the way.
+    fn english() -> Languages {
+        Languages::default()
+    }
+
+    /// One language chosen for both, which is the case a person who does not
+    /// work in English is actually in.
+    fn russian() -> Languages {
+        Languages { agent: "ru".into(), task: "ru".into() }
+    }
+
     /// Nothing read: what a PluginDir harness always gets, and what an Inline
     /// harness gets when the files cannot be read.
     fn nothing() -> SkillText<'static> {
@@ -723,8 +884,69 @@ mod tests {
         }
     }
 
+    /// The intent a run's batch actually arrives as. The directory and the
+    /// batch number are the run's own and are not in any file, so a fixture
+    /// names them the way `runs::service` builds them.
+    fn run_intent(settings: RunSettings) -> Intent {
+        Intent::Run {
+            settings,
+            reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
+            batch: 2,
+        }
+    }
+
     fn run_prompt(settings: RunSettings, delivery: SkillDelivery) -> String {
-        build(&Intent::Run { settings }, delivery, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap()
+        build(&run_intent(settings), delivery, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_run_names_the_exact_file_its_batch_writes_its_account_to() {
+        // The app cannot see what a session did — an exit code is the whole of
+        // what comes back — so the account is asked for, by name. The number is
+        // the app's and not the agent's: a batch working the file name out for
+        // itself is one the app could not then match to the batch it timed.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), delivery);
+            assert!(text.contains("/p/.smetana/runs/7/batch-2.json"), "{delivery:?}: {text}");
+            assert!(text.contains("\"did\""), "the shape is named too: {text}");
+            assert!(
+                text.contains("record, not a gate"),
+                "a batch that cannot write it carries on: {text}"
+            );
+            assert!(
+                text.contains("replaces no part of it"),
+                "the JSON is beside the prose report, never instead of it: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_other_intent_is_asked_for_a_batch_account() {
+        // The file belongs to a run's batch and to nothing else: there is no
+        // batch behind a filing session or an edit, and no directory made for
+        // one either.
+        for intent in [
+            Intent::Bare,
+            Intent::Setup,
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            new_task(Stage::On),
+        ] {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text = build(
+                    &intent,
+                    delivery,
+                    ImageDelivery::InPrompt,
+                    &skills(),
+                    Some(FACTS),
+                    every_skill(),
+                    &english(),
+                )
+                .unwrap_or_default();
+                assert!(!text.contains(".smetana/runs/"), "{intent:?}/{delivery:?}: {text}");
+            }
+        }
     }
 
     #[test]
@@ -892,15 +1114,29 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_session_opens_on_nothing() {
-        assert!(build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).is_none());
+    fn a_bare_session_opens_on_the_language_and_nothing_else() {
+        // It used to open on nothing at all, and that changed with the choice
+        // of an English default over an Auto position: the one session where a
+        // person talks to the agent most cannot be the one the setting never
+        // reaches. What is imposed is still only the language — a bare session
+        // has no work, so there is nothing else to say.
+        let text = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
+            .expect("a bare session opens on the language sentence");
+        assert_eq!(text, conversation("English"));
+
+        let russian = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &russian())
+            .expect("builds");
+        assert!(russian.contains("Russian"), "{russian}");
     }
 
     #[test]
     fn editing_an_issue_names_it_and_asks_what_to_change() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
-        assert_eq!(text, format!("Update bd issue smetana-7 (\"x y\"). {EDIT}"));
+        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english()).unwrap();
+        // The work is the whole of the prompt after the language paragraphs,
+        // which is what `ends_with` pins here: an edit session is told what to
+        // do and nothing more.
+        assert!(text.ends_with(&format!("Update bd issue smetana-7 (\"x y\"). {EDIT}")), "{text}");
         assert!(text.contains("ask me what to change"), "{text}");
     }
 
@@ -917,23 +1153,36 @@ mod tests {
         // hands over mid-instruction, which is exactly what a dangling colon,
         // comma or dash looks like.
         for intent in [
+            Intent::Bare,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
             Intent::Setup,
             new_task(Stage::Auto),
             new_task(Stage::On),
             new_task(Stage::Off),
-            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
+            run_intent(run_settings(RunMode::Auto, RunScope::Queue)),
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-                let text =
-                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill())
-                        .unwrap();
-                let end = text.trim_end();
-                assert!(
-                    !end.ends_with([':', ',', '—', '-']),
-                    "{intent:?}/{delivery:?} hands the agent an unfinished instruction: {end}"
-                );
+                // Both language settings as well: every one of these prompts
+                // now opens on a sentence this walk has to cover.
+                for languages in [english(), russian()] {
+                    let text = build(
+                        &intent,
+                        delivery,
+                        ImageDelivery::InPrompt,
+                        &skills(),
+                        Some(FACTS),
+                        every_skill(),
+                        &languages,
+                    )
+                    .unwrap();
+                    let end = text.trim_end();
+                    assert!(
+                        !end.ends_with([':', ',', '—', '-']),
+                        "{intent:?}/{delivery:?}/{languages:?} hands the agent an unfinished \
+                         instruction: {end}"
+                    );
+                }
             }
         }
     }
@@ -941,14 +1190,14 @@ mod tests {
     #[test]
     fn editing_an_issue_is_never_given_a_filing_skill() {
         let intent = Intent::EditTask { id: "smetana-7".into(), title: "x y".into() };
-        let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
+        let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english()).unwrap();
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
     }
 
     fn resolving(delivery: SkillDelivery, text: SkillText) -> String {
         let intent =
             Intent::ResolveTask { id: "smetana-29j".into(), title: "Show the state".into() };
-        build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, text).unwrap()
+        build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, text, &english()).unwrap()
     }
 
     #[test]
@@ -1025,11 +1274,11 @@ mod tests {
             Intent::Bare,
             Intent::Setup,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
-            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
+            run_intent(run_settings(RunMode::Auto, RunScope::Queue)),
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
                 let text =
-                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill())
+                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill(), &english())
                         .unwrap_or_default();
                 assert!(!text.contains(RESOLVE_WRITE), "{intent:?}/{delivery:?}: {text}");
                 assert!(!text.contains("smetana:resolving-questions"), "{intent:?}/{delivery:?}");
@@ -1040,7 +1289,7 @@ mod tests {
     fn drafted(draft: TaskDraft) -> String {
         let intent =
             Intent::NewTask { brainstorm: Stage::Off, spec: Stage::Off, plan: Stage::Off, draft };
-        build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap()
+        build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english()).unwrap()
     }
 
     #[test]
@@ -1094,7 +1343,7 @@ mod tests {
                 ..draft()
             },
         };
-        build(&intent, SkillDelivery::PluginDir, image_delivery, &skills(), None, nothing()).unwrap()
+        build(&intent, SkillDelivery::PluginDir, image_delivery, &skills(), None, nothing(), &english()).unwrap()
     }
 
     #[test]
@@ -1140,7 +1389,7 @@ mod tests {
             draft: TaskDraft { images: vec!["/data/a.png".into()], ..draft() },
         };
         let text =
-            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing())
+            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
                 .unwrap();
         assert!(text.contains("There is an image attached to this task, at this absolute path"), "{text}");
         assert!(text.contains("Open and look at it before"), "{text}");
@@ -1163,7 +1412,7 @@ mod tests {
         // so a leak of either into the Off arm would say nothing about the
         // process and still pass a substring check on that word alone.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            let text = build(&new_task(Stage::Off), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
+            let text = build(&new_task(Stage::Off), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english()).unwrap();
             assert!(!text.contains(DISCUSS), "{delivery:?}: off must not carry the discussion prose");
             assert!(!text.contains(JUDGE), "{delivery:?}: off must not carry the judgement prose");
         }
@@ -1179,7 +1428,7 @@ mod tests {
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
             for mode in [Stage::Off, Stage::Auto, Stage::On] {
                 let text =
-                    build(&new_task(mode), delivery, ImageDelivery::InPrompt, &skills(), None, nothing())
+                    build(&new_task(mode), delivery, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
                         .unwrap();
                 assert!(text.contains(STANDARD), "{delivery:?}/{mode:?}: {text}");
             }
@@ -1193,7 +1442,7 @@ mod tests {
         // an update. Leaking it would tell those sessions to validate a call
         // they are not making.
         for intent in [Intent::Bare, Intent::Setup, Intent::EditTask { id: "x-1".into(), title: "T".into() }] {
-            let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill())
+            let text = build(&intent, SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english())
                 .unwrap_or_default();
             assert!(!text.contains(STANDARD), "{intent:?}: {text}");
         }
@@ -1205,7 +1454,7 @@ mod tests {
         // from the PluginDir side of the same guarantee: filing applies to
         // every NewTask whatever the switch says.
         for mode in [Stage::Off, Stage::Auto, Stage::On] {
-            let text = build(&new_task(mode), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
+            let text = build(&new_task(mode), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english()).unwrap();
             assert!(text.contains("smetana:filing-a-task"), "{mode:?}");
             assert!(!text.contains(FILING), "{mode:?}: no registry should carry the skill body");
         }
@@ -1217,7 +1466,7 @@ mod tests {
         // question: an agent that files without discussion still has to file
         // it properly.
         for mode in [Stage::Off, Stage::Auto, Stage::On] {
-            let text = build(&new_task(mode), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
+            let text = build(&new_task(mode), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english()).unwrap();
             assert!(text.contains("The title says what needs doing"), "{mode:?}");
             assert!(!text.contains("smetana:filing-a-task"), "{mode:?}: no registry to name");
         }
@@ -1226,13 +1475,13 @@ mod tests {
     #[test]
     fn switched_on_a_plugin_dir_harness_is_told_the_skill_name() {
         let text =
-            build(&new_task(Stage::On), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
+            build(&new_task(Stage::On), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english()).unwrap();
         assert!(text.contains("superpowers:brainstorming"));
     }
 
     #[test]
     fn switched_on_an_inline_harness_carries_the_whole_process() {
-        let text = build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
+        let text = build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english()).unwrap();
         assert!(text.contains("Ask one question at a time."));
         assert!(
             !text.contains("superpowers:brainstorming"),
@@ -1243,20 +1492,20 @@ mod tests {
     #[test]
     fn on_inline_degrades_to_the_rule_when_the_skill_cannot_be_read() {
         let text =
-            build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
+            build(&new_task(Stage::On), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, nothing(), &english()).unwrap();
         assert!(text.contains("agree the design"), "the instruction survives a missing file");
     }
 
     #[test]
     fn auto_leaves_the_judgement_to_the_agent() {
         let text =
-            build(&new_task(Stage::Auto), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap();
+            build(&new_task(Stage::Auto), SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english()).unwrap();
         assert!(text.contains("more than one"), "auto states the test the agent applies");
     }
 
     #[test]
     fn auto_on_an_inline_harness_points_at_the_file_rather_than_pasting_it() {
-        let text = build(&new_task(Stage::Auto), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill()).unwrap();
+        let text = build(&new_task(Stage::Auto), SkillDelivery::Inline, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english()).unwrap();
         assert!(text.contains("/app/resources/superpowers/skills/brainstorming/SKILL.md"));
         assert!(
             !text.contains("Ask one question at a time."),
@@ -1278,6 +1527,7 @@ mod tests {
             &skills(),
             None,
             every_skill(),
+            &english(),
         )
         .unwrap()
     }
@@ -1321,14 +1571,12 @@ mod tests {
             Intent::Bare,
             Intent::Setup,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
-            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
-            Intent::Run {
-                settings: run_settings(RunMode::Solo, RunScope::Task { id: "x-2".into() }),
-            },
+            run_intent(run_settings(RunMode::Auto, RunScope::Queue)),
+            run_intent(run_settings(RunMode::Solo, RunScope::Task { id: "x-2".into() })),
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
                 let text =
-                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill())
+                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill(), &english())
                         .unwrap_or_default();
                 no_paperwork(&text, &format!("{intent:?}/{delivery:?}"));
             }
@@ -1437,6 +1685,7 @@ mod tests {
             &skills(),
             None,
             nothing(),
+            &english(),
         )
         .unwrap();
         assert!(text.contains(PLAN), "{text}");
@@ -1448,7 +1697,7 @@ mod tests {
     #[test]
     fn setting_a_project_up_carries_the_survey_and_names_the_file_to_write() {
         let text =
-            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing())
+            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing(), &english())
                 .expect("a setup session opens on something");
         assert!(text.contains(".smetana/project.toml"), "{text}");
         assert!(text.contains("npm run test"), "the survey reaches the agent: {text}");
@@ -1457,7 +1706,7 @@ mod tests {
     #[test]
     fn a_plugin_dir_harness_is_told_the_setup_skill_by_name() {
         let text =
-            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing())
+            build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), Some(FACTS), nothing(), &english())
                 .expect("builds");
         assert!(text.contains("smetana:project-setup"), "{text}");
     }
@@ -1473,17 +1722,169 @@ mod tests {
             &skills(),
             Some(FACTS),
             every_skill(),
+            &english(),
         )
         .expect("builds");
         assert!(text.contains("/app/resources/smetana/skills/project-setup/SKILL.md"), "{text}");
         assert!(!text.contains("The title says what needs doing"), "nothing is filed here");
     }
 
+    /// Every intent there is, in both deliveries — the walk the language tests
+    /// below share, since what makes a language rule worth anything is that no
+    /// session escapes it.
+    fn every_intent() -> Vec<Intent> {
+        vec![
+            Intent::Bare,
+            Intent::Setup,
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            new_task(Stage::Auto),
+            new_task(Stage::On),
+            new_task(Stage::Off),
+            staged(Stage::On, Stage::On, Stage::On),
+            run_intent(run_settings(RunMode::Auto, RunScope::Queue)),
+        ]
+    }
+
+    fn in_language(intent: &Intent, delivery: SkillDelivery, languages: &Languages) -> String {
+        build(intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill(), languages)
+            .expect("every intent opens on at least the language sentence")
+    }
+
+    #[test]
+    fn every_intent_names_the_conversation_language() {
+        // `Bare` included, and that is the point rather than a side effect: it
+        // is the session where a person talks to the agent most, and an English
+        // default with no Auto position is what makes the setting real from the
+        // first run.
+        for intent in every_intent() {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text = in_language(&intent, delivery, &russian());
+                assert!(
+                    text.contains("Talk to me in Russian"),
+                    "{intent:?}/{delivery:?}: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_session_that_writes_to_bd_is_told_the_task_language() {
+        // The four that run `bd create` or `bd update`. A setup session writes
+        // one toml file and a bare one has no work at all — telling either how
+        // to word an issue would be prose about something that will not happen.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for intent in every_intent() {
+                let text = in_language(&intent, delivery, &russian());
+                let told = text.contains("Write the prose of any bd issue");
+                let writes = matches!(
+                    intent,
+                    Intent::NewTask { .. }
+                        | Intent::EditTask { .. }
+                        | Intent::ResolveTask { .. }
+                        | Intent::Run { .. }
+                );
+                assert_eq!(told, writes, "{intent:?}/{delivery:?}: {text}");
+                if writes {
+                    assert!(text.contains("in Russian"), "{intent:?}/{delivery:?}: {text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_section_headings_stay_english_whatever_the_task_language_is() {
+        // `bd create --validate` matches the wording of a heading and nothing
+        // else, so a translated `## Acceptance Criteria` is not a difference of
+        // style — it is bd refusing to create the issue. The literal strings
+        // are asserted rather than the caveat's presence, because the caveat is
+        // only worth having if the headings themselves travel intact.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for intent in every_intent() {
+                let text = in_language(&intent, delivery, &russian());
+                if !text.contains("Write the prose of any bd issue") {
+                    assert!(!text.contains("## "), "{intent:?}/{delivery:?} names a heading: {text}");
+                    continue;
+                }
+                assert!(text.contains("stay in English"), "{intent:?}/{delivery:?}: {text}");
+                assert!(text.contains("## Acceptance Criteria"), "{intent:?}/{delivery:?}: {text}");
+                assert!(text.contains("## Steps to Reproduce"), "{intent:?}/{delivery:?}: {text}");
+                assert!(text.contains("## Success Criteria"), "{intent:?}/{delivery:?}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_notes_markers_stay_english_whatever_the_task_language_is() {
+        // The same class of literal-string dependency the headings are, and
+        // this paragraph is what opens the hole by asking for the notes in
+        // another language. `components/kanban/parked.js` matches
+        // `/^\s*parked:\s*(.+)$/i` and `/^\s*resolved:\s*/i`, so a translated
+        // marker leaves `openQuestions` empty: the parked card's dialog says
+        // nothing is open and moving it to Ready stops warning.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for intent in every_intent() {
+                let text = in_language(&intent, delivery, &russian());
+                if !text.contains("Write the prose of any bd issue") {
+                    continue;
+                }
+                assert!(text.contains("`parked:`"), "{intent:?}/{delivery:?}: {text}");
+                assert!(text.contains("`resolved:`"), "{intent:?}/{delivery:?}: {text}");
+                assert!(
+                    text.contains("in English"),
+                    "{intent:?}/{delivery:?} asks for the markers untranslated: {text}"
+                );
+            }
+        }
+
+        // A resolving session is the one that writes `resolved:` lines, so the
+        // rule has to reach it whatever else its prompt says.
+        let resolving = in_language(
+            &Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            SkillDelivery::Inline,
+            &russian(),
+        );
+        assert!(resolving.contains("`resolved:`"), "{resolving}");
+    }
+
+    #[test]
+    fn a_design_document_and_a_plan_are_always_english() {
+        // The one piece of writing neither setting moves: both are read by
+        // whoever picks the work up months later and by every agent after them,
+        // and the repository they sit beside is English throughout.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for languages in [english(), russian(), Languages { agent: "ja".into(), task: "de".into() }] {
+                for (spec, plan) in
+                    [(Stage::On, Stage::On), (Stage::On, Stage::Off), (Stage::Auto, Stage::Auto)]
+                {
+                    let text =
+                        in_language(&staged(Stage::On, spec, plan), delivery, &languages);
+                    assert!(text.contains(IN_ENGLISH), "{delivery:?}/{languages:?}/{spec:?}: {text}");
+                    assert!(text.contains("is in English"), "{delivery:?}/{languages:?}: {text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_language_nobody_ships_reads_as_the_default_rather_than_as_itself() {
+        // `Settings::validate` drops one on the way to the file, but this
+        // function is pure and takes what it is handed — and a tag written into
+        // the prompt raw would be an instruction nobody can follow.
+        let text = in_language(
+            &Intent::Bare,
+            SkillDelivery::PluginDir,
+            &Languages { agent: "xx".into(), task: "xx".into() },
+        );
+        assert!(text.contains("Talk to me in English"), "{text}");
+        assert!(!text.contains("xx"), "{text}");
+    }
+
     #[test]
     fn a_setup_session_survives_a_survey_that_found_nothing() {
         // `render` always produces text, but a caller that could not run the
         // survey at all passes None, and the instruction still has to stand.
-        let text = build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing())
+        let text = build(&Intent::Setup, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
             .expect("builds");
         assert!(text.contains(".smetana/project.toml"), "{text}");
     }

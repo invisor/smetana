@@ -349,6 +349,35 @@ the epic that it is waiting on that child, and leave it open.
   dependencies where they changed, applying anything a regenerated artefact needs
   applied.
 
+## The batch's own file, beside that report
+
+Smetana keeps its own account of the run and writes it out as an HTML document when the run
+ends. It can see the board and its own clock and nothing else — what comes back from your
+session is an exit code and nothing more — so which tasks moved and how long the night took
+are its to work out, and **what was actually done is yours to say.**
+
+So, after the report above and before you hand back, write the file the prompt names —
+`.smetana/runs/<run>/batch-<n>.json`, whose directory already exists:
+
+```json
+{
+  "tasks": [
+    { "id": "smetana-t9o", "did": "one or two sentences on what you actually did" }
+  ],
+  "notes": "anything about the batch as a whole, or leave it out"
+}
+```
+
+- **It is in addition to the report and never replaces any part of it.** The report is prose
+  for the person reading this terminal; this file is for one program that renders it into a
+  document. Neither is a summary of the other.
+- **One line per task you touched**, the ones you parked included, saying what stopped them.
+- **Nothing is timed here.** A number you reported could not be checked against anything;
+  the app times its own batches and says so only where a batch held one task.
+- **It is a record, not a gate.** If it cannot be written, carry on — a batch that leaves
+  no file is named in the document as having left no account of itself, and its tasks still
+  appear there from the board.
+
 ## The rules that hold everywhere in this run
 
 - **Never push.** A run merges into a local branch and says so.
