@@ -39,13 +39,32 @@ written.
 
 ### Parking, in Auto
 
-Wherever any of the four skills says to stop, and wherever you hit something you cannot
-resolve from the code, the spec or the skills:
+**Park for a question, and for nothing else.** A park is a real question about what the
+program should do — what the spec left open, which of two behaviours was meant, a
+finding whose fix is a decision — that you cannot resolve from the code, the spec or the
+skills, and that a person has to answer before the work can be right. Wherever any of
+the four skills says to stop over one of those:
 
 1. `bd update <id> --status parked`
 2. `bd note <id> "parked: <one concrete line>"`
 3. Leave that task's worktrees where they are — somebody will want to look.
 4. **Carry on with the rest of the batch.** One task parking never ends the run.
+
+**A check this run could not run is not a question, and must never park finished work.**
+Nobody is being asked anything: the code is written, reviewed and merged, and what is
+missing is a pair of eyes or a tool that was not there. File the looking as its own task
+and `bd defer` it — deferred is out of `bd ready`, so no later run takes it, and it
+stays in `bd list` for the person to do and to close themselves. Then close the task
+that produced it. Phase 3's INFRA branch below is this rule's one named instance.
+
+The distinction is the cost of getting it wrong in each direction. A parked question
+costs one answer and the work waits for it, which is right, because work built on a
+guess is worse than work not built. A parked check costs the whole task: it is finished
+and it sits out of the queue with nothing anybody can do to it, and — the reason this
+paragraph exists — **nothing ever unparks a task when its blocker goes away by itself.**
+Five tasks sat parked for a day in exactly that way, over a dirty main checkout that was
+committed three hours later; `bd ready` never returned them again, and it took a person
+noticing that their features had gone missing from the app.
 
 `parked` is a custom status, so `bd ready` never returns it and the run cannot spin on it.
 It is deliberately not the built-in `blocked`, which is a hand-set flag for an impediment
@@ -327,7 +346,23 @@ Only when the run has the live check on. Mechanics are in `live-checking`.
   4. `bd note <id> "closed with follow-up <fix-id>"`, close, remove worktrees. After an
      epic-gate failure the epic itself stays open.
 - **INFRA** → not a verdict about the code. Retry the whole check once. A second INFRA →
-  park the task, with what failed to start and the tail of its log.
+  **hand the looking to the person and close the task.** The work is merged and reviewed;
+  what failed is the check's own tooling, and holding finished work for a tool that is
+  not there helps nobody.
+  1. File one task, type `task`, priority 2, titled for what still needs looking at.
+     Its description names the scenarios the check would have run, what failed to start
+     with the tail of its log, and the id of the task it came from. Its acceptance
+     criteria are what a person would see, in words somebody can act on: which screen,
+     which states, what would be wrong.
+  2. `bd defer <fix-id> --reason "<a person's own check>"` — out of `bd ready`, so no
+     later run takes work that needs eyes; in `bd list`, so it is in front of somebody.
+  3. `bd note <id> "closed with eye check <fix-id>: <what could not be run>"`, close the
+     task, stand its workers down and remove its worktrees.
+
+  A run's browser tooling is the ordinary way here: the machine may have none
+  (`browser.rs` decides that before the run starts), and Playwright's one shared profile
+  may be held by a browser this process cannot see — a person's own Chrome, or another
+  project's run. All of it is INFRA and none of it is about the task.
 
 **The epic gate.** After every close in this phase: if the task had an epic parent and
 `bd dep tree <epic-id>` shows no other child still open, in progress, waiting to merge or
@@ -341,7 +376,11 @@ the epic that it is waiting on that child, and leave it open.
 - **Merged and closed** — per repository: the new tip of the target branch, the gate
   results, anything that was regenerated rather than merged, and the live check's verdict
   per task (or "live check: off").
-- **Parked** — id, the concrete reason, and the worktree path.
+- **Parked** — id, the concrete reason, and the worktree path. The reason is a question,
+  or it does not belong in this list.
+- **Left for a person to look at** — every eye check deferred in Phase 3: its id, the
+  task it came from, and what could not be run. These are closed tasks with an open
+  question of eyesight, not parked work, and the report says which screen to open.
 - **Filed** — id, title, depth and root, one line each, under "waiting for a person to
   promote (`bd update <id> --status open`)". None → say so.
 - **Digested** — the count, and the root ids to read.
