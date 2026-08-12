@@ -86,10 +86,3 @@ export const scope = {
   dirtyCount: 3,
   agentsActive: 2
 }
-
-export const inspector = {
-  id: 'bd-a1b2',
-  status: 'needs-you',
-  title: 'Rename worktree when the branch changes',
-  blocksDownstream: 5
-}

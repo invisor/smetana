@@ -76,10 +76,15 @@ const items = computed(() =>
   props.options.map((o) => (typeof o === 'object' && o !== null ? o : { value: o, label: String(o) }))
 )
 
+/* Filtering hides options, and a caption whose whole group went with them is a
+   heading over nothing. A header survives only when something choosable follows
+   it before the next one does. */
 const matches = computed(() => {
   const needle = query.value.trim().toLowerCase()
-  if (!needle) return items.value
-  return items.value.filter((o) => String(o.label).toLowerCase().includes(needle))
+  const kept = needle
+    ? items.value.filter((o) => o.header || String(o.label).toLowerCase().includes(needle))
+    : items.value
+  return kept.filter((o, i) => !o.header || (!!kept[i + 1] && !kept[i + 1].header))
 })
 
 /* A value that is not in the list is still shown, as itself. The list is what
@@ -88,23 +93,30 @@ const matches = computed(() => {
    the placeholder in either case would say "nothing is chosen" about something
    that is about to be acted on. */
 const selectedLabel = computed(() => {
-  const found = items.value.find((o) => o.value === props.modelValue)
+  const found = items.value.find((o) => !o.header && o.value === props.modelValue)
   if (found) return String(found.label)
   return props.modelValue === '' || props.modelValue == null ? '' : String(props.modelValue)
 })
 
+/* Never a header: the cursor is where Enter lands, and Enter on a caption would
+   do nothing while looking exactly like a row that refuses to be picked. */
 watch(matches, () => {
-  cursor.value = 0
+  cursor.value = Math.max(0, matches.value.findIndex((o) => !o.header))
 })
 
 const show = async () => {
   if (props.disabled) return
   open.value = true
   query.value = ''
-  cursor.value = Math.max(
-    0,
-    items.value.findIndex((o) => o.value === props.modelValue)
-  )
+  /* Seated against `matches` and never against `items`, because the cursor is
+     an index into the list that is actually drawn — which is what the rendered
+     rows, `step` and `reveal` all read. The two differ exactly when a caption
+     is pruned above, and one pruned caption shifts every index after it by one:
+     the highlight then sits on one row while Enter takes another, silently. The
+     `matches` watcher is no rescue here — `hide` has already cleared `query`, so
+     opening changes nothing about `matches` and the watcher never fires. */
+  const chosen = matches.value.findIndex((o) => !o.header && o.value === props.modelValue)
+  cursor.value = chosen >= 0 ? chosen : Math.max(0, matches.value.findIndex((o) => !o.header))
   at.value = null
   width.value = field.value?.getBoundingClientRect().width ?? 0
   emit('open')
@@ -226,16 +238,32 @@ const ownsEnter = (target) =>
    makes the header slot's own controls reachable in the first place, so the
    Enter branch asks where the press came from and leaves everything else to the
    control it was aimed at. */
+
+/* One step in a list that has rows the keyboard must pass over. Bounded by the
+   list's own length, so a list of nothing but captions stops rather than
+   spinning. */
+const step = (delta) => {
+  const n = matches.value.length
+  if (!n) return
+  let i = cursor.value
+  for (let taken = 0; taken < n; taken += 1) {
+    i = (i + delta + n) % n
+    if (!matches.value[i].header) {
+      cursor.value = i
+      return
+    }
+  }
+}
+
 const onKeydown = (event) => {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
-    const n = matches.value.length
-    if (n) cursor.value = (cursor.value + (event.key === 'ArrowDown' ? 1 : -1) + n) % n
+    step(event.key === 'ArrowDown' ? 1 : -1)
   } else if (event.key === 'Enter') {
     if (!ownsEnter(event.target)) return
     event.preventDefault()
     const pick = matches.value[cursor.value]
-    if (pick) choose(pick.value)
+    if (pick && !pick.header) choose(pick.value)
   } else if (event.key === 'Escape') {
     event.preventDefault()
     hide()
@@ -367,6 +395,53 @@ const optionStyle = (option, index) => ({
   cursor: 'default'
 })
 
+/* The label and the note share a box of their own rather than sitting directly
+   in the row, and that box is the whole reason `labelStyle`'s ceiling can be
+   honest. `100%` of the *row* includes the check icon and the gap beside it, so
+   the cap came out 16-18px too generous: a name wider than the panel was sliced
+   by the panel's own `overflow: hidden` with no ellipsis, the note was pushed
+   clean off the panel, and the list grew a horizontal scrollbar. Inside this
+   box, `100%` is exactly the space the two of them actually have. */
+const rowTextStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  flex: '1 1 auto',
+  minWidth: 0,
+  overflow: 'hidden'
+}
+
+/* The label, and which of the two spans in a row gives way.
+
+   Flex shrink factors cannot say "this one only after that one has nothing
+   left": a factor distributes the shortfall in proportion, so the label always
+   keeps some share of it, and `text-overflow: ellipsis` fires on a fraction of
+   a pixel by removing whole characters — 0.05px of overflow cost a branch name
+   two of them. Weighting the note at 100 made the share 0.28px and clipped
+   `spike/auth` to `spike/au…`; raising the number only moves which labels round
+   the wrong way. So the ordering is stated rather than approximated: no shrink
+   while a note is there to take it, ordinary shrink when the label is alone.
+
+   `1 1 auto` and not `flex: 1`: that is `1 1 0%`, a flex-basis of zero, which
+   leaves the label with no base size to defend — it absorbs all free space, the
+   row never overflows, and no clipping rule on the note can ever fire. It still
+   grows into free space, so a row with no note looks exactly as it always did.
+
+   `maxWidth` is the backstop for the pathological row, where the name alone is
+   wider than the panel: the note is squeezed away first, and then the label
+   ellipsises at the row's own width instead of spilling past it. The percentage
+   is of `rowTextStyle`'s box and not the row's — see there for what measuring it
+   against the row instead cost. */
+const labelStyle = (option) => ({
+  flex: '1 1 auto',
+  flexShrink: option.note ? 0 : 1,
+  maxWidth: '100%',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+})
+
 const emptyStyle = {
   padding: 'var(--space-4)',
   fontSize: 'var(--text-xs)',
@@ -380,6 +455,36 @@ const hintStyle = {
   whiteSpace: 'nowrap',
   fontFamily: 'var(--font-sans)'
 }
+
+/* A row's own note. The field's `hintStyle` colour and size, deliberately not
+   `hintStyle` itself: this one has to lose a negotiation the field's hint never
+   enters. It is the only span in the row that shrinks while both are present —
+   see `labelStyle` for why that ordering is stated outright rather than
+   weighted — so the whole of the shortfall lands here and ellipsises here. */
+const noteStyle = {
+  fontSize: 'var(--text-2xs)',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-sans)',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+}
+
+/* A caption over a group. Muted and small, so it reads as structure rather than
+   as an option somebody failed to make choosable, and it keeps `--row-h` so the
+   list's rhythm does not break where a group starts. The rule belongs to the
+   boundary, so the first caption in a list has none. */
+const headerStyle = (index) => ({
+  display: 'flex',
+  alignItems: 'center',
+  height: 'var(--row-h)',
+  flexShrink: 0,
+  padding: '0 var(--space-4)',
+  color: 'var(--text-muted)',
+  font: `var(--weight-medium) var(--text-2xs)/1 var(--font-sans)`,
+  borderTop: index === 0 ? 'none' : 'var(--border-w) solid var(--border-subtle)'
+})
 </script>
 
 <template>
@@ -411,27 +516,43 @@ const hintStyle = {
         :aria-label="searchLabel"
       />
       <div ref="list" :style="listStyle">
-        <button
-          v-for="(option, i) in matches"
-          :key="option.value"
-          type="button"
-          :style="optionStyle(option, i)"
-          @mouseenter="cursor = i"
-          @click="choose(option.value)"
-        >
-          <Icon
-            name="check"
-            :size="12"
-            :style="{ visibility: option.value === modelValue ? 'visible' : 'hidden' }"
-          />
-          <span :style="{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
-            {{ option.label }}
-          </span>
-        </button>
-          <div v-if="!matches.length" :style="emptyStyle">
-            <slot name="empty">Nothing matches.</slot>
-          </div>
+        <template v-for="(option, i) in matches" :key="option.header ? `h:${option.label}` : option.value">
+          <!-- A caption is a `div` and not a disabled `button`: it is not a
+               choice that happens to be unavailable, and a disabled control in
+               the tab order is a stop for no reason. It stays a child of this
+               same list, which is what keeps `reveal`'s `children[cursor]`
+               pointing at the row the cursor names. -->
+          <div v-if="option.header" :style="headerStyle(i)">{{ option.label }}</div>
+          <button
+            v-else
+            type="button"
+            :style="optionStyle(option, i)"
+            @mouseenter="cursor = i"
+            @click="choose(option.value)"
+          >
+            <Icon
+              name="check"
+              :size="12"
+              :style="{ visibility: option.value === modelValue ? 'visible' : 'hidden', flexShrink: 0 }"
+            />
+            <span :style="rowTextStyle">
+              <span :style="labelStyle(option)">{{ option.label }}</span>
+              <!-- Something to say about this row in particular: the field's
+                   `hintStyle` voice, in its own style rather than that one.
+                   Reusing it would carry `white-space: nowrap` with nothing to
+                   shrink or clip it, and in a flex row that means the *label*
+                   gives way — a long note eating the branch name it is about,
+                   which is the opposite of what a note is for. So it keeps the
+                   colour and size and adds what a row needs: it may shrink, and
+                   it clips itself when it does. -->
+              <span v-if="option.note" :style="noteStyle">{{ option.note }}</span>
+            </span>
+          </button>
+        </template>
+        <div v-if="!matches.length" :style="emptyStyle">
+          <slot name="empty">Nothing matches.</slot>
         </div>
+      </div>
       </div>
     </Teleport>
   </div>

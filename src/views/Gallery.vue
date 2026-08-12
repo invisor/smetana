@@ -148,6 +148,12 @@ const choice = ref('running')
    the dialog around it is not what needs looking at. */
 const pickedBranch = ref('staging')
 const branchIsNew = ref(false)
+const groupedBranch = ref('develop')
+const narrowBranch = ref('spike/auth')
+/* Records for the branch fields below — the shape `target_branches` actually
+   answers with, now that git.js passes it straight through. */
+const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
+const partialBranch = ref('release/7')
 const checked = ref(true)
 const switched = ref(true)
 
@@ -756,7 +762,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'queue' }"
             :count="12"
-            :branches="['main', 'staging', 'feature/runs-project-config']"
+            :branches="everywhere('main', 'staging', 'feature/runs-project-config')"
             default-branch="staging"
             @close="() => {}"
             @confirm="() => {}"
@@ -768,7 +774,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :scope="{ kind: 'task', id: 'smetana-9', title: 'Rename the worktree when the branch changes' }"
             :count="1"
             :part-of="{ id: 'smetana-4', title: 'Worktree lifecycle', siblings: 2 }"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             :live-check-available="false"
             :default-parallel="5"
@@ -783,7 +789,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'task', id: 'smetana-77', title: 'Fold the settings debounce into the store' }"
             :count="1"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             :remembered="{ mode: 'solo' }"
             @close="() => {}"
@@ -793,17 +799,18 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <!-- The damaged configuration, with the parser's own message in it —
              the caret line and its leading spaces are the point, so this
              fixture keeps them. Every field below the notice is disabled and so
-             is Run; "Set up again" is not, because it is the way out. -->
+             is Run: this dialog says what is wrong and offers nothing that
+             would repair it. The way out is "Set up again" in the right-click
+             menu on the project's own row, down in the Projects section. -->
         <div :style="{ position: 'relative', width: '480px', height: '800px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
           <RunModal
             :open="true"
             :count="12"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="staging"
             :config-error="BROKEN_CONFIG"
             @close="() => {}"
             @confirm="() => {}"
-            @setup="() => {}"
           />
         </div>
         <!-- The project wants a browser live check and the machine has nothing
@@ -817,7 +824,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'queue' }"
             :count="12"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             live-check-blocked="Nothing here can drive a browser: Playwright's MCP server is not in the agent's configuration and the Claude in Chrome extension was not found in a Chrome profile."
             @close="() => {}"
@@ -949,7 +956,16 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
       <div :style="headStyle">Projects</div>
       <!-- ProjectList carries no header of its own — the surrounding Panel owns
            "Projects" and the "+" in its actions slot, so the demo wraps it the
-           same way DesktopApp.vue does, to catch the pairing breaking too. -->
+           same way DesktopApp.vue does, to catch the pairing breaking too.
+
+           Right-click the rows: every one of them opens the row's three actions
+           at the pointer, and the two that are only meaningful for the project
+           the window is pointed at are greyed with the reason in the row on
+           every other. The setup item is the frames' second job here — it reads
+           "Set up" where there is no configuration and "Set up again" where
+           there is one, damaged or not — and the last frame is where the
+           placement can be checked, since nothing else on this page opens a
+           panel from a point rather than from a control. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false">
@@ -972,12 +988,17 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             <template #actions>
               <IconButton icon="plus" label="Add project" size="sm" />
             </template>
+            <!-- The one frame with a run configuration that reads. Nothing on
+                 the row says so — a project that is set up has nothing to
+                 report — so it is only visible in the right-click menu, where
+                 this active row is the one that reads "Set up again". -->
             <ProjectList
               :projects="[
                 { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
                 { path: '/Users/you/notes', name: 'notes', tracked: false }
               ]"
               active-path="/Users/you/notes"
+              configured
             />
           </Panel>
         </div>
@@ -1025,6 +1046,33 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             <ProjectList :projects="[]" />
           </Panel>
         </div>
+        <!-- A list past the fifth row, which is where it starts to scroll, and
+             the frame the menu's placement is checked in. Right-click the last
+             row a person can see: the panel is teleported to the body and fixed
+             in window coordinates, so neither the list's own scroll container
+             nor this frame may clip it, and it flips above the pointer when the
+             window has no room below. Scroll the list under an open menu and it
+             closes — the point it was opened at no longer names a row. -->
+        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="plus" label="Add project" size="sm" />
+            </template>
+            <ProjectList
+              :projects="[
+                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
+                { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true },
+                { path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true },
+                { path: '/Users/you/dev/tracker-notes', name: 'tracker-notes', tracked: false },
+                { path: '/Users/you/dev/scratch', name: 'scratch', tracked: true },
+                { path: '/Users/you/dev/archive', name: 'archive', tracked: true }
+              ]"
+              active-path="/Users/you/dev/holiday-curb"
+              can-add-agent
+              configured
+            />
+          </Panel>
+        </div>
       </div>
     </section>
 
@@ -1051,7 +1099,67 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <BranchSelect
             v-model="pickedBranch"
             v-model:create="branchIsNew"
-            :branches="['main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7']"
+            :branches="everywhere('main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7')"
+          />
+        </div>
+        <div :style="{ width: '320px' }">
+          <!-- A branch three of the project's repositories carry and one does
+               not. The hint counts them and the row names them: "will be created"
+               on its own would say the branch does not exist, which is the very
+               thing that sent a run out to cut a `develop` that already had its
+               own history in four repositories. -->
+          <BranchSelect
+            v-model="partialBranch"
+            :branches="[
+              { name: 'develop', missing_in: [] },
+              { name: 'main', missing_in: [] },
+              { name: 'release/7', missing_in: ['admin', 'extension'] },
+              { name: 'spike/auth', missing_in: ['frontend', 'admin', 'extension'] }
+            ]"
+          />
+        </div>
+        <div :style="{ width: '320px' }">
+          <!-- Captions and per-row notes. Deliberately long enough to scroll,
+               since the caption rows are what `reveal` has to walk past: the
+               cursor is brought into view by index into this list's children, so
+               a row that is not a sibling of the options would desync it. -->
+          <Dropdown
+            v-model="groupedBranch"
+            mono
+            searchable
+            search-label="Search branches"
+            :options="[
+              { header: true, label: 'Everywhere' },
+              { value: 'develop', label: 'develop' },
+              { value: 'main', label: 'main' },
+              { value: 'staging', label: 'staging' },
+              { header: true, label: 'Not everywhere' },
+              { value: 'release/7', label: 'release/7', note: 'not in admin, extension' },
+              { value: 'spike/auth', label: 'spike/auth', note: 'not in frontend, admin, extension' },
+              { value: 'hotfix/2026-08', label: 'hotfix/2026-08', note: 'not in extension' },
+              { value: 'chore/deps', label: 'chore/deps', note: 'not in backend' },
+              { value: 'wip/editor', label: 'wip/editor', note: 'not in admin' }
+            ]"
+          />
+        </div>
+        <!-- The same list in a field too narrow for its longest note. The
+             example above is wide enough that nothing ever overflows, so it
+             cannot show which of the two gives way — and that is exactly the
+             thing worth looking at: the branch name has to survive whole and
+             the note has to clip. -->
+        <div :style="{ width: '210px' }">
+          <Dropdown
+            v-model="narrowBranch"
+            mono
+            searchable
+            search-label="Search branches"
+            :options="[
+              { header: true, label: 'Everywhere' },
+              { value: 'develop', label: 'develop' },
+              { header: true, label: 'Not everywhere' },
+              { value: 'release/7', label: 'release/7', note: 'not in admin, extension' },
+              { value: 'spike/auth', label: 'spike/auth', note: 'not in frontend, admin, extension' }
+            ]"
           />
         </div>
       </div>

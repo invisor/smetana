@@ -85,6 +85,13 @@ pub enum Request {
     Resize(SessionId, u16, u16),
     Write(SessionId, String, oneshot::Sender<Result<(), TerminalError>>),
     RunCapture(SessionId, String, u64, u64, oneshot::Sender<Result<Vec<String>, TerminalError>>),
+    /// The pid of this session's process group, for the run registry to write
+    /// down — `None` for a session the worker does not have, or one whose
+    /// process never had a pid to give. Asked for rather than carried on
+    /// `Session`, which is serialized to the front end: nothing on screen draws
+    /// a pid, and the one caller is the run worker recording what to hang up
+    /// after an unclean exit.
+    Group(SessionId, oneshot::Sender<Option<u32>>),
     /// Answer once this session's process is gone, with how it ended. See
     /// `ExitWaiter` for why it is a request and not a subscription, and `Exit`
     /// for why the answer is three-valued rather than an exit code.
@@ -692,6 +699,9 @@ fn handle(
                     });
                 }
             }
+        }
+        Request::Group(id, tx) => {
+            let _ = tx.send(sessions.get(&id).and_then(|live| live.pty.pid()));
         }
         Request::AwaitExit(id, tx) => {
             // No answer here even for a session that is already gone: the tick

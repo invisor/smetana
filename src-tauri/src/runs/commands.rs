@@ -2,7 +2,7 @@
 //! state to guard: reading one file costs milliseconds, the same reasoning
 //! that keeps `files/` and `git.rs` out of a worker.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::oneshot;
@@ -17,6 +17,59 @@ use super::service::{Request, RunHandle};
 #[tauri::command]
 pub fn project_config(project: String) -> ConfigState {
     config::load(Path::new(&project))
+}
+
+/// What this project's runs may merge into: every local branch of every
+/// repository `[project].repos` names, and which of them each branch is
+/// missing from.
+///
+/// **The config is read here rather than taken from the front end, and that is
+/// the point of the command existing at all.** `runs.js` fills its copy through
+/// its own `project_config` call, and the run dialog is shown before that has
+/// landed — which is the whole of smetana-6gs, where the branch rule ran once
+/// against a list that was not there yet. A repository list passed down from
+/// the front end would be the same race under a new name. Read inside one
+/// command, there is no order between the two facts to get wrong.
+///
+/// It lives in `runs/` rather than in `git.rs` because "what may this run merge
+/// into" is a question about a run; `git.rs` keeps the pure combining rule and
+/// stays a leaf, knowing nothing about project configuration.
+#[tauri::command]
+pub fn target_branches(project: String) -> Vec<crate::git::BranchOption> {
+    crate::git::combine(repo_lists(Path::new(&project)))
+}
+
+/// One entry per repository git can actually see.
+///
+/// Three inputs give the same answer and it is the one this has always given:
+/// no config file, a config that will not parse, and `repos = ["."]` all ask
+/// the project root. A single-repository project is the common case — this
+/// project is one — and nothing about it changes.
+///
+/// A name pointing at a missing folder, or at one with no `.git`, is left out
+/// rather than counted as missing every branch. `git_dir` is what tells that
+/// apart from a repository with nothing in it, since both hand back an empty
+/// list of branches.
+///
+/// One case that guard does not catch: a stale linked worktree, whose `.git`
+/// is a file and whose `gitdir:` target has since gone. `git_dir` parses the
+/// pointer without checking it resolves, so it answers `Some` and the folder
+/// counts as a readable repository with no branches at all — after which every
+/// branch in the project reads as missing from it, which is the very outcome
+/// leaving unreadable repositories out exists to prevent.
+fn repo_lists(root: &Path) -> Vec<(String, Vec<(String, Option<i64>)>)> {
+    let names: Vec<String> = match config::load(root) {
+        ConfigState::Ok { config } if !config.project.repos.is_empty() => config.project.repos.clone(),
+        _ => vec![".".to_string()],
+    };
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let path: PathBuf = root.join(&name);
+            crate::git::git_dir(&path)?;
+            Some((name, crate::git::branches_with_recency(&path)))
+        })
+        .collect()
 }
 
 /// Whether there is anything on this machine to drive a browser with, asked
@@ -107,4 +160,110 @@ pub async fn run_stop(handle: State<'_, RunHandle>, token: u64) -> Result<Option
 #[tauri::command]
 pub async fn run_state(handle: State<'_, RunHandle>, project: String) -> Result<Vec<Run>, RunError> {
     ask(&handle, |tx| Request::State(project, tx)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("smetana-tb-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create the temp directory");
+        dir
+    }
+
+    /// A repository with one branch and nothing else — enough for `git_dir` to
+    /// find it and for `branches_with_recency` to name the branch through HEAD.
+    fn repo(root: &Path, at: &str, branch: &str) {
+        let git = root.join(at).join(".git");
+        fs::create_dir_all(&git).expect("create the git directory");
+        fs::write(git.join("HEAD"), format!("ref: refs/heads/{branch}\n")).expect("write HEAD");
+    }
+
+    fn config(root: &Path, body: &str) {
+        fs::create_dir_all(root.join(".smetana")).expect("create .smetana");
+        fs::write(root.join(".smetana/project.toml"), body).expect("write the config");
+    }
+
+    #[test]
+    fn a_project_with_no_config_answers_from_its_own_root() {
+        // The single-repository case, and the one this has always been. Nothing
+        // can be partial when there is nothing to be short of.
+        let root = scratch("no-config");
+        repo(&root, ".", "main");
+        let out = target_branches(root.to_string_lossy().into_owned());
+        assert_eq!(out.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["main"]);
+        assert!(out.iter().all(|o| o.missing_in.is_empty()), "{out:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_config_that_will_not_parse_answers_from_the_root_rather_than_nothing() {
+        // A damaged config is `runs::service`'s to shout about, and it does.
+        // Emptying the branch field over it would disable Run with no sentence
+        // anywhere near the field saying why.
+        let root = scratch("broken-config");
+        repo(&root, ".", "main");
+        config(&root, "this is not toml at all [[[");
+        let out = target_branches(root.to_string_lossy().into_owned());
+        assert_eq!(out.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["main"]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_monorepo_of_one_answers_from_the_root_too() {
+        let root = scratch("dot-repo");
+        repo(&root, ".", "develop");
+        config(&root, "[project]\nrepos = [\".\"]\n");
+        let out = target_branches(root.to_string_lossy().into_owned());
+        assert_eq!(out.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["develop"]);
+        assert!(out.iter().all(|o| o.missing_in.is_empty()), "{out:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_named_repositories_are_asked_and_not_the_folder_holding_them() {
+        // The defect this exists for: the root of `holiday-curb` is its own
+        // repository on `master`, and no run will ever merge into it.
+        let root = scratch("several");
+        repo(&root, ".", "master");
+        repo(&root, "backend", "develop");
+        repo(&root, "admin", "develop");
+        config(&root, "[project]\nrepos = [\"backend\", \"admin\"]\n");
+        let out = target_branches(root.to_string_lossy().into_owned());
+        assert_eq!(out.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["develop"]);
+        assert!(out[0].missing_in.is_empty(), "{out:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_branch_only_some_repositories_have_says_which_ones_lack_it() {
+        let root = scratch("partial");
+        repo(&root, "backend", "release/7");
+        repo(&root, "admin", "develop");
+        config(&root, "[project]\nrepos = [\"backend\", \"admin\"]\n");
+        let out = target_branches(root.to_string_lossy().into_owned());
+        let by_name: Vec<(&str, &[String])> =
+            out.iter().map(|o| (o.name.as_str(), o.missing_in.as_slice())).collect();
+        assert!(by_name.contains(&("release/7", &["admin".to_string()][..])), "{out:?}");
+        assert!(by_name.contains(&("develop", &["backend".to_string()][..])), "{out:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_repository_is_left_out_rather_than_missing_everything() {
+        // One typo in `[project].repos` would otherwise make every branch
+        // partial and empty the field's top group, hiding the real question
+        // behind a fault that has nothing to do with it. `merging` stops at
+        // that repository with a message naming it, which is more than this
+        // dialog could say.
+        let root = scratch("typo");
+        repo(&root, "backend", "develop");
+        config(&root, "[project]\nrepos = [\"backend\", \"beckend\"]\n");
+        let out = target_branches(root.to_string_lossy().into_owned());
+        assert_eq!(out, vec![crate::git::BranchOption { name: "develop".into(), missing_in: vec![] }]);
+        let _ = fs::remove_dir_all(&root);
+    }
 }

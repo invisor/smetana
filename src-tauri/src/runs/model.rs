@@ -65,11 +65,17 @@ pub struct RunSettings {
     /// is already going, and a run that silently retargets halfway through is
     /// worse than one that is wrong from the start and says so.
     pub target_branch: String,
-    /// The target branch does not exist yet and has to be cut before anything
-    /// merges into it. Decided by the dialog, which is the only place that
-    /// knows what the branch list held — the worker never sees it, and the
-    /// agent asking `git` itself would be asking after the run had already
-    /// decided where things go.
+    /// Permission to cut the target branch wherever it turns out to be
+    /// missing — not a claim that it is.
+    ///
+    /// Permission rather than a fact because a project of several repositories
+    /// can carry the branch in some of them and not others, and which ones is
+    /// a question only each repository can answer at the moment it is cut. The
+    /// dialog's answer is a snapshot of what the list held when it opened, and
+    /// a run lives for hours: so `provisioning` re-asks git per repository
+    /// (`show-ref --verify`) and this flag decides only what it may do when the
+    /// answer is no — make the branch from that repository's own HEAD, or STOP
+    /// because nobody sanctioned inventing a base for the whole batch.
     #[serde(default)]
     pub create_target: bool,
     /// Nothing worse than this is taken automatically. bd's scale runs 0 (most

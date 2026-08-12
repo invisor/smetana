@@ -38,10 +38,26 @@ pub fn run() {
       // empty list, means we take the directory the app was launched from if it
       // is tracked; otherwise there is no project, and that is a normal state,
       // not a failure.
-      let initial = settings::path(app.handle())
-        .and_then(|path| settings::file::load(&path).0.last_project)
+      let stored = settings::path(app.handle()).map(|path| settings::file::load(&path).0);
+      let initial = stored
+        .as_ref()
+        .and_then(|settings| settings.last_project.clone())
         .map(std::path::PathBuf::from)
         .or_else(project::default_project);
+      // Every project this launch knows about, for the run worker's start-up
+      // sweep: a `kill -9` leaves agent processes running and a record of them
+      // in each project's `.smetana/runs.json`, and this is the list of files
+      // to go and finish. The open list rather than the active project alone —
+      // a run in a project somebody has since switched away from left the same
+      // orphans — and one that was closed altogether waits until it is opened
+      // again, which is the price of the registry living in the project.
+      let known: Vec<std::path::PathBuf> = stored
+        .map(|settings| settings.open_projects)
+        .unwrap_or_default()
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .chain(initial.clone())
+        .collect();
 
       let tracker = tracker::service::start(app.handle().clone(), initial);
       app.manage(tracker.clone());
@@ -56,7 +72,7 @@ pub fn run() {
       // own: it reads the board from the tracker and starts one session per
       // batch through the terminal. Handed clones of both, so it queues behind
       // them like every other caller.
-      let runs = runs::service::start(app.handle().clone(), tracker.clone(), terminal);
+      let runs = runs::service::start(app.handle().clone(), tracker.clone(), terminal, known);
       app.manage(runs);
 
       // The plugin writes the window geometry only on exit; here it starts
@@ -88,12 +104,12 @@ pub fn run() {
       attachments::attachments_survey,
       attachments::attachments_clean,
       git::git_head,
-      git::git_branches,
       runs::commands::project_config,
       runs::commands::browser_tools,
       runs::commands::run_start,
       runs::commands::run_stop,
       runs::commands::run_state,
+      runs::commands::target_branches,
       settings::commands::settings_load,
       settings::commands::settings_save,
       window::settings_window_open,

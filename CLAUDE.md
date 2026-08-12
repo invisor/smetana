@@ -95,12 +95,17 @@ gone, because invented output under a real issue claimed the app knew something 
 session's actual output is the terminal tab. `LogView` itself stays in the library and in the
 gallery — the component is fine, the fixture in the product was not.
 
-That right column draws one of three things, and which one is **derived rather than stored**
+That right column draws one of four things, and which one is **derived rather than stored**
 (`rightPanel` in `DesktopApp.vue`). `DraftInspector` shows a task still being filed — the person's
 own words, read-only, with no issue behind them. `ClaimedTasks` shows what a run has taken, with the
 card for whichever of them is picked, the list staying above the card because the choice between them
 is the point and a card that replaced the list would take the way back with it. Otherwise it is
-`TaskInspector` on the selected issue. Deriving it is what stops the halves drifting: `selectedTask`
+`TaskInspector` on the selected issue. With nothing picked on the board it is an `EmptyState` saying
+so, and that is the fourth: the slot used to hold a fixture issue — an id, a `needs-you` badge and a
+downstream count, none of it real — so a newly added project opened by announcing that somebody had
+filed a task needing a human (smetana-agh). It is deliberately not drawn under a run's claimed list,
+where the list is the content and an empty state beneath it would call the panel empty when it is
+not. Deriving it is what stops the halves drifting: `selectedTask`
 is remembered per project in `settings.json`, so a panel choice that wrote to it would turn a glance
 at an agent into an edit of a preference, and a stored version had the run case highlighting a card
 on the board that the inspector then refused to draw.
@@ -305,16 +310,61 @@ HEAD is not silently dressed up as a branch: `Head` keeps `branch` and `detached
 the same answer the file tree gives; `src/stores/git.js` guards against its own stale response the
 way `terminals.js` does, so the bar cannot name one project's branch under another project's name.
 
-The same file answers a second question, for the run dialog's branch field: `git_branches`, which
-holds the no-spawn rule at the one place it is genuinely inconvenient. A branch list is not one line
-the way `HEAD` is — it is `refs/heads` walked for loose refs, `packed-refs` for the ones git has
-folded away, and the two reconciled — so this is three reads where `head` is one, and it is still
-cheaper than a process. `by_recency` then orders them by each branch's own reflog under
-`logs/refs/heads`, because the branch somebody wants to merge into is nearly always one they touched
-recently and an alphabetical list buries it. Nothing here is an error either: a folder outside git
-offers an empty list. The one name that is added whatever the refs say is the current branch — a
-repository whose only branch has no commits yet has no ref file at all, and a merge target field
-offering nothing would be worse than one offering the single branch that exists.
+The same file still holds the no-spawn rule at the one place it is genuinely inconvenient — a branch
+list is not one line the way `HEAD` is, it is `refs/heads` walked for loose refs, `packed-refs` for
+the ones git has folded away, and each branch's own reflog under `logs/refs/heads`, three reads where
+`head` is one and still cheaper than a process. All three are read from the common directory, so a
+linked worktree still offers its whole list and the `smetana-5t7` account of `commondir` below is
+unchanged. The reflog is what orders the result rather than the alphabet, because
+the branch somebody merges into every day is nowhere in particular alphabetically; a branch with no
+reflog anywhere does not sort as "very old", it falls outside the recency group entirely, into the
+alphabetical tail a fresh clone leaves nearly everything in. Nothing in that reading is an error
+either, the same as everywhere else in this file: a folder outside git offers an empty list rather
+than a failure, and the current branch is offered whatever the refs themselves say — a repository
+whose only branch has no commits yet has no ref file for it at all, and a merge-target field offering
+nothing would be worse than one offering the single branch that exists.
+
+A run's dialog reaches those same three sources through `branches_with_recency`, which sorts the
+names alphabetically and dedups them before stamping each with its own reflog time — the ordering
+itself is left undone, deliberately, because it is `by_recency`'s rule and not a second one written
+here. `combine` is the pure function that applies it: it folds several repositories' lists into one,
+splits complete from partial, and calls `by_recency` itself, once, on each of the two groups it
+builds. Its one genuinely new judgement is where a branch's freshness comes from across repositories
+— `develop` opened an hour ago in `backend` and a month ago in `admin` is an hour old, because it is
+one branch to the person merging into it, and taking the first repository's answer, or the least of
+them, would bury the branch somebody is actually in behind one they touched in a repository they
+happen to have opened. `BranchOption { name, missing_in }` is what a folded list is made of: a name,
+and the repositories from `[project].repos` that do not have it, in the order those repositories were
+given — the project's own statement about what depends on what, rather than an incidental order that
+might not even stay the same between two runs of the same project. An empty `missing_in` means every
+one of them does.
+
+**`git.rs` no longer answers the dialog.** `runs::commands::target_branches` does, because "what may
+this run merge into" is a question about a run rather than about one directory: it reads
+`.smetana/project.toml` itself, through `config::load`, and walks `[project].repos`, calling
+`branches_with_recency` once per repository and folding the results through `combine`. `git.rs` keeps
+its shape — a leaf, no worker, no spawn — and no code in it reads project configuration: `combine`
+takes a list of `(name, branches)` pairs and never learns where they came from. The config is read
+inside that one command rather than taken from the front end, and that is the design rather than a
+shortcut: `runs.js` holds its own copy of the config, filled by its own `project_config` call, and the
+run dialog is shown before that call has landed — the whole of `smetana-6gs` and `smetana-o8r`, where
+the branch-filling rule ran once against a list that was not there yet. A repository list threaded
+down from the front end instead of read in Rust would be the same race wearing a different name;
+reading both facts inside the one command leaves no order between them to get wrong.
+
+What the field draws from that is two groups, headed "Everywhere" and "Not everywhere", and no
+captions at all when nothing is partial — which is every single-repository project, and therefore the
+common case, so the field looks exactly as it always has. A name in `[project].repos` that resolves
+to nothing readable, a missing folder or one with no `.git`, is left out of the coverage question
+entirely rather than counted as missing every branch: the alternative reads worse in exactly the case
+that matters, since one typo in the config would make every branch partial, empty the field's top
+group, and bury the real question — which branches are everywhere — behind a fault that has nothing
+to do with it. This is what closed a defect with no issue behind it, and the shape of it is worth
+keeping: a project of four repositories living under one folder had the dialog asking not any of the
+four but the fifth repository that folder itself happened to be, so `develop` — present in all four
+repositories the project actually touches — read as a branch nobody had, and the run went out telling
+the agent to cut `develop` from the current branch in every one of those four repositories, though
+each of them already had it with its own history.
 
 **Refs are shared and HEAD is per-worktree, and conflating the two is `smetana-5t7`.** A linked
 worktree's git directory — whatever its `.git` file points at, `.git/worktrees/<name>` — holds only
@@ -370,9 +420,10 @@ is why. A bundled app on macOS is handed launchd's environment: `open smetana.ap
 nvm's shims — reaches `PATH` from `~/.zshrc` or `~/.zprofile`, which only a shell ever reads. So the
 app asks a login shell once (`$SHELL -i -l -c`, the value fenced between markers because an
 interactive rc file writes shell-integration escapes into the same stream), and that answer is what
-both `agents::pick` and `build_command` work from — finding out whether an agent is installed and the
-environment it is started with are the same question, and answering only the first would trade
-"no agent is installed" for an agent that cannot find `git` or `node`. `-l` alone is not enough: the
+everything that has to start a program works from — `agents::pick` and `build_command` here, and
+`runs/usage.rs` and `runs/preflight.rs` over in the run worker. Finding out whether an agent is
+installed and the environment it is started with are the same question, and answering only the first
+would trade "no agent is installed" for an agent that cannot find `git` or `node`. `-l` alone is not enough: the
 machine this was written on adds cargo and the rest from `~/.zshrc`, which only `-i` reads. Every
 failure — no shell, a five-second timeout, unrecognisable output — falls back to the inherited value,
 which is where things were before the module existed. The bug is invisible in development, and that
@@ -533,7 +584,9 @@ is left. The wait is bounded because the window is already closing. The two seco
 waits are a different thing again, and deliberately longer: they are the ceiling on a *wedged worker*,
 the same one `settings.js` puts on its close-time flush, and for the same reason — the window always
 closes, and a worker that never answers costs the cleanup, not the app. Anything that outruns all
-that, or that the app never got a chance to signal, is an orphan in the process list.
+that, or that the app never got a chance to signal, is an orphan in the process list — for the
+sessions a *run* started, the next launch finds them again through the registry under Runs below,
+which is the one place a session's pid is written down.
 
 `src/stores/terminals.js` is one of those files, and it keeps the
 same cost-driven split as the worker: `sessions` and `agentRows` hold every session's state, cheap and
@@ -1070,6 +1123,9 @@ other caller.
 | `config.rs` | `.smetana/project.toml`: the shape of the project a run works in |
 | `survey.rs` | what a project looks like from outside, before anyone has configured it |
 | `gitignore.rs` | keeping `.smetana/` out of the repository |
+| `registry.rs` | `.smetana/runs.json`: what a live run leaves on disk, and the rules for reading it — pure, and where those tests are |
+| `procs.rs` | the process table and the two signals: the only `unsafe` in `runs/` |
+| `recovery.rs` | the disk half of the registry, and the start-up sweep for what an unclean exit left running |
 | `preflight.rs` | bringing the project up before the first batch — declared commands, then declared health checks |
 | `usage.rs` | what the subscription has left, and whether to run at full size, a smaller one, or not yet |
 | `browser.rs` | whether there is anything on this machine to drive a browser with — pure over file contents and directory listings, and where those tests are |
@@ -1127,6 +1183,13 @@ contradictory things on screen at once — a bar saying the run is stopped and a
 going — and a person reads that as the stop not having taken. The gap is not always brief: the loop
 may be inside a board read or a 60s usage probe, and it holds its scope for the whole of it — only
 its scope, since the rest of the project's runs were never this one's to hold.
+
+Every declared command and every health probe the preflight starts is given the **login shell's**
+`PATH`, from the same `shell_env` the terminal uses and for the same reason: a bundled app inherits
+launchd's, which holds nothing a person installed, so `docker compose up -d` exited 127 against
+infrastructure that was up and answering — and the one phase whose whole job is to name the missing
+piece named the wrong one. `shell_env::path` falls back to the inherited value, so this is never a
+narrowing.
 
 **The preflight is the one phase where a stop is not cooperative** (smetana-16w), and that exception
 is the reason the gap is no longer measured in minutes. `bring_up` read the stop channel nowhere at
@@ -1238,23 +1301,114 @@ and the answer then differs from project to project. The app decides once, in co
 and carries the tests; it treats `.smetana`, `.smetana/`, `/.smetana` and even the negation
 `!.smetana` as already covered, that last one because it can only have been typed on purpose.
 
+### What an unclean exit leaves, and who clears it
+
+Everything a run knows lives in memory, and sessions are deliberately kept out of
+`settings.json` because a session row with a dead process behind it is worse than an
+empty list. The orderly ending is `RunEvent::Exit`. A crash, a force quit, a `kill -9`
+and — in development — every Rust rebuild reach none of it, and what they strand is
+tasks claimed by a run that no longer exists and agent processes nobody will signal.
+This is the same shape as the window-geometry defect `window.rs` was written for, where
+the only write happened at `Exit`.
+
+**The app writes a registry and deals with processes; the tracker half stays with
+`smetana:running-tasks` Phase R.** The split follows what each half can see: the app can
+see the process table and the tracker cannot, and Phase R already recovers claimed tasks
+correctly with the worktrees in front of it. So the app never rewrites `in_progress`,
+never parks anything, and writes to bd nowhere as part of recovery. An app that did both
+would be a second mechanism doing Phase R's job, and two mechanisms on one fact drift.
+
+The registry is `.smetana/runs.json` in the project folder, beside `project.toml` and
+outside the repository. Phase R reads it with an ordinary file read, needing nothing from
+the app and no path passed through a prompt — which a file beside `settings.json` in
+`app_config_dir()` could not be, being platform-dependent and therefore findable by a
+skill only if the app told it. It is not visible from a worktree, and that costs nothing:
+an ignored file does not travel into the worktree `provisioning` cuts, and the lead reads
+it from the project checkout.
+
+**A record proves its own liveness, and an actor id alone cannot.** `BEADS_ACTOR` is
+`smetana-run-<session-id>` and session ids restart at 1 on every launch, so after a
+restart a fresh session takes a dead run's name. Every record therefore carries a
+`writer` — the app process that wrote it — as a pid *plus* that process's start time,
+which is what survives pid reuse; each batch carries its actor and, the same way, the
+process group it started. Nothing in the file is read as a date to decide liveness: the
+one timestamp says when the run began and is used for nothing but ageing a record out
+after a week. The stamp is read per platform in `procs.rs` (macOS `proc_pidinfo`, Linux
+`/proc/<pid>/stat` against `btime`) rather than through a crate, since `libc` is already
+here for `killpg`; a platform that cannot answer keeps no registry at all, because a
+record nobody could ever show stale is worse than none.
+
+At start-up the run worker sweeps every project the settings file lists as open, before
+it serves its first request — one writer, so the read-modify-write is safe, and no batch
+can go out beside a sweep about to hang up a leftover agent in the same worktree. For a
+record whose writer is provably dead it signals the recorded process groups exactly as a
+clean exit does: `SIGHUP` to the group, a bounded wait, then a kill for what is left.
+**Anything the registry does not name is never touched** — the app cannot show it started
+it — and neither is a group whose pid has since been reused, nor anything under a writer
+that is alive or unreadable. The sweep is silent: no dialog and no interface element,
+because the app is finishing its own interrupted shutdown rather than taking a new
+decision, and a modal about housekeeping after every rebuild would be the loudness budget
+spent on the opposite of a card needing a human. What was killed goes to the log.
+
+The record itself **outlives the processes on purpose**, for up to `ABANDONED_DAYS`: its
+actors are the evidence Phase R reads, and deleting it the moment the processes were
+dealt with would send that half of the recovery back to its old default of leaving every
+claim in place.
+
+A record is removed when its run's **loop task ends — however it ended**, which is not
+the same as "finished": `Report::Ended` comes from the same `Drop` guard the worker's map
+leans on, so a cancellation, a crash and a failed preflight all take the record with them,
+and none of them needs to be enumerated anywhere. The one condition on that is the
+processes rather than the reason. `runs::service` ends a run with `NeedsAnswer` **without
+killing the session** — the person is being sent to that terminal to answer, and killing
+would take away the very thing they were sent to — so `registry::forget_run` keeps a
+record that still names something running, trimmed to the batches that are actually still
+there. Deleting it would leave a live agent, still claiming under its actor, named
+nowhere: a `kill -9` a minute later orphans exactly the process this file exists to
+reclaim. Conditioning on the stop reason instead would have been a `match` somebody has
+to remember to extend.
+`smetana:merging`'s 60-minute lock staleness rule is untouched by all this and cannot be
+replaced by the registry: the file names runs this app started on this machine, while the
+lock can be held by a lead a person started by hand in a terminal, which never appears in
+it.
+
 On the front end, `runs.js` is deliberately small — a file read with no worker behind it, freshness
-from switching projects and from a setup session finishing. It keeps the back end's `config` and
-`Run` objects **whole** rather than unpacking them into flags, which is the same instinct
-`tracker.js` follows with statuses: a state this front end has not heard of must not silently read as
-one it has. The runs ride as a set keyed by `token` — events and stop answers land by `upsert`, so a
-late word about one run can never write over another. It is guarded against its own stale response
-exactly as `git.js` and `terminals.js` are, and the `run:state` listener carries that guard in its
-other form — an event is not a response to anything, so nothing orders it against a project switch,
-and a batch ending just as somebody moves project would otherwise post its run under the new
-project's name. `RunBar` draws one segment per run in the scope bar, each stop button naming its own
-token, and keeps a stopped run there until the project changes or a run of the same scope replaces
-it: the reason it stopped is what somebody came back to read, an unknown reason is an ordinary
-outcome rather than a crash (this front end may be older than the worker), and the endings differ by
-glyph as well as by colour, the rule the status palette keeps everywhere else. The scope rule itself
-— what "the same run" means, and the words a greyed play carries — is `components/run/runScopes.js`,
-one of the `branchChoice.js` family and shared with the worker's `admit` by vocabulary rather than
-by code.
+from switching projects, from window focus, and from any of the project's sessions starting or
+stopping work. It keeps the back end's `config` and `Run` objects **whole** rather than unpacking
+them into flags, which is the same instinct `tracker.js` follows with statuses: a state this front
+end has not heard of must not silently read as one it has. The runs ride as a set keyed by `token` —
+events and stop answers land by `upsert`, so a late word about one run can never write over another.
+It is guarded against its own stale response exactly as `git.js` and `terminals.js` are, and the
+`run:state` listener carries that guard in its other form — an event is not a response to anything,
+so nothing orders it against a project switch, and a batch ending just as somebody moves project
+would otherwise post its run under the new project's name. `RunBar` draws one segment per run in the
+scope bar, each stop button naming its own token, and keeps a stopped run there until the project
+changes or a run of the same scope replaces it: the reason it stopped is what somebody came back to
+read, an unknown reason is an ordinary outcome rather than a crash (this front end may be older than
+the worker), and the endings differ by glyph as well as by colour, the rule the status palette keeps
+everywhere else. The scope rule itself — what "the same run" means, and the words a greyed play
+carries — is `components/run/runScopes.js`, one of the `branchChoice.js` family and shared with the
+worker's `admit` by vocabulary rather than by code.
+
+That third freshness channel is `components/run/configFreshness.js`, another of the `branchChoice.js`
+family, and it is the only one that fires while somebody sits and watches a setup agent write
+`.smetana/project.toml` — they never leave the window, so focus never returns and no project switch
+happens. `workingKey` is a value over the set of the project's sessions that are still `starting` or
+`running`, and a `watch` on it re-reads the file on **both** edges: every time one of them stops,
+exits or leaves the list, and every time one starts. So a session going idle, picking up again and
+then exiting costs two reads rather than one, which is the frequency to weigh before touching this
+channel — a small toml parse against a `catchUp` that re-lists every expanded directory. The mark
+still clears on a read that came back `ok`, never on the optimism that a session ended. What it
+replaces was a watcher created inside `startSetup` over a single session id, which tore itself down
+for good on its first callback for another project or for a session already gone from
+`terminalState.sessions`, with nothing to re-establish it — so a window that then never switched
+project and never lost focus kept the "Not set up for runs" triangle over a configuration that
+existed, and kept the board's play buttons hidden behind the same `configured` (smetana-0ag). The
+width is the fix: a key over a set cannot be lost, since it is recomputed from whatever the store
+holds now, and it is scoped to one project, so a setup running in A can neither clear nor set the
+mark on B. That the key is a **string** is what keeps the two array reassignments quiet —
+`terminal:removed` and `loadSessions` both replace `terminalState.sessions` wholesale, and an
+unchanged set of working sessions produces an unchanged key and no read at all.
 
 ### Panel widths
 
@@ -1319,10 +1473,13 @@ happened" from "something did" without comparing contents.
 a `.vue` file is the one thing no test in this repository can reach, so the whole of the rule filling
 the run dialog's branch field lives outside the component. `pickBranch` is three steps in one order —
 what this project was left at last time, then its own `[defaults].target_branch`, then whatever the
-list puts first, which is the most recently worked-on branch because `git_branches` orders by reflog.
-A remembered name that is no longer in the list is skipped in silence rather than offered, since a
-branch deleted since it was remembered would sit in the field as an option that fails on the first
-merge.
+list puts first, which is the most recently worked-on branch because `target_branches` orders by
+reflog. A remembered name that is no longer in the list is skipped in silence rather than offered,
+since a branch deleted since it was remembered would sit in the field as an option that fails on the
+first merge. The list itself holds `{ name, missing_in }` records rather than bare strings:
+`needsCutting` is the single rule behind both the field's hint and the run's `create_target`, and
+`branchOptions` is what splits the two groups the field draws — with no captions at all when nothing
+is partial, which is every single-repository project.
 
 The defect it was written for was not the rule being wrong but the rule running **once**, against a
 list that had not arrived yet (smetana-6gs, smetana-o8r): the dialog is shown first and the branches

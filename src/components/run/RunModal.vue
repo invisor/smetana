@@ -13,7 +13,7 @@ import Icon from '../core/Icon.vue'
 import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
 import Tooltip from '../core/Tooltip.vue'
-import { pickBranch } from './branchChoice.js'
+import { needsCutting, pickBranch } from './branchChoice.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -58,9 +58,10 @@ const props = defineProps({
   /* The parser's own complaint about .smetana/project.toml, or '' when the file
      reads. This dialog is where a damaged configuration is said out loud, and
      it is the only place: the board offers no other route, and the project row
-     carries a mark with nothing on it that could name a section. The message is
-     the parser's verbatim — it already points at the key and the line, which is
-     more than a summary written here would say. */
+     carries a mark and a menu, neither of which has the room to name a section
+     — the menu offers the way out of the state, not a reading of it. The
+     message is the parser's verbatim: it already points at the key and the
+     line, which is more than a summary written here would say. */
   configError: { type: String, default: '' },
   /* What the worker refused with, if it did. */
   error: { type: String, default: '' },
@@ -71,13 +72,11 @@ const props = defineProps({
    already been chosen in the fields below is still what somebody wants, and
    making them set it all again is a poor reward for taking the advice.
 
-   `setup` re-runs the project's setup agent. It is offered here whatever state
-   the configuration is in, and that is the point: the gear on the project row
-   only ever appears while there is no file, so a project that is set up has no
-   other way back to it — and the shape of a project changes, repositories get
-   added. A damaged file needs the same route for a different reason, which is
-   why one button serves both. */
-const emit = defineEmits(['close', 'confirm', 'rescope', 'setup'])
+   There was a "Set up again" here as well, and it is gone: re-running the setup
+   agent is an action on a project, and it now sits with the project's other two
+   in the right-click menu on its row. A dialog about one run was never the
+   place to keep the only route to it. */
+const emit = defineEmits(['close', 'confirm', 'rescope'])
 
 /* Nothing here can be answered while the configuration cannot be read: the
    defaults every field is filled from come out of that file, so the values on
@@ -140,18 +139,18 @@ const branchChosen = ref(false)
    itself is in branchChoice.js, where a test can reach it. */
 const fillBranch = () => {
   branch.value = pickBranch(props.branches, props.remembered?.targetBranch, props.defaultBranch)
-  /* Everything this fills with is a branch that exists — pickBranch offers
-     nothing else — so there is never anything to create.
+  /* Derived, never forced. This said `false` and its comment said why —
+     "everything this fills with is a branch that exists, `pickBranch` offers
+     nothing else, so there is never anything to create" — and that stopped
+     being true the moment a branch could exist in three repositories out of
+     four. `pickBranch` will happily fill the field with a remembered
+     `release/7` that two of them lack, and forcing the flag false then sends
+     the run out telling the agent not to cut it: a `provisioning` STOP in the
+     first batch, in the one mode where nobody was going to be asked anything.
 
-     Note what makes that safe, since it is not local: `createBranch` is guarded
-     by `branchChosen`, which this function does not set, and the two only stay
-     in step because BranchSelect never raises `create` on its own — both paths
-     that do (`pick` and `commitName`) emit `update:modelValue` first, so
-     `chooseBranch` has already run by the time `create` arrives and no fill can
-     land between the two. If that ever stops being true, the fix is here: an
-     `@update:create` handler setting `branchChosen` would make the invariant
-     local instead of borrowed. */
-  createBranch.value = false
+     `branchChosen` is untouched by all this and still guards a late fill from
+     overwriting a choice somebody has already made — see `chooseBranch`. */
+  createBranch.value = branch.value !== '' && needsCutting(props.branches, branch.value)
 }
 
 /* Somebody's own answer, and the one thing the late fill below will not touch
@@ -522,18 +521,6 @@ const errorStyle = {
       <span v-if="error" :style="errorStyle">{{ error }}</span>
     </div>
     <template #footer>
-      <!-- Pushed to the far side by its own margin rather than by a change to
-           Modal: the footer is right-aligned for every dialog in the system, and
-           this is the one button in one of them that is neither the action nor
-           its refusal. -->
-      <Button
-        variant="ghost"
-        :disabled="busy"
-        :style="{ marginRight: 'auto' }"
-        @click="$emit('setup')"
-      >
-        Set up again
-      </Button>
       <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>
       <Button variant="primary" :disabled="locked || !branch" @click="confirm">
         {{ busy ? 'Starting…' : 'Run' }}

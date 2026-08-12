@@ -342,8 +342,18 @@ export function installMockBackend() {
         busy_project: null
       }
     }
-    /* Enough branches for the dialog's field to be worth looking at. */
-    if (command === 'git_branches') return ['main', 'staging', 'feature/runs-project-config']
+    /* Enough branches for the dialog's field to be worth looking at, and one of
+       them short of a repository — the browser is the only place the lower
+       group and its notes can be seen at all, since there is no Rust worker
+       here to walk anybody's repositories. */
+    if (command === 'target_branches') {
+      return [
+        { name: 'main', missing_in: [] },
+        { name: 'staging', missing_in: [] },
+        { name: 'feature/runs-project-config', missing_in: [] },
+        { name: 'release/7', missing_in: ['admin', 'extension'] }
+      ]
+    }
     /* The Storage tab's numbers. A read, so it answers — otherwise the section
        could not be looked at under `npm run dev` at all, and the one place in
        the app that deletes anything would be the one screen nobody could see.

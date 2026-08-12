@@ -253,6 +253,23 @@ pub fn warm() {
 /// failure — see `resolved()` for why that is the entire error path.
 #[cfg(unix)]
 fn resolve() -> Option<String> {
+    resolve_within(TIMEOUT)
+}
+
+/// The same call with the deadline handed in, which exists for the machine
+/// probe in the tests and for nothing else — production has one ceiling and
+/// `resolve()` is where it is written down.
+///
+/// The split is worth its two lines because the two callers are asking
+/// different questions. `TIMEOUT` is how long a *person* stares at a window
+/// while the app works out whether an agent is installed, so it is deliberately
+/// tight. The probe asks whether this machine has a login shell that reports a
+/// `PATH` at all, with nobody waiting on the answer, and borrowing the
+/// product's five seconds made it a question about how busy the box was
+/// instead: the gate went red on a merge that never touched this file
+/// (smetana-ybh).
+#[cfg(unix)]
+fn resolve_within(timeout: std::time::Duration) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
 
@@ -290,7 +307,7 @@ fn resolve() -> Option<String> {
         let _ = tx.send(buf);
     });
 
-    match rx.recv_timeout(TIMEOUT) {
+    match rx.recv_timeout(timeout) {
         Ok(buf) => {
             let _ = child.wait();
             // Lossy: an environment variable that is not UTF-8 is possible on
@@ -301,7 +318,7 @@ fn resolve() -> Option<String> {
             Some(String::from_utf8_lossy(&buf).into_owned())
         }
         Err(_) => {
-            eprintln!("[env] {shell} did not answer within {TIMEOUT:?}; using the inherited environment");
+            eprintln!("[env] {shell} did not answer within {timeout:?}; using the inherited environment");
             let _ = child.kill();
             let _ = child.wait();
             None
@@ -504,13 +521,33 @@ mod tests {
         assert_eq!(locale_of("PATH=/usr/bin\nTERM=xterm"), None);
     }
 
+    /// How long the probe below is willing to wait, and the reason it is not
+    /// `TIMEOUT`: the two deadlines answer different questions. Five seconds is
+    /// a product decision about a person watching a window at app start. This
+    /// one is a machine probe in a batch of hundreds with nobody watching, so
+    /// the only thing it may be allowed to fail on is a shell that cannot
+    /// report a `PATH` at all — never one that was merely slow, which is what
+    /// borrowing the production number turned it into (smetana-ybh: the gate
+    /// went red mid-merge on a loaded box, and passed on the next attempt,
+    /// which is exactly the signal that teaches a reader to re-run a gate
+    /// instead of believing it).
+    ///
+    /// A minute rather than a round two or three, because a box loaded enough
+    /// to miss five seconds is already an order of magnitude off its idle
+    /// speed and the next order costs nothing here — the probe pays this only
+    /// when it is about to fail, and answers in a fraction of a second
+    /// otherwise. It stays finite so that an rc file blocking forever ends the
+    /// suite with a failure rather than hanging it.
+    #[cfg(unix)]
+    const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
     /// Not a test of the parser but of the machine: on any developer's Unix box
     /// a login shell has a `PATH`, and if this stops being true the fallback in
     /// `path()` is what a person would be left with.
     #[cfg(unix)]
     #[test]
     fn a_login_shell_on_this_machine_answers() {
-        let stdout = resolve().expect("a login shell must answer");
+        let stdout = resolve_within(PROBE_TIMEOUT).expect("a login shell must answer");
         let path = extract(&stdout, "PATH").expect("a login shell must report a PATH");
         assert!(path.contains('/'), "{path:?} does not look like a PATH");
     }

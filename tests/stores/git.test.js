@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
 
+/* What the store holds: a branch and the repositories that do not have it. A
+   single-repository project is short of nothing, which is every fixture here. */
+const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
+
 describe('the active project\'s branch', () => {
   it('the branch is read and lands in the store', async () => {
     const { ipc, stores } = await loadStores()
@@ -71,11 +75,11 @@ describe('the active project\'s branch', () => {
 describe('the branches offered to the run dialog', () => {
   it('the list is read and lands in the store', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('git_branches', ['staging', 'main'])
+    ipc.on('target_branches', everywhere('staging', 'main'))
 
     await stores.git.loadBranches('/p')
 
-    expect(stores.git.gitState.branches).toEqual(['staging', 'main'])
+    expect(stores.git.gitState.branches).toEqual(everywhere('staging', 'main'))
   })
 
   /* Half of smetana-6gs: the dialog opens and asks for the branches in the same
@@ -83,27 +87,27 @@ describe('the branches offered to the run dialog', () => {
      field with nothing to fill from at the moment it fills. */
   it('this project\'s branches stay on screen while they are read again', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('git_branches', ['staging', 'main'])
+    ipc.on('target_branches', everywhere('staging', 'main'))
     await stores.git.loadBranches('/p')
 
     let answer
-    ipc.on('git_branches', () => new Promise((resolve) => (answer = resolve)))
+    ipc.on('target_branches', () => new Promise((resolve) => (answer = resolve)))
     const again = stores.git.loadBranches('/p')
 
-    expect(stores.git.gitState.branches).toEqual(['staging', 'main'])
-    answer(['main', 'staging'])
+    expect(stores.git.gitState.branches).toEqual(everywhere('staging', 'main'))
+    answer(everywhere('main', 'staging'))
     await again
-    expect(stores.git.gitState.branches).toEqual(['main', 'staging'])
+    expect(stores.git.gitState.branches).toEqual(everywhere('main', 'staging'))
   })
 
   /* The other side of it, and the reason the clearing was there: a branch of a
      repository somebody has left must never be an option in front of them. */
   it('another project\'s branches go the moment this one is asked about', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('git_branches', ['staging', 'main'])
+    ipc.on('target_branches', everywhere('staging', 'main'))
     await stores.git.loadBranches('/p')
 
-    ipc.on('git_branches', () => new Promise(() => {}))
+    ipc.on('target_branches', () => new Promise(() => {}))
     stores.git.loadBranches('/q')
 
     expect(stores.git.gitState.branches).toEqual([])
@@ -111,22 +115,22 @@ describe('the branches offered to the run dialog', () => {
 
   it('with no project there is nothing to offer and nothing to ask', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('git_branches', ['main'])
+    ipc.on('target_branches', everywhere('main'))
     await stores.git.loadBranches('/p')
 
     await stores.git.loadBranches(null)
 
     expect(stores.git.gitState.branches).toEqual([])
-    expect(ipc.calls('git_branches')).toEqual([{ project: '/p' }])
+    expect(ipc.calls('target_branches')).toEqual([{ project: '/p' }])
   })
 
   it('a failed listing leaves nothing rather than a list nobody confirmed', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('git_branches', ['main'])
+    ipc.on('target_branches', everywhere('main'))
     await stores.git.loadBranches('/p')
 
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    ipc.fail('git_branches', 'it broke')
+    ipc.fail('target_branches', 'it broke')
     await stores.git.loadBranches('/p')
 
     expect(stores.git.gitState.branches).toEqual([])
@@ -141,11 +145,27 @@ describe('the branches offered to the run dialog', () => {
     const slow = stores.git.loadBranches('/old')
     const fast = stores.git.loadBranches('/new')
 
-    pending.get('/new')(['new-main'])
+    pending.get('/new')(everywhere('new-main'))
     await fast
-    pending.get('/old')(['old-main'])
+    pending.get('/old')(everywhere('old-main'))
     await slow
 
-    expect(stores.git.gitState.branches).toEqual(['new-main'])
+    expect(stores.git.gitState.branches).toEqual(everywhere('new-main'))
+  })
+
+  /* The multi-repository half, and what the field draws the lower group from.
+     The store keeps the record whole rather than flattening it to a name, the
+     same instinct `runs.js` follows with a `Run`: a fact this front end has not
+     learned to draw must not be silently thrown away on the way in. */
+  it('keeps which repositories a branch is missing from', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('target_branches', [
+      { name: 'develop', missing_in: [] },
+      { name: 'release/7', missing_in: ['admin', 'extension'] }
+    ])
+
+    await stores.git.loadBranches('/p')
+
+    expect(stores.git.gitState.branches[1].missing_in).toEqual(['admin', 'extension'])
   })
 })

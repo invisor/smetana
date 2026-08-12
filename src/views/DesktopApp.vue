@@ -18,7 +18,6 @@ import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
-import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
@@ -93,8 +92,9 @@ import {
   stopRun
 } from '../stores/runs.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
+import { workingKey } from '../components/run/configFreshness.js'
 import { scopeBusyReason } from '../components/run/runScopes.js'
-import { inspector, scope } from './desktopAppData.js'
+import { scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
   basenameOf,
@@ -301,9 +301,11 @@ const runConfig = computed(() => (configured.value ? runsState.config.config : n
 /* Whether the run dialog can be reached at all, which is not the same question
    as whether a run can start. A damaged configuration is offered the dialog on
    purpose: it is the only surface wide enough to quote the parser and name the
-   section that failed, and it carries the button that repairs the file. Take
-   the route away and the state is exactly what it was before this task — a
-   board with no play buttons and nothing anywhere saying why.
+   section that failed. Take the route away and the state is exactly what it was
+   before this task — a board with no play buttons and nothing anywhere saying
+   why. The repair itself is not here any more: "Set up again" lives in the
+   project row's right-click menu, which is where the other two actions on a
+   project already were.
 
    The dialog itself is what refuses: `configError` disables its Run. Letting
    the play through to a dialog that says no is the opposite of the rule about
@@ -569,48 +571,46 @@ const onAddProject = async () => {
   if (needsSetup.value) openSetup(added, false)
 }
 
-/* The run dialog's own way back to the setup, and the only one a project that
-   is already configured has — the gear on its row goes as soon as the file
-   exists. The dialog closes: the two are alternatives, and leaving the run
-   dialog behind this one would put a person back in front of fields that are
-   about to be filled from a file being rewritten. */
-const setupFromRun = () => {
-  if (!activePath.value) return
-  runOpen.value = false
-  openSetup(activePath.value, true)
-}
-
 /* The setup agent runs inside this window's own terminal tab, so the person
    watching it never leaves and never returns — window focus, which is how
    every other outside writer (an agent on a branch, a person in a terminal)
    gets noticed, simply never fires. terminalState.sessions already carries
-   state for every session, active or not (see stores/terminals.js), so that
-   is the signal to watch instead of a timer: once the session leaves
-   starting/running — it stopped to ask a question, or it is done — the file
-   may have changed, and loadConfig reads it again. Kept as a plain variable,
-   not a ref: nothing in the template reads it, it only guards against two
-   setup sessions leaving two watchers running at once. */
-let stopSetupWatch = null
+   state for every session, active or not (see stores/terminals.js), so that is
+   the signal to watch instead of a timer: every time a session of this project
+   stops working, or one starts, the file may have changed and loadConfig reads
+   it again. Both edges, deliberately — the key is what is working now, not
+   what has just finished — so a session going idle, picking up again and then
+   exiting costs two reads rather than one. That is the frequency to weigh
+   before touching this channel, and it is a small toml parse against a
+   `catchUp` that re-lists every expanded directory.
 
-function watchSetupSession(id, path) {
-  if (stopSetupWatch) stopSetupWatch()
-  stopSetupWatch = watch(
-    () => terminalState.sessions.find((s) => s.id === id)?.state,
-    (state) => {
-      // The project moved on, or the session is gone from the list (removed,
-      // or a project switch repopulated it under a different one) — either
-      // way there is nothing left to watch for, and watching on would risk
-      // reloading another project's config under this one's mark.
-      if (activePath.value !== path || !state) {
-        stopSetupWatch()
-        stopSetupWatch = null
-        return
-      }
-      if (state === 'starting' || state === 'running') return
-      loadConfig(path)
-    }
-  )
-}
+   The rule is `workingKey`, and it lives outside this file for the reason the
+   whole `branchChoice.js` family does. What it replaces was a watcher created
+   inside `startSetup`, over one session id, which tore itself down for good on
+   its first callback for another project or for a session already gone from
+   `terminalState.sessions` — and nothing anywhere re-established it, so a
+   window that then never switched project and never lost focus went on drawing
+   "Not set up for runs" over a configuration that existed, with the board's
+   play buttons hidden behind the same `configured` (smetana-0ag).
+
+   Declared at module-body scope like the rest of the watchers here, so Vue ties
+   its lifetime to the component's and there is nothing left to stop by hand.
+   The mark still clears on a read and never on the optimism that a session
+   ended: this only asks the question again, and `needsSetup` moves when the
+   answer comes back `ok`.
+
+   A project switch moves the key too, and pays for up to two extra reads of a
+   small file — the sessions of the project just left stop matching, then
+   loadSessions brings the new project's in. The activePath watcher below reads
+   the same file at the same moment; loadConfig is idempotent and guarded
+   against its own stale response, so the duplicate costs the read and nothing
+   else. */
+watch(
+  () => workingKey(terminalState.sessions, activePath.value),
+  () => {
+    if (activePath.value) loadConfig(activePath.value)
+  }
+)
 
 const startSetup = async () => {
   const path = setupFor.value
@@ -619,22 +619,14 @@ const startSetup = async () => {
   try {
     project.sideTab = 'agents'
     project.activeTab = 'terminal'
-    const session = await createSession(path, { kind: 'setup' })
+    await createSession(path, { kind: 'setup' })
     closeSetup()
-    watchSetupSession(session.id, path)
   } catch {
     // already reported by createSession; the dialog stays open
   } finally {
     settingUp.value = false
   }
 }
-
-/* Created inside an event handler rather than synchronously during setup(),
-   so Vue never ties its lifetime to the component's the way it does for the
-   watchers declared at module-body scope elsewhere in this file — it needs
-   its own stop on unmount, or a setup started just before navigating away
-   would keep polling terminalState forever. */
-onUnmounted(() => stopSetupWatch?.())
 
 /* Whose work the right column is showing under the question block: the id of
    the agent row a person opened, or null for the board's own selection. It
@@ -1660,13 +1652,6 @@ const inspectorBody = {
   padding: 'var(--panel-pad)',
   minWidth: 0
 }
-const blocksLine = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-3)',
-  font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)',
-  color: 'var(--status-blocked-fg)'
-}
 /* The issue's title inside the delete dialog, in the same words the panel's
    own dialog drew it in — this is what a person reads to check they are about
    to delete the thing they meant. */
@@ -1700,13 +1685,6 @@ const questionGlyphStyle = {
   display: 'flex',
   marginTop: '2px',
   color: 'var(--attn-loud)'
-}
-/* the hatch is the dependency signature, reused at swatch size */
-const hatchSwatch = {
-  width: '16px',
-  height: '8px',
-  borderRadius: 'var(--radius-1)',
-  backgroundImage: 'repeating-linear-gradient(135deg,var(--hatch-blocked) 0 1.5px,transparent 1.5px 4px)'
 }
 
 /* Where the bell's panel sits: under the bar, against the right edge, clear of
@@ -1805,10 +1783,11 @@ const toastStackStyle = {
               :can-add-agent="project.sideTab === 'agents'"
               :needs-setup="needsSetup"
               :config-broken="configBroken"
+              :configured="configured"
               @select="switchTo"
               @remove="removeProject"
               @add-agent="newAgent"
-              @setup="openSetup($event, false)"
+              @setup="openSetup"
             />
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
@@ -1911,7 +1890,6 @@ const toastStackStyle = {
           @close="runOpen = false"
           @confirm="startTheRun"
           @rescope="runTheEpicInstead"
-          @setup="setupFromRun"
         />
         <SetupProjectModal
           :open="!!setupFor"
@@ -2075,23 +2053,20 @@ const toastStackStyle = {
               :ui-status="toUiStatus(inspectedIssue.status)"
             />
 
-            <template v-else-if="rightPanel === 'board'">
-              <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
-                <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-                  {{ inspector.id }}
-                </span>
-                <StatusBadge :status="inspector.status" size="sm" />
-              </div>
-
-              <div :style="{ fontSize: 'var(--text-md)', lineHeight: 'var(--leading-snug)', textWrap: 'pretty' }">
-                {{ inspector.title }}
-              </div>
-
-              <div :style="blocksLine">
-                <span :style="hatchSwatch" />
-                blocks {{ inspector.blocksDownstream }} downstream tasks
-              </div>
-            </template>
+            <!-- Nothing picked on the board, which is where a project opens.
+                 The app's own answer to "nothing here" rather than a blank
+                 column: a silent panel beside a full board reads as a
+                 rendering failure. Only the board case — under a run's
+                 claimed list the list itself is the content, and an empty
+                 state beneath it would say the panel was empty when it is
+                 not. -->
+            <EmptyState
+              v-else-if="rightPanel === 'board'"
+              compact
+              icon="inbox"
+              title="No task selected"
+              description="Pick a card on the board to see it here."
+            />
           </div>
         </Panel>
       </div>
