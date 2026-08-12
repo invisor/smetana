@@ -301,9 +301,11 @@ const runConfig = computed(() => (configured.value ? runsState.config.config : n
 /* Whether the run dialog can be reached at all, which is not the same question
    as whether a run can start. A damaged configuration is offered the dialog on
    purpose: it is the only surface wide enough to quote the parser and name the
-   section that failed, and it carries the button that repairs the file. Take
-   the route away and the state is exactly what it was before this task — a
-   board with no play buttons and nothing anywhere saying why.
+   section that failed. Take the route away and the state is exactly what it was
+   before this task — a board with no play buttons and nothing anywhere saying
+   why. The repair itself is not here any more: "Set up again" lives in the
+   project row's right-click menu, which is where the other two actions on a
+   project already were.
 
    The dialog itself is what refuses: `configError` disables its Run. Letting
    the play through to a dialog that says no is the opposite of the rule about
@@ -567,17 +569,6 @@ const onAddProject = async () => {
   if (!added) return
   await loadConfig(added)
   if (needsSetup.value) openSetup(added, false)
-}
-
-/* The run dialog's own way back to the setup, and the only one a project that
-   is already configured has — the gear on its row goes as soon as the file
-   exists. The dialog closes: the two are alternatives, and leaving the run
-   dialog behind this one would put a person back in front of fields that are
-   about to be filled from a file being rewritten. */
-const setupFromRun = () => {
-  if (!activePath.value) return
-  runOpen.value = false
-  openSetup(activePath.value, true)
 }
 
 /* The setup agent runs inside this window's own terminal tab, so the person
@@ -1792,10 +1783,11 @@ const toastStackStyle = {
               :can-add-agent="project.sideTab === 'agents'"
               :needs-setup="needsSetup"
               :config-broken="configBroken"
+              :configured="configured"
               @select="switchTo"
               @remove="removeProject"
               @add-agent="newAgent"
-              @setup="openSetup($event, false)"
+              @setup="openSetup"
             />
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
@@ -1898,7 +1890,6 @@ const toastStackStyle = {
           @close="runOpen = false"
           @confirm="startTheRun"
           @rescope="runTheEpicInstead"
-          @setup="setupFromRun"
         />
         <SetupProjectModal
           :open="!!setupFor"
