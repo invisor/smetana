@@ -93,6 +93,7 @@ export { default as Toast } from './overlays/Toast.vue'
 
 // run
 export { default as BranchSelect } from './run/BranchSelect.vue'
+export { default as ReportView } from './run/ReportView.vue'
 export { default as RunBar } from './run/RunBar.vue'
 export { default as RunModal } from './run/RunModal.vue'
 export { default as SetupProjectModal } from './run/SetupProjectModal.vue'
