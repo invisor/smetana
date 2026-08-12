@@ -31,7 +31,7 @@ import {
   sendSettingsPatch,
   watchSharedSettings
 } from '../stores/settings.js'
-import { appVersion, openExternal } from '../stores/app.js'
+import { appVersion, openExternal, watchSettingsSection } from '../stores/app.js'
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
 
 /* The query string's two overrides, passed down rather than read here so that
@@ -41,7 +41,14 @@ import { clearStorage, surveyStorage } from '../stores/attachments.js'
    can be looked at in the other theme and in compact. */
 const props = defineProps({
   themeOverride: { type: String, default: null },
-  densityOverride: { type: String, default: null }
+  densityOverride: { type: String, default: null },
+  /* Which section to open on — `?tab=`, read in `App.vue` with the rest of the
+     query string. Checked against `TABS` below rather than trusted: it comes
+     off a URL, and Rust guards its shape without knowing the vocabulary. Named
+     apart from the `tab` ref below on purpose: a prop and a setup binding of
+     one name resolve by a precedence rule nobody should have to remember while
+     reading the template. */
+  initialTab: { type: String, default: null }
 })
 
 /* Everything this window can see and change, flat, in the shape the two windows
@@ -80,6 +87,7 @@ const change = (patch) => {
 }
 
 let stopWatching = null
+let stopSections = null
 const version = ref(null)
 
 onMounted(async () => {
@@ -87,6 +95,17 @@ onMounted(async () => {
     stopWatching = await watchSharedSettings((state) => adopt(state, true))
   } catch (err) {
     console.warn('[settings-window] no app window to follow:', err)
+  }
+  try {
+    /* The app window pressing "open the settings on Storage" while this window
+       is already open. A name this build does not know is ignored rather than
+       drawn: the person keeps the tab they were reading. */
+    stopSections = await watchSettingsSection((name) => {
+      const asked = known(name)
+      if (asked) tab.value = asked
+    })
+  } catch (err) {
+    console.warn('[settings-window] no app window to hear from:', err)
   }
   try {
     const stored = await readSharedSettings()
@@ -97,7 +116,10 @@ onMounted(async () => {
   version.value = await appVersion()
 })
 
-onUnmounted(() => stopWatching?.())
+onUnmounted(() => {
+  stopWatching?.()
+  stopSections?.()
+})
 
 /* This window paints itself: it is a separate webview with its own document
    root, so the app window's attributes reach nothing here. `system` is resolved
@@ -122,7 +144,22 @@ const TABS = [
   { id: 'storage', label: 'Storage', kind: 'pinned' },
   { id: 'about', label: 'About', kind: 'pinned' }
 ]
-const tab = ref('general')
+
+/* The list of sections is this file's, and this is the only place a name is
+   checked against it — Rust builds the URL and guards its shape, never its
+   vocabulary, so a section this build has never heard of opens on General
+   rather than on an empty body. Whoever asked for it pressed a button, so the
+   worst outcome is landing one tab away from what they meant. */
+const known = (name) => (TABS.some((entry) => entry.id === name) ? name : null)
+
+/* Which section a caller asked for, in the two forms that can reach this
+   window. `?tab=` is how a window being built hears about it — passed in as a
+   prop, the way `?theme=` and `?density=` are, so `App.vue` stays the one place
+   that reads the query string; the event is how an already-open window hears,
+   since opening it a second time focuses it and never reloads the URL. Unlike
+   the appearance overrides this one is not a standing override: it names where
+   to start, and a person is free to walk away from it. */
+const tab = ref(known(props.initialTab) ?? 'general')
 
 /* The Storage tab, and the one part of this window that is not a setting at
    all: it asks the back end two questions of its own rather than reading the

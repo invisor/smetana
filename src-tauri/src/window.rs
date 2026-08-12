@@ -63,12 +63,38 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 /// UI would come up as a page that cannot talk to anything.
 const SETTINGS_LABEL: &str = "settings";
 
-/// Opens the settings window, or brings the open one forward.
+/// Which section a caller asked for, as a query parameter on the URL the window
+/// already loads — the mechanism `?view=` and `?theme=` are already built on.
+///
+/// The closed list of sections lives in `src/views/SettingsWindow.vue`, which
+/// owns the tabs, and is deliberately not repeated here: that window already
+/// falls back to General for a name it does not know, and a second copy of the
+/// list in Rust would be one more pair to keep in step. What this function is
+/// for is the URL rather than the tab — anything but a short plain identifier is
+/// dropped, so nothing a caller sends can add a parameter of its own or escape
+/// the query string.
+fn tab_query(tab: Option<&str>) -> String {
+    let plain = tab.filter(|name| {
+        !name.is_empty()
+            && name.len() <= 32
+            && name.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+    });
+    plain.map(|name| format!("&tab={name}")).unwrap_or_default()
+}
+
+/// Opens the settings window on a section, or brings the open one forward.
+///
+/// The section only reaches a window being built: an open one is focused rather
+/// than reloaded, exactly as it has always been, so telling *that* window which
+/// section to show is a message rather than a URL — `settings:show`, on the
+/// event channel the two windows already speak over. Reloading it instead would
+/// throw away the tab a person is in the middle of reading to show them one they
+/// pressed a button for, and re-ask the app window for everything it holds.
 ///
 /// Deliberately not `async`: a synchronous command runs on the main thread,
 /// which is where a window is created on every platform this app targets.
 #[tauri::command]
-pub fn settings_window_open(app: AppHandle) -> Result<(), String> {
+pub fn settings_window_open(app: AppHandle, tab: Option<String>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(SETTINGS_LABEL) {
         // Minimized counts as open, and focusing a minimized window leaves a
         // person pressing the gear with nothing on screen to show for it.
@@ -79,7 +105,7 @@ pub fn settings_window_open(app: AppHandle) -> Result<(), String> {
     let mut builder = WebviewWindowBuilder::new(
         &app,
         SETTINGS_LABEL,
-        WebviewUrl::App("index.html?view=settings".into()),
+        WebviewUrl::App(format!("index.html?view=settings{}", tab_query(tab.as_deref())).into()),
     )
     .title("Settings")
     .inner_size(720.0, 560.0)
@@ -166,4 +192,25 @@ pub fn persist_geometry(app: &AppHandle) {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tab_query;
+
+    #[test]
+    fn a_section_rides_as_a_query_parameter() {
+        assert_eq!(tab_query(Some("storage")), "&tab=storage");
+        assert_eq!(tab_query(None), "");
+    }
+
+    /// Nothing a caller sends may add a parameter of its own or leave the query
+    /// string. The window falls back to General for a name it does not know, so
+    /// dropping the whole parameter costs one press landing on the first tab.
+    #[test]
+    fn anything_that_is_not_a_plain_name_is_dropped() {
+        for odd in ["", "Storage", "storage&view=gallery", "sto rage", "../etc", "a".repeat(33).as_str()] {
+            assert_eq!(tab_query(Some(odd)), "", "{odd:?}");
+        }
+    }
 }
