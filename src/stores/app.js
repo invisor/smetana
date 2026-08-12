@@ -8,23 +8,54 @@
    that. It is not `settings.js` because none of it is a setting — the settings
    window is a window, and the version is a fact about the build. */
 import { invoke } from '@tauri-apps/api/core'
+import { emit, listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { usingMockBackend } from './mockBackend.js'
 
-/* Opens the settings window, or brings the open one forward — the decision is
-   Rust's (`window::settings_window_open`), because the window either exists or
-   it does not and only that side can tell.
+/* Which section the settings window should be showing. Not a setting and not
+   part of the three-event contract in `settings.js` — nothing about it reaches
+   `settings.json`, and the main window is still the only writer of that file.
+   It is a message about a window, which is what this store is for. */
+export const SETTINGS_SHOW = 'settings:show'
+
+/* Opens the settings window on a section, or brings the open one forward — the
+   decision is Rust's (`window::settings_window_open`), because the window either
+   exists or it does not and only that side can tell.
+
+   The section therefore travels twice, and both halves are needed for one press
+   to work in both states. A window being built gets it as a query parameter on
+   the URL it already loads (`?view=settings&tab=storage`), the mechanism
+   `?view=` and `?theme=` are built on. A window already open is focused rather
+   than rebuilt — that is the whole point of the label — so it never sees a new
+   URL, and the event is the only way to reach it. A fresh window is not
+   listening yet and simply misses the event, having already read the parameter.
 
    In a browser there is no window to make: the mock answers, nothing happens,
    and the gear is a no-op. The settings UI is still reachable there, through
    `?view=settings`, which is what the dev server checks it with. */
-export async function openSettingsWindow() {
+export async function openSettingsWindow(tab = null) {
   try {
-    await invoke('settings_window_open')
+    await invoke('settings_window_open', { tab })
   } catch (err) {
     console.error('[app] the settings window did not open:', err)
+    return
   }
+  if (!tab) return
+  try {
+    await emit(SETTINGS_SHOW, { tab })
+  } catch (err) {
+    /* The window is open on whatever it was showing, which is a smaller failure
+       than not opening at all — hence a warning and no further attempt. */
+    console.warn('[app] the settings window was not told which section to show:', err)
+  }
+}
+
+/* The settings window's half: which section it has just been asked for. Its own
+   `TABS` list decides whether the name means anything — this store carries the
+   message and never the vocabulary. */
+export async function watchSettingsSection(onShow) {
+  return listen(SETTINGS_SHOW, (event) => onShow(event.payload?.tab ?? null))
 }
 
 /* The version this build carries — `tauri.conf.json`'s `version`, which is the

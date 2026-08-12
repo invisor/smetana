@@ -37,6 +37,8 @@ import {
   MenuButton,
   Modal,
   NewTaskModal,
+  NotificationCard,
+  NotificationPanel,
   Panel,
   ProjectList,
   PromoteColumnModal,
@@ -60,6 +62,7 @@ import {
   ToolCall,
   Tooltip
 } from '../components/index.js'
+import { storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 import { terminalState } from '../stores/terminals.js'
@@ -427,6 +430,15 @@ const galleryNoBoardSurvey = {
   removable: { files: 0, bytes: 0 }
 }
 const galleryCleaned = { removed: { files: 6, bytes: 9 * 1024 * 1024 }, failed: 0 }
+
+/* What the bell has to say, built by the rule itself rather than typed out here:
+   a card whose prose came from a fixture would go on looking right after the
+   sentence in `notifications.js` had changed under it. Both ends of the panel
+   are drawn — a card, and the empty answer, which is the state the panel is
+   most often in and the one worth checking is not a blank rectangle. */
+const galleryNotifications = [
+  storageNotification('/Users/you/Projects/smetana', 62 * 1024 * 1024 + 700 * 1024, 50)
+]
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -1202,6 +1214,17 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <Toast tone="warning" title="claude-1 needs you" description="bd-a1b2 · worktree name collision · 4m" />
           <Toast tone="error" title="claude-2 failed" description="exit 101 in wt/bd-3c9d" />
           <Toast tone="success" title="bd-12cd done" description="+41 −1 · 2h 14m" />
+        </div>
+        <!-- The bell's panel, both ways round: what it looks like holding
+             something, and what it says holding nothing. Drawn inline here
+             rather than hanging off a corner — placement belongs to whoever
+             opens it, the same split ContextMenu and MenuButton keep. -->
+        <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+          <NotificationPanel :items="galleryNotifications" />
+          <NotificationPanel />
+        </div>
+        <div :style="{ width: '360px' }">
+          <NotificationCard :notification="galleryNotifications[0]" />
         </div>
         <div :style="{ width: '220px' }">
           <Skeleton :lines="4" :height="10" />

@@ -351,6 +351,15 @@ export function installMockBackend() {
        active project's share of it, some of that share still in use and some of
        it not, which is the state the button is drawn for.
 
+       The same numbers are what the bell weighs, and the project's share of the
+       store — `kept` and `removable` together, 15.25 MiB — is deliberately over
+       the first threshold: that is what makes the notification panel visible in
+       `npm run dev` at all, with no Rust worker to grow a folder behind it. It
+       announces once per page load and no more, because a browser has nowhere
+       to keep the threshold it just announced (`settings_save` is accepted and
+       dropped here) — so the card comes back on every reload, which is the one
+       way this fixture's behaviour differs from the app's.
+
        `attachments_clean` is deliberately absent and falls through to the loud
        refusal at the bottom, like every other write. There is no store to
        delete from in a browser, and a deletion that looked like it had happened

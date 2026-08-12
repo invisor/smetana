@@ -65,6 +65,15 @@ const defaults = () => ({
        and it would be prefilled in the one dialog whose whole job is being the
        last cheap place to notice a run aimed at the wrong thing. */
     runSettings: null,
+    /* The highest attachment-storage threshold this project has been warned
+       about, in MiB — null until it has been warned about any. The one thing
+       the notification bell keeps between runs, and per project because the
+       folder it is about is (`stores/notifications.js`). Listed here for the
+       reason `runSettings` above spells out: a key missing from this object is
+       a key the defaults layer cannot clear, and switching projects would carry
+       the previous one's number across — which would silence a warning for a
+       folder nobody has ever been warned about. */
+    storageWarnedMib: null,
     usedAt: null
   }
 })

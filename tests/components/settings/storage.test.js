@@ -4,6 +4,7 @@ import {
   countFiles,
   formatBytes,
   removalLine,
+  projectBytes,
   removedLine,
   scopeLine,
   storageLine
@@ -127,6 +128,36 @@ describe('whether the button may be pressed at all', () => {
     // both are "not read", never "assume it was".
     expect(canClear(survey({ board: 'something-new' }))).toBe(false)
     expect(canClear(survey({ board: undefined }))).toBe(false)
+  })
+})
+
+describe('how much of the store belongs to this project', () => {
+  it('is what stays and what could go, together', () => {
+    // 2 MiB kept and 1 MiB removable: the folder the button reaches is 3 MiB,
+    // whichever side of the rule each file falls.
+    expect(projectBytes(survey())).toBe(3 * 1024 * 1024)
+  })
+
+  it('has no answer at all when the board was not read', () => {
+    // Both tallies are zero in that state by design, so a sum would report an
+    // empty folder for one that may hold hundreds of megabytes — and the bell
+    // would re-arm its ladder off a number nobody measured.
+    for (const board of ['error', 'not-a-beads-repo', 'bd-version-mismatch', 'something-new']) {
+      expect(projectBytes(survey({ board }))).toBe(null)
+    }
+    expect(projectBytes(survey({ board: undefined }))).toBe(null)
+  })
+
+  it('has no answer with no project, and none before the survey lands', () => {
+    expect(projectBytes(survey({ project: null }))).toBe(null)
+    expect(projectBytes(null)).toBe(null)
+    expect(projectBytes({})).toBe(null)
+  })
+
+  it('tells an empty folder apart from a folder nobody counted', () => {
+    expect(projectBytes(survey({ kept: { files: 0, bytes: 0 }, removable: { files: 0, bytes: 0 } })))
+      .toBe(0)
+    expect(projectBytes(survey({ removable: undefined }))).toBe(null)
   })
 })
 

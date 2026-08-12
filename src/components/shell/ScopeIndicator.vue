@@ -41,7 +41,23 @@ const truncate = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'elli
 const counter = (color) => ({ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', color })
 
 const scopeName = computed(() => props.worktree || props.branch)
+
+/* The bell's name, and the tooltip over it. It used to say "unread", which is a
+   ledger this app deliberately does not keep — a notification here is derived
+   from what is true right now and goes when that stops being true, so there is
+   nothing for "read" to mean. It also said "1 notifications". */
+const notificationsLabel = computed(() => {
+  if (props.notifications <= 0) return 'Notifications'
+  return props.notifications === 1 ? '1 notification' : `${props.notifications} notifications`
+})
+/* The count over the bell. `pointerEvents: 'none'` is not decoration: the badge
+   is drawn over the top right of a 24px button, which is where a pointer aiming
+   at the middle of the glyph lands, so without it the badge swallows the press
+   and the bell does nothing — silently, since the badge is `aria-hidden` and has
+   no handler of its own to fail. It cost nothing while nobody listened for the
+   click; the moment something did, it was the whole feature. */
 const badgeStyle = {
+  pointerEvents: 'none',
   position: 'absolute', top: '1px', right: '1px', minWidth: '12px', height: '12px', padding: '0 3px',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   background: 'var(--attn-loud)', color: 'var(--attn-loud-contrast)',
@@ -85,7 +101,7 @@ const badgeStyle = {
       <IconButton
         icon="bell"
         size="sm"
-        :label="notifications > 0 ? `${notifications} unread notifications` : 'Notifications'"
+        :label="notificationsLabel"
         @click="$emit('notifications')"
       />
       <span v-if="notifications > 0" aria-hidden="true" :style="badgeStyle">{{ notifications }}</span>

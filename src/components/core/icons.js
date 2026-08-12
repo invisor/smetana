@@ -33,6 +33,7 @@ import {
   GitBranch,
   GitFork,
   GitMerge,
+  HardDrive,
   Inbox,
   Info,
   Layers,
@@ -154,6 +155,8 @@ export const iconNodes = {
   ellipsis: Ellipsis,
   'chevrons-right': ChevronsRight,
   bell: Bell,
+  /* The bell's one source today: the attachment store's own weight. */
+  'hard-drive': HardDrive,
   settings: Settings,
   'settings-2': Settings2,
   plus: Plus,

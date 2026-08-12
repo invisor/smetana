@@ -72,6 +72,19 @@ export { default as FileEditor } from './files/FileEditor.vue'
 export { default as FileTree } from './files/FileTree.vue'
 export { default as FileTreeRow } from './files/FileTreeRow.vue'
 
+// notifications
+export { default as NotificationCard } from './notifications/NotificationCard.vue'
+export { default as NotificationPanel } from './notifications/NotificationPanel.vue'
+export {
+  MIB,
+  THRESHOLDS_MIB,
+  crossedThreshold,
+  reachedThreshold,
+  rememberAfter,
+  stillOver,
+  storageNotification
+} from './notifications/notifications.js'
+
 // overlays
 export { default as ContextMenu } from './overlays/ContextMenu.vue'
 export { default as MenuButton } from './overlays/MenuButton.vue'
