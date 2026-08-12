@@ -344,6 +344,22 @@ const hintStyle = {
   fontFamily: 'var(--font-sans)'
 }
 
+/* A row's own note. The field's `hintStyle` colour and size, deliberately not
+   `hintStyle` itself: that one sits in a field where nothing competes with it,
+   and it carries `white-space: nowrap` with no clip and no shrink rule. Dropped
+   into an option row it wins the flex negotiation outright and the label —
+   `flex: 1, minWidth: 0` — shrinks toward nothing instead, so a long note eats
+   the very branch name it is describing. This one gives way first. */
+const noteStyle = {
+  fontSize: 'var(--text-2xs)',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-sans)',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+}
+
 /* A caption over a group. Muted and small, so it reads as structure rather than
    as an option somebody failed to make choosable, and it keeps `--row-h` so the
    list's rhythm does not break where a group starts. The rule belongs to the
@@ -412,15 +428,21 @@ const headerStyle = (index) => ({
             <span :style="{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
               {{ option.label }}
             </span>
-            <!-- Something to say about this row in particular. `hintStyle` is
-                 the field's own, reused deliberately: the note and the hint are
-                 the same voice, one in the list and one in the field. -->
-            <span v-if="option.note" :style="hintStyle">{{ option.note }}</span>
+            <!-- Something to say about this row in particular: the field's
+                 `hintStyle` voice, in its own style rather than that one.
+                 Reusing it would carry `white-space: nowrap` with nothing to
+                 shrink or clip it, and in a flex row that means the *label*
+                 gives way — a long note eating the branch name it is about,
+                 which is the opposite of what a note is for. So it keeps the
+                 colour and size and adds what a row needs: it may shrink, and
+                 it clips itself when it does. -->
+            <span v-if="option.note" :style="noteStyle">{{ option.note }}</span>
           </button>
         </template>
         <div v-if="!matches.length" :style="emptyStyle">
           <slot name="empty">Nothing matches.</slot>
         </div>
+      </div>
       </div>
     </Teleport>
   </div>
