@@ -70,8 +70,8 @@ let branchesFor = null
    nothing refilled it, which is what smetana-6gs was.
 
    Keeping it costs one thing, and it is a real one: for the length of a
-   git_branches call the field can be filled from a list that is one read out of
-   date. A branch deleted since the last open is still on offer in that window,
+   target_branches call the field can be filled from a list that is one read out
+   of date. A branch deleted since the last open is still on offer in that window,
    and somebody who picks it by hand inside it has their choice frozen by
    RunModal's `branchChosen` — the run then goes out with create_target false
    against a branch that is not there. Clearing first made that impossible,
@@ -83,14 +83,21 @@ let branchesFor = null
 
    Guarded against its own stale response the way loadHead is: the last call
    wins, not the last answer. The dialog cannot be opened twice at once, but a
-   project switch and an open can overlap, and the guard costs a comparison. */
+   project switch and an open can overlap, and the guard costs a comparison.
+
+   `target_branches` and not `git_branches`: for a project whose
+   `[project].repos` names several repositories, the project path is the folder
+   that holds them and whatever repository happens to sit at that folder is not
+   one of the ones a run merges into. Rust reads the config and asks each of
+   them, in one call, because a repository list passed down from here would
+   arrive from `runs.js` on its own schedule and race the dialog opening. */
 export async function loadBranches(project) {
   const same = !!project && project === branchesFor
   branchesFor = project
   if (!same) gitState.branches = []
   if (!project) return
   try {
-    const list = await invoke('git_branches', { project })
+    const list = await invoke('target_branches', { project })
     if (branchesFor !== project) return
     gitState.branches = list
   } catch (err) {

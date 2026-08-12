@@ -138,13 +138,36 @@ pub fn describe(check: &HealthCheck) -> String {
 /// makes when a file it cannot read answers "no".
 pub fn is_healthy(check: &HealthCheck) -> bool {
     match check {
-        HealthCheck::Url { url } => Command::new("curl")
-            .args(["-sfS", "-o", "/dev/null", "--max-time", "5", url])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success()),
+        HealthCheck::Url { url } => curl(url).status().is_ok_and(|s| s.success()),
         HealthCheck::Tcp { tcp } => tcp_open(*tcp),
+    }
+}
+
+/// The probe itself, built rather than run, so the `PATH` it is given is a
+/// thing a test can read. `curl` lives in `/usr/bin` on macOS and is therefore
+/// found either way today — it gets the login shell's `PATH` regardless,
+/// because the alternative is a rule that holds in one of the two places it is
+/// written and nobody finds out which.
+fn curl(url: &str) -> Command {
+    let mut cmd = Command::new("curl");
+    cmd.args(["-sfS", "-o", "/dev/null", "--max-time", "5", url])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    with_login_path(&mut cmd);
+    cmd
+}
+
+/// The `PATH` anything the preflight starts is given: the login shell's, for
+/// the reason `terminal/pty.rs` records at its own copy of this. A bundled app
+/// started from Finder inherits launchd's, which holds nothing a person
+/// installed — so `docker`, `mise`, `nvm`'s shims and everything else a
+/// declared command reaches for are simply not there, and the phase whose whole
+/// job is to say which piece is missing reports the tool instead of the piece.
+/// `shell_env::path` already falls back to the inherited value, so this is
+/// never a narrowing.
+fn with_login_path(cmd: &mut Command) {
+    if let Some(path) = crate::shell_env::path() {
+        cmd.env("PATH", path);
     }
 }
 
@@ -259,6 +282,7 @@ fn shell(root: &Path, command: &str) -> Command {
 
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command).current_dir(root);
+    with_login_path(&mut cmd);
     // A group of its own, which is what makes `terminate` able to name the
     // whole tree the command started. Standard input goes with it: a command
     // in a background group that reads the terminal is stopped by the kernel
@@ -272,6 +296,7 @@ fn shell(root: &Path, command: &str) -> Command {
 fn shell(root: &Path, command: &str) -> Command {
     let mut cmd = Command::new("cmd");
     cmd.arg("/C").arg(command).current_dir(root).stdin(Stdio::null());
+    with_login_path(&mut cmd);
     cmd
 }
 
@@ -345,6 +370,26 @@ mod tests {
         // so this is a Command failure carrying the shell's own message.
         assert!(matches!(err, PreflightError::Command { .. }), "{err:?}");
         assert!(err.to_string().contains("definitely-not-a-real-command-8a3f"));
+    }
+
+    /// The bug this whole `PATH` line exists for. A bundled app on macOS is
+    /// handed launchd's environment, which on a stock machine is
+    /// `/usr/bin:/bin:/usr/sbin:/sbin` — so `docker compose -f … up -d`, the
+    /// very first declared command of the project this was ported from, exits
+    /// 127 against infrastructure that is up and answering, because Docker
+    /// installs itself into `/usr/local/bin`. Invisible in development, where
+    /// the binary is started from a terminal that already has the person's own
+    /// `PATH`, which is why it is pinned here rather than left to be noticed.
+    #[test]
+    fn a_declared_command_and_a_probe_both_get_the_login_shells_path() {
+        use std::ffi::OsStr;
+
+        let expected = crate::shell_env::path().map(OsStr::new);
+        for cmd in [shell(Path::new("/"), "docker compose up -d"), curl("http://localhost:4001/health")] {
+            let given =
+                cmd.get_envs().find(|(key, _)| *key == OsStr::new("PATH")).and_then(|(_, value)| value);
+            assert_eq!(given, expected, "{:?}", cmd.get_program());
+        }
     }
 
     #[test]

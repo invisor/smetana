@@ -148,6 +148,12 @@ const choice = ref('running')
    the dialog around it is not what needs looking at. */
 const pickedBranch = ref('staging')
 const branchIsNew = ref(false)
+const groupedBranch = ref('develop')
+const narrowBranch = ref('spike/auth')
+/* Records for the branch fields below — the shape `target_branches` actually
+   answers with, now that git.js passes it straight through. */
+const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
+const partialBranch = ref('release/7')
 const checked = ref(true)
 const switched = ref(true)
 
@@ -756,7 +762,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'queue' }"
             :count="12"
-            :branches="['main', 'staging', 'feature/runs-project-config']"
+            :branches="everywhere('main', 'staging', 'feature/runs-project-config')"
             default-branch="staging"
             @close="() => {}"
             @confirm="() => {}"
@@ -768,7 +774,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :scope="{ kind: 'task', id: 'smetana-9', title: 'Rename the worktree when the branch changes' }"
             :count="1"
             :part-of="{ id: 'smetana-4', title: 'Worktree lifecycle', siblings: 2 }"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             :live-check-available="false"
             :default-parallel="5"
@@ -783,7 +789,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'task', id: 'smetana-77', title: 'Fold the settings debounce into the store' }"
             :count="1"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             :remembered="{ mode: 'solo' }"
             @close="() => {}"
@@ -800,7 +806,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <RunModal
             :open="true"
             :count="12"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="staging"
             :config-error="BROKEN_CONFIG"
             @close="() => {}"
@@ -818,7 +824,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :open="true"
             :scope="{ kind: 'queue' }"
             :count="12"
-            :branches="['main', 'staging']"
+            :branches="everywhere('main', 'staging')"
             default-branch="main"
             live-check-blocked="Nothing here can drive a browser: Playwright's MCP server is not in the agent's configuration and the Claude in Chrome extension was not found in a Chrome profile."
             @close="() => {}"
@@ -1093,7 +1099,67 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <BranchSelect
             v-model="pickedBranch"
             v-model:create="branchIsNew"
-            :branches="['main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7']"
+            :branches="everywhere('main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7')"
+          />
+        </div>
+        <div :style="{ width: '320px' }">
+          <!-- A branch three of the project's repositories carry and one does
+               not. The hint counts them and the row names them: "will be created"
+               on its own would say the branch does not exist, which is the very
+               thing that sent a run out to cut a `develop` that already had its
+               own history in four repositories. -->
+          <BranchSelect
+            v-model="partialBranch"
+            :branches="[
+              { name: 'develop', missing_in: [] },
+              { name: 'main', missing_in: [] },
+              { name: 'release/7', missing_in: ['admin', 'extension'] },
+              { name: 'spike/auth', missing_in: ['frontend', 'admin', 'extension'] }
+            ]"
+          />
+        </div>
+        <div :style="{ width: '320px' }">
+          <!-- Captions and per-row notes. Deliberately long enough to scroll,
+               since the caption rows are what `reveal` has to walk past: the
+               cursor is brought into view by index into this list's children, so
+               a row that is not a sibling of the options would desync it. -->
+          <Dropdown
+            v-model="groupedBranch"
+            mono
+            searchable
+            search-label="Search branches"
+            :options="[
+              { header: true, label: 'Everywhere' },
+              { value: 'develop', label: 'develop' },
+              { value: 'main', label: 'main' },
+              { value: 'staging', label: 'staging' },
+              { header: true, label: 'Not everywhere' },
+              { value: 'release/7', label: 'release/7', note: 'not in admin, extension' },
+              { value: 'spike/auth', label: 'spike/auth', note: 'not in frontend, admin, extension' },
+              { value: 'hotfix/2026-08', label: 'hotfix/2026-08', note: 'not in extension' },
+              { value: 'chore/deps', label: 'chore/deps', note: 'not in backend' },
+              { value: 'wip/editor', label: 'wip/editor', note: 'not in admin' }
+            ]"
+          />
+        </div>
+        <!-- The same list in a field too narrow for its longest note. The
+             example above is wide enough that nothing ever overflows, so it
+             cannot show which of the two gives way — and that is exactly the
+             thing worth looking at: the branch name has to survive whole and
+             the note has to clip. -->
+        <div :style="{ width: '210px' }">
+          <Dropdown
+            v-model="narrowBranch"
+            mono
+            searchable
+            search-label="Search branches"
+            :options="[
+              { header: true, label: 'Everywhere' },
+              { value: 'develop', label: 'develop' },
+              { header: true, label: 'Not everywhere' },
+              { value: 'release/7', label: 'release/7', note: 'not in admin, extension' },
+              { value: 'spike/auth', label: 'spike/auth', note: 'not in frontend, admin, extension' }
+            ]"
           />
         </div>
       </div>
@@ -1137,6 +1203,21 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             runFixture({
               kind: 'stopped',
               reason: { kind: 'needs_answer', question: 'Do you trust the contents of this directory?' }
+            })
+          "
+        />
+        <!-- The project would not come up, and the detail line is the whole of
+             what somebody can act on: without it this reads as "Could not start
+             into develop", a sentence naming the target branch, which had
+             nothing to do with the tool that was missing. -->
+        <RunBar
+          :run="
+            runFixture({
+              kind: 'stopped',
+              reason: {
+                kind: 'preflight',
+                detail: '`docker compose -f backend/docker-compose.yml up -d` exited 127: sh: docker: command not found'
+              }
             })
           "
         />

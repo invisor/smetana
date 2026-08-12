@@ -9,7 +9,7 @@
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
-import { TONE, stopReason } from './stopReason.js'
+import { TONE, endingDetail, stopReason } from './stopReason.js'
 
 const props = defineProps({
   /* The whole Run from the worker, or null when nothing has been started. */
@@ -64,10 +64,12 @@ const branch = computed(() =>
    stop does not end the batch in flight, and a bar that went on saying "Batch
    3" would read as the button having done nothing. */
 const detail = computed(() => {
-  /* The one ending that says what it is stuck on. "The agent is waiting for an
-     answer" without the question sends somebody to the terminal to find out
-     what for, and the branch is the least of what they need at that moment. */
-  if (over.value) return state.value.reason?.question || branch.value
+  /* What the ending has to say for itself, and the branch only when it has
+     nothing: "The agent is waiting for an answer" without the question sends
+     somebody to the terminal to find out what for, and "Could not start"
+     without the tool that was not found sends them nowhere at all. The order
+     is `endingDetail`'s, next door and pinned by its own tests. */
+  if (over.value) return endingDetail(state.value.reason, branch.value)
   /* While paused the branch is the least of what somebody needs: they came to
      find out when this picks up again, and the harness's own sentence about the
      reset is the only thing that answers it. Without one, say that the run is

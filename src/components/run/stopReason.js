@@ -74,6 +74,28 @@ export const REASONS = {
   preflight: { text: 'Could not start', tone: TONE.failed }
 }
 
+/* The second line under an ending: what the worker said about it, or failing
+   that the branch the run was aimed at.
+
+   Here rather than in the component because it is the same class of thing the
+   table above is — an ending that has something to say and does not say it goes
+   wrong quietly. It did: `StopReason::Preflight` carries a `detail` naming what
+   would not come up, and the bar read only `question`, so a project whose
+   `docker` was not on the app's `PATH` stopped with "Could not start into
+   develop" — a sentence pointing at the target branch, which had nothing to do
+   with it, while `sh: docker: command not found` had crossed the wire and was
+   drawn nowhere.
+
+   The order is what each ending has to say for itself. `question` first: an
+   ending that has one is the agent waiting, and what it asked is what decides
+   whether somebody goes and answers it. `detail` next, which is the two
+   endings that could not start at all — the project that would not come up, and
+   the batch that could not be spawned, since `service.rs` reports both this way.
+   The branch last, for every ending with nothing of its own to add. */
+export function endingDetail(reason, branch = '') {
+  return reason?.question || reason?.detail || branch
+}
+
 export function stopReason(kind) {
   /* An unknown reason is an ordinary outcome, not a crash: this front end may
      be older than the worker. It says so plainly rather than drawing nothing.

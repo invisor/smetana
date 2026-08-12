@@ -310,16 +310,61 @@ HEAD is not silently dressed up as a branch: `Head` keeps `branch` and `detached
 the same answer the file tree gives; `src/stores/git.js` guards against its own stale response the
 way `terminals.js` does, so the bar cannot name one project's branch under another project's name.
 
-The same file answers a second question, for the run dialog's branch field: `git_branches`, which
-holds the no-spawn rule at the one place it is genuinely inconvenient. A branch list is not one line
-the way `HEAD` is — it is `refs/heads` walked for loose refs, `packed-refs` for the ones git has
-folded away, and the two reconciled — so this is three reads where `head` is one, and it is still
-cheaper than a process. `by_recency` then orders them by each branch's own reflog under
-`logs/refs/heads`, because the branch somebody wants to merge into is nearly always one they touched
-recently and an alphabetical list buries it. Nothing here is an error either: a folder outside git
-offers an empty list. The one name that is added whatever the refs say is the current branch — a
-repository whose only branch has no commits yet has no ref file at all, and a merge target field
-offering nothing would be worse than one offering the single branch that exists.
+The same file still holds the no-spawn rule at the one place it is genuinely inconvenient — a branch
+list is not one line the way `HEAD` is, it is `refs/heads` walked for loose refs, `packed-refs` for
+the ones git has folded away, and each branch's own reflog under `logs/refs/heads`, three reads where
+`head` is one and still cheaper than a process. All three are read from the common directory, so a
+linked worktree still offers its whole list and the `smetana-5t7` account of `commondir` below is
+unchanged. The reflog is what orders the result rather than the alphabet, because
+the branch somebody merges into every day is nowhere in particular alphabetically; a branch with no
+reflog anywhere does not sort as "very old", it falls outside the recency group entirely, into the
+alphabetical tail a fresh clone leaves nearly everything in. Nothing in that reading is an error
+either, the same as everywhere else in this file: a folder outside git offers an empty list rather
+than a failure, and the current branch is offered whatever the refs themselves say — a repository
+whose only branch has no commits yet has no ref file for it at all, and a merge-target field offering
+nothing would be worse than one offering the single branch that exists.
+
+A run's dialog reaches those same three sources through `branches_with_recency`, which sorts the
+names alphabetically and dedups them before stamping each with its own reflog time — the ordering
+itself is left undone, deliberately, because it is `by_recency`'s rule and not a second one written
+here. `combine` is the pure function that applies it: it folds several repositories' lists into one,
+splits complete from partial, and calls `by_recency` itself, once, on each of the two groups it
+builds. Its one genuinely new judgement is where a branch's freshness comes from across repositories
+— `develop` opened an hour ago in `backend` and a month ago in `admin` is an hour old, because it is
+one branch to the person merging into it, and taking the first repository's answer, or the least of
+them, would bury the branch somebody is actually in behind one they touched in a repository they
+happen to have opened. `BranchOption { name, missing_in }` is what a folded list is made of: a name,
+and the repositories from `[project].repos` that do not have it, in the order those repositories were
+given — the project's own statement about what depends on what, rather than an incidental order that
+might not even stay the same between two runs of the same project. An empty `missing_in` means every
+one of them does.
+
+**`git.rs` no longer answers the dialog.** `runs::commands::target_branches` does, because "what may
+this run merge into" is a question about a run rather than about one directory: it reads
+`.smetana/project.toml` itself, through `config::load`, and walks `[project].repos`, calling
+`branches_with_recency` once per repository and folding the results through `combine`. `git.rs` keeps
+its shape — a leaf, no worker, no spawn — and no code in it reads project configuration: `combine`
+takes a list of `(name, branches)` pairs and never learns where they came from. The config is read
+inside that one command rather than taken from the front end, and that is the design rather than a
+shortcut: `runs.js` holds its own copy of the config, filled by its own `project_config` call, and the
+run dialog is shown before that call has landed — the whole of `smetana-6gs` and `smetana-o8r`, where
+the branch-filling rule ran once against a list that was not there yet. A repository list threaded
+down from the front end instead of read in Rust would be the same race wearing a different name;
+reading both facts inside the one command leaves no order between them to get wrong.
+
+What the field draws from that is two groups, headed "Everywhere" and "Not everywhere", and no
+captions at all when nothing is partial — which is every single-repository project, and therefore the
+common case, so the field looks exactly as it always has. A name in `[project].repos` that resolves
+to nothing readable, a missing folder or one with no `.git`, is left out of the coverage question
+entirely rather than counted as missing every branch: the alternative reads worse in exactly the case
+that matters, since one typo in the config would make every branch partial, empty the field's top
+group, and bury the real question — which branches are everywhere — behind a fault that has nothing
+to do with it. This is what closed a defect with no issue behind it, and the shape of it is worth
+keeping: a project of four repositories living under one folder had the dialog asking not any of the
+four but the fifth repository that folder itself happened to be, so `develop` — present in all four
+repositories the project actually touches — read as a branch nobody had, and the run went out telling
+the agent to cut `develop` from the current branch in every one of those four repositories, though
+each of them already had it with its own history.
 
 **Refs are shared and HEAD is per-worktree, and conflating the two is `smetana-5t7`.** A linked
 worktree's git directory — whatever its `.git` file points at, `.git/worktrees/<name>` — holds only
@@ -375,9 +420,10 @@ is why. A bundled app on macOS is handed launchd's environment: `open smetana.ap
 nvm's shims — reaches `PATH` from `~/.zshrc` or `~/.zprofile`, which only a shell ever reads. So the
 app asks a login shell once (`$SHELL -i -l -c`, the value fenced between markers because an
 interactive rc file writes shell-integration escapes into the same stream), and that answer is what
-both `agents::pick` and `build_command` work from — finding out whether an agent is installed and the
-environment it is started with are the same question, and answering only the first would trade
-"no agent is installed" for an agent that cannot find `git` or `node`. `-l` alone is not enough: the
+everything that has to start a program works from — `agents::pick` and `build_command` here, and
+`runs/usage.rs` and `runs/preflight.rs` over in the run worker. Finding out whether an agent is
+installed and the environment it is started with are the same question, and answering only the first
+would trade "no agent is installed" for an agent that cannot find `git` or `node`. `-l` alone is not enough: the
 machine this was written on adds cargo and the rest from `~/.zshrc`, which only `-i` reads. Every
 failure — no shell, a five-second timeout, unrecognisable output — falls back to the inherited value,
 which is where things were before the module existed. The bug is invisible in development, and that
@@ -1138,6 +1184,13 @@ going — and a person reads that as the stop not having taken. The gap is not a
 may be inside a board read or a 60s usage probe, and it holds its scope for the whole of it — only
 its scope, since the rest of the project's runs were never this one's to hold.
 
+Every declared command and every health probe the preflight starts is given the **login shell's**
+`PATH`, from the same `shell_env` the terminal uses and for the same reason: a bundled app inherits
+launchd's, which holds nothing a person installed, so `docker compose up -d` exited 127 against
+infrastructure that was up and answering — and the one phase whose whole job is to name the missing
+piece named the wrong one. `shell_env::path` falls back to the inherited value, so this is never a
+narrowing.
+
 **The preflight is the one phase where a stop is not cooperative** (smetana-16w), and that exception
 is the reason the gap is no longer measured in minutes. `bring_up` read the stop channel nowhere at
 all, so a stop pressed during it waited out every declared command at 600s apiece and every health
@@ -1420,10 +1473,13 @@ happened" from "something did" without comparing contents.
 a `.vue` file is the one thing no test in this repository can reach, so the whole of the rule filling
 the run dialog's branch field lives outside the component. `pickBranch` is three steps in one order —
 what this project was left at last time, then its own `[defaults].target_branch`, then whatever the
-list puts first, which is the most recently worked-on branch because `git_branches` orders by reflog.
-A remembered name that is no longer in the list is skipped in silence rather than offered, since a
-branch deleted since it was remembered would sit in the field as an option that fails on the first
-merge.
+list puts first, which is the most recently worked-on branch because `target_branches` orders by
+reflog. A remembered name that is no longer in the list is skipped in silence rather than offered,
+since a branch deleted since it was remembered would sit in the field as an option that fails on the
+first merge. The list itself holds `{ name, missing_in }` records rather than bare strings:
+`needsCutting` is the single rule behind both the field's hint and the run's `create_target`, and
+`branchOptions` is what splits the two groups the field draws — with no captions at all when nothing
+is partial, which is every single-repository project.
 
 The defect it was written for was not the rule being wrong but the rule running **once**, against a
 list that had not arrived yet (smetana-6gs, smetana-o8r): the dialog is shown first and the branches
