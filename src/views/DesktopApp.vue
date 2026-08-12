@@ -18,7 +18,6 @@ import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
-import StatusBadge from '../components/status/StatusBadge.vue'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
@@ -94,7 +93,7 @@ import {
 } from '../stores/runs.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { scopeBusyReason } from '../components/run/runScopes.js'
-import { inspector, scope } from './desktopAppData.js'
+import { scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
   basenameOf,
@@ -1660,13 +1659,6 @@ const inspectorBody = {
   padding: 'var(--panel-pad)',
   minWidth: 0
 }
-const blocksLine = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-3)',
-  font: 'var(--weight-regular) var(--text-2xs)/1 var(--font-mono)',
-  color: 'var(--status-blocked-fg)'
-}
 /* The issue's title inside the delete dialog, in the same words the panel's
    own dialog drew it in — this is what a person reads to check they are about
    to delete the thing they meant. */
@@ -1700,13 +1692,6 @@ const questionGlyphStyle = {
   display: 'flex',
   marginTop: '2px',
   color: 'var(--attn-loud)'
-}
-/* the hatch is the dependency signature, reused at swatch size */
-const hatchSwatch = {
-  width: '16px',
-  height: '8px',
-  borderRadius: 'var(--radius-1)',
-  backgroundImage: 'repeating-linear-gradient(135deg,var(--hatch-blocked) 0 1.5px,transparent 1.5px 4px)'
 }
 
 /* Where the bell's panel sits: under the bar, against the right edge, clear of
@@ -2075,23 +2060,20 @@ const toastStackStyle = {
               :ui-status="toUiStatus(inspectedIssue.status)"
             />
 
-            <template v-else-if="rightPanel === 'board'">
-              <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
-                <span :style="{ font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-                  {{ inspector.id }}
-                </span>
-                <StatusBadge :status="inspector.status" size="sm" />
-              </div>
-
-              <div :style="{ fontSize: 'var(--text-md)', lineHeight: 'var(--leading-snug)', textWrap: 'pretty' }">
-                {{ inspector.title }}
-              </div>
-
-              <div :style="blocksLine">
-                <span :style="hatchSwatch" />
-                blocks {{ inspector.blocksDownstream }} downstream tasks
-              </div>
-            </template>
+            <!-- Nothing picked on the board, which is where a project opens.
+                 The app's own answer to "nothing here" rather than a blank
+                 column: a silent panel beside a full board reads as a
+                 rendering failure. Only the board case — under a run's
+                 claimed list the list itself is the content, and an empty
+                 state beneath it would say the panel was empty when it is
+                 not. -->
+            <EmptyState
+              v-else-if="rightPanel === 'board'"
+              compact
+              icon="inbox"
+              title="No task selected"
+              description="Pick a card on the board to see it here."
+            />
           </div>
         </Panel>
       </div>
