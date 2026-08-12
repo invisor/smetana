@@ -55,7 +55,9 @@ bd create --title "Merge lock" --type chore --priority 4 -l smetana-lock \
   --silent --body-file - <<'EOF'
 The merge lock (label: smetana-lock). A lead claims this issue before its first merge
 into the target branch and releases it after its last. It is coordination, not work —
-never implement it, never close it.
+never implement it, never close it. Nothing is ever written to it but the claim and the
+release: staleness is read off `updated_at`, so any other write makes a dead run's claim
+look alive.
 EOF
 ```
 
@@ -75,21 +77,30 @@ bd update <lock-id> --claim
 - **Refused past the staleness rule** → break it, below.
 
 **Staleness: 60 minutes.** A run killed mid-merge leaves the lock claimed forever, and
-the evidence is `started_at` in `bd show <lock-id> --json` — the moment the standing
-claim was taken. A whole batch's merge phase with gates fits well under an hour in this
-project, so a claim older than 60 minutes is a dead run's. Break it — release, then
-claim:
+the evidence is `updated_at` in `bd show <lock-id> --json` — a claim is a write, so that
+field is the moment the standing claim was taken. **Not `started_at`**: bd stamps that
+once, on the first claim in the issue's life, and never moves it again, so a lock claimed
+one second ago reads as days old by it and every holder looks dead to every waiter
+(smetana-qtw). A whole batch's merge phase with gates fits well under an hour in this
+project, so a standing claim whose `updated_at` is older than 60 minutes is a dead run's.
+Break it — release, then claim:
 
 ```bash
 bd update <lock-id> --status open --assignee ""
 bd update <lock-id> --claim
 ```
 
+**Nothing is ever written to the lock issue but the claim and the release** — no notes,
+no labels, no re-titling, no closing, nothing. `updated_at` moves on *any* write, so one
+note added to a lock a dead run is still holding resets its age to seconds and hangs
+every waiting lead for a further hour. That the only two writes are the two that change
+who holds it is exactly what makes the field above readable as the claim's age.
+
 **Breaking a lock is a report line, never a silent step**: name the actor it was taken
 from and how old the claim was. The claim after the break can still be refused —
 another waiting lead may land first — and that refusal goes back to waiting, not to
-another break: the new claim carries a fresh `started_at`, so the ordinary 60-minute
-rule re-arms and applies to it like any other.
+another break: the new claim moves `updated_at` to the moment it landed, so the ordinary
+60-minute rule re-arms and applies to it like any other.
 
 The break is release-then-claim and bd has no compare-and-swap, so the pair is not
 atomic: two waiters seeing the same stale lock can interleave, and the second release
