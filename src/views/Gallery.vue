@@ -42,6 +42,7 @@ import {
   Panel,
   ProjectList,
   PromoteColumnModal,
+  ReportView,
   Select,
   RunBar,
   SettingsRow,
@@ -125,6 +126,62 @@ const runFixture = (state, extra = {}) => ({
   reduced: null,
   ...extra
 })
+
+/* A run's document, shortened. `report.rs` writes the real one and this is the
+   same shape — its own `<style>`, its own colours, its own `prefers-color-scheme`
+   block — because the point of drawing it here is seeing that the frame hands the
+   document the whole box and paints nothing of its own over it. It deliberately
+   does not follow `data-theme`: the document has to be readable in a browser with
+   nothing of ours loaded, so it follows the reader's own theme instead, and in
+   this gallery that means the operating system rather than the switch at the top
+   of the page.
+
+   The `<script>` is not filler, and what it does had to be chosen with some
+   care. It is the one thing the sandbox exists for — `report.rs` writes no
+   script, but a report that has been sitting on somebody's disk since last
+   night can be hand-edited between then and now — and the gallery is the only
+   verification this project has, so a probe whose effect nobody could see would
+   be worse than none: it would report success whether or not `sandbox=""` were
+   still on the frame. `document.title` was exactly that mistake. It sets the
+   *frame's* title, which no browser surfaces to the parent page, so removing
+   the attribute entirely would have left this section rendering byte for byte
+   the same.
+
+   So the effect is inside the frame and impossible to miss: the script paints
+   the document red and replaces it with a banner. Nothing in this app is ever
+   red across a whole pane, which is the point — the failure cannot be confused
+   with a normal render. The two readings are named in the document itself, so
+   whoever checks this next does not have to infer them. */
+const REPORT_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Run report</title><style>
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;
+max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fff}
+h1{font-size:1.5rem;margin:0 0 .25rem}h2{font-size:1.05rem;margin:2rem 0 .5rem}
+.meta{color:#666;font-size:.85rem}.unknown{color:#666;font-style:italic}
+.total{margin-top:2rem;border-top:1px solid #ddd;padding-top:.75rem;font-weight:600}
+table{border-collapse:collapse;width:100%}
+td{border-top:1px solid #eee;padding:.4rem .5rem;vertical-align:top}
+.id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+@media(prefers-color-scheme:dark){body{color:#e6e6e6;background:#141414}
+.meta,.unknown{color:#999}td{border-color:#2a2a2a}.total{border-color:#2a2a2a}}
+</style></head><body>
+<h1>Run report</h1>
+<p class="meta">/Users/you/dev/smetana &middot; the ready queue &middot; finished 2026-08-12 14:31</p>
+<h2>Closed (2)</h2>
+<table>
+<tr><td class="id">smetana-qca</td><td>The run writes its own report</td><td>Wrote the diff and the document, with tests on both.</td><td class="meta">1h 12m</td></tr>
+<tr><td class="id">smetana-ajr</td><td>The run report tab</td><td>&mdash;</td><td class="meta">&mdash;</td></tr>
+</table>
+<h2>Parked (0)</h2>
+<p class="meta">None.</p>
+<h2>Batches</h2>
+<p class="unknown">This batch left no account of itself.</p>
+<p>This document carries a script that would paint the whole page red and replace
+everything on it with the words THE SANDBOX FAILED. If that is what you are looking at,
+the frame lost its sandbox. If you are reading this report, the script did not run.</p>
+<p class="total">Total 2h 14m</p>
+<script>document.body.style.background='red';document.body.innerHTML='<h1>THE SANDBOX FAILED</h1>'<\/script>
+</body></html>`
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -1226,6 +1283,36 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             })
           "
         />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Run report</div>
+      <!-- The frame is given a box and has to fill it exactly: the document
+           paints its own ground, so anything of ours showing through is a strip
+           of the wrong colour. Two boxes rather than one, because the second is
+           the case that matters — a buffer still loading, or one that failed to
+           read, hands the component an empty string, and what shows then is the
+           host's own token ground rather than whatever sits behind the centre
+           column. Height is a token multiple for the same reason the terminal's
+           is: the frame fills whatever it is given. -->
+      <div
+        :style="{
+          display: 'flex',
+          height: 'calc(var(--space-9) * 8)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ReportView :html="REPORT_HTML" />
+      </div>
+      <div
+        :style="{
+          display: 'flex',
+          height: 'calc(var(--space-9) * 2)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ReportView html="" />
       </div>
     </section>
 

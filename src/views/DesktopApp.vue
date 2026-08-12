@@ -24,6 +24,8 @@ import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import RunBar from '../components/run/RunBar.vue'
 import RunModal from '../components/run/RunModal.vue'
+import ReportView from '../components/run/ReportView.vue'
+import { isReportPath } from '../components/run/reportTab.js'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
 import DraftInspector from '../components/kanban/DraftInspector.vue'
 import ClaimedTasks from '../components/agent/ClaimedTasks.vue'
@@ -1300,10 +1302,24 @@ const healthNotice = computed(() => {
   return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
 })
 
+/* A run's document, drawn as the page it is rather than as its source. It is an
+   ordinary path in `openTabs` — no storage of its own, and it closes and comes
+   back after a restart like every other tab — so where it sits is the whole of
+   what makes it one, and that rule is `reportTab.js`. */
+const reportTabActive = computed(() => isReportPath(project.activeTab))
+
 /* A file tab is anything that isn't terminal or kanban. There is no closed
-   list in the centre and there won't be: the project brings the tabs. */
+   list in the centre and there won't be: the project brings the tabs.
+
+   Minus the reports, which are a third kind of tab: the two computeds are
+   never both true, and a report opened in CodeMirror would show a person the
+   markup of a document written for them to read. This is also what keeps Cmd+S
+   off it below — there is nothing to save on a tab nobody can type into. */
 const fileTabActive = computed(
-  () => project.activeTab !== 'terminal' && project.activeTab !== 'kanban'
+  () =>
+    project.activeTab !== 'terminal' &&
+    project.activeTab !== 'kanban' &&
+    !reportTabActive.value
 )
 
 /* Cmd+S is caught by the window, not by the editor field. A click on a tab, on
@@ -1962,13 +1978,20 @@ const toastStackStyle = {
             <Button variant="primary" size="sm" @click="answerUnsaved('save')">Save</Button>
           </template>
         </Modal>
+        <!-- A run's report, before the editor branch and not beside it: the
+             buffer is the one tabs.js already loads for any open path, so the
+             document needs no second read path and inherits the same loading
+             and error handling every other tab has. What it does not inherit is
+             the field — a report is read, never edited, which is why this is a
+             branch of its own rather than a mode of FileEditor. -->
+        <ReportView v-if="reportTabActive" :html="activeBuffer?.text ?? ''" />
         <!-- A file tab: the board and the chat have nothing to do with it. -->
         <!-- There is no :key here any more: the field survives a tab switch
              deliberately. editor/states.js keeps the caret, the scroll position
              and the edit history per tab, and FileEditor switches state by
              :path. -->
         <FileEditor
-          v-if="fileTabActive"
+          v-else-if="fileTabActive"
           :path="absoluteEditorPath(project.activeTab)"
           :model-value="activeBuffer?.text ?? ''"
           :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
