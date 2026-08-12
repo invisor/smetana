@@ -236,7 +236,9 @@ pub fn build(
             ))
         }
         Intent::Setup => Some(setup(delivery, skills, facts)),
-        Intent::Run { settings } => Some(run(settings, delivery, skills)),
+        Intent::Run { settings, reports, batch } => {
+            Some(run(settings, reports, *batch, delivery, skills))
+        }
     }
 }
 
@@ -249,7 +251,13 @@ pub fn build(
 /// reads out of `.smetana/project.toml` itself, which is also what keeps a
 /// batch reading the config as it is now rather than as it was when the run
 /// started.
-fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> String {
+fn run(
+    settings: &RunSettings,
+    reports: &Path,
+    batch: u32,
+    delivery: SkillDelivery,
+    skills: &Skills,
+) -> String {
     let mut out = String::from("Work this project's bd tracker. ");
 
     match &settings.scope {
@@ -348,6 +356,26 @@ fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> Stri
             );
         }
     }
+
+    // The one fact about this batch no skill can carry, because it names a path
+    // that exists for this run and this batch alone. The app can see the board
+    // and its own clock and nothing else — what a session *did* comes back from
+    // it as an exit code and nothing more — so the account is asked for here.
+    // Stated as a record rather than a gate on purpose: the report's skeleton is
+    // built from the board whatever happens, and a batch that leaves no file is
+    // named in the document rather than drawn as an empty row.
+    let _ = write!(
+        out,
+        "\n\nWhen this batch is finished, and before you hand back, write your own account of it \
+         to {} — the directory already exists. Smetana reads that file and nobody else does, so \
+         it is JSON in exactly this shape: {{\"tasks\": [{{\"id\": \"<bd id>\", \"did\": \"one or \
+         two sentences on what you actually did\"}}], \"notes\": \"anything about the batch as a \
+         whole, or leave it out\"}}. Put a line in it for every task you touched, the ones you \
+         parked included, saying what stopped them. This is in addition to the report you hand \
+         back in this conversation and replaces no part of it. If the file cannot be written, \
+         carry on regardless — it is a record, not a gate.",
+        reports.join(format!("batch-{batch}.json")).display()
+    );
     out
 }
 
@@ -723,8 +751,61 @@ mod tests {
         }
     }
 
+    /// The intent a run's batch actually arrives as. The directory and the
+    /// batch number are the run's own and are not in any file, so a fixture
+    /// names them the way `runs::service` builds them.
+    fn run_intent(settings: RunSettings) -> Intent {
+        Intent::Run {
+            settings,
+            reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
+            batch: 2,
+        }
+    }
+
     fn run_prompt(settings: RunSettings, delivery: SkillDelivery) -> String {
-        build(&Intent::Run { settings }, delivery, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap()
+        build(&run_intent(settings), delivery, ImageDelivery::InPrompt, &skills(), None, nothing()).unwrap()
+    }
+
+    #[test]
+    fn a_run_names_the_exact_file_its_batch_writes_its_account_to() {
+        // The app cannot see what a session did — an exit code is the whole of
+        // what comes back — so the account is asked for, by name. The number is
+        // the app's and not the agent's: a batch working the file name out for
+        // itself is one the app could not then match to the batch it timed.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), delivery);
+            assert!(text.contains("/p/.smetana/runs/7/batch-2.json"), "{delivery:?}: {text}");
+            assert!(text.contains("\"did\""), "the shape is named too: {text}");
+            assert!(
+                text.contains("record, not a gate"),
+                "a batch that cannot write it carries on: {text}"
+            );
+            assert!(
+                text.contains("replaces no part of it"),
+                "the JSON is beside the prose report, never instead of it: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_other_intent_is_asked_for_a_batch_account() {
+        // The file belongs to a run's batch and to nothing else: there is no
+        // batch behind a filing session or an edit, and no directory made for
+        // one either.
+        for intent in [
+            Intent::Bare,
+            Intent::Setup,
+            Intent::EditTask { id: "x-1".into(), title: "T".into() },
+            Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            new_task(Stage::On),
+        ] {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text =
+                    build(&intent, delivery, ImageDelivery::InPrompt, &skills(), Some(FACTS), every_skill())
+                        .unwrap_or_default();
+                assert!(!text.contains(".smetana/runs/"), "{intent:?}/{delivery:?}: {text}");
+            }
+        }
     }
 
     #[test]
@@ -923,7 +1004,7 @@ mod tests {
             new_task(Stage::Auto),
             new_task(Stage::On),
             new_task(Stage::Off),
-            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
+            run_intent(run_settings(RunMode::Auto, RunScope::Queue)),
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
                 let text =
@@ -1025,7 +1106,7 @@ mod tests {
             Intent::Bare,
             Intent::Setup,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
-            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
+            run_intent(run_settings(RunMode::Auto, RunScope::Queue)),
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
                 let text =
@@ -1321,10 +1402,8 @@ mod tests {
             Intent::Bare,
             Intent::Setup,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
-            Intent::Run { settings: run_settings(RunMode::Auto, RunScope::Queue) },
-            Intent::Run {
-                settings: run_settings(RunMode::Solo, RunScope::Task { id: "x-2".into() }),
-            },
+            run_intent(run_settings(RunMode::Auto, RunScope::Queue)),
+            run_intent(run_settings(RunMode::Solo, RunScope::Task { id: "x-2".into() })),
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
                 let text =

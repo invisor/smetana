@@ -105,7 +105,7 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     // positional prompt and `CommandBuilder` only appends; the environment has
     // no order and belongs here, beside the other two variables every agent
     // gets. Only a `Run` has a mode, and only a `Run` gets any of this.
-    if let Intent::Run { settings } = &launch.intent {
+    if let Intent::Run { settings, .. } = &launch.intent {
         for (key, value) in launch.profile.autonomy(settings.mode).env {
             cmd.env(key, value);
         }
@@ -367,6 +367,8 @@ mod tests {
                 live_check: false,
                 file_findings: true,
             },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
         }
     }
 

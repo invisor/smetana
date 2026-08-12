@@ -220,6 +220,18 @@ pub struct Run {
     /// and is watching two has something on screen that says why.
     #[serde(default)]
     pub reduced: Option<u8>,
+    /// What the run did, filled in on the one transition into `Stopped` and
+    /// `None` in every other state — there is nothing to summarize about a run
+    /// that is still going, and a half-filled one on the wire would be read as
+    /// the whole account. `advance` is what holds that: only the `Stopped` arm
+    /// keeps it, so a field set by accident anywhere else clears itself on the
+    /// next transition rather than travelling under a live run.
+    ///
+    /// `runs::service::finish` is the single writer, which is the whole reason
+    /// that helper exists: a dozen exits into `Stopped` is how the next ending
+    /// somebody adds quietly arrives with no report behind it.
+    #[serde(default)]
+    pub summary: Option<crate::runs::summary::RunSummary>,
 }
 
 /// What a run cannot start for.
@@ -430,6 +442,7 @@ impl Run {
             batches: 0,
             stopping: false,
             reduced: None,
+            summary: None,
         }
     }
 
@@ -446,6 +459,11 @@ impl Run {
         }
         if matches!(state, RunState::Stopped { .. }) {
             self.session = None;
+        } else {
+            // A summary belongs to an ending and to nothing else. Clearing it
+            // here is what makes "None in every state but Stopped" a property
+            // of the type rather than a habit of the one caller that fills it.
+            self.summary = None;
         }
         self.state = state;
     }
@@ -460,6 +478,42 @@ impl Run {
         let asked_to_stop = self.stopping;
         *self = reported;
         self.stopping |= asked_to_stop;
+    }
+
+    /// Take the account of itself a run that was stopped from this side could
+    /// not have made, and answer whether anything was taken.
+    ///
+    /// `request_stop` ends a run with nothing in flight **at once** — that is
+    /// what makes the button immediate and what lets it reach a paused run — so
+    /// the worker's copy reaches `Stopped` before the loop task has looked at
+    /// the stop channel. Only the loop runs `finish`, and `finish` is the one
+    /// place a summary is ever made, so the account arrives afterwards, in a
+    /// report `adopt` must not take: a stopped run is never revived, and the
+    /// loop's copy would put a live state back on the screen.
+    ///
+    /// Hence this, which is `adopt`'s opposite number and deliberately much
+    /// narrower — **the summary and nothing else.** The ending does not travel
+    /// with it: somebody pressed stop and was told `Cancelled`, while the loop
+    /// may have got as far as reading the board and finding the queue empty a
+    /// moment later, and rewriting the reason under them would be a different
+    /// run's story. Without this the document sits on disk correctly written
+    /// and the `Run` on the wire says there is none — for stop-while-deciding,
+    /// stop-while-paused and stop-during-preflight, which is the whole of what
+    /// the immediate branch exists for.
+    pub fn take_summary_from(&mut self, reported: Run) -> bool {
+        if !self.is_over() || self.summary.is_some() {
+            return false;
+        }
+        // A summary is only ever set beside a `Stopped`, and `advance` clears
+        // it on every other transition, so its presence is the whole evidence
+        // that this report is an ending carrying an account.
+        match reported.summary {
+            Some(summary) => {
+                self.summary = Some(summary);
+                true
+            }
+            None => false,
+        }
     }
 
     /// May another batch go out? Everything a stop has touched says no: a run

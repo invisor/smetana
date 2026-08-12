@@ -163,6 +163,18 @@ pub enum Intent {
     /// that is wrong from the start and says so.
     Run {
         settings: crate::runs::model::RunSettings,
+        /// Absolute directory this run's batches write their own account into,
+        /// one JSON file per batch — `<project>/.smetana/runs/<token>/`, which
+        /// `runs/gitignore.rs` already keeps out of the repository. The app
+        /// cannot see what a session did (nothing comes back from one but an
+        /// exit code), so the lead is asked for it, and a batch that leaves
+        /// nothing is named in the report rather than drawn as an empty row.
+        reports: std::path::PathBuf,
+        /// Which batch of the run this session is — the `<n>` in `batch-<n>.json`
+        /// under that directory. The prompt names the whole file rather than
+        /// the folder, because a number the agent had to work out for itself
+        /// is a number the app could not then match to the batch it timed.
+        batch: u32,
     },
 }
 
