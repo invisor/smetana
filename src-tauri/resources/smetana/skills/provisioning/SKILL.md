@@ -118,19 +118,36 @@ For each repository the task touches, in the order `[project].repos` gives:
    If it is not, add the line to that repository's `.gitignore` and commit it before
    going further. A worktree directory tracked by its own repository turns every later
    `git status` into noise and can be committed by accident.
-2. **Cut from the target branch**, not from whatever is checked out:
+2. **Make sure the target branch is there, in this repository.** It is one name
+   for the whole run, and a project of several repositories can carry it in some
+   of them and not others:
+
+   ```bash
+   git -C <repo> show-ref --verify --quiet refs/heads/<target-branch>
+   ```
+
+   - Present → carry on to the cut below.
+   - Absent, and the run's prompt said to cut it where it does not exist yet →
+     make it from this repository's own HEAD:
+     `git -C <repo> branch <target-branch>`. That repository's HEAD and not
+     another repository's, and not the branch of the same name somewhere else:
+     there is no relationship between two repositories' histories to preserve.
+   - Absent, and the prompt said nothing of the kind → **STOP**. The run was
+     told to merge into a branch that is not here and nobody said it could make
+     one. Cutting it anyway invents a base for every task in the batch.
+3. **Cut from the target branch**, not from whatever is checked out:
    `git -C <repo> worktree add "<wt>" -b "<branch>" <target-branch>`. The target branch
    is the run's, defaulting to `[defaults].target_branch`. It holds the siblings that
    already merged; cutting from anywhere else rebuilds the task against a state nothing
    else shares. The main checkout does not need to be clean for this — the worktree is
    cut from a branch, not from the working tree.
-3. **Retry a lock.** Two creations racing produce an index or worktree lock error. Wait
+4. **Retry a lock.** Two creations racing produce an index or worktree lock error. Wait
    a second or two and try again, up to three times.
-4. **A worktree already at that path belongs to this task** — the id in the slug
+5. **A worktree already at that path belongs to this task** — the id in the slug
    guarantees it. Reuse it; do not delete it and start again, it may hold work.
-5. **Bring it up.** Run `[repo.<name>].setup` in the fresh worktree if there is one.
+6. **Bring it up.** Run `[repo.<name>].setup` in the fresh worktree if there is one.
    Dependencies are not shared between worktrees, so this is not optional when it exists.
-6. **Copy in what git does not carry.** Each path in `[repo.<name>].env_files` is
+7. **Copy in what git does not carry.** Each path in `[repo.<name>].env_files` is
    gitignored and therefore absent from a fresh worktree: copy it from the main checkout.
    A missing source file is worth one line in your report, not a stop.
 

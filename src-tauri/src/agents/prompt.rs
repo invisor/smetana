@@ -266,12 +266,18 @@ fn run(settings: &RunSettings, delivery: SkillDelivery, skills: &Skills) -> Stri
     }
 
     out.push_str("\n\nThis run:\n");
+    // "wherever it does not exist yet" and not "it does not exist yet": a
+    // project of several repositories can carry the branch in some of them, and
+    // the dialog's answer is a snapshot taken when it opened, hours before the
+    // fifth batch. What travels is permission; `provisioning` asks each
+    // repository at the moment it cuts, which is the only place and time the
+    // question has a current answer.
     let _ = writeln!(
         out,
         "- merge finished work into `{}`{}",
         settings.target_branch,
         if settings.create_target {
-            " — it does not exist yet, so cut it from the current branch before the first merge"
+            " — cut it from the repository's own current branch wherever it does not exist yet"
         } else {
             ""
         }
@@ -802,10 +808,12 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_that_does_not_exist_yet_is_named_as_one_to_cut() {
-        // The dialog is the only place that knows the branch list, so the fact
-        // travels in the settings. Without this line the first merge is into a
-        // branch nothing created, and every task parks on the same error.
+    fn a_branch_that_may_have_to_be_cut_says_so_and_says_what_from() {
+        // `create_target` no longer means "the branch does not exist" — it
+        // means cutting it where it does not exist is sanctioned. The
+        // difference is the whole of the multi-repository case: `release/7` can
+        // sit in two repositories of four, and a prompt claiming it does not
+        // exist is false about the two that have it.
         let settings = RunSettings {
             target_branch: "release/8".into(),
             create_target: true,
@@ -813,13 +821,15 @@ mod tests {
         };
         let text = run_prompt(settings, SkillDelivery::PluginDir);
         assert!(text.contains("release/8"), "{text}");
-        assert!(text.contains("does not exist yet"), "{text}");
-        assert!(text.contains("cut it from the current branch"), "{text}");
+        assert!(text.contains("wherever it does not exist yet"), "{text}");
+        assert!(text.contains("cut it from the repository's own current branch"), "{text}");
 
-        // And an existing branch says nothing of the kind: an agent told to
-        // create a branch that is already there fails on its first command.
+        // And a branch that is everywhere says nothing of the kind: an agent
+        // told to cut a branch that is already there rewrites somebody's
+        // history or stops on its first command.
         let plain = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), SkillDelivery::PluginDir);
-        assert!(!plain.contains("does not exist yet"), "{plain}");
+        assert!(!plain.contains("does not exist"), "{plain}");
+        assert!(!plain.contains("cut it"), "{plain}");
     }
 
     #[test]
