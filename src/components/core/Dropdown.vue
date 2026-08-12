@@ -330,6 +330,35 @@ const optionStyle = (option, index) => ({
   cursor: 'default'
 })
 
+/* The label, and which of the two spans in a row gives way.
+
+   Flex shrink factors cannot say "this one only after that one has nothing
+   left": a factor distributes the shortfall in proportion, so the label always
+   keeps some share of it, and `text-overflow: ellipsis` fires on a fraction of
+   a pixel by removing whole characters — 0.05px of overflow cost a branch name
+   two of them. Weighting the note at 100 made the share 0.28px and clipped
+   `spike/auth` to `spike/au…`; raising the number only moves which labels round
+   the wrong way. So the ordering is stated rather than approximated: no shrink
+   while a note is there to take it, ordinary shrink when the label is alone.
+
+   `1 1 auto` and not `flex: 1`: that is `1 1 0%`, a flex-basis of zero, which
+   leaves the label with no base size to defend — it absorbs all free space, the
+   row never overflows, and no clipping rule on the note can ever fire. It still
+   grows into free space, so a row with no note looks exactly as it always did.
+
+   `maxWidth` is the backstop for the pathological row, where the name alone is
+   wider than the panel: the note is squeezed away first, and then the label
+   ellipsises at the row's own width instead of spilling past it. */
+const labelStyle = (option) => ({
+  flex: '1 1 auto',
+  flexShrink: option.note ? 0 : 1,
+  maxWidth: '100%',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+})
+
 const emptyStyle = {
   padding: 'var(--space-4)',
   fontSize: 'var(--text-xs)',
@@ -345,23 +374,14 @@ const hintStyle = {
 }
 
 /* A row's own note. The field's `hintStyle` colour and size, deliberately not
-   `hintStyle` itself: this one has to survive a negotiation the field's hint
-   never enters, and it has to lose that negotiation.
-
-   The weight is the whole of it. Both spans may shrink, so a row with no room
-   is shared out between them by flex — in proportion to their base sizes,
-   which would clip the branch name alongside the note. A large shrink factor
-   makes the note absorb effectively all of the shortfall, so the name comes
-   through whole and the note ellipsises. What it deliberately is *not* is a
-   `max-width`: that fires on available width rather than on overflow, so it
-   clipped a note with 36px of slack beside it. And the note is not
-   `flex-shrink: 0` either — a very long branch name with no note at all has to
-   be able to squeeze this to nothing rather than overflow the row. */
+   `hintStyle` itself: this one has to lose a negotiation the field's hint never
+   enters. It is the only span in the row that shrinks while both are present —
+   see `labelStyle` for why that ordering is stated outright rather than
+   weighted — so the whole of the shortfall lands here and ellipsises here. */
 const noteStyle = {
   fontSize: 'var(--text-2xs)',
   color: 'var(--text-muted)',
   fontFamily: 'var(--font-sans)',
-  flexShrink: 100,
   minWidth: 0,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -433,7 +453,7 @@ const headerStyle = (index) => ({
               :size="12"
               :style="{ visibility: option.value === modelValue ? 'visible' : 'hidden' }"
             />
-            <span :style="{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
+            <span :style="labelStyle(option)">
               {{ option.label }}
             </span>
             <!-- Something to say about this row in particular: the field's
