@@ -3,8 +3,11 @@
    object and two computeds.
 
    Deliberately small, like git.js: this is a file read, there is no worker
-   behind it, and freshness comes from switching projects and from a setup
-   session finishing. */
+   behind it, and freshness comes from switching projects, from window focus,
+   and from any of this project's sessions starting or stopping work — the last
+   being the only channel that fires while somebody watches a setup agent
+   write the file without leaving the window. The rule for that one is
+   components/run/configFreshness.js. */
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
