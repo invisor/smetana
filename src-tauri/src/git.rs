@@ -333,11 +333,6 @@ pub fn branches_with_recency(project: &Path) -> Vec<(String, Option<i64>)> {
     out.into_iter().map(|name| { let at = touched_at(&logs, &name); (name, at) }).collect()
 }
 
-#[tauri::command]
-pub fn git_branches(project: String) -> Vec<String> {
-    branches(Path::new(&project))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -146,9 +146,10 @@ const pickedBranch = ref('staging')
 const branchIsNew = ref(false)
 const groupedBranch = ref('develop')
 const narrowBranch = ref('spike/auth')
-/* Records for the branch fields below — the shape the field takes now, stood
-   in here the same way git.js wraps the old command's plain strings. */
+/* Records for the branch fields below — the shape `target_branches` actually
+   answers with, now that git.js passes it straight through. */
 const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
+const partialBranch = ref('release/7')
 const checked = ref(true)
 const switched = ref(true)
 
@@ -1015,6 +1016,22 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             v-model="pickedBranch"
             v-model:create="branchIsNew"
             :branches="everywhere('main', 'staging', 'feature/runs-project-config', 'fix/tooltip-clipping', 'release/7')"
+          />
+        </div>
+        <div :style="{ width: '320px' }">
+          <!-- A branch three of the project's repositories carry and one does
+               not. The hint counts them and the row names them: "will be created"
+               on its own would say the branch does not exist, which is the very
+               thing that sent a run out to cut a `develop` that already had its
+               own history in four repositories. -->
+          <BranchSelect
+            v-model="partialBranch"
+            :branches="[
+              { name: 'develop', missing_in: [] },
+              { name: 'main', missing_in: [] },
+              { name: 'release/7', missing_in: ['admin', 'extension'] },
+              { name: 'spike/auth', missing_in: ['frontend', 'admin', 'extension'] }
+            ]"
           />
         </div>
         <div :style="{ width: '320px' }">

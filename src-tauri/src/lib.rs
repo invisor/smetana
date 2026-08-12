@@ -86,7 +86,6 @@ pub fn run() {
       attachments::attachment_import,
       attachments::attachment_write,
       git::git_head,
-      git::git_branches,
       runs::commands::project_config,
       runs::commands::browser_tools,
       runs::commands::run_start,
