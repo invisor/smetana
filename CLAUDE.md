@@ -786,6 +786,50 @@ substitution happens silently and the only way to see it is the terminal itself.
 is installed the session fails with `NoAgent` — a write failing loudly, which is the rule everywhere
 else here.
 
+`agents::LANGUAGES` is the same idea one field over: the twelve languages a person may choose,
+as BCP-47 ids **with the English name of each**, and the only copy of that list —
+`settings/model.rs` validates `agentLanguage` and `taskLanguage` against it exactly as it validates
+`agent` against `IDS`, and the name is carried beside the id because the name is what goes into the
+prompt. `zh-Hans` is a tag out of a settings file; "Chinese (Simplified)" is a sentence. Both
+default to `en` rather than to an Auto position, which would have meant "say nothing about
+language" — today's behaviour exactly, so an update would change nothing for anybody until they went
+and chose. The visible price of that is deliberate: `Intent::Bare` no longer opens on nothing, since
+it now carries the one sentence naming the conversation language, and the alternative was that the
+one session where a person talks to the agent most is the one session the setting cannot reach.
+
+Neither language crosses the IPC. `terminal_create`'s signature is unchanged and the run worker
+threads no new argument: `settings::languages(app)` reads the file where `settings::agent(app)`
+already does, and `terminal::service`'s `Create` arm calls it while building the `Launch`. That is
+the one place every session in the app is built, so a person's session and a run's batch get the
+same answer by construction rather than because two call sites were kept in step. From the `Launch`
+the two ids reach `prompt::build`, which stays pure.
+
+Two costs come with reading it there and both are accepted. A session started in the same fraction
+of a second as a language change reads the previous language, since the front end writes settings on
+a 400 ms debounce — the same lag `settings::agent(app)` already lives with in `runs::service`. And a
+run reads the languages **per batch**, where it snapshots its agent and its whole `RunSettings` once
+and carries them, so a language changed at 2am reaches the next batch and one run's issues can end up
+in two languages. Snapshotting them onto `Intent::Run` instead would put the languages back on a
+second road into a session, which is exactly what reading them in the one place exists to prevent.
+
+What each moves is not the same. The conversation language goes into **every** intent; the task
+language goes only where the agent writes into bd — `NewTask`, `EditTask`, `ResolveTask` and `Run` —
+and it carries a caveat that is not optional, because what the setting must never move is a string
+some other piece of software matches on. The `##` section headings, because
+`bd create --validate` matches the wording of a heading and nothing else, so a translated
+`## Acceptance Criteria` is not a difference of style but bd refusing the issue. And the markers a
+note begins with: `parked:` and `resolved:` are matched as literals by
+`components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked card's
+dialog then says nothing is open while the Ready warning goes quiet — the failure is silent and lands
+on somebody trying to answer a parked task. What the setting moves is the title, the body of the
+description, the criteria themselves and what follows the colon in a note; not the markup and not the
+markers. Specifications and plans are English whatever either setting says (`IN_ENGLISH` in
+`prompt.rs`, appended once to whichever stages were asked for): they are read by whoever picks the
+work up months later and by every agent after them, and the repository they sit beside is English
+throughout. A setting for the language of *code comments* was asked for and refused, for the reason
+the top of this document gives — it would either do nothing in any repository with a convention, or
+produce exactly the regression the Language section names.
+
 Two directories under `src-tauri/resources/` are the library itself, both bundle resources.
 `smetana/` is ours — the directory is the list, for the reason the test-count note under Commands
 gives, and today it holds `filing-a-task`, `resolving-questions`, `provisioning`, `running-tasks`,
@@ -1604,8 +1648,9 @@ and where the tests are; `file.rs` is the disk (atomic write through a per-call 
 thin commands.
 
 The file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed state and
-width for each side), `editor` with its own `fontSize`, and `agent`, the
-id of the CLI agent to start, at the root;
+width for each side), `editor` with its own `fontSize`, `agent`, the
+id of the CLI agent to start, and `agentLanguage` and `taskLanguage`, the two languages that agent
+works in, at the root;
 below that, `openProjects` is the list of
 projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
 a map from each project's absolute path to its content state (side tab, active tab, selected task,
@@ -1624,7 +1669,8 @@ open the dialog claiming to run something nobody clicked. The open tabs are path
 relative to the project root — the key already carries the absolute part, and a moved folder does
 not turn the list into rubbish. The map never crosses the IPC boundary: `settings_load` returns the
 resolved view for one project
-(`{ appearance, layout, editor, agent, project, openProjects, activeProject }`) and
+(`{ appearance, layout, editor, agent, agentLanguage, taskLanguage, project, openProjects,
+activeProject }`) and
 `settings_save` puts it back, stamps `usedAt` on the active project and trims `projects` toward the
 20 most recently used — but never evicts the current project or anything still in `openProjects`, so
 the cap only bites entries from past visits that were closed, not projects a person still has open.
@@ -1637,8 +1683,9 @@ ceiling and then destroys the window itself — the window always closes, a slow
 last edit rather than the app.
 
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
-an opened tab. Four fields are the exception and they are what the settings window edits —
-`appearance.theme`, `appearance.uiFontSize`, `editor.fontSize` and `agent`. Density is not among
+an opened tab. A handful of fields are the exception and they are what the settings window edits —
+`appearance.theme`, `appearance.uiFontSize`, `editor.fontSize`, `agent` and the two languages beside
+it. Density is not among
 them, deliberately: nothing has asked for it yet, and a screen full of switches nobody wanted is
 worse than a short one. `?theme=` and `?density=` still override the first two for one run and are
 deliberately **not** written back — one visit to the dev server must not repaint the app forever.
@@ -1730,7 +1777,11 @@ row brought into view on opening and on walking off either end, since the shippe
 fourth of fifteen and anything above about 17px opened on a list with no visible answer in it.
 Agents is the one place in the front
 end that ever *names* an agent: the ids are still `agents::IDS` and Rust still drops one it does not
-ship, so this is a set of labels for ids Rust already knows. The subscription block under it is a
+ship, so this is a set of labels for ids Rust already knows. The two language pickers under it are
+the same doubling against `agents::LANGUAGES`, accepted for the same reason — Rust validates the
+ids, so drift costs a stale label rather than a lost setting — and all three rows share one control
+column, wider than the shipped default because `Dropdown` ellipsises a label that does not fit and
+"Chinese (Simplified)" is the longest either list holds. The subscription block under it is a
 placeholder with dashes and a sentence saying so — a block of invented numbers under a real setting
 would claim the app knows something it does not, which is what the fixture log pane was removed for.
 

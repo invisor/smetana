@@ -290,6 +290,15 @@ pub struct Settings {
     /// `src/views/DesktopApp.vue` — and a value missing from one of them comes
     /// back after a restart as something the person did not choose.
     pub agent: String,
+    /// The language a CLI agent talks to the person in, and the language the
+    /// prose of a bd issue it writes is in. Both at the root beside `agent` and
+    /// for the same reason: which language somebody wants to be spoken to in is
+    /// a habit of theirs and travels with them between repositories.
+    ///
+    /// The set of legal values is `agents::LANGUAGES` and is not repeated here,
+    /// the same as `agent` above.
+    pub agent_language: String,
+    pub task_language: String,
     pub last_project: Option<String>,
     /// The contents and order of the on-screen list — the order things were
     /// added, not how recent they are: rows that jump on every switch are
@@ -306,6 +315,8 @@ impl Default for Settings {
             layout: Layout::default(),
             editor: EditorSettings::default(),
             agent: "claude".into(),
+            agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
+            task_language: crate::agents::DEFAULT_LANGUAGE.into(),
             last_project: None,
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
@@ -329,6 +340,9 @@ pub struct ResolvedSettings {
     pub editor: EditorSettings,
     /// Which CLI agent the app starts. See `Settings::agent`.
     pub agent: String,
+    /// The two languages. See `Settings::agent_language`.
+    pub agent_language: String,
+    pub task_language: String,
     pub project: ProjectState,
     pub open_projects: Vec<String>,
     pub active_project: Option<String>,
@@ -347,6 +361,8 @@ impl Default for ResolvedSettings {
             layout: Layout::default(),
             editor: EditorSettings::default(),
             agent: "claude".into(),
+            agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
+            task_language: crate::agents::DEFAULT_LANGUAGE.into(),
             project: ProjectState::default(),
             open_projects: Vec::new(),
             active_project: None,
@@ -385,6 +401,8 @@ pub fn parse(text: &str) -> Outcome {
         layout: section(&object, "layout"),
         editor: section(&object, "editor"),
         agent: object.get("agent").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| "claude".into()),
+        agent_language: language_field(&object, "agentLanguage"),
+        task_language: language_field(&object, "taskLanguage"),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
@@ -422,6 +440,8 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         layout: file.layout.clone(),
         editor: file.editor.clone(),
         agent: file.agent.clone(),
+        agent_language: file.agent_language.clone(),
+        task_language: file.task_language.clone(),
         project: active
             .as_deref()
             .and_then(|path| file.projects.get(path))
@@ -441,6 +461,8 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.layout = resolved.layout;
     file.editor = resolved.editor;
     file.agent = resolved.agent;
+    file.agent_language = resolved.agent_language;
+    file.task_language = resolved.task_language;
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
 
@@ -540,6 +562,8 @@ impl Settings {
     /// only the field itself is lost.
     pub fn validate(&mut self) {
         one_of(&mut self.agent, &crate::agents::IDS, "claude");
+        known_language(&mut self.agent_language);
+        known_language(&mut self.task_language);
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -554,6 +578,8 @@ impl Settings {
 impl ResolvedSettings {
     pub fn validate(&mut self) {
         one_of(&mut self.agent, &crate::agents::IDS, "claude");
+        known_language(&mut self.agent_language);
+        known_language(&mut self.task_language);
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -676,6 +702,26 @@ impl ProjectState {
 fn one_of(value: &mut String, allowed: &[&str], fallback: &str) {
     if !allowed.contains(&value.as_str()) {
         *value = fallback.to_owned();
+    }
+}
+
+/// One language id off the file, before validation. A missing field is the
+/// ordinary case — every file written before these two existed has neither.
+fn language_field(object: &Map<String, Value>, key: &str) -> String {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::agents::DEFAULT_LANGUAGE.to_owned())
+}
+
+/// `one_of` for a language, and it takes the same shape for the same reason:
+/// a value nobody ships loses that one field rather than the section around it.
+/// The list itself is `agents::LANGUAGES` and is asked rather than repeated,
+/// exactly as `agents::IDS` is above.
+fn known_language(value: &mut String) {
+    if !crate::agents::known_language(value) {
+        *value = crate::agents::DEFAULT_LANGUAGE.to_owned();
     }
 }
 
@@ -1419,6 +1465,63 @@ mod tests {
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert_eq!(written.agent, "codex", "merge must carry it back into the file");
     }
+
+    #[test]
+    fn a_file_with_no_languages_in_it_speaks_english() {
+        // Every file on a person's disk right now is this file.
+        let settings = settings_of(r#"{"version":1}"#);
+        assert_eq!(settings.agent_language, "en");
+        assert_eq!(settings.task_language, "en");
+        assert_eq!(Settings::default().agent_language, "en");
+        assert_eq!(ResolvedSettings::default().task_language, "en");
+    }
+
+    #[test]
+    fn every_language_the_app_ships_survives_a_load() {
+        for (id, _) in crate::agents::LANGUAGES {
+            let settings = settings_of(&format!(
+                r#"{{"version":1,"agentLanguage":"{id}","taskLanguage":"{id}"}}"#
+            ));
+            assert_eq!(settings.agent_language, id);
+            assert_eq!(settings.task_language, id);
+        }
+    }
+
+    #[test]
+    fn a_language_nobody_ships_loses_the_field_and_not_the_section() {
+        // The shape `an_agent_nobody_ships_loses_the_field_and_not_the_section`
+        // already has, and for the same reason: a hand-edited value is no
+        // reason to throw the rest of somebody's file away.
+        let settings = settings_of(
+            r#"{"version":1,"agentLanguage":"xx","taskLanguage":"ru","agent":"codex",
+                "appearance":{"theme":"light"}}"#,
+        );
+        assert_eq!(settings.agent_language, "en", "the bad one falls back");
+        assert_eq!(settings.task_language, "ru", "its neighbour is untouched");
+        assert_eq!(settings.agent, "codex", "and so is the rest of the file");
+        assert_eq!(settings.appearance.theme, "light");
+    }
+
+    /// The same walk `a_chosen_agent_does_not_quietly_become_claude_again`
+    /// makes, for the same reason: a field added to the two structs but not
+    /// wired into `parse`, `resolve` and `merge` reads as `"en"` forever no
+    /// matter what the file says.
+    #[test]
+    fn a_chosen_language_does_not_quietly_become_english_again() {
+        let file = settings_of(r#"{"version":1,"agentLanguage":"ru","taskLanguage":"ja"}"#);
+        assert_eq!(file.agent_language, "ru", "parse must read it off the disk");
+        assert_eq!(file.task_language, "ja");
+
+        let resolved = resolve(&file, None);
+        assert_eq!(resolved.agent_language, "ru", "resolve must carry it to the front end");
+        assert_eq!(resolved.task_language, "ja");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.agent_language, "ru", "merge must carry it back into the file");
+        assert_eq!(written.task_language, "ja");
+    }
+
     #[test]
     fn a_settings_file_written_before_the_run_dialog_existed_still_loads() {
         // Every file on a person's disk right now is this file.

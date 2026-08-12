@@ -67,6 +67,18 @@ pub fn agent(path: &Path) -> String {
     load(path).0.agent
 }
 
+/// The two configured languages, and nothing else out of the file. The same
+/// shape as `agent` above and answering under the same guarantees: both are
+/// always ids `agents::LANGUAGES` knows, because `parse` validates them on the
+/// way in, and a missing or unreadable file answers with the default pair.
+pub fn languages(path: &Path) -> crate::agents::Languages {
+    let settings = load(path).0;
+    crate::agents::Languages {
+        agent: settings.agent_language,
+        task: settings.task_language,
+    }
+}
+
 /// The write is atomic: a neighbouring file first, then a rename. Otherwise a
 /// break halfway through would leave half a JSON and the next launch would lose
 /// everything. The content is flushed to disk before the rename — without that

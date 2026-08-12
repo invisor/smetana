@@ -106,6 +106,7 @@ impl Profile for Codex {
             &launch.skills,
             launch.facts.as_deref(),
             text,
+            &launch.languages,
         ) {
             cmd.arg(built);
         }
@@ -569,6 +570,7 @@ mod tests {
                 superpowers_installed: false,
             },
             facts: None,
+            languages: crate::agents::Languages::default(),
         }
     }
 
@@ -625,8 +627,14 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_session_is_just_the_binary() {
-        assert_eq!(argv(&launch(Intent::Bare)), vec!["codex".to_string()]);
+    fn a_bare_session_is_the_binary_and_the_language_sentence() {
+        // It was the binary alone until the conversation language reached every
+        // intent. Still nothing about the work — a bare session has none — and
+        // still no flags, since Codex has no per-session skill mechanism.
+        let args = argv(&launch(Intent::Bare));
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "codex");
+        assert!(args[1].contains("Talk to me in English"), "{args:?}");
     }
 
     #[test]
