@@ -12,6 +12,14 @@ import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { sameScope } from '../components/run/runScopes.js'
+/* The bell's run cards are a function of the list below and of nothing else, so
+   they are rebuilt wherever it moves — which is here, in the three places that
+   assign it. The import is circular (notifications.js reads `runsState`) and
+   deliberately so: `syncRunCards` is a hoisted function declaration and neither
+   module touches the other at evaluation time, and the alternative — a watcher
+   inside the notifications store — would make the cards a frame late for no
+   gain. */
+import { syncRunCards } from './notifications.js'
 
 const NONE = { state: 'missing' }
 
@@ -46,11 +54,11 @@ export const runsState = reactive({
    and an event interleave. */
 function upsert(run) {
   const at = runsState.runs.findIndex((r) => r.token === run.token)
-  if (at !== -1) {
-    runsState.runs[at] = run
-    return
-  }
-  runsState.runs = [...runsState.runs, run].sort((a, b) => a.token - b.token)
+  if (at !== -1) runsState.runs[at] = run
+  else runsState.runs = [...runsState.runs, run].sort((a, b) => a.token - b.token)
+  /* A run reaching `stopped` is what puts its card in the bell, and this is the
+     one place a run's state ever changes. */
+  syncRunCards()
 }
 
 /* An offer to set the project up, not a warning: most projects are here, and
@@ -79,6 +87,11 @@ export async function loadConfig(project) {
      runs under the new name for as long as that call takes. */
   if (runsState.project !== project) {
     runsState.runs = []
+    /* And their cards with them: a card about a run in the project somebody has
+       just left is a statement about work this window is no longer looking at,
+       posted under the new project's name. Exactly what `measureStorage` drops
+       its card for, one source over. */
+    syncRunCards()
     /* Per project the same way the run is: `.mcp.json` is the project's own file
        and busy-ness is about the runs beside this one, so an answer read for
        another project says nothing here. Cleared rather than kept as a guess —
@@ -112,12 +125,14 @@ export async function loadConfig(project) {
 export async function loadRun(project) {
   if (!project) {
     runsState.runs = []
+    syncRunCards()
     return
   }
   try {
     const runs = await invoke('run_state', { project })
     if (runsState.project !== project) return
     runsState.runs = runs ?? []
+    syncRunCards()
   } catch (err) {
     console.error('[runs] reading the run state failed:', err)
   }

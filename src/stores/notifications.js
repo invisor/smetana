@@ -1,4 +1,5 @@
-/* What the bell has to say, and the one source that says anything today.
+/* What the bell has to say, and the two sources that say anything today: the
+   attachment store growing, and a run that is over.
 
    This file knows nothing about Tauri: the back end it reads is
    `attachments.js`, which already owns the one command that weighs the store
@@ -23,19 +24,57 @@
 import { reactive } from 'vue'
 import { surveyStorage } from './attachments.js'
 import { settings } from './settings.js'
+/* **Nothing in this module may read `runsState` at evaluation time** — only
+   inside `syncRunCards`, which runs long after both modules are up. The import
+   is one half of a cycle (`runs.js` calls `syncRunCards`), and the bundler
+   emits *this* module first, before `runs.js` has evaluated and before the
+   `const runsState` exists: a module-scope `watch(() => runsState.runs)` — the
+   natural-looking improvement over the explicit calls in `runs.js` — would
+   therefore throw on the very first line of the built app and leave a white
+   window, while working perfectly in `npm run dev`, where the browser's own
+   module order is the other way round. Verified against the emitted chunk, not
+   assumed. */
+import { runsState } from './runs.js'
 import {
   crossedThreshold,
   projectBytes,
   rememberAfter,
+  runNotification,
   stillOver,
   storageNotification
 } from '../components/notifications/notifications.js'
 
 export const notificationsState = reactive({
-  /* Whole notification objects, newest first if there is ever more than one.
-     The badge counts this, the panel draws it. */
+  /* Whole notification objects, in `SOURCES` order. The badge counts this, the
+     panel draws it. */
   items: []
 })
+
+/* The order the panel draws its sources in, and the whole of it.
+
+   It is a property of the list rather than of who spoke last, and that is the
+   fix for what the two sources did while each arranged its own half: the
+   storage card was prepended when it was announced, run cards were put in front
+   of everything when the list moved, so whichever source had most recently had
+   something to say sat on top and the panel had no order anybody could rely on.
+   Both writers now hand their result to `arrange`, so the sequence is the same
+   however the cards got there.
+
+   Runs first: a night that has ended is what somebody came back to the window
+   to read, while a folder that has grown is housekeeping and will still be
+   there tomorrow. A source this list has never heard of sorts to the end rather
+   than to the front, since an unknown card has not earned the top of a panel
+   budgeted at one or two rows. */
+const SOURCES = ['run', 'storage']
+
+const rank = (item) => {
+  const at = SOURCES.indexOf(item.source)
+  return at === -1 ? SOURCES.length : at
+}
+
+/* `sort` is stable, so cards of one source keep the order their own writer gave
+   them — run cards oldest run first, as `runsState.runs` holds them. */
+const arrange = (items) => [...items].sort((a, b) => rank(a) - rank(b))
 
 /* The storage source is one card at a time — one folder, one statement about
    it — so a new one replaces the old rather than stacking beside it. */
@@ -45,7 +84,7 @@ const dropStorage = () => {
 
 const put = (notification) => {
   dropStorage()
-  notificationsState.items = [notification, ...notificationsState.items]
+  notificationsState.items = arrange([notification, ...notificationsState.items])
 }
 
 const storageCard = () => notificationsState.items.find((item) => item.source === 'storage') ?? null
@@ -125,6 +164,41 @@ export async function measureStorage(project) {
   settings.project.storageWarnedMib = rememberAfter(bytes, announced)
 }
 
+/* ---- the second source: runs that are over --------------------------- */
+
+/* Runs whose card somebody has taken away, by token, in memory and nowhere
+   else. There is nothing for a stored flag to be about: a run does not survive
+   a restart any more than a session does, so the list it is derived from starts
+   empty on every launch and a remembered token would refer to nothing. The
+   token is issued once per app process and never reused, so this set cannot
+   silence a later run — not even one in another project. */
+const dismissedRuns = new Set()
+
+/* The run cards, rebuilt from `runsState.runs`.
+
+   **Derived, never accumulated**, which is the whole reason this bell is not an
+   inbox: a card exists while its stopped run is in that list and goes when the
+   run does — the project changing, or a run of the same scope replacing it,
+   which is the rule `runs.js` already keeps and the reason a stopped run stays
+   on the bar at all. Nothing here remembers that a card was ever made, so there
+   is no second source of truth to go stale, and no run ends up announced twice.
+
+   Cards of other sources are left exactly as they are: this rebuilds one
+   source's half of the list and knows nothing about the rest of it.
+
+   The list it reads is the active project's — `runs.js` guards it against its
+   own stale responses and against events arriving after a switch — so there is
+   no project check here to keep in step with that one. What this must not do is
+   read anything else about the project, and it does not. */
+export function syncRunCards() {
+  const cards = runsState.runs
+    .filter((run) => !dismissedRuns.has(run?.token))
+    .map(runNotification)
+    .filter(Boolean)
+  const others = notificationsState.items.filter((item) => item.source !== 'run')
+  notificationsState.items = arrange([...cards, ...others])
+}
+
 /* Dismiss. For a storage card this is exactly the write an announcement makes,
    for the size measured at that moment — which is why there is no dismissed
    flag anywhere: the card is derived, and a threshold recorded as announced is
@@ -137,5 +211,10 @@ export function dismiss(id) {
   if (card.source === 'storage' && settings.activeProject === card.project) {
     settings.project.storageWarnedMib = rememberAfter(card.bytes, card.threshold)
   }
+  /* A run card is derived from a list that outlives the card, so taking it out
+     of `items` alone would put it straight back on the next sync. The token is
+     remembered instead — and only in memory, for the reason `dismissedRuns`
+     gives. */
+  if (card.source === 'run') dismissedRuns.add(card.token)
   notificationsState.items = notificationsState.items.filter((item) => item.id !== id)
 }

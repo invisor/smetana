@@ -155,7 +155,7 @@ export const iconNodes = {
   ellipsis: Ellipsis,
   'chevrons-right': ChevronsRight,
   bell: Bell,
-  /* The bell's one source today: the attachment store's own weight. */
+  /* The storage source's glyph: the attachment store's own weight. */
   'hard-drive': HardDrive,
   settings: Settings,
   'settings-2': Settings2,

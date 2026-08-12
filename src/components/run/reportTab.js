@@ -36,3 +36,33 @@ export function isReportPath(path) {
   const name = path.slice(REPORTS_DIR.length)
   return name.endsWith('.html') && !name.includes('/')
 }
+
+/* The tab path for the absolute one a run's summary carries, or `null` when
+   there is no honest answer.
+
+   Two vocabularies meet here and this is the whole of the translation between
+   them. `RunSummary.report` is absolute, because it is written by a worker that
+   knows nothing of tabs and has to name a file on disk; `openTabs` is
+   project-relative, because the project's own path is already the key that list
+   sits under. Neither is going to change, so something has to do this, and it
+   lives here rather than in the component for the reason the rule above does.
+
+   Separators are normalised on both sides before they are compared: every path
+   inside `files.js` uses `/`, while the string Rust wrote is the platform's, so
+   on Windows the two would never match and the button would silently do
+   nothing. That is `basename`'s trade in `src/paths.js` taken a second time and
+   for the same reason.
+
+   `null` rather than a guess for anything that does not land squarely inside
+   this project's reports folder — a document belonging to a project this window
+   has left, or a path in a shape this rule cannot read. Opening the wrong file,
+   or opening a report as text, is worse than a button that declines. */
+export function reportTabPath(report, root) {
+  if (typeof report !== 'string' || typeof root !== 'string' || !root) return null
+  const slashes = (path) => path.replace(/\\/g, '/')
+  const base = slashes(root).replace(/\/+$/, '') + '/'
+  const full = slashes(report)
+  if (!full.startsWith(base)) return null
+  const relative = full.slice(base.length)
+  return isReportPath(relative) ? relative : null
+}
