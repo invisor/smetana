@@ -60,7 +60,11 @@ const view = reactive({
   density: 'comfortable',
   uiFontSize: UI_FONT_DEFAULT,
   editorFontSize: EDITOR_FONT_DEFAULT,
-  agent: 'claude'
+  agent: 'claude',
+  /* Both BCP-47 ids, mirroring Rust's `en` — the same shipped-defaults
+     reasoning the four above carry. */
+  agentLanguage: 'en',
+  taskLanguage: 'en'
 })
 const FIELDS = Object.keys(view)
 
@@ -79,8 +83,8 @@ const adopt = (state, fromApp) => {
 }
 
 /* One edit: applied here, then sent. Never the whole object — the message is
-   what changed, and sending all five fields would let a stale copy of one
-   overwrite an edit somebody made in the app window in between. */
+   what changed, and sending every field would let a stale copy of one overwrite
+   an edit somebody made in the app window in between. */
 const change = (patch) => {
   adopt(patch, false)
   sendSettingsPatch(patch)
@@ -268,7 +272,11 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
         <AgentSettings
           v-else-if="tab === 'agents'"
           :agent="view.agent"
+          :agent-language="view.agentLanguage"
+          :task-language="view.taskLanguage"
           @update:agent="change({ agent: $event })"
+          @update:agent-language="change({ agentLanguage: $event })"
+          @update:task-language="change({ taskLanguage: $event })"
         />
         <StorageSettings
           v-else-if="tab === 'storage'"

@@ -1,9 +1,14 @@
 <script setup>
-/* The Agents tab: which CLI coding agent the app starts, and what is known
-   about its subscription.
+/* The Agents tab: which CLI coding agent the app starts, the language it talks
+   to the person in, the language it writes a task in, and what is known about
+   its subscription.
 
-   The first half is real and takes effect on the next session started — the id
-   travels to `terminal_create`, and Rust resolves it (`agents::resolve`). The
+   The first three are real and take effect on the next session started — the id
+   travels to `terminal_create`, and Rust resolves it (`agents::resolve`); the
+   two languages travel by a different road and never cross the IPC as
+   arguments at all, since `terminal::service` reads them from the file itself
+   when it builds the session, which is what keeps a person's session and a
+   run's batch from disagreeing about them. The
    second half is a placeholder with nothing behind it, and it says so in as many
    words: a block of invented numbers under a real setting would claim the app
    knows something it does not, which is the same mistake the fixture log pane in
@@ -13,10 +18,15 @@ import Dropdown from '../core/Dropdown.vue'
 import SettingsRow from './SettingsRow.vue'
 
 const props = defineProps({
-  agent: { type: String, default: 'claude' }
+  agent: { type: String, default: 'claude' },
+  /* The language the agent talks to the person in, and the language the prose
+     of a bd issue it writes is in. BCP-47 ids, validated in Rust against
+     `agents::LANGUAGES`; `en` here mirrors that table's default. */
+  agentLanguage: { type: String, default: 'en' },
+  taskLanguage: { type: String, default: 'en' }
 })
 
-const emit = defineEmits(['update:agent'])
+const emit = defineEmits(['update:agent', 'update:agentLanguage', 'update:taskLanguage'])
 
 /* The one place in the front end that names an agent. The ids are `agents::IDS`
    in `src-tauri/src/agents/mod.rs`, which is where the truth lives — Rust
@@ -28,6 +38,36 @@ const AGENTS = [
   { value: 'claude', label: 'Claude Code' },
   { value: 'codex', label: 'Codex' }
 ]
+
+/* The same doubling one row down, accepted for the same reason. The ids are
+   `agents::LANGUAGES` in `src-tauri/src/agents/mod.rs`, which carries the
+   English name beside each because that name is what goes into the prompt —
+   these are labels for ids Rust already knows and validates, so drift costs a
+   stale label rather than a lost setting. The order is the table's, and the
+   table's order is not alphabetical either: it is roughly how many people write
+   in each, with English and Russian first because they are the two this was
+   built for. */
+const LANGUAGES = [
+  { value: 'en', label: 'English' },
+  { value: 'ru', label: 'Russian' },
+  { value: 'zh-Hans', label: 'Chinese (Simplified)' },
+  { value: 'es', label: 'Spanish' },
+  { value: 'hi', label: 'Hindi' },
+  { value: 'pt', label: 'Portuguese' },
+  { value: 'fr', label: 'French' },
+  { value: 'de', label: 'German' },
+  { value: 'ja', label: 'Japanese' },
+  { value: 'ko', label: 'Korean' },
+  { value: 'it', label: 'Italian' },
+  { value: 'tr', label: 'Turkish' }
+]
+
+/* Every row on this tab shares one control column, wider than the shipped
+   default: "Chinese (Simplified)" is the longest label either list holds, and
+   `Dropdown` ellipsises a label that does not fit its field rather than growing
+   it. In `ch` like the rest of this window, so the column grows with the
+   app-wide font size instead of clipping at the top of the range. */
+const CONTROL_WIDTH = '30ch'
 
 /* The agent whose subscription the block below is about — by its own label,
    because "your subscription" beside a picker showing something else reads as
@@ -84,11 +124,36 @@ const FACTS = [
     <SettingsRow
       label="Agent"
       description="Which CLI agent new sessions start. Sessions already running keep the one they started with."
+      :control-width="CONTROL_WIDTH"
     >
       <Dropdown
         :model-value="props.agent"
         :options="AGENTS"
         @update:model-value="emit('update:agent', $event)"
+      />
+    </SettingsRow>
+
+    <SettingsRow
+      label="Conversation language"
+      description="What an agent says to you is written in this. It reaches the next session started, not the ones already running."
+      :control-width="CONTROL_WIDTH"
+    >
+      <Dropdown
+        :model-value="props.agentLanguage"
+        :options="LANGUAGES"
+        @update:model-value="emit('update:agentLanguage', $event)"
+      />
+    </SettingsRow>
+
+    <SettingsRow
+      label="Task language"
+      description="What an agent writes into a task is written in this — the title, the description, the criteria. Section headings stay English, and so do specifications and plans."
+      :control-width="CONTROL_WIDTH"
+    >
+      <Dropdown
+        :model-value="props.taskLanguage"
+        :options="LANGUAGES"
+        @update:model-value="emit('update:taskLanguage', $event)"
       />
     </SettingsRow>
 
