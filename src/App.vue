@@ -26,6 +26,11 @@ const settingsWindow = ref(view === 'settings')
 const override = (name, allowed) => (allowed.includes(params.get(name)) ? params.get(name) : null)
 const themeOverride = override('theme', ['dark', 'light'])
 const densityOverride = override('density', ['comfortable', 'compact'])
+/* Which section the settings window opens on, when something asked for one —
+   `settings_window_open` puts it here. Passed through untouched: the list of
+   sections belongs to that window, and checking a name against it here would be
+   the same closed list written out twice. */
+const settingsTab = params.get('tab')
 
 /* The gallery is a component harness and the settings window holds no store of
    its own: both render straight away. The app waits for the file — a few
@@ -66,6 +71,7 @@ const density = computed(
     v-if="settingsWindow"
     :theme-override="themeOverride"
     :density-override="densityOverride"
+    :initial-tab="settingsTab"
   />
   <Gallery v-else-if="gallery" :theme="theme" :density="density" />
   <DesktopApp v-else-if="ready" :theme="theme" :density="density" />

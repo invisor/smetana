@@ -168,6 +168,21 @@ pub struct ProjectState {
     /// from whichever play button was pressed, and remembering it would open
     /// the dialog claiming to run something nobody clicked.
     pub run_settings: Option<RunDefaults>,
+    /// The highest attachment-storage threshold this project has already been
+    /// warned about, in MiB, or `None` for a project nobody has been warned
+    /// about yet. The one thing the notification bell keeps between runs.
+    ///
+    /// Per project because the folder is: the store is laid out by project key
+    /// and the clean-up button reaches one project's folder and no other, so a
+    /// number about that folder belongs beside `column_order` for exactly the
+    /// same reason a column order does.
+    ///
+    /// It is re-set after **every** measurement to the highest threshold the
+    /// folder still reaches, which is what makes a threshold announce once and
+    /// then arm itself again when somebody cleans up — see
+    /// `src/components/notifications/notifications.js`, which owns that rule and
+    /// the ladder this field is validated against.
+    pub storage_warned_mib: Option<u32>,
     /// RFC 3339, stamped on write. Needed only for trimming the map.
     pub used_at: Option<String>,
 }
@@ -184,6 +199,7 @@ impl Default for ProjectState {
             preview_tab: None,
             column_order: Vec::new(),
             run_settings: None,
+            storage_warned_mib: None,
             used_at: None,
         }
     }
@@ -247,6 +263,14 @@ const RUN_MODES: [&str; 3] = ["auto", "supervised", "solo"];
 /// bd's priority scale. Anything outside it would silently take everything or
 /// nothing.
 const MAX_PRIORITY: u8 = 4;
+
+/// The attachment-storage thresholds the bell announces, in MiB. Written out a
+/// second time in `src/components/notifications/notifications.js`, which owns
+/// the rule; this copy exists so a hand-edited number cannot silence a warning
+/// for ever — a value off the ladder loses itself, and the whole cost of that is
+/// one repeated warning. The same doubling `SIDE_TABS` carries, with the same
+/// obligation: both copies move together.
+const STORAGE_THRESHOLDS_MIB: [u32; 3] = [10, 50, 100];
 
 /// The whole file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -608,6 +632,14 @@ impl ProjectState {
         sane_list(&mut self.column_order, MAX_COLUMNS, MAX_ID_LEN);
         if let Some(run) = self.run_settings.as_mut() {
             run.validate();
+        }
+        // Off the ladder is forgotten rather than rounded, the same rule
+        // `min_priority` keeps: a number nobody could have been warned at is a
+        // hand-edited file, and the honest reading of it is that no warning has
+        // happened here. Rounding down would keep a warning suppressed on the
+        // strength of a value the app never wrote.
+        if self.storage_warned_mib.is_some_and(|at| !STORAGE_THRESHOLDS_MIB.contains(&at)) {
+            self.storage_warned_mib = None;
         }
 
         // A preview tab that is not among the open ones cannot exist: it would
@@ -1247,6 +1279,58 @@ mod tests {
             file.projects["/p"].column_order,
             vec!["running".to_string(), "ready".to_string()]
         );
+    }
+
+    #[test]
+    fn the_announced_storage_threshold_is_read_and_written() {
+        let settings =
+            settings_of(r#"{"version":1,"projects":{"/p":{"storageWarnedMib":50}}}"#);
+        assert_eq!(settings.projects["/p"].storage_warned_mib, Some(50));
+
+        let mut file = Settings::default();
+        let resolved = ResolvedSettings {
+            project: ProjectState { storage_warned_mib: Some(10), ..ProjectState::default() },
+            open_projects: vec!["/p".into()],
+            active_project: Some("/p".into()),
+            ..ResolvedSettings::default()
+        };
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
+        assert_eq!(file.projects["/p"].storage_warned_mib, Some(10));
+    }
+
+    #[test]
+    fn a_file_written_before_the_storage_threshold_reads_without_it() {
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"agents"}}}"#);
+        assert_eq!(
+            settings.projects["/p"].storage_warned_mib, None,
+            "nobody has been warned here yet"
+        );
+    }
+
+    /// A number nobody could have been warned at loses itself, and the whole
+    /// cost of that is one repeated warning. Rounding it down instead would keep
+    /// a warning suppressed on the strength of a value the app never wrote.
+    #[test]
+    fn a_storage_threshold_off_the_ladder_is_forgotten() {
+        for text in [
+            r#"{"version":1,"projects":{"/p":{"storageWarnedMib":37}}}"#,
+            r#"{"version":1,"projects":{"/p":{"storageWarnedMib":0}}}"#,
+            r#"{"version":1,"projects":{"/p":{"storageWarnedMib":1000000}}}"#,
+        ] {
+            assert_eq!(settings_of(text).projects["/p"].storage_warned_mib, None, "{text}");
+        }
+    }
+
+    /// The section is lenient about its neighbours and this field is no
+    /// exception: a wrong type here costs the whole entry, the same as anywhere
+    /// else, and the rest of the file survives.
+    #[test]
+    fn a_storage_threshold_of_the_wrong_type_costs_that_project_and_no_other() {
+        let settings = settings_of(
+            r#"{"version":1,"projects":{"/p":{"storageWarnedMib":"lots","sideTab":"agents"},"/q":{"sideTab":"agents"}}}"#,
+        );
+        assert!(!settings.projects.contains_key("/p"), "the damaged entry is dropped");
+        assert_eq!(settings.projects["/q"].side_tab, "agents");
     }
 
     #[test]

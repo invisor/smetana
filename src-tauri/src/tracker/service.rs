@@ -27,6 +27,21 @@ const OVERLAP_SECONDS: i64 = 5;
 pub enum Request {
     Health(oneshot::Sender<Health>),
     Snapshot(oneshot::Sender<Snapshot>),
+    /// The folder being watched, **how well it is being read**, and the board
+    /// it holds — as one answer.
+    ///
+    /// Three facts rather than three questions, because the caller is
+    /// `attachments`, deciding which of a project's stored pictures nothing
+    /// refers to any more, and every pair of them can be made to disagree by
+    /// asking separately. A project switch between two calls would have one
+    /// project's board deciding what to delete from another project's folder.
+    /// And health is here rather than left to `tracker_health` for a sharper
+    /// reason: an empty snapshot means "this board holds nothing" or "this
+    /// board could not be read", the two are indistinguishable in `Snapshot`,
+    /// and reading the second as the first deletes the attachments of every
+    /// live task in the project. Health is the only thing that tells them
+    /// apart, so it travels in the same message as the emptiness it explains.
+    Current(oneshot::Sender<(Option<PathBuf>, Health, Snapshot)>),
     SetProject(Option<PathBuf>, oneshot::Sender<Snapshot>),
     InitTracker(oneshot::Sender<Result<Snapshot, TrackerError>>),
     Resync(oneshot::Sender<Result<Snapshot, TrackerError>>),
@@ -383,6 +398,17 @@ async fn handle(
         }
         Request::Snapshot(reply) => {
             let _ = reply.send(store.snapshot());
+            false
+        }
+        Request::Current(reply) => {
+            // The directory whatever its state — a folder with no `.beads` in
+            // it is still the project somebody has open, and its stored
+            // pictures are still its own. What that folder's health says about
+            // the board is sent beside it precisely because the two differ
+            // there: the pictures belong to the project, and with no tracker
+            // nothing can vouch for a single one of them.
+            let dir = current.as_ref().map(|p| p.dir.clone());
+            let _ = reply.send((dir, health.current(), store.snapshot()));
             false
         }
         Request::SetProject(dir, reply) => {

@@ -17,11 +17,12 @@
    same frame, and it is what makes this screen work in a browser at all, where
    nothing answers. The announcement that follows is the correction — a value the
    main window refuses comes straight back and overwrites what is drawn here. */
-import { onMounted, onUnmounted, reactive, ref, watchEffect } from 'vue'
+import { onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue'
 import TabBar from '../components/shell/TabBar.vue'
 import GeneralSettings from '../components/settings/GeneralSettings.vue'
 import EditorSettings from '../components/settings/EditorSettings.vue'
 import AgentSettings from '../components/settings/AgentSettings.vue'
+import StorageSettings from '../components/settings/StorageSettings.vue'
 import AboutSettings from '../components/settings/AboutSettings.vue'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
@@ -30,7 +31,8 @@ import {
   sendSettingsPatch,
   watchSharedSettings
 } from '../stores/settings.js'
-import { appVersion, openExternal } from '../stores/app.js'
+import { appVersion, openExternal, watchSettingsSection } from '../stores/app.js'
+import { clearStorage, surveyStorage } from '../stores/attachments.js'
 
 /* The query string's two overrides, passed down rather than read here so that
    `App.vue` stays the one place that knows about them. They win over what the
@@ -39,7 +41,14 @@ import { appVersion, openExternal } from '../stores/app.js'
    can be looked at in the other theme and in compact. */
 const props = defineProps({
   themeOverride: { type: String, default: null },
-  densityOverride: { type: String, default: null }
+  densityOverride: { type: String, default: null },
+  /* Which section to open on — `?tab=`, read in `App.vue` with the rest of the
+     query string. Checked against `TABS` below rather than trusted: it comes
+     off a URL, and Rust guards its shape without knowing the vocabulary. Named
+     apart from the `tab` ref below on purpose: a prop and a setup binding of
+     one name resolve by a precedence rule nobody should have to remember while
+     reading the template. */
+  initialTab: { type: String, default: null }
 })
 
 /* Everything this window can see and change, flat, in the shape the two windows
@@ -78,6 +87,7 @@ const change = (patch) => {
 }
 
 let stopWatching = null
+let stopSections = null
 const version = ref(null)
 
 onMounted(async () => {
@@ -85,6 +95,17 @@ onMounted(async () => {
     stopWatching = await watchSharedSettings((state) => adopt(state, true))
   } catch (err) {
     console.warn('[settings-window] no app window to follow:', err)
+  }
+  try {
+    /* The app window pressing "open the settings on Storage" while this window
+       is already open. A name this build does not know is ignored rather than
+       drawn: the person keeps the tab they were reading. */
+    stopSections = await watchSettingsSection((name) => {
+      const asked = known(name)
+      if (asked) tab.value = asked
+    })
+  } catch (err) {
+    console.warn('[settings-window] no app window to hear from:', err)
   }
   try {
     const stored = await readSharedSettings()
@@ -95,7 +116,10 @@ onMounted(async () => {
   version.value = await appVersion()
 })
 
-onUnmounted(() => stopWatching?.())
+onUnmounted(() => {
+  stopWatching?.()
+  stopSections?.()
+})
 
 /* This window paints itself: it is a separate webview with its own document
    root, so the app window's attributes reach nothing here. `system` is resolved
@@ -117,9 +141,82 @@ const TABS = [
   { id: 'general', label: 'General', kind: 'pinned' },
   { id: 'editor', label: 'Editor', kind: 'pinned' },
   { id: 'agents', label: 'Agents', kind: 'pinned' },
+  { id: 'storage', label: 'Storage', kind: 'pinned' },
   { id: 'about', label: 'About', kind: 'pinned' }
 ]
-const tab = ref('general')
+
+/* The list of sections is this file's, and this is the only place a name is
+   checked against it — Rust builds the URL and guards its shape, never its
+   vocabulary, so a section this build has never heard of opens on General
+   rather than on an empty body. Whoever asked for it pressed a button, so the
+   worst outcome is landing one tab away from what they meant. */
+const known = (name) => (TABS.some((entry) => entry.id === name) ? name : null)
+
+/* Which section a caller asked for, in the two forms that can reach this
+   window. `?tab=` is how a window being built hears about it — passed in as a
+   prop, the way `?theme=` and `?density=` are, so `App.vue` stays the one place
+   that reads the query string; the event is how an already-open window hears,
+   since opening it a second time focuses it and never reloads the URL. Unlike
+   the appearance overrides this one is not a standing override: it names where
+   to start, and a person is free to walk away from it. */
+const tab = ref(known(props.initialTab) ?? 'general')
+
+/* The Storage tab, and the one part of this window that is not a setting at
+   all: it asks the back end two questions of its own rather than reading the
+   state the app window announces. That is not a second writer of
+   `settings.json` — nothing here reaches that file. The store is the app's own
+   data directory, Rust owns it, and both calls are answered against the tracker
+   worker's idea of the active project, so this window never names a project or
+   a path of its own.
+
+   Read on opening the tab rather than on mounting the window: the answer costs
+   a queue behind the tracker worker, which may be two seconds into a bd call,
+   and the other four tabs have no use for it. */
+const storage = reactive({ survey: null, busy: false, error: null, cleaned: null })
+
+const readStorage = async () => {
+  storage.busy = true
+  /* What a previous press did is news about that press, and coming back to the
+     tab later is a fresh look at the store rather than a repeat of it. */
+  storage.cleaned = null
+  try {
+    storage.survey = await surveyStorage()
+    storage.error = null
+  } catch (err) {
+    storage.error = err.message
+  } finally {
+    storage.busy = false
+  }
+}
+
+/* The press. What goes is decided in Rust, against the board and inside the
+   active project's own folder — this function hands over no path and no name,
+   which is what keeps the button unable to reach another project's images.
+   The command answers with fresh numbers, so the screen corrects itself with no
+   second round trip. */
+const clear = async () => {
+  storage.busy = true
+  storage.error = null
+  try {
+    const cleaned = await clearStorage()
+    storage.cleaned = cleaned
+    storage.survey = cleaned.survey
+  } catch (err) {
+    /* A refusal leaves the numbers exactly as they were: they still describe
+       the store, since nothing was deleted. */
+    storage.error = err.message
+  } finally {
+    storage.busy = false
+  }
+}
+
+watch(
+  tab,
+  (which) => {
+    if (which === 'storage' && !storage.busy) readStorage()
+  },
+  { immediate: true }
+)
 
 const rootStyle = {
   display: 'flex',
@@ -172,6 +269,14 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           v-else-if="tab === 'agents'"
           :agent="view.agent"
           @update:agent="change({ agent: $event })"
+        />
+        <StorageSettings
+          v-else-if="tab === 'storage'"
+          :survey="storage.survey"
+          :busy="storage.busy"
+          :error="storage.error"
+          :cleaned="storage.cleaned"
+          @clear="clear"
         />
         <AboutSettings v-else :version="version" @open="openExternal" />
       </div>

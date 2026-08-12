@@ -344,6 +344,41 @@ export function installMockBackend() {
     }
     /* Enough branches for the dialog's field to be worth looking at. */
     if (command === 'git_branches') return ['main', 'staging', 'feature/runs-project-config']
+    /* The Storage tab's numbers. A read, so it answers — otherwise the section
+       could not be looked at under `npm run dev` at all, and the one place in
+       the app that deletes anything would be the one screen nobody could see.
+       The shape is `attachments::Survey` in full: a store bigger than the
+       active project's share of it, some of that share still in use and some of
+       it not, which is the state the button is drawn for.
+
+       The same numbers are what the bell weighs, and the project's share of the
+       store — `kept` and `removable` together, 15.25 MiB — is deliberately over
+       the first threshold: that is what makes the notification panel visible in
+       `npm run dev` at all, with no Rust worker to grow a folder behind it. It
+       announces once per page load and no more, because a browser has nowhere
+       to keep the threshold it just announced (`settings_save` is accepted and
+       dropped here) — so the card comes back on every reload, which is the one
+       way this fixture's behaviour differs from the app's.
+
+       `attachments_clean` is deliberately absent and falls through to the loud
+       refusal at the bottom, like every other write. There is no store to
+       delete from in a browser, and a deletion that looked like it had happened
+       would be the worst of them: the person would believe their pictures were
+       gone. The refusal in the section's own error line is the honest answer,
+       and it is a thing worth seeing by eye. */
+    if (command === 'attachments_survey') {
+      return {
+        store: { files: 14, bytes: 22 * 1024 * 1024 + 512 * 1024 },
+        project: MOCK_PROJECTS[0],
+        /* `tracker_health` above answers `ok`, and this has to agree: the two
+           are one fact in Rust, where the board and its health leave the worker
+           in the same message. A fixture claiming a healthy board here and a
+           broken one there would show a state the app cannot produce. */
+        board: 'ok',
+        kept: { files: 5, bytes: 6 * 1024 * 1024 },
+        removable: { files: 6, bytes: 9 * 1024 * 1024 + 256 * 1024 }
+      }
+    }
     /* `attachment_import` and `attachment_write` are deliberately absent too,
        and their absence costs the browser nothing it could have had: there is
        no app data directory to copy an image into, so a thumbnail answered

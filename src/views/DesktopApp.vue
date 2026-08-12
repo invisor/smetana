@@ -57,6 +57,8 @@ import {
   trackerState,
   updateIssue
 } from '../stores/tracker.js'
+import NotificationPanel from '../components/notifications/NotificationPanel.vue'
+import { dismiss as dismissNotification, measureStorage, notificationsState } from '../stores/notifications.js'
 import { initSettingsBridge, settings } from '../stores/settings.js'
 import { openSettingsWindow } from '../stores/app.js'
 import { paintRoot } from './useAppearance.js'
@@ -747,6 +749,9 @@ onMounted(async () => {
   loadHead(opened)
   loadConfig(opened)
   loadRun(opened)
+  /* Not awaited, like the three above it: the bell fills in when the answer
+     lands, and nothing on this pass depends on it. */
+  measureStorage(opened)
   await loadSessions(opened)
   await listDir('')
   if (activePath.value !== opened) return
@@ -781,6 +786,11 @@ const catchUp = async () => {
      this app learns about all of those. Not awaited, for the same reason
      loadHead above is not: the mark updates on its own. */
   loadConfig(activePath.value)
+  /* The attachment store is written to from outside this window too — an agent
+     filing a task, the Storage tab's own clean-up button, which lives in the
+     other window and leaves this one holding a card about a folder that has
+     just been emptied. Focus is when this app learns about all of those. */
+  measureStorage(activePath.value)
 
   const open = [...project.openTabs]
   if (!open.length) return
@@ -1496,6 +1506,78 @@ const branchLabel = computed(() => {
    now" — the first half fires on its own when focus returns to the window. */
 const refreshTree = () => refreshDirs(['', ...project.expanded])
 
+/* ---- the bell -------------------------------------------------------------
+
+   The panel hangs under the bell in the top right corner. It is placed here
+   rather than by the component, the same split `ContextMenu` and `MenuButton`
+   keep: the component draws a list or says it is empty, and knows nothing about
+   where on the screen it is — which is what lets it be looked at in the gallery
+   in an ordinary column.
+
+   Whether the panel opens is not a preference and is deliberately not stored:
+   it is a glance, and a window that reopened its notifications on every launch
+   would be the fixture bell's other failure said differently. */
+const notificationsOpen = ref(false)
+const notificationsBox = ref(null)
+const scopeBar = ref(null)
+
+/* Anything outside closes it, with the whole scope bar excluded rather than the
+   bell alone. The bell has to be excluded — pointerdown closing the panel and
+   the click after it reopening would make a second press do nothing — and it is
+   inside `ScopeIndicator`, which draws its own button and hands out no ref to
+   it. The cost is that a press on the project name or a run's stop button
+   leaves the panel open, which is a glance staying open beside a bar that has
+   not moved. */
+const onNotificationsPointerdown = (event) => {
+  if (notificationsBox.value?.contains(event.target)) return
+  if (scopeBar.value?.$el?.contains(event.target)) return
+  closeNotifications()
+}
+const onNotificationsKeydown = (event) => {
+  if (event.key === 'Escape') closeNotifications()
+}
+function closeNotifications() {
+  if (!notificationsOpen.value) return
+  notificationsOpen.value = false
+  document.removeEventListener('pointerdown', onNotificationsPointerdown, true)
+  window.removeEventListener('keydown', onNotificationsKeydown)
+}
+const toggleNotifications = () => {
+  if (notificationsOpen.value) {
+    closeNotifications()
+    return
+  }
+  notificationsOpen.value = true
+  document.addEventListener('pointerdown', onNotificationsPointerdown, true)
+  window.addEventListener('keydown', onNotificationsKeydown)
+}
+onUnmounted(closeNotifications)
+
+/* A card's own button. Today there is one source and one verb, and the switch
+   is on the source rather than on the card's label: the label is prose and
+   changes with the copy, while the source is what the card came from. */
+const actOnNotification = (notification) => {
+  if (notification.source === 'storage') openSettingsWindow('storage')
+  closeNotifications()
+}
+
+/* When the store is weighed: at start once the project is resolved, on a
+   switch (`projects.js`, after the new project's layout has landed), when focus
+   returns — the same sweep the file tree and the branch ride on — and after an
+   attachment is saved, which is the one moment the app knows for certain that
+   the number changed. No watcher over the app's own data directory: reading a
+   directory costs milliseconds and guards no state, the same reasoning `files/`
+   and `git.rs` are built on.
+
+   The list's length is what `attachmentsState.items` is watched for. Taking a
+   thumbnail back out never deletes anything, so a shrinking list is a
+   measurement that will find nothing changed — cheap, and cheaper than a second
+   signal to keep in step with the store. */
+watch(
+  () => attachmentsState.items.length,
+  () => measureStorage(activePath.value)
+)
+
 /* ---- styles ---------------------------------------------------------- */
 const rootStyle = {
   display: 'flex',
@@ -1627,6 +1709,16 @@ const hatchSwatch = {
   backgroundImage: 'repeating-linear-gradient(135deg,var(--hatch-blocked) 0 1.5px,transparent 1.5px 4px)'
 }
 
+/* Where the bell's panel sits: under the bar, against the right edge, clear of
+   the gear by the same gutter the bar's own padding uses. Above everything, at
+   the popover level, since it is opened over whatever is on screen. */
+const notificationsBoxStyle = {
+  position: 'fixed',
+  top: 'calc(var(--scope-bar-h) + var(--space-2))',
+  right: 'var(--space-5)',
+  zIndex: 'var(--z-popover)'
+}
+
 /* The column of toasts in the corner. When empty it takes up nothing and
    intercepts nothing: with no children its size is zero. */
 const toastStackStyle = {
@@ -1649,11 +1741,14 @@ const toastStackStyle = {
          branch alone is what puts it there once, undecorated. The counters
          are still fixture — nothing in the app reads git's status yet. -->
     <ScopeIndicator
+      ref="scopeBar"
       v-bind="scope"
       :repo="activePath ? basename(activePath) : '—'"
       worktree=""
       :branch="branchLabel"
-      @settings="openSettingsWindow"
+      :notifications="notificationsState.items.length"
+      @notifications="toggleNotifications"
+      @settings="openSettingsWindow()"
     >
       <template #status>
         <!-- One segment per run, oldest first — a project holds several now,
@@ -1667,6 +1762,18 @@ const toastStackStyle = {
         <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
       </template>
     </ScopeIndicator>
+
+    <!-- The bell's panel, hung under the corner it was opened from. Fixed
+         rather than absolute: the bar is a flex item in a column that clips,
+         and a panel positioned inside it would be cut off at its own first
+         card. -->
+    <div v-if="notificationsOpen" ref="notificationsBox" :style="notificationsBoxStyle">
+      <NotificationPanel
+        :items="notificationsState.items"
+        @action="actOnNotification"
+        @dismiss="dismissNotification($event.id)"
+      />
+    </div>
 
     <div :style="bodyStyle">
       <!-- left: worktree files and the agents working in it -->

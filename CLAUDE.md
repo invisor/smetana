@@ -886,10 +886,12 @@ Ready is the one that hands it to an agent with the question still open.
 ### Attachments: pictures on a task nobody has filed yet
 
 A screenshot is the fastest way to say what is wrong, so the new-task dialog takes images:
-`src-tauri/src/attachments.rs`, `src/stores/attachments.js` and
-`components/kanban/AttachmentStrip.vue`. The Rust side is the same no-worker shape as `files/` and
-`git.rs`, for the same reason — writing a couple of megabytes guards no state — and it is two
-commands over pure functions that carry the tests.
+`src-tauri/src/attachments/`, `src/stores/attachments.js` and
+`components/kanban/AttachmentStrip.vue`, plus the Storage tab of the settings window
+(`components/settings/StorageSettings.vue` over the pure `settings/storage.js`). The Rust side is the
+same no-worker shape as `files/` and `git.rs`, for the same reason — writing a couple of megabytes
+guards no state — and it is four commands over pure functions that carry the tests: `mod.rs` is the
+disk and the vocabulary, `cleanup.rs` is the whole of the deleting rule with no filesystem in it.
 
 Three gestures put a picture in the list and they arrive as only two kinds of thing. A file already
 on disk arrives as a path and Rust copies it (`attachment_import`); the clipboard exists inside the
@@ -929,8 +931,130 @@ not first read into an ArrayBuffer and encoded a third larger again. Drift there
 above Rust's is harmless, below Rust's makes every file between the two impossible to attach at all
 by a refusal Rust would never have sent. The front end's copy must never be the smaller.
 
-Nothing here ever deletes. Taking a thumbnail out of the dialog forgets the path and leaves the file;
-tidying the store is deliberately outside this work, so the directory grows.
+**The store is laid out by project, and that layout is the boundary the one deleting thing in this
+app works inside.** A picture goes into `attachments/<key>/`, where the key is
+`cleanup::project_key`: the folder's own name through the same `slug` a stored file's name gets, and
+the FNV-1a hash of the whole absolute path after it. Three properties are wanted at once and each
+one rules something out — it is derivable from the path alone, since nothing is written down
+anywhere that could be lost; it is the same on every run, which is why the hash is written out here
+rather than taken from `DefaultHasher`, whose value is documented as free to move between Rust
+releases and would strand every picture under the old name; and it is safe as a single path segment,
+because this string is joined onto the store's root and everything deleted is found by walking the
+result. The name half is for a person opening the directory in Finder; the hash is what actually
+tells two projects called `app` apart.
+
+**Nothing deletes on its own, at any moment.** Not on start, not on a schedule, not when the
+new-task dialog closes on images nobody filed — taking a thumbnail out forgets the path and leaves
+the file, exactly as before. The one thing that deletes is `attachments_clean`, and it happens only
+at the end of a person's press on the Storage tab, after `attachments_survey` has told them how many
+files and how many bytes it is about to take. Deleting is irreversible, so it is somebody's decision
+rather than a policy's.
+
+**What survives is what an unfinished task still names.** `cleanup::removable` is the rule, pure,
+over a list of files and a snapshot of the board: a file whose absolute path appears in any of an
+issue's four prose fields — description, acceptance criteria, design, notes — stays if that issue is
+anything but `closed`; a file only closed issues name goes; a file nothing names at all goes, and
+that third case is most of the rubbish and the whole reason the directory stops growing. The four
+fields are deliberately more than the prompt asks for, because the agent decides where the link
+lands and naming a field too many costs a file kept for nothing while naming one too few costs
+somebody's screenshot. There is no record of which task a picture belongs to and there cannot be
+one: the paths ride out in a prompt, the agent runs `bd create` itself, and nothing comes back
+saying which id it wrote — the same missing channel `claimedBy` in `terminals.js` reconstructs
+around.
+
+**An empty board and an unreadable board are the same `Snapshot` and opposite facts**, and keeping
+them apart is `cleanup::refusal` — the guard both commands ask before anything is listed. `open()`
+resets the store and then ignores whether the first sync worked, deliberately, so a worker that
+cannot reach bd sits with a project open and an empty snapshot; `removable` reads that as "no task
+refers to any of these files" and the sweep takes every attachment of every live task in the
+project. The ways in are ordinary rather than exotic — no bd on the machine, which `postinstall`
+explicitly tolerates; a version mismatch; a damaged `.beads`; and a folder with no tracker at all,
+which the app deliberately keeps open so `bd init` can be offered. So `Request::Current` carries
+`Health` beside the snapshot, in the same message as the emptiness it explains, and anything but
+`Ok` refuses with `NoBoard` — the same argument `NoProject` was already written for, and the rule
+`runs/browser.rs` sets for the whole repository: anything unobservable reads as "no", loudly. The
+survey counts zero in that state rather than counting everything as rubbish, because a number
+offering the whole folder under a button that refuses to press is the same lie told quietly; the
+front end's `canClear` holds the button on the same field, and treats a health word it has never
+heard of, or a missing one, as unread.
+
+**The button reaches one project's folder and physically cannot reach another's.** The directory is
+`store_root()/project_key(dir)` where `dir` comes from the tracker worker — `Request::Current`,
+which answers with the folder being watched *and* the board it holds in one message, so the two
+cannot name different projects across a switch. Everything deleted is that directory joined with a
+name out of that directory's own `read_dir`, checked once more by `plain_name`; no subdirectory is
+entered and no string from the front end reaches the sweep at all. Reading every open project's
+tracker instead was refused: a project closed in the list would still go unread, and its live tasks
+would lose their pictures while looking like nobody's. The files sitting in the root of
+`attachments/` from before the split are out of reach for exactly that reason and stay for good —
+they belong to no project, so there is no board to ask about them. They are finite and no longer
+growing; there is no migration and no second button.
+
+An attachment made while no project is open, or while the worker cannot say which one it is, also
+lands in that root. That is the honest place for it rather than a fallback: the root is the part of
+the store nothing sweeps, and a file whose project is unknown must not be filed under one that would
+later find nothing referring to it.
+
+### The bell: what the app has to say right now
+
+The bell in the scope bar opens a panel of notifications, and the badge counts what is in it —
+`components/notifications/` (the pure `notifications.js`, `NotificationPanel.vue`,
+`NotificationCard.vue`) over `src/stores/notifications.js`. Today there is exactly one source, so
+the badge is 0 or 1.
+
+**The list is derived, not an inbox.** A notification is computed from the state of its source and
+thrown away when that state goes away; nothing accumulates on disk — no history, no message log, no
+read/unread ledger, and the bell's own label says "1 notification" rather than "unread" for exactly
+that reason. A durable inbox was considered and dropped: everything this app has any use for
+announcing is a statement about something it can look at right now, so a stored copy is a second
+source of truth that goes stale the moment the first one moves, and the failure is a bell shouting
+about a folder somebody emptied an hour ago. The cost is named rather than discovered: there is
+nothing to say about the past, and a source that genuinely needs history brings its own storage. A
+card that is up stands until it is answered or stops being true, and every measurement under it
+rewrites its prose from the size just read — a card describing a folder as it was half an hour ago is
+the same staleness one sentence smaller.
+
+The one thing that survives a restart is a number per project — `storageWarnedMib` in
+`settings.json`, beside `columnOrder` and `runSettings`, per project because the folder it is about
+is. **A threshold is announced once and arms itself again when the size falls back below it**: after
+*every* measurement the remembered number becomes the highest threshold the folder still reaches, so
+crossing 10 MiB says so once and stays quiet for the next 40, while cleaning down to 3 MiB clears the
+memory and the next crossing of 10 speaks again. Remembering only "already warned" would spend the
+whole mechanism on the first crossing of each step and say nothing ever after — which is exactly what
+the fixture bell did before this. Dismissing is the same write, which is why there is no dismissed
+flag: there is nothing a second one could express that this number does not.
+
+The ladder is 10, 50 and 100 MiB, weighed against **the active project's subdirectory** of the
+attachment store rather than the whole of it, and that follows from the Storage tab: the clean-up
+button reaches this project's folder and nothing else, so a warning summing in a neighbouring
+project and the unreachable files in the store's root would name a number a person cannot bring
+down. Announcing every project's folder was dropped as well, though it is honest: the only action
+for somebody else's folder is "switch project first", and it needs the stable project key mapped
+back to a path. A neighbouring project's folder stays quiet until somebody works in it.
+
+The size comes from `attachments_survey` — **the same command the Storage tab reads**, never a
+second one, because two commands measuring one folder eventually disagree and the screen a person is
+sent to would then argue with the card that sent them. `projectBytes` in `settings/storage.js` is
+the reading of it: `kept` plus `removable`, and `null` — not zero — whenever the board could not be
+read, which is the case worth knowing about. The survey counts nothing in that state by design, so a
+zero taken as a size would announce nothing about a folder that may be full *and* re-arm the ladder
+off a number nobody measured; it would also offer a Clean up button that Rust refuses. So an
+unreadable board changes nothing at all: no card made, none taken away, and the remembered threshold
+left where it is. Freshness is the answer the file tree and the branch already give — no watcher:
+at start once the project is resolved, on a project switch (in `projects.js`, after the new layout
+has landed *and* after `tracker_set_project`, since the survey is answered against the worker's idea
+of the active project), on window focus, and after an attachment is saved.
+
+Clean up opens the settings window **on the Storage section**, which is the one new piece of wiring:
+`settings_window_open` takes a `tab`, a window being built gets it as `?tab=storage` on the URL it
+already loads, and a window already open — which is focused rather than rebuilt — is told by the
+`settings:show` event. That event lives in `stores/app.js` rather than in `settings.js`'s three-event
+contract because nothing about it reaches `settings.json`: the main window is still the only writer.
+The closed list of sections stays in `SettingsWindow.vue` alone; Rust guards the *shape* of the name
+so nothing can smuggle a second parameter into the URL, and an unknown section opens on General.
+
+There are no toasts. The bell is the whole surface: a folder that has grown is not a person waiting
+on an answer, and the loud budget on that screen is one or two rows.
 
 ### Runs: a batch of the board, carried out by sessions
 
@@ -1258,9 +1382,13 @@ id of the CLI agent to start, at the root;
 below that, `openProjects` is the list of
 projects the window has open, `lastProject` is the one active when it last closed, and `projects` is
 a map from each project's absolute path to its content state (side tab, active tab, selected task,
-selected path, expanded folders, `openTabs`, `previewTab`, `columnOrder`, `runSettings`, `usedAt`).
-The last two are per project for the same reason the rest are: a status has no meaning in another
-repository's column order and a branch name has none in another repository. `runSettings` is what the
+selected path, expanded folders, `openTabs`, `previewTab`, `columnOrder`, `runSettings`,
+`storageWarnedMib`, `usedAt`). Three of those are per project for the same reason the rest are: a
+status has no meaning in another repository's column order, a branch name has none in another
+repository, and the attachment folder the bell weighs is a different folder for every project. The
+ladder `storageWarnedMib` is validated against is a closed list written out twice, in `model.rs` and
+in `components/notifications/notifications.js`; a value off it loses itself and costs one repeated
+warning. `runSettings` is what the
 run dialog opens on next time and is a mirror of `runs::model::RunSettings` **minus the scope** —
 deliberately its own type rather than a reuse, since this one lives in a file people edit by hand and
 has to tolerate anything while the other crosses the IPC boundary and must not, and deliberately
@@ -1358,8 +1486,9 @@ the tidy answer and needs a newer Safari than the build targets). And **icons do
 `--icon-*` tokens are referenced nowhere, and the ~35 `Icon` call sites pass numeric literals, so
 glyphs stay put while their labels grow.
 
-The four tabs are `components/settings/`, and each is presentational — handed values, emitting what
-was picked — so the whole window renders in `?view=gallery` too. Every list on them is `Dropdown`,
+The tabs are `components/settings/` — the directory is the list, for the reason the note under
+Commands gives — and each is presentational, handed values and emitting what was picked, so the whole
+window renders in `?view=gallery` too. Every list on them is `Dropdown`,
 and with that **`Select` is drawn nowhere outside the gallery any more.** This window was the last
 place taking `Select`'s bargain — one element, accessible for free — and what it actually bought
 here was a menu the operating system paints: its own colours, font and row height, none of them
@@ -1377,6 +1506,17 @@ end that ever *names* an agent: the ids are still `agents::IDS` and Rust still d
 ship, so this is a set of labels for ids Rust already knows. The subscription block under it is a
 placeholder with dashes and a sentence saying so — a block of invented numbers under a real setting
 would claim the app knows something it does not, which is what the fixture log pane was removed for.
+
+**Storage is the one tab that is not a setting**, and it is the exception that keeps the rule
+readable. Nothing on it reaches `settings.json`: it asks Rust what the attachment store weighs
+(`attachments_survey`) and, on a press, tells Rust to sweep the active project's folder
+(`attachments_clean`) — two commands about the app's own data directory, so the main window is still
+the only writer of settings and this window still holds no settings store. It is read when the tab is
+opened rather than when the window mounts, since the answer queues behind the tracker worker, which
+may be two seconds into a bd call, and the other four tabs have no use for it. The window hands
+over no path and no project, which is what leaves the deleting confined in Rust; the component takes
+the survey whole in Rust's own shape and `settings/storage.js` — pure, tested, another of the
+`branchChoice.js` family — turns it into the sentence somebody reads before an irreversible press.
 About's link goes out through `tauri-plugin-opener` (`opener:allow-open-url`, scoped to
 `https://github.com/*`): inside this webview it would replace the app with a web page, and there is
 no address bar here to come back from. Which branch `openExternal` takes is decided **before** the

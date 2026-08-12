@@ -110,6 +110,14 @@ const show = async () => {
   emit('open')
   await nextTick()
   place()
+  /* A second tick, and it is the whole of what makes the keyboard work at all.
+     `place()` only writes `at`; the panel is still carrying the
+     `visibility: hidden` of its unmeasured state until Vue has applied the
+     style, and the browser refuses focus on a hidden element. Focusing here
+     left the keyboard on the field button, so the arrows, Enter and Escape
+     bound below went to the page and the list could only be used with the
+     mouse. */
+  await nextTick()
   reveal()
   /* Whichever of the two can take the keyboard. Without focus landing
      somewhere inside the panel the arrow keys would go to the page, and a list
@@ -161,8 +169,26 @@ watch(cursor, () => {
 })
 
 const hide = () => {
+  /* Read before anything is torn down, because closing is what makes the
+     answer unavailable: the panel leaves the document and `document.activeElement`
+     falls back to `<body>`, at which point there is no telling whether the
+     keyboard had been in here at all. */
+  const held = panel.value?.contains(document.activeElement)
   open.value = false
   query.value = ''
+  /* Hand the keyboard back to the field. The panel takes focus on opening and
+     is gone the moment it closes, so without this every close would drop focus
+     onto the body and the field somebody was just using could not be reopened
+     without the mouse.
+
+     Only when focus was inside, and the guard is not decoration: `hide` is also
+     the outside-press handler and the `close` this component exposes. On an
+     outside press the browser is a moment away from focusing whatever was
+     pressed, and moving it here first would be a theft; and an exposed `close`
+     can arrive with the keyboard anywhere at all. One rule rather than a list
+     of call sites, so a close added later is covered by the same sentence —
+     `MenuButton` carries the identical guard for the identical reason. */
+  if (held) field.value?.focus()
 }
 
 const choose = (value) => {
@@ -170,12 +196,43 @@ const choose = (value) => {
   hide()
 }
 
+/* Which controls Enter is this handler's to answer: the panel itself, the
+   filter, and the option rows — the three the cursor is a cursor over. Anything
+   else inside the panel is a control of its own, and the header slot is where
+   they live: `BranchSelect`'s "New branch" is the one in the tree today. Enter
+   on a button is that button's own activation, so acting on it here would do
+   two wrong things at once — choose a row nobody pointed at, and swallow the
+   press that was meant for the button. In the run dialog that reads as a target
+   branch written for somebody with nothing on screen to say it happened.
+
+   Arrows and Escape are deliberately not asked the same question: walking the
+   list and closing it are right from anywhere inside the panel, and neither
+   cancels anything a button was going to do with the key. Space is nobody's
+   business here — it is not handled at all, which is why it has always
+   activated the header button correctly. */
+const ownsEnter = (target) =>
+  target === panel.value || target === filterField.value || !!list.value?.contains(target)
+
+/* Bound on the panel and nowhere else, which is what makes one press one call:
+   it used to be bound on the filter as well, and a press in a searchable
+   dropdown ran the whole of this twice — the arrows stepped two rows, putting
+   half the list out of reach, and Enter was worse, since the first call chose
+   the right row and closed the panel, the `matches` watcher put the cursor back
+   to the top, and the second call chose again from there, so the answer was
+   always the first row.
+
+   Seeing every press is not acting on every press, and the difference is
+   `ownsEnter` above. The keyboard lands inside the panel now, which is what
+   makes the header slot's own controls reachable in the first place, so the
+   Enter branch asks where the press came from and leaves everything else to the
+   control it was aimed at. */
 const onKeydown = (event) => {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
     const n = matches.value.length
     if (n) cursor.value = (cursor.value + (event.key === 'ArrowDown' ? 1 : -1) + n) % n
   } else if (event.key === 'Enter') {
+    if (!ownsEnter(event.target)) return
     event.preventDefault()
     const pick = matches.value[cursor.value]
     if (pick) choose(pick.value)
@@ -352,7 +409,6 @@ const hintStyle = {
         :style="filterStyle"
         :placeholder="searchLabel"
         :aria-label="searchLabel"
-        @keydown="onKeydown"
       />
       <div ref="list" :style="listStyle">
         <button

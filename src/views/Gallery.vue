@@ -37,6 +37,8 @@ import {
   MenuButton,
   Modal,
   NewTaskModal,
+  NotificationCard,
+  NotificationPanel,
   Panel,
   ProjectList,
   PromoteColumnModal,
@@ -48,6 +50,7 @@ import {
   Skeleton,
   StatusBadge,
   StatusDot,
+  StorageSettings,
   Switch,
   TabBar,
   TaskCard,
@@ -59,6 +62,7 @@ import {
   ToolCall,
   Tooltip
 } from '../components/index.js'
+import { storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 import { terminalState } from '../stores/terminals.js'
@@ -390,13 +394,51 @@ const PARKED_CARD_MENU = taskMenuItems({
 terminalState.activeId = 1
 
 /* The settings window's own state lives in that window and reaches it as
-   events from the app window; here the four tabs are simply driven by local
-   refs, so every control is live enough to look at in all four theme x density
+   events from the app window; here the tabs are simply driven by local refs, so
+   every control is live enough to look at in all four theme x density
    combinations. */
 const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
 const galleryAgent = ref('claude')
+/* `attachments_survey`'s answer in Rust's own shape — a store bigger than this
+   project's share of it, some of that share in use and some of it not. */
+const gallerySurvey = {
+  store: { files: 14, bytes: 22 * 1024 * 1024 },
+  project: '/Users/you/Projects/smetana',
+  board: 'ok',
+  kept: { files: 5, bytes: 6 * 1024 * 1024 },
+  removable: { files: 6, bytes: 9 * 1024 * 1024 }
+}
+const galleryEmptySurvey = {
+  store: { files: 5, bytes: 6 * 1024 * 1024 },
+  project: '/Users/you/Projects/smetana',
+  board: 'ok',
+  kept: { files: 5, bytes: 6 * 1024 * 1024 },
+  removable: { files: 0, bytes: 0 }
+}
+/* The board unreadable: the counts are zero because nothing may be judged off
+   it, and the sentence has to say that rather than let the zero read as a fact
+   about somebody's pictures. This is the state the `?view=gallery` harness
+   exists for — it cannot be reached in the dev server, where the mock's board
+   is always healthy. */
+const galleryNoBoardSurvey = {
+  store: { files: 14, bytes: 22 * 1024 * 1024 },
+  project: '/Users/you/Projects/smetana',
+  board: 'error',
+  kept: { files: 0, bytes: 0 },
+  removable: { files: 0, bytes: 0 }
+}
+const galleryCleaned = { removed: { files: 6, bytes: 9 * 1024 * 1024 }, failed: 0 }
+
+/* What the bell has to say, built by the rule itself rather than typed out here:
+   a card whose prose came from a fixture would go on looking right after the
+   sentence in `notifications.js` had changed under it. Both ends of the panel
+   are drawn — a card, and the empty answer, which is the state the panel is
+   most often in and the one worth checking is not a blank rectangle. */
+const galleryNotifications = [
+  storageNotification('/Users/you/Projects/smetana', 62 * 1024 * 1024 + 700 * 1024, 50)
+]
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -1132,6 +1174,23 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '380px' }">
           <AgentSettings :agent="galleryAgent" @update:agent="galleryAgent = $event" />
         </div>
+        <!-- The Storage tab in the three states worth looking at: something to
+             delete, with the count and the size a person reads before pressing;
+             nothing to delete, where the button is dead and the description
+             says which of the empties it is; and a board that could not be
+             read, where the button is dead because nothing can vouch for a
+             single file. Nothing is behind any of them here — pressing emits
+             and the harness does nothing, which is the whole point of a
+             presentational component. -->
+        <div :style="{ width: '380px' }">
+          <StorageSettings :survey="gallerySurvey" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <StorageSettings :survey="galleryEmptySurvey" :cleaned="galleryCleaned" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <StorageSettings :survey="galleryNoBoardSurvey" />
+        </div>
         <div :style="{ width: '380px' }">
           <AboutSettings version="0.1.0" />
         </div>
@@ -1170,6 +1229,17 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <Toast tone="warning" title="claude-1 needs you" description="bd-a1b2 · worktree name collision · 4m" />
           <Toast tone="error" title="claude-2 failed" description="exit 101 in wt/bd-3c9d" />
           <Toast tone="success" title="bd-12cd done" description="+41 −1 · 2h 14m" />
+        </div>
+        <!-- The bell's panel, both ways round: what it looks like holding
+             something, and what it says holding nothing. Drawn inline here
+             rather than hanging off a corner — placement belongs to whoever
+             opens it, the same split ContextMenu and MenuButton keep. -->
+        <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+          <NotificationPanel :items="galleryNotifications" />
+          <NotificationPanel />
+        </div>
+        <div :style="{ width: '360px' }">
+          <NotificationCard :notification="galleryNotifications[0]" />
         </div>
         <div :style="{ width: '220px' }">
           <Skeleton :lines="4" :height="10" />
