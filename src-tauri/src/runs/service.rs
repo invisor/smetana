@@ -44,6 +44,8 @@ use super::model::{
 };
 use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
+use super::recovery;
+use super::registry::Proc;
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
 use crate::terminal::model::{Exit, SessionState};
@@ -101,6 +103,15 @@ pub enum Request {
 enum Report {
     /// Where the loop has got to.
     State { token: u64, run: Box<Run> },
+    /// A batch has started: the name it claims under in bd's audit trail, and
+    /// the process group it can be found in. Only the registry reads it — it is
+    /// what a next start after a `kill -9` has to hang up, and what Phase R
+    /// matches an `in_progress` claim against.
+    ///
+    /// Its own report rather than a field on `State`, because the group is
+    /// asked of the terminal worker and may not answer: a batch whose pid could
+    /// not be read still has an actor worth writing down.
+    Started { token: u64, session: u64, group: Option<Proc> },
     /// May another batch go out? The worker's answer *is* the decision — see
     /// `may_spawn`.
     Spawning { token: u64, allow: oneshot::Sender<bool> },
@@ -160,11 +171,28 @@ impl Drop for Ending {
     }
 }
 
-pub fn start(app: AppHandle, tracker: TrackerHandle, terminal: TerminalHandle) -> RunHandle {
+/// `known` is the projects to sweep for what an unclean exit left behind: the
+/// settings file's open list plus whatever the app is opening with. Handed in
+/// rather than read here, because `lib.rs` has already loaded that file to
+/// decide which project to open.
+pub fn start(
+    app: AppHandle,
+    tracker: TrackerHandle,
+    terminal: TerminalHandle,
+    known: Vec<PathBuf>,
+) -> RunHandle {
     let (tx, mut rx) = mpsc::channel::<Request>(8);
     let (report_tx, mut report_rx) = mpsc::unbounded_channel::<Report>();
 
     tauri::async_runtime::spawn(async move {
+        // Before the first request is served, and on this task rather than a
+        // task of its own: this worker is the only thing that writes the
+        // registry, which is what makes its read-modify-write safe, and a run
+        // started beside a sweep that is about to hang up a leftover agent
+        // would be two agents in one worktree. Requests queue meanwhile, which
+        // is a fraction of a second unless something really is still running.
+        recovery::recover(&known).await;
+
         // Keyed by each run's token: several runs share a project now, and the
         // token is the one name that is never two runs'. Which project an
         // entry belongs to is `run.project`, the same path the tracker, the
@@ -284,6 +312,12 @@ fn handle(
             let run = Run::new(token, project.clone(), settings);
             let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
             active.insert(token, Active { run: run.clone(), starting: false, stop: stop_tx });
+            // On disk from here until the run ends, so that an app killed
+            // mid-run leaves something behind that says what was going and
+            // under whose name — the map above is memory and dies with the
+            // process. Written here rather than by the loop task for the reason
+            // the sweep runs here: one writer.
+            recovery::note_run(Path::new(&project), token, &run.settings.target_branch);
 
             let ending = Ending { token, report: report.clone() };
             let driving = drive(
@@ -311,8 +345,46 @@ fn handle(
 }
 
 fn handle_report(app: &AppHandle, active: &mut HashMap<u64, Active>, report: Report) {
+    // The disk half first, because an ending takes its entry out of the map and
+    // the project this run belongs to is on that entry. Kept out of `absorb`,
+    // which stays pure.
+    record(active, &report);
     if let Some(run) = absorb(active, report) {
         emit(app, &run);
+    }
+}
+
+/// What a report changes in `.smetana/runs.json`: a batch is added to its run's
+/// record, and an ending — any ending, since `Report::Ended` comes from a `Drop`
+/// guard — takes the record away, unless it still names a process that is
+/// running. That last condition is `registry::forget_run`'s, and the ending it
+/// exists for is `NeedsAnswer`, which deliberately leaves its session alive.
+///
+/// Everything else leaves the file alone: a run's state is not evidence of
+/// anything after the process is gone, and rewriting the file on every progress
+/// report would be a write per board read for nothing.
+fn record(active: &HashMap<u64, Active>, report: &Report) {
+    let (token, project) = match report {
+        Report::Started { token, .. } | Report::Ended { token } => match active.get(token) {
+            Some(entry) => (*token, entry.run.project.clone()),
+            // An ending whose entry has already gone, or a batch reported by a
+            // loop whose run is over: there is nothing on disk to attach it to.
+            None => return,
+        },
+        _ => return,
+    };
+    let root = Path::new(&project);
+    match report {
+        Report::Started { session, group, .. } => {
+            recovery::note_batch(
+                root,
+                token,
+                crate::terminal::model::run_actor(*session),
+                group.clone(),
+            );
+        }
+        Report::Ended { .. } => recovery::forget_run(root, token),
+        _ => {}
     }
 }
 
@@ -358,6 +430,10 @@ fn absorb(active: &mut HashMap<u64, Active>, report: Report) -> Option<Run> {
             let _ = allow.send(permit(active, token));
             None
         }
+        // The registry's business alone, and `record` has already dealt with
+        // it: nothing about the map or the front end changes because a batch's
+        // pid was written down.
+        Report::Started { .. } => None,
         Report::Ended { token } => {
             // The one place an entry leaves the map. By its own token, so an
             // ending can only ever take its own entry out — the guard that
@@ -575,6 +651,12 @@ async fn drive(
                 return;
             }
         };
+
+        // Before anything waits on the batch: from here on the app may be
+        // killed at any moment, and what the registry does not know about by
+        // then is an agent nobody will ever signal.
+        let group = group_of(&terminal, session).await;
+        let _ = report.send(Report::Started { token, session, group });
 
         run.session = Some(session);
         run.batches += 1;
@@ -985,6 +1067,16 @@ async fn spawn_batch(
         Ok(Err(err)) => Err(err.to_string()),
         Err(_) => Err("the terminal worker did not answer".to_string()),
     }
+}
+
+/// The process group this batch's session runs in, with the evidence that says
+/// which process that pid is. `None` when the terminal worker cannot answer or
+/// the platform cannot read a start time — the batch is still recorded by its
+/// actor, which is what the tracker half matches on.
+async fn group_of(terminal: &TerminalHandle, session: u64) -> Option<Proc> {
+    let (tx, rx) = oneshot::channel();
+    terminal.0.send(TerminalRequest::Group(session, tx)).await.ok()?;
+    recovery::group(rx.await.ok()??)
 }
 
 /// What ended the wait on a batch.

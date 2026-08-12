@@ -282,6 +282,19 @@ impl Pty {
         self.child.try_wait().ok().flatten().map(|status| status.exit_code() as i32)
     }
 
+    /// The child's pid, which is also the id of the process group everything it
+    /// starts belongs to — `spawn_command` calls `setsid`, which is the same
+    /// fact `hangup` below rests on.
+    ///
+    /// It keeps answering after the child has been reaped, so a caller writing
+    /// it down has to pair it with something that says *which* process that pid
+    /// was: the run registry pairs it with the process's start time
+    /// (`runs::recovery::group`), because a bare pid written to a file and read
+    /// after a restart names whoever holds it by then.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.process_id()
+    }
+
     /// The soft signal, sent before any killing: an agent given no warning
     /// flushes nothing, and this is the path that runs every time the app
     /// closes. It goes to the process *group*, not to the child: the child is

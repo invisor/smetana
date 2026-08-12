@@ -159,13 +159,46 @@ on its own. **This runs before you take any new work.**
    orphan.** The assignee is the evidence — `bd show <id>` carries it, and every run
    claims under its own actor — so a `smetana-run-<id>` that is not this run's own
    (yours is `$BEADS_ACTOR` in your environment) may be a killed run's leftovers, or a
-   run still live on the same board, mid-flight in its own worktrees. Telling a dead
-   run's actor from a live one has no mechanical answer today: the app keeps no run
-   registry a skill can read, and that gap is recorded here rather than papered over.
-   **The default, in every mode: a claim you cannot show dead is left in place** — not
-   recovered, not parked, not noted. It is another run's work until proven otherwise,
-   and interfering with it is worse than skipping recovery. Recover only what the
-   caller's policy lets you treat as dead, and finish it **in place**, one at a time:
+   run still live on the same board, mid-flight in its own worktrees.
+
+   **The app's run registry is what tells those apart.** It is `.smetana/runs.json` in
+   the project root — read it there, not from your worktree: the folder is ignored, so
+   it never travelled into the tree you were cut. It holds one record per run the app
+   has going, each carrying the run's `token`, its `targetBranch`, the `batches` it has
+   started — one `actor` apiece, the very `smetana-run-<id>` strings you are matching —
+   and a `writer`, the app process that wrote the record. Session ids restart at 1 on
+   every launch, so the actor's name proves nothing on its own; the `writer` is what
+   does.
+
+   Read a record's liveness off its `writer`, never off a date in the file:
+
+   ```bash
+   cat .smetana/runs.json                     # from the project root
+   ps -p <writer.pid> -o pid=,comm=           # per record you care about
+   ```
+
+   No such process → the app that wrote that record is gone, and every actor under it
+   is dead. A process that is there but is plainly not Smetana → the pid has been reused
+   since; the record is dead too. Smetana under that pid → that run is live, and its
+   claims are not yours to touch. Judge that last one, do not string-compare it: the
+   recorded `command` is the kernel's short name for the process, while `ps -o comm=`
+   prints the full executable path on macOS and the short name on Linux, so the two are
+   equal on one platform and not the other. What you are deciding is whether the process
+   under that pid is plausibly the app.
+
+   The app has usually dealt with the *processes* of a dead record already — at its next
+   start it hangs up the process groups it recorded, for every project it had open, so a
+   project nobody has reopened since may still have them running. It writes to the
+   tracker nowhere either way. The claims are yours.
+
+   So: **an actor named under a dead writer is a claim you may recover.** **The
+   default everywhere else, in every mode: a claim you cannot show dead is left in
+   place** — not recovered, not parked, not noted. That covers an actor under a live
+   writer, an actor the file does not name at all, a project with no
+   `.smetana/runs.json`, and a file you cannot read. It is another run's work until
+   proven otherwise, and interfering with it is worse than skipping recovery. Recover
+   what the registry shows dead, plus anything else the caller's policy lets you treat
+   as dead, and finish it **in place**, one at a time:
    - Its slug is `<id>-<short-kebab-title>` and its worktrees are already at
      `<repo>/.worktrees/<slug>` — the id in the slug is what proves they are this task's.
      None found → park it ("in_progress with no worktree to resume").
