@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { REPORTS_DIR, isReportPath } from '../../../src/components/run/reportTab.js'
+import { REPORTS_DIR, isReportPath, reportTabPath } from '../../../src/components/run/reportTab.js'
 
 describe('isReportPath', () => {
   it('accepts a report the run wrote', () => {
@@ -46,5 +46,42 @@ describe('isReportPath', () => {
   it('says no to the two pinned tabs, which are names and not paths', () => {
     expect(isReportPath('terminal')).toBe(false)
     expect(isReportPath('kanban')).toBe(false)
+  })
+})
+
+describe('reportTabPath', () => {
+  const ROOT = '/Users/you/Projects/smetana'
+  const REPORT = `${ROOT}/.smetana/reports/2026-08-12-143155.html`
+
+  it('takes the project off the front of what the worker wrote', () => {
+    expect(reportTabPath(REPORT, ROOT)).toBe('.smetana/reports/2026-08-12-143155.html')
+  })
+
+  it('does not mind a root with a trailing separator', () => {
+    expect(reportTabPath(REPORT, `${ROOT}/`)).toBe('.smetana/reports/2026-08-12-143155.html')
+  })
+
+  it('reads a Windows path, where the two vocabularies use different separators', () => {
+    const root = 'C:\\Users\\you\\smetana'
+    const report = 'C:\\Users\\you\\smetana\\.smetana\\reports\\2026-08-12-143155.html'
+    expect(reportTabPath(report, root)).toBe('.smetana/reports/2026-08-12-143155.html')
+  })
+
+  it('refuses a document belonging to another project rather than guessing', () => {
+    expect(reportTabPath(REPORT, '/Users/you/Projects/other')).toBe(null)
+    // The trailing separator again, from the other side: a sibling folder whose
+    // name merely starts with this one's is not inside it.
+    expect(reportTabPath('/Users/you/Projects/smetana-old/.smetana/reports/a.html', ROOT)).toBe(null)
+  })
+
+  it('refuses anything under the project that is not a report', () => {
+    expect(reportTabPath(`${ROOT}/src/index.html`, ROOT)).toBe(null)
+    expect(reportTabPath(`${ROOT}/.smetana/reports/notes.txt`, ROOT)).toBe(null)
+  })
+
+  it('says no to nothing at all rather than throwing', () => {
+    expect(reportTabPath(null, ROOT)).toBe(null)
+    expect(reportTabPath(REPORT, null)).toBe(null)
+    expect(reportTabPath(REPORT, '')).toBe(null)
   })
 })

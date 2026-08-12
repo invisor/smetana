@@ -25,7 +25,7 @@ import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import RunBar from '../components/run/RunBar.vue'
 import RunModal from '../components/run/RunModal.vue'
 import ReportView from '../components/run/ReportView.vue'
-import { isReportPath } from '../components/run/reportTab.js'
+import { isReportPath, reportTabPath } from '../components/run/reportTab.js'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
 import DraftInspector from '../components/kanban/DraftInspector.vue'
 import ClaimedTasks from '../components/agent/ClaimedTasks.vue'
@@ -1566,7 +1566,30 @@ onUnmounted(closeNotifications)
    changes with the copy, while the source is what the card came from. */
 const actOnNotification = (notification) => {
   if (notification.source === 'storage') openSettingsWindow('storage')
+  if (notification.source === 'run') showReport(notification.report)
   closeNotifications()
+}
+
+/* A run's report opened from its card. The document is an ordinary file under
+   the project root, so this is the same call the file tree makes and there is
+   no second way of opening a tab to keep in step with the first — `openFile`
+   puts it in `openTabs`, makes it active and reads it, and `reportTabActive`
+   above decides that what the centre draws is a report rather than an editor.
+   Permanent rather than a preview: this is a document somebody asked for by
+   name, and the next click in the tree must not evict it.
+
+   The path arrives absolute and the tabs are project-relative; `reportTabPath`
+   is that rule and the whole of it. It declines rather than guesses, and the
+   refusal is logged rather than shown: it means a card outlived the project it
+   was made in, which the store already prevents, so anybody meeting it is
+   looking at a defect and not at something to act on. */
+const showReport = (report) => {
+  const path = reportTabPath(report, activePath.value)
+  if (!path) {
+    console.warn('[app] this run report is not in the open project:', report)
+    return
+  }
+  openFile(path, { permanent: true })
 }
 
 /* When the store is weighed: at start once the project is resolved, on a

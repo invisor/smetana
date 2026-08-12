@@ -1096,8 +1096,9 @@ later find nothing referring to it.
 
 The bell in the scope bar opens a panel of notifications, and the badge counts what is in it —
 `components/notifications/` (the pure `notifications.js`, `NotificationPanel.vue`,
-`NotificationCard.vue`) over `src/stores/notifications.js`. Today there is exactly one source, so
-the badge is 0 or 1.
+`NotificationCard.vue`) over `src/stores/notifications.js`. There are two sources — the attachment
+store growing, and a run that is over — and the badge counts one card per stopped run beside the one
+the storage source is ever allowed.
 
 **The list is derived, not an inbox.** A notification is computed from the state of its source and
 thrown away when that state goes away; nothing accumulates on disk — no history, no message log, no
@@ -1150,8 +1151,67 @@ contract because nothing about it reaches `settings.json`: the main window is st
 The closed list of sections stays in `SettingsWindow.vue` alone; Rust guards the *shape* of the name
 so nothing can smuggle a second parameter into the URL, and an unknown section opens on General.
 
+**The second source is a run that has stopped, and it is what tells anybody the night is over.**
+`runNotification` beside `storageNotification`, one card per stopped run keyed `run:<token>`, and it
+is the same shape as the first rather than a new mechanism: derived from `runsState.runs` and gone
+when the run leaves that list — a project switch, or a run of the same scope replacing it, which is
+the rule `runs.js` already keeps and the reason a stopped run stays on the bar at all. So
+`syncRunCards` is called from three functions in `runs.js`, and those three cover every assignment of
+the list — `startRun`'s filter of a replaced scope's stopped run through the `upsert` on the line
+after it, which is the one place the coverage is transitive and therefore the one place an edit
+landing between the two would leave a card up for a run no longer in the list. It rewrites that
+source's half of `items` and leaves every other source's cards alone. Which
+source sits above which is a property of the list rather than of who spoke last: `SOURCES` in
+`stores/notifications.js` declares the order and both writers hand their result to `arrange`, runs
+above storage, because a night that has ended is what somebody came back to read while a folder that
+has grown will still be there tomorrow.
+
+The import between the two stores is circular by construction — `notifications.js` reads `runsState`,
+`runs.js` calls a hoisted function declaration — and **nothing in `notifications.js` may read
+`runsState` at evaluation time**, only inside `syncRunCards`. That is not a style rule: the bundler
+emits `notifications.js` first, before `runs.js` has evaluated and before the `const` exists, so the
+natural-looking improvement — a module-scope `watch(() => runsState.runs)` replacing the explicit
+calls — would throw on the built app's first line and leave a white window while working perfectly in
+`npm run dev`, where the browser's module order is the other way round.
+
+**Nothing about it reaches disk, and there is nothing for a stored flag to be about**: dismissing
+adds the token to an in-memory `Set`, and a run no more survives a restart than a session does, so
+this source needs no equivalent of `storageWarnedMib`. The token is issued once per app process and
+never reused, which is what makes one set safe across projects.
+
+The card is short on purpose — the ending, `N closed · M parked`, the duration, and one button — and
+everything else is in the report the button opens. A card that restated the document would be the
+right panel's question block all over again (smetana-s4f). The ending's sentence and glyph come from
+`components/run/stopReason.js`, the same table the bar draws, and they go into the **body** rather
+than into the title: several of those sentences carry an em dash of their own, so folding one into a
+title after a second dash reads as two sentences run together, and lower-casing it to make it fit
+would be a second file rewriting prose that has one authored copy. Neither is a default written at
+the call site any more: every entry in `REASONS` names its own glyph and so does the answer for an
+ending this build has never heard of, because while they did not, the bar and this card each kept
+their own `?? 'square'` — the glyph seven of the ten endings actually draw, duplicated, with the two
+drifting apart being invisible.
+
+**An unread board is never a zero** — `summary.tasks` of `null` says the board could not be read
+instead of "0 closed, 0 parked", and no `Show details` is offered when there is no document — the
+same rule `projectBytes` and `cleanup::refusal` keep. **A run carrying no summary at all is a third
+case, not that one**: nothing has failed to read anything, nothing has looked yet. `request_stop`
+ends a run with nothing in flight at once and the account arrives seconds later through
+`Run::take_summary_from`, so every press of Stop between batches passes through this state on its way
+to the real counts — a card announcing a board failure there would state a failure that did not
+happen. It says the ending and nothing else, and is still announced at all because this front end may
+also simply be older than the worker.
+
+`Show details` opens the report as an ordinary centre tab, through the very `openFile` the file tree
+calls. The one translation is `reportTabPath` in `reportTab.js` — the summary's path is absolute
+because a worker that knows nothing of tabs has to name a file on disk, and `openTabs` is
+project-relative because the project's path is already the key that list sits under. It normalises
+separators on both sides, since every path inside `files.js` uses `/` while the string Rust wrote is
+the platform's, and it answers `null` rather than guessing for anything not squarely inside this
+project's reports folder.
+
 There are no toasts. The bell is the whole surface: a folder that has grown is not a person waiting
-on an answer, and the loud budget on that screen is one or two rows.
+on an answer, a run that has finished is not one either, and the loud budget on that screen is one or
+two rows.
 
 ### Runs: a batch of the board, carried out by sessions
 

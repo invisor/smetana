@@ -220,3 +220,140 @@ describe('the bell and the attachment store', () => {
     expect(ipc.calls('attachments_survey')).toHaveLength(1)
   })
 })
+
+/* A run the worker has finished with, whole, the way `run_state` answers. */
+const finished = (token, over = {}) => ({
+  token,
+  project: PROJECT,
+  settings: { scope: { kind: 'queue' }, target_branch: 'develop' },
+  state: { kind: 'stopped', reason: { kind: 'queue_empty' } },
+  session: null,
+  batches: 1,
+  stopping: false,
+  summary: {
+    seconds: 840,
+    tasks: { closed: [{ id: 'a-1', title: 'One' }], parked: [] },
+    report: `${PROJECT}/.smetana/reports/2026-08-12-143155.html`
+  },
+  ...over
+})
+
+describe('the bell and a run that is over', () => {
+  it('puts a card up for each stopped run, and the badge counts them', async () => {
+    const { ipc, stores } = await loadStores()
+    openOn(stores)
+    ipc.on('project_config', { state: 'ok', config: {} })
+    ipc.on('run_state', [finished(1), finished(2, { token: 2 })])
+
+    await stores.runs.loadConfig(PROJECT)
+    await stores.runs.loadRun(PROJECT)
+
+    const items = stores.notifications.notificationsState.items
+    // The badge is this length, so two runs is a bell reading 2.
+    expect(items).toHaveLength(2)
+    expect(items.map((item) => item.id)).toEqual(['run:1', 'run:2'])
+    expect(items[0].body).toContain('1 closed')
+    expect(items[0].actionLabel).toBe('Show details')
+  })
+
+  it('says nothing about a run that is still going', async () => {
+    const { ipc, stores } = await loadStores()
+    openOn(stores)
+    ipc.on('project_config', { state: 'ok', config: {} })
+    ipc.on('run_state', [finished(1, { state: { kind: 'working', iteration: 0 } })])
+
+    await stores.runs.loadConfig(PROJECT)
+    await stores.runs.loadRun(PROJECT)
+
+    expect(stores.notifications.notificationsState.items).toEqual([])
+  })
+
+  it('takes a dismissed card away for good, however often the list is read again', async () => {
+    const { ipc, stores } = await loadStores()
+    openOn(stores)
+    ipc.on('project_config', { state: 'ok', config: {} })
+    ipc.on('run_state', [finished(1)])
+
+    await stores.runs.loadConfig(PROJECT)
+    await stores.runs.loadRun(PROJECT)
+    stores.notifications.dismiss('run:1')
+    expect(stores.notifications.notificationsState.items).toEqual([])
+
+    // The card is derived from a list that outlives it, so the whole of
+    // "dismissed" is the remembered token: without it the next read of the
+    // same list would put the card straight back.
+    await stores.runs.loadRun(PROJECT)
+    stores.notifications.syncRunCards()
+    expect(stores.notifications.notificationsState.items).toEqual([])
+  })
+
+  it('takes the card away with the project it was made in', async () => {
+    const { ipc, stores } = await loadStores()
+    openOn(stores)
+    ipc.on('project_config', { state: 'ok', config: {} })
+    ipc.on('run_state', [finished(1)])
+
+    await stores.runs.loadConfig(PROJECT)
+    await stores.runs.loadRun(PROJECT)
+    expect(stores.notifications.notificationsState.items).toHaveLength(1)
+
+    // Switching project empties the run list, and a card about work in a folder
+    // this window has left must not stand under the new project's name.
+    const other = '/Users/you/Projects/other'
+    openOn(stores, other)
+    await stores.runs.loadConfig(other)
+
+    expect(stores.notifications.notificationsState.items).toEqual([])
+  })
+
+  it('leaves the other sources\' cards exactly where they were', async () => {
+    const { ipc, stores } = await loadStores()
+    openOn(stores)
+    ipc.on('attachments_survey', () => survey(12 * MIB))
+    ipc.on('project_config', { state: 'ok', config: {} })
+    ipc.on('run_state', [finished(1)])
+
+    await stores.notifications.measureStorage(PROJECT)
+    await stores.runs.loadConfig(PROJECT)
+    await stores.runs.loadRun(PROJECT)
+
+    expect(stores.notifications.notificationsState.items).toHaveLength(2)
+
+    // And dismissing one of them is no statement about the other.
+    stores.notifications.dismiss('run:1')
+    expect(stores.notifications.notificationsState.items.map((item) => item.source)).toEqual([
+      'storage'
+    ])
+  })
+
+  /* The order is a property of the list, not of whichever source last had
+     something to say — so it is checked from both directions rather than in the
+     one sequence that happens to produce it. Before this, each writer arranged
+     its own half: the storage card was prepended when announced and run cards
+     were put in front when the list moved, and the panel's order was therefore
+     whatever had happened most recently. */
+  it('draws its sources in one order however the cards got there', async () => {
+    const runsThenStorage = await loadStores()
+    openOn(runsThenStorage.stores)
+    runsThenStorage.ipc.on('attachments_survey', () => survey(12 * MIB))
+    runsThenStorage.ipc.on('project_config', { state: 'ok', config: {} })
+    runsThenStorage.ipc.on('run_state', [finished(1)])
+    await runsThenStorage.stores.runs.loadConfig(PROJECT)
+    await runsThenStorage.stores.runs.loadRun(PROJECT)
+    await runsThenStorage.stores.notifications.measureStorage(PROJECT)
+
+    const storageThenRuns = await loadStores()
+    openOn(storageThenRuns.stores)
+    storageThenRuns.ipc.on('attachments_survey', () => survey(12 * MIB))
+    storageThenRuns.ipc.on('project_config', { state: 'ok', config: {} })
+    storageThenRuns.ipc.on('run_state', [finished(1)])
+    await storageThenRuns.stores.notifications.measureStorage(PROJECT)
+    await storageThenRuns.stores.runs.loadConfig(PROJECT)
+    await storageThenRuns.stores.runs.loadRun(PROJECT)
+
+    const sources = (graph) =>
+      graph.stores.notifications.notificationsState.items.map((item) => item.source)
+    expect(sources(runsThenStorage)).toEqual(['run', 'storage'])
+    expect(sources(storageThenRuns)).toEqual(sources(runsThenStorage))
+  })
+})

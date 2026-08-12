@@ -63,7 +63,7 @@ import {
   ToolCall,
   Tooltip
 } from '../components/index.js'
-import { storageNotification } from '../components/notifications/notifications.js'
+import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 import { terminalState } from '../stores/terminals.js'
@@ -505,6 +505,27 @@ const galleryCleaned = { removed: { files: 6, bytes: 9 * 1024 * 1024 }, failed: 
    are drawn — a card, and the empty answer, which is the state the panel is
    most often in and the one worth checking is not a blank rectangle. */
 const galleryNotifications = [
+  /* Both sources, in the order the panel puts them in, and each built the same
+     way: from a run as the worker would have sent it, so the wording is the
+     rule's own. This is the only place a finished run's card can be looked at
+     without spending a night on a real one. */
+  runNotification({
+    token: 7,
+    project: '/Users/you/Projects/smetana',
+    state: { kind: 'stopped', reason: { kind: 'queue_empty' } },
+    summary: {
+      seconds: 8040,
+      tasks: {
+        closed: [
+          { id: 'smetana-a1b', title: 'One' },
+          { id: 'smetana-c3d', title: 'Two' },
+          { id: 'smetana-e5f', title: 'Three' }
+        ],
+        parked: [{ id: 'smetana-g7h', title: 'Four' }]
+      },
+      report: '/Users/you/Projects/smetana/.smetana/reports/2026-08-12-143155.html'
+    }
+  }),
   storageNotification('/Users/you/Projects/smetana', 62 * 1024 * 1024 + 700 * 1024, 50)
 ]
 

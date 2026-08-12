@@ -21,6 +21,11 @@ import { basename } from '../../paths.js'
    folder would produce — and it is exactly what `projectBytes` living over there
    with the rest of the survey's readers is for. */
 import { formatBytes, projectBytes } from '../settings/storage.js'
+/* The ending's own sentence and glyph, from the table the run bar already draws
+   them out of. Borrowed for exactly the reason the formatter above is: a second
+   copy here would eventually disagree with the bar a few centimetres away, and
+   the two would be describing the same run. */
+import { stopReason } from '../run/stopReason.js'
 
 export { projectBytes }
 
@@ -105,5 +110,95 @@ export function storageNotification(project, bytes, threshold) {
     title: 'Attachment storage is growing',
     body: `${basename(project)} has ${formatBytes(bytes)} of stored images, past the ${threshold} MiB mark. Clean up opens Storage in settings, where the images no open task refers to can be deleted.`,
     actionLabel: 'Clean up'
+  }
+}
+
+/* ---- the second source: a run that is over -------------------------- */
+
+/* How long the run took, read as somebody would say it: hours and minutes, or
+   minutes, or seconds. One wall-clock number and no breakdown by state — the
+   only number about a run's time that cannot be computed wrongly, since a run
+   spends its night in the preflight, in batches, in pauses and in backoff, and
+   nothing anywhere measures those separately.
+
+   `null` for anything that is not a finite, non-negative number, which is the
+   same distinction `projectBytes` draws: a duration nobody measured is not a
+   duration of zero, and the card simply says nothing about the time rather than
+   claiming the run took no time at all. */
+export function formatDuration(seconds) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null
+  const whole = Math.floor(seconds)
+  const hours = Math.floor(whole / 3600)
+  const minutes = Math.floor((whole % 3600) / 60)
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m`
+  return `${whole}s`
+}
+
+/* The card for a run that has stopped, or `null` for one that has not.
+
+   Deliberately short: the ending, the two counts, the duration, and one button
+   through to the document that holds everything else. A card that restated the
+   report would be the question block removed in smetana-s4f all over again —
+   it repeated what was already on screen and pushed what mattered down the
+   column.
+
+   The ending's own sentence goes into the body rather than into the title, and
+   that is the one wording decision here. Every entry in `REASONS` is already a
+   whole statement about how a run ended, several of them carrying an em dash of
+   their own ("Done — nothing left to take"), so folding one into a title after
+   a second dash reads as two sentences run together — and lower-casing it to
+   make that fit would be this file rewriting prose whose only authored copy is
+   next door. The title says what the card is about and the body says what
+   happened, which leaves `stopReason.js` the single source of the words.
+
+   A stopped run carrying no `summary` at all still gets a card: this front end
+   may be older than the worker, and an ending nobody can describe is still an
+   ending worth announcing. */
+export function runNotification(run) {
+  if (run?.state?.kind !== 'stopped') return null
+  const ending = stopReason(run.state.reason?.kind)
+  const summary = run.summary ?? null
+  const tasks = summary?.tasks ?? null
+  const duration = formatDuration(summary?.seconds)
+
+  const parts = [ending.text]
+  /* Three cases, not two, and the third is why. An unread board is never a zero
+     — the same rule `projectBytes` and `cleanup::refusal` keep, and the reason
+     `RunSummary.tasks` is an option at all — so a summary whose `tasks` is null
+     says the board could not be read rather than "0 closed · 0 parked". But a
+     run carrying **no summary at all** has not failed to read anything: nothing
+     has looked yet. `request_stop` ends a run with nothing in flight at once,
+     while the account is made a moment later by the loop and arrives through
+     `Run::take_summary_from`, so every press of Stop between batches passes
+     through this state on its way to the real counts. Saying "the board could
+     not be read" there would announce a failure that did not happen, for the
+     seconds it takes the summary to land. Saying nothing about the board is the
+     truth in that window and reads as the ending alone. */
+  if (tasks) parts.push(`${tasks.closed?.length ?? 0} closed`, `${tasks.parked?.length ?? 0} parked`)
+  else if (summary) parts.push('the board could not be read')
+  if (duration) parts.push(duration)
+
+  return {
+    /* One card per stopped run, named by the token, which is the one name that
+       is never two runs': a project holds several at once, and the badge counts
+       them all. */
+    id: `run:${run.token}`,
+    source: 'run',
+    token: run.token,
+    project: run.project,
+    /* Absolute, as the worker wrote it. Turning it into the tab path is the
+       acting code's job and `reportTab.js`'s rule. */
+    report: summary?.report ?? null,
+    /* The glyph the bar draws for this ending, taken whole. `stopReason`
+       answers with one for every ending, known or not, so there is no default
+       to write here — and writing one is exactly how this card and the bar
+       would come to disagree about a run they are both describing. */
+    icon: ending.icon,
+    title: 'Run finished',
+    body: parts.join(' · '),
+    /* No document, no button. A card offering details that are not there is
+       worse than one carrying nothing but Dismiss. */
+    ...(summary?.report ? { actionLabel: 'Show details' } : {})
   }
 }
