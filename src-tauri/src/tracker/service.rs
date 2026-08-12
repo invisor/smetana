@@ -27,6 +27,14 @@ const OVERLAP_SECONDS: i64 = 5;
 pub enum Request {
     Health(oneshot::Sender<Health>),
     Snapshot(oneshot::Sender<Snapshot>),
+    /// The folder being watched and the board it holds, as one answer.
+    ///
+    /// Two questions rather than one would be two answers a project switch
+    /// could fall between, and the caller — `attachments`, deciding which of a
+    /// project's stored pictures nothing refers to any more — would then read
+    /// one project's board to decide what to delete from another project's
+    /// folder. Answered together, they cannot disagree.
+    Current(oneshot::Sender<(Option<PathBuf>, Snapshot)>),
     SetProject(Option<PathBuf>, oneshot::Sender<Snapshot>),
     InitTracker(oneshot::Sender<Result<Snapshot, TrackerError>>),
     Resync(oneshot::Sender<Result<Snapshot, TrackerError>>),
@@ -383,6 +391,14 @@ async fn handle(
         }
         Request::Snapshot(reply) => {
             let _ = reply.send(store.snapshot());
+            false
+        }
+        Request::Current(reply) => {
+            // The directory whatever its state — a folder with no `.beads` in
+            // it is still the project somebody has open, and its stored
+            // pictures are still its own.
+            let dir = current.as_ref().map(|p| p.dir.clone());
+            let _ = reply.send((dir, store.snapshot()));
             false
         }
         Request::SetProject(dir, reply) => {

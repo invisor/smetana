@@ -16,9 +16,24 @@
 //! not this app's decision to make. The price of the choice is plain: in
 //! somebody else's clone, and in CI, the images are not there.
 //!
-//! Nothing here ever deletes. Taking a thumbnail out of the dialog forgets the
-//! path and leaves the file; tidying the store is deliberately outside this
-//! work, so the directory grows.
+//! **A picture goes into its project's own folder** — `attachments/<key>/…` —
+//! and `cleanup::project_key` is the whole of what a key is. That layout is not
+//! tidiness: it is the boundary the one deleting thing in this app works
+//! inside. A run of the tidy-up reads the active project's tracker and can
+//! reach nothing but the active project's folder, so a neighbouring project's
+//! pictures are out of the way physically rather than by a careful condition in
+//! a loop. Anything already sitting in the root of the store from before that
+//! split is out of reach for the same reason and stays there for good: those
+//! files belong to no project, so no board can be read to find out whether
+//! somebody still wants them.
+//!
+//! **Nothing here ever deletes on its own.** Taking a thumbnail out of the
+//! dialog forgets the path and leaves the file, closing the dialog leaves what
+//! was attached, and neither starting the app nor closing it removes anything.
+//! The one thing that deletes is `attachments_clean`, which a person starts by
+//! pressing a button in the settings window after reading how many files and
+//! how many bytes it is about to take — deleting is irreversible, so it is
+//! always somebody's decision and never a schedule's.
 //!
 //! **There is no `resolve_within` here, and its absence is the design rather
 //! than an oversight.** `files/fs.rs` confines every path to the project root
@@ -32,11 +47,19 @@
 //! a `slug` that keeps ASCII letters and digits and nothing else, so no name
 //! coming in can climb a directory, hide behind a dot or need quoting.
 
+mod cleanup;
+
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
+use tokio::sync::oneshot;
+
+use crate::tracker::model::{Issue, Snapshot};
+use crate::tracker::service::{Request, TrackerHandle};
+
+use cleanup::{project_key, StoredFile, Tally};
 
 /// The ceiling, and deliberately **not** `files::model::MAX_FILE_BYTES`.
 ///
@@ -192,6 +215,12 @@ pub enum AttachmentError {
     TooLarge { name: String, bytes: u64 },
     #[error("{0} is not a PNG, JPEG, GIF or WebP image")]
     NotAnImage(String),
+    /// Only the tidy-up ever sends this. Which pictures are still wanted is
+    /// read off a project's board, so with no project open the question has no
+    /// answer — and answering "nothing to delete" would be a guess dressed as a
+    /// result.
+    #[error("no project is open, so there is no board to say which images are still in use")]
+    NoProject,
     #[error("{0}")]
     Io(String),
 }
@@ -204,6 +233,7 @@ impl AttachmentError {
         match self {
             Self::TooLarge { .. } => "tooLarge",
             Self::NotAnImage(_) => "notAnImage",
+            Self::NoProject => "noProject",
             Self::Io(_) => "io",
         }
     }
@@ -226,17 +256,245 @@ fn stamp() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 
-/// Somewhere to put it. Created on the way, since the very first attachment on
-/// a machine arrives before the directory exists.
-fn store_dir(app: &AppHandle) -> Result<PathBuf, AttachmentError> {
-    let dir = app
+/// The whole store: every project's folder lives under this one.
+fn store_root(app: &AppHandle) -> Result<PathBuf, AttachmentError> {
+    Ok(app
         .path()
         .app_data_dir()
         .map_err(|err| AttachmentError::Io(format!("no app data directory: {err}")))?
-        .join(STORE);
+        .join(STORE))
+}
+
+/// Somewhere to put it: the active project's own folder. Created on the way,
+/// since the very first attachment in a project arrives before it exists.
+///
+/// A picture attached while no project is open, or while the tracker worker
+/// cannot say which one it is, lands in the root of the store instead. That is
+/// the honest place for it rather than a fallback: the root is exactly the part
+/// of the store no cleanup can reach, and a file whose project is unknown must
+/// not be filed under a project that would later decide nothing refers to it.
+fn store_dir(app: &AppHandle, project: Option<&Path>) -> Result<PathBuf, AttachmentError> {
+    let root = store_root(app)?;
+    let dir = match project {
+        Some(project) => root.join(project_key(project)),
+        None => root,
+    };
     std::fs::create_dir_all(&dir)
         .map_err(|err| AttachmentError::Io(format!("{}: {err}", dir.display())))?;
     Ok(dir)
+}
+
+/// The folder the tracker worker is looking at, and the board it holds, as one
+/// answer.
+///
+/// One request rather than two, and that is the point of it: the cleanup reads
+/// a project's tracker to decide what may go out of that project's folder, and
+/// two questions answered a moment apart could name two different projects
+/// across a switch. Asking the worker rather than taking a path from the front
+/// end is the same decision `runs::commands::target_branches` records — a
+/// project threaded down through the webview is a second copy of a fact, and
+/// the two get out of step in exactly the window that matters.
+async fn current(app: &AppHandle) -> Result<(Option<PathBuf>, Snapshot), AttachmentError> {
+    let handle = app
+        .try_state::<TrackerHandle>()
+        .ok_or_else(|| AttachmentError::Io("the tracker worker is not running".to_owned()))?;
+    let (tx, rx) = oneshot::channel();
+    handle
+        .0
+        .send(Request::Current(tx))
+        .await
+        .map_err(|_| AttachmentError::Io("the tracker worker is not running".to_owned()))?;
+    rx.await
+        .map_err(|_| AttachmentError::Io("the tracker worker did not answer".to_owned()))
+}
+
+/// Which project a picture being attached right now belongs to. A worker that
+/// cannot answer is not a reason to refuse somebody's screenshot — the file
+/// goes to the root of the store, which is the one place nothing ever deletes.
+async fn current_project(app: &AppHandle) -> Option<PathBuf> {
+    match current(app).await {
+        Ok((project, _)) => project,
+        Err(err) => {
+            log::warn!("attachments: no project for this image ({err}); storing it in the root");
+            None
+        }
+    }
+}
+
+/// The files sitting directly in one directory of the store.
+///
+/// Directly, and nothing below: the store is two levels deep by construction,
+/// and a walk that descended would give the deleting code paths it did not
+/// build. `file_type` follows no symlink, so a link somebody dropped in here is
+/// neither counted as bytes it does not own nor offered up to be deleted.
+fn list(dir: &Path) -> Vec<StoredFile> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        // A project that has never had an attachment has no folder, and that is
+        // an empty list rather than a failure — the same reading `git.rs` gives
+        // a folder outside git.
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        files.push(StoredFile {
+            path: dir.join(&name).to_string_lossy().into_owned(),
+            name,
+            bytes: meta.len(),
+        });
+    }
+    files
+}
+
+/// What the whole store weighs: the root's own leftovers plus every project's
+/// folder. This is the number the settings window calls the storage, and it
+/// deliberately covers more than the button can reach — a person asking how big
+/// this has got is asking about the directory, not about their share of it.
+fn weigh(root: &Path) -> Tally {
+    let mut total = Tally::default();
+    for file in list(root) {
+        total.add(file.bytes);
+    }
+    let Ok(entries) = std::fs::read_dir(root) else { return total };
+    for entry in entries.flatten() {
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            for file in list(&entry.path()) {
+                total.add(file.bytes);
+            }
+        }
+    }
+    total
+}
+
+/// Split one project's folder into what stays and what may go.
+fn survey_dir(dir: &Path, issues: &[Issue]) -> (Tally, Tally) {
+    let files = list(dir);
+    let doomed = cleanup::removable(&files, issues);
+    let mut removable = Tally::default();
+    for file in &doomed {
+        removable.add(file.bytes);
+    }
+    let mut kept = Tally::default();
+    for file in &files {
+        if !doomed.iter().any(|other| other.name == file.name) {
+            kept.add(file.bytes);
+        }
+    }
+    (kept, removable)
+}
+
+/// Delete what no unfinished task refers to, and say what actually went.
+///
+/// Every path handed to `remove_file` is this directory joined with a name that
+/// came out of this directory's own `read_dir`, checked once more by
+/// `plain_name` on the way past. Nothing else is ever built, no subdirectory is
+/// entered and no string from the front end reaches this function at all, which
+/// is what makes "the button cannot touch another project" a property of the
+/// code rather than of a condition somebody has to keep right.
+fn sweep(dir: &Path, issues: &[Issue]) -> (Tally, u64) {
+    let files = list(dir);
+    let mut removed = Tally::default();
+    let mut failed = 0;
+    for file in cleanup::removable(&files, issues) {
+        if !cleanup::plain_name(&file.name) {
+            log::warn!("attachments: refusing to delete {:?}, which is not a plain name", file.name);
+            failed += 1;
+            continue;
+        }
+        match std::fs::remove_file(dir.join(&file.name)) {
+            Ok(()) => removed.add(file.bytes),
+            Err(err) => {
+                log::warn!("attachments: could not delete {}: {err}", file.path);
+                failed += 1;
+            }
+        }
+    }
+    (removed, failed)
+}
+
+/// What the settings window draws before anybody presses anything.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Survey {
+    /// Everything under `attachments/`, whoever it belongs to — the storage.
+    pub store: Tally,
+    /// The active project, absolute, or `None` when no project is open. The
+    /// window names it, because the button reaches this project and no other.
+    pub project: Option<String>,
+    /// This project's files an unfinished task still refers to.
+    pub kept: Tally,
+    /// This project's files nothing unfinished refers to — what the button
+    /// would take, counted before it is pressed, which is the whole reason this
+    /// command exists apart from the one that deletes.
+    pub removable: Tally,
+}
+
+/// What a press actually did, and where that leaves the store.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cleaned {
+    pub removed: Tally,
+    /// Files the rule chose and the disk would not give up — a permission, a
+    /// file already gone. Reported rather than swallowed: a person who was told
+    /// seven and sees six wants to know which half of that is true.
+    pub failed: u64,
+    /// The same numbers the window opened on, recomputed after the deleting, so
+    /// one press updates the screen without a second round trip through a
+    /// worker that may be two seconds into a bd call.
+    pub survey: Survey,
+}
+
+/// Read the store and the board, and say what could go.
+///
+/// A read, so it answers with a project of `None` rather than refusing when
+/// there is nothing open: the section still has a size to show, and the button
+/// under it has a reason to be disabled that a person can read.
+#[tauri::command]
+pub async fn attachments_survey(app: AppHandle) -> Result<Survey, AttachmentError> {
+    let root = store_root(&app)?;
+    let (project, snapshot) = current(&app).await?;
+    let (kept, removable) = match &project {
+        Some(project) => survey_dir(&root.join(project_key(project)), &snapshot.issues),
+        None => (Tally::default(), Tally::default()),
+    };
+    Ok(Survey {
+        store: weigh(&root),
+        project: project.map(|path| path.to_string_lossy().into_owned()),
+        kept,
+        removable,
+    })
+}
+
+/// The one thing in this app that deletes somebody's pictures, and it happens
+/// only here, only when a person presses the button, and only inside the active
+/// project's own folder.
+#[tauri::command]
+pub async fn attachments_clean(app: AppHandle) -> Result<Cleaned, AttachmentError> {
+    let root = store_root(&app)?;
+    let (project, snapshot) = current(&app).await?;
+    // Not "delete nothing and say it worked": with no project there is no
+    // tracker to ask what is still wanted, so there is no honest answer here at
+    // all — and a write that looked like it happened is the one thing this app
+    // refuses everywhere.
+    let Some(project) = project else { return Err(AttachmentError::NoProject) };
+
+    let dir = root.join(project_key(&project));
+    let (removed, failed) = sweep(&dir, &snapshot.issues);
+    let (kept, removable) = survey_dir(&dir, &snapshot.issues);
+    Ok(Cleaned {
+        removed,
+        failed,
+        survey: Survey {
+            store: weigh(&root),
+            project: Some(project.to_string_lossy().into_owned()),
+            kept,
+            removable,
+        },
+    })
 }
 
 /// Write the bytes into `dir` and say what was written.
@@ -287,10 +545,11 @@ pub fn save_into(
 /// A file already on disk — what the picker and a drop on the window produce.
 ///
 /// The size is read from the metadata first, so a video somebody dropped by
-/// mistake is refused without being read into memory.
+/// mistake is refused without being read into memory — and, since the project's
+/// folder is asked of the tracker worker, without queueing behind a bd call for
+/// something that was never going to be stored.
 #[tauri::command]
 pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachment, AttachmentError> {
-    let dir = store_dir(&app)?;
     let source = PathBuf::from(&path);
     let name = source.file_name().map(|n| n.to_string_lossy().into_owned());
     let meta = std::fs::metadata(&source)
@@ -308,6 +567,7 @@ pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachmen
         });
     }
     let bytes = std::fs::read(&source).map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
+    let dir = store_dir(&app, current_project(&app).await.as_deref())?;
     save_into(&dir, name.as_deref(), bytes, &stamp())
 }
 
@@ -329,7 +589,6 @@ pub async fn attachment_write(
     name: Option<String>,
     data: String,
 ) -> Result<Attachment, AttachmentError> {
-    let dir = store_dir(&app)?;
     if decoded_at_least(data.len()) > MAX_IMAGE_BYTES {
         return Err(AttachmentError::TooLarge {
             name: name.unwrap_or_else(|| PASTED.to_owned()),
@@ -342,6 +601,7 @@ pub async fn attachment_write(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data.as_bytes())
         .map_err(|err| AttachmentError::Io(format!("{PASTED} did not decode: {err}")))?;
+    let dir = store_dir(&app, current_project(&app).await.as_deref())?;
     save_into(&dir, name.as_deref(), bytes, &stamp())
 }
 
@@ -551,6 +811,128 @@ mod tests {
         assert!(message.contains(&MAX_IMAGE_BYTES.to_string()), "the ceiling is the actionable half: {message}");
 
         assert_eq!(AttachmentError::NotAnImage("a.txt".into()).kind(), "notAnImage");
+        assert_eq!(AttachmentError::NoProject.kind(), "noProject");
         assert_eq!(AttachmentError::Io("x".into()).kind(), "io");
+    }
+
+    /// A store with one file in the root and one in each of two projects'
+    /// folders — the shape the button has to be safe in.
+    fn store_with_three(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let root = scratch(name);
+        let mine = root.join(project_key(Path::new("/projects/mine")));
+        let theirs = root.join(project_key(Path::new("/projects/theirs")));
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(root.join("20240101-000000-old.png"), PNG).unwrap();
+        std::fs::write(mine.join("20260806-121314-mine.png"), PNG).unwrap();
+        std::fs::write(theirs.join("20260806-121314-theirs.png"), JPEG).unwrap();
+        (root, mine, theirs)
+    }
+
+    fn issue(status: &str, description: &str) -> crate::tracker::model::Issue {
+        crate::tracker::model::Issue {
+            id: "smetana-x".into(),
+            status: status.into(),
+            description: Some(description.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_sweep_reaches_nothing_but_the_folder_it_was_given() {
+        // The whole of the confinement: the neighbouring project and the files
+        // left in the root from before the store was split by project are out
+        // of reach because nothing ever names them, not because a condition
+        // spares them.
+        let (root, mine, theirs) = store_with_three("sweep-confined");
+
+        let (removed, failed) = sweep(&mine, &[]);
+
+        assert_eq!(removed.files, 1, "the folder it was given is swept");
+        assert_eq!(failed, 0);
+        assert!(root.join("20240101-000000-old.png").exists(), "the root is never touched");
+        assert!(theirs.join("20260806-121314-theirs.png").exists(), "another project is never touched");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_sweep_keeps_what_an_unfinished_task_names_and_takes_the_rest() {
+        let root = scratch("sweep-rule");
+        let dir = root.join("project");
+        std::fs::create_dir_all(&dir).unwrap();
+        let wanted = dir.join("20260806-121314-wanted.png");
+        let closed = dir.join("20260806-121315-closed.png");
+        let orphan = dir.join("20260806-121316-orphan.png");
+        for path in [&wanted, &closed, &orphan] {
+            std::fs::write(path, PNG).unwrap();
+        }
+        let issues = [
+            issue("open", &format!("still needed: {}", wanted.display())),
+            issue("closed", &format!("done with: {}", closed.display())),
+        ];
+
+        let (removed, failed) = sweep(&dir, &issues);
+
+        assert_eq!(failed, 0);
+        assert_eq!(removed.files, 2);
+        assert_eq!(removed.bytes, PNG.len() as u64 * 2);
+        assert!(wanted.exists(), "an unfinished task still refers to it");
+        assert!(!closed.exists(), "only a closed task referred to it");
+        assert!(!orphan.exists(), "nothing referred to it at all");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_store_weighs_the_root_and_every_projects_folder_alike() {
+        // The number in the settings window is about the directory, not about
+        // the share of it the button can reach — a person asking how big this
+        // has got is not asking about their current project.
+        let (root, _, _) = store_with_three("weigh");
+
+        let total = weigh(&root);
+
+        assert_eq!(total.files, 3);
+        assert_eq!(total.bytes, PNG.len() as u64 * 2 + JPEG.len() as u64);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_survey_counts_what_stays_apart_from_what_would_go() {
+        let root = scratch("survey");
+        let dir = root.join("project");
+        std::fs::create_dir_all(&dir).unwrap();
+        let wanted = dir.join("20260806-121314-wanted.png");
+        std::fs::write(&wanted, PNG).unwrap();
+        std::fs::write(dir.join("20260806-121315-orphan.png"), JPEG).unwrap();
+
+        let (kept, removable) = survey_dir(&dir, &[issue("open", &wanted.display().to_string())]);
+
+        assert_eq!(kept, Tally { files: 1, bytes: PNG.len() as u64 });
+        assert_eq!(removable, Tally { files: 1, bytes: JPEG.len() as u64 });
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_project_that_has_never_had_an_attachment_reads_as_empty_rather_than_failing() {
+        let root = scratch("no-folder");
+
+        assert_eq!(survey_dir(&root.join("never-used"), &[]), (Tally::default(), Tally::default()));
+        assert_eq!(sweep(&root.join("never-used"), &[]), (Tally::default(), 0));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_directory_inside_a_projects_folder_is_neither_counted_nor_deleted() {
+        // Nothing here ever makes one, so it can only be somebody's own doing —
+        // and a walk that descended would hand `remove_file` paths this module
+        // did not build.
+        let root = scratch("nested");
+        let dir = root.join("project");
+        std::fs::create_dir_all(dir.join("keep-me")).unwrap();
+        std::fs::write(dir.join("keep-me/inside.png"), PNG).unwrap();
+
+        assert_eq!(sweep(&dir, &[]), (Tally::default(), 0));
+        assert!(dir.join("keep-me/inside.png").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
