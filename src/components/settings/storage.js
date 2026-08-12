@@ -60,6 +60,27 @@ const tally = (value) =>
    open — with a delete button under it. */
 const boardRead = (survey) => survey?.board === 'ok'
 
+/* How much of the store belongs to the active project — the half the button can
+   actually reach, which is `kept` and `removable` together and nothing else.
+   Not drawn on this tab, where the two halves are worth more apart than summed;
+   it is here because it is a reading of this survey, and the bell
+   (`components/notifications/notifications.js`) weighs exactly this number
+   against its thresholds. Written once so the screen a person is sent to and the
+   card that sent them there cannot end up quoting different sizes.
+
+   `null` is "there is no answer", and it is the important half of this function.
+   An unreadable board makes both tallies zero by design — see `Survey.board` —
+   so reading the sum straight would report an empty folder for a project whose
+   folder may hold hundreds of megabytes, and re-arm a threshold ladder off a
+   number nobody measured. No project is the same absence for the same reason. */
+export function projectBytes(survey) {
+  if (!survey?.project || !boardRead(survey)) return null
+  const kept = tally(survey.kept)
+  const removable = tally(survey.removable)
+  if (!kept || !removable) return null
+  return kept.bytes + removable.bytes
+}
+
 /* How big the whole store is — every project's images and whatever is left in
    its root, which is more than the button can reach. That is deliberate: a
    person asking how much this has grown is asking about the directory, not
