@@ -49,7 +49,7 @@ impl Profile for Claude {
         // Before the prompt, which is positional: a flag after it would rely
         // on the CLI's parser being relaxed about the order, and this app does
         // not get to assume that about somebody else's argument grammar.
-        if let Intent::Run { settings } = &launch.intent {
+        if let Intent::Run { settings, .. } = &launch.intent {
             for arg in self.autonomy(settings.mode).args {
                 cmd.arg(arg);
             }
@@ -736,6 +736,8 @@ mod tests {
                 live_check: true,
                 file_findings: true,
             },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
         }
     }
 

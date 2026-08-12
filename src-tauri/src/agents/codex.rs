@@ -75,7 +75,7 @@ impl Profile for Codex {
             planning.then(|| read_skill(&launch.skills.superpowers, "writing-plans")).flatten();
         // Before the prompt, which is positional — see the same line in
         // `claude.rs` for why the order is not left to the parser.
-        if let Intent::Run { settings } = &launch.intent {
+        if let Intent::Run { settings, .. } = &launch.intent {
             for arg in self.autonomy(settings.mode).args {
                 cmd.arg(arg);
             }
@@ -1253,6 +1253,8 @@ mod tests {
                 live_check: true,
                 file_findings: true,
             },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
         }
     }
 
