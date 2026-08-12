@@ -330,6 +330,22 @@ const optionStyle = (option, index) => ({
   cursor: 'default'
 })
 
+/* The label and the note share a box of their own rather than sitting directly
+   in the row, and that box is the whole reason `labelStyle`'s ceiling can be
+   honest. `100%` of the *row* includes the check icon and the gap beside it, so
+   the cap came out 16-18px too generous: a name wider than the panel was sliced
+   by the panel's own `overflow: hidden` with no ellipsis, the note was pushed
+   clean off the panel, and the list grew a horizontal scrollbar. Inside this
+   box, `100%` is exactly the space the two of them actually have. */
+const rowTextStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  flex: '1 1 auto',
+  minWidth: 0,
+  overflow: 'hidden'
+}
+
 /* The label, and which of the two spans in a row gives way.
 
    Flex shrink factors cannot say "this one only after that one has nothing
@@ -348,7 +364,9 @@ const optionStyle = (option, index) => ({
 
    `maxWidth` is the backstop for the pathological row, where the name alone is
    wider than the panel: the note is squeezed away first, and then the label
-   ellipsises at the row's own width instead of spilling past it. */
+   ellipsises at the row's own width instead of spilling past it. The percentage
+   is of `rowTextStyle`'s box and not the row's — see there for what measuring it
+   against the row instead cost. */
 const labelStyle = (option) => ({
   flex: '1 1 auto',
   flexShrink: option.note ? 0 : 1,
@@ -451,20 +469,20 @@ const headerStyle = (index) => ({
             <Icon
               name="check"
               :size="12"
-              :style="{ visibility: option.value === modelValue ? 'visible' : 'hidden' }"
+              :style="{ visibility: option.value === modelValue ? 'visible' : 'hidden', flexShrink: 0 }"
             />
-            <span :style="labelStyle(option)">
-              {{ option.label }}
+            <span :style="rowTextStyle">
+              <span :style="labelStyle(option)">{{ option.label }}</span>
+              <!-- Something to say about this row in particular: the field's
+                   `hintStyle` voice, in its own style rather than that one.
+                   Reusing it would carry `white-space: nowrap` with nothing to
+                   shrink or clip it, and in a flex row that means the *label*
+                   gives way — a long note eating the branch name it is about,
+                   which is the opposite of what a note is for. So it keeps the
+                   colour and size and adds what a row needs: it may shrink, and
+                   it clips itself when it does. -->
+              <span v-if="option.note" :style="noteStyle">{{ option.note }}</span>
             </span>
-            <!-- Something to say about this row in particular: the field's
-                 `hintStyle` voice, in its own style rather than that one.
-                 Reusing it would carry `white-space: nowrap` with nothing to
-                 shrink or clip it, and in a flex row that means the *label*
-                 gives way — a long note eating the branch name it is about,
-                 which is the opposite of what a note is for. So it keeps the
-                 colour and size and adds what a row needs: it may shrink, and
-                 it clips itself when it does. -->
-            <span v-if="option.note" :style="noteStyle">{{ option.note }}</span>
           </button>
         </template>
         <div v-if="!matches.length" :style="emptyStyle">
