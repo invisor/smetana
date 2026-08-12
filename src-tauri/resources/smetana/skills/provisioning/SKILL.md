@@ -128,10 +128,28 @@ For each repository the task touches, in the order `[project].repos` gives:
 
    - Present → carry on to the cut below.
    - Absent, and the run's prompt said to cut it where it does not exist yet →
-     make it from this repository's own current branch (HEAD):
-     `git -C <repo> branch <target-branch>`. That repository's HEAD and not
-     another repository's, and not the branch of the same name somewhere else:
-     there is no relationship between two repositories' histories to preserve.
+     make it from this repository's own current branch (HEAD) **and leave the
+     main checkout on it**:
+
+     ```bash
+     git -C <repo> status --porcelain    # must be empty, or STOP
+     git -C <repo> checkout -b <target-branch>
+     ```
+
+     That repository's HEAD and not another repository's, and not the branch of
+     the same name somewhere else: there is no relationship between two
+     repositories' histories to preserve. Checking it out rather than only
+     creating the ref is what leaves the world in the state `merging` requires
+     — its Step 1 stops unless the main checkout is clean and *on* the target
+     branch, and its Step 5 merges into whatever that checkout has out, so a
+     bare `git branch` would make the run's own first merge fail a precondition
+     the run itself created.
+
+     **If the main checkout is not clean, STOP** rather than switching it.
+     Somebody's uncommitted work would ride onto the branch the whole run is
+     about to merge into, and `merging` demands a clean main checkout anyway —
+     so a dirty one is a stop either way, and it is far cheaper here, before a
+     single worktree exists, than after a batch of work has been done.
    - Absent, and the prompt said nothing of the kind → **STOP**. The run was
      told to merge into a branch that is not here and nobody said it could make
      one. Cutting it anyway invents a base for every task in the batch.
@@ -140,7 +158,10 @@ For each repository the task touches, in the order `[project].repos` gives:
    is the run's, defaulting to `[defaults].target_branch`. It holds the siblings that
    already merged; cutting from anywhere else rebuilds the task against a state nothing
    else shares. The main checkout does not need to be clean for this — the worktree is
-   cut from a branch, not from the working tree.
+   cut from a branch, not from the working tree. That does not contradict the cleanliness
+   stop in step 2, and the difference is which checkouts move: cutting a worktree moves
+   none, while creating the target branch there switches the main one, and a switch is the
+   only thing a dirty tree is in the way of.
 4. **Retry a lock.** Two creations racing produce an index or worktree lock error. Wait
    a second or two and try again, up to three times.
 5. **A worktree already at that path belongs to this task** — the id in the slug

@@ -76,6 +76,23 @@ describe('the list the branch field draws', () => {
     ])
   })
 
+  /* The other half of the same rule, and the reachable one: repositories on
+     `main` and `master` with nothing else carry no branch in common, because the
+     list always holds each repository's own HEAD. An `Everywhere` caption over
+     nothing is pruned again by `Dropdown`, and the field's rows and its cursor
+     then count different lists. */
+  it('draws only the partial caption when no branch is everywhere', () => {
+    const list = [
+      { name: 'main', missing_in: ['extension'] },
+      { name: 'master', missing_in: ['admin'] }
+    ]
+    expect(branchOptions(list)).toEqual([
+      { header: true, label: 'Not everywhere' },
+      { value: 'main', label: 'main', note: 'not in extension' },
+      { value: 'master', label: 'master', note: 'not in admin' }
+    ])
+  })
+
   it('splits the two groups and says where a partial branch is missing', () => {
     const list = [
       { name: 'develop', missing_in: [] },

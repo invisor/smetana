@@ -108,8 +108,15 @@ const show = async () => {
   if (props.disabled) return
   open.value = true
   query.value = ''
-  const chosen = items.value.findIndex((o) => !o.header && o.value === props.modelValue)
-  cursor.value = chosen >= 0 ? chosen : Math.max(0, items.value.findIndex((o) => !o.header))
+  /* Seated against `matches` and never against `items`, because the cursor is
+     an index into the list that is actually drawn — which is what the rendered
+     rows, `step` and `reveal` all read. The two differ exactly when a caption
+     is pruned above, and one pruned caption shifts every index after it by one:
+     the highlight then sits on one row while Enter takes another, silently. The
+     `matches` watcher is no rescue here — `hide` has already cleared `query`, so
+     opening changes nothing about `matches` and the watcher never fires. */
+  const chosen = matches.value.findIndex((o) => !o.header && o.value === props.modelValue)
+  cursor.value = chosen >= 0 ? chosen : Math.max(0, matches.value.findIndex((o) => !o.header))
   at.value = null
   width.value = field.value?.getBoundingClientRect().width ?? 0
   emit('open')

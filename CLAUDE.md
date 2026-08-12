@@ -415,9 +415,10 @@ is why. A bundled app on macOS is handed launchd's environment: `open smetana.ap
 nvm's shims — reaches `PATH` from `~/.zshrc` or `~/.zprofile`, which only a shell ever reads. So the
 app asks a login shell once (`$SHELL -i -l -c`, the value fenced between markers because an
 interactive rc file writes shell-integration escapes into the same stream), and that answer is what
-both `agents::pick` and `build_command` work from — finding out whether an agent is installed and the
-environment it is started with are the same question, and answering only the first would trade
-"no agent is installed" for an agent that cannot find `git` or `node`. `-l` alone is not enough: the
+everything that has to start a program works from — `agents::pick` and `build_command` here, and
+`runs/usage.rs` and `runs/preflight.rs` over in the run worker. Finding out whether an agent is
+installed and the environment it is started with are the same question, and answering only the first
+would trade "no agent is installed" for an agent that cannot find `git` or `node`. `-l` alone is not enough: the
 machine this was written on adds cargo and the rest from `~/.zshrc`, which only `-i` reads. Every
 failure — no shell, a five-second timeout, unrecognisable output — falls back to the inherited value,
 which is where things were before the module existed. The bug is invisible in development, and that
@@ -1048,6 +1049,13 @@ contradictory things on screen at once — a bar saying the run is stopped and a
 going — and a person reads that as the stop not having taken. The gap is not always brief: the loop
 may be inside a board read or a 60s usage probe, and it holds its scope for the whole of it — only
 its scope, since the rest of the project's runs were never this one's to hold.
+
+Every declared command and every health probe the preflight starts is given the **login shell's**
+`PATH`, from the same `shell_env` the terminal uses and for the same reason: a bundled app inherits
+launchd's, which holds nothing a person installed, so `docker compose up -d` exited 127 against
+infrastructure that was up and answering — and the one phase whose whole job is to name the missing
+piece named the wrong one. `shell_env::path` falls back to the inherited value, so this is never a
+narrowing.
 
 **The preflight is the one phase where a stop is not cooperative** (smetana-16w), and that exception
 is the reason the gap is no longer measured in minutes. `bring_up` read the stop channel nowhere at

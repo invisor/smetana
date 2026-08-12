@@ -59,6 +59,14 @@ export function needsCutting(branches, name) {
    single-repository project and therefore the common case: a caption over the
    entire list names nothing, and this field looks exactly as it always has.
 
+   **And never a caption over an empty group**, which is the same rule read the
+   other way: a caption names a group, and where there is no group there is
+   nothing to name. Repositories sitting on `main` and `master` with nothing else
+   are exactly that — every branch is partial, because the list always carries
+   each repository's own HEAD — and an `Everywhere` heading nothing followed was
+   pruned again downstream by `Dropdown`'s own filter, leaving the field's rows
+   and its cursor counting different lists.
+
    The note is always "not in …" and never "only in …", and that is forced
    rather than chosen: `BranchOption` carries the repositories a branch is
    missing from, and the front end never learns the full list, so "only in" is
@@ -69,10 +77,11 @@ export function branchOptions(branches) {
   const partial = list.filter((b) => b.missing_in?.length)
   const plain = (b) => ({ value: b.name, label: b.name })
   if (!partial.length) return complete.map(plain)
-  return [
-    { header: true, label: 'Everywhere' },
-    ...complete.map(plain),
+  const rows = []
+  if (complete.length) rows.push({ header: true, label: 'Everywhere' }, ...complete.map(plain))
+  rows.push(
     { header: true, label: 'Not everywhere' },
     ...partial.map((b) => ({ ...plain(b), note: `not in ${b.missing_in.join(', ')}` }))
-  ]
+  )
+  return rows
 }

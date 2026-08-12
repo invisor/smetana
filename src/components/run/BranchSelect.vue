@@ -21,9 +21,11 @@ const props = defineProps({
   disabled: { type: Boolean, default: false }
 })
 
-/* `create` says the chosen name is not one of `branches` — the run has to know,
-   because a branch that does not exist has to be cut before anything merges
-   into it, and this control is the only place that knows the difference. */
+/* `create` says the chosen name is missing from at least one repository — which
+   includes a name nothing carries, and also a branch that is right there in the
+   list and short of one of four. Both sites ask `needsCutting`, never "is it in
+   `branches`": the run has to carry permission to cut the branch where it turns
+   out to be absent, and this control is the only place that has seen the list. */
 const emit = defineEmits(['update:modelValue', 'update:create'])
 
 const naming = ref(false)

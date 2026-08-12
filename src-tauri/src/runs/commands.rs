@@ -50,6 +50,13 @@ pub fn target_branches(project: String) -> Vec<crate::git::BranchOption> {
 /// rather than counted as missing every branch. `git_dir` is what tells that
 /// apart from a repository with nothing in it, since both hand back an empty
 /// list of branches.
+///
+/// One case that guard does not catch: a stale linked worktree, whose `.git`
+/// is a file and whose `gitdir:` target has since gone. `git_dir` parses the
+/// pointer without checking it resolves, so it answers `Some` and the folder
+/// counts as a readable repository with no branches at all — after which every
+/// branch in the project reads as missing from it, which is the very outcome
+/// leaving unreadable repositories out exists to prevent.
 fn repo_lists(root: &Path) -> Vec<(String, Vec<(String, Option<i64>)>)> {
     let names: Vec<String> = match config::load(root) {
         ConfigState::Ok { config } if !config.project.repos.is_empty() => config.project.repos.clone(),
