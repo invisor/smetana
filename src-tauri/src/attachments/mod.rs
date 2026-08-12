@@ -2,8 +2,11 @@
 //!
 //! The same shape as `files/` and `git.rs`, and for the same reason: writing a
 //! couple of megabytes holds no state that anything has to guard, so there is
-//! no worker and no queue here — pure functions carrying the tests, and two
-//! thin commands over them.
+//! no worker and no queue here — pure functions carrying the tests, and thin
+//! commands over them. Two of those store an image and two are the settings
+//! window's Storage tab, which counts what is here and, on a person's press,
+//! sweeps it. This file is the disk; `cleanup.rs` is the deciding, with no
+//! filesystem anywhere in it.
 //!
 //! **Where the bytes go.** Into the app's own data directory (`app_data_dir()`),
 //! and the path that reaches the agent is absolute. A file chosen with the
@@ -42,7 +45,7 @@
 //! dialog or dragged off their desktop, and a folder outside the project is the
 //! ordinary case, not the attack. Reading it is exactly what was asked for, by
 //! the same person, through the OS's own picker. What is confined is the
-//! *destination*: it is always `app_data_dir()/attachments`, and the file name
+//! *destination*: it is always `app_data_dir()/attachments/<key>`, and the file name
 //! is not the one that arrived — `stored_name` builds it out of a timestamp and
 //! a `slug` that keeps ASCII letters and digits and nothing else, so no name
 //! coming in can climb a directory, hide behind a dot or need quoting.
