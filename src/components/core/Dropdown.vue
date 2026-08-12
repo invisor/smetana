@@ -345,22 +345,23 @@ const hintStyle = {
 }
 
 /* A row's own note. The field's `hintStyle` colour and size, deliberately not
-   `hintStyle` itself: dropped into an option row it would win the flex
-   negotiation outright and the label — `flex: 1`, so a flex-basis of zero and
-   no base size of its own to defend — would shrink toward nothing instead, a
-   long note eating the very branch name it is describing.
+   `hintStyle` itself: this one has to survive a negotiation the field's hint
+   never enters, and it has to lose that negotiation.
 
-   The ceiling is what makes that impossible, and it is a ceiling rather than a
-   shrink rule for a reason worth keeping: with the label at flex-basis zero the
-   row never overflows, so nothing ever asks the note to shrink and its own
-   `text-overflow` would never fire. Capped, it is the note that runs out of
-   room and clips, and the name keeps at least half the row whatever it is
-   called. */
+   The weight is the whole of it. Both spans may shrink, so a row with no room
+   is shared out between them by flex — in proportion to their base sizes,
+   which would clip the branch name alongside the note. A large shrink factor
+   makes the note absorb effectively all of the shortfall, so the name comes
+   through whole and the note ellipsises. What it deliberately is *not* is a
+   `max-width`: that fires on available width rather than on overflow, so it
+   clipped a note with 36px of slack beside it. And the note is not
+   `flex-shrink: 0` either — a very long branch name with no note at all has to
+   be able to squeeze this to nothing rather than overflow the row. */
 const noteStyle = {
   fontSize: 'var(--text-2xs)',
   color: 'var(--text-muted)',
   fontFamily: 'var(--font-sans)',
-  maxWidth: '50%',
+  flexShrink: 100,
   minWidth: 0,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -432,7 +433,7 @@ const headerStyle = (index) => ({
               :size="12"
               :style="{ visibility: option.value === modelValue ? 'visible' : 'hidden' }"
             />
-            <span :style="{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
+            <span :style="{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
               {{ option.label }}
             </span>
             <!-- Something to say about this row in particular: the field's
