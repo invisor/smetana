@@ -361,6 +361,11 @@ export function installMockBackend() {
       return {
         store: { files: 14, bytes: 22 * 1024 * 1024 + 512 * 1024 },
         project: MOCK_PROJECTS[0],
+        /* `tracker_health` above answers `ok`, and this has to agree: the two
+           are one fact in Rust, where the board and its health leave the worker
+           in the same message. A fixture claiming a healthy board here and a
+           broken one there would show a state the app cannot produce. */
+        board: 'ok',
         kept: { files: 5, bytes: 6 * 1024 * 1024 },
         removable: { files: 6, bytes: 9 * 1024 * 1024 + 256 * 1024 }
       }

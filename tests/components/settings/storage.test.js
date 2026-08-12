@@ -12,6 +12,7 @@ import {
 const survey = (over = {}) => ({
   store: { files: 12, bytes: 5 * 1024 * 1024 },
   project: '/Users/you/Projects/smetana',
+  board: 'ok',
   kept: { files: 4, bytes: 2 * 1024 * 1024 },
   removable: { files: 3, bytes: 1024 * 1024 },
   ...over
@@ -86,6 +87,21 @@ describe('what a person reads before pressing the button', () => {
     expect(removalLine(survey({ removable: undefined }))).toContain('could not be read')
   })
 
+  it('says the board could not be read instead of counting off an empty one', () => {
+    // An unreadable board reaches this front end as an empty one, so a sentence
+    // about counts would be read as a fact about the pictures. Rust already
+    // refuses the press; this is the same refusal said before it is pressed.
+    for (const board of ['error', 'bd-version-mismatch']) {
+      const line = removalLine(survey({ board, removable: { files: 0, bytes: 0 } }))
+      expect(line).toContain('could not be read')
+      expect(line).toContain('Nothing will be deleted')
+    }
+  })
+
+  it('names a folder with no tracker as itself, since that one can be acted on', () => {
+    expect(removalLine(survey({ board: 'not-a-beads-repo' }))).toContain('no bd tracker')
+  })
+
   it('names the one project the button reaches', () => {
     expect(scopeLine(survey())).toContain('smetana')
     expect(scopeLine(survey({ project: null }))).toBe('')
@@ -98,6 +114,19 @@ describe('whether the button may be pressed at all', () => {
     expect(canClear(survey({ removable: { files: 0, bytes: 0 } }))).toBe(false)
     expect(canClear(survey({ project: null }))).toBe(false)
     expect(canClear(null)).toBe(false)
+  })
+
+  it('is dead whenever the board was not read, whatever the counts say', () => {
+    // The counts are zero in these states, so this looks redundant and is not:
+    // a build that ever offered files off an unread board would delete the
+    // attachments of every open task in the project.
+    for (const board of ['error', 'not-a-beads-repo', 'bd-version-mismatch', 'no-project']) {
+      expect(canClear(survey({ board }))).toBe(false)
+    }
+    // A word this build has never heard of, and the field missing altogether:
+    // both are "not read", never "assume it was".
+    expect(canClear(survey({ board: 'something-new' }))).toBe(false)
+    expect(canClear(survey({ board: undefined }))).toBe(false)
   })
 })
 

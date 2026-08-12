@@ -403,13 +403,27 @@ const galleryAgent = ref('claude')
 const gallerySurvey = {
   store: { files: 14, bytes: 22 * 1024 * 1024 },
   project: '/Users/you/Projects/smetana',
+  board: 'ok',
   kept: { files: 5, bytes: 6 * 1024 * 1024 },
   removable: { files: 6, bytes: 9 * 1024 * 1024 }
 }
 const galleryEmptySurvey = {
   store: { files: 5, bytes: 6 * 1024 * 1024 },
   project: '/Users/you/Projects/smetana',
+  board: 'ok',
   kept: { files: 5, bytes: 6 * 1024 * 1024 },
+  removable: { files: 0, bytes: 0 }
+}
+/* The board unreadable: the counts are zero because nothing may be judged off
+   it, and the sentence has to say that rather than let the zero read as a fact
+   about somebody's pictures. This is the state the `?view=gallery` harness
+   exists for — it cannot be reached in the dev server, where the mock's board
+   is always healthy. */
+const galleryNoBoardSurvey = {
+  store: { files: 14, bytes: 22 * 1024 * 1024 },
+  project: '/Users/you/Projects/smetana',
+  board: 'error',
+  kept: { files: 0, bytes: 0 },
   removable: { files: 0, bytes: 0 }
 }
 const galleryCleaned = { removed: { files: 6, bytes: 9 * 1024 * 1024 }, failed: 0 }
@@ -1133,17 +1147,22 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '380px' }">
           <AgentSettings :agent="galleryAgent" @update:agent="galleryAgent = $event" />
         </div>
-        <!-- The Storage tab in both of the states worth looking at: something
-             to delete, with the count and the size a person reads before
-             pressing, and nothing to delete, where the button is dead and the
-             description says which of the two empties it is. Nothing is behind
-             either of them here — pressing emits and the harness does nothing,
-             which is the whole point of a presentational component. -->
+        <!-- The Storage tab in the three states worth looking at: something to
+             delete, with the count and the size a person reads before pressing;
+             nothing to delete, where the button is dead and the description
+             says which of the empties it is; and a board that could not be
+             read, where the button is dead because nothing can vouch for a
+             single file. Nothing is behind any of them here — pressing emits
+             and the harness does nothing, which is the whole point of a
+             presentational component. -->
         <div :style="{ width: '380px' }">
           <StorageSettings :survey="gallerySurvey" />
         </div>
         <div :style="{ width: '380px' }">
           <StorageSettings :survey="galleryEmptySurvey" :cleaned="galleryCleaned" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <StorageSettings :survey="galleryNoBoardSurvey" />
         </div>
         <div :style="{ width: '380px' }">
           <AboutSettings version="0.1.0" />

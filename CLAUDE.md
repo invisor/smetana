@@ -962,6 +962,22 @@ one: the paths ride out in a prompt, the agent runs `bd create` itself, and noth
 saying which id it wrote — the same missing channel `claimedBy` in `terminals.js` reconstructs
 around.
 
+**An empty board and an unreadable board are the same `Snapshot` and opposite facts**, and keeping
+them apart is `cleanup::refusal` — the guard both commands ask before anything is listed. `open()`
+resets the store and then ignores whether the first sync worked, deliberately, so a worker that
+cannot reach bd sits with a project open and an empty snapshot; `removable` reads that as "no task
+refers to any of these files" and the sweep takes every attachment of every live task in the
+project. The ways in are ordinary rather than exotic — no bd on the machine, which `postinstall`
+explicitly tolerates; a version mismatch; a damaged `.beads`; and a folder with no tracker at all,
+which the app deliberately keeps open so `bd init` can be offered. So `Request::Current` carries
+`Health` beside the snapshot, in the same message as the emptiness it explains, and anything but
+`Ok` refuses with `NoBoard` — the same argument `NoProject` was already written for, and the rule
+`runs/browser.rs` sets for the whole repository: anything unobservable reads as "no", loudly. The
+survey counts zero in that state rather than counting everything as rubbish, because a number
+offering the whole folder under a button that refuses to press is the same lie told quietly; the
+front end's `canClear` holds the button on the same field, and treats a health word it has never
+heard of, or a missing one, as unread.
+
 **The button reaches one project's folder and physically cannot reach another's.** The directory is
 `store_root()/project_key(dir)` where `dir` comes from the tracker worker — `Request::Current`,
 which answers with the folder being watched *and* the board it holds in one message, so the two
@@ -1432,7 +1448,7 @@ readable. Nothing on it reaches `settings.json`: it asks Rust what the attachmen
 (`attachments_clean`) — two commands about the app's own data directory, so the main window is still
 the only writer of settings and this window still holds no settings store. It is read when the tab is
 opened rather than when the window mounts, since the answer queues behind the tracker worker, which
-may be two seconds into a bd call, and four of the five tabs have no use for it. The window hands
+may be two seconds into a bd call, and the other four tabs have no use for it. The window hands
 over no path and no project, which is what leaves the deleting confined in Rust; the component takes
 the survey whole in Rust's own shape and `settings/storage.js` — pure, tested, another of the
 `branchChoice.js` family — turns it into the sentence somebody reads before an irreversible press.

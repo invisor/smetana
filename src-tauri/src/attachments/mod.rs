@@ -53,13 +53,14 @@
 mod cleanup;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
 
-use crate::tracker::model::{Issue, Snapshot};
+use crate::tracker::model::{Health, HealthState, Issue, Snapshot};
 use crate::tracker::service::{Request, TrackerHandle};
 
 use cleanup::{project_key, StoredFile, Tally};
@@ -224,6 +225,11 @@ pub enum AttachmentError {
     /// result.
     #[error("no project is open, so there is no board to say which images are still in use")]
     NoProject,
+    /// The same absence one step in: a project is open and its board cannot be
+    /// read. An unreadable board arrives as an *empty* one, so without this the
+    /// sweep would find nothing referring to anything and delete the lot.
+    #[error("the board could not be read, so there is no way to tell which images are still in use")]
+    NoBoard,
     #[error("{0}")]
     Io(String),
 }
@@ -237,6 +243,7 @@ impl AttachmentError {
             Self::TooLarge { .. } => "tooLarge",
             Self::NotAnImage(_) => "notAnImage",
             Self::NoProject => "noProject",
+            Self::NoBoard => "noBoard",
             Self::Io(_) => "io",
         }
     }
@@ -277,27 +284,49 @@ fn store_root(app: &AppHandle) -> Result<PathBuf, AttachmentError> {
 /// of the store no cleanup can reach, and a file whose project is unknown must
 /// not be filed under a project that would later decide nothing refers to it.
 fn store_dir(app: &AppHandle, project: Option<&Path>) -> Result<PathBuf, AttachmentError> {
-    let root = store_root(app)?;
-    let dir = match project {
-        Some(project) => root.join(project_key(project)),
-        None => root,
-    };
+    let dir = project_dir(&store_root(app)?, project);
     std::fs::create_dir_all(&dir)
         .map_err(|err| AttachmentError::Io(format!("{}: {err}", dir.display())))?;
     Ok(dir)
 }
 
-/// The folder the tracker worker is looking at, and the board it holds, as one
-/// answer.
+/// Where one project's pictures live, and the **only** expression in this file
+/// that says so.
 ///
-/// One request rather than two, and that is the point of it: the cleanup reads
-/// a project's tracker to decide what may go out of that project's folder, and
-/// two questions answered a moment apart could name two different projects
-/// across a switch. Asking the worker rather than taking a path from the front
+/// It is one function rather than three matching lines because the two ends of
+/// it are the place a picture is written and the place the sweep runs: three
+/// copies agree until they do not, and the way that failure shows up is a sweep
+/// pointed at a directory nothing writes to — silent, and on the deleting side.
+fn project_dir(root: &Path, project: Option<&Path>) -> PathBuf {
+    match project {
+        Some(project) => root.join(project_key(project)),
+        None => root.to_path_buf(),
+    }
+}
+
+/// How long to wait for the tracker worker before giving up on it.
+///
+/// Not a guess at how long the answer takes — the worker is single-threaded
+/// behind bd calls of about two seconds and holds its queue for the whole of a
+/// project switch, so several seconds is ordinary and a shorter ceiling would
+/// fire on healthy machines. It is the ceiling on a **wedged** one: `bd.rs`'s
+/// `run()` has no timeout of its own, so without this a paste or a drop would
+/// hang on a person's interactive gesture with no thumbnail, no refusal and
+/// nothing on screen to say anything was happening.
+const ASK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The folder the tracker worker is looking at, how well it is being read, and
+/// the board it holds — as one answer.
+///
+/// One request rather than three, and that is the point of it: the cleanup
+/// reads a project's tracker to decide what may go out of that project's
+/// folder, and questions answered a moment apart could name two different
+/// projects across a switch, or pair an empty board with the health of a
+/// different one. Asking the worker rather than taking a path from the front
 /// end is the same decision `runs::commands::target_branches` records — a
 /// project threaded down through the webview is a second copy of a fact, and
 /// the two get out of step in exactly the window that matters.
-async fn current(app: &AppHandle) -> Result<(Option<PathBuf>, Snapshot), AttachmentError> {
+async fn current(app: &AppHandle) -> Result<(Option<PathBuf>, Health, Snapshot), AttachmentError> {
     let handle = app
         .try_state::<TrackerHandle>()
         .ok_or_else(|| AttachmentError::Io("the tracker worker is not running".to_owned()))?;
@@ -307,16 +336,24 @@ async fn current(app: &AppHandle) -> Result<(Option<PathBuf>, Snapshot), Attachm
         .send(Request::Current(tx))
         .await
         .map_err(|_| AttachmentError::Io("the tracker worker is not running".to_owned()))?;
-    rx.await
-        .map_err(|_| AttachmentError::Io("the tracker worker did not answer".to_owned()))
+    match tokio::time::timeout(ASK_TIMEOUT, rx).await {
+        Ok(Ok(answer)) => Ok(answer),
+        Ok(Err(_)) => Err(AttachmentError::Io("the tracker worker did not answer".to_owned())),
+        Err(_) => Err(AttachmentError::Io(format!(
+            "the tracker worker did not answer within {}s",
+            ASK_TIMEOUT.as_secs()
+        ))),
+    }
 }
 
 /// Which project a picture being attached right now belongs to. A worker that
 /// cannot answer is not a reason to refuse somebody's screenshot — the file
 /// goes to the root of the store, which is the one place nothing ever deletes.
+/// Health is not consulted here on purpose: whether the board can be read
+/// decides what may be deleted and says nothing about where a new file belongs.
 async fn current_project(app: &AppHandle) -> Option<PathBuf> {
     match current(app).await {
-        Ok((project, _)) => project,
+        Ok((project, _, _)) => project,
         Err(err) => {
             log::warn!("attachments: no project for this image ({err}); storing it in the root");
             None
@@ -428,6 +465,12 @@ pub struct Survey {
     /// The active project, absolute, or `None` when no project is open. The
     /// window names it, because the button reaches this project and no other.
     pub project: Option<String>,
+    /// Whether that project's board could be read at all. Anything but `Ok`
+    /// means `kept` and `removable` are both zero and say nothing: an
+    /// unreadable board is an empty one here, so the honest answer is to count
+    /// nothing rather than to count everything as rubbish. The front end draws
+    /// its own sentence from this and holds the button.
+    pub board: HealthState,
     /// This project's files an unfinished task still refers to.
     pub kept: Tally,
     /// This project's files nothing unfinished refers to — what the button
@@ -451,25 +494,36 @@ pub struct Cleaned {
     pub survey: Survey,
 }
 
+/// Everything the Storage tab draws, off one answer from the worker.
+///
+/// The tallies are counted only where a sweep would actually be allowed to run,
+/// which is what keeps this command and the one that deletes from ever
+/// disagreeing: a survey that counted every file as removable while the button
+/// refused to press would be the same lie told quietly instead of loudly.
+fn survey(root: &Path, project: Option<&Path>, board: &Health, issues: &[Issue]) -> Survey {
+    let (kept, removable) = match cleanup::refusal(project, &board.state) {
+        None => survey_dir(&project_dir(root, project), issues),
+        Some(_) => (Tally::default(), Tally::default()),
+    };
+    Survey {
+        store: weigh(root),
+        project: project.map(|path| path.to_string_lossy().into_owned()),
+        board: board.state.clone(),
+        kept,
+        removable,
+    }
+}
+
 /// Read the store and the board, and say what could go.
 ///
-/// A read, so it answers with a project of `None` rather than refusing when
-/// there is nothing open: the section still has a size to show, and the button
-/// under it has a reason to be disabled that a person can read.
+/// A read, so it answers rather than refusing when there is no project or no
+/// readable board: the section still has a size to show, and the button under
+/// it has a reason to be disabled that a person can read.
 #[tauri::command]
 pub async fn attachments_survey(app: AppHandle) -> Result<Survey, AttachmentError> {
     let root = store_root(&app)?;
-    let (project, snapshot) = current(&app).await?;
-    let (kept, removable) = match &project {
-        Some(project) => survey_dir(&root.join(project_key(project)), &snapshot.issues),
-        None => (Tally::default(), Tally::default()),
-    };
-    Ok(Survey {
-        store: weigh(&root),
-        project: project.map(|path| path.to_string_lossy().into_owned()),
-        kept,
-        removable,
-    })
+    let (project, board, snapshot) = current(&app).await?;
+    Ok(survey(&root, project.as_deref(), &board, &snapshot.issues))
 }
 
 /// The one thing in this app that deletes somebody's pictures, and it happens
@@ -478,25 +532,24 @@ pub async fn attachments_survey(app: AppHandle) -> Result<Survey, AttachmentErro
 #[tauri::command]
 pub async fn attachments_clean(app: AppHandle) -> Result<Cleaned, AttachmentError> {
     let root = store_root(&app)?;
-    let (project, snapshot) = current(&app).await?;
-    // Not "delete nothing and say it worked": with no project there is no
-    // tracker to ask what is still wanted, so there is no honest answer here at
-    // all — and a write that looked like it happened is the one thing this app
-    // refuses everywhere.
-    let Some(project) = project else { return Err(AttachmentError::NoProject) };
+    let (project, board, snapshot) = current(&app).await?;
+    // The gate is asked before anything is listed, let alone deleted. Both
+    // refusals it can give are absences of the one thing that could vouch for
+    // these files — a board — and neither may be softened into "there was
+    // nothing to delete": an unreadable board is indistinguishable from an
+    // empty one right up to the moment the sweep takes every picture in the
+    // project. See `cleanup::refusal`.
+    if let Some(refusal) = cleanup::refusal(project.as_deref(), &board.state) {
+        return Err(refusal);
+    }
+    let project = project.expect("refusal answers NoProject when there is no project");
 
-    let dir = root.join(project_key(&project));
+    let dir = project_dir(&root, Some(&project));
     let (removed, failed) = sweep(&dir, &snapshot.issues);
-    let (kept, removable) = survey_dir(&dir, &snapshot.issues);
     Ok(Cleaned {
         removed,
         failed,
-        survey: Survey {
-            store: weigh(&root),
-            project: Some(project.to_string_lossy().into_owned()),
-            kept,
-            removable,
-        },
+        survey: survey(&root, Some(&project), &board, &snapshot.issues),
     })
 }
 
@@ -815,6 +868,7 @@ mod tests {
 
         assert_eq!(AttachmentError::NotAnImage("a.txt".into()).kind(), "notAnImage");
         assert_eq!(AttachmentError::NoProject.kind(), "noProject");
+        assert_eq!(AttachmentError::NoBoard.kind(), "noBoard");
         assert_eq!(AttachmentError::Io("x".into()).kind(), "io");
     }
 
@@ -922,6 +976,56 @@ mod tests {
         assert_eq!(survey_dir(&root.join("never-used"), &[]), (Tally::default(), Tally::default()));
         assert_eq!(sweep(&root.join("never-used"), &[]), (Tally::default(), 0));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn healthy() -> Health {
+        Health { state: HealthState::Ok, message: None }
+    }
+
+    #[test]
+    fn a_survey_of_an_unreadable_board_offers_nothing_rather_than_everything() {
+        // The number on screen and the button under it come from one function
+        // for this reason: with the board unreadable the honest count is zero,
+        // and a survey that offered the whole folder while the press refused
+        // would be the same mistake told quietly.
+        let (root, mine, _) = store_with_three("survey-unreadable");
+        let project = Path::new("/projects/mine");
+        let broken = Health {
+            state: HealthState::Error,
+            message: Some("bd exited with code 1".into()),
+        };
+
+        let answer = survey(&root, Some(project), &broken, &[]);
+
+        assert_eq!(answer.removable, Tally::default(), "nothing may be offered off a board nobody read");
+        assert_eq!(answer.kept, Tally::default());
+        assert_eq!(answer.board, HealthState::Error, "the window needs to say why");
+        assert_eq!(answer.store.files, 3, "the size of the store is still a fact");
+        assert!(mine.join("20260806-121314-mine.png").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_survey_of_a_readable_board_offers_what_the_sweep_would_take() {
+        let (root, _, _) = store_with_three("survey-readable");
+        let project = Path::new("/projects/mine");
+
+        let answer = survey(&root, Some(project), &healthy(), &[]);
+
+        assert_eq!(answer.removable.files, 1);
+        assert_eq!(answer.board, HealthState::Ok);
+        assert_eq!(answer.project.as_deref(), Some("/projects/mine"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn where_a_picture_is_written_and_where_the_sweep_runs_are_one_expression() {
+        // Three copies of this join agreed until they did not, and the way that
+        // fails is a sweep pointed at a directory nothing writes to.
+        let root = Path::new("/store");
+        let project = Path::new("/projects/mine");
+        assert_eq!(project_dir(root, Some(project)), root.join(project_key(project)));
+        assert_eq!(project_dir(root, None), root, "an unknown project writes to the root");
     }
 
     #[test]

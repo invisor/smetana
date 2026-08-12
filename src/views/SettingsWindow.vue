@@ -134,7 +134,7 @@ const tab = ref('general')
 
    Read on opening the tab rather than on mounting the window: the answer costs
    a queue behind the tracker worker, which may be two seconds into a bd call,
-   and three of the five tabs have no use for it. */
+   and the other four tabs have no use for it. */
 const storage = reactive({ survey: null, busy: false, error: null, cleaned: null })
 
 const readStorage = async () => {

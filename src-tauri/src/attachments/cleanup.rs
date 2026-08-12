@@ -15,9 +15,9 @@
 
 use std::path::Path;
 
-use crate::tracker::model::Issue;
+use crate::tracker::model::{HealthState, Issue};
 
-use super::slug;
+use super::{slug, AttachmentError};
 
 /// bd's own word for an issue that is over. Everything else — `open`,
 /// `in_progress`, `parked`, a custom status this app has never heard of —
@@ -119,6 +119,37 @@ fn prose(issue: &Issue) -> [Option<&str>; 4] {
         issue.design.as_deref(),
         issue.notes.as_deref(),
     ]
+}
+
+/// Why a sweep must not run, or `None` when it may.
+///
+/// **An empty board and an unreadable board are the same `Snapshot` and
+/// opposite facts**, and the whole of this function exists to keep them apart.
+/// `removable` reads a board that holds nothing as "no task refers to any of
+/// these files", which is the truth when bd was read and the project genuinely
+/// has no issues — and a catastrophe when bd could not be read at all, because
+/// the worker keeps the project open with an empty store after a failed sync
+/// and every attachment of every live task would then be unreferenced. The
+/// states that reach here are ordinary, not exotic: no bd on the machine (which
+/// `postinstall` explicitly tolerates), a version mismatch, a damaged `.beads`,
+/// and a folder that has no tracker at all — where the app deliberately stays
+/// open so `bd init` can be offered.
+///
+/// So the rule is the one `runs/browser.rs` already sets for this repository:
+/// anything unobservable reads as "no", loudly. A board that is not `Ok` is not
+/// a board, and the pictures in that project's folder have nobody to vouch for
+/// them — which is exactly the argument `NoProject` was already written for.
+pub fn refusal(project: Option<&Path>, board: &HealthState) -> Option<AttachmentError> {
+    if project.is_none() {
+        return Some(AttachmentError::NoProject);
+    }
+    match board {
+        HealthState::Ok => None,
+        // The health message would be a second copy of what the board area of
+        // the app window is already saying; the kind is what this refusal is
+        // about, and the front end has its own sentence for it.
+        _ => Some(AttachmentError::NoBoard),
+    }
 }
 
 /// What may go: every file no unfinished task mentions.
@@ -250,12 +281,47 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_board_makes_every_file_removable() {
-        // A project whose tracker holds nothing yet, and the honest answer: no
-        // task refers to any of it. Refusing to sweep an empty board would be a
-        // special case with nothing behind it.
+    fn a_board_that_was_read_and_holds_nothing_makes_every_file_removable() {
+        // A project whose tracker really is empty, and the honest answer: no
+        // task refers to any of it. That this function cannot tell such a board
+        // from one that could not be read is the reason `refusal` exists and is
+        // asked first — see the test below.
         let files = [file(A, 10), file(B, 20)];
         assert_eq!(removable(&files, &[]), vec![&files[0], &files[1]]);
+    }
+
+    #[test]
+    fn a_board_that_could_not_be_read_sweeps_nothing() {
+        // The other half of the pair above, and the one that costs somebody
+        // their screenshots when it is missing: every one of these states
+        // leaves the worker holding an open project and an empty snapshot, and
+        // `removable` would then call every attachment of every live task
+        // unreferenced.
+        let project = Path::new("/projects/mine");
+        for board in [
+            HealthState::Error,
+            HealthState::BdVersionMismatch,
+            HealthState::NotABeadsRepo,
+            HealthState::NoProject,
+        ] {
+            assert!(
+                matches!(refusal(Some(project), &board), Some(AttachmentError::NoBoard)),
+                "{board:?} is not a board that can vouch for anything"
+            );
+        }
+    }
+
+    #[test]
+    fn a_readable_board_over_an_open_project_is_the_one_case_that_sweeps() {
+        assert!(refusal(Some(Path::new("/projects/mine")), &HealthState::Ok).is_none());
+    }
+
+    #[test]
+    fn with_no_project_the_refusal_says_that_rather_than_blaming_the_board() {
+        // Two absences with two answers: nothing is open, against something is
+        // open and cannot be read. The person can act on the first.
+        assert!(matches!(refusal(None, &HealthState::Ok), Some(AttachmentError::NoProject)));
+        assert!(matches!(refusal(None, &HealthState::NoProject), Some(AttachmentError::NoProject)));
     }
 
     #[test]
@@ -283,8 +349,10 @@ mod tests {
     #[test]
     fn a_project_name_with_nothing_ascii_in_it_still_gets_a_key() {
         // The name is only for a person reading the directory listing; the hash
-        // is what tells two projects apart, so there is always a key.
-        let key = project_key(Path::new("/Users/you/Проекты/сметана"));
+        // is what tells two projects apart, so there is always a key. Any
+        // script would do; this one reads "project" in Japanese, matching the
+        // fixture `stored_name` is tested with next door.
+        let key = project_key(Path::new("/Users/you/プロジェクト/しごと"));
         assert!(key.starts_with("project-"), "{key}");
         assert!(key.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'), "{key}");
     }
