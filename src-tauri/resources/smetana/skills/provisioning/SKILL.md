@@ -114,23 +114,117 @@ decide.
 
 For each repository the task touches, in the order `[project].repos` gives:
 
-1. **Make sure `.worktrees` is ignored** — `git -C <repo> check-ignore -q .worktrees`.
+1. **Make sure the target branch is there, and that the main checkout is on it.**
+   Both halves are per repository: the branch is one name for the whole run, and a
+   project of several repositories can carry it in some of them and not others,
+   while the checkout is wherever somebody last left it. They are settled together,
+   as one rule rather than two that happen to agree, because there is one outcome
+   between them — the repository ends up clean and on the target branch, which is
+   the state `merging` requires and never arranges for itself.
+
+   **An unignored `.worktrees/` does not count as dirt in the stops below** — it is
+   what step 2 exists to repair, and a repository arriving with one from an earlier
+   run would otherwise stop here over the single piece of mess the next step cleans
+   up. Everything else in a dirty tree counts.
+
+   ```bash
+   git -C <repo> show-ref --verify --quiet refs/heads/<target-branch>
+   ```
+
+   - Present → **the main checkout has to end up on it.** Only the switch is
+     conditional; the cleanliness check is not:
+
+     ```bash
+     git -C <repo> status --porcelain | grep -v '^?? \.worktrees/'   # empty, or STOP
+     git -C <repo> rev-parse --abbrev-ref HEAD   # already the target branch → no switch
+     git -C <repo> checkout <target-branch>
+     ```
+
+     Nothing about the cut below needs this: the worktree comes off the branch and
+     the checkout could stay where it is. What needs it is `merging`, and it needs
+     it far too late — its Step 1 stops unless the main checkout is clean and on
+     the target branch, so a repository parked on some other branch reaches the
+     merge phase with the work done, the review passed and the merge lock held, and
+     stops there on a precondition nobody was asked to satisfy. Settling it here
+     costs one command before a single worktree exists.
+
+     **A checkout already on the target branch is checked, not waved through.** It
+     is the most ordinary state of all — somebody was last working on the target
+     branch and left an edit there — and it fails that same Step 1, on the other
+     half of the precondition, the half a comparison of branch names never looks
+     at. Skip the status because the name already matches and the batch is claimed,
+     the worktrees cut, the work done, reviewed and merge-locked before anybody
+     finds out the tree was dirty the whole time. The name decides whether to
+     switch and nothing else.
+
+     **A run may move somebody's main checkout, and only while it is clean.** That
+     is the decision, and it is deliberate rather than an omission: the branch a
+     person left it on is one `git checkout` away for them afterwards and nothing
+     of theirs is lost, while the target branch is where this run is going anyway.
+     Uncommitted work is the half that cannot be put back, so **a dirty main
+     checkout is a STOP, naming the repository and what is uncommitted** — a switch
+     carrying that work would land somebody's unfinished changes on the branch
+     every task of the batch merges into.
+
+     **A switch git refuses is a STOP as well.** A branch is checked out in one
+     place at a time, so a target branch already out in a linked worktree of this
+     same repository cannot be moved to here. Git names the worktree holding it,
+     and that path is what the report carries — it is somebody's checkout or
+     another run's, and forcing past it is not this process's call.
+   - Absent, and the run's prompt said to cut it where it does not exist yet →
+     make it from this repository's own current branch (HEAD) **and leave the
+     main checkout on it**:
+
+     ```bash
+     git -C <repo> status --porcelain    # must be empty, or STOP
+     git -C <repo> checkout -b <target-branch>
+     ```
+
+     That repository's HEAD and not another repository's, and not the branch of
+     the same name somewhere else: there is no relationship between two
+     repositories' histories to preserve. Checking it out rather than only
+     creating the ref is what leaves the world in the state `merging` requires
+     — its Step 1 stops unless the main checkout is clean and *on* the target
+     branch, and its Step 5 merges into whatever that checkout has out, so a
+     bare `git branch` would make the run's own first merge fail a precondition
+     the run itself created.
+
+     **If the main checkout is not clean, STOP** rather than switching it.
+     Somebody's uncommitted work would ride onto the branch the whole run is
+     about to merge into, and `merging` demands a clean main checkout anyway —
+     so a dirty one is a stop either way, and it is far cheaper here, before a
+     single worktree exists, than after a batch of work has been done.
+   - Absent, and the prompt said nothing of the kind → **STOP**. The run was
+     told to merge into a branch that is not here and nobody said it could make
+     one. Cutting it anyway invents a base for every task in the batch.
+2. **Make sure `.worktrees` is ignored** — `git -C <repo> check-ignore -q .worktrees`.
    If it is not, add the line to that repository's `.gitignore` and commit it before
    going further. A worktree directory tracked by its own repository turns every later
-   `git status` into noise and can be committed by accident.
-2. **Cut from the target branch**, not from whatever is checked out:
+   `git status` into noise and can be committed by accident. **This is after step 1 and
+   not before it**, because both halves of it answer for whatever branch is checked out:
+   the commit lands on that branch, and so does the `.gitignore` `check-ignore` reads.
+   Done first, in a repository parked somewhere else, it leaves an unasked-for commit
+   stranded on somebody's branch and none on the target — and then step 3 cuts a
+   worktree the target branch does not ignore, which leaves the main checkout dirty for
+   the rest of the run and stops `merging` after the batch, for precisely the reason
+   step 1 exists.
+3. **Cut from the target branch**, not from whatever is checked out:
    `git -C <repo> worktree add "<wt>" -b "<branch>" <target-branch>`. The target branch
    is the run's, defaulting to `[defaults].target_branch`. It holds the siblings that
    already merged; cutting from anywhere else rebuilds the task against a state nothing
    else shares. The main checkout does not need to be clean for this — the worktree is
-   cut from a branch, not from the working tree.
-3. **Retry a lock.** Two creations racing produce an index or worktree lock error. Wait
+   cut from a branch, not from the working tree. That does not contradict the cleanliness
+   stop in step 1, and the difference is which checkouts move: cutting a worktree moves
+   none, while bringing the main checkout to the target branch — creating it there, or
+   switching to it — moves that one, and a switch is the only thing a dirty tree is in
+   the way of.
+4. **Retry a lock.** Two creations racing produce an index or worktree lock error. Wait
    a second or two and try again, up to three times.
-4. **A worktree already at that path belongs to this task** — the id in the slug
+5. **A worktree already at that path belongs to this task** — the id in the slug
    guarantees it. Reuse it; do not delete it and start again, it may hold work.
-5. **Bring it up.** Run `[repo.<name>].setup` in the fresh worktree if there is one.
+6. **Bring it up.** Run `[repo.<name>].setup` in the fresh worktree if there is one.
    Dependencies are not shared between worktrees, so this is not optional when it exists.
-6. **Copy in what git does not carry.** Each path in `[repo.<name>].env_files` is
+7. **Copy in what git does not carry.** Each path in `[repo.<name>].env_files` is
    gitignored and therefore absent from a fresh worktree: copy it from the main checkout.
    A missing source file is worth one line in your report, not a stop.
 
