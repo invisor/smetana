@@ -150,7 +150,10 @@ on its own. **This runs before you take any new work.**
 
 1. Pin the tracker, and set the custom statuses once — idempotent, and always the full
    set, because a partial value clobbers the others:
-   `bd config set status.custom "ready_to_merge,parked"`.
+   `bd config set status.custom "ready_to_merge,parked,human_check"`.
+   All three, every time, including the ones this phase never writes itself: dropping
+   `human_check` here would delete the status out from under Phase 3, whose card is then
+   filed and left in `open` for the next batch to pick up and try to implement.
    In the same breath, make sure the merge lock exists — look for it, create it only
    when it is not there: `bd list -l smetana-lock --json` answering nothing → create it
    exactly as `merging`'s lock section says. Idempotent the same way the statuses are:
@@ -342,8 +345,13 @@ Only when the run has the live check on. Mechanics are in `live-checking`.
 `bd dep tree <epic-id>` shows no other child still open, in progress, waiting to merge or
 parked → run one check for the epic itself, against the epic's own description, as an
 end-to-end flow. PASS → close the epic. FAIL → fix forward as above, with the fix as an
-epic child, and the epic stays open. **A parked child skips the gate entirely**: note on
-the epic that it is waiting on that child, and leave it open.
+epic child, and the epic stays open. INFRA → retried once and then treated exactly as a
+task's second INFRA: close the epic and file its human check card. The gate is the only
+place an epic can reach a verdict at all — its children never get checks of their own — so
+without this clause the one case the card was written for has no outcome at the epic level,
+and a whole epic's worth of merged work would sit open over a stand that would not start.
+**A parked child skips the gate entirely**: note on the epic that it is waiting on that
+child, and leave it open.
 
 ### The card that says a person still has to look
 
@@ -356,6 +364,16 @@ own status is never changed to make room for this.
 **Only in this phase, and only when the live check is on.** A run started with the live
 check off files none of these at all — somebody who switched it off has said they do not
 want to be sent looking tonight.
+
+**The findings switch does not reach this card, and the live-check switch is the one that
+does.** That is not an exemption granted to it; the two switches answer different
+questions. Findings are things a review or a check *noticed* that might be worth working
+on later, and the switch turns off filing them because a queue that feeds itself is worse
+than a lost observation. This card is neither noticed nor work: it is the run stating what
+it could not verify about a task it has just merged and closed, which is a fact about that
+task and not a candidate for anybody's queue. So a run with findings off and the live check
+on files these exactly as it would otherwise, and a run with the live check off files none
+whatever the findings switch says.
 
 File one in exactly three cases:
 
@@ -387,6 +405,16 @@ EOF
 bd update "$check" --status human_check
 bd dep add "$check" <task-id> --type related
 ```
+
+The priority is **the checked task's own**, copied across. Nothing ever queues this card, so
+the number decides no order of work and buys nothing by being reasoned about; what it does
+is carry the weight of the thing being checked into a column somebody scans by eye. Invent
+one and every lead invents a different one, and the column sorts by an accident.
+
+`human_check` has to exist as a status before that `bd update`, and Phase R's very first
+step is what makes it exist — the full set, all three names. A refusal there is bd declining
+a status it has never been told about, not a bd fault: go and look at that config line
+before anything else.
 
 `related`, never `blocks`: only a `blocks` dependency holds a queue back, and a card waiting
 on a person must never hold work up. `human_check` keeps the card out of a run by itself — a
