@@ -176,6 +176,14 @@ describe('mergeOrder', () => {
   it('leaves the order alone when nothing was drawn', () => {
     expect(mergeOrder([], ['ready', 'done'])).toEqual(['ready', 'done'])
   })
+
+  it('writes a name into every slot even when the board repeats one', () => {
+    // Unreachable today — the board buckets its columns through a Map keyed on
+    // status. Pinned because the failure would not stay in this file: an
+    // undefined here reaches settings.json as a null and costs Rust the whole
+    // project section.
+    expect(mergeOrder(['a'], ['a', 'a'])).toEqual(['a', 'a'])
+  })
 })
 
 describe('columnChoices', () => {

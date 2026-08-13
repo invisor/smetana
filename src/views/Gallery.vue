@@ -757,6 +757,18 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @task-action="() => {}"
         />
       </div>
+      <!-- A board with no columns to draw, in both of the opposite facts that
+           can mean: nothing is connected, and everything is hidden by the view
+           settings over a board that is perfectly full. The second is the one
+           worth having here — it is the only place its sentence can be read. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)' }">
+        <div :style="{ flex: 1, display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <KanbanBoard :columns="[]" />
+        </div>
+        <div :style="{ flex: 1, display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <KanbanBoard :columns="[]" filtered />
+        </div>
+      </div>
       <!-- Tall enough for the whole dialog, footer included: a frame that
            clips it turns the one harness that would catch a broken modal into
            a picture of the top half. It grew from 400px with the images row

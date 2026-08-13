@@ -2098,6 +2098,7 @@ const toastStackStyle = {
         <KanbanBoard
           v-else
           :columns="drawnColumns"
+          :filtered="orderedColumns.length > 0"
           :selected-id="highlightedTask"
           :add-to="ADD_TO"
           :run-from="runOffered ? ADD_TO : null"

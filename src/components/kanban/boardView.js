@@ -132,7 +132,14 @@ export function mergeOrder(drawn, all) {
   const leftover = names.filter((name) => !all.includes(name))
 
   let next = 0
-  const merged = all.map((name) => (moving.has(name) ? queue[next++] : name))
+  /* The `?? name` guards a branch nothing can reach today — `all` comes from
+     `boardColumns`, which buckets through a `Map` keyed on status and so cannot
+     repeat a name — and it is written anyway because the failure would not stay
+     here. A duplicate in `all` exhausts the queue, the `undefined` lands in
+     `project.columnOrder`, serialises as `null`, and Rust's `Vec<String>` then
+     refuses the whole project section of `settings.json`: side tab, open tabs,
+     expanded folders and selection, gone for a column drawn twice. */
+  const merged = all.map((name) => (moving.has(name) ? (queue[next++] ?? name) : name))
   return [...merged, ...leftover]
 }
 
