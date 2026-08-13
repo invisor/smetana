@@ -94,6 +94,73 @@ pub const EDITOR_FONT_DEFAULT: u32 = 12;
 const MIN_FONT: u32 = 10;
 const MAX_FONT: u32 = 24;
 
+/// How the board is drawn: which columns are worth a slot on screen, and how
+/// far back a card is worth looking at.
+///
+/// At the root beside `layout` and `editor` rather than under a project, and
+/// that is a decision with its eyes open. The honest argument for per-project
+/// is the one written on `column_order` below — a custom status of one
+/// repository has no meaning in another's — and both lists here are lists of
+/// exactly such statuses. What outweighed it is the size of the change: storing
+/// them per project would widen the two windows' contract by a project half
+/// (`settings:state` carrying the active project's state, `settings:apply` able
+/// to edit it, the settings window learning which project it is talking about),
+/// and nobody asked for that. The price is paid in the interface instead: the
+/// tab draws a stored name that no column of this project matches in a group of
+/// its own, so it can be seen and taken off.
+///
+/// Both scalars default to today's board exactly — every column, every task —
+/// so nothing on anybody's screen moves until they go and choose. The same
+/// argument that keeps both agent languages at `en` rather than at an Auto.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct KanbanSettings {
+    /// `all` or `non-empty`.
+    pub columns: String,
+    /// Columns that stay on the board even when nothing is in them. Only means
+    /// anything under `non-empty`.
+    pub always_show: Vec<String>,
+    /// `all`, `day`, `week` or `month`.
+    pub interval: String,
+    /// Columns the interval does not reach: they show everything they hold,
+    /// whatever the window says.
+    pub unlimited: Vec<String>,
+}
+
+impl Default for KanbanSettings {
+    fn default() -> Self {
+        Self {
+            columns: "all".into(),
+            always_show: Vec::new(),
+            interval: "all".into(),
+            unlimited: Vec::new(),
+        }
+    }
+}
+
+/// The two closed lists, written out a second time in
+/// `src/components/kanban/boardView.js` — the same doubling `SIDE_TABS` and
+/// `STORAGE_THRESHOLDS_MIB` carry, and with the same obligation: what the tab
+/// offers must be a subset of what this accepts, since a value refused here
+/// loses itself on the next save with nothing on screen to say so.
+const KANBAN_COLUMNS: [&str; 2] = ["all", "non-empty"];
+const KANBAN_INTERVALS: [&str; 4] = ["all", "day", "week", "month"];
+
+impl KanbanSettings {
+    fn validate(&mut self) {
+        one_of(&mut self.columns, &KANBAN_COLUMNS, "all");
+        one_of(&mut self.interval, &KANBAN_INTERVALS, "all");
+        // Status names, so the identifier ceiling and the same cap a column
+        // order gets. Membership is deliberately not checked here either: bd's
+        // set of statuses is unknown on this side, and a name matching nothing
+        // is drawn as such by the tab rather than being thrown away — which is
+        // what makes a list stored against another project's board removable
+        // instead of invisibly at work.
+        sane_list(&mut self.always_show, MAX_COLUMNS, MAX_ID_LEN);
+        sane_list(&mut self.unlimited, MAX_COLUMNS, MAX_ID_LEN);
+    }
+}
+
 /// Collapsed state and width of the side panels — also about the screen, not
 /// about content.
 ///
@@ -282,6 +349,9 @@ pub struct Settings {
     /// The code editor's own preferences. A section of its own at the root, for
     /// the reason `EditorSettings` records.
     pub editor: EditorSettings,
+    /// How the board is drawn. At the root rather than under a project, for the
+    /// reason `KanbanSettings` records.
+    pub kanban: KanbanSettings,
     /// Which CLI agent the app starts. A habit of the person's, not a property
     /// of the repository, so it sits at the root rather than under a project.
     ///
@@ -314,6 +384,7 @@ impl Default for Settings {
             appearance: Appearance::default(),
             layout: Layout::default(),
             editor: EditorSettings::default(),
+            kanban: KanbanSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -338,6 +409,8 @@ pub struct ResolvedSettings {
     pub layout: Layout,
     /// The code editor's own preferences. See `Settings::editor`.
     pub editor: EditorSettings,
+    /// How the board is drawn. See `Settings::kanban`.
+    pub kanban: KanbanSettings,
     /// Which CLI agent the app starts. See `Settings::agent`.
     pub agent: String,
     /// The two languages. See `Settings::agent_language`.
@@ -360,6 +433,7 @@ impl Default for ResolvedSettings {
             appearance: Appearance::default(),
             layout: Layout::default(),
             editor: EditorSettings::default(),
+            kanban: KanbanSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -400,6 +474,7 @@ pub fn parse(text: &str) -> Outcome {
         appearance: section(&object, "appearance"),
         layout: section(&object, "layout"),
         editor: section(&object, "editor"),
+        kanban: section(&object, "kanban"),
         agent: object.get("agent").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| "claude".into()),
         agent_language: language_field(&object, "agentLanguage"),
         task_language: language_field(&object, "taskLanguage"),
@@ -439,6 +514,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         appearance: file.appearance.clone(),
         layout: file.layout.clone(),
         editor: file.editor.clone(),
+        kanban: file.kanban.clone(),
         agent: file.agent.clone(),
         agent_language: file.agent_language.clone(),
         task_language: file.task_language.clone(),
@@ -460,6 +536,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.appearance = resolved.appearance;
     file.layout = resolved.layout;
     file.editor = resolved.editor;
+    file.kanban = resolved.kanban;
     file.agent = resolved.agent;
     file.agent_language = resolved.agent_language;
     file.task_language = resolved.task_language;
@@ -567,6 +644,7 @@ impl Settings {
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
+        self.kanban.validate();
         for state in self.projects.values_mut() {
             state.validate();
         }
@@ -583,6 +661,7 @@ impl ResolvedSettings {
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
+        self.kanban.validate();
         self.project.validate();
         sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
         active_in(&mut self.active_project, &self.open_projects);
@@ -858,6 +937,97 @@ mod tests {
         let settings = settings_of(r#"{"version":1,"editor":"large","appearance":{"theme":"light"}}"#);
         assert_eq!(settings.editor, EditorSettings::default());
         assert_eq!(settings.appearance.theme, "light");
+    }
+
+    #[test]
+    fn a_file_written_before_the_board_settings_draws_the_board_it_always_did() {
+        // Every settings file on a person's disk right now is this file, and
+        // the shipped values have to be today's board exactly: every column,
+        // every task.
+        let settings = settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.kanban, KanbanSettings::default());
+        assert_eq!(settings.kanban.columns, "all");
+        assert_eq!(settings.kanban.interval, "all");
+        assert!(settings.kanban.always_show.is_empty());
+        assert!(settings.kanban.unlimited.is_empty());
+    }
+
+    #[test]
+    fn a_board_value_outside_its_closed_list_loses_only_itself() {
+        let settings = settings_of(
+            r#"{"version":1,"kanban":{"columns":"some","interval":"week","alwaysShow":["ready"]}}"#,
+        );
+        assert_eq!(settings.kanban.columns, "all");
+        assert_eq!(settings.kanban.interval, "week", "the neighbouring field must survive");
+        assert_eq!(settings.kanban.always_show, vec!["ready".to_string()]);
+
+        let settings = settings_of(r#"{"version":1,"kanban":{"columns":"non-empty","interval":"fortnight"}}"#);
+        assert_eq!(settings.kanban.interval, "all");
+        assert_eq!(settings.kanban.columns, "non-empty", "the neighbouring field must survive");
+    }
+
+    #[test]
+    fn a_board_section_of_the_wrong_type_is_lost_whole() {
+        let settings =
+            settings_of(r#"{"version":1,"kanban":"compact","appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.kanban, KanbanSettings::default());
+        assert_eq!(settings.appearance.theme, "light", "and it takes nothing with it");
+    }
+
+    #[test]
+    fn the_board_column_lists_lose_blanks_duplicates_and_overlong_names() {
+        let long = "x".repeat(MAX_ID_LEN + 1);
+        let text = serde_json::json!({
+            "version": 1,
+            "kanban": { "alwaysShow": ["ready", "ready", "", long, "done"], "unlimited": ["ready"] }
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(settings.kanban.always_show, vec!["ready".to_string(), "done".to_string()]);
+        assert_eq!(settings.kanban.unlimited, vec!["ready".to_string()]);
+    }
+
+    /// The same walk the font sizes make above, and for the same reason: a
+    /// section added to the structs but not wired into `parse`, `resolve` and
+    /// `merge` reads as the default forever, and no struct-alone test sees it.
+    #[test]
+    fn the_board_settings_survive_disk_to_front_end_and_back() {
+        let file = settings_of(
+            r#"{"version":1,"kanban":{"columns":"non-empty","alwaysShow":["ready"],
+                "interval":"day","unlimited":["done"]}}"#,
+        );
+        assert_eq!(file.kanban.columns, "non-empty", "parse must read them off the disk");
+
+        let resolved = resolve(&file, None);
+        assert_eq!(resolved.kanban.interval, "day", "resolve must carry them to the front end");
+        assert_eq!(resolved.kanban.unlimited, vec!["done".to_string()]);
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(written.kanban.columns, "non-empty", "merge must carry them back into the file");
+        assert_eq!(written.kanban.always_show, vec!["ready".to_string()]);
+        assert_eq!(written.kanban.interval, "day");
+    }
+
+    #[test]
+    fn a_board_value_the_front_end_should_not_have_sent_does_not_reach_the_file() {
+        let mut file = Settings::default();
+        let resolved = ResolvedSettings {
+            kanban: KanbanSettings {
+                columns: "some".into(),
+                interval: "week".into(),
+                always_show: vec!["ready".into(), "ready".into()],
+                unlimited: Vec::new(),
+            },
+            ..ResolvedSettings::default()
+        };
+
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
+
+        assert_eq!(file.kanban.columns, "all", "validated on the way in, not only on the way out");
+        assert_eq!(file.kanban.interval, "week");
+        assert_eq!(file.kanban.always_show, vec!["ready".to_string()], "the duplicate fell out");
     }
 
     #[test]

@@ -58,6 +58,54 @@ export async function watchSettingsSection(onShow) {
   return listen(SETTINGS_SHOW, (event) => onShow(event.payload?.tab ?? null))
 }
 
+/* Which columns the active project's board has, so the Kanban tab can offer
+   them as checkboxes. Two events, the same hello-and-announcement shape
+   `settings.js` uses, because a settings window opened at any moment has to
+   learn the set it missed.
+
+   Here rather than as a fourth message in the settings contract, and for the
+   reason `settings:show` above is here: nothing about it reaches
+   `settings.json`, and those three events are about the one file the main
+   window is the only writer of.
+
+   Asking Rust — the way the Storage tab asks about the attachment folder —
+   would not work: `blocked` is a *computed* column, no such status exists in
+   bd (a task in it is `open` with an unclosed blocker), so the real set of
+   columns exists only in `boardColumns` on the front end. A list out of Rust
+   would be missing exactly the column somebody is most likely to want pinned. */
+export const BOARD_COLUMNS = 'board:columns'
+export const BOARD_HELLO = 'board:hello'
+
+/* The app window's half: this is the set now. Called on every change to it and
+   again whenever a settings window says hello — an announcement nobody is
+   listening to costs an event and nothing else. */
+export async function announceBoardColumns(columns) {
+  try {
+    await emit(BOARD_COLUMNS, { columns })
+  } catch (err) {
+    console.warn('[app] the settings window was not told which columns the board has:', err)
+  }
+}
+
+export async function watchBoardHello(onHello) {
+  return listen(BOARD_HELLO, () => onHello())
+}
+
+/* The settings window's half. The hello is sent after the subscription, never
+   before — the answer is an event too, and one sent first would be answered
+   into a window that is not listening yet. It is not awaited, for the reason
+   `watchSharedSettings` records: the subscription already exists and has to
+   reach the caller whatever the hello does. A hello that never went costs an
+   empty checkbox list until the board next changes, which is the fall-back this
+   window already has. */
+export async function watchBoardColumns(onColumns) {
+  const stop = await listen(BOARD_COLUMNS, (event) => onColumns(event.payload?.columns ?? []))
+  emit(BOARD_HELLO, null).catch((err) => {
+    console.warn('[app] the app window was not asked which columns the board has:', err)
+  })
+  return stop
+}
+
 /* The version this build carries — `tauri.conf.json`'s `version`, which is the
    one a person would quote in a bug report. `null` when there is nobody to ask
    (a browser): the About tab draws a dash rather than inventing a number, since
