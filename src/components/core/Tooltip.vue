@@ -150,12 +150,20 @@ function onPointerdown() {
 
 onUnmounted(cancel)
 
-/* For a trigger that cannot reach these events itself. `focusin` bubbles up
-   from whatever took the focus, so an element wrapping this one — a column
-   header, which is its own drag handle and therefore the thing that takes the
-   focus — never puts this span on the event's path. Handing it the same two
-   entry points is what keeps one timer and one rule; the alternative was a
-   second wait, kept in the component that owns the header. */
+/* Relays for an ancestor that owns the focus, and nothing wider than that.
+   `focusin` bubbles up from whatever took the focus, so an element wrapping
+   this one — a column header, which is its own drag handle and therefore the
+   thing that takes the focus — never puts this span on the event's path.
+   Handing it the same two entry points is what keeps one timer and one rule;
+   the alternative was a second wait, kept in the component that owns the
+   header.
+
+   The contract that comes with them: whoever calls `show` owns the matching
+   `hide`. This is deliberately **not** a way to open a tooltip programmatically
+   — no `open` state is exposed to reconcile against, so a caller that shows and
+   forgets leaves a panel that only its own `hide`, a `mouseleave` or a
+   `focusout` can take down, sitting over the interface until one of the three
+   happens. Every caller is expected to be relaying a pair of real events. */
 defineExpose({ show, hide })
 
 const tipStyle = computed(() => ({
