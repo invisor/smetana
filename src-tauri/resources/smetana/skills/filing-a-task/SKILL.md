@@ -129,15 +129,18 @@ say plainly in the criteria what is still undecided and who has to decide it,
 and park it so that no run picks it up and stalls:
 
 ```sh
-bd config set status.custom "ready_to_merge,parked"
+bd config set status.custom "ready_to_merge,parked,human_check"
 bd update <id> --status parked
 bd note <id> "parked: <the one thing that needs a person, concretely>"
 ```
 
 The config line is idempotent and must always carry the full set — a partial
-value clobbers the rest. `parked` does not exist as a status until it is set,
-and `bd update` refuses an unknown one, so run it first rather than reading the
-refusal as a bd problem. A parked task sits on the board where somebody will
+value clobbers the rest. That set is the repository's, not this skill's, so
+`human_check` belongs in it here too even though nothing on this page ever writes
+that status: naming only the ones you need deletes the others, and the damage
+lands somewhere else entirely. `parked` does not exist as a status until it is
+set, and `bd update` refuses an unknown one, so run it first rather than reading
+the refusal as a bd problem. A parked task sits on the board where somebody will
 see it; `bd ready` never returns it.
 
 What must not happen is a section filled in to get past the validator. An

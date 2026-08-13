@@ -102,7 +102,15 @@ const EXTRA_GLYPH = {
      a bd status, the other is how an agent asks a question — so the triangle
      still means one thing wherever it is drawn. */
   parked: 'triangle-alert',
-  'ready-to-merge': 'git-merge'
+  'ready-to-merge': 'git-merge',
+  /* Merged and closed, and still owing somebody a look before it counts as
+     done. A person with a tick rather than the generic tag, because the column
+     is about the person and that has to be visible; and deliberately not the
+     reserved `needs-you`, whose loudness is budgeted at one or two rows on a
+     screen while this column holds a dozen cards at a time. It is a custom
+     status, so it takes a generated hue and the `HC` code beside it — colour is
+     never alone — and `attentionLevel` leaves it at ordinary `live`. */
+  'human-check': 'user-check'
 }
 
 /* A status nobody has heard of is an ordinary outcome, not an error: it draws

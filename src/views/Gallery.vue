@@ -33,6 +33,7 @@ import {
   IconButton,
   Input,
   KanbanBoard,
+  KanbanSettings,
   LogView,
   MenuButton,
   Modal,
@@ -335,9 +336,14 @@ const CLAIMED = [
    the three that carry a hue and the neutral set everything else falls into. */
 const types = ['bug', 'feature', 'epic', 'task', 'chore', 'decision', 'tech-debt']
 
-/* Reserved statuses plus generated ones, to show both halves of the algorithm. */
+/* Reserved statuses plus generated ones, to show both halves of the algorithm.
+   `human_check` is here in bd's own spelling and not for symmetry: it is the
+   badge the task inspector draws for a card waiting on somebody's eye, and its
+   two-letter code is the whole of what tells that status apart from the other
+   generated ones. */
 const statuses = [
   'blocked', 'ready', 'running', 'needs-you', 'done', 'failed',
+  'human_check',
   'awaiting-review', 'needs-triage', 'on-hold', 'shipped'
 ]
 
@@ -389,12 +395,12 @@ const busyBoardColumns = computed(() =>
 )
 
 /* Every glyph a column header can draw: bd's built-in vocabulary, the two
-   reserved statuses no bd column carries but a custom one might, the two custom
-   statuses that have a glyph of their own — `ready_to_merge` in bd's own
-   spelling, to show `normalizeStatus` doing its half — and one on the end with
-   no glyph, for the generic tag. `running` appears twice, because the spinner
-   is the count's business: it turns over work and stands still over an empty
-   column. */
+   reserved statuses no bd column carries but a custom one might, the three
+   custom statuses that have a glyph of their own — `ready_to_merge` and
+   `human_check` in bd's own spelling, to show `normalizeStatus` doing its half
+   — and one on the end with no glyph, for the generic tag. `running` appears
+   twice, because the spinner is the count's business: it turns over work and
+   stands still over an empty column. */
 const columnHeaders = [
   { status: 'ready', count: 4 },
   { status: 'running', count: 2 },
@@ -408,6 +414,7 @@ const columnHeaders = [
   { status: 'failed', count: 0 },
   { status: 'parked', count: 2 },
   { status: 'ready_to_merge', count: 1 },
+  { status: 'human_check', count: 3 },
   { status: 'awaiting-review', count: 2 }
 ]
 
@@ -469,6 +476,15 @@ const galleryAgent = ref('claude')
    twice would never draw it. */
 const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
+/* The Kanban tab. Both lists live rather than off, since the interesting shape
+   of this tab is a checkbox column that does something — and the fixture board
+   deliberately carries a name no column of it matches (`triage`), which is the
+   second group, the whole price of storing these lists globally. */
+const galleryKanbanColumns = ref('non-empty')
+const galleryKanbanAlwaysShow = ref(['ready', 'triage'])
+const galleryKanbanInterval = ref('week')
+const galleryKanbanUnlimited = ref(['blocked'])
+const galleryBoardColumns = ['blocked', 'ready', 'running', 'needs-you', 'done']
 /* `attachments_survey`'s answer in Rust's own shape — a store bigger than this
    project's share of it, some of that share in use and some of it not. */
 const gallerySurvey = {
@@ -753,6 +769,18 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @run="() => {}"
           @task-action="() => {}"
         />
+      </div>
+      <!-- A board with no columns to draw, in both of the opposite facts that
+           can mean: nothing is connected, and everything is hidden by the view
+           settings over a board that is perfectly full. The second is the one
+           worth having here — it is the only place its sentence can be read. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)' }">
+        <div :style="{ flex: 1, display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <KanbanBoard :columns="[]" />
+        </div>
+        <div :style="{ flex: 1, display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <KanbanBoard :columns="[]" filtered />
+        </div>
       </div>
       <!-- Tall enough for the whole dialog, footer included: a frame that
            clips it turns the one harness that would catch a broken modal into
@@ -1407,6 +1435,19 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <KanbanSettings
+            :columns="galleryKanbanColumns"
+            :always-show="galleryKanbanAlwaysShow"
+            :interval="galleryKanbanInterval"
+            :unlimited="galleryKanbanUnlimited"
+            :board-columns="galleryBoardColumns"
+            @update:columns="galleryKanbanColumns = $event"
+            @update:always-show="galleryKanbanAlwaysShow = $event"
+            @update:interval="galleryKanbanInterval = $event"
+            @update:unlimited="galleryKanbanUnlimited = $event"
           />
         </div>
         <!-- The Storage tab in the three states worth looking at: something to
