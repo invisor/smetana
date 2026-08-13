@@ -1,9 +1,10 @@
 <script setup>
-import { computed, nextTick } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { attentionLevel, statusColors, statusGlyph } from '../status/status.js'
+import { columnHelp, COLUMN_HELP_DELAY } from './columnHelp.js'
 
 const props = defineProps({
   status: { type: String, required: true },
@@ -143,6 +144,42 @@ const promoteLabel = computed(() =>
   `Move ${props.count} ${props.count === 1 ? 'task' : 'tasks'} to ready`
 )
 
+/* What the column is, in a sentence, after a wait — over the glyph, the name
+   and the count, and over nothing else in the header. The buttons keep their
+   own labels, which are about the press rather than about the column.
+
+   The header is also the thing the keyboard focuses, and it is the tooltip's
+   *ancestor* rather than its descendant, so `focusin` never reaches the panel's
+   own trigger. Hence the two relays below: the wait itself stays in `Tooltip`,
+   which is the one place that knows when the panel is up. */
+const help = ref(null)
+
+/* Only the header itself. Focus entering a button inside it is that button's
+   business — it has a label of its own — and the column's description under it
+   would be an answer to a question nobody asked. */
+const onFocusin = (event) => {
+  if (event.target === event.currentTarget) help.value?.show()
+}
+
+const onFocusout = () => help.value?.hide()
+
+/* The wrapper stands where the three items used to stand, so it has to shrink
+   the way they did: without `min-width: 0` a flex item refuses to go below its
+   own content, and a long custom status would stop ellipsising and push the
+   buttons out of the header instead. */
+const helpStyle = {
+  minWidth: 0,
+  overflow: 'hidden'
+}
+
+/* Inside the slot, the spacing the header itself used to give these three. */
+const helpInnerStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-4)',
+  minWidth: 0
+}
+
 const wipStyle = computed(() => ({
   display: 'inline-flex',
   alignItems: 'center',
@@ -159,12 +196,24 @@ const wipStyle = computed(() => ({
     :aria-label="movable ? moveLabel : undefined"
     @pointerdown="onPointerdown"
     @keydown="onKeydown"
+    @focusin="onFocusin"
+    @focusout="onFocusout"
   >
-    <Icon :name="glyph" :size="12" :stroke-width="2" :style="glyphStyle" />
-    <span :style="nameStyle">{{ label }}</span>
-    <span :style="{ font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-      {{ count }}
-    </span>
+    <Tooltip
+      ref="help"
+      :label="columnHelp(status)"
+      :delay="COLUMN_HELP_DELAY"
+      side="bottom"
+      :style="helpStyle"
+    >
+      <span :style="helpInnerStyle">
+        <Icon :name="glyph" :size="12" :stroke-width="2" :style="glyphStyle" />
+        <span :style="nameStyle">{{ label }}</span>
+        <span :style="{ font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+          {{ count }}
+        </span>
+      </span>
+    </Tooltip>
     <Tooltip v-if="wipLimit != null" :label="`WIP limit ${wipLimit}`">
       <span :style="wipStyle">
         <Icon :name="over ? 'triangle-alert' : 'gauge'" :size="10" :stroke-width="2" />/{{ wipLimit }}
