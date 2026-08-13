@@ -88,6 +88,10 @@ with no such line is depth 0 — a human wrote it.
 A suggestion that feels important enough to file is a severity error on the reviewer's
 part, not permission to file. Send it back as "BLOCKING or digest — pick one".
 
+Phase 3's human check card is not on this table and is not governed by it. It is not a
+finding — nothing was found — but a note that finished work still owes somebody a look, and
+it has its own rules where it is filed.
+
 ### The depth budget
 
 - **Depth 3 or more — never file anything**, whatever the severity. Digest and move on.
@@ -146,7 +150,10 @@ on its own. **This runs before you take any new work.**
 
 1. Pin the tracker, and set the custom statuses once — idempotent, and always the full
    set, because a partial value clobbers the others:
-   `bd config set status.custom "ready_to_merge,parked"`.
+   `bd config set status.custom "ready_to_merge,parked,human_check"`.
+   All three, every time, including the ones this phase never writes itself: dropping
+   `human_check` here would delete the status out from under Phase 3, whose card is then
+   filed and left in `open` for the next batch to pick up and try to implement.
    In the same breath, make sure the merge lock exists — look for it, create it only
    when it is not there: `bd list -l smetana-lock --json` answering nothing → create it
    exactly as `merging`'s lock section says. Idempotent the same way the statuses are:
@@ -327,14 +334,106 @@ Only when the run has the live check on. Mechanics are in `live-checking`.
   4. `bd note <id> "closed with follow-up <fix-id>"`, close, remove worktrees. After an
      epic-gate failure the epic itself stays open.
 - **INFRA** → not a verdict about the code. Retry the whole check once. A second INFRA →
-  park the task, with what failed to start and the tail of its log.
+  **close the task and file a human check card** (below). It used to park here, and that
+  was the wrong end to stop at: Phase 2 has already put the work on the target branch and
+  its gates were green, so holding it out of the run's account because there was nothing
+  on this machine to look at it with buries finished work under a fault that has nothing
+  to do with it. `bd note <id> "live check INFRA: <what failed to start, and the tail of
+  its log>"`, then close and remove worktrees exactly as a PASS does.
 
 **The epic gate.** After every close in this phase: if the task had an epic parent and
 `bd dep tree <epic-id>` shows no other child still open, in progress, waiting to merge or
 parked → run one check for the epic itself, against the epic's own description, as an
 end-to-end flow. PASS → close the epic. FAIL → fix forward as above, with the fix as an
-epic child, and the epic stays open. **A parked child skips the gate entirely**: note on
-the epic that it is waiting on that child, and leave it open.
+epic child, and the epic stays open. INFRA → retried once and then treated exactly as a
+task's second INFRA: close the epic and file its human check card. The gate is the only
+place an epic can reach a verdict at all — its children never get checks of their own — so
+without this clause the one case the card was written for has no outcome at the epic level,
+and a whole epic's worth of merged work would sit open over a stand that would not start.
+**A parked child skips the gate entirely**: note on the epic that it is waiting on that
+child, and leave it open.
+
+### The card that says a person still has to look
+
+Some work is finished, merged and green and still cannot be counted until somebody goes and
+uses it. That is not a question about the spec and not work that has stalled, so it is
+neither `parked` nor `deferred`: file a **separate check task** in the status `human_check`,
+and leave the task it is about to close exactly as it otherwise would. The checked task's
+own status is never changed to make room for this.
+
+**Only in this phase, and only when the live check is on.** A run started with the live
+check off files none of these at all — somebody who switched it off has said they do not
+want to be sent looking tonight.
+
+**The findings switch does not reach this card, and the live-check switch is the one that
+does.** That is not an exemption granted to it; the two switches answer different
+questions. Findings are things a review or a check *noticed* that might be worth working
+on later, and the switch turns off filing them because a queue that feeds itself is worse
+than a lost observation. This card is neither noticed nor work: it is the run stating what
+it could not verify about a task it has just merged and closed, which is a fact about that
+task and not a candidate for anybody's queue. So a run with findings off and the live check
+on files these exactly as it would otherwise, and a run with the live check off files none
+whatever the findings switch says.
+
+File one in exactly three cases:
+
+1. **A second INFRA.** There was nothing here to check with: the stand never came up, the
+   browser was held by somebody else's profile. This is the case the whole card exists for.
+2. **An acceptance criterion no agent can tick.** "In both themes and both densities",
+   "nothing is clipped", "it looks right". Those stay unticked under a PASS on every
+   scenario, and a PASS that quietly leaves them behind claims more than it checked.
+3. **You could not run it where a person runs it, and you are left with doubts.** For a
+   desktop application that is most of the surface — a browser, a component gallery and a
+   dev server are reachable from here and the application's own windows are not.
+
+File none for anything else. Not when the check was skipped as nothing a person can see —
+a refactor, tooling, internal work. Not on a clean PASS with no doubt left. And **FAIL does
+not change**: that is a bug and a fix forward, exactly as above.
+
+**One card per task, and for an epic one card for the epic as a whole.** An epic's children
+get none of their own — this phase already defers their check to the epic — so the epic's
+card covers the lot.
+
+Link it to what it is about, and never so that it blocks:
+
+```bash
+check=$(bd create --title "<what is being checked>" --type task --priority <N> \
+          --validate --silent --body-file - <<'EOF'
+<the walkthrough, then ## Acceptance Criteria>
+EOF
+)
+bd update "$check" --status human_check
+bd dep add "$check" <task-id> --type related
+```
+
+The priority is **the checked task's own**, copied across. Nothing ever queues this card, so
+the number decides no order of work and buys nothing by being reasoned about; what it does
+is carry the weight of the thing being checked into a column somebody scans by eye. Invent
+one and every lead invents a different one, and the column sorts by an accident.
+
+`human_check` has to exist as a status before that `bd update`, and Phase R's very first
+step is what makes it exist — the full set, all three names. A refusal there is bd declining
+a status it has never been told about, not a bd fault: go and look at that config line
+before anything else.
+
+`related`, never `blocks`: only a `blocks` dependency holds a queue back, and a card waiting
+on a person must never hold work up. `human_check` keeps the card out of a run by itself — a
+run takes `open` and recovers `in_progress` and `ready_to_merge`, and this is none of the
+three — so it neither joins a batch nor stops the queue from reading as empty.
+
+**It is not a finding, so the depth budget does not reach it and it carries no `spawned`
+label.** That budget is written against a queue that feeds itself: a finding became work,
+and the work produced another finding. This card cannot do that, because nothing will ever
+pick it up. Where it came from is said by the dependency rather than by a `spawned-from:`
+line.
+
+**Write it for a person, in plain words: where to click, what to look at, what should
+happen.** No file names, no symbols, no paths, no identifiers — whoever reads it is sitting
+in front of the running application, not in front of the editor, and the words a task is
+written in for an agent are the wrong words here. The title names the thing being checked,
+not the task it came out of. The rest of `filing-a-task` still holds — `--validate` and a
+real `## Acceptance Criteria`, which here is simply the list somebody ticks off as they walk
+through it.
 
 ## The report at the end
 
@@ -344,6 +443,8 @@ the epic that it is waiting on that child, and leave it open.
 - **Parked** — id, the concrete reason, and the worktree path.
 - **Filed** — id, title, depth and root, one line each, under "waiting for a person to
   promote (`bd update <id> --status open`)". None → say so.
+- **Waiting on a person's eye** — every human check card you filed: its id, its title and
+  the task it is about, one line each. None → say so.
 - **Digested** — the count, and the root ids to read.
 - **What is left for a person** — the list `merging` ends with: pushing, reinstalling
   dependencies where they changed, applying anything a regenerated artefact needs

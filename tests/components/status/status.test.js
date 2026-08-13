@@ -7,6 +7,7 @@ import {
   normalizeStatus,
   statusCode,
   statusColors,
+  statusGlyph,
   statusLabel,
   statusSlot
 } from '../../../src/components/status/status.js'
@@ -139,5 +140,50 @@ describe('attentionLevel', () => {
   it('an unknown status is live rather than quiet: hiding the unknown is worse than showing it', () => {
     expect(attentionLevel('awaiting-review')).toBe('live')
     expect(attentionLevel('')).toBe('live')
+  })
+})
+
+describe('statusGlyph', () => {
+  it('a reserved status draws its own glyph', () => {
+    expect(statusGlyph('needs-you')).toBe('triangle-alert')
+    expect(statusGlyph('done')).toBe('check')
+  })
+
+  it('a named custom status draws the glyph written down for it', () => {
+    expect(statusGlyph('parked')).toBe('triangle-alert')
+    expect(statusGlyph('ready_to_merge')).toBe('git-merge')
+  })
+
+  it('a status nobody has heard of falls back to the generic tag', () => {
+    expect(statusGlyph('awaiting-review')).toBe('tag')
+  })
+})
+
+/* The whole of what `human_check` is, pinned in one place. Every one of these
+   follows from a rule elsewhere in this file rather than from a branch written
+   for this status, and the point of the block is that the rules keep agreeing:
+   a column of work that is merged and waiting on a person's own eye must not
+   shout the way `needs-you` does, and it must say what it is in something other
+   than a colour. */
+describe('the human_check status', () => {
+  it('is not reserved, so it takes a generated hue rather than a semantic one', () => {
+    expect(RESERVED).not.toContain('human-check')
+    expect(statusColors('human_check').reserved).toBe(false)
+  })
+
+  it('carries the two-letter code HC, since colour is never the only signal', () => {
+    expect(statusCode('human_check')).toBe('HC')
+  })
+
+  it('is ordinary loudness: a column of these must never spend the loud budget', () => {
+    expect(attentionLevel('human_check')).toBe('live')
+  })
+
+  it('draws a person with a tick rather than the generic tag', () => {
+    expect(statusGlyph('human_check')).toBe('user-check')
+  })
+
+  it('is written as prose the way the status picker appends it', () => {
+    expect(statusLabel('human_check')).toBe('Human check')
   })
 })

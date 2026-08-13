@@ -336,9 +336,14 @@ const CLAIMED = [
    the three that carry a hue and the neutral set everything else falls into. */
 const types = ['bug', 'feature', 'epic', 'task', 'chore', 'decision', 'tech-debt']
 
-/* Reserved statuses plus generated ones, to show both halves of the algorithm. */
+/* Reserved statuses plus generated ones, to show both halves of the algorithm.
+   `human_check` is here in bd's own spelling and not for symmetry: it is the
+   badge the task inspector draws for a card waiting on somebody's eye, and its
+   two-letter code is the whole of what tells that status apart from the other
+   generated ones. */
 const statuses = [
   'blocked', 'ready', 'running', 'needs-you', 'done', 'failed',
+  'human_check',
   'awaiting-review', 'needs-triage', 'on-hold', 'shipped'
 ]
 
@@ -390,12 +395,12 @@ const busyBoardColumns = computed(() =>
 )
 
 /* Every glyph a column header can draw: bd's built-in vocabulary, the two
-   reserved statuses no bd column carries but a custom one might, the two custom
-   statuses that have a glyph of their own — `ready_to_merge` in bd's own
-   spelling, to show `normalizeStatus` doing its half — and one on the end with
-   no glyph, for the generic tag. `running` appears twice, because the spinner
-   is the count's business: it turns over work and stands still over an empty
-   column. */
+   reserved statuses no bd column carries but a custom one might, the three
+   custom statuses that have a glyph of their own — `ready_to_merge` and
+   `human_check` in bd's own spelling, to show `normalizeStatus` doing its half
+   — and one on the end with no glyph, for the generic tag. `running` appears
+   twice, because the spinner is the count's business: it turns over work and
+   stands still over an empty column. */
 const columnHeaders = [
   { status: 'ready', count: 4 },
   { status: 'running', count: 2 },
@@ -409,6 +414,7 @@ const columnHeaders = [
   { status: 'failed', count: 0 },
   { status: 'parked', count: 2 },
   { status: 'ready_to_merge', count: 1 },
+  { status: 'human_check', count: 3 },
   { status: 'awaiting-review', count: 2 }
 ]
 
