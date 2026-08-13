@@ -93,6 +93,7 @@ export { default as Toast } from './overlays/Toast.vue'
 
 // run
 export { default as BranchSelect } from './run/BranchSelect.vue'
+export { default as ReportView } from './run/ReportView.vue'
 export { default as RunBar } from './run/RunBar.vue'
 export { default as RunModal } from './run/RunModal.vue'
 export { default as SetupProjectModal } from './run/SetupProjectModal.vue'
@@ -102,6 +103,7 @@ export { default as AboutSettings } from './settings/AboutSettings.vue'
 export { default as AgentSettings } from './settings/AgentSettings.vue'
 export { default as EditorSettings } from './settings/EditorSettings.vue'
 export { default as GeneralSettings } from './settings/GeneralSettings.vue'
+export { default as KanbanSettings } from './settings/KanbanSettings.vue'
 export { default as SettingsRow } from './settings/SettingsRow.vue'
 export { default as StorageSettings } from './settings/StorageSettings.vue'
 

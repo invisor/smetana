@@ -17,6 +17,7 @@ import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
+import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
@@ -24,6 +25,8 @@ import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import RunBar from '../components/run/RunBar.vue'
 import RunModal from '../components/run/RunModal.vue'
+import ReportView from '../components/run/ReportView.vue'
+import { isReportPath, reportTabPath } from '../components/run/reportTab.js'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
 import DraftInspector from '../components/kanban/DraftInspector.vue'
 import ClaimedTasks from '../components/agent/ClaimedTasks.vue'
@@ -59,7 +62,7 @@ import {
 import NotificationPanel from '../components/notifications/NotificationPanel.vue'
 import { dismiss as dismissNotification, measureStorage, notificationsState } from '../stores/notifications.js'
 import { initSettingsBridge, settings } from '../stores/settings.js'
-import { openSettingsWindow } from '../stores/app.js'
+import { announceBoardColumns, openSettingsWindow, watchBoardHello } from '../stores/app.js'
 import { paintRoot } from './useAppearance.js'
 import {
   activePath,
@@ -156,6 +159,23 @@ watchEffect(() =>
    back — from here they are ordinary changes to the same reactive object every
    panel writes to, and the store's debounce takes them to disk. */
 onMounted(initSettingsBridge)
+
+/* The other half of the settings window's picture, and deliberately not part of
+   that three-event contract: which columns this project's board has, for the
+   Kanban tab's checkbox lists. The watcher above announces every change; this
+   answers a window that opened after the last one, which is otherwise a tab
+   with an empty list until the board next moves. Torn down on unmount so a
+   view that is gone does not go on answering. */
+let stopBoardHello = null
+onMounted(async () => {
+  try {
+    stopBoardHello = await watchBoardHello(() => announceBoardColumns(projectColumns.value))
+  } catch (err) {
+    /* A browser, or an ACL — the app is fully usable without a settings window. */
+    console.warn('[app] the board columns will not be announced:', err)
+  }
+})
+onUnmounted(() => stopBoardHello?.())
 
 /* Everything that survives a restart lives in settings: the panels in layout,
    the selection inside a project in project. Local refs are left only for what
@@ -457,9 +477,11 @@ const runTheEpicInstead = () => {
   if (epic) runScope.value = { kind: 'epic', id: epic.id, title: epic.title }
 }
 
-/* How much is in front of the run, for the line the dialog ends on. The ready
-   count is the board's own, so it is the same number a person can see behind
-   the dialog. */
+/* How much is in front of the run, for the line the dialog ends on. The whole
+   ready column, not the drawn one: a run reads the board in Rust and the view
+   settings do not reach it, so a number taken from what is on screen would
+   describe something other than what the run is about to take. Only a period
+   filter can make the two differ, and then the honest number is the run's. */
 const runCount = computed(() => {
   if (runScope.value.kind === 'task') return 1
   if (runScope.value.kind === 'epic') return childrenOf(runScope.value.id).length
@@ -855,7 +877,11 @@ const promoteFailed = ref(null)
 
 const openPromote = () => {
   if (promoting.value) return
-  const ids = orderedColumns.value.find((c) => c.status === PROMOTE_FROM)?.tasks.map((t) => t.id)
+  /* The drawn column, not the whole one: the button a person pressed is
+     captioned with the number beside it in the header, which counts the cards
+     on screen. Reading the full column here would move a set larger than the
+     one the label and the dialog both named. */
+  const ids = drawnColumns.value.find((c) => c.status === PROMOTE_FROM)?.tasks.map((t) => t.id)
   if (!ids?.length) return
   promoteIds.value = ids
   promoted.value = 0
@@ -1292,6 +1318,35 @@ const orderedColumns = computed(() =>
   }))
 )
 
+/* What is actually drawn: the whole ordered board put through the two view
+   settings (`components/kanban/boardView.js`). After `orderColumns` and never
+   before — the sequence is a property of the whole board and must not depend on
+   which columns happen to be on screen today.
+
+   `Date.now()` is read here rather than kept in a ticking ref: this recomputes
+   on every tracker delta and on every change to the settings, which is enough.
+   A card is not obliged to vanish on the minute, and a timer would repaint the
+   board for nobody. */
+const drawnColumns = computed(() =>
+  visibleColumns(orderedColumns.value, settings.kanban, Date.now())
+)
+
+/* Which columns this project's board has, for the settings window's Kanban tab
+   — the full set, never the drawn one: a column hidden by a setting is exactly
+   the column somebody goes there to pin, and a list that dropped it would take
+   the way back with it. `blocked` is in it, which is why this comes from here
+   and not from Rust — see `stores/app.js`.
+
+   Watched over the joined names rather than the array: `orderedColumns` is
+   rebuilt on every delta, so an identity watch would announce on every card
+   that moved. */
+const projectColumns = computed(() => orderedColumns.value.map((column) => column.status))
+watch(
+  () => projectColumns.value.join('\n'),
+  () => announceBoardColumns(projectColumns.value),
+  { immediate: true }
+)
+
 /* Only when there is nothing else to show: a failing bd is no reason to hide
    the tasks that were already read. */
 const healthNotice = computed(() => {
@@ -1300,10 +1355,24 @@ const healthNotice = computed(() => {
   return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
 })
 
+/* A run's document, drawn as the page it is rather than as its source. It is an
+   ordinary path in `openTabs` — no storage of its own, and it closes and comes
+   back after a restart like every other tab — so where it sits is the whole of
+   what makes it one, and that rule is `reportTab.js`. */
+const reportTabActive = computed(() => isReportPath(project.activeTab))
+
 /* A file tab is anything that isn't terminal or kanban. There is no closed
-   list in the centre and there won't be: the project brings the tabs. */
+   list in the centre and there won't be: the project brings the tabs.
+
+   Minus the reports, which are a third kind of tab: the two computeds are
+   never both true, and a report opened in CodeMirror would show a person the
+   markup of a document written for them to read. This is also what keeps Cmd+S
+   off it below — there is nothing to save on a tab nobody can type into. */
 const fileTabActive = computed(
-  () => project.activeTab !== 'terminal' && project.activeTab !== 'kanban'
+  () =>
+    project.activeTab !== 'terminal' &&
+    project.activeTab !== 'kanban' &&
+    !reportTabActive.value
 )
 
 /* Cmd+S is caught by the window, not by the editor field. A click on a tab, on
@@ -1550,7 +1619,30 @@ onUnmounted(closeNotifications)
    changes with the copy, while the source is what the card came from. */
 const actOnNotification = (notification) => {
   if (notification.source === 'storage') openSettingsWindow('storage')
+  if (notification.source === 'run') showReport(notification.report)
   closeNotifications()
+}
+
+/* A run's report opened from its card. The document is an ordinary file under
+   the project root, so this is the same call the file tree makes and there is
+   no second way of opening a tab to keep in step with the first — `openFile`
+   puts it in `openTabs`, makes it active and reads it, and `reportTabActive`
+   above decides that what the centre draws is a report rather than an editor.
+   Permanent rather than a preview: this is a document somebody asked for by
+   name, and the next click in the tree must not evict it.
+
+   The path arrives absolute and the tabs are project-relative; `reportTabPath`
+   is that rule and the whole of it. It declines rather than guesses, and the
+   refusal is logged rather than shown: it means a card outlived the project it
+   was made in, which the store already prevents, so anybody meeting it is
+   looking at a defect and not at something to act on. */
+const showReport = (report) => {
+  const path = reportTabPath(report, activePath.value)
+  if (!path) {
+    console.warn('[app] this run report is not in the open project:', report)
+    return
+  }
+  openFile(path, { permanent: true })
 }
 
 /* When the store is weighed: at start once the project is resolved, on a
@@ -1962,13 +2054,20 @@ const toastStackStyle = {
             <Button variant="primary" size="sm" @click="answerUnsaved('save')">Save</Button>
           </template>
         </Modal>
+        <!-- A run's report, before the editor branch and not beside it: the
+             buffer is the one tabs.js already loads for any open path, so the
+             document needs no second read path and inherits the same loading
+             and error handling every other tab has. What it does not inherit is
+             the field — a report is read, never edited, which is why this is a
+             branch of its own rather than a mode of FileEditor. -->
+        <ReportView v-if="reportTabActive" :html="activeBuffer?.text ?? ''" />
         <!-- A file tab: the board and the chat have nothing to do with it. -->
         <!-- There is no :key here any more: the field survives a tab switch
              deliberately. editor/states.js keeps the caret, the scroll position
              and the edit history per tab, and FileEditor switches state by
              :path. -->
         <FileEditor
-          v-if="fileTabActive"
+          v-else-if="fileTabActive"
           :path="absoluteEditorPath(project.activeTab)"
           :model-value="activeBuffer?.text ?? ''"
           :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
@@ -1998,7 +2097,8 @@ const toastStackStyle = {
         </EmptyState>
         <KanbanBoard
           v-else
-          :columns="orderedColumns"
+          :columns="drawnColumns"
+          :filtered="orderedColumns.length > 0"
           :selected-id="highlightedTask"
           :add-to="ADD_TO"
           :run-from="runOffered ? ADD_TO : null"
@@ -2009,7 +2109,7 @@ const toastStackStyle = {
           @run="openRun({ kind: 'queue' })"
           @promote="openPromote"
           @task-action="onTaskAction"
-          @reorder="project.columnOrder = $event"
+          @reorder="project.columnOrder = mergeOrder($event, projectColumns)"
         />
       </div>
 

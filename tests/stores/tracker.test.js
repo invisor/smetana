@@ -73,6 +73,16 @@ describe('boardColumns', () => {
     expect(tasks.find((t) => t.id === 'bd-2').type).toBe('tech-debt')
   })
 
+  /* The board's period setting is measured on this date, so it has to reach the
+     card at all — a card without it is a card the rule always shows. */
+  it("carries bd's updated_at through to the card", async () => {
+    await start(snapshot({ issues: [issue({ id: 'bd-1', updated_at: '2026-08-01T10:00:00Z' })] }))
+
+    expect(tracker.boardColumns.value.flatMap((c) => c.tasks)[0].updatedAt).toBe(
+      '2026-08-01T10:00:00Z'
+    )
+  })
+
   it('an issue bd never typed leaves the card with nothing to draw', async () => {
     await start(snapshot({ issues: [issue({ id: 'bd-1', issue_type: null })] }))
 

@@ -105,7 +105,7 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     // positional prompt and `CommandBuilder` only appends; the environment has
     // no order and belongs here, beside the other two variables every agent
     // gets. Only a `Run` has a mode, and only a `Run` gets any of this.
-    if let Intent::Run { settings } = &launch.intent {
+    if let Intent::Run { settings, .. } = &launch.intent {
         for (key, value) in launch.profile.autonomy(settings.mode).env {
             cmd.env(key, value);
         }
@@ -351,6 +351,7 @@ mod tests {
                 superpowers_installed: true,
             },
             facts: None,
+            languages: agents::Languages::default(),
         }
     }
 
@@ -367,6 +368,8 @@ mod tests {
                 live_check: false,
                 file_findings: true,
             },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
         }
     }
 
@@ -504,7 +507,7 @@ mod tests {
         // wording belongs to `prompt.rs` and is pinned by its own tests, and a
         // second copy of it here would only have to be edited twice.
         assert!(
-            argv.last().unwrap().to_string_lossy().starts_with("Update bd issue smetana-7 (\"x y\")"),
+            argv.last().unwrap().to_string_lossy().contains("Update bd issue smetana-7 (\"x y\")"),
             "{argv:?}"
         );
     }

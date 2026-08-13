@@ -22,6 +22,7 @@ import TabBar from '../components/shell/TabBar.vue'
 import GeneralSettings from '../components/settings/GeneralSettings.vue'
 import EditorSettings from '../components/settings/EditorSettings.vue'
 import AgentSettings from '../components/settings/AgentSettings.vue'
+import KanbanSettings from '../components/settings/KanbanSettings.vue'
 import StorageSettings from '../components/settings/StorageSettings.vue'
 import AboutSettings from '../components/settings/AboutSettings.vue'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
@@ -31,7 +32,7 @@ import {
   sendSettingsPatch,
   watchSharedSettings
 } from '../stores/settings.js'
-import { appVersion, openExternal, watchSettingsSection } from '../stores/app.js'
+import { appVersion, openExternal, watchBoardColumns, watchSettingsSection } from '../stores/app.js'
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
 
 /* The query string's two overrides, passed down rather than read here so that
@@ -60,7 +61,19 @@ const view = reactive({
   density: 'comfortable',
   uiFontSize: UI_FONT_DEFAULT,
   editorFontSize: EDITOR_FONT_DEFAULT,
-  agent: 'claude'
+  agent: 'claude',
+  /* Both BCP-47 ids, mirroring Rust's `en` — the same shipped-defaults
+     reasoning the four above carry. */
+  agentLanguage: 'en',
+  taskLanguage: 'en',
+  /* The board's four, flat in the same message the rest ride in — see
+     `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
+     the same reason the four above are shipped values: this window paints
+     itself correctly in the moment before the first answer arrives. */
+  kanbanColumns: 'all',
+  kanbanAlwaysShow: [],
+  kanbanInterval: 'all',
+  kanbanUnlimited: []
 })
 const FIELDS = Object.keys(view)
 
@@ -79,8 +92,8 @@ const adopt = (state, fromApp) => {
 }
 
 /* One edit: applied here, then sent. Never the whole object — the message is
-   what changed, and sending all five fields would let a stale copy of one
-   overwrite an edit somebody made in the app window in between. */
+   what changed, and sending every field would let a stale copy of one overwrite
+   an edit somebody made in the app window in between. */
 const change = (patch) => {
   adopt(patch, false)
   sendSettingsPatch(patch)
@@ -88,7 +101,16 @@ const change = (patch) => {
 
 let stopWatching = null
 let stopSections = null
+let stopColumns = null
 const version = ref(null)
+
+/* Which columns the active project's board has, for the Kanban tab's two lists.
+   Not a setting and not on the settings contract: it is announced by the app
+   window through `stores/app.js`, which is also where the reason it cannot come
+   from Rust is written down. An empty list is an ordinary state — no project
+   open, or nobody has answered yet — and the tab says so rather than drawing a
+   gap. */
+const boardColumns = ref([])
 
 onMounted(async () => {
   try {
@@ -108,6 +130,13 @@ onMounted(async () => {
     console.warn('[settings-window] no app window to hear from:', err)
   }
   try {
+    stopColumns = await watchBoardColumns((columns) => {
+      boardColumns.value = Array.isArray(columns) ? columns : []
+    })
+  } catch (err) {
+    console.warn('[settings-window] no app window to hear the board columns from:', err)
+  }
+  try {
     const stored = await readSharedSettings()
     if (!heard.value) adopt(stored, false)
   } catch (err) {
@@ -119,6 +148,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopWatching?.()
   stopSections?.()
+  stopColumns?.()
 })
 
 /* This window paints itself: it is a separate webview with its own document
@@ -141,6 +171,7 @@ const TABS = [
   { id: 'general', label: 'General', kind: 'pinned' },
   { id: 'editor', label: 'Editor', kind: 'pinned' },
   { id: 'agents', label: 'Agents', kind: 'pinned' },
+  { id: 'kanban', label: 'Kanban', kind: 'pinned' },
   { id: 'storage', label: 'Storage', kind: 'pinned' },
   { id: 'about', label: 'About', kind: 'pinned' }
 ]
@@ -268,7 +299,23 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
         <AgentSettings
           v-else-if="tab === 'agents'"
           :agent="view.agent"
+          :agent-language="view.agentLanguage"
+          :task-language="view.taskLanguage"
           @update:agent="change({ agent: $event })"
+          @update:agent-language="change({ agentLanguage: $event })"
+          @update:task-language="change({ taskLanguage: $event })"
+        />
+        <KanbanSettings
+          v-else-if="tab === 'kanban'"
+          :columns="view.kanbanColumns"
+          :always-show="view.kanbanAlwaysShow"
+          :interval="view.kanbanInterval"
+          :unlimited="view.kanbanUnlimited"
+          :board-columns="boardColumns"
+          @update:columns="change({ kanbanColumns: $event })"
+          @update:always-show="change({ kanbanAlwaysShow: $event })"
+          @update:interval="change({ kanbanInterval: $event })"
+          @update:unlimited="change({ kanbanUnlimited: $event })"
         />
         <StorageSettings
           v-else-if="tab === 'storage'"

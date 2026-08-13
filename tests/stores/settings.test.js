@@ -32,8 +32,29 @@ describe('loading', () => {
       uiFontSize: 13
     })
     expect(settings.settings.editor).toEqual({ fontSize: 12 })
+    /* Today's board exactly: every column, every task. Nothing on anybody's
+       screen moves until they go and choose. */
+    expect(settings.settings.kanban).toEqual({
+      columns: 'all',
+      alwaysShow: [],
+      interval: 'all',
+      unlimited: []
+    })
     expect(settings.settings.openProjects).toEqual([])
     expect(settings.settings.project.activeTab).toBe('kanban')
+  })
+
+  it('reads the board settings off the file', async () => {
+    ipc.on('settings_load', {
+      kanban: { columns: 'non-empty', alwaysShow: ['ready'], interval: 'day' }
+    })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.kanban.columns).toBe('non-empty')
+    expect(settings.settings.kanban.alwaysShow).toEqual(['ready'])
+    expect(settings.settings.kanban.interval).toBe('day')
+    expect(settings.settings.kanban.unlimited).toEqual([], 'the field the file left out takes its default')
   })
 
   it('stored values cover the defaults field by field, not section by section', async () => {
@@ -70,6 +91,29 @@ describe('loading', () => {
     stores.settings.settings.appearance.theme = 'light'
     await stores.settings.flushPending()
     expect(ipc.calls('settings_save').at(-1).settings.agent).toBe('codex')
+  })
+
+  it('opens on English when the file names no language, and takes what it does name', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', {})
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.agentLanguage).toBe('en')
+    expect(stores.settings.settings.taskLanguage).toBe('en')
+
+    const second = await loadStores()
+    second.ipc.on('settings_load', { agentLanguage: 'ru', taskLanguage: 'ja' })
+    second.ipc.on('settings_save', null)
+    await second.stores.settings.loadSettings()
+    expect(second.stores.settings.settings.agentLanguage).toBe('ru')
+    expect(second.stores.settings.settings.taskLanguage).toBe('ja')
+
+    /* And back out on the next write, so a restart brings the choice back. */
+    second.stores.settings.settings.appearance.theme = 'light'
+    await second.stores.settings.flushPending()
+    const sent = second.ipc.calls('settings_save').at(-1).settings
+    expect(sent.agentLanguage).toBe('ru')
+    expect(sent.taskLanguage).toBe('ja')
   })
 })
 
@@ -269,6 +313,60 @@ describe('the settings window', () => {
     expect(settings.settings.agent).toBe('codex', 'the field beside them still arrived')
   })
 
+  it('takes a language it is sent and keeps the one it holds when the value is not a language id', async () => {
+    /* Rust owns the list of language ids (`agents::LANGUAGES`), so what is
+       guarded here is the shape and nothing else: a string travels, and an id
+       nobody ships is dropped on the way to the file. */
+    await emit(settings.SETTINGS_APPLY, { agentLanguage: 'ru', taskLanguage: 'zh-Hans' })
+    await nextTick()
+    expect(settings.settings.agentLanguage).toBe('ru')
+    expect(settings.settings.taskLanguage).toBe('zh-Hans')
+
+    /* Skipped rather than reset to the shipped default, the same as every other
+       field here: an event is not a response to anything, so a malformed one
+       must cost nothing — and reverting to English would be a change nobody
+       asked for. */
+    await emit(settings.SETTINGS_APPLY, { agentLanguage: 7, taskLanguage: '' })
+    await nextTick()
+    expect(settings.settings.agentLanguage).toBe('ru')
+    expect(settings.settings.taskLanguage).toBe('zh-Hans')
+  })
+
+  it('takes the board settings and cleans the two column lists on the way in', async () => {
+    await emit(settings.SETTINGS_APPLY, {
+      kanbanColumns: 'non-empty',
+      kanbanInterval: 'week',
+      kanbanAlwaysShow: ['ready', 'ready', '', 7, 'done'],
+      kanbanUnlimited: ['blocked']
+    })
+    await nextTick()
+
+    expect(settings.settings.kanban.columns).toBe('non-empty')
+    expect(settings.settings.kanban.interval).toBe('week')
+    expect(settings.settings.kanban.alwaysShow).toEqual(['ready', 'done'])
+    expect(settings.settings.kanban.unlimited).toEqual(['blocked'])
+  })
+
+  it('keeps the board setting it holds when the value is off its closed list', async () => {
+    /* The two scalars are checked against `boardView.js`'s lists, and Rust
+       validates the file against its own copy — so what this guards is that a
+       value neither of them would accept never becomes the board a person
+       stares at. Skipped rather than reset, like every other field here. */
+    await emit(settings.SETTINGS_APPLY, { kanbanColumns: 'non-empty', kanbanInterval: 'week' })
+    await nextTick()
+
+    await emit(settings.SETTINGS_APPLY, {
+      kanbanColumns: 'some',
+      kanbanInterval: 'fortnight',
+      kanbanUnlimited: 'ready'
+    })
+    await nextTick()
+
+    expect(settings.settings.kanban.columns).toBe('non-empty')
+    expect(settings.settings.kanban.interval).toBe('week')
+    expect(settings.settings.kanban.unlimited).toEqual([], 'a list that is not one is skipped')
+  })
+
   it('answers a hello with what this window holds, not with what is on disk', async () => {
     settings.settings.appearance.uiFontSize = 20
     const heard = []
@@ -282,7 +380,13 @@ describe('the settings window', () => {
       density: 'comfortable',
       uiFontSize: 20,
       editorFontSize: 12,
-      agent: 'claude'
+      kanbanColumns: 'all',
+      kanbanAlwaysShow: [],
+      kanbanInterval: 'all',
+      kanbanUnlimited: [],
+      agent: 'claude',
+      agentLanguage: 'en',
+      taskLanguage: 'en'
     })
   })
 
@@ -304,7 +408,13 @@ describe('the settings window', () => {
       density: 'comfortable',
       uiFontSize: 15,
       editorFontSize: 12,
-      agent: 'codex'
+      kanbanColumns: 'all',
+      kanbanAlwaysShow: [],
+      kanbanInterval: 'all',
+      kanbanUnlimited: [],
+      agent: 'codex',
+      agentLanguage: 'en',
+      taskLanguage: 'en'
     })
   })
 })

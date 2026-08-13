@@ -66,7 +66,19 @@ describe('how the run bar draws an ending', () => {
   it('gives the endings a person acts on differently their own glyphs', () => {
     expect(stopReason('queue_empty').icon).toBe('check')
     expect(stopReason('needs_answer').icon).toBe('message-circle-question-mark')
-    expect(stopReason('crashed').icon).toBeUndefined()
+    expect(stopReason('crashed').icon).toBe('square')
+  })
+
+  /* The same argument the tone test above makes, and it was a live duplication
+     before: while an entry could leave its glyph out, each caller supplied its
+     own `?? 'square'`, so the bar and the bell's card each kept a copy of the
+     glyph seven of the ten endings actually draw. Nothing may need one now. */
+  it('leaves no ending without a glyph, and no caller a default to write', () => {
+    for (const [kind, reason] of Object.entries(REASONS)) {
+      expect(reason.icon, kind).toBeTruthy()
+    }
+    expect(stopReason('rate_limited_forever').icon).toBe('square')
+    expect(stopReason(undefined).icon).toBe('square')
   })
 })
 

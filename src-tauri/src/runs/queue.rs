@@ -22,7 +22,10 @@ const READY_TO_MERGE: &str = "ready_to_merge";
 pub const PARKED: &str = "parked";
 /// bd's own status for work that is available.
 const OPEN: &str = "open";
-const CLOSED: &str = "closed";
+/// bd's own status for work that is finished. `pub(super)` because
+/// `summary.rs` diffs the board against this very word, and a second copy of
+/// the string would drift.
+pub(super) const CLOSED: &str = "closed";
 /// The dependency kind that actually blocks. bd also records `parent-child`,
 /// `related` and `discovered-from`, and none of those means "wait".
 const BLOCKS: &str = "blocks";
@@ -33,7 +36,7 @@ const BLOCKS: &str = "blocks";
 /// held, it is `in_progress` and would count as unfinished. Either reading
 /// turns coordination into work: a lead would try to implement it, and a run
 /// would keep taking batches to "recover" it.
-const LOCK_LABEL: &str = "smetana-lock";
+pub(super) const LOCK_LABEL: &str = "smetana-lock";
 
 /// The board, as a run cares about it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -166,7 +169,11 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) ->
 /// closes — and if something does by mistake, holding the dependent back fails
 /// closed, where releasing it would take work whose premise was a wiring
 /// error.
-fn is_lock(issue: &Issue) -> bool {
+///
+/// `pub(super)` because `summary.rs` has to make the same exclusion — a lock is
+/// coordination there too, and it must never appear in a report — and sharing
+/// the predicate is what stops the two from drifting apart.
+pub(super) fn is_lock(issue: &Issue) -> bool {
     issue.labels.iter().any(|l| l == LOCK_LABEL)
 }
 

@@ -33,7 +33,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
@@ -46,6 +46,8 @@ use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::recovery;
 use super::registry::Proc;
+use super::report::{self, BatchLine};
+use super::summary::{self, Baseline, RunSummary};
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
 use crate::terminal::model::{Exit, SessionState};
@@ -70,6 +72,10 @@ const CRASH_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// costs its batch about ten seconds after it is drawn, against the for ever it
 /// used to take.
 const ASK_POLL: Duration = Duration::from_secs(5);
+/// How many runs of one project may end in the same second before a report has
+/// nowhere to go. A ceiling rather than an endless walk, since every step is a
+/// syscall; a project would need twenty live runs stopping together to reach it.
+const MAX_REPORTS_PER_SECOND: u32 = 20;
 
 pub enum Request {
     Start(String, Box<RunSettings>, oneshot::Sender<Result<Run, RunError>>),
@@ -418,8 +424,18 @@ fn absorb(active: &mut HashMap<u64, Active>, report: Report) -> Option<Run> {
             // batch that was on its way out — the rule `Run::advance` keeps one
             // level down, needed here because the loop's own copy knows nothing
             // of that stop until it next looks at the channel.
+            //
+            // One thing does cross that line, and only one: the run's account
+            // of itself. `request_stop` ends a run with nothing in flight at
+            // once, so this side reaches `Stopped` while the loop is still
+            // inside a board read — and the loop is the only thing that runs
+            // `finish`, which is the only thing that writes a summary. Dropping
+            // its report wholesale left the document on disk and the `Run` on
+            // the wire saying there was none, for every stop landing between
+            // batches, on a paused run, or during the preflight. `take_summary_from`
+            // takes that field and refuses the rest, ending included.
             if current.run.is_over() {
-                return None;
+                return current.run.take_summary_from(run).then(|| current.run.clone());
             }
             // Adopted rather than assigned: `stopping` is this side's field and
             // the loop's copy always says false — see `Run::adopt`.
@@ -527,6 +543,22 @@ fn browser_candidates(active: &HashMap<u64, Active>) -> Vec<String> {
     projects
 }
 
+/// Everything an ending needs to write the run's document, gathered as the loop
+/// goes: the run's own clock, the board as it first stood, what each batch said
+/// about itself, and the directory those accounts are read from.
+///
+/// A struct rather than four more parameters repeated at a dozen call sites —
+/// which is the very shape `finish` exists to collapse.
+struct Account {
+    started: Instant,
+    /// `None` until the first board read lands, which is exactly the case a run
+    /// that died in its preflight is in: there is no baseline, so there is no
+    /// diff, and the document says so rather than counting zero.
+    baseline: Option<Baseline>,
+    batches: Vec<BatchLine>,
+    reports: PathBuf,
+}
+
 /// The loop itself, on a task of its own so the worker above stays answerable
 /// while a batch runs for an hour.
 #[allow(clippy::too_many_arguments)]
@@ -545,17 +577,35 @@ async fn drive(
         let _ = report.send(Report::State { token, run: Box::new(run.clone()) });
     };
 
+    // The clock starts before anything the run will be held to account for: the
+    // preflight, the pauses on a spent allowance and the crash backoff are all
+    // part of how long the night took.
+    let mut account = Account {
+        started: Instant::now(),
+        baseline: None,
+        batches: Vec::new(),
+        // Keyed by the token, which is unique within this app instance — the
+        // document itself is timestamped instead, because a token counts from
+        // zero on every start and would collide across restarts.
+        reports: root.join(".smetana").join("runs").join(token.to_string()),
+    };
+    if let Err(err) = std::fs::create_dir_all(&account.reports) {
+        // Never a reason to hold a run up: a batch whose account cannot be
+        // written is a document saying that batch left none, which is the same
+        // outcome as a batch killed before it could write one.
+        log::warn!("could not make {}: {err}", account.reports.display());
+    }
+
     if let Some(config) = preflight_config {
         match bring_up(&root, &config, &mut stop).await {
             BringUp::Ready => {}
             BringUp::Cancelled => {
-                run.advance(RunState::Stopped { reason: StopReason::Cancelled });
-                say(&run);
+                finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
                 return;
             }
             BringUp::Failed(detail) => {
-                run.advance(RunState::Stopped { reason: StopReason::Preflight { detail } });
-                say(&run);
+                let reason = StopReason::Preflight { detail };
+                finish(&mut run, reason, &say, &account, &root, &tracker).await;
                 return;
             }
         }
@@ -585,8 +635,7 @@ async fn drive(
 
     for iteration in 0.. {
         if stop.try_recv().is_ok() || run.stopping {
-            run.advance(RunState::Stopped { reason: StopReason::Cancelled });
-            say(&run);
+            finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
             return;
         }
 
@@ -600,13 +649,18 @@ async fn drive(
             // tracker that is not there, and a run that cannot read the board
             // is deciding from nothing.
             if unreadable >= 2 {
-                run.advance(RunState::Stopped { reason: StopReason::Unreadable });
-                say(&run);
+                finish(&mut run, StopReason::Unreadable, &say, &account, &root, &tracker).await;
                 return;
             }
             continue;
         };
         unreadable = 0;
+        // The first board read inside the loop, after the preflight, is the
+        // baseline the whole report is a diff against — so a task already
+        // `closed` when the run started is not credited to it.
+        if account.baseline.is_none() {
+            account.baseline = Some(Baseline::of(&issues, &run.settings.scope));
+        }
 
         let now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
         // Narrower than the mode on purpose: what the decision cares about is
@@ -616,8 +670,7 @@ async fn drive(
         match queue::next_action(&now, previous.as_ref(), iteration, MAX_ITERATIONS, last_batch, once)
         {
             Action::Stop(reason) => {
-                run.advance(RunState::Stopped { reason });
-                say(&run);
+                finish(&mut run, reason, &say, &account, &root, &tracker).await;
                 return;
             }
             Action::Run(_) => {}
@@ -629,6 +682,7 @@ async fn drive(
         // no session at all, where discovering it by failing costs one every
         // time round.
         let Some(tasks) = headroom(&mut run, &say, profile, &mut stop).await else {
+            finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
             return;
         };
 
@@ -638,16 +692,23 @@ async fn drive(
         // orders the answer against the microseconds that follow it. The worker
         // can order them, because it is the single task that handles both.
         if !may_spawn(&report, token).await {
-            run.advance(RunState::Stopped { reason: StopReason::Cancelled });
-            say(&run);
+            finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
             return;
         }
 
-        let session = match spawn_batch(&terminal, &run, tasks, &agent).await {
+        // The batch's own number and its own clock. The number is what names
+        // the file the lead writes its account into, so the app can match an
+        // account to the batch it timed rather than trusting a count kept twice.
+        let batch_no = run.batches + 1;
+        let batch_started = Instant::now();
+
+        let session = match spawn_batch(&terminal, &run, tasks, &agent, &account.reports, batch_no)
+            .await
+        {
             Ok(id) => id,
             Err(err) => {
-                run.advance(RunState::Stopped { reason: StopReason::Preflight { detail: err } });
-                say(&run);
+                let reason = StopReason::Preflight { detail: err };
+                finish(&mut run, reason, &say, &account, &root, &tracker).await;
                 return;
             }
         };
@@ -663,7 +724,17 @@ async fn drive(
         run.advance(RunState::Working { iteration });
         say(&run);
 
-        let exit = match watch_batch(&terminal, &run, session).await {
+        let outcome = watch_batch(&terminal, &run, session).await;
+        // Read here rather than at the ending, so that a batch's account is
+        // taken while it is the freshest thing on disk and every way out of the
+        // match below is covered by one read instead of three.
+        account.batches.push(read_batch(
+            &account.reports,
+            batch_no,
+            batch_started.elapsed().as_secs(),
+        ));
+
+        let exit = match outcome {
             Batch::Ended(exit) => {
                 // Ended some other way, so the questions-in-a-row count starts
                 // over — see `RepeatedQuestion` for why "in a row" is literal.
@@ -710,10 +781,8 @@ async fn drive(
                     // and killing would take away the very terminal the
                     // person is being sent to.
                     park_claims(&tracker, session, &question).await;
-                    run.advance(RunState::Stopped {
-                        reason: StopReason::NeedsAnswer { question },
-                    });
-                    say(&run);
+                    let reason = StopReason::NeedsAnswer { question };
+                    finish(&mut run, reason, &say, &account, &root, &tracker).await;
                     return;
                 }
             },
@@ -724,8 +793,7 @@ async fn drive(
         // it. So the run ends here, with its own reason — the crash backstop
         // below is for processes that failed on their own.
         if exit == Exit::Removed {
-            run.advance(RunState::Stopped { reason: StopReason::SessionRemoved });
-            say(&run);
+            finish(&mut run, StopReason::SessionRemoved, &say, &account, &root, &tracker).await;
             return;
         }
         // `NoCode` is a session that was signalled, which did not finish the
@@ -755,8 +823,8 @@ async fn drive(
         crashes += 1;
         last_batch = LastBatch::Crashed;
         if crashes >= MAX_CRASHES {
-            run.advance(RunState::Stopped { reason: StopReason::Crashed { attempts: crashes } });
-            say(&run);
+            let reason = StopReason::Crashed { attempts: crashes };
+            finish(&mut run, reason, &say, &account, &root, &tracker).await;
             return;
         }
         let backoff = CRASH_BACKOFF_MAX.min(CRASH_BACKOFF_BASE * 2u32.pow(crashes - 1));
@@ -765,12 +833,148 @@ async fn drive(
         tokio::select! {
             _ = tokio::time::sleep(backoff) => {}
             _ = stop.recv() => {
-                run.advance(RunState::Stopped { reason: StopReason::Cancelled });
-                say(&run);
+                finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
                 return;
             }
         }
     }
+}
+
+/// The single way the loop task ends a run.
+///
+/// Every ending *this task* reaches goes through here, so that the next one
+/// somebody adds cannot quietly arrive with no report behind it — there were a
+/// dozen exits into `Stopped` in `drive` before this, and a dozen call sites is
+/// exactly how that happens. This is also the only place a `RunSummary` is ever
+/// made.
+///
+/// **It is not the only way a run reaches `Stopped`.** `Run::request_stop` ends
+/// one with nothing in flight at once, on the worker's own copy, which is what
+/// makes the stop button immediate and what lets it reach a paused run — so for
+/// a stop landing between batches, on a paused run or during the preflight, that
+/// copy is already stopped by the time this runs and `absorb` will not adopt the
+/// report below. `Run::take_summary_from` is the other half, and the account
+/// reaches the front end through it rather than through here.
+///
+/// The board is read once more through `fresh_board`, which already carries the
+/// ~2 s resync the run's own last writes need: the agent's `bd` writes reach
+/// this process through the watcher, and a batch that closed a task moments
+/// before it exited may not have landed in the cached snapshot yet. The named
+/// cost is one extra tracker round trip per run ending, at a moment when
+/// nothing at all is waiting on it.
+///
+/// A baseline that was never taken, or a final read that fails, both produce
+/// `tasks: None` — never an empty diff. An unreadable board and an empty board
+/// are opposite facts, and the whole of `RunSummary::tasks` being an `Option`
+/// is that they must not be written down as the same one.
+async fn finish(
+    run: &mut Run,
+    reason: StopReason,
+    say: &impl Fn(&Run),
+    account: &Account,
+    root: &Path,
+    tracker: &TrackerHandle,
+) {
+    let seconds = account.started.elapsed().as_secs();
+    let tasks = match (account.baseline.as_ref(), fresh_board(tracker).await) {
+        (Some(base), Some(issues)) => {
+            Some(summary::diff(base, &issues, &run.settings.scope))
+        }
+        _ => None,
+    };
+    let report = write_report(root, run, seconds, tasks.as_ref(), &account.batches);
+    run.summary = Some(RunSummary { seconds, tasks, report });
+    run.advance(RunState::Stopped { reason });
+    say(run);
+}
+
+/// One batch's own account of itself, as the lead left it.
+///
+/// A missing file and a damaged one are the same ordinary outcome — a batch
+/// that was killed, crashed or cancelled leaves nothing — and neither is an
+/// error: the batch's tasks still appear in the document from the board, and
+/// the document says that batch left no account of itself.
+fn read_batch(dir: &Path, n: u32, seconds: u64) -> BatchLine {
+    let parsed = match std::fs::read_to_string(dir.join(format!("batch-{n}.json"))) {
+        Ok(text) => report::parse_batch(&text),
+        Err(_) => report::ParsedBatch { tasks: vec![], notes: None, reported_ok: false },
+    };
+    BatchLine { n, seconds, tasks: parsed.tasks, notes: parsed.notes, reported: parsed.reported_ok }
+}
+
+/// The document on disk, and the absolute path of it — `None` when it could not
+/// be written, because a card offering a report that is not there is worse than
+/// one without a button.
+///
+/// Timestamped rather than keyed by the run's token: the token counts from zero
+/// on every app start, so two nights' reports would collide across a restart.
+/// Nothing ever deletes one — they are small text, and deciding when a record of
+/// a night's work stops mattering is not this app's call.
+fn write_report(
+    root: &Path,
+    run: &Run,
+    seconds: u64,
+    tasks: Option<&summary::Tasks>,
+    batches: &[BatchLine],
+) -> Option<String> {
+    let now = chrono::Local::now();
+    let dir = root.join(".smetana").join("reports");
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        log::warn!("could not make {}: {err}", dir.display());
+        return None;
+    }
+    let scope = run.settings.scope.describe();
+    let finished = now.format("%Y-%m-%d %H:%M").to_string();
+    let html = report::render(&report::RunReport {
+        project: &run.project,
+        scope: &scope,
+        finished: &finished,
+        seconds,
+        tasks,
+        batches,
+    });
+    let (path, mut file) = claim_report(&dir, &now.format("%Y-%m-%d-%H%M%S").to_string())?;
+    match std::io::Write::write_all(&mut file, html.as_bytes()) {
+        Ok(()) => Some(path.to_string_lossy().into_owned()),
+        Err(err) => {
+            log::warn!("could not write {}: {err}", path.display());
+            None
+        }
+    }
+}
+
+/// A file nothing else has, made rather than found.
+///
+/// The timestamp alone is not unique: a project holds several runs at once
+/// (smetana-5hf), so two stops in the same second — one press each, or a queue
+/// run and a task run both reaching `QueueEmpty` together — used to leave one
+/// document, silently, and losing a night's record without a word is worse than
+/// an ugly file name.
+///
+/// `create_new` rather than a check for the path followed by a write: the two
+/// runs are on two loop tasks, so an `exists()` test would be a race with itself
+/// — and it is the *creation* that has to be the exclusive step. The token is
+/// deliberately not the disambiguator: it counts from zero on every app start,
+/// which is the very property the timestamp was chosen to avoid leaning on, so
+/// two runs numbered 1 in two app instances would collide exactly as before. A
+/// suffix leans on nothing.
+fn claim_report(dir: &Path, stem: &str) -> Option<(PathBuf, std::fs::File)> {
+    for nth in 1..=MAX_REPORTS_PER_SECOND {
+        let path = dir.join(match nth {
+            1 => format!("{stem}.html"),
+            n => format!("{stem}-{n}.html"),
+        });
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Some((path, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                log::warn!("could not make {}: {err}", path.display());
+                return None;
+            }
+        }
+    }
+    log::warn!("no free report name in {} for {stem}", dir.display());
+    None
 }
 
 /// What the harness says is left of the allowance. Blocking work goes to a
@@ -785,7 +989,10 @@ async fn ask(profile: Option<&'static dyn Profile>) -> Decision {
 /// Wait until there is allowance enough to run a batch, and answer with how
 /// many tasks that batch may take.
 ///
-/// `None` means the run ended while it waited — the caller returns.
+/// `None` means a stop arrived while it waited. The ending itself is not made
+/// here, deliberately: the caller ends the run through `finish`, which is the
+/// single place a run reaches `Stopped` and therefore the single place one gets
+/// a report written for it.
 ///
 /// The wait is a state rather than a sleep, which is what puts it in the scope
 /// bar and what lets the stop button reach it: a run with no session in flight
@@ -805,8 +1012,6 @@ async fn headroom(
         // carries it back here, so a check on the field would look like a guard
         // and be one only by accident.
         if stop.try_recv().is_ok() {
-            run.advance(RunState::Stopped { reason: StopReason::Cancelled });
-            say(run);
             return None;
         }
         match ask(profile).await {
@@ -815,11 +1020,7 @@ async fn headroom(
                 say(run);
                 tokio::select! {
                     _ = tokio::time::sleep(usage::POLL) => {}
-                    _ = stop.recv() => {
-                        run.advance(RunState::Stopped { reason: StopReason::Cancelled });
-                        say(run);
-                        return None;
-                    }
+                    _ = stop.recv() => return None,
                 }
             }
             decision => {
@@ -1053,10 +1254,16 @@ async fn spawn_batch(
     run: &Run,
     tasks: Option<u8>,
     agent: &str,
+    reports: &Path,
+    batch: u32,
 ) -> Result<u64, String> {
     let (tx, rx) = oneshot::channel();
     let settings = RunSettings { max_parallel_tasks: tasks, ..run.settings.clone() };
-    let intent = Intent::Run { settings };
+    // The directory and this batch's number ride with the settings for the same
+    // reason those do: the session outlives everything about the run except what
+    // it was handed, and a batch working out its own file name is a batch the
+    // app cannot then match to the one it timed.
+    let intent = Intent::Run { settings, reports: reports.to_path_buf(), batch };
     terminal
         .0
         .send(TerminalRequest::Create(run.project.clone(), agent.to_string(), intent, tx))
@@ -1387,6 +1594,80 @@ mod tests {
         assert!(active[&1].run.is_over(), "and a finished run does not come back on screen");
     }
 
+    /// A loop task's ending, as it comes back from `finish`: stopped, and
+    /// carrying the account only that helper ever makes.
+    fn ended(token: u64, reason: StopReason, report: &str) -> Run {
+        let mut run = Run::new(token, "/p".into(), settings(RunScope::Queue));
+        run.summary = Some(RunSummary {
+            seconds: 42,
+            tasks: Some(summary::Tasks::default()),
+            report: Some(report.into()),
+        });
+        run.advance(RunState::Stopped { reason });
+        run
+    }
+
+    #[test]
+    fn a_run_stopped_with_nothing_in_flight_still_gets_its_account() {
+        // The immediate branch of `request_stop` — stop while deciding, while
+        // paused overnight on a spent allowance, or during the preflight — ends
+        // the run on this side before the loop has looked at the channel. Only
+        // the loop runs `finish`, so its report is the one and only place the
+        // document's path ever comes from: dropped, the file sits on disk
+        // correctly written while the run on the wire says there is no report.
+        let mut active = map(1);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
+        assert!(active[&1].run.is_over(), "nothing was in flight, so the stop was immediate");
+        assert!(active[&1].run.summary.is_none(), "and this side never made an account");
+
+        let reported = ended(1, StopReason::Cancelled, "/p/.smetana/reports/x.html");
+        let emitted = absorb(&mut active, state(1, &reported))
+            .expect("the account has to reach the front end or the document is unreachable");
+
+        assert_eq!(
+            emitted.summary.as_ref().and_then(|s| s.report.as_deref()),
+            Some("/p/.smetana/reports/x.html")
+        );
+        assert_eq!(emitted.summary.as_ref().expect("a summary").seconds, 42);
+    }
+
+    #[test]
+    fn a_late_account_cannot_change_how_a_stopped_run_ended() {
+        // The summary and nothing else. Somebody pressed stop and was told
+        // Cancelled; the loop may have reached the board a moment later and
+        // found the queue empty, and rewriting the ending under them would put
+        // a different run's story on the bar.
+        let mut active = map(1);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
+
+        let mut reported = ended(1, StopReason::QueueEmpty, "/p/.smetana/reports/x.html");
+        reported.batches = 5;
+        let emitted = absorb(&mut active, state(1, &reported)).expect("the account still crosses");
+
+        assert_eq!(emitted.state, RunState::Stopped { reason: StopReason::Cancelled });
+        assert_eq!(emitted.batches, 0, "nothing but the account crosses");
+        assert!(emitted.summary.is_some());
+    }
+
+    #[test]
+    fn an_account_is_taken_once_and_a_later_report_changes_nothing() {
+        // The guard is on the field rather than on a flag: once the run holds
+        // an account, another report is the past again and is not emitted, so
+        // the front end is not sent the same finished run twice.
+        let mut active = map(1);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
+        let first = ended(1, StopReason::Cancelled, "/p/.smetana/reports/x.html");
+        assert!(absorb(&mut active, state(1, &first)).is_some());
+
+        let second = ended(1, StopReason::Cancelled, "/p/.smetana/reports/other.html");
+        assert!(absorb(&mut active, state(1, &second)).is_none(), "nothing to put on the wire");
+        assert_eq!(
+            active[&1].run.summary.as_ref().and_then(|s| s.report.as_deref()),
+            Some("/p/.smetana/reports/x.html"),
+            "and the first account stands"
+        );
+    }
+
     #[test]
     fn a_report_is_emitted_with_the_stop_this_side_asked_for_still_on_it() {
         // `adopt` through the path that actually runs: a cooperative stop, then
@@ -1402,6 +1683,28 @@ mod tests {
         assert_eq!(emitted.state, RunState::Deciding, "where the loop is, is the loop's to say");
         assert!(emitted.stopping, "and whether it was asked to stop is not");
         assert!(!permit(&mut active, 1), "so the next batch is still refused");
+    }
+
+    #[test]
+    fn two_runs_ending_in_the_same_second_keep_two_documents() {
+        // A project holds several runs at once, so one timestamp is not one
+        // run. Losing a night's record without a word is worse than an ugly
+        // file name, and the creation itself is the exclusive step because the
+        // two runs are on two loop tasks.
+        let dir = std::env::temp_dir()
+            .join(format!("smetana-reports-{}-same-second", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory to write into");
+
+        let (first, _) = claim_report(&dir, "2026-08-12-143155").expect("the first document");
+        let (second, _) = claim_report(&dir, "2026-08-12-143155").expect("the second document");
+
+        assert_ne!(first, second, "the second run must not overwrite the first");
+        assert_eq!(first.file_name().expect("a name"), "2026-08-12-143155.html");
+        assert_eq!(second.file_name().expect("a name"), "2026-08-12-143155-2.html");
+        assert!(first.exists() && second.exists(), "both are claimed on disk, not just named");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

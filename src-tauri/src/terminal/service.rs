@@ -527,6 +527,27 @@ fn handle(
                 intent,
                 skills: agents::library::resolve(app),
                 facts,
+                // Read from the file here, and here only: this is the one place
+                // every session in the app is built, so a manual session and a
+                // run's batch get the same answer by construction rather than
+                // because two call sites were kept in step.
+                //
+                // Two costs, both accepted rather than discovered later. The
+                // front end owns the truth of the settings and writes them on a
+                // 400 ms debounce, so a session started in the same fraction of
+                // a second as a language change reads the previous language —
+                // one session, and the same lag `settings::agent(app)` already
+                // lives with over in `runs::service`. (The `agent` parameter
+                // above is not that: it comes down from the front end's live
+                // store and has no lag at all.) And a run reads these per
+                // batch, where it snapshots its agent and its whole
+                // `RunSettings` once and carries them: a language changed at
+                // 2am reaches the next batch, so one run's issues can end up
+                // written in two languages. That is accepted and not an
+                // oversight — snapshotting them onto `Intent::Run` would put
+                // the languages back on a second road into a session, which is
+                // exactly what reading them here exists to prevent.
+                languages: crate::settings::languages(app),
             };
             let spawned = Pty::spawn(id, &launch, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
             let _ = tx.send(match spawned {

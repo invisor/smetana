@@ -33,7 +33,10 @@ const reason = computed(() => stopReason(state.value?.reason?.kind))
    system. A pause is a third silhouette for the same reason: it is neither
    working nor over, and the glyph is the fastest way to tell it from both. */
 const glyph = computed(() => {
-  if (over.value) return reason.value.icon ?? 'square'
+  /* No fallback here: `stopReason` answers with a glyph for every ending it
+     knows and for every one it does not, so a default written at this call site
+     would be a second copy of a decision that lives next door. */
+  if (over.value) return reason.value.icon
   return paused.value ? 'pause' : 'play'
 })
 

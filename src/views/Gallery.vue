@@ -33,6 +33,7 @@ import {
   IconButton,
   Input,
   KanbanBoard,
+  KanbanSettings,
   LogView,
   MenuButton,
   Modal,
@@ -42,6 +43,7 @@ import {
   Panel,
   ProjectList,
   PromoteColumnModal,
+  ReportView,
   Select,
   RunBar,
   SettingsRow,
@@ -62,7 +64,7 @@ import {
   ToolCall,
   Tooltip
 } from '../components/index.js'
-import { storageNotification } from '../components/notifications/notifications.js'
+import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 import { terminalState } from '../stores/terminals.js'
@@ -125,6 +127,62 @@ const runFixture = (state, extra = {}) => ({
   reduced: null,
   ...extra
 })
+
+/* A run's document, shortened. `report.rs` writes the real one and this is the
+   same shape — its own `<style>`, its own colours, its own `prefers-color-scheme`
+   block — because the point of drawing it here is seeing that the frame hands the
+   document the whole box and paints nothing of its own over it. It deliberately
+   does not follow `data-theme`: the document has to be readable in a browser with
+   nothing of ours loaded, so it follows the reader's own theme instead, and in
+   this gallery that means the operating system rather than the switch at the top
+   of the page.
+
+   The `<script>` is not filler, and what it does had to be chosen with some
+   care. It is the one thing the sandbox exists for — `report.rs` writes no
+   script, but a report that has been sitting on somebody's disk since last
+   night can be hand-edited between then and now — and the gallery is the only
+   verification this project has, so a probe whose effect nobody could see would
+   be worse than none: it would report success whether or not `sandbox=""` were
+   still on the frame. `document.title` was exactly that mistake. It sets the
+   *frame's* title, which no browser surfaces to the parent page, so removing
+   the attribute entirely would have left this section rendering byte for byte
+   the same.
+
+   So the effect is inside the frame and impossible to miss: the script paints
+   the document red and replaces it with a banner. Nothing in this app is ever
+   red across a whole pane, which is the point — the failure cannot be confused
+   with a normal render. The two readings are named in the document itself, so
+   whoever checks this next does not have to infer them. */
+const REPORT_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Run report</title><style>
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;
+max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fff}
+h1{font-size:1.5rem;margin:0 0 .25rem}h2{font-size:1.05rem;margin:2rem 0 .5rem}
+.meta{color:#666;font-size:.85rem}.unknown{color:#666;font-style:italic}
+.total{margin-top:2rem;border-top:1px solid #ddd;padding-top:.75rem;font-weight:600}
+table{border-collapse:collapse;width:100%}
+td{border-top:1px solid #eee;padding:.4rem .5rem;vertical-align:top}
+.id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+@media(prefers-color-scheme:dark){body{color:#e6e6e6;background:#141414}
+.meta,.unknown{color:#999}td{border-color:#2a2a2a}.total{border-color:#2a2a2a}}
+</style></head><body>
+<h1>Run report</h1>
+<p class="meta">/Users/you/dev/smetana &middot; the ready queue &middot; finished 2026-08-12 14:31</p>
+<h2>Closed (2)</h2>
+<table>
+<tr><td class="id">smetana-qca</td><td>The run writes its own report</td><td>Wrote the diff and the document, with tests on both.</td><td class="meta">1h 12m</td></tr>
+<tr><td class="id">smetana-ajr</td><td>The run report tab</td><td>&mdash;</td><td class="meta">&mdash;</td></tr>
+</table>
+<h2>Parked (0)</h2>
+<p class="meta">None.</p>
+<h2>Batches</h2>
+<p class="unknown">This batch left no account of itself.</p>
+<p>This document carries a script that would paint the whole page red and replace
+everything on it with the words THE SANDBOX FAILED. If that is what you are looking at,
+the frame lost its sandbox. If you are reading this report, the script did not run.</p>
+<p class="total">Total 2h 14m</p>
+<script>document.body.style.background='red';document.body.innerHTML='<h1>THE SANDBOX FAILED</h1>'<\/script>
+</body></html>`
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
@@ -278,9 +336,14 @@ const CLAIMED = [
    the three that carry a hue and the neutral set everything else falls into. */
 const types = ['bug', 'feature', 'epic', 'task', 'chore', 'decision', 'tech-debt']
 
-/* Reserved statuses plus generated ones, to show both halves of the algorithm. */
+/* Reserved statuses plus generated ones, to show both halves of the algorithm.
+   `human_check` is here in bd's own spelling and not for symmetry: it is the
+   badge the task inspector draws for a card waiting on somebody's eye, and its
+   two-letter code is the whole of what tells that status apart from the other
+   generated ones. */
 const statuses = [
   'blocked', 'ready', 'running', 'needs-you', 'done', 'failed',
+  'human_check',
   'awaiting-review', 'needs-triage', 'on-hold', 'shipped'
 ]
 
@@ -332,12 +395,12 @@ const busyBoardColumns = computed(() =>
 )
 
 /* Every glyph a column header can draw: bd's built-in vocabulary, the two
-   reserved statuses no bd column carries but a custom one might, the two custom
-   statuses that have a glyph of their own — `ready_to_merge` in bd's own
-   spelling, to show `normalizeStatus` doing its half — and one on the end with
-   no glyph, for the generic tag. `running` appears twice, because the spinner
-   is the count's business: it turns over work and stands still over an empty
-   column. */
+   reserved statuses no bd column carries but a custom one might, the three
+   custom statuses that have a glyph of their own — `ready_to_merge` and
+   `human_check` in bd's own spelling, to show `normalizeStatus` doing its half
+   — and one on the end with no glyph, for the generic tag. `running` appears
+   twice, because the spinner is the count's business: it turns over work and
+   stands still over an empty column. */
 const columnHeaders = [
   { status: 'ready', count: 4 },
   { status: 'running', count: 2 },
@@ -351,6 +414,7 @@ const columnHeaders = [
   { status: 'failed', count: 0 },
   { status: 'parked', count: 2 },
   { status: 'ready_to_merge', count: 1 },
+  { status: 'human_check', count: 3 },
   { status: 'awaiting-review', count: 2 }
 ]
 
@@ -407,6 +471,20 @@ const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
 const galleryAgent = ref('claude')
+/* The Agents tab's two language pickers. Not both on English: the longest label
+   either list holds is the one worth looking at, and a tab showing "English"
+   twice would never draw it. */
+const galleryAgentLanguage = ref('ru')
+const galleryTaskLanguage = ref('zh-Hans')
+/* The Kanban tab. Both lists live rather than off, since the interesting shape
+   of this tab is a checkbox column that does something — and the fixture board
+   deliberately carries a name no column of it matches (`triage`), which is the
+   second group, the whole price of storing these lists globally. */
+const galleryKanbanColumns = ref('non-empty')
+const galleryKanbanAlwaysShow = ref(['ready', 'triage'])
+const galleryKanbanInterval = ref('week')
+const galleryKanbanUnlimited = ref(['blocked'])
+const galleryBoardColumns = ['blocked', 'ready', 'running', 'needs-you', 'done']
 /* `attachments_survey`'s answer in Rust's own shape — a store bigger than this
    project's share of it, some of that share in use and some of it not. */
 const gallerySurvey = {
@@ -443,6 +521,27 @@ const galleryCleaned = { removed: { files: 6, bytes: 9 * 1024 * 1024 }, failed: 
    are drawn — a card, and the empty answer, which is the state the panel is
    most often in and the one worth checking is not a blank rectangle. */
 const galleryNotifications = [
+  /* Both sources, in the order the panel puts them in, and each built the same
+     way: from a run as the worker would have sent it, so the wording is the
+     rule's own. This is the only place a finished run's card can be looked at
+     without spending a night on a real one. */
+  runNotification({
+    token: 7,
+    project: '/Users/you/Projects/smetana',
+    state: { kind: 'stopped', reason: { kind: 'queue_empty' } },
+    summary: {
+      seconds: 8040,
+      tasks: {
+        closed: [
+          { id: 'smetana-a1b', title: 'One' },
+          { id: 'smetana-c3d', title: 'Two' },
+          { id: 'smetana-e5f', title: 'Three' }
+        ],
+        parked: [{ id: 'smetana-g7h', title: 'Four' }]
+      },
+      report: '/Users/you/Projects/smetana/.smetana/reports/2026-08-12-143155.html'
+    }
+  }),
   storageNotification('/Users/you/Projects/smetana', 62 * 1024 * 1024 + 700 * 1024, 50)
 ]
 
@@ -502,6 +601,13 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <Switch v-model="switched" label="Compact density" />
         <Tooltip label="Read-only while an agent is working" shortcut="⌘R">
           <Button variant="secondary" size="sm">Hover me</Button>
+        </Tooltip>
+        <!-- The same panel with a wait in front of it, which is what a column
+             header asks for: prose about the thing under the pointer, on a
+             surface people cross on the way to something else. Both are here
+             because the difference is a behaviour and only a hover shows it. -->
+        <Tooltip label="A column's description opens after a wait this long" :delay="2000">
+          <Button variant="secondary" size="sm">Hold me</Button>
         </Tooltip>
       </div>
     </section>
@@ -663,6 +769,18 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @run="() => {}"
           @task-action="() => {}"
         />
+      </div>
+      <!-- A board with no columns to draw, in both of the opposite facts that
+           can mean: nothing is connected, and everything is hidden by the view
+           settings over a board that is perfectly full. The second is the one
+           worth having here — it is the only place its sentence can be read. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)' }">
+        <div :style="{ flex: 1, display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <KanbanBoard :columns="[]" />
+        </div>
+        <div :style="{ flex: 1, display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <KanbanBoard :columns="[]" filtered />
+        </div>
       </div>
       <!-- Tall enough for the whole dialog, footer included: a frame that
            clips it turns the one harness that would catch a broken modal into
@@ -1225,6 +1343,36 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
     </section>
 
     <section :style="sectionStyle">
+      <div :style="headStyle">Run report</div>
+      <!-- The frame is given a box and has to fill it exactly: the document
+           paints its own ground, so anything of ours showing through is a strip
+           of the wrong colour. Two boxes rather than one, because the second is
+           the case that matters — a buffer still loading, or one that failed to
+           read, hands the component an empty string, and what shows then is the
+           host's own token ground rather than whatever sits behind the centre
+           column. Height is a token multiple for the same reason the terminal's
+           is: the frame fills whatever it is given. -->
+      <div
+        :style="{
+          display: 'flex',
+          height: 'calc(var(--space-9) * 8)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ReportView :html="REPORT_HTML" />
+      </div>
+      <div
+        :style="{
+          display: 'flex',
+          height: 'calc(var(--space-9) * 2)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ReportView html="" />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
       <div :style="headStyle">Agent output</div>
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div :style="{ width: '360px' }">
@@ -1280,7 +1428,27 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <EditorSettings :font-size="galleryEditorFont" @update:font-size="galleryEditorFont = $event" />
         </div>
         <div :style="{ width: '380px' }">
-          <AgentSettings :agent="galleryAgent" @update:agent="galleryAgent = $event" />
+          <AgentSettings
+            :agent="galleryAgent"
+            :agent-language="galleryAgentLanguage"
+            :task-language="galleryTaskLanguage"
+            @update:agent="galleryAgent = $event"
+            @update:agent-language="galleryAgentLanguage = $event"
+            @update:task-language="galleryTaskLanguage = $event"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <KanbanSettings
+            :columns="galleryKanbanColumns"
+            :always-show="galleryKanbanAlwaysShow"
+            :interval="galleryKanbanInterval"
+            :unlimited="galleryKanbanUnlimited"
+            :board-columns="galleryBoardColumns"
+            @update:columns="galleryKanbanColumns = $event"
+            @update:always-show="galleryKanbanAlwaysShow = $event"
+            @update:interval="galleryKanbanInterval = $event"
+            @update:unlimited="galleryKanbanUnlimited = $event"
+          />
         </div>
         <!-- The Storage tab in the three states worth looking at: something to
              delete, with the count and the size a person reads before pressing;

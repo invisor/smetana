@@ -17,6 +17,8 @@ pub mod procs;
 pub mod queue;
 pub mod recovery;
 pub mod registry;
+pub mod report;
 pub mod service;
+pub mod summary;
 pub mod survey;
 pub mod usage;

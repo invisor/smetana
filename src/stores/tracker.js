@@ -128,6 +128,12 @@ export const boardColumns = computed(() => {
          vocabulary, not the design system's, and a custom type has to survive
          the trip to be drawn at all. */
       type: issue.issue_type ?? undefined,
+      /* When bd last saw this issue change — the one of its three dates that is
+         always there, which is what lets the board's period setting be one
+         sentence with no hole in it (`components/kanban/boardView.js`). Carried
+         as bd wrote it: the rule parses it, and a string this front end cannot
+         read means show the card rather than hide it. */
+      updatedAt: issue.updated_at,
       blockedBy: blockedByIds.length,
       blockedByIds,
       blocks: blockingIds.length,

@@ -25,10 +25,27 @@ export const TONE = {
   needsYou: 'var(--status-needs-you-fg)'
 }
 
+/* The glyph for an ending that has no claim of its own to make — a filled
+   square, the same shape the stop button carries.
+
+   It is written here, once, and every ending that wants it names it: an entry
+   without an `icon` used to leave each caller to supply the default, and by the
+   time there were two callers the bar and the bell each held their own copy of
+   `?? 'square'`. Seven of the ten endings below land on it, so that was the
+   glyph most runs actually draw, kept in two places, with the failure being the
+   bar and the card a centimetre apart describing one run differently and
+   nothing anywhere going red. */
+const NEUTRAL = 'square'
+
 /* Loud only where a person has to do something. A run that finished its queue
    is the ordinary ending and gets the quiet treatment; one that stopped because
    nothing moved, or because the harness kept failing, is the reason this bar
-   is worth a colour at all. */
+   is worth a colour at all.
+
+   Every entry names both its tone and its glyph, for the same reason the tone
+   note above gives: an ending added without one would take whatever default the
+   last caller happened to write, which is exactly the drift this table exists
+   to prevent. */
 export const REASONS = {
   queue_empty: { text: 'Done — nothing left to take', tone: TONE.quiet, icon: 'check' },
   /* A Crew run's own ending: it takes one batch, merges it, and that is the
@@ -36,7 +53,7 @@ export const REASONS = {
      Ready — the run finished its batch, not the board's work. Quiet like it,
      though: this is the mode doing exactly what it said. */
   batch_done: { text: 'Done — the batch is finished', tone: TONE.quiet, icon: 'check' },
-  cancelled: { text: 'Stopped', tone: TONE.quiet },
+  cancelled: { text: 'Stopped', tone: TONE.quiet, icon: NEUTRAL },
   /* Quiet, like the stop button and for the same reason: a person did this on
      purpose and there is nothing here to fix. Loudness is not what it owes
      them — the sentence is. "Mid-batch" is the whole of it: a stop lets the
@@ -51,6 +68,7 @@ export const REASONS = {
   session_removed: {
     text: 'Stopped mid-batch — its agent session was removed',
     tone: TONE.quiet,
+    icon: NEUTRAL,
     bare: true
   },
   /* The agent asked something and the run had nobody in it to answer — a
@@ -67,11 +85,11 @@ export const REASONS = {
     tone: TONE.needsYou,
     icon: 'message-circle-question-mark'
   },
-  no_progress: { text: 'Stuck — a whole batch changed nothing', tone: TONE.failed },
-  max_iterations: { text: 'Stopped after too many batches', tone: TONE.failed },
-  unreadable: { text: 'Stopped — the tracker could not be read', tone: TONE.failed },
-  crashed: { text: 'Stopped — the agent kept failing', tone: TONE.failed },
-  preflight: { text: 'Could not start', tone: TONE.failed }
+  no_progress: { text: 'Stuck — a whole batch changed nothing', tone: TONE.failed, icon: NEUTRAL },
+  max_iterations: { text: 'Stopped after too many batches', tone: TONE.failed, icon: NEUTRAL },
+  unreadable: { text: 'Stopped — the tracker could not be read', tone: TONE.failed, icon: NEUTRAL },
+  crashed: { text: 'Stopped — the agent kept failing', tone: TONE.failed, icon: NEUTRAL },
+  preflight: { text: 'Could not start', tone: TONE.failed, icon: NEUTRAL }
 }
 
 /* The second line under an ending: what the worker said about it, or failing
@@ -102,11 +120,15 @@ export function stopReason(kind) {
      Its tone is the one it has always had, now written down rather than
      inherited from a flag — an ending this build cannot name is at least not
      `queue_empty`, which it does know, so the run stopped short of its queue
-     and somebody has to go and read why. */
+     and somebody has to go and read why. Its glyph is the neutral one, and it
+     is here rather than left to the caller for the same reason every entry
+     above names its own: what this function answers is complete, so nothing
+     downstream has a default of its own to keep in step. */
   return (
     REASONS[kind] ?? {
       text: kind ? `Stopped — ${kind.replace(/_/g, ' ')}` : 'Stopped',
-      tone: TONE.failed
+      tone: TONE.failed,
+      icon: NEUTRAL
     }
   )
 }

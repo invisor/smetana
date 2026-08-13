@@ -49,7 +49,7 @@ impl Profile for Claude {
         // Before the prompt, which is positional: a flag after it would rely
         // on the CLI's parser being relaxed about the order, and this app does
         // not get to assume that about somebody else's argument grammar.
-        if let Intent::Run { settings } = &launch.intent {
+        if let Intent::Run { settings, .. } = &launch.intent {
             for arg in self.autonomy(settings.mode).args {
                 cmd.arg(arg);
             }
@@ -69,6 +69,7 @@ impl Profile for Claude {
             &launch.skills,
             launch.facts.as_deref(),
             text,
+            &launch.languages,
         ) {
             cmd.arg(built);
         }
@@ -370,6 +371,7 @@ mod tests {
             intent,
             skills: skills(superpowers_installed),
             facts: None,
+            languages: crate::agents::Languages::default(),
         }
     }
 
@@ -403,10 +405,16 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_session_gets_no_positional_prompt() {
-        // claude, two --plugin-dir flags and their two paths: nothing else.
-        assert_eq!(argv(&launch(Intent::Bare, false)).len(), 5);
-        assert_eq!(argv(&launch(Intent::Bare, true)).len(), 3);
+    fn a_bare_session_gets_the_language_sentence_and_nothing_more() {
+        // claude, two --plugin-dir flags and their two paths, and one
+        // positional prompt. That prompt is the whole of what a bare session is
+        // told — the conversation language — and it exists because an English
+        // default with no Auto position has to reach this session too; what it
+        // says is `prompt.rs`'s business and is pinned there.
+        let args = argv(&launch(Intent::Bare, false));
+        assert_eq!(args.len(), 6);
+        assert!(args.last().unwrap().contains("Talk to me in English"), "{args:?}");
+        assert_eq!(argv(&launch(Intent::Bare, true)).len(), 4);
     }
 
     fn new_task(images: Vec<String>) -> Intent {
@@ -728,6 +736,8 @@ mod tests {
                 live_check: true,
                 file_findings: true,
             },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/1"),
+            batch: 1,
         }
     }
 

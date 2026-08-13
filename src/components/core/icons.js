@@ -64,6 +64,7 @@ import {
   Trash2,
   TriangleAlert,
   User,
+  UserCheck,
   Wrench,
   X
 } from 'lucide'
@@ -72,6 +73,10 @@ export const iconNodes = {
   // agents and people
   bot: Bot,
   user: User,
+  /* A person with a tick: work that is finished and merged and still owes
+     somebody a look. `status/status.js` draws it for the `human_check`
+     column. */
+  'user-check': UserCheck,
   'circle-dashed': CircleDashed,
   terminal: Terminal,
   'trash-2': Trash2,
@@ -155,7 +160,7 @@ export const iconNodes = {
   ellipsis: Ellipsis,
   'chevrons-right': ChevronsRight,
   bell: Bell,
-  /* The bell's one source today: the attachment store's own weight. */
+  /* The storage source's glyph: the attachment store's own weight. */
   'hard-drive': HardDrive,
   settings: Settings,
   'settings-2': Settings2,

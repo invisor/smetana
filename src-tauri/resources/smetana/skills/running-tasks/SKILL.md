@@ -61,10 +61,11 @@ unfinished sets identical, and the run stops itself with `NoProgress` (`queue.rs
 
 **A check this run could not run is not a question, and must never park finished work.**
 Nobody is being asked anything: the code is written, reviewed and merged, and what is
-missing is a pair of eyes or a tool that was not there. File the looking as its own task
-and `bd defer` it — deferred is out of `bd ready`, so no later run takes it, and it
-stays in `bd list` for the person to do and to close themselves. Then close the task
-that produced it. Phase 3's INFRA branch below is this rule's one named instance.
+missing is a pair of eyes or a tool that was not there. File the looking as its own card
+in the status `human_check` and close the task that produced it — the card is out of
+`bd ready`, so no later run takes it, and it stands in a column somebody scans by eye.
+Phase 3's INFRA branch is this rule's one named instance, and the card has its own
+section there.
 
 The distinction is the cost of getting it wrong in each direction. A parked question
 costs one answer and the work waits for it, which is right, because work built on a
@@ -116,6 +117,10 @@ with no such line is depth 0 — a human wrote it.
 
 A suggestion that feels important enough to file is a severity error on the reviewer's
 part, not permission to file. Send it back as "BLOCKING or digest — pick one".
+
+Phase 3's human check card is not on this table and is not governed by it. It is not a
+finding — nothing was found — but a note that finished work still owes somebody a look, and
+it has its own rules where it is filed.
 
 ### The depth budget
 
@@ -175,7 +180,10 @@ on its own. **This runs before you take any new work.**
 
 1. Pin the tracker, and set the custom statuses once — idempotent, and always the full
    set, because a partial value clobbers the others:
-   `bd config set status.custom "ready_to_merge,parked"`.
+   `bd config set status.custom "ready_to_merge,parked,human_check"`.
+   All three, every time, including the ones this phase never writes itself: dropping
+   `human_check` here would delete the status out from under Phase 3, whose card is then
+   filed and left in `open` for the next batch to pick up and try to implement.
    In the same breath, make sure the merge lock exists — look for it, create it only
    when it is not there: `bd list -l smetana-lock --json` answering nothing → create it
    exactly as `merging`'s lock section says. Idempotent the same way the statuses are:
@@ -358,20 +366,14 @@ Only when the run has the live check on. Mechanics are in `live-checking`.
   4. `bd note <id> "closed with follow-up <fix-id>"`, close, remove worktrees. After an
      epic-gate failure the epic itself stays open.
 - **INFRA** → not a verdict about the code. Retry the whole check once. A second INFRA →
-  **hand the looking to the person and close the task.** The work is merged and reviewed;
-  what failed is the check's own tooling, and holding finished work for a tool that is
-  not there helps nobody.
-  1. File one task, type `task`, priority 2, titled for what still needs looking at.
-     Its description names the scenarios the check would have run, what failed to start
-     with the tail of its log, and the id of the task it came from. Its acceptance
-     criteria are what a person would see, in words somebody can act on: which screen,
-     which states, what would be wrong.
-  2. `bd defer <fix-id> --reason "<a person's own check>"` — out of `bd ready`, so no
-     later run takes work that needs eyes; in `bd list`, so it is in front of somebody.
-  3. `bd note <id> "closed with eye check <fix-id>: <what could not be run>"`, close the
-     task, stand its workers down and remove its worktrees.
+  **close the task and file a human check card** (below). It used to park here, and that
+  was the wrong end to stop at: Phase 2 has already put the work on the target branch and
+  its gates were green, so holding it out of the run's account because there was nothing
+  on this machine to look at it with buries finished work under a fault that has nothing
+  to do with it. `bd note <id> "live check INFRA: <what failed to start, and the tail of
+  its log>"`, then close and remove worktrees exactly as a PASS does.
 
-  A run's browser tooling is the ordinary way here: the machine may have none
+  A run's browser tooling is the ordinary way to get here: the machine may have none
   (`browser.rs` decides that before the run starts), and Playwright's one shared profile
   may be held by a browser this process cannot see — a person's own Chrome, or another
   project's run. All of it is INFRA and none of it is about the task.
@@ -380,8 +382,95 @@ Only when the run has the live check on. Mechanics are in `live-checking`.
 `bd dep tree <epic-id>` shows no other child still open, in progress, waiting to merge or
 parked → run one check for the epic itself, against the epic's own description, as an
 end-to-end flow. PASS → close the epic. FAIL → fix forward as above, with the fix as an
-epic child, and the epic stays open. **A parked child skips the gate entirely**: note on
-the epic that it is waiting on that child, and leave it open.
+epic child, and the epic stays open. INFRA → retried once and then treated exactly as a
+task's second INFRA: close the epic and file its human check card. The gate is the only
+place an epic can reach a verdict at all — its children never get checks of their own — so
+without this clause the one case the card was written for has no outcome at the epic level,
+and a whole epic's worth of merged work would sit open over a stand that would not start.
+**A parked child skips the gate entirely**: note on the epic that it is waiting on that
+child, and leave it open.
+
+### The card that says a person still has to look
+
+Some work is finished, merged and green and still cannot be counted until somebody goes and
+uses it. That is not a question about the spec and not work that has stalled, so it is
+neither `parked` nor `deferred`: file a **separate check task** in the status `human_check`,
+and leave the task it is about to close exactly as it otherwise would. The checked task's
+own status is never changed to make room for this.
+
+**Only in this phase, and only when the live check is on.** A run started with the live
+check off files none of these at all — somebody who switched it off has said they do not
+want to be sent looking tonight.
+
+**The findings switch does not reach this card, and the live-check switch is the one that
+does.** That is not an exemption granted to it; the two switches answer different
+questions. Findings are things a review or a check *noticed* that might be worth working
+on later, and the switch turns off filing them because a queue that feeds itself is worse
+than a lost observation. This card is neither noticed nor work: it is the run stating what
+it could not verify about a task it has just merged and closed, which is a fact about that
+task and not a candidate for anybody's queue. So a run with findings off and the live check
+on files these exactly as it would otherwise, and a run with the live check off files none
+whatever the findings switch says.
+
+File one in exactly three cases:
+
+1. **A second INFRA.** There was nothing here to check with: the stand never came up, the
+   browser was held by somebody else's profile. This is the case the whole card exists for.
+2. **An acceptance criterion no agent can tick.** "In both themes and both densities",
+   "nothing is clipped", "it looks right". Those stay unticked under a PASS on every
+   scenario, and a PASS that quietly leaves them behind claims more than it checked.
+3. **You could not run it where a person runs it, and you are left with doubts.** For a
+   desktop application that is most of the surface — a browser, a component gallery and a
+   dev server are reachable from here and the application's own windows are not.
+
+File none for anything else. Not when the check was skipped as nothing a person can see —
+a refactor, tooling, internal work. Not on a clean PASS with no doubt left. And **FAIL does
+not change**: that is a bug and a fix forward, exactly as above.
+
+**One card per task, and for an epic one card for the epic as a whole.** An epic's children
+get none of their own — this phase already defers their check to the epic — so the epic's
+card covers the lot.
+
+Link it to what it is about, and never so that it blocks:
+
+```bash
+check=$(bd create --title "<what is being checked>" --type task --priority <N> \
+          --validate --silent --body-file - <<'EOF'
+<the walkthrough, then ## Acceptance Criteria>
+EOF
+)
+bd update "$check" --status human_check
+bd dep add "$check" <task-id> --type related
+```
+
+The priority is **the checked task's own**, copied across. Nothing ever queues this card, so
+the number decides no order of work and buys nothing by being reasoned about; what it does
+is carry the weight of the thing being checked into a column somebody scans by eye. Invent
+one and every lead invents a different one, and the column sorts by an accident.
+
+`human_check` has to exist as a status before that `bd update`, and Phase R's very first
+step is what makes it exist — the full set, all three names. A refusal there is bd declining
+a status it has never been told about, not a bd fault: go and look at that config line
+before anything else.
+
+`related`, never `blocks`: only a `blocks` dependency holds a queue back, and a card waiting
+on a person must never hold work up. `human_check` keeps the card out of a run by itself — a
+run takes `open` and recovers `in_progress` and `ready_to_merge`, and this is none of the
+three — so it neither joins a batch nor stops the queue from reading as empty.
+
+**It is not a finding, so the depth budget does not reach it and it carries no `spawned`
+label.** That budget is written against a queue that feeds itself: a finding became work,
+and the work produced another finding. This card cannot do that, because nothing will ever
+pick it up. Where it came from is said by the dependency rather than by a `spawned-from:`
+line.
+
+**Write it for a person, in plain words: where to click, what to look at, what should
+happen.** No file names, no symbols, no paths, no identifiers — whoever reads it is sitting
+in front of the running application, not in front of the editor, and the words a task is
+written in for an agent are the wrong words here. The title names the thing being checked,
+not the task it came out of. The rest of `filing-a-task` still holds — `--validate` and a
+real `## Acceptance Criteria`, which here is simply the list somebody ticks off as they walk
+through it.
 
 ## The report at the end
 
@@ -390,15 +479,43 @@ the epic that it is waiting on that child, and leave it open.
   per task (or "live check: off").
 - **Parked** — id, the concrete reason, and the worktree path. The reason is a question,
   or it does not belong in this list.
-- **Left for a person to look at** — every eye check deferred in Phase 3: its id, the
-  task it came from, and what could not be run. These are closed tasks with an open
-  question of eyesight, not parked work, and the report says which screen to open.
 - **Filed** — id, title, depth and root, one line each, under "waiting for a person to
   promote (`bd update <id> --status open`)". None → say so.
+- **Waiting on a person's eye** — every human check card you filed: its id, its title and
+  the task it is about, one line each. None → say so.
 - **Digested** — the count, and the root ids to read.
 - **What is left for a person** — the list `merging` ends with: pushing, reinstalling
   dependencies where they changed, applying anything a regenerated artefact needs
   applied.
+
+## The batch's own file, beside that report
+
+Smetana keeps its own account of the run and writes it out as an HTML document when the run
+ends. It can see the board and its own clock and nothing else — what comes back from your
+session is an exit code and nothing more — so which tasks moved and how long the night took
+are its to work out, and **what was actually done is yours to say.**
+
+So, after the report above and before you hand back, write the file the prompt names —
+`.smetana/runs/<run>/batch-<n>.json`, whose directory already exists:
+
+```json
+{
+  "tasks": [
+    { "id": "smetana-t9o", "did": "one or two sentences on what you actually did" }
+  ],
+  "notes": "anything about the batch as a whole, or leave it out"
+}
+```
+
+- **It is in addition to the report and never replaces any part of it.** The report is prose
+  for the person reading this terminal; this file is for one program that renders it into a
+  document. Neither is a summary of the other.
+- **One line per task you touched**, the ones you parked included, saying what stopped them.
+- **Nothing is timed here.** A number you reported could not be checked against anything;
+  the app times its own batches and says so only where a batch held one task.
+- **It is a record, not a gate.** If it cannot be written, carry on — a batch that leaves
+  no file is named in the document as having left no account of itself, and its tasks still
+  appear there from the board.
 
 ## The rules that hold everywhere in this run
 

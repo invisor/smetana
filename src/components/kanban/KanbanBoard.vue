@@ -40,7 +40,18 @@ const props = defineProps({
      out of the queue and does it; this only puts work into the queue and stops
      there. */
   promoteFrom: { type: String, default: null },
-  reorderable: { type: Boolean, default: true }
+  reorderable: { type: Boolean, default: true },
+  /* Whether the board *has* columns that are simply not being drawn — the view
+     settings hid every one of them. Only read when `columns` is empty, and only
+     to tell two opposite facts apart: a board nothing is connected to, and a
+     board full of tasks with a setting in front of it. The default is the
+     honest one for every caller that knows nothing about view settings.
+
+     The board is told rather than asked to work it out: it is handed what to
+     draw and has never seen the whole of anything, which is the same split
+     `columnOrder.js` keeps — bd owns the columns, the settings own the view,
+     and this component owns neither. */
+  filtered: { type: Boolean, default: false }
 })
 
 /* `reorder` carries the full list of statuses in their new order, not a
@@ -185,6 +196,32 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
 })
 
+/* An empty board is two opposite facts and they must not share one sentence.
+   "No board yet" tells a person the tracker is not connected and there is
+   nothing there — true of a fresh project, and a plain untruth over a board
+   full of tasks that a view setting has hidden. Saying it anyway would be the
+   same fault the fixture log pane and the right panel's fixture issue were
+   removed for: the app stating something it cannot know.
+
+   So the filtered case says what it is and names the way back. The setting is
+   not undone from here and no column is quietly pinned — which columns stay is
+   the person's own choice on that tab, and a board that overruled it would make
+   the choice they just made a lie. */
+const empty = computed(() =>
+  props.filtered
+    ? {
+        icon: 'settings-2',
+        title: 'Every column is hidden',
+        description:
+          'This board has columns, but the Kanban settings hide all of them. Change what the board shows on the Kanban tab of the settings window.'
+      }
+    : {
+        icon: 'columns-3',
+        title: 'No board yet',
+        description: 'Connect a tracker to pull tasks, or create the first task locally.'
+      }
+)
+
 const style = {
   display: 'flex',
   gap: 'var(--space-6)',
@@ -197,12 +234,7 @@ const style = {
 </script>
 
 <template>
-  <EmptyState
-    v-if="!columns.length"
-    icon="columns-3"
-    title="No board yet"
-    description="Connect a tracker to pull tasks, or create the first task locally."
-  />
+  <EmptyState v-if="!columns.length" v-bind="empty" />
   <div
     v-else
     ref="strip"
