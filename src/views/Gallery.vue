@@ -602,6 +602,13 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <Tooltip label="Read-only while an agent is working" shortcut="⌘R">
           <Button variant="secondary" size="sm">Hover me</Button>
         </Tooltip>
+        <!-- The same panel with a wait in front of it, which is what a column
+             header asks for: prose about the thing under the pointer, on a
+             surface people cross on the way to something else. Both are here
+             because the difference is a behaviour and only a hover shows it. -->
+        <Tooltip label="A column's description opens after a wait this long" :delay="2000">
+          <Button variant="secondary" size="sm">Hold me</Button>
+        </Tooltip>
       </div>
     </section>
 

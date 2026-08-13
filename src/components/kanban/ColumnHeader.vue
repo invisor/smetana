@@ -1,9 +1,10 @@
 <script setup>
-import { computed, nextTick } from 'vue'
+import { computed, nextTick, onUnmounted, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { attentionLevel, statusColors, statusGlyph } from '../status/status.js'
+import { columnHelp, COLUMN_HELP_DELAY } from './columnHelp.js'
 
 const props = defineProps({
   status: { type: String, required: true },
@@ -62,10 +63,63 @@ const glyphStyle = computed(() => ({
   animation: spinning.value ? 'sm-spin var(--dur-pulse) linear infinite' : undefined
 }))
 
+/* What the column is, in a sentence, after a wait — over the glyph, the name
+   and the count, and over nothing else in the header. The buttons keep their
+   own labels, which are about the press rather than about the column.
+
+   The header is also the thing the keyboard focuses, and it is the tooltip's
+   *ancestor* rather than its descendant, so `focusin` never reaches the panel's
+   own trigger. Hence the relays below: the wait itself stays in `Tooltip`,
+   which is the one place that knows when the panel is up. */
+const help = ref(null)
+
+/* A press on this header is the start of a drag or an ordinary click, and
+   neither is a request to read about the column — so the press takes down
+   whatever is up and cancels whatever is pending.
+   Hiding alone is not enough, and this is the whole reason `pressed` exists:
+   `pointerdown` is dispatched *before* the browser moves the focus, so the
+   focus the press itself causes would run `onFocusin` a moment later and start
+   the wait again — a panel opening two seconds after a click, over a board the
+   pointer has long since left, staying until something else is clicked.
+   The flag is dropped on a timer rather than on `pointerup`, because the board
+   captures the pointer for a drag and the release is then not this element's to
+   hear; a zero timeout is a later task than the focus, which the browser
+   delivers within this one. */
+let pressed = false
+let release = null
+
+const press = () => {
+  pressed = true
+  help.value?.hide()
+  clearTimeout(release)
+  release = setTimeout(() => {
+    pressed = false
+  }, 0)
+}
+
+onUnmounted(() => clearTimeout(release))
+
+/* Only the header itself, and only when the keyboard is what brought the focus
+   here. Focus entering a button inside it is that button's business — it has a
+   label of its own — and a focus caused by a press is the press speaking, not a
+   person asking what this column is; the pointer already has its own way of
+   asking, and it is to hold still.
+   `:focus-visible` is the tidy way to draw that line and is deliberately not
+   used: it reaches this project's `safari15` target only in 15.4, where
+   `matches` on a pseudo-class it does not know throws rather than answering
+   false — inside a focus handler, which nothing here would survive. */
+const onFocusin = (event) => {
+  if (pressed || event.target !== event.currentTarget) return
+  help.value?.show()
+}
+
+const onFocusout = () => help.value?.hide()
+
 /* A pointerdown on the "+" is a press of that button and nothing else. Without
    this the button still works — a click survives a drag that never passed its
    threshold — but the column follows the pointer while somebody aims at it. */
 const onPointerdown = (event) => {
+  press()
   if (!props.movable || event.button !== 0) return
   if (event.target.closest('button')) return
   emit('grab', event)
@@ -143,6 +197,23 @@ const promoteLabel = computed(() =>
   `Move ${props.count} ${props.count === 1 ? 'task' : 'tasks'} to ready`
 )
 
+/* The wrapper stands where the three items used to stand, so it has to shrink
+   the way they did: without `min-width: 0` a flex item refuses to go below its
+   own content, and a long custom status would stop ellipsising and push the
+   buttons out of the header instead. */
+const helpStyle = {
+  minWidth: 0,
+  overflow: 'hidden'
+}
+
+/* Inside the slot, the spacing the header itself used to give these three. */
+const helpInnerStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-4)',
+  minWidth: 0
+}
+
 const wipStyle = computed(() => ({
   display: 'inline-flex',
   alignItems: 'center',
@@ -159,12 +230,24 @@ const wipStyle = computed(() => ({
     :aria-label="movable ? moveLabel : undefined"
     @pointerdown="onPointerdown"
     @keydown="onKeydown"
+    @focusin="onFocusin"
+    @focusout="onFocusout"
   >
-    <Icon :name="glyph" :size="12" :stroke-width="2" :style="glyphStyle" />
-    <span :style="nameStyle">{{ label }}</span>
-    <span :style="{ font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
-      {{ count }}
-    </span>
+    <Tooltip
+      ref="help"
+      :label="columnHelp(status)"
+      :delay="COLUMN_HELP_DELAY"
+      side="bottom"
+      :style="helpStyle"
+    >
+      <span :style="helpInnerStyle">
+        <Icon :name="glyph" :size="12" :stroke-width="2" :style="glyphStyle" />
+        <span :style="nameStyle">{{ label }}</span>
+        <span :style="{ font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)', color: 'var(--text-muted)' }">
+          {{ count }}
+        </span>
+      </span>
+    </Tooltip>
     <Tooltip v-if="wipLimit != null" :label="`WIP limit ${wipLimit}`">
       <span :style="wipStyle">
         <Icon :name="over ? 'triangle-alert' : 'gauge'" :size="10" :stroke-width="2" />/{{ wipLimit }}
