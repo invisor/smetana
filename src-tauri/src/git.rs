@@ -311,7 +311,11 @@ pub fn combine(per_repo: Vec<(String, Vec<(String, Option<i64>)>)>) -> Vec<Branc
 /// Nothing in production calls this any more — the run dialog reaches these same three
 /// sources through `branches_with_recency` and `by_recency`, one repository at a time. It
 /// stays because this file's own tests read the sources through it, and the linked-worktree
-/// case below is the one they would lose first.
+/// case below is the one they would lose first. So it is compiled under `cfg(test)` and
+/// nowhere else: a public function with no caller reads as part of the API, and the next
+/// person to want a branch list would reasonably call it instead of the pair that replaced
+/// it — the same reason `tracker_create` was deleted rather than left unused.
+#[cfg(test)]
 pub fn branches(project: &Path) -> Vec<String> {
     by_recency(branches_with_recency(project))
 }

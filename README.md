@@ -18,11 +18,12 @@ Query parameters, matching the design template's two props:
 |---|---|---|
 | `theme` | `dark`, `light` | `dark` |
 | `density` | `comfortable`, `compact` | `comfortable` |
-| `view` | `gallery` | the app |
+| `view` | `gallery`, `settings` | the app |
 
 `?view=gallery` renders every component once — a dev harness for spotting a broken
 component before it reaches the product. It is code-split and never lands in the
-app bundle.
+app bundle. `?view=settings` is the settings window, which in the desktop app is a
+second OS window loading that same query string.
 
 ## Layout
 
@@ -34,21 +35,28 @@ src/
                         typography, space, shape, motion, base
   components/
     index.js            the library's public surface
-    core/               Button, IconButton, Icon, Input, Select, Checkbox, Switch,
-                        Tooltip, Skeleton, EmptyState  (+ icons.js, interactive.js)
-    status/             StatusBadge, StatusDot, DependencyMark, DependencyBand,
-                        DependencySpine  (+ status.js: the colour algorithm)
-    shell/              AppShell, Panel, Resizer, ScopeIndicator, TabBar, Tab
-    kanban/             KanbanBoard, KanbanColumn, ColumnHeader, TaskCard, Assignee
-    agent/              LogView, LogLine, LogToolbar, CodeBlock, ToolCall,
-                        ChatMessage, AnsiText  (+ ansi.js, tokenize.js)
-    files/              FileTree, FileTreeRow
-    overlays/           Modal, Toast, ContextMenu
+    core/               buttons, inputs, Dropdown, Tooltip, EmptyState …
+                        (+ icons.js, interactive.js)
+    status/             status badges, dots and dependency marks
+                        (+ status.js: the colour algorithm)
+    shell/              AppShell, Panel, Resizer, ScopeIndicator, TabBar, project list
+    kanban/             the board, the task inspector, the new-task dialog
+    agent/              the agent list, the log view and its parts
+    files/              the file tree and the CodeMirror editor
+    terminal/           the xterm.js pane
+    run/                the run bar, the run dialog, the report view
+    notifications/      the bell's panel and cards
+    settings/           the settings window's tabs
+    overlays/           Modal, Toast, ContextMenu, MenuButton
   views/
     DesktopApp.vue      the three-column shell — the imported template
+    SettingsWindow.vue  the second window, under ?view=settings
     Gallery.vue         dev-only component harness
-    desktopAppData.js   sample tracker / agent / log state
+    desktopAppData.js   what is left of the sample state
 ```
+
+Each group's directory is the list; naming its files here only invites drift.
+`CLAUDE.md` carries the architecture and the decisions behind it.
 
 Tokens are copied from the design system verbatim; components are ported from its
 React sources to Vue SFCs, keeping prop names, computed styles and behaviour.
@@ -75,9 +83,10 @@ WebKitGTK constraint. Sentence case everywhere; identifiers in mono, prose in sa
 ## Icons
 
 Lucide (ISC), registered explicitly in `src/components/core/icons.js` so the build
-tree-shakes to the ~40 glyphs actually used. Adding a glyph to the UI means adding
-it there first; `Icon` warns in dev when a name is not registered. To swap in a
-different icon set, replace that file — nothing else references Lucide.
+tree-shakes to the glyphs actually used — that file is the list. Adding a glyph to
+the UI means adding it there first; `Icon` warns in dev when a name is not
+registered. To swap in a different icon set, replace that file — nothing else
+references Lucide.
 
 Two notes carried over from the import:
 
