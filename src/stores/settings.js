@@ -23,6 +23,17 @@ import { confirmUnsaved } from './tabs.js'
    defaults. Imported so that these two numbers do not end up with two copies in
    the front end. */
 import { LEFT_DEFAULT, RIGHT_DEFAULT } from '../views/panelWidths.js'
+/* Pure, no Vue and no DOM: what the board's two view settings may be, and the
+   shape of the two column lists beside them. Imported so this store and the
+   settings tab cannot disagree about which values are legal — and so that what
+   the tab offers stays a subset of what Rust accepts, since a value Rust
+   refuses would lose itself on the next save with nothing on screen to say so. */
+import {
+  COLUMN_MODES,
+  INTERVALS,
+  KANBAN_DEFAULTS,
+  columnNames
+} from '../components/kanban/boardView.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
@@ -33,6 +44,12 @@ const defaults = () => ({
      `UI_FONT_DEFAULT` / `EDITOR_FONT_DEFAULT`. */
   appearance: { theme: 'dark', density: 'comfortable', uiFontSize: UI_FONT_DEFAULT },
   editor: { fontSize: EDITOR_FONT_DEFAULT },
+  /* How the board is drawn — which columns get a slot and how far back a card
+     is worth looking at. Global rather than per project, for the reason
+     `KanbanSettings` in Rust records, and shipped as today's board exactly:
+     every column, every task. The rule these four feed is
+     `components/kanban/boardView.js`. */
+  kanban: { ...KANBAN_DEFAULTS, alwaysShow: [], unlimited: [] },
   layout: {
     leftCollapsed: false,
     rightCollapsed: false,
@@ -245,6 +262,7 @@ export async function loadSettings() {
     const base = defaults()
     applySection(settings.appearance, base.appearance, stored.appearance)
     applySection(settings.editor, base.editor, stored.editor)
+    applySection(settings.kanban, base.kanban, stored.kanban)
     applySection(settings.layout, base.layout, stored.layout)
     applySection(settings.project, base.project, stored.project)
     settings.openProjects = stored.openProjects ?? []
@@ -300,11 +318,20 @@ function toShared(source) {
   const base = defaults()
   const appearance = { ...base.appearance, ...source.appearance }
   const editor = { ...base.editor, ...source.editor }
+  const kanban = { ...base.kanban, ...source.kanban }
   return {
     theme: appearance.theme,
     density: appearance.density,
     uiFontSize: appearance.uiFontSize,
     editorFontSize: editor.fontSize,
+    /* Flat, like `editor.fontSize` above and for the same reason: the payload
+       is a message rather than a slice of the settings tree, and a nested
+       `kanban` would invite somebody to send the whole section and quietly
+       blank the two fields they left out. */
+    kanbanColumns: kanban.columns,
+    kanbanAlwaysShow: kanban.alwaysShow,
+    kanbanInterval: kanban.interval,
+    kanbanUnlimited: kanban.unlimited,
     agent: source.agent ?? base.agent,
     agentLanguage: source.agentLanguage ?? base.agentLanguage,
     taskLanguage: source.taskLanguage ?? base.taskLanguage
@@ -349,6 +376,24 @@ export function applyPatch(patch) {
   }
   if (typeof patch.taskLanguage === 'string' && patch.taskLanguage) {
     settings.taskLanguage = patch.taskLanguage
+  }
+  /* The board's four. The two scalars are checked against the closed lists
+     `boardView.js` holds — unlike `agent`, where Rust is the only party with
+     the list, the vocabulary here is the front end's own rule and Rust merely
+     validates the file against its copy of it. The two lists are cleaned rather
+     than trusted: they end up filtering the board, and a number arriving in one
+     would sit there matching no column for ever. */
+  if (COLUMN_MODES.includes(patch.kanbanColumns)) {
+    settings.kanban.columns = patch.kanbanColumns
+  }
+  if (INTERVALS.includes(patch.kanbanInterval)) {
+    settings.kanban.interval = patch.kanbanInterval
+  }
+  if (Array.isArray(patch.kanbanAlwaysShow)) {
+    settings.kanban.alwaysShow = columnNames(patch.kanbanAlwaysShow)
+  }
+  if (Array.isArray(patch.kanbanUnlimited)) {
+    settings.kanban.unlimited = columnNames(patch.kanbanUnlimited)
   }
 }
 

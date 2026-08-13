@@ -33,6 +33,7 @@ import {
   IconButton,
   Input,
   KanbanBoard,
+  KanbanSettings,
   LogView,
   MenuButton,
   Modal,
@@ -475,6 +476,15 @@ const galleryAgent = ref('claude')
    twice would never draw it. */
 const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
+/* The Kanban tab. Both lists live rather than off, since the interesting shape
+   of this tab is a checkbox column that does something — and the fixture board
+   deliberately carries a name no column of it matches (`triage`), which is the
+   second group, the whole price of storing these lists globally. */
+const galleryKanbanColumns = ref('non-empty')
+const galleryKanbanAlwaysShow = ref(['ready', 'triage'])
+const galleryKanbanInterval = ref('week')
+const galleryKanbanUnlimited = ref(['blocked'])
+const galleryBoardColumns = ['blocked', 'ready', 'running', 'needs-you', 'done']
 /* `attachments_survey`'s answer in Rust's own shape — a store bigger than this
    project's share of it, some of that share in use and some of it not. */
 const gallerySurvey = {
@@ -752,6 +762,18 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           @run="() => {}"
           @task-action="() => {}"
         />
+      </div>
+      <!-- A board with no columns to draw, in both of the opposite facts that
+           can mean: nothing is connected, and everything is hidden by the view
+           settings over a board that is perfectly full. The second is the one
+           worth having here — it is the only place its sentence can be read. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)' }">
+        <div :style="{ flex: 1, display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <KanbanBoard :columns="[]" />
+        </div>
+        <div :style="{ flex: 1, display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <KanbanBoard :columns="[]" filtered />
+        </div>
       </div>
       <!-- Tall enough for the whole dialog, footer included: a frame that
            clips it turns the one harness that would catch a broken modal into
@@ -1406,6 +1428,19 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <KanbanSettings
+            :columns="galleryKanbanColumns"
+            :always-show="galleryKanbanAlwaysShow"
+            :interval="galleryKanbanInterval"
+            :unlimited="galleryKanbanUnlimited"
+            :board-columns="galleryBoardColumns"
+            @update:columns="galleryKanbanColumns = $event"
+            @update:always-show="galleryKanbanAlwaysShow = $event"
+            @update:interval="galleryKanbanInterval = $event"
+            @update:unlimited="galleryKanbanUnlimited = $event"
           />
         </div>
         <!-- The Storage tab in the three states worth looking at: something to

@@ -32,8 +32,29 @@ describe('loading', () => {
       uiFontSize: 13
     })
     expect(settings.settings.editor).toEqual({ fontSize: 12 })
+    /* Today's board exactly: every column, every task. Nothing on anybody's
+       screen moves until they go and choose. */
+    expect(settings.settings.kanban).toEqual({
+      columns: 'all',
+      alwaysShow: [],
+      interval: 'all',
+      unlimited: []
+    })
     expect(settings.settings.openProjects).toEqual([])
     expect(settings.settings.project.activeTab).toBe('kanban')
+  })
+
+  it('reads the board settings off the file', async () => {
+    ipc.on('settings_load', {
+      kanban: { columns: 'non-empty', alwaysShow: ['ready'], interval: 'day' }
+    })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.kanban.columns).toBe('non-empty')
+    expect(settings.settings.kanban.alwaysShow).toEqual(['ready'])
+    expect(settings.settings.kanban.interval).toBe('day')
+    expect(settings.settings.kanban.unlimited).toEqual([], 'the field the file left out takes its default')
   })
 
   it('stored values cover the defaults field by field, not section by section', async () => {
@@ -311,6 +332,41 @@ describe('the settings window', () => {
     expect(settings.settings.taskLanguage).toBe('zh-Hans')
   })
 
+  it('takes the board settings and cleans the two column lists on the way in', async () => {
+    await emit(settings.SETTINGS_APPLY, {
+      kanbanColumns: 'non-empty',
+      kanbanInterval: 'week',
+      kanbanAlwaysShow: ['ready', 'ready', '', 7, 'done'],
+      kanbanUnlimited: ['blocked']
+    })
+    await nextTick()
+
+    expect(settings.settings.kanban.columns).toBe('non-empty')
+    expect(settings.settings.kanban.interval).toBe('week')
+    expect(settings.settings.kanban.alwaysShow).toEqual(['ready', 'done'])
+    expect(settings.settings.kanban.unlimited).toEqual(['blocked'])
+  })
+
+  it('keeps the board setting it holds when the value is off its closed list', async () => {
+    /* The two scalars are checked against `boardView.js`'s lists, and Rust
+       validates the file against its own copy — so what this guards is that a
+       value neither of them would accept never becomes the board a person
+       stares at. Skipped rather than reset, like every other field here. */
+    await emit(settings.SETTINGS_APPLY, { kanbanColumns: 'non-empty', kanbanInterval: 'week' })
+    await nextTick()
+
+    await emit(settings.SETTINGS_APPLY, {
+      kanbanColumns: 'some',
+      kanbanInterval: 'fortnight',
+      kanbanUnlimited: 'ready'
+    })
+    await nextTick()
+
+    expect(settings.settings.kanban.columns).toBe('non-empty')
+    expect(settings.settings.kanban.interval).toBe('week')
+    expect(settings.settings.kanban.unlimited).toEqual([], 'a list that is not one is skipped')
+  })
+
   it('answers a hello with what this window holds, not with what is on disk', async () => {
     settings.settings.appearance.uiFontSize = 20
     const heard = []
@@ -324,6 +380,10 @@ describe('the settings window', () => {
       density: 'comfortable',
       uiFontSize: 20,
       editorFontSize: 12,
+      kanbanColumns: 'all',
+      kanbanAlwaysShow: [],
+      kanbanInterval: 'all',
+      kanbanUnlimited: [],
       agent: 'claude',
       agentLanguage: 'en',
       taskLanguage: 'en'
@@ -348,6 +408,10 @@ describe('the settings window', () => {
       density: 'comfortable',
       uiFontSize: 15,
       editorFontSize: 12,
+      kanbanColumns: 'all',
+      kanbanAlwaysShow: [],
+      kanbanInterval: 'all',
+      kanbanUnlimited: [],
       agent: 'codex',
       agentLanguage: 'en',
       taskLanguage: 'en'
