@@ -40,6 +40,13 @@ impl Profile for Claude {
     /// agent would make for us.
     fn command(&self, launch: &Launch) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(self.binary());
+        // First of all, and before the plugins: this is what makes the batch
+        // end by itself. See `agents::is_batch` for which sessions get it.
+        if crate::agents::is_batch(&launch.intent) {
+            for arg in self.batch_args() {
+                cmd.arg(arg);
+            }
+        }
         cmd.arg("--plugin-dir");
         cmd.arg(&launch.skills.smetana);
         if !launch.skills.superpowers_installed {
@@ -100,6 +107,23 @@ impl Profile for Claude {
             },
             env: vec![("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")],
         }
+    }
+
+    /// `-p` is Claude Code's own "print response and exit", and the shape the
+    /// loop this subsystem was ported from has always used: `runClaude` in
+    /// `holiday-curb`'s `scripts/lead-auto-loop.mjs` spawns exactly these four
+    /// arguments per batch. The `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` beside
+    /// `autonomy` came from that same script and is a **print-mode** variable —
+    /// it has done nothing at all while this profile started an interactive
+    /// session, and it starts working here.
+    ///
+    /// The stream format is not decoration. Measured against the installed CLI,
+    /// `-p --verbose` prints a single line when the batch ends, so a pane would
+    /// sit empty for the length of one; `--output-format stream-json` emits an
+    /// event as each thing happens. What that JSONL is turned into is
+    /// `transcript` below.
+    fn batch_args(&self) -> &'static [&'static str] {
+        &["-p", "--verbose", "--output-format", "stream-json"]
     }
 
     /// `/usage` is a slash command of the interactive interface, and `-p` runs
@@ -765,6 +789,62 @@ mod tests {
         let args = argv(&launch(run(crate::runs::model::RunMode::Auto), false));
         let flag = args.iter().position(|a| a == "--permission-mode").expect("the flag is there");
         assert_eq!(flag, args.len() - 3, "only the flag's value and the prompt come after it");
+    }
+
+    fn run_intent(mode: crate::runs::model::RunMode) -> Intent {
+        Intent::Run {
+            settings: crate::runs::model::RunSettings {
+                scope: crate::runs::model::RunScope::Queue,
+                mode,
+                target_branch: "main".into(),
+                create_target: false,
+                min_priority: Some(2),
+                max_parallel_tasks: Some(3),
+                live_check: true,
+                file_findings: true,
+            },
+            reports: PathBuf::from("/p/.smetana/runs/7"),
+            batch: 1,
+        }
+    }
+
+    #[test]
+    fn an_unattended_batch_prints_its_stream_and_exits() {
+        // `-p` is what makes the process end when the work does, which is the
+        // whole of why the run's loop ever comes round. The stream format is
+        // the other half: measured against the CLI, `-p` alone prints one line
+        // at the very end, so the pane would sit empty for the length of a
+        // batch.
+        let args = argv(&launch(run_intent(crate::runs::model::RunMode::Auto), true));
+        assert_eq!(args[0], "claude");
+        assert_eq!(args[1..4], ["-p", "--verbose", "--output-format"], "{args:?}");
+        assert_eq!(args[4], "stream-json", "{args:?}");
+        assert!(
+            args.iter().any(|a| a == "bypassPermissions"),
+            "the autonomy switches are unaffected: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "--plugin-dir" && w[1] == "/app/resources/smetana"),
+            "and so are the plugins: {args:?}"
+        );
+    }
+
+    #[test]
+    fn a_supervised_or_solo_batch_keeps_its_interface() {
+        // Both modes have a person answering in the terminal, and print mode
+        // has no terminal to answer in.
+        for mode in [crate::runs::model::RunMode::Supervised, crate::runs::model::RunMode::Solo] {
+            let args = argv(&launch(run_intent(mode), true));
+            assert!(!args.iter().any(|a| a == "-p"), "{mode:?}: {args:?}");
+        }
+    }
+
+    #[test]
+    fn a_persons_own_session_is_never_printed() {
+        for intent in [Intent::Bare, Intent::EditTask { id: "a-1".into(), title: "t".into() }] {
+            let args = argv(&launch(intent, true));
+            assert!(!args.iter().any(|a| a == "-p"), "{args:?}");
+        }
     }
 
     #[test]
