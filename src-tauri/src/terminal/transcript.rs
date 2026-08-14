@@ -93,8 +93,8 @@ mod tests {
 
     #[test]
     fn a_multibyte_character_split_across_chunks_survives() {
-        // Decoding per chunk would turn the two halves of a Cyrillic letter
-        // into two replacement characters; decoding per line cannot.
+        // Decoding per chunk would turn the two halves of a multi-byte
+        // character into two replacement characters; decoding per line cannot.
         let mut t = Transcript::new(echo);
         let word = "———".as_bytes();
         assert_eq!(text(t.feed(&word[..5])), "");
