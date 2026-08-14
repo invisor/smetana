@@ -96,10 +96,10 @@ mod tests {
         // Decoding per chunk would turn the two halves of a Cyrillic letter
         // into two replacement characters; decoding per line cannot.
         let mut t = Transcript::new(echo);
-        let word = "привет".as_bytes();
+        let word = "———".as_bytes();
         assert_eq!(text(t.feed(&word[..5])), "");
         assert_eq!(text(t.feed(&word[5..])), "");
-        assert_eq!(text(t.feed(b"\n")), "привет\r\n");
+        assert_eq!(text(t.feed(b"\n")), "———\r\n");
     }
 
     #[test]

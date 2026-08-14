@@ -776,6 +776,31 @@ mod tests {
     }
 
     #[test]
+    fn a_translator_is_only_ever_installed_over_a_stream_that_was_asked_for() {
+        // The two answers are a pair, and nothing else in the app checks that
+        // they agree: `terminal::service` installs the translator on `is_batch`
+        // alone, without knowing whether this profile's `command` actually put
+        // `batch_args` on the line — each harness applies them itself, in its
+        // own body, because they have to lead the argv.
+        //
+        // Both ways of getting it wrong are silent, and one is worse than the
+        // other. A profile answering `transcript` and forgetting the arguments
+        // gets a JSONL translator over an interactive TUI's ANSI stream: every
+        // line is unparseable, every line renders as nothing, and the pane is
+        // blank for the length of a batch with nothing in any log to say why.
+        // The other way round only leaves a pane of raw JSON, which at least
+        // says what happened.
+        for id in IDS {
+            let profile = resolve(id).expect("a listed id must resolve");
+            assert_eq!(
+                profile.transcript().is_some(),
+                !profile.batch_args().is_empty(),
+                "{id}: a harness reads its own non-interactive output or asks for neither"
+            );
+        }
+    }
+
+    #[test]
     fn picking_falls_back_to_whatever_is_installed() {
         // "sh" is not an agent, so nothing is installed as far as pick is
         // concerned, and there is nothing to fall back to either.

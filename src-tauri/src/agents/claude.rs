@@ -153,9 +153,27 @@ impl Profile for Claude {
 const MAX_TEXT: usize = 200;
 const MAX_DETAIL: usize = 140;
 
-/// Whitespace collapsed and the whole thing on one line — a pane row is a row.
+/// Whitespace collapsed and the whole thing on one line — a pane row is a row —
+/// and every other control character dropped.
+///
+/// The second half is not tidiness. Everything that reaches this function is
+/// **agent-authored**: an assistant paragraph, a `Bash` command quoting terminal
+/// output, an error message from the API. Such a string routinely carries
+/// `\u001b[31m` and `\u0007` in the JSON, and `serde_json` decodes those into
+/// live bytes — which, before this translator existed, sat inert inside a JSON
+/// line nobody rendered. Passed through, they would be colour and cursor
+/// movement in a transcript specified as plain text, and a bell would set
+/// `bell_pending`, turning the session's row `needs-you` and spending one of the
+/// one or two loud rows the whole design budgets for a screen. `char::is_control`
+/// covers C0, DEL and C1, and C1 is worth taking with them: U+009B is a CSI in
+/// its own right.
 fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.split_whitespace()
+        .map(|word| word.chars().filter(|c| !c.is_control()).collect::<String>())
+        // A word that was nothing but control bytes leaves no gap of its own.
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -214,7 +232,9 @@ pub fn transcript_line(line: &str) -> Vec<String> {
     match str_at("type") {
         "system" => match str_at("subtype") {
             "init" => {
-                let model = str_at("model");
+                // Collapsed first and judged empty afterwards: a model field of
+                // pure whitespace would otherwise render as `(model )`.
+                let model = clip(&one_line(str_at("model")), MAX_DETAIL);
                 Some(if model.is_empty() {
                     "-- session start".to_string()
                 } else {
@@ -222,7 +242,12 @@ pub fn transcript_line(line: &str) -> Vec<String> {
                 })
             }
             "api_retry" => {
-                let error = if str_at("error").is_empty() { "error" } else { str_at("error") };
+                // Somebody else's error message, and the same treatment the
+                // agent's own prose gets: a newline in it is the diagonal
+                // stepping the `\r\n` rule exists against, and an unbounded one
+                // is a wall.
+                let error = clip(&one_line(str_at("error")), MAX_DETAIL);
+                let error = if error.is_empty() { "error".to_string() } else { error };
                 let attempt = event
                     .get("attempt")
                     .and_then(serde_json::Value::as_i64)
@@ -940,7 +965,12 @@ mod tests {
                 target_branch: "main".into(),
                 create_target: false,
                 min_priority: Some(2),
-                max_parallel_tasks: Some(3),
+                // None in Solo, the way `RunSettings::validate` requires — the
+                // same form the copy in `agents/mod.rs` keeps. A flat `Some(3)`
+                // makes the Solo assertion below one about settings that can
+                // never reach a profile at all.
+                max_parallel_tasks: (!matches!(mode, crate::runs::model::RunMode::Solo))
+                    .then_some(3),
                 live_check: true,
                 file_findings: true,
             },
@@ -1070,6 +1100,62 @@ mod tests {
         ] {
             assert!(transcript_line(line).is_empty(), "{line}");
         }
+    }
+
+    #[test]
+    fn nothing_agent_authored_reaches_the_pane_carrying_a_control_byte() {
+        // The text and a tool's input are written by the agent, and an
+        // assistant paragraph or a `Bash` command quoting terminal output
+        // carries an escape sequence and a bell in the JSON, which serde
+        // decodes into live bytes. Through the pane they would be colour and
+        // cursor movement in a transcript specified as plain text, and a ring
+        // that turns the row `needs-you` -- one of the one or two loud rows the
+        // whole design budgets for a screen. The escapes below are written the
+        // way the CLI writes them, as JSON `\u001b`, so this source file holds
+        // no control byte of its own.
+        let text = transcript_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"red \u001b[31mhere\u001b[0m and a bell \u0007done"}]}}"#,
+        );
+        assert_eq!(text, vec!["   red [31mhere[0m and a bell done"]);
+        assert!(!text[0].contains('\u{1b}') && !text[0].contains('\u{7}'), "{text:?}");
+
+        let call = transcript_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo \u001b[1mhi\u001b[0m"}}]}}"#,
+        );
+        assert_eq!(call, vec!["* Bash — echo [1mhi[0m"]);
+    }
+
+    #[test]
+    fn the_fields_of_a_system_event_are_collapsed_and_clipped_like_every_other() {
+        // The model name and an API error message are interpolated the same way
+        // the agent's own text is, and were the only two that reached the pane
+        // raw: a newline in an error message is the very diagonal stepping the
+        // `\r\n` rule exists against, and an unbounded one is a wall. What is
+        // left of the escape below is its printable tail, which is text like any
+        // other -- only the control byte itself is a thing this pane must not
+        // be handed.
+        assert_eq!(
+            transcript_line(
+                r#"{"type":"system","subtype":"api_retry","error":"overloaded\nupstream said \u001b[0m no","attempt":2}"#
+            ),
+            vec!["!! api retry (overloaded upstream said [0m no), attempt 2"]
+        );
+        assert_eq!(
+            transcript_line(&format!(
+                r#"{{"type":"system","subtype":"api_retry","error":"{}","attempt":1}}"#,
+                "e".repeat(400)
+            ))[0]
+                .chars()
+                .count(),
+            // "!! api retry (" + 140 clipped characters + "), attempt 1"
+            14 + MAX_DETAIL + 12
+        );
+        // Whitespace is collapsed *before* the emptiness is judged, or a model
+        // field holding nothing but spaces renders as `(model )`.
+        assert_eq!(
+            transcript_line(r#"{"type":"system","subtype":"init","model":"   "}"#),
+            vec!["-- session start"]
+        );
     }
 
     #[test]
