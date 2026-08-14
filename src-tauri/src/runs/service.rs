@@ -662,13 +662,35 @@ async fn drive(
             account.baseline = Some(Baseline::of(&issues, &run.settings.scope));
         }
 
-        let now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
+        let mut now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
         // Narrower than the mode on purpose: what the decision cares about is
         // whether this run may take a second batch, not who answers a question
         // — see `RunMode::one_batch`.
         let once = run.settings.mode.one_batch();
-        match queue::next_action(&now, previous.as_ref(), iteration, MAX_ITERATIONS, last_batch, once)
-        {
+        let mut action =
+            queue::next_action(&now, previous.as_ref(), iteration, MAX_ITERATIONS, last_batch, once);
+        // An empty board is the one ending worth paying a resync for. The
+        // snapshot above is the tracker worker's cache, and it learns of a
+        // batch's writes through the watcher — so a board read microseconds
+        // after the batch's process exited can still be missing the closes that
+        // released the next task. Every other ending survives being two seconds
+        // late; this one ends the night saying there was nothing left to take.
+        // `finish` already resyncs for the same reason, one step later and too
+        // late to change the decision.
+        if matches!(action, Action::Stop(StopReason::QueueEmpty)) {
+            if let Some(fresh) = fresh_board(&tracker).await {
+                now = queue::snapshot(&fresh, &run.settings.scope, run.settings.min_priority);
+                action = queue::next_action(
+                    &now,
+                    previous.as_ref(),
+                    iteration,
+                    MAX_ITERATIONS,
+                    last_batch,
+                    once,
+                );
+            }
+        }
+        match action {
             Action::Stop(reason) => {
                 finish(&mut run, reason, &say, &account, &root, &tracker).await;
                 return;
