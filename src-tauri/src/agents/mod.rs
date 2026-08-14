@@ -302,6 +302,42 @@ pub trait Profile: Sync {
     fn autonomy(&self, _mode: crate::runs::model::RunMode) -> Autonomy {
         Autonomy::default()
     }
+
+    /// How this harness is told to carry one batch out and **exit**, as
+    /// arguments in front of everything else on its command line.
+    ///
+    /// A run's loop reads the board again only once the batch's process is gone
+    /// (`runs::service::watch_batch` waits on `await_exit`), and an ordinary
+    /// interactive session never goes: it finishes the work, reports, and sits
+    /// at its prompt. So a batch nobody is watching is started in the harness's
+    /// non-interactive form, where finishing the work and exiting are one event.
+    ///
+    /// In front of everything else because a harness may answer with a
+    /// subcommand rather than a flag, and a subcommand has one legal position.
+    ///
+    /// The default is nothing, and — like `autonomy`'s — it is a working answer
+    /// rather than a gap: a harness with no non-interactive form runs exactly as
+    /// every harness ran before this existed.
+    fn batch_args(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// How one line of what a batch prints becomes what a person sees in the
+    /// pane, or `None` where the harness's own output is already that.
+    ///
+    /// It is a pair with `batch_args` and belongs to the same profile for the
+    /// same reason layer B does: what a harness emits in its non-interactive
+    /// form is knowledge about that harness. Claude Code's only streaming form
+    /// is JSONL, so its answer is a translator; a harness that prints readable
+    /// progress by itself keeps the default and its bytes pass through
+    /// untouched.
+    ///
+    /// A function pointer rather than a trait object: the rendering is pure —
+    /// one line in, zero or more lines out — and nothing about it needs to
+    /// borrow the profile.
+    fn transcript(&self) -> Option<fn(&str) -> Vec<String>> {
+        None
+    }
 }
 
 /// What a profile needs added to run a batch.
@@ -309,6 +345,22 @@ pub trait Profile: Sync {
 pub struct Autonomy {
     pub args: Vec<&'static str>,
     pub env: Vec<(&'static str, &'static str)>,
+}
+
+/// Is this session an unattended run's batch — the one kind that has to end by
+/// itself, and therefore not an interactive session at all?
+///
+/// Written once because two separate things hang off it: the arguments in
+/// `Profile::batch_args` and the translator in `Profile::transcript`. Two copies
+/// of the condition would eventually disagree about which sessions have a person
+/// in them, and the disagreement would be silent in both directions — a
+/// supervised session with no interface, or a batch that never ends.
+///
+/// `RunMode::unattended` is the same predicate `watch_batch` already reads to
+/// decide whether an unanswered question ends the batch, so this cannot drift
+/// from that either.
+pub fn is_batch(intent: &Intent) -> bool {
+    matches!(intent, Intent::Run { settings, .. } if settings.mode.unattended())
 }
 
 /// The closed list of agent ids, and the only copy of it. `settings/model.rs`
@@ -661,6 +713,66 @@ mod tests {
         assert_eq!(cascade(Stage::On, Stage::On, Stage::Off), (Stage::On, Stage::Off));
         assert_eq!(cascade(Stage::On, Stage::Auto, Stage::On), (Stage::Auto, Stage::Auto));
         assert_eq!(cascade(Stage::On, Stage::Off, Stage::On), (Stage::Off, Stage::Off));
+    }
+
+    fn run_intent(mode: crate::runs::model::RunMode) -> Intent {
+        Intent::Run {
+            settings: crate::runs::model::RunSettings {
+                scope: crate::runs::model::RunScope::Queue,
+                mode,
+                target_branch: "main".into(),
+                create_target: false,
+                min_priority: Some(2),
+                max_parallel_tasks: (!matches!(mode, crate::runs::model::RunMode::Solo))
+                    .then_some(3),
+                live_check: true,
+                file_findings: true,
+            },
+            reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
+            batch: 1,
+        }
+    }
+
+    #[test]
+    fn only_a_run_with_nobody_watching_is_a_batch() {
+        // The whole rule, in one place, because two things hang off it: the
+        // arguments that make the process exit, and the translator that makes
+        // what it prints readable. A session with a person in front of it is
+        // neither — taking their interface away would take away what they
+        // started.
+        use crate::runs::model::RunMode;
+
+        assert!(is_batch(&run_intent(RunMode::Auto)));
+        assert!(!is_batch(&run_intent(RunMode::Supervised)));
+        assert!(!is_batch(&run_intent(RunMode::Solo)));
+        assert!(!is_batch(&Intent::Bare));
+        assert!(!is_batch(&Intent::Setup));
+        assert!(!is_batch(&Intent::EditTask { id: "a-1".into(), title: "t".into() }));
+    }
+
+    #[test]
+    fn a_harness_that_was_given_neither_answer_keeps_the_session_it_has() {
+        // The defaults are working answers rather than gaps, the shape every
+        // other optional method on this trait keeps: such a harness runs
+        // exactly as it does today. For Codex that is deliberate and recorded
+        // — its own task — not an oversight here.
+        struct Plain;
+        impl Profile for Plain {
+            fn id(&self) -> &'static str {
+                "plain"
+            }
+            fn binary(&self) -> &'static str {
+                "plain"
+            }
+            fn delivery(&self) -> SkillDelivery {
+                SkillDelivery::Inline
+            }
+            fn command(&self, _launch: &Launch) -> portable_pty::CommandBuilder {
+                portable_pty::CommandBuilder::new(self.binary())
+            }
+        }
+        assert!(Plain.batch_args().is_empty());
+        assert!(Plain.transcript().is_none());
     }
 
     #[test]
