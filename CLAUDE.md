@@ -486,6 +486,22 @@ see. The rule cuts the other way too, deliberately: a session whose screen holds
 `IDLE_AFTER` is called idle even while bytes pour in, which is the honest reading and cheap to be
 wrong about.
 
+**That second half is a rule about a screen a harness draws for a person, and one kind of session
+sits outside it**: a run's batch, whose pane is a rendered transcript of a machine-format stream
+(`Live::transcript` in the worker, `DetectInput::transcript` beside it in `detect.rs`). Such a
+harness emits bytes only when a tool call begins or ends, so the picture holds still for the whole of
+a five-minute `cargo test` with the agent working flat out — stillness meaning the opposite of what
+it means on a TUI. **That mechanism is read off the stream's own event types rather than watched on
+a live Autopilot batch under this build**, the same standing the smetana-8h7 fix below has. Layer A
+therefore never calls such a session idle; the bell and layer B sit above it untouched, so
+`needs-you` is still reachable from either. The price is named and small: a batch wedged dead reads
+as running until its process exits, and nothing waits on that state — a run waits on the exit code,
+and the only readers of a batch's idle were the dot in the agent list and `configFreshness`, which
+is the pair the rule exists for (smetana-07o). The marker is `transcript` and not `agents::is_batch`
+on purpose, and that is the narrower fact rather than the tidier one: Codex runs its batches
+interactively, has no translator, and a still screen of its means exactly what a person's session's
+does.
+
 `Quiet` keeps a hash rather than the screen — this runs for every live session on every detection
 tick, and holding the previous screen would mean copying kilobytes per session per tick. **The
 fingerprint deliberately covers the plain text of the visible rows and nothing else**: no colour, no
@@ -502,10 +518,11 @@ and not one that has been observed on the dialog it was aimed at**; the live che
 permission dialog without spending model quota, and the trust dialog is no stand-in, having been
 measured emitting zero bytes after the first 0.6 s. The bell half is not closed: Claude Code still
 rings none on a permission prompt. What an unmatched layer B produces is `Idle`, which reaches the
-front end as `ready`, whose loudness is `live` — so the whole visible cost of a waiting agent no
-profile could read is a dashed dot instead of a spinning one. **Nothing shouts, nothing dims, and
-nothing else in the app acts on the state at all**, and `NeedsYou` comes only from a bell or from a
-profile's own match.
+front end as `ready`, whose loudness is `live` — so in a session a person started, the whole visible
+cost of a waiting agent no profile could read is a dashed dot instead of a spinning one, and in a
+run's batch, which layer A never calls idle at all, it is the opposite dot: a spinning one for as
+long as the process lives. **Nothing shouts, nothing dims, and nothing else in the app acts on the
+state at all**, and `NeedsYou` comes only from a bell or from a profile's own match.
 
 An agent that has genuinely finished still reaches `Idle` at about three seconds, but not to the
 millisecond, and the drift goes both ways: earlier, because the last bytes a CLI writes are often
@@ -519,13 +536,14 @@ even if state hasn't caught up yet (state lags the fact by up to `SETTLE` plus a
 is that same fact arriving sooner). Writing into an open permission dialog would answer, on a human's
 behalf, a question the app never read and the human never saw. **What that guard cannot catch is the
 other half of `smetana-8h7`**: a dialog whose agent rang no bell and whose profile failed to read it.
-Layer A calls that session `Idle`, which is the truth and not a refusal — an idle session is exactly
-what a capture expects to write into, so `Idle` can never join this guard without breaking the
-ordinary case, and layer B is therefore the whole of the protection here. The capture's own settle is
-the one place the stream is still the right thing to measure, and deliberately the opposite of what
-layer A does: a capture has just written into the session and is waiting for an answer to arrive at
-all, so a screen that happens to look unchanged mid-answer is not a settled one, and reading a
-half-finished reply as finished would hand a caller the wrong text with nothing to say so.
+Layer A calls that session `Idle`, which is the truth and not a refusal — and `Running` for a run's
+batch, which it never calls idle at all, no more of a refusal than the other. An idle session is
+exactly what a capture expects to write into, so `Idle` can never join this guard without breaking
+the ordinary case, and layer B is therefore the whole of the protection here. The capture's own
+settle is the one place the stream is still the right thing to measure, and deliberately the opposite
+of what layer A does: a capture has just written into the session and is waiting for an answer to
+arrive at all, so a screen that happens to look unchanged mid-answer is not a settled one, and
+reading a half-finished reply as finished would hand a caller the wrong text with nothing to say so.
 
 Sessions do not survive a restart, and nothing about them is written to `settings.json` — a session
 row with a dead process behind it is worse than an empty list. `RunEvent::Exit` calls
