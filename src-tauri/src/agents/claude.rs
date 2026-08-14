@@ -40,6 +40,13 @@ impl Profile for Claude {
     /// agent would make for us.
     fn command(&self, launch: &Launch) -> CommandBuilder {
         let mut cmd = CommandBuilder::new(self.binary());
+        // First of all, and before the plugins: this is what makes the batch
+        // end by itself. See `agents::is_batch` for which sessions get it.
+        if crate::agents::is_batch(&launch.intent) {
+            for arg in self.batch_args() {
+                cmd.arg(arg);
+            }
+        }
         cmd.arg("--plugin-dir");
         cmd.arg(&launch.skills.smetana);
         if !launch.skills.superpowers_installed {
@@ -102,6 +109,29 @@ impl Profile for Claude {
         }
     }
 
+    /// `-p` is Claude Code's own "print response and exit", and the shape the
+    /// loop this subsystem was ported from has always used: `runClaude` in
+    /// `holiday-curb`'s `scripts/lead-auto-loop.mjs` spawns exactly these four
+    /// arguments per batch. The `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` beside
+    /// `autonomy` came from that same script and is a **print-mode** variable —
+    /// it has done nothing at all while this profile started an interactive
+    /// session, and it starts working here.
+    ///
+    /// The stream format is not decoration. Measured against the installed CLI,
+    /// `-p --verbose` prints a single line when the batch ends, so a pane would
+    /// sit empty for the length of one; `--output-format stream-json` emits an
+    /// event as each thing happens. What that JSONL is turned into is
+    /// `transcript` below.
+    fn batch_args(&self) -> &'static [&'static str] {
+        &["-p", "--verbose", "--output-format", "stream-json"]
+    }
+
+    /// Claude Code's only streaming form is JSONL, so what a person reads has
+    /// to be made from it here. See `transcript_line`.
+    fn transcript(&self) -> Option<fn(&str) -> Vec<String>> {
+        Some(transcript_line)
+    }
+
     /// `/usage` is a slash command of the interactive interface, and `-p` runs
     /// one anyway and prints what it would have drawn. There is no
     /// machine-readable form of this and none has appeared: as of 2.1.174 the
@@ -114,6 +144,166 @@ impl Profile for Claude {
 
     fn parse_usage(&self, output: &str) -> Option<Usage> {
         usage(output)
+    }
+}
+
+/// The agent's own words, and a tool's detail: the reference formatter's two
+/// ceilings, kept because they were chosen against real output. A `Task` call
+/// carries a whole briefing in its input, and unclipped it fills the pane.
+const MAX_TEXT: usize = 200;
+const MAX_DETAIL: usize = 140;
+
+/// Whitespace collapsed and the whole thing on one line — a pane row is a row —
+/// and every other control character dropped.
+///
+/// The second half is not tidiness. Everything that reaches this function is
+/// **agent-authored**: an assistant paragraph, a `Bash` command quoting terminal
+/// output, an error message from the API. Such a string routinely carries
+/// `\u001b[31m` and `\u0007` in the JSON, and `serde_json` decodes those into
+/// live bytes — which, before this translator existed, sat inert inside a JSON
+/// line nobody rendered. Passed through, they would be colour and cursor
+/// movement in a transcript specified as plain text, and a bell would set
+/// `bell_pending`, turning the session's row `needs-you` and spending one of the
+/// one or two loud rows the whole design budgets for a screen. `char::is_control`
+/// covers C0, DEL and C1, and C1 is worth taking with them: U+009B is a CSI in
+/// its own right.
+fn one_line(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| word.chars().filter(|c| !c.is_control()).collect::<String>())
+        // A word that was nothing but control bytes leaves no gap of its own.
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn clip(text: &str, max: usize) -> String {
+    // Counted in characters rather than bytes: a Russian task title is two
+    // bytes a letter, and slicing a string mid-character panics.
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max.saturating_sub(3)).collect();
+    format!("{kept}...")
+}
+
+/// Which field of a tool's input says what that call is actually doing. The
+/// table is the reference formatter's; a tool it has never heard of still gets
+/// its name shown, because the point of the line is that something happened.
+fn tool_detail(name: &str, input: &serde_json::Value) -> String {
+    let field = |key: &str| input.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
+    let detail = match name {
+        "Bash" => field("command").to_string(),
+        "Task" => {
+            let kind = field("subagent_type");
+            let what = if field("description").is_empty() { field("prompt") } else { field("description") };
+            if kind.is_empty() { what.to_string() } else { format!("{kind}: {what}") }
+        }
+        "Read" | "Edit" | "Write" | "NotebookEdit" => field("file_path").to_string(),
+        "Grep" | "Glob" => field("pattern").to_string(),
+        "Skill" => {
+            let skill = field("skill");
+            if skill.is_empty() { field("command").to_string() } else { skill.to_string() }
+        }
+        "TaskCreate" | "TaskUpdate" => {
+            let what = field("description");
+            if what.is_empty() { field("status").to_string() } else { what.to_string() }
+        }
+        _ => String::new(),
+    };
+    clip(&one_line(&detail), MAX_DETAIL)
+}
+
+/// One line of `--output-format stream-json`, as the pane should show it.
+///
+/// Zero lines is an ordinary answer and the commonest one: hook chatter, a
+/// rate-limit event, a tool's result — routinely a whole file — and every event
+/// type this build has never heard of. Failing that way round is deliberate: a
+/// missing row in a pane costs a person nothing they cannot get from the CLI's
+/// own logs, while a wall of JSON costs them the pane.
+///
+/// A port of `lib/stream-format.mjs` in the project `runs/queue.rs` was ported
+/// from, with its `⚙ ✓ ⚠` replaced by ASCII — this app composes the text, and
+/// the constraint against emoji does not stop at the edge of a terminal pane.
+pub fn transcript_line(line: &str) -> Vec<String> {
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Vec::new();
+    };
+    let str_at = |key: &str| event.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
+    match str_at("type") {
+        "system" => match str_at("subtype") {
+            "init" => {
+                // Collapsed first and judged empty afterwards: a model field of
+                // pure whitespace would otherwise render as `(model )`.
+                let model = clip(&one_line(str_at("model")), MAX_DETAIL);
+                Some(if model.is_empty() {
+                    "-- session start".to_string()
+                } else {
+                    format!("-- session start (model {model})")
+                })
+            }
+            "api_retry" => {
+                // Somebody else's error message, and the same treatment the
+                // agent's own prose gets: a newline in it is the diagonal
+                // stepping the `\r\n` rule exists against, and an unbounded one
+                // is a wall.
+                let error = clip(&one_line(str_at("error")), MAX_DETAIL);
+                let error = if error.is_empty() { "error".to_string() } else { error };
+                let attempt = event
+                    .get("attempt")
+                    .and_then(serde_json::Value::as_i64)
+                    .map_or("?".to_string(), |n| n.to_string());
+                Some(format!("!! api retry ({error}), attempt {attempt}"))
+            }
+            _ => None,
+        }
+        .into_iter()
+        .collect(),
+        "assistant" => event
+            .pointer("/message/content")
+            .and_then(serde_json::Value::as_array)
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|block| {
+                        match block.get("type").and_then(serde_json::Value::as_str)? {
+                            "text" => {
+                                let text = one_line(
+                                    block.get("text").and_then(serde_json::Value::as_str)?,
+                                );
+                                (!text.is_empty()).then(|| format!("   {}", clip(&text, MAX_TEXT)))
+                            }
+                            "tool_use" => {
+                                let name = block.get("name").and_then(serde_json::Value::as_str)?;
+                                let detail = tool_detail(
+                                    name,
+                                    block.get("input").unwrap_or(&serde_json::Value::Null),
+                                );
+                                Some(if detail.is_empty() {
+                                    format!("* {name}")
+                                } else {
+                                    format!("* {name} — {detail}")
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        "result" => {
+            let tokens = |key: &str| {
+                event
+                    .pointer(&format!("/usage/{key}"))
+                    .and_then(serde_json::Value::as_i64)
+                    .map_or("?".to_string(), |n| n.to_string())
+            };
+            vec![format!(
+                "-- batch result (in {} / out {} tok)",
+                tokens("input_tokens"),
+                tokens("output_tokens")
+            )]
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -767,6 +957,67 @@ mod tests {
         assert_eq!(flag, args.len() - 3, "only the flag's value and the prompt come after it");
     }
 
+    fn run_intent(mode: crate::runs::model::RunMode) -> Intent {
+        Intent::Run {
+            settings: crate::runs::model::RunSettings {
+                scope: crate::runs::model::RunScope::Queue,
+                mode,
+                target_branch: "main".into(),
+                create_target: false,
+                min_priority: Some(2),
+                // None in Solo, the way `RunSettings::validate` requires — the
+                // same form the copy in `agents/mod.rs` keeps. A flat `Some(3)`
+                // makes the Solo assertion below one about settings that can
+                // never reach a profile at all.
+                max_parallel_tasks: (!matches!(mode, crate::runs::model::RunMode::Solo))
+                    .then_some(3),
+                live_check: true,
+                file_findings: true,
+            },
+            reports: PathBuf::from("/p/.smetana/runs/7"),
+            batch: 1,
+        }
+    }
+
+    #[test]
+    fn an_unattended_batch_prints_its_stream_and_exits() {
+        // `-p` is what makes the process end when the work does, which is the
+        // whole of why the run's loop ever comes round. The stream format is
+        // the other half: measured against the CLI, `-p` alone prints one line
+        // at the very end, so the pane would sit empty for the length of a
+        // batch.
+        let args = argv(&launch(run_intent(crate::runs::model::RunMode::Auto), true));
+        assert_eq!(args[0], "claude");
+        assert_eq!(args[1..4], ["-p", "--verbose", "--output-format"], "{args:?}");
+        assert_eq!(args[4], "stream-json", "{args:?}");
+        assert!(
+            args.iter().any(|a| a == "bypassPermissions"),
+            "the autonomy switches are unaffected: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|w| w[0] == "--plugin-dir" && w[1] == "/app/resources/smetana"),
+            "and so are the plugins: {args:?}"
+        );
+    }
+
+    #[test]
+    fn a_supervised_or_solo_batch_keeps_its_interface() {
+        // Both modes have a person answering in the terminal, and print mode
+        // has no terminal to answer in.
+        for mode in [crate::runs::model::RunMode::Supervised, crate::runs::model::RunMode::Solo] {
+            let args = argv(&launch(run_intent(mode), true));
+            assert!(!args.iter().any(|a| a == "-p"), "{mode:?}: {args:?}");
+        }
+    }
+
+    #[test]
+    fn a_persons_own_session_is_never_printed() {
+        for intent in [Intent::Bare, Intent::EditTask { id: "a-1".into(), title: "t".into() }] {
+            let args = argv(&launch(intent, true));
+            assert!(!args.iter().any(|a| a == "-p"), "{args:?}");
+        }
+    }
+
     #[test]
     fn nothing_a_person_started_is_silently_given_a_bypass() {
         // build_command applies autonomy for a Run and for nothing else; the
@@ -776,6 +1027,150 @@ mod tests {
             let args = argv(&launch(intent, false));
             assert!(!args.iter().any(|a| a == "--permission-mode"), "{args:?}");
         }
+    }
+
+    #[test]
+    fn a_tool_call_becomes_one_line_naming_the_tool_and_its_point() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git worktree add ../wt-1 -b task/x"}}]}}"#;
+        assert_eq!(
+            transcript_line(line),
+            vec!["* Bash — git worktree add ../wt-1 -b task/x".to_string()]
+        );
+    }
+
+    #[test]
+    fn each_tool_is_summarized_by_the_field_that_says_what_it_is_doing() {
+        let call = |name: &str, input: &str| {
+            transcript_line(&format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"{name}","input":{input}}}]}}}}"#
+            ))
+        };
+        assert_eq!(call("Read", r#"{"file_path":"/p/src/main.rs"}"#), vec!["* Read — /p/src/main.rs"]);
+        assert_eq!(call("Grep", r#"{"pattern":"fn main"}"#), vec!["* Grep — fn main"]);
+        assert_eq!(
+            call("Task", r#"{"subagent_type":"worker","description":"implement smetana-1"}"#),
+            vec!["* Task — worker: implement smetana-1"]
+        );
+        assert_eq!(call("Skill", r#"{"skill":"smetana:merging"}"#), vec!["* Skill — smetana:merging"]);
+        // A tool this table has never heard of still says which tool ran: the
+        // point of the line is that something happened, and the detail is a
+        // bonus.
+        assert_eq!(call("Whatever", r#"{}"#), vec!["* Whatever"]);
+    }
+
+    #[test]
+    fn the_agents_own_words_are_shown_and_long_ones_are_clipped() {
+        let text = "x".repeat(400);
+        let line = format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
+        );
+        let out = transcript_line(&line);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].len() <= 204, "clipped to the reference's 200 plus the indent: {}", out[0].len());
+        assert!(out[0].ends_with("..."), "{}", out[0]);
+    }
+
+    #[test]
+    fn the_start_and_the_end_of_a_batch_are_each_one_line() {
+        assert_eq!(
+            transcript_line(r#"{"type":"system","subtype":"init","model":"claude-opus-5"}"#),
+            vec!["-- session start (model claude-opus-5)"]
+        );
+        assert_eq!(
+            transcript_line(
+                r#"{"type":"result","is_error":false,"num_turns":3,"usage":{"input_tokens":6,"output_tokens":91}}"#
+            ),
+            vec!["-- batch result (in 6 / out 91 tok)"]
+        );
+    }
+
+    #[test]
+    fn noise_and_nonsense_produce_nothing() {
+        // Hook chatter, the rate-limit event, a tool's result (routinely a whole
+        // file), an event type this build has never heard of, a line that is not
+        // JSON at all, and an empty line. Every one of them is an ordinary thing
+        // to meet in that stream, and none of them is worth a row in the pane.
+        for line in [
+            r#"{"type":"system","subtype":"hook_started","hook_name":"SessionStart:startup"}"#,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"one"}]}}"#,
+            r#"{"type":"something_new_in_2027"}"#,
+            "not json at all",
+            "",
+        ] {
+            assert!(transcript_line(line).is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn nothing_agent_authored_reaches_the_pane_carrying_a_control_byte() {
+        // The text and a tool's input are written by the agent, and an
+        // assistant paragraph or a `Bash` command quoting terminal output
+        // carries an escape sequence and a bell in the JSON, which serde
+        // decodes into live bytes. Through the pane they would be colour and
+        // cursor movement in a transcript specified as plain text, and a ring
+        // that turns the row `needs-you` -- one of the one or two loud rows the
+        // whole design budgets for a screen. The escapes below are written the
+        // way the CLI writes them, as JSON `\u001b`, so this source file holds
+        // no control byte of its own.
+        let text = transcript_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"red \u001b[31mhere\u001b[0m and a bell \u0007done"}]}}"#,
+        );
+        assert_eq!(text, vec!["   red [31mhere[0m and a bell done"]);
+        assert!(!text[0].contains('\u{1b}') && !text[0].contains('\u{7}'), "{text:?}");
+
+        let call = transcript_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo \u001b[1mhi\u001b[0m"}}]}}"#,
+        );
+        assert_eq!(call, vec!["* Bash — echo [1mhi[0m"]);
+    }
+
+    #[test]
+    fn the_fields_of_a_system_event_are_collapsed_and_clipped_like_every_other() {
+        // The model name and an API error message are interpolated the same way
+        // the agent's own text is, and were the only two that reached the pane
+        // raw: a newline in an error message is the very diagonal stepping the
+        // `\r\n` rule exists against, and an unbounded one is a wall. What is
+        // left of the escape below is its printable tail, which is text like any
+        // other -- only the control byte itself is a thing this pane must not
+        // be handed.
+        assert_eq!(
+            transcript_line(
+                r#"{"type":"system","subtype":"api_retry","error":"overloaded\nupstream said \u001b[0m no","attempt":2}"#
+            ),
+            vec!["!! api retry (overloaded upstream said [0m no), attempt 2"]
+        );
+        assert_eq!(
+            transcript_line(&format!(
+                r#"{{"type":"system","subtype":"api_retry","error":"{}","attempt":1}}"#,
+                "e".repeat(400)
+            ))[0]
+                .chars()
+                .count(),
+            // "!! api retry (" + 140 clipped characters + "), attempt 1"
+            14 + MAX_DETAIL + 12
+        );
+        // Whitespace is collapsed *before* the emptiness is judged, or a model
+        // field holding nothing but spaces renders as `(model )`.
+        assert_eq!(
+            transcript_line(r#"{"type":"system","subtype":"init","model":"   "}"#),
+            vec!["-- session start"]
+        );
+    }
+
+    #[test]
+    fn an_api_retry_is_worth_saying_out_loud() {
+        // The one piece of trouble this stream reports that a person watching
+        // an overnight run would want to see: it is why nothing is happening.
+        assert_eq!(
+            transcript_line(r#"{"type":"system","subtype":"api_retry","error":"overloaded","attempt":2}"#),
+            vec!["!! api retry (overloaded), attempt 2"]
+        );
+    }
+
+    #[test]
+    fn the_profile_hands_the_translator_over_and_only_claude_code_has_one() {
+        assert!(Claude.transcript().is_some());
     }
 
     /// Copied out of `claude -p "/usage"` on 2.1.224, whole and unedited. It is

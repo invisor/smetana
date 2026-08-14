@@ -416,6 +416,7 @@ dev` starts the binary from a terminal, so the process already has the full `PAT
 | file | what it does |
 |---|---|
 | `model.rs` | `Session`, `SessionState`, `Question`, `TerminalError` — the vocabulary, and the pure rules for entering and leaving each state (`Session::apply`, `finish`) |
+| `transcript.rs` | a batch's machine-format output cut into lines and handed to the profile's own rendering, before anything downstream sees a byte of it |
 | `ring.rs` | the raw-byte scrollback ring, trimmed on overflow to a line boundary |
 | `screen.rs` | a `vt100` grid built from the same bytes — the text a person would actually see |
 | `detect.rs` | layer A: bell and silence, a pure function of the screen, the bell flag and the timings |
@@ -435,7 +436,10 @@ human — exactly what xterm.js repaints itself from on attach — and, separate
 `vt100` grid for the app. The raw stream is cursor moves and repaints with nothing findable in it; a
 `\r` overwriting "thinking..." with "done" is two writes in the ring and one line on the screen.
 Detection reads the screen, never the ring. xterm.js is a third, independent emulation fed the very
-same bytes, so the person's picture and the app's agree by construction rather than by hand.
+same bytes, so the person's picture and the app's agree by construction rather than by hand. A
+batch's chunk is translated before any of the three has seen it, inside `absorb` itself, and that
+position is the whole of why it is safe: one translation ahead of the fork leaves all three reading
+one identical stream, where translating for the pane alone would set them arguing.
 
 `seq` plays the part `generation` plays for the tracker: every flushed output event carries a
 monotonic number, `terminal_attach` hands back the ring's snapshot plus the `seq` to continue from,
@@ -665,8 +669,8 @@ turned `needs-you` spends one of the one or two loud rows on the screen and make
 `terminal_run_capture` refuse a session with nothing open on it, so a change to that CLI should cost
 a miss rather than a false alarm.
 
-Three more methods on `Profile` are the same split one level down, and each one's **default is a
-working answer rather than a gap** — the shape to keep when a fourth is added. `images` says how
+Five more methods on `Profile` are the same split one level down, and each one's **default is a
+working answer rather than a gap** — the shape to keep when the next one is added. `images` says how
 pixels reach a harness: Codex takes `-i/--image`, Claude Code simply opens a path the prompt names,
 so the default is `InPrompt`, the one channel every CLI has. `usage_command` and `parse_usage` are a
 pair, and a profile answering one without the other reads as unaskable, which the run gate treats as
@@ -674,6 +678,15 @@ no reason to hold anything up. `autonomy` is the extra arguments and environment
 nobody watching; the default is nothing, so a harness with no such switch stops at its first
 permission prompt and turns `needs-you` — exactly what `Supervised` already is, which is the app
 saying a harness cannot be autonomous by behaving like it rather than pretending otherwise.
+`batch_args` and `transcript` are the last pair and hang off one predicate, `agents::is_batch`: an
+interactive session finishes its work and sits at its prompt, so a run's loop — which comes round
+only when the batch's process is gone — never comes round at all, and the non-interactive form that
+fixes that is also the one printing a machine format nobody reads. So the first says how this
+harness is told to carry one batch out and **exit**, in front of everything else on the line, and
+the second says how a line of what it then prints becomes a line in the pane. Their defaults are
+nothing and no translator, working answers again: a harness given neither runs exactly as every
+harness ran before they existed — which is Codex today, deliberately and with its own task behind
+it.
 
 `agents::IDS` is the single copy of the agent-id list, and `settings/model.rs` validates against it
 rather than repeating it — the side-tab hazard again: a value that survives the session and silently
