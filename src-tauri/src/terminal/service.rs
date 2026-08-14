@@ -415,6 +415,10 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             bell_pending: live.bell_pending,
             still_for,
             screen: &lines,
+            // The one fact layer A needs about where this picture comes from:
+            // a rendered transcript holds still between tool calls without the
+            // agent having stopped. See `DetectInput::transcript`.
+            transcript: live.transcript.is_some(),
             profile: live.profile,
         });
         let before = (live.session.state, live.session.question.clone());
