@@ -55,20 +55,30 @@ pub async fn vcs_branches(repo: String) -> Vec<Branch> {
 
 /// Switch the repository to a branch it already has.
 ///
-/// `git checkout <branch>` and nothing more. **Never `--force`**, and the
-/// omission is the feature: the two refusals worth having are exactly the ones
-/// force would drive over — a branch already checked out in another worktree,
-/// which is what a run's `provisioning` phase cuts, and local changes the
-/// checkout would have to overwrite.
+/// `git checkout --no-guess <branch>` and nothing more. **Never `--force`**, and
+/// the omission is the feature: the two refusals worth having are exactly the
+/// ones force would drive over — a branch already checked out in another
+/// worktree, which is what a run's `provisioning` phase cuts, and local changes
+/// the checkout would have to overwrite.
 ///
 /// Neither is pre-empted here. Asking git whether it would refuse, and then
 /// asking it to do the thing, is two answers about one moment with a window
 /// between them; and the sentence git gives is better than one written here,
 /// because the person reading it knows git. `run.rs` carries it through
 /// untouched with git's exit status beside it.
+///
+/// `--no-guess` is what makes the first line of this comment true. The list
+/// this branch was picked from has no watcher behind it, and a run's `merging`
+/// phase deletes branches, so the row somebody presses can name a branch that
+/// is gone — and git's DWIM would then quietly *create* a local branch from
+/// `origin/<name>` at the remote's tip and check that out. Creating a branch is
+/// outside this epic entirely, and a person who asked to switch to something
+/// they could see would be handed a different commit with nothing saying so.
+/// With the flag a stale row produces git's own "pathspec did not match"
+/// refusal, which is the design this command already commits to.
 #[tauri::command]
 pub async fn vcs_checkout(repo: String, branch: String) -> Result<(), VcsError> {
-    run::git(Path::new(&repo), &["checkout", &branch])?;
+    run::git(Path::new(&repo), &["checkout", "--no-guess", &branch])?;
     Ok(())
 }
 
