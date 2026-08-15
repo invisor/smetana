@@ -1115,14 +1115,22 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
            sidebar puts around it — the refresh button lives in that header
            rather than inside GitPanel, exactly as it does in DesktopApp.vue.
 
+           Every frame is a flex container rather than a plain block, and that
+           is what makes the height it declares real: `Panel` carries no height
+           of its own (`shell/Panel.vue`) and stretches to a flex parent, which
+           is how DesktopApp gives it one. In a plain block it grows to its
+           content instead, `GitPanel`'s `height: 100%` resolves against nothing,
+           and the changes list — the one thing a tall frame is here to show
+           scrolling — spills out over the frame below it.
+
            Four frames, because the three empty states are the point of this
            component and each says something different: a repository with files
            in it, a clean one, a folder that holds no repository at all, and a
            machine with no git on it. The last one is the only one a person can
            act on, and it names what was looked for. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
-        <div :style="{ width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <template #actions>
               <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
             </template>
@@ -1133,25 +1141,25 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             />
           </Panel>
         </div>
-        <div :style="{ width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <template #actions>
               <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
             </template>
             <GitPanel :repos="[REPOS[0]]" selected="/Users/you/dev/smetana" :tree="CLEAN_TREE" />
           </Panel>
         </div>
-        <div :style="{ width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel :repos="[]" :tree="null" />
           </Panel>
         </div>
-        <div :style="{ width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
               :repos="[]"
               :tree="null"
-              :error="{ kind: 'noGit', message: 'git was not found on this machine (looked for `git` on PATH)' }"
+              :error="{ kind: 'noGit', message: 'Smetana looked for git on your PATH and found nothing.' }"
             />
           </Panel>
         </div>
@@ -1167,8 +1175,9 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <ChangeList :changes="CHANGES" />
         </div>
-        <div :style="{ width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
+        <div :style="{ display: 'flex', width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
           <GitPanel
+            :style="{ flex: 1, minWidth: 0 }"
             :repos="[REPOS[0]]"
             selected="/Users/you/dev/smetana"
             :tree="null"

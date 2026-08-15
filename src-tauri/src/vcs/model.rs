@@ -82,7 +82,12 @@ pub enum VcsError {
     /// own error rather than an empty answer: the rule `runs/browser.rs` sets
     /// for the whole repository is that anything unobservable reads as "no",
     /// loudly.
-    #[error("git was not found on this machine (looked for `{0}` on PATH)")]
+    ///
+    /// A whole sentence, because the panel draws it as it stands, and it names
+    /// what was looked for the way `TerminalError::NoAgent` does: the program
+    /// name belongs to this side, and a second copy of it on the front end is
+    /// the kind that drifts.
+    #[error("Smetana looked for {0} on your PATH and found nothing.")]
     NoGit(String),
     /// git refused, and its own words are what the person reads. They know git;
     /// a message rewritten here would be a worse version of one they can
