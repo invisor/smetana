@@ -18,3 +18,4 @@
 //! serialised by git's own `index.lock`, whose refusal is shown as it is.
 
 pub mod model;
+pub mod repos;
