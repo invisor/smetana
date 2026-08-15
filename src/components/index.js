@@ -68,6 +68,7 @@ export { default as ToolCall } from './agent/ToolCall.vue'
 export { parseAnsi } from './agent/ansi.js'
 
 // files
+export { default as DiffView } from './files/editor/DiffView.vue'
 export { default as FileEditor } from './files/FileEditor.vue'
 export { default as FileTree } from './files/FileTree.vue'
 export { default as FileTreeRow } from './files/FileTreeRow.vue'

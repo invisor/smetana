@@ -76,6 +76,15 @@ export const MOCK_TREE = {
 const MOCK_FILE = `fn main() {\n    println!("hello from the mock backend");\n}\n`
 const MOCK_MTIME = 1754006400000
 
+/* The same file one commit ago, for the Git panel's diff. It differs from
+   `MOCK_FILE` in one line rather than wholesale, since what a diff is for is
+   showing the difference and a fixture with nothing in common between its two
+   sides would draw two solid blocks of colour. `notes/todo.txt` is untracked in
+   the status fixture below, so it answers `null` — the added-file case, which
+   is the one the empty left column exists for. */
+const MOCK_FILE_AT_HEAD = `fn main() {\n    println!("hello");\n}\n`
+const MOCK_UNTRACKED = 'notes/todo.txt'
+
 /* PTY output is arbitrary bytes; the fixture's box-drawing characters sit
    outside Latin-1, so plain btoa() would throw. Route through TextEncoder
    first, to get from this fixture's JS string to the UTF-8 bytes a PTY would
@@ -447,6 +456,12 @@ export function installMockBackend() {
         { name: 'admin', path: `${project}/admin`, branch: null, detached: 'a1b2c3d' }
       ]
     }
+    /* The left-hand side of a diff. A browser has no git, so one fixture stands
+       for every tracked file and the untracked one answers `null` — the two
+       answers this command has, and the second is not a failure. */
+    if (command === 'vcs_file_at_head') {
+      return payload?.path === MOCK_UNTRACKED ? null : MOCK_FILE_AT_HEAD
+    }
     /* One of each kind the panel draws, including a rename with its original
        path and a conflict — the loud row, which is the one worth being able to
        look at with no worker behind it. */
@@ -465,7 +480,7 @@ export function installMockBackend() {
             staged: true,
             unstaged: false
           },
-          { path: 'notes/todo.txt', origPath: null, kind: 'untracked', staged: false, unstaged: true },
+          { path: MOCK_UNTRACKED, origPath: null, kind: 'untracked', staged: false, unstaged: true },
           { path: 'src/stores/tabs.js', origPath: null, kind: 'conflicted', staged: false, unstaged: true }
         ]
       }

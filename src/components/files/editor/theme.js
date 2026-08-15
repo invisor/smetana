@@ -142,6 +142,69 @@ const chrome = EditorView.theme({
   '.cm-panel.cm-search [name="close"]:hover': { color: 'var(--text-primary)' }
 })
 
+/* The diff, drawn by @codemirror/merge in this same DOM and therefore themed
+   here — the file is the exception, and the exception is about CodeMirror
+   rather than about the editor.
+
+   The package brings a base theme of its own with two opinions this system does
+   not share, and both are suppressed rather than left to lose a specificity
+   argument. It paints the changed characters with a `linear-gradient`
+   underline, on both sides and in both of its own light and dark variants, and
+   gradients are forbidden here — exactly the case @codemirror/search's buttons
+   already made above. And its colours are hardcoded hexes chosen against
+   `&light`/`&dark`, which this theme never raises (see the note at the top), so
+   every one of them would resolve to its light value whatever the app's theme
+   is. What replaces the gradient is an underline in a token colour, which is
+   what the gradient was drawing anyway: the exact characters that moved, marked
+   without touching the syntax colour under them.
+
+   A line that is wholly new, or wholly gone, is therefore underlined end to end
+   — the package's own long-standing look, since its gradient did the same — and
+   there is **no narrower rule available**. `buildChunkDeco` wraps every chunk on
+   side a in `<del class="cm-deletedLine">` and every chunk on side b in
+   `<ins class="cm-insertedLine">` and then marks the changed sub-ranges *inside*
+   that, so every `cm-changedText` in the view is a descendant of one of those
+   two classes and neither of them tells a whole-line insertion from a
+   one-character edit. A rule quietening them by that descent quietens the marks
+   on every line, and then a one-character change on an otherwise identical line
+   is invisible — which is exactly what shipped here for one commit and is worse
+   than what the package draws by default. If the end-to-end underline is the
+   wrong look, it is a colour question for the design system, not a selector to
+   guess at.
+
+   `&` is the editor element and it is what carries `cm-merge-a` (HEAD) or
+   `cm-merge-b` (the working tree) — the sides are told apart by that class and
+   nothing else, so a rule without it would paint an addition in the colour of a
+   deletion on the other side of the same screen.
+
+   Two families of the base theme's rules are deliberately not answered here:
+   `.cm-deletedChunk` with its accept and reject buttons, and `.cm-collapsedLines`
+   with a gradient of its own. Both belong to `unifiedMergeView` and
+   `collapseUnchanged`, neither of which this app builds — a rule for a class
+   that never appears is a rule nobody could ever check. */
+const diff = EditorView.theme({
+  '&.cm-merge-a .cm-changedLine': { backgroundColor: 'var(--diff-removed-bg)' },
+  '&.cm-merge-b .cm-changedLine': { backgroundColor: 'var(--diff-added-bg)' },
+  '&.cm-merge-a .cm-changedText': {
+    background: 'none',
+    textDecoration: 'underline',
+    textDecorationColor: 'var(--diff-removed-fg)'
+  },
+  '&.cm-merge-b .cm-changedText': {
+    background: 'none',
+    textDecoration: 'underline',
+    textDecorationColor: 'var(--diff-added-fg)'
+  },
+  /* The 3px strip down the inside edge of the gutter: the one mark that says a
+     line changed while the pane is scrolled past it. */
+  '&.cm-merge-a .cm-changedLineGutter': { backgroundColor: 'var(--diff-removed-gutter)' },
+  '&.cm-merge-b .cm-changedLineGutter': { backgroundColor: 'var(--diff-added-gutter)' },
+  /* The filler rows @codemirror/merge inserts to keep the two sides level. They
+     are not lines of either document and must not read as one, so they take the
+     gutter's own ground rather than the editor's. */
+  '.cm-mergeSpacer': { backgroundColor: 'var(--editor-gutter-bg)' }
+})
+
 /* Italics only where they carry markup meaning (markdown emphasis). Comments
    are not italicised: the system has no type-style token for it, and inventing
    a value is exactly what is forbidden. */
@@ -162,4 +225,8 @@ const syntax = HighlightStyle.define([
   { tag: [t.emphasis], fontStyle: 'italic' }
 ])
 
-export const editorTheme = [chrome, syntaxHighlighting(syntax)]
+/* The diff rules ride with the rest rather than as an extension of their own:
+   the classes they name appear in a merge view and nowhere else, so an ordinary
+   editor carries a handful of rules that match nothing, against the alternative
+   of two theme exports that could be assembled in the wrong order. */
+export const editorTheme = [chrome, diff, syntaxHighlighting(syntax)]

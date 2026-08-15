@@ -124,14 +124,18 @@ import {
 import {
   activeBuffer,
   buffers,
+  closeDiff,
   closeTab,
   confirmUnsaved,
+  diffTab,
   discardTabs,
+  isDiffTab,
   isDirty,
   keepMine,
   markGone,
   markStale,
   onUnsaved,
+  openDiff,
   openFile,
   promote,
   reloadTab,
@@ -142,6 +146,7 @@ import {
   tabList
 } from '../stores/tabs.js'
 import FileEditor from '../components/files/FileEditor.vue'
+import DiffView from '../components/files/editor/DiffView.vue'
 import { keepOnly } from '../components/files/editor/states.js'
 
 const props = defineProps({
@@ -1382,18 +1387,36 @@ const healthNotice = computed(() => {
    what makes it one, and that rule is `reportTab.js`. */
 const reportTabActive = computed(() => isReportPath(project.activeTab))
 
+/* A changed file open as a diff. The record is the store's — the two texts and
+   whatever refused to be read — and `null` is both "not a diff tab" and "a diff
+   tab that is no longer there", which is why the branch below hangs off it
+   rather than off `isDiffTab`: an id left over from a restart draws the board,
+   not two empty columns. */
+const activeDiff = computed(() => diffTab(project.activeTab))
+
 /* A file tab is anything that isn't terminal or kanban. There is no closed
    list in the centre and there won't be: the project brings the tabs.
 
    Minus the reports, which are a third kind of tab: the two computeds are
    never both true, and a report opened in CodeMirror would show a person the
    markup of a document written for them to read. This is also what keeps Cmd+S
-   off it below — there is nothing to save on a tab nobody can type into. */
+   off it below — there is nothing to save on a tab nobody can type into. And
+   minus the diffs, which are a fourth: they name no file in `openTabs`, so a
+   `FileEditor` on one would ask the disk for a path built out of a tab id. */
 const fileTabActive = computed(
   () =>
     project.activeTab !== 'terminal' &&
     project.activeTab !== 'kanban' &&
-    !reportTabActive.value
+    !reportTabActive.value &&
+    !isDiffTab(project.activeTab)
+)
+
+/* The text a diff refuses with. `fileErrorText` is the editor's own table and
+   the kinds are the same on both sides of the wire — `VcsError::kind` carries
+   `FilesError`'s strings deliberately — so a binary file says the same thing
+   whichever way it was opened. */
+const diffNotice = computed(() =>
+  activeDiff.value?.error ? fileErrorText(activeDiff.value.error) : ''
 )
 
 /* Cmd+S is caught by the window, not by the editor field. A click on a tab, on
@@ -1511,6 +1534,9 @@ const answerUnsaved = async (answer) => {
 }
 
 const onCloseTab = async (id) => {
+  /* A diff holds nothing of anybody's, so there is nothing to ask about and
+     nothing in `openTabs` to take out. */
+  if (isDiffTab(id)) return closeDiff(id)
   if (isDirty(id) && !(await confirmUnsaved([id]))) return
   closeTab(id)
 }
@@ -1555,7 +1581,9 @@ watch(
   tabList,
   (tabs) =>
     keepOnly(
-      tabs.filter((tab) => tab.kind !== 'pinned').map((tab) => absoluteEditorPath(tab.id))
+      tabs
+        .filter((tab) => tab.kind !== 'pinned' && tab.kind !== 'diff')
+        .map((tab) => absoluteEditorPath(tab.id))
     ),
   { flush: 'post' }
 )
@@ -1974,7 +2002,9 @@ const toastStackStyle = {
                 :tree="vcsState.tree"
                 :error="vcsState.error"
                 :loading="vcsState.loading"
+                :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
                 @select="selectRepo"
+                @open="openDiff(vcsState.selected, $event.path)"
               />
               <AgentList
                 v-else
@@ -2139,6 +2169,17 @@ const toastStackStyle = {
              the field — a report is read, never edited, which is why this is a
              branch of its own rather than a mode of FileEditor. -->
         <ReportView v-if="reportTabActive" :html="activeBuffer?.text ?? ''" />
+        <!-- A changed file, HEAD against the working tree. Before the editor
+             branch for the same reason the report is: it is a tab of its own
+             kind, with no buffer behind it and nothing to save. -->
+        <DiffView
+          v-else-if="activeDiff"
+          :path="activeDiff.path"
+          :head="activeDiff.head"
+          :work="activeDiff.work"
+          :missing-at-head="activeDiff.missingAtHead"
+          :notice="diffNotice"
+        />
         <!-- A file tab: the board and the chat have nothing to do with it. -->
         <!-- There is no :key here any more: the field survives a tab switch
              deliberately. editor/states.js keeps the caret, the scroll position
