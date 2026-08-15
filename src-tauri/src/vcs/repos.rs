@@ -54,7 +54,17 @@ pub fn discover(root: &Path) -> Vec<Repo> {
         }
         _ => None,
     };
-    names(configured, one_level_down(root))
+    // The listing is read in the arm that uses it and nowhere else. Handing it
+    // to `names` unconditionally read the root and stat'ed a `.git` per entry
+    // for every project that has a config — thrown away on the next line, and
+    // paid again on every window focus, which is this panel's freshness
+    // channel. The rule itself stays where it was: both arms go through
+    // `names`, which is pure and knows nothing about a disk.
+    let listed = match configured {
+        Some(repos) => names(Some(repos), Vec::new()),
+        None => names(None, one_level_down(root)),
+    };
+    listed
         .into_iter()
         .filter_map(|name| {
             let path = resolve(root, &name);
