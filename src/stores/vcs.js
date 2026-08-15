@@ -81,9 +81,13 @@ export async function loadRepos(project) {
     await selectRepo(pickRepo(repos, settings.project.selectedRepo))
   } catch (err) {
     if (vcsState.project !== project) return
-    /* The command itself answers with a list for anything it can read, so
-       reaching here means the call failed rather than the folder being
-       uninteresting. The panel says so; the raw text stays in the console. */
+    /* `vcs_repos` answers with a list for anything it can read and cannot
+       refuse today, so reaching here means the call itself failed — a transport
+       fault now, and whatever that command grows into a `Result` for later.
+       `GitPanel` draws this message **in place of** the repository list, which
+       is what the empty list beside it requires: "No repositories here" is a
+       statement about a folder that was read, and this one was not. The raw
+       text stays in the console. */
     console.error('[vcs] listing repositories failed:', err)
     vcsState.repos = []
     vcsState.tree = null

@@ -71,9 +71,19 @@ const failureTextStyle = {
    nothing below it could be read either, and an empty repository list under it
    would say the opposite thing quietly. */
 const noGit = computed(() => props.error?.kind === 'noGit')
-/* Anything else git said, which belongs under the changes because that is the
-   read it failed. */
+/* Anything else git said. It is drawn whether or not there are repositories,
+   and the repository list's own empty sentence gives way to it: a failure that
+   left the list empty would otherwise be reported as "no repositories here",
+   which states the opposite of what happened. */
 const failure = computed(() => (props.error && !noGit.value ? props.error.message : ''))
+
+/* Which read failed decides the noun. With a repository selected the message is
+   about that repository's working tree; with none, nothing got as far as one
+   and calling it "this repository" would name something that is not on
+   screen. */
+const failureTitle = computed(() =>
+  props.repos.length ? 'Git could not read this repository' : 'Git could not read this folder'
+)
 
 /* A first read in flight has nothing to say yet, and the empty states are
    statements: "this folder holds no repository" must not flash over a list
@@ -103,28 +113,33 @@ const changes = computed(() => props.tree?.changes ?? [])
       <!-- The list scrolls rather than pushing the changes off the bottom: a
            folder of a dozen sibling repositories is exactly what the discovery
            arm in `vcs/repos.rs` exists for, and `0 1 auto` is what lets this
-           give way while the changes below keep their share. -->
-      <div :style="{ flex: '0 1 auto', minHeight: 0, overflow: 'auto' }">
+           give way while the changes below keep their share.
+
+           With nothing in the list and a failure to report, the list is left
+           out altogether: `RepoList`'s "No repositories here" is a statement
+           about a folder that was read, and a read that failed has not earned
+           it. The failure below says what actually happened. -->
+      <div v-if="repos.length || !failure" :style="{ flex: '0 1 auto', minHeight: 0, overflow: 'auto' }">
         <RepoList v-if="settled" :repos="repos" :selected="selected" @select="$emit('select', $event)" />
       </div>
 
-      <!-- The whole section goes when there is no repository to have changed
-           anything: a caption over nothing would be a second empty state
-           saying less than the one above it already said. -->
-      <template v-if="repos.length">
-        <div :style="headerStyle">
-          <span>Changes</span>
-          <span :style="{ flex: 1 }" />
-          <span v-if="tree && changes.length" :style="countStyle">{{ changes.length }}</span>
+      <!-- The caption goes when there is no repository to have changed
+           anything: a "Changes" heading over nothing would be a second empty
+           state saying less than the one above it already said. The failure
+           underneath is not gated on it, so a `vcs_repos` that refuses has
+           somewhere to be drawn. -->
+      <div v-if="repos.length" :style="headerStyle">
+        <span>Changes</span>
+        <span :style="{ flex: 1 }" />
+        <span v-if="tree && changes.length" :style="countStyle">{{ changes.length }}</span>
+      </div>
+      <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
+        <div v-if="failure" :style="failureStyle">
+          <div :style="failureTitleStyle">{{ failureTitle }}</div>
+          <div :style="failureTextStyle">{{ failure }}</div>
         </div>
-        <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
-          <div v-if="failure" :style="failureStyle">
-            <div :style="failureTitleStyle">Git could not read this repository</div>
-            <div :style="failureTextStyle">{{ failure }}</div>
-          </div>
-          <ChangeList v-else-if="tree" :changes="changes" />
-        </div>
-      </template>
+        <ChangeList v-else-if="repos.length && tree" :changes="changes" />
+      </div>
     </template>
   </div>
 </template>

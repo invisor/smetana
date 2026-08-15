@@ -1184,6 +1184,19 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :error="{ kind: 'git', message: 'fatal: not a git repository (or any of the parent directories): .git' }"
           />
         </div>
+        <!-- The same failure with the repository list empty, which is the
+             shape a refusal from `vcs_repos` would take. The list's own "No
+             repositories here" must not be what a person reads then: it states
+             a folder was read and found bare, and this one was not read at
+             all. -->
+        <div :style="{ display: 'flex', width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
+          <GitPanel
+            :style="{ flex: 1, minWidth: 0 }"
+            :repos="[]"
+            :tree="null"
+            :error="{ kind: 'io', message: 'the repositories of this project could not be listed' }"
+          />
+        </div>
       </div>
     </section>
 
