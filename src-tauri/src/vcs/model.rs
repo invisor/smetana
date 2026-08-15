@@ -153,6 +153,39 @@ pub fn conflicted(tree: &WorkingTree) -> Vec<String> {
         .collect()
 }
 
+/// The unmerged paths **this** operation is answerable for: the tree after it,
+/// but only where the tree before it was clean of unmerged records.
+///
+/// The reading of a conflict is off the tree and never off git's message, and
+/// this is the other half of that rule. git **refuses to start** a merge or a
+/// rebase in a tree that already has unmerged entries — "Merging is not
+/// possible because you have unmerged files", exit 128 — and does nothing at
+/// all, leaving those same records in the porcelain. Asked only "are there
+/// unmerged records now", the app reads that refusal as a fresh conflict of its
+/// own: a dialog naming an operation git never began, whose Abort runs
+/// `git merge --abort` against whatever *is* in progress. That is not exotic —
+/// leaving a tree conflicted is this app's own designed exit from the dialog,
+/// and a repository left mid-merge by an agent is the ordinary case the panel's
+/// staleness already admits. The cost of getting it wrong that way is somebody
+/// else's staged resolutions thrown away under a button captioned "puts the
+/// repository back where it was".
+///
+/// So an already-unmerged tree attributes nothing, and the caller returns git's
+/// own refusal instead — which is what a person can act on, since git's message
+/// says exactly what is in the way.
+///
+/// `None` is a tree that could not be read *before*, and it attributes nothing
+/// either: not knowing what was there is not evidence that nothing was. The
+/// direction is deliberate and it is the cheap one — losing the dialog leaves
+/// a conflicted tree drawn in the changes list with git's message beside it,
+/// where claiming one wrongly offers to destroy work.
+pub fn new_conflicts(before: Option<&WorkingTree>, after: &WorkingTree) -> Vec<String> {
+    match before {
+        Some(before) if conflicted(before).is_empty() => conflicted(after),
+        _ => Vec::new(),
+    }
+}
+
 /// How many characters of a detached HEAD's hash to show — git's own default
 /// for an abbreviated object name, and the same number `git.rs` uses.
 const SHORT_HASH: usize = 7;
@@ -502,6 +535,55 @@ mod tests {
             "? notes.txt",
         ]));
         assert!(conflicted(&tree).is_empty());
+    }
+
+    /// The other half of that same rule, and the one a real repository forced.
+    ///
+    /// git refuses to *start* a merge or a rebase in a tree that already has
+    /// unmerged entries — measured: `git merge --no-edit third` against a tree
+    /// left conflicted by an earlier merge prints "Merging is not possible
+    /// because you have unmerged files", exits 128, and changes nothing, so the
+    /// earlier merge's own `u` records are still sitting in the porcelain
+    /// afterwards. Read as "are there unmerged records now", that refusal
+    /// becomes a conflict of this operation's own: a dialog naming a merge git
+    /// never began, whose Abort reaches whatever really is in progress and
+    /// throws away resolutions somebody had already staged.
+    #[test]
+    fn a_tree_already_unmerged_before_the_operation_earns_no_conflict_of_its_own() {
+        let unmerged = parse_status(&porcelain(&[
+            "u UU N... 100644 100644 100644 100644 a b c src/one.rs",
+        ]));
+        assert!(
+            new_conflicts(Some(&unmerged), &unmerged).is_empty(),
+            "git refused and did nothing; the records are the previous operation's"
+        );
+    }
+
+    #[test]
+    fn a_conflict_this_operation_made_is_the_one_it_reports() {
+        // The ordinary case, and the one the rule must not cost: a tree with
+        // ordinary changes in it, and unmerged records only afterwards.
+        let before = parse_status(&porcelain(&[
+            "# branch.head main",
+            "1 .M N... 100644 100644 100644 d e src/two.rs",
+        ]));
+        let after = parse_status(&porcelain(&[
+            "u UU N... 100644 100644 100644 100644 a b c src/one.rs",
+            "1 .M N... 100644 100644 100644 d e src/two.rs",
+        ]));
+        assert_eq!(new_conflicts(Some(&before), &after), ["src/one.rs"]);
+    }
+
+    #[test]
+    fn a_tree_that_could_not_be_read_first_attributes_nothing() {
+        // Not knowing what was there is not evidence that nothing was, and the
+        // caller answers with git's own refusal instead. Losing a dialog costs
+        // a conflicted tree drawn in the changes list; claiming one wrongly
+        // offers to destroy work.
+        let after = parse_status(&porcelain(&[
+            "u UU N... 100644 100644 100644 100644 a b c src/one.rs",
+        ]));
+        assert!(new_conflicts(None, &after).is_empty());
     }
 
     /// The panel branches on `kind` and reads `files`; both spellings are

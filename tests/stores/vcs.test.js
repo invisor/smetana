@@ -196,7 +196,7 @@ describe('the git panel store', () => {
   /* The success path's guard is on the **project** and deliberately not on the
      pair the failure path uses, and this is what says so.
 
-     Repository rows are not held by `checkingOut`, so somebody can pick another
+     Repository rows are not held by `busy`, so somebody can pick another
      repository while git works. The branch moved on disk either way, and on the
      pair-guard nothing refreshed after it: no second `vcs_repos`, the row still
      naming the branch just left, and the mark still on it until the next window

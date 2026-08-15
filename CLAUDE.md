@@ -411,8 +411,10 @@ Each row's branch comes from `git::head` — a file read, so the whole list cost
 all**.
 
 `run.rs` builds the child's environment from `shell_env::path()`, exactly as `runs/preflight.rs` and
-`terminal/pty.rs` do, and for the reason recorded there. `GIT_OPTIONAL_LOCKS=0` on every read, so
-looking at a status never takes `index.lock` out from under an agent working in the same tree. The
+`terminal/pty.rs` do, and for the reason recorded there. `GIT_OPTIONAL_LOCKS=0` on every call, reads
+and writes alike, so looking at a status never takes `index.lock` out from under an agent working in
+the same tree — it suppresses only the locks git takes on its own account, an index refresh it did
+not have to do, so the merge and the rebase still take the locks their own work needs. The
 working directory is `current_dir` and not `-C`, so an odd character in a path never has to survive
 being an argument. A missing `git` is `VcsError::NoGit` and never an empty list — anything
 unobservable reads as "no", loudly (`runs/browser.rs`) — and a non-zero exit carries git's **own
@@ -451,9 +453,21 @@ branch" over a refused merge would name an operation nobody asked for.
 **A conflict is an outcome and not a failure, and it is read off the tree rather than off the
 message.** `git merge`'s prose moves between versions where an unmerged record in `--porcelain=v2`
 does not, so a non-zero exit is not an answer by itself: `run::git_attempt` hands the refusal back
-instead of raising it, the tree is read again through the very call `vcs_status` uses, and
-`model::conflicted` decides. Unmerged paths are `MergeOutcome::Conflict`; nothing unmerged is
-`VcsError::Git` with git's own stderr, untouched.
+instead of raising it, the tree is read through the very call `vcs_status` uses, and unmerged records
+decide. Unmerged paths are `MergeOutcome::Conflict`; nothing unmerged is `VcsError::Git` with git's
+own stderr, untouched.
+
+**The tree is read twice — before as well as after — and the first read is what makes that rule
+true.** git refuses to *start* either operation in a tree that already has unmerged entries ("Merging
+is not possible because you have unmerged files", exit 128) and changes nothing, so those same
+records are still in the porcelain afterwards; an "after" read alone reports somebody else's conflict
+as this operation's. What that costs is not hypothetical: leaving a tree conflicted is this app's own
+designed exit from the dialog, so one click later the modal would name a merge git never began, and
+its Abort would run `git merge --abort` against whatever really is in progress and throw away
+resolutions somebody had already staged. `model::new_conflicts` is the rule, pure and measured
+against a real refusal, and an unreadable "before" attributes nothing either — not knowing what was
+there is not evidence that nothing was. The price is one `git status` in front of an operation that
+rewrites the working tree.
 
 **What the app then offers is two doors and no third**, because there is no merge editor here and
 this epic adds none: `ConflictModal.vue` has no close button, and `overlays/Modal.vue` closes on

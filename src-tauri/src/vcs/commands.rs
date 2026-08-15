@@ -154,20 +154,30 @@ pub async fn vcs_abort(repo: String, op: OpKind) -> Result<(), VcsError> {
 /// **A non-zero exit is not an answer by itself.** git stops the same way for a
 /// tree it left conflicted and for one it refused to touch, and the messages
 /// that tell those apart are prose that moves between versions. So the tree is
-/// read again — through the very call `vcs_status` uses — and unmerged records
-/// in it are the conflict. Anything else non-zero is `VcsError::Git` with git's
-/// own stderr, untouched, exactly as every other command here refuses.
+/// read — through the very call `vcs_status` uses — and unmerged records decide.
+/// Anything else non-zero is `VcsError::Git` with git's own stderr, untouched,
+/// exactly as every other command here refuses.
 ///
-/// A tree that could not be read at all counts as no conflict, so what the
-/// person gets is git's refusal of the merge rather than a second failure about
-/// a status nobody asked for: the first one is what they can act on, and a tree
-/// unreadable at this moment is not evidence that anything is unmerged.
+/// **The tree is read twice, before as well as after, and the first read is
+/// what makes the rule true.** git refuses to *start* either operation in a
+/// tree that already has unmerged entries and leaves those entries exactly
+/// where they were, so an "after" read alone reports somebody else's conflict
+/// as this operation's — `model::new_conflicts` is that rule and carries the
+/// measurement. The cost is one `git status` per merge or rebase: tens of
+/// milliseconds in front of an operation that rewrites the working tree.
+///
+/// A tree that could not be read at all — either time — counts as no conflict,
+/// so what the person gets is git's refusal rather than a second failure about
+/// a status nobody asked for: the first one is what they can act on, and an
+/// unreadable tree is not evidence about what is unmerged in it.
 fn attempt(repo: &Path, args: &[&str]) -> Result<MergeOutcome, VcsError> {
+    let before = working_tree(repo).ok();
     match run::git_attempt(repo, args)? {
         Attempt::Done => Ok(MergeOutcome::Clean),
         Attempt::Refused(refusal) => {
-            let files =
-                working_tree(repo).map(|tree| model::conflicted(&tree)).unwrap_or_default();
+            let files = working_tree(repo)
+                .map(|after| model::new_conflicts(before.as_ref(), &after))
+                .unwrap_or_default();
             if files.is_empty() {
                 Err(refusal)
             } else {
