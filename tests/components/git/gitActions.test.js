@@ -43,10 +43,10 @@ describe('when the panel may write to a repository', () => {
     expect(gitActions([null]).allowed).toBe(false)
   })
 
-  /* The list itself may not have arrived — `runs.js` fills it on mount, on a
-     project switch and on window focus. Nothing known to be going is not the
-     same fact as a live run, and blocking on it would leave the panel dead
-     until the first read lands. */
+  /* Defensive rather than a state the store reaches: `runsState.runs` is `[]`
+     from the start and `[]` again across a project switch. Nothing known to be
+     going is still not the same fact as a live run, and this keeps the rule a
+     total function over whatever any caller hands it. */
   it('an absent list is not a run', () => {
     expect(gitActions(undefined).allowed).toBe(true)
     expect(gitActions(null).allowed).toBe(true)

@@ -39,8 +39,11 @@ export const vcsState = reactive({
   /* The selected repository's local branches, in the order `git::by_recency`
      gave them and never re-sorted here: the branch somebody merges into every
      day is nowhere in particular alphabetically. `[{ name, current }]`, and an
-     empty list is an ordinary answer — a folder outside git has none, and so
-     has a repository whose first commit is not written yet. */
+     empty list is an ordinary answer — a folder git can see nothing in. Not a
+     repository without a first commit, which has no ref on disk and still
+     answers with one branch: `git.rs` puts HEAD's own name into the list, so
+     that a repository nobody has committed to still has something to merge
+     into. */
   branches: [],
   /* `{ kind, message }` — Rust's own shape, normalised here so a rejection that
      is a bare string (the browser mock, a transport failure) draws the same
@@ -222,7 +225,15 @@ export async function checkout(branch) {
   vcsState.checkoutError = null
   try {
     await invoke('vcs_checkout', { repo: selected, branch })
-    if (vcsState.project !== project || vcsState.selected !== selected) return
+    /* The project alone, deliberately, where the failure path below guards the
+       pair. Repository rows are not held by `checkingOut`, so somebody can pick
+       another repository while git works; the branch did move on disk, and
+       leaving on the pair would mean nothing refreshed and the row and the mark
+       stayed wrong until the next window focus. `refresh()` re-reads every
+       repository and re-picks the remembered one, so it is right whichever is
+       selected by the time it runs — the `selected` half is what `loadStatus`
+       and `loadBranchList` need, not this. */
+    if (vcsState.project !== project) return
     await refresh()
     /* Awaited, unlike the sweep in `catchUp` that fires the same call and walks
        on: here it is the second half of one act, so a checkout that has

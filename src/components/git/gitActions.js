@@ -43,6 +43,11 @@ const isGoing = (run) => run?.state?.kind !== STOPPED
 const COST = 'A checkout under a batch that is mid-merge would lose its work.'
 
 export function gitActions(runs) {
+  /* `?? []` is defensive and not a window the store can produce: `runsState.runs`
+     starts as `[]` and is set back to `[]` on a project switch before `loadRun`
+     refills it, so it is never absent in the app. It costs nothing and keeps
+     this a total function over whatever a caller — a gallery frame, a test —
+     hands it. */
   const going = (runs ?? []).filter(isGoing).length
   if (going === 0) return { allowed: true, reason: null }
   const subject = going === 1 ? 'A run is going' : `${going} runs are going`
