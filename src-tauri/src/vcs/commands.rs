@@ -53,6 +53,25 @@ pub async fn vcs_branches(repo: String) -> Vec<Branch> {
     branch_list(Path::new(&repo))
 }
 
+/// Switch the repository to a branch it already has.
+///
+/// `git checkout <branch>` and nothing more. **Never `--force`**, and the
+/// omission is the feature: the two refusals worth having are exactly the ones
+/// force would drive over — a branch already checked out in another worktree,
+/// which is what a run's `provisioning` phase cuts, and local changes the
+/// checkout would have to overwrite.
+///
+/// Neither is pre-empted here. Asking git whether it would refuse, and then
+/// asking it to do the thing, is two answers about one moment with a window
+/// between them; and the sentence git gives is better than one written here,
+/// because the person reading it knows git. `run.rs` carries it through
+/// untouched with git's exit status beside it.
+#[tauri::command]
+pub async fn vcs_checkout(repo: String, branch: String) -> Result<(), VcsError> {
+    run::git(Path::new(&repo), &["checkout", &branch])?;
+    Ok(())
+}
+
 /// The command's whole body, synchronous so a test can call it: an `async fn`
 /// would need a runtime here for three file reads that never yield.
 fn branch_list(path: &Path) -> Vec<Branch> {

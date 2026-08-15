@@ -108,6 +108,7 @@ pub fn run() {
       vcs::commands::vcs_repos,
       vcs::commands::vcs_status,
       vcs::commands::vcs_branches,
+      vcs::commands::vcs_checkout,
       runs::commands::project_config,
       runs::commands::browser_tools,
       runs::commands::run_start,

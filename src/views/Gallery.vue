@@ -68,6 +68,7 @@ import {
   ToolCall,
   Tooltip
 } from '../components/index.js'
+import { gitActions } from '../components/git/gitActions.js'
 import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
@@ -310,6 +311,11 @@ const BRANCHES = [
   { name: 'feature/smetana-8ok-git-panel-branches', current: false },
   { name: 'release/7', current: false }
 ]
+
+/* The verdict a live run produces, taken from the rule itself rather than
+   written out here: a frame quoting a sentence by hand is a copy that goes on
+   reading well long after the rule stopped saying it. */
+const RUN_GOING = gitActions([{ token: 1, state: { kind: 'running' } }])
 
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking
@@ -1199,6 +1205,38 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />
+        </div>
+        <!-- The same list with a run going: every row inert, the current one
+             still readable, and the reason on a tooltip over whichever row the
+             pointer is on. The sentence is `gitActions.js`'s own, computed here
+             from a run in the shape `runs.js` holds one, so the frame cannot
+             drift from the rule. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" :actions="RUN_GOING" />
+        </div>
+        <!-- The fourth of the panel's empty sentences, which no `GitPanel`
+             frame can reach: a repository whose first commit is not written yet
+             has no ref on disk at all, and the section is gated on there being
+             a repository, so this is the only place it can be looked at. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="[]" />
+        </div>
+        <!-- A checkout in flight, and git's refusal of the last one — the two
+             states the list has of its own. The refusal is git's own stderr,
+             untouched: a branch held by another worktree is exactly what a
+             run's provisioning phase leaves behind. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" checking-out="develop" />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="BRANCHES"
+            :error="{
+              kind: 'git',
+              message:
+                &quot;fatal: 'develop' is already checked out at '/Users/you/dev/smetana/.worktrees/smetana-8ok.3'&quot;
+            }"
+          />
         </div>
         <div :style="{ display: 'flex', width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
           <GitPanel

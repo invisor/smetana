@@ -121,6 +121,94 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.branches).toEqual(branchesOf('backend'))
   })
 
+  /* A repository whose HEAD moves when git is told to move it, so a checkout
+     can be watched from every place that draws the branch: the repository row,
+     the branch list's mark, and the scope bar one store over. */
+  const switching = (ipc, at = 'main') => {
+    let branch = at
+    ipc.on('vcs_repos', () => [{ name: '.', path: '/p/.', branch, detached: null }])
+    ipc.on('vcs_status', () => ({ branch, detached: null, changes: [] }))
+    ipc.on('vcs_branches', () => [
+      { name: 'main', current: branch === 'main' },
+      { name: 'develop', current: branch === 'develop' }
+    ])
+    ipc.on('git_head', () => ({ branch, detached: null }))
+    ipc.on('vcs_checkout', (args) => {
+      branch = args.branch
+      return null
+    })
+  }
+
+  /* The scope bar's branch is `git.js`'s and is refreshed by window focus and
+     by switching project — neither of which somebody switching branches in this
+     panel ever reaches. So the write refreshes it itself, and the bar naming
+     the branch a person just left is what this pins. */
+  it('a checkout that worked moves the panel and the scope bar with it', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    await stores.vcs.loadRepos('/p')
+    await stores.git.loadHead('/p')
+    expect(stores.git.gitState.branch).toBe('main')
+
+    await stores.vcs.checkout('develop')
+
+    expect(ipc.calls('vcs_checkout')).toEqual([{ repo: '/p/.', branch: 'develop' }])
+    expect(stores.vcs.vcsState.branches.find((b) => b.current)?.name).toBe('develop')
+    // The row draws its own branch, so a status-only refresh would leave it
+    // naming the branch that was just left.
+    expect(stores.vcs.vcsState.repos[0].branch).toBe('develop')
+    expect(stores.git.gitState.branch).toBe('develop')
+    expect(stores.vcs.vcsState.checkoutError).toBe(null)
+    expect(stores.vcs.vcsState.checkingOut).toBe(null)
+  })
+
+  /* Git's two refusals — a branch already checked out in another worktree, and
+     local changes a checkout would overwrite — arrive as its own stderr and are
+     drawn as they stand. Nothing else in the panel moves: the working tree is
+     exactly where it was, and an error taking the changes list down with it
+     would say a repository could not be read when it was read perfectly. */
+  it('a refused checkout keeps git own words and changes nothing else', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    await stores.vcs.loadRepos('/p')
+    const before = stores.vcs.vcsState.tree
+    /* git's own sentence, verbatim from a repository where the branch was held
+       by a second worktree — which is exactly what a run's provisioning phase
+       leaves behind. */
+    ipc.fail('vcs_checkout', {
+      kind: 'git',
+      message: "fatal: 'develop' is already checked out at '/p/.worktrees/x'"
+    })
+
+    await stores.vcs.checkout('develop')
+
+    expect(stores.vcs.vcsState.checkoutError).toEqual({
+      kind: 'git',
+      message: "fatal: 'develop' is already checked out at '/p/.worktrees/x'"
+    })
+    expect(stores.vcs.vcsState.error).toBe(null)
+    expect(stores.vcs.vcsState.tree).toEqual(before)
+    expect(stores.vcs.vcsState.branches.find((b) => b.current)?.name).toBe('main')
+    expect(stores.vcs.vcsState.checkingOut).toBe(null)
+  })
+
+  /* One at a time. A second press while git is working would ask it to check a
+     branch out in a tree it is already in, and the refusal for that comes from
+     `index.lock` rather than from anything a person did wrong. */
+  it('a checkout already in flight refuses a second one', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    await stores.vcs.loadRepos('/p')
+    let release
+    ipc.on('vcs_checkout', () => new Promise((resolve) => (release = () => resolve(null))))
+
+    const first = stores.vcs.checkout('develop')
+    await stores.vcs.checkout('main')
+    expect(ipc.calls('vcs_checkout')).toEqual([{ repo: '/p/.', branch: 'develop' }])
+    release()
+    await first
+  })
+
   it('a failure leaves an error to draw, not a half-filled panel', async () => {
     const { stores, ipc, nextTick } = await loadStores()
     ipc.on('vcs_repos', repoIn('/p'))

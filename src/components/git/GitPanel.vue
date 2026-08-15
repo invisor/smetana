@@ -30,6 +30,15 @@ const props = defineProps({
   /* `[{ name, current }]` in `git::by_recency`'s order, which is drawn as it
      arrives. */
   branches: { type: Array, default: () => [] },
+  /* `{ allowed, reason }` from `gitActions.js`: whether a checkout may be
+     offered at all, and the sentence over it when it may not. Passed through
+     rather than decided here — this panel draws, and the rule is a pure file a
+     test can reach. */
+  actions: { type: Object, default: () => ({ allowed: true, reason: null }) },
+  /* The branch a checkout is in flight for, and git's refusal of the last
+     one. */
+  checkingOut: { type: String, default: null },
+  checkoutError: { type: Object, default: null },
   /* `{ kind, message }` as `stores/vcs.js` normalises it. `noGit` is the one
      kind this panel branches on; everything else is git's own words, shown
      untouched, because whoever reads them knows git. */
@@ -41,16 +50,35 @@ defineEmits(['select', 'checkout'])
 const rootStyle = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }
 
 /* A caption over a list, in prose and therefore sans, with the count beside it
-   in mono because it is a measurement. */
+   in mono because it is a measurement.
+
+   `flexShrink: 0` because a caption is a flex item in this column and a flex
+   item shrinks by default: with three sections crowding a short panel the
+   captions gave way with the lists, `--row-h` became a starting point and the
+   text was clipped — the very defect a short list hid in `Dropdown`'s options.
+   A caption is the one thing here that must not move. */
 const headerStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
   height: 'var(--row-h)',
+  flexShrink: 0,
   padding: '0 var(--space-5)',
   font: 'var(--weight-medium) var(--text-xs)/1 var(--font-sans)',
   color: 'var(--text-muted)'
 }
+
+/* How many branch rows the section may claim before it scrolls inside itself.
+   A count and not a height, so it follows `--row-h` through both densities and
+   the app-wide font size.
+
+   The cap is what makes "the branches must not push the changes off the top"
+   true. Without it the section's basis is its content, so a repository with
+   forty branches claims forty rows of the column and the list somebody opened
+   this panel for is squeezed to nothing — measured at 0px in a short panel
+   before this. Six rows is enough to reach for a branch and short enough that
+   the changes stay the content. */
+const BRANCH_ROWS = 6
 const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)' }
 
 /* git's own stderr. Mono and left-aligned rather than an `EmptyState`'s centred
@@ -138,7 +166,13 @@ const changes = computed(() => props.tree?.changes ?? [])
         <span :style="{ flex: 1 }" />
         <span v-if="tree && changes.length" :style="countStyle">{{ changes.length }}</span>
       </div>
-      <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
+      <!-- `1 1 auto` rather than `flex: 1`: with a basis of zero this section
+           only grew into what was left over, while its neighbours claimed their
+           content first, so adding the branch list below squeezed the changes
+           to nothing. On a basis of its own content it takes the largest share
+           of a crowded column and gives ground in proportion, which is what
+           says the changes are what this panel is for. -->
+      <div :style="{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }">
         <div v-if="failure" :style="failureStyle">
           <div :style="failureTitleStyle">{{ failureTitle }}</div>
           <div :style="failureTextStyle">{{ failure }}</div>
@@ -149,17 +183,31 @@ const changes = computed(() => props.tree?.changes ?? [])
       <!-- Third, under the changes, and gated on there being a repository for
            the same reason the changes caption is: a "Branches" heading over
            nothing says less than the repository list's own empty sentence
-           already did. The section shrinks rather than growing — the changes
-           above it are what somebody opened this panel for, and a repository
-           with forty branches must not push them off the top. -->
+           already did. The section shrinks and never grows, and it is capped at
+           `BRANCH_ROWS` on top of that: the changes above it are what somebody
+           opened this panel for, and a repository with forty branches must not
+           push them off the top. -->
       <template v-if="repos.length && !failure">
         <div :style="headerStyle">
           <span>Branches</span>
           <span :style="{ flex: 1 }" />
           <span v-if="branches.length > 1" :style="countStyle">{{ branches.length }}</span>
         </div>
-        <div :style="{ flex: '0 1 auto', minHeight: 0, overflow: 'auto' }">
-          <BranchList :branches="branches" @checkout="$emit('checkout', $event)" />
+        <div
+          :style="{
+            flex: '0 1 auto',
+            minHeight: 0,
+            maxHeight: `calc(var(--row-h) * ${BRANCH_ROWS})`,
+            overflow: 'auto'
+          }"
+        >
+          <BranchList
+            :branches="branches"
+            :actions="actions"
+            :checking-out="checkingOut"
+            :error="checkoutError"
+            @checkout="$emit('checkout', $event)"
+          />
         </div>
       </template>
     </template>

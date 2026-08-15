@@ -78,6 +78,7 @@ export { default as ChangeList } from './git/ChangeList.vue'
 export { default as GitPanel } from './git/GitPanel.vue'
 export { default as RepoList } from './git/RepoList.vue'
 export { changeStatus } from './git/changeStatus.js'
+export { gitActions } from './git/gitActions.js'
 
 // notifications
 export { default as NotificationCard } from './notifications/NotificationCard.vue'
