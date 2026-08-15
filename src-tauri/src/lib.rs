@@ -8,6 +8,7 @@ mod settings;
 mod shell_env;
 mod terminal;
 mod tracker;
+mod vcs;
 mod window;
 
 use tauri::Manager;
@@ -104,6 +105,8 @@ pub fn run() {
       attachments::attachments_survey,
       attachments::attachments_clean,
       git::git_head,
+      vcs::commands::vcs_repos,
+      vcs::commands::vcs_status,
       runs::commands::project_config,
       runs::commands::browser_tools,
       runs::commands::run_start,

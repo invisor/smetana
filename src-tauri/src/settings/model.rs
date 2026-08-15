@@ -209,6 +209,16 @@ pub struct ProjectState {
     pub active_tab: String,
     pub selected_task: Option<String>,
     pub selected_path: Option<String>,
+    /// Which repository the Git panel is showing, as an absolute path — the
+    /// argument every command in `vcs/` takes anyway.
+    ///
+    /// Per project for the reason `column_order` is: a repository inside one
+    /// project means nothing inside another. A hint rather than a truth, the
+    /// same as that field — a path no longer among the project's repositories
+    /// is passed over in silence by `src/stores/vcs.js` and the first one is
+    /// shown instead, because a panel aimed at a folder that is gone would draw
+    /// an error about a choice nobody made today.
+    pub selected_repo: Option<String>,
     pub expanded: Vec<String>,
     /// Open files in tab order. Paths are relative to the project root: the
     /// project's key in the map is already absolute, and duplicating it in
@@ -261,6 +271,7 @@ impl Default for ProjectState {
             active_tab: "kanban".into(),
             selected_task: None,
             selected_path: None,
+            selected_repo: None,
             expanded: Vec::new(),
             open_tabs: Vec::new(),
             preview_tab: None,
@@ -729,6 +740,11 @@ impl ProjectState {
         one_of(&mut self.side_tab, &SIDE_TABS, "files");
         forget_if_junk(&mut self.selected_task, MAX_ID_LEN);
         forget_if_junk(&mut self.selected_path, MAX_PATH_LEN);
+        // A path, so the same ceiling. Membership is deliberately not checked:
+        // which repositories a project has is not known here, and a name that
+        // matches nothing is passed over by the panel anyway — the rule
+        // `column_order` keeps one line above.
+        forget_if_junk(&mut self.selected_repo, MAX_PATH_LEN);
         sane_list(&mut self.expanded, MAX_EXPANDED, MAX_PATH_LEN);
         sane_list(&mut self.open_tabs, MAX_OPEN_TABS, MAX_PATH_LEN);
         // A status name, not a path — hence the identifier ceiling. Membership

@@ -74,6 +74,13 @@ const defaults = () => ({
     activeTab: 'kanban',
     selectedTask: null,
     selectedPath: null,
+    /* Which repository the Git panel is showing, by absolute path — null until
+       somebody has opened that tab in this project. Listed here for the reason
+       `runSettings` below spells out: a key missing from this object is a key
+       the defaults layer cannot clear, so switching projects would leave the
+       previous project's repository in place, and the panel would ask git about
+       a folder belonging to a project nobody is looking at. */
+    selectedRepo: null,
     expanded: [],
     openTabs: [],
     previewTab: null,

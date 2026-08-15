@@ -11,6 +11,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listDir, setRoot } from './files.js'
 import { measureStorage } from './notifications.js'
+import { loadRepos } from './vcs.js'
 import { flushPending, loadProjectLayout, settings } from './settings.js'
 import { confirmUnsaved, resetTabs, restoreTabs } from './tabs.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
@@ -72,6 +73,14 @@ async function moveTo(path) {
      what we restore. */
   resetTabs()
   setRoot(path)
+  /* The Git panel, after `loadProjectLayout` and deliberately not from a
+     watcher on the active project: which repository this project was left
+     showing lives in its own settings entry, and a watcher fires on the
+     assignment above — one microtask later, with the previous project's entry
+     still in place. It would then pick a repository nobody chose here and write
+     it over the remembered one a moment before the layout landed. Not awaited:
+     nothing about the move waits on git. */
+  loadRepos(path)
   if (path) {
     await listDir('')
     await Promise.all(settings.project.expanded.map((dir) => listDir(dir)))
