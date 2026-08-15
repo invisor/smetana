@@ -208,7 +208,13 @@ const editorPlain = ref('no language for this extension\nplain text, no colour\n
 
 /* The diff's two sides. Written to show every kind of chunk at once — a line
    changed in place, a line added, a line taken away — since which of the three
-   is which is the whole of what the colours have to say. */
+   is which is the whole of what the colours have to say.
+
+   The third line replaces a word rather than appending to one, and that is the
+   fixture's job rather than an idle choice: an insertion marks characters on
+   the working tree's side only, so a fixture made of insertions alone leaves the
+   HEAD side's intra-line mark undrawn and therefore unchecked. `parse` against
+   `read` puts one on each side. */
 const diffHead = `pub fn head(dir: &Path) -> Head {
     let git = git_dir(dir);
     let text = fs::read_to_string(git.join("HEAD")).ok();
@@ -218,8 +224,8 @@ const diffHead = `pub fn head(dir: &Path) -> Head {
 const diffWork = `pub fn head(dir: &Path) -> Head {
     // Refs are shared and HEAD is per-worktree.
     let git = git_dir(dir).unwrap_or_default();
-    let text = fs::read_to_string(git.join("HEAD")).ok();
-    Head::parse(text.as_deref())
+    let text = fs::read_to_string(git.join("ORIG_HEAD")).ok();
+    Head::read(text.as_deref())
 }
 `
 const diffNew = `notes for the morning

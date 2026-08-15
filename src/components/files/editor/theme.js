@@ -158,6 +158,20 @@ const chrome = EditorView.theme({
    what the gradient was drawing anyway: the exact characters that moved, marked
    without touching the syntax colour under them.
 
+   A line that is wholly new, or wholly gone, is therefore underlined end to end
+   — the package's own long-standing look, since its gradient did the same — and
+   there is **no narrower rule available**. `buildChunkDeco` wraps every chunk on
+   side a in `<del class="cm-deletedLine">` and every chunk on side b in
+   `<ins class="cm-insertedLine">` and then marks the changed sub-ranges *inside*
+   that, so every `cm-changedText` in the view is a descendant of one of those
+   two classes and neither of them tells a whole-line insertion from a
+   one-character edit. A rule quietening them by that descent quietens the marks
+   on every line, and then a one-character change on an otherwise identical line
+   is invisible — which is exactly what shipped here for one commit and is worse
+   than what the package draws by default. If the end-to-end underline is the
+   wrong look, it is a colour question for the design system, not a selector to
+   guess at.
+
    `&` is the editor element and it is what carries `cm-merge-a` (HEAD) or
    `cm-merge-b` (the working tree) — the sides are told apart by that class and
    nothing else, so a rule without it would paint an addition in the colour of a
@@ -180,15 +194,6 @@ const diff = EditorView.theme({
     background: 'none',
     textDecoration: 'underline',
     textDecorationColor: 'var(--diff-added-fg)'
-  },
-  /* A line that is wholly new, or wholly gone, is one long `cm-changedText` —
-     so the rule above would underline it end to end, which is what a file the
-     other side does not have at all looks like: every line of it ruled through.
-     The ground already says the line is new; the underline is there to mark
-     what moved *inside* a line that otherwise stayed. `cm-insertedLine` and
-     `cm-deletedLine` are the package's own names for exactly those two cases. */
-  '.cm-insertedLine .cm-changedText, .cm-deletedLine .cm-changedText': {
-    textDecoration: 'none'
   },
   /* The 3px strip down the inside edge of the gutter: the one mark that says a
      line changed while the pane is scrolled past it. */
