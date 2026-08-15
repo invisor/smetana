@@ -100,7 +100,13 @@ const changes = computed(() => props.tree?.changes ?? [])
         <span :style="{ flex: 1 }" />
         <span v-if="repos.length > 1" :style="countStyle">{{ repos.length }}</span>
       </div>
-      <RepoList v-if="settled" :repos="repos" :selected="selected" @select="$emit('select', $event)" />
+      <!-- The list scrolls rather than pushing the changes off the bottom: a
+           folder of a dozen sibling repositories is exactly what the discovery
+           arm in `vcs/repos.rs` exists for, and `0 1 auto` is what lets this
+           give way while the changes below keep their share. -->
+      <div :style="{ flex: '0 1 auto', minHeight: 0, overflow: 'auto' }">
+        <RepoList v-if="settled" :repos="repos" :selected="selected" @select="$emit('select', $event)" />
+      </div>
 
       <!-- The whole section goes when there is no repository to have changed
            anything: a caption over nothing would be a second empty state

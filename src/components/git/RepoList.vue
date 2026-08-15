@@ -131,7 +131,7 @@ const empty = computed(() => props.repos.length === 0)
       :style="{
         padding: 'var(--space-5)',
         color: 'var(--text-muted)',
-        font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)'
+        font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)'
       }"
     >
       No repositories here. This folder holds none that git can see.

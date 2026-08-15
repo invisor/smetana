@@ -100,7 +100,14 @@ const empty = computed(() => props.changes.length === 0)
              the panel does too — with a glyph rather than a shade. -->
         <Icon v-if="change.staged" name="check" :size="MARK" />
       </span>
-      <span :style="letterStyle(change)">{{ changeStatus(change.kind).letter }}</span>
+      <!-- The word is what the letter stands for, and it is the accessible name
+           of a mark that is otherwise one character: `M` reads as nothing at
+           all to a screen reader. -->
+      <span
+        role="img"
+        :aria-label="changeStatus(change.kind).label"
+        :style="letterStyle(change)"
+      >{{ changeStatus(change.kind).letter }}</span>
       <span :style="nameStyle">{{ label(change.path) }}</span>
       <span :style="pathStyle">{{ [directory(change.path), from(change)].filter(Boolean).join(' ') }}</span>
     </div>
@@ -112,7 +119,7 @@ const empty = computed(() => props.changes.length === 0)
       :style="{
         padding: 'var(--space-5)',
         color: 'var(--text-muted)',
-        font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)'
+        font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)'
       }"
     >
       No uncommitted files in this repository.
