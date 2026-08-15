@@ -8,6 +8,7 @@ mod settings;
 mod shell_env;
 mod terminal;
 mod tracker;
+mod vcs;
 mod window;
 
 use tauri::Manager;
