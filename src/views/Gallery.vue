@@ -289,6 +289,9 @@ const CHANGES = [
   },
   { path: 'src/components/files/editor/languages.js', origPath: null, kind: 'typeChanged', staged: false, unstaged: true },
   { path: 'notes.txt', origPath: null, kind: 'untracked', staged: false, unstaged: true },
+  /* An untracked *directory*, which is what `--untracked-files=normal` reports
+     rather than every file under it: the trailing slash is git's and is kept. */
+  { path: 'src/components/git/', origPath: null, kind: 'untracked', staged: false, unstaged: true },
   { path: 'src/stores/tabs.js', origPath: null, kind: 'conflicted', staged: false, unstaged: true }
 ]
 

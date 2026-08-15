@@ -102,18 +102,23 @@ const changes = computed(() => props.tree?.changes ?? [])
       </div>
       <RepoList v-if="settled" :repos="repos" :selected="selected" @select="$emit('select', $event)" />
 
-      <div :style="headerStyle">
-        <span>Changes</span>
-        <span :style="{ flex: 1 }" />
-        <span v-if="tree && changes.length" :style="countStyle">{{ changes.length }}</span>
-      </div>
-      <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
-        <div v-if="failure" :style="failureStyle">
-          <div :style="failureTitleStyle">Git could not read this repository</div>
-          <div :style="failureTextStyle">{{ failure }}</div>
+      <!-- The whole section goes when there is no repository to have changed
+           anything: a caption over nothing would be a second empty state
+           saying less than the one above it already said. -->
+      <template v-if="repos.length">
+        <div :style="headerStyle">
+          <span>Changes</span>
+          <span :style="{ flex: 1 }" />
+          <span v-if="tree && changes.length" :style="countStyle">{{ changes.length }}</span>
         </div>
-        <ChangeList v-else-if="tree" :changes="changes" />
-      </div>
+        <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
+          <div v-if="failure" :style="failureStyle">
+            <div :style="failureTitleStyle">Git could not read this repository</div>
+            <div :style="failureTextStyle">{{ failure }}</div>
+          </div>
+          <ChangeList v-else-if="tree" :changes="changes" />
+        </div>
+      </template>
     </template>
   </div>
 </template>

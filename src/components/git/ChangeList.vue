@@ -70,11 +70,18 @@ const pathStyle = {
   color: 'var(--text-muted)'
 }
 
-/* Everything above the file's own name. Empty at the root of the repository,
+/* `--untracked-files=normal` is git's own default and this panel's — `all`
+   would walk into every untracked directory — so an untracked folder arrives as
+   one record with a trailing slash. It is kept: "git/" says a folder where
+   "git" would look like a file nobody can find. */
+const label = (path) => (path.endsWith('/') ? `${basename(path)}/` : basename(path))
+
+/* Everything above the thing being named. Empty at the root of the repository,
    where there is nothing to say. */
 const directory = (path) => {
-  const cut = path.lastIndexOf('/')
-  return cut > 0 ? path.slice(0, cut) : ''
+  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
+  const cut = trimmed.lastIndexOf('/')
+  return cut > 0 ? trimmed.slice(0, cut) : ''
 }
 
 /* A rename's other half. Named rather than left out: a row saying only where a
@@ -94,7 +101,7 @@ const empty = computed(() => props.changes.length === 0)
         <Icon v-if="change.staged" name="check" :size="MARK" />
       </span>
       <span :style="letterStyle(change)">{{ changeStatus(change.kind).letter }}</span>
-      <span :style="nameStyle">{{ basename(change.path) }}</span>
+      <span :style="nameStyle">{{ label(change.path) }}</span>
       <span :style="pathStyle">{{ [directory(change.path), from(change)].filter(Boolean).join(' ') }}</span>
     </div>
     <!-- Its own sentence: a repository with nothing changed in it is a fact
