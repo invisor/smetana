@@ -424,8 +424,12 @@ is selected is remembered per project as `selectedRepo` in `settings.json`, vali
 `settings/model.rs` like every other field, and a stored path no longer in the list is silently
 replaced by the first — a stored value is a hint, never the truth, the rule `columnOrder.js` states.
 `components/git/` draws it: `GitPanel.vue` over `RepoList.vue` and `ChangeList.vue`, with the pure
-`changeStatus.js` saying what a change is captioned with. Its tokens are the `--git-*` set the file
-tree already marks a modified file with, so one file changed once looks the same in both places.
+`changeStatus.js` saying what a change is captioned with. Four of its eight kinds — modified, added,
+deleted, untracked — take the `--git-*` token the file tree already marks that file with
+(`files/FileTreeRow.vue`), which is the whole of the agreement between the two: renamed, copied and
+type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares
+`--git-conflict` while the letters differ, `C` here against the tree's `!`. Borrowing the four rather
+than inventing a palette is the point; claiming the two lists match everywhere would not be true.
 Each section has **its own empty state and they say different things** — no git on this machine
 (naming what was looked for), no repository in this folder, nothing uncommitted in this repository:
 one blank area for all three would be a panel saying nothing three different ways. Freshness is
