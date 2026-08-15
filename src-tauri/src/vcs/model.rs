@@ -88,6 +88,135 @@ pub struct Branch {
     pub current: bool,
 }
 
+/// Which of the two operations put a repository where it is, and therefore
+/// which one an abort has to undo.
+///
+/// A typed word rather than a free string, because it crosses the IPC twice in
+/// opposite directions: the panel sends it back to `vcs_abort`, and it rides on
+/// `agents::Intent::ResolveConflict` into a prompt. A string would reach git as
+/// `git <whatever the front end wrote> --abort` and be refused by the one
+/// command whose whole job is to put a tree back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OpKind {
+    Merge,
+    Rebase,
+}
+
+impl OpKind {
+    /// git's own subcommand for it, which is also the word a prompt calls it
+    /// by. One copy, so `git merge --abort` and the sentence explaining what
+    /// was not to be done cannot come to name different operations.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Rebase => "rebase",
+        }
+    }
+}
+
+/// What a merge or a rebase came to.
+///
+/// A conflict is an **outcome and not a failure**: nothing was lost, nothing
+/// was committed, and the tree is exactly what git left behind — which is the
+/// state the panel then offers two doors out of. So it is not a `VcsError`, and
+/// the front end branches on `kind` rather than reading a message.
+///
+/// Which of the two it is, is decided by the **tree** and never by what git
+/// said: `git merge`'s prose moves between versions where unmerged records do
+/// not, the same reason `parse_status` reads `--porcelain=v2` and never
+/// `git status`. `conflicted` below is that reading.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum MergeOutcome {
+    /// git finished the operation. There may be a new commit or there may not
+    /// — a fast-forward makes none — and the panel draws the tree either way.
+    Clean,
+    /// git stopped, leaving these paths unmerged. Repository-relative, exactly
+    /// as `vcs_status` reports every other path.
+    Conflict { files: Vec<String> },
+}
+
+/// The paths git left unmerged, and nothing else in the tree.
+///
+/// Pure, and the whole of how a conflict is told apart from a refusal: a merge
+/// that fails because the tree was dirty exits non-zero with nothing unmerged,
+/// and a merge that conflicts exits non-zero with `u` records in the status. The
+/// modified file sitting beside a conflicted one is not part of the answer — it
+/// is not what the agent is being sent to resolve, and naming it in the prompt
+/// would send one after work nobody asked about.
+pub fn conflicted(tree: &WorkingTree) -> Vec<String> {
+    tree.changes
+        .iter()
+        .filter(|change| change.kind == ChangeKind::Conflicted)
+        .map(|change| change.path.clone())
+        .collect()
+}
+
+/// The unmerged paths **this** operation is answerable for: the tree after it,
+/// but only where the tree before it was clean of unmerged records.
+///
+/// The reading of a conflict is off the tree and never off git's message, and
+/// this is the other half of that rule. git **refuses to start** a merge or a
+/// rebase in a tree that already has unmerged entries — "Merging is not
+/// possible because you have unmerged files", exit 128 — and does nothing at
+/// all, leaving those same records in the porcelain. Asked only "are there
+/// unmerged records now", the app reads that refusal as a fresh conflict of its
+/// own: a dialog naming an operation git never began, whose Abort runs
+/// `git merge --abort` against whatever *is* in progress. That is not exotic —
+/// leaving a tree conflicted is this app's own designed exit from the dialog,
+/// and a repository left mid-merge by an agent is the ordinary case the panel's
+/// staleness already admits. The cost of getting it wrong that way is somebody
+/// else's staged resolutions thrown away under a button captioned "puts the
+/// repository back where it was".
+///
+/// So an already-unmerged tree attributes nothing, and the caller returns git's
+/// own refusal instead — which is what a person can act on, since git's message
+/// says exactly what is in the way.
+///
+/// `None` is a tree that could not be read *before*, and it attributes nothing
+/// either: not knowing what was there is not evidence that nothing was. The
+/// direction is deliberate and it is still the cheap side, but **what it costs
+/// is worse than it looks and is written down here measured rather than
+/// assumed**, because a cost recorded lower than the real one is what invites
+/// somebody to invert this arm later.
+///
+/// What the caller returns in that arm is `VcsError::Git`, and `refusal()`
+/// carries **stderr only** — while a merge conflict writes nothing to stderr at
+/// all. Measured: `git merge --no-edit other` on a real conflict leaves stderr
+/// empty and puts "CONFLICT (content): Merge conflict in f.txt / Automatic
+/// merge failed" on stdout. So a merge conflict lost to this arm reaches
+/// `GitPanel` as "Git did not merge" over an **empty** message block. A rebase
+/// is the better half of the same case — `error: could not apply …` does go to
+/// stderr — so there the words survive.
+///
+/// And the conflicted files are not drawn either, in either operation:
+/// `write()` in `src/stores/vcs.js` sets `writeError` in its catch and returns,
+/// where `refresh()` and `loadHead()` are on the success path — so the tree
+/// stays as the panel last read it until the next window focus or a press of
+/// the refresh button. Against that: claiming a conflict wrongly offers a
+/// person an Abort that destroys work somebody else staged. Still the cheap
+/// side, and no longer a cheap-sounding one.
+///
+/// **This is a comparison of two moments and not a lock, and the residual is
+/// named rather than left to be discovered.** An agent that *starts* a
+/// conflicting merge in the same tree in between — after the pre-read, before
+/// the spawn — leaves `before` clean and `after` unmerged, and its conflict is
+/// attributed to us exactly as the one-read version attributed every one. The
+/// window is the tens of milliseconds between two `git status` calls, against
+/// the 100% that version hit on the same failure, and no arithmetic over these
+/// two lists can close it: only asking git what is *in progress* would —
+/// a `MERGE_HEAD` / `rebase-merge` probe — which is a file read in a module
+/// whose header forbids one, a different mechanism in a different file, and
+/// deliberately not taken. So do not read this rule as airtight; read it as a
+/// hundredfold narrowing of a failure that used to be certain.
+pub fn new_conflicts(before: Option<&WorkingTree>, after: &WorkingTree) -> Vec<String> {
+    match before {
+        Some(before) if conflicted(before).is_empty() => conflicted(after),
+        _ => Vec::new(),
+    }
+}
+
 /// How many characters of a detached HEAD's hash to show — git's own default
 /// for an abbreviated object name, and the same number `git.rs` uses.
 const SHORT_HASH: usize = 7;
@@ -410,6 +539,114 @@ mod tests {
             FilesError::TooLarge { path: path(), bytes: 1 }.kind()
         );
         assert_eq!(VcsError::NotUtf8(path()).kind(), FilesError::NotUtf8(path()).kind());
+    }
+
+    /// The rule the whole merge door rests on. `git merge`'s own wording moves
+    /// between versions — "Automatic merge failed; fix conflicts" is not a
+    /// promise anybody made — while an unmerged record in the porcelain is
+    /// documented and stable. So the exit code says only "something happened"
+    /// and the tree says what.
+    #[test]
+    fn a_conflict_is_read_off_the_tree_rather_than_off_the_message() {
+        let tree = parse_status(&porcelain(&[
+            "u UU N... 100644 100644 100644 100644 a b c src/one.rs",
+            "1 .M N... 100644 100644 100644 d e src/two.rs",
+        ]));
+        assert_eq!(conflicted(&tree), ["src/one.rs"], "only the unmerged records");
+    }
+
+    /// The other half of that rule, and the one that decides whether a non-zero
+    /// exit reaches the person as git's own refusal: a tree with nothing
+    /// unmerged in it is not a conflict, however loudly git complained.
+    #[test]
+    fn a_tree_with_nothing_unmerged_names_no_conflict_at_all() {
+        let tree = parse_status(&porcelain(&[
+            "# branch.head main",
+            "1 .M N... 100644 100644 100644 d e src/two.rs",
+            "? notes.txt",
+        ]));
+        assert!(conflicted(&tree).is_empty());
+    }
+
+    /// The other half of that same rule, and the one a real repository forced.
+    ///
+    /// git refuses to *start* a merge or a rebase in a tree that already has
+    /// unmerged entries — measured: `git merge --no-edit third` against a tree
+    /// left conflicted by an earlier merge prints "Merging is not possible
+    /// because you have unmerged files", exits 128, and changes nothing, so the
+    /// earlier merge's own `u` records are still sitting in the porcelain
+    /// afterwards. Read as "are there unmerged records now", that refusal
+    /// becomes a conflict of this operation's own: a dialog naming a merge git
+    /// never began, whose Abort reaches whatever really is in progress and
+    /// throws away resolutions somebody had already staged.
+    #[test]
+    fn a_tree_already_unmerged_before_the_operation_earns_no_conflict_of_its_own() {
+        let unmerged = parse_status(&porcelain(&[
+            "u UU N... 100644 100644 100644 100644 a b c src/one.rs",
+        ]));
+        assert!(
+            new_conflicts(Some(&unmerged), &unmerged).is_empty(),
+            "git refused and did nothing; the records are the previous operation's"
+        );
+    }
+
+    #[test]
+    fn a_conflict_this_operation_made_is_the_one_it_reports() {
+        // The ordinary case, and the one the rule must not cost: a tree with
+        // ordinary changes in it, and unmerged records only afterwards.
+        let before = parse_status(&porcelain(&[
+            "# branch.head main",
+            "1 .M N... 100644 100644 100644 d e src/two.rs",
+        ]));
+        let after = parse_status(&porcelain(&[
+            "u UU N... 100644 100644 100644 100644 a b c src/one.rs",
+            "1 .M N... 100644 100644 100644 d e src/two.rs",
+        ]));
+        assert_eq!(new_conflicts(Some(&before), &after), ["src/one.rs"]);
+    }
+
+    #[test]
+    fn a_tree_that_could_not_be_read_first_attributes_nothing() {
+        // Not knowing what was there is not evidence that nothing was, and the
+        // caller answers with git's own refusal instead. Losing a dialog costs
+        // a conflicted tree drawn in the changes list; claiming one wrongly
+        // offers to destroy work.
+        let after = parse_status(&porcelain(&[
+            "u UU N... 100644 100644 100644 100644 a b c src/one.rs",
+        ]));
+        assert!(new_conflicts(None, &after).is_empty());
+    }
+
+    /// The panel branches on `kind` and reads `files`; both spellings are
+    /// written out again in `src/stores/vcs.js`, which is the only other place
+    /// they exist.
+    #[test]
+    fn an_outcome_reaches_the_front_end_tagged_by_kind() {
+        assert_eq!(
+            serde_json::to_string(&MergeOutcome::Clean).expect("serializes"),
+            r#"{"kind":"clean"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&MergeOutcome::Conflict { files: vec!["src/one.rs".into()] })
+                .expect("serializes"),
+            r#"{"kind":"conflict","files":["src/one.rs"]}"#
+        );
+    }
+
+    /// The word the panel sends back for an abort, and the word git is given.
+    /// They are the same string by construction here, which is what stops
+    /// `vcs_abort` from ever running `git <something else> --abort`.
+    #[test]
+    fn an_operation_crosses_the_wire_as_the_word_git_knows_it_by() {
+        for (json, op, word) in [
+            (r#""merge""#, OpKind::Merge, "merge"),
+            (r#""rebase""#, OpKind::Rebase, "rebase"),
+        ] {
+            let parsed: OpKind = serde_json::from_str(json).expect("deserializes");
+            assert_eq!(parsed, op, "{json}");
+            assert_eq!(op.word(), word);
+        }
+        assert!(serde_json::from_str::<OpKind>(r#""cherryPick""#).is_err());
     }
 
     /// An unknown record type is git's business, not ours: skipping it loses

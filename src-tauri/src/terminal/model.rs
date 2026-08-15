@@ -94,6 +94,16 @@ pub enum SessionWork {
     /// the work and this is different work: an edit is a person's own change to
     /// an issue, this is a run's unanswered question being put to them.
     ResolveTask { id: String },
+    /// A conflicted working tree the Git panel produced, and the merge or
+    /// rebase that is to be finished in it. The only work in this list that is
+    /// about a repository rather than about an issue, which is why it carries a
+    /// path: a project can hold several, and "resolving a conflict" without
+    /// saying where would name none of them.
+    ///
+    /// The conflicted paths stay behind, the way `NewTask`'s images do: they
+    /// are the agent's briefing, a row has nowhere to draw a dozen of them, and
+    /// the list is out of date the moment the agent resolves the first one.
+    ResolveConflict { repo: String, theirs: String },
     Setup,
     /// One batch of a run. Which issues it has taken is not known here and
     /// cannot be: the agent claims them by running `bd update --claim` itself,
@@ -240,6 +250,20 @@ mod tests {
             serde_json::to_string(&SessionWork::NewTask { text: "x".into(), issue_type: None, priority: None })
                 .expect("serializes");
         assert_eq!(json, r#"{"kind":"newTask","text":"x","issueType":null,"priority":null}"#);
+    }
+
+    #[test]
+    fn a_conflict_reaches_the_front_end_as_the_repository_and_the_branch() {
+        // Both spellings are read in `src/stores/terminals.js`, where the row's
+        // caption is built: `repo` becomes the folder's name in the caption and
+        // `theirs` the branch beside it, so a rename on this side goes quiet
+        // rather than loud — the row keeps drawing, saying "Agent".
+        let json = serde_json::to_string(&SessionWork::ResolveConflict {
+            repo: "/p/backend".into(),
+            theirs: "develop".into(),
+        })
+        .expect("serializes");
+        assert_eq!(json, r#"{"kind":"resolveConflict","repo":"/p/backend","theirs":"develop"}"#);
     }
 
     #[test]

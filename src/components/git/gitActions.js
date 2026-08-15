@@ -36,11 +36,17 @@ const STOPPED = 'stopped'
 
 const isGoing = (run) => run?.state?.kind !== STOPPED
 
-/* What a checkout under a run would cost, in the words of the thing it would
-   cost it. The count is in the sentence because a project holds several runs at
-   once (smetana-5hf): "a run" over three of them would read as though stopping
-   one would free the panel. */
-const COST = 'A checkout under a batch that is mid-merge would lose its work.'
+/* What a write under a run would cost, in the words of the thing it would cost
+   it. The count is in the sentence because a project holds several runs at once
+   (smetana-5hf): "a run" over three of them would read as though stopping one
+   would free the panel.
+
+   The write is named generically because this one verdict gates all three of
+   them — a checkout, a merge and a rebase — and the tooltip carrying it sits
+   over a row whose merge and rebase it blocks as well. A sentence naming only
+   the checkout would be a rule explaining the wrong half of what it just
+   disabled; there is still exactly one rule and one sentence. */
+const COST = 'Changing this repository under a batch that is mid-merge would lose its work.'
 
 export function gitActions(runs) {
   /* `?? []` is defensive and not a window the store can produce: `runsState.runs`

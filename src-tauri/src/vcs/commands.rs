@@ -6,7 +6,8 @@
 
 use std::path::Path;
 
-use super::model::{Branch, Repo, VcsError, WorkingTree};
+use super::model::{Branch, MergeOutcome, OpKind, Repo, VcsError, WorkingTree};
+use super::run::Attempt;
 use super::{model, repos, run};
 use crate::files::model::{looks_binary, BINARY_SNIFF_BYTES, MAX_FILE_BYTES};
 use crate::git;
@@ -25,8 +26,18 @@ pub async fn vcs_repos(project: String) -> Vec<Repo> {
 /// untracked directory, and a person who wants that opens the file tree.
 #[tauri::command]
 pub async fn vcs_status(repo: String) -> Result<WorkingTree, VcsError> {
+    working_tree(Path::new(&repo))
+}
+
+/// The porcelain call itself, written once.
+///
+/// `vcs_status` is one caller and `attempt` below is the other, and they have
+/// to be the same call: "did that merge conflict" is the same question about
+/// the same records the panel is already drawing, so a second argument list
+/// here would be a second answer free to disagree with what is on screen.
+fn working_tree(repo: &Path) -> Result<WorkingTree, VcsError> {
     let out = run::git(
-        Path::new(&repo),
+        repo,
         &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal"],
     )?;
     Ok(model::parse_status(&out))
@@ -95,6 +106,85 @@ pub async fn vcs_branches(repo: String) -> Vec<Branch> {
 pub async fn vcs_checkout(repo: String, branch: String) -> Result<(), VcsError> {
     run::git(Path::new(&repo), &["checkout", "--no-guess", &branch, "--"])?;
     Ok(())
+}
+
+/// Bring another branch's work into the one this repository is on.
+///
+/// `--no-edit` is the only word added, and it is about not hanging rather than
+/// about the merge: git opens an editor for the merge message when it is
+/// invoked from a terminal, and a child with pipes for stdio is not one — but
+/// that is git's rule to change, and a machine configured to edit regardless
+/// would leave a process sitting on an editor nobody can see, with the panel
+/// waiting on it for as long as the app is open. No strategy, no `--no-ff`, no
+/// `--squash`: what this offers is the merge git would do by itself.
+///
+/// A conflict is **not** a failure here — see `attempt`.
+#[tauri::command]
+pub async fn vcs_merge(repo: String, branch: String) -> Result<MergeOutcome, VcsError> {
+    attempt(Path::new(&repo), &["merge", "--no-edit", &branch])
+}
+
+/// Replay this repository's branch on top of another one.
+///
+/// `onto` rather than `branch`, because that is what it is: the current branch
+/// is the one that moves. Nothing else is passed — an interactive rebase would
+/// want an editor and a person in front of it, and continuing an interrupted
+/// one is outside this epic.
+#[tauri::command]
+pub async fn vcs_rebase(repo: String, onto: String) -> Result<MergeOutcome, VcsError> {
+    attempt(Path::new(&repo), &["rebase", &onto])
+}
+
+/// Put the tree back exactly as it was before the operation that conflicted.
+///
+/// `op` decides the subcommand and arrives as a typed word (`OpKind`), so the
+/// only two things this can run are `git merge --abort` and `git rebase
+/// --abort`. Nothing was committed, so nothing is lost — which is the whole of
+/// why this door can sit beside "resolve it" with no confirmation in front of
+/// it. git's refusal, if it has one (there is no operation in progress, the
+/// abort itself could not finish), comes back in its own words.
+#[tauri::command]
+pub async fn vcs_abort(repo: String, op: OpKind) -> Result<(), VcsError> {
+    run::git(Path::new(&repo), &[op.word(), "--abort"])?;
+    Ok(())
+}
+
+/// A merge or a rebase, and the reading of what it left behind.
+///
+/// **A non-zero exit is not an answer by itself.** git stops the same way for a
+/// tree it left conflicted and for one it refused to touch, and the messages
+/// that tell those apart are prose that moves between versions. So the tree is
+/// read — through the very call `vcs_status` uses — and unmerged records decide.
+/// Anything else non-zero is `VcsError::Git` with git's own stderr, untouched,
+/// exactly as every other command here refuses.
+///
+/// **The tree is read twice, before as well as after, and the first read is
+/// what makes the rule true.** git refuses to *start* either operation in a
+/// tree that already has unmerged entries and leaves those entries exactly
+/// where they were, so an "after" read alone reports somebody else's conflict
+/// as this operation's — `model::new_conflicts` is that rule and carries the
+/// measurement. The cost is one `git status` per merge or rebase: tens of
+/// milliseconds in front of an operation that rewrites the working tree.
+///
+/// A tree that could not be read at all — either time — counts as no conflict,
+/// so what the person gets is git's refusal rather than a second failure about
+/// a status nobody asked for: the first one is what they can act on, and an
+/// unreadable tree is not evidence about what is unmerged in it.
+fn attempt(repo: &Path, args: &[&str]) -> Result<MergeOutcome, VcsError> {
+    let before = working_tree(repo).ok();
+    match run::git_attempt(repo, args)? {
+        Attempt::Done => Ok(MergeOutcome::Clean),
+        Attempt::Refused(refusal) => {
+            let files = working_tree(repo)
+                .map(|after| model::new_conflicts(before.as_ref(), &after))
+                .unwrap_or_default();
+            if files.is_empty() {
+                Err(refusal)
+            } else {
+                Ok(MergeOutcome::Conflict { files })
+            }
+        }
+    }
 }
 
 /// The command's whole body, synchronous so a test can call it: an `async fn`

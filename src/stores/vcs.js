@@ -50,16 +50,40 @@ export const vcsState = reactive({
      way. `kind` is what the panel branches on; the message is git's own words
      and is shown untouched. */
   error: null,
-  /* Git's refusal of a checkout, in the same `{ kind, message }` shape and kept
-     apart from `error` above deliberately: that one says the working tree could
-     not be read, this one says it was read and a switch was refused. Folding
-     them together would put a refusal about a branch where the changes should
-     be, and take the list down with it. */
-  checkoutError: null,
-  /* The branch a checkout is in flight for, or null. One at a time: the panel
-     goes inert while git works, so a second row cannot be pressed into a
-     checkout git is already refusing for the first. */
-  checkingOut: null,
+  /* Git's refusal of a write — a checkout, a merge, a rebase — in the same
+     `{ kind, message }` shape with the `op` that earned it, and kept apart from
+     `error` above deliberately: that one says the working tree could not be
+     read, this one says it was read and git declined to change it. Folding them
+     together would put a refusal about a branch where the changes should be,
+     and take the list down with it.
+
+     One field for the three writes rather than one apiece: they cannot happen
+     at once (`busy` is what says so), only one of them can have last been
+     refused, and two fields for one fact are two that drift. The `op` is what
+     lets the panel name which write it was without a second copy of that
+     knowledge. */
+  writeError: null,
+  /* What git is doing right now — `{ op, branch }` — or null. One at a time:
+     the panel goes inert while git works, so a second row cannot be pressed
+     into an operation git is already in the middle of for the first. `op` is
+     `checkout`, `merge`, `rebase` or `abort`, and the branch is the row it was
+     asked for, which is where the spinner goes. */
+  busy: null,
+  /* A merge or a rebase that stopped on conflicts, which is an outcome and not
+     a failure — hence its own field beside `writeError` rather than in it.
+     `{ repo, op, ours, theirs, files }`: the repository it happened in, which
+     of the two operations it was, the branch this repository was on, the branch
+     that was being brought in, and every path git left unmerged.
+
+     The modal drawn from it has no dismiss, and that is the point of keeping
+     the record here rather than in a component: a conflicted tree behind a
+     closed dialog is a state this panel promises to show and cannot draw. It
+     leaves on one of the two doors and nowhere else. */
+  conflict: null,
+  /* Git's refusal of the abort, drawn **inside** that modal. Its own field for
+     one reason: the dialog cannot be dismissed, so a message put in the panel
+     behind it would be one nobody could see. */
+  conflictError: null,
   loading: false
 })
 
@@ -94,6 +118,13 @@ function pickRepo(repos, remembered) {
    project's name, with every row in the panel then naming the wrong
    repository. */
 export async function loadRepos(project) {
+  /* A conflict belongs to a repository of one project, and both its doors act
+     on that project: the abort names that repository, and the agent is started
+     there. Somebody who has moved on gets neither, so the dialog goes with the
+     project rather than hanging over the next one. `refresh()` comes back
+     through here with the same project and leaves it standing, which is what
+     lets a conflict survive the refresh that follows the merge that made it. */
+  if (project !== vcsState.project) dismissConflict()
   vcsState.project = project
   if (!project) {
     reset()
@@ -136,8 +167,10 @@ export async function selectRepo(path) {
   settings.project.selectedRepo = path
   /* Git's last refusal went with the repository it was about: a message saying
      a branch is checked out in another worktree, left standing over the branch
-     list of the repository next door, would be a statement about neither. */
-  vcsState.checkoutError = null
+     list of the repository next door, would be a statement about neither. A
+     conflict is deliberately not cleared here — it is a tree somebody still has
+     to answer for, and its own record names the repository it belongs to. */
+  vcsState.writeError = null
   await Promise.all([loadStatus(), loadBranchList()])
 }
 
@@ -201,32 +234,44 @@ async function loadBranchList() {
   }
 }
 
-/* Switch the selected repository to another of its branches.
+/* The branch the selected repository is on right now, as the list says.
 
-   The one write this panel has. Whether it may be offered at all is
-   `components/git/gitActions.js` — a rule about the project's runs, kept out of
-   here because a store is not where a `.vue` file's disabled state is decided
-   and because a test can reach that file. This function is the mechanics only,
-   and deliberately does not repeat the rule: a second copy would be the half
-   that drifts.
+   Read before an operation rather than after it, because a rebase leaves HEAD
+   detached while it is stopped on a conflict: asked afterwards, the question
+   "which branch was this" has no answer at all. The tree is the fall-back for a
+   repository whose branch list has not landed yet. */
+function currentBranch() {
+  return vcsState.branches.find((branch) => branch.current)?.name ?? vcsState.tree?.branch ?? null
+}
 
-   Git decides the rest. A branch checked out in another worktree, a working
-   tree that would have to be overwritten — both come back as `VcsError::Git`
-   with git's own stderr in them, and the panel prints that as it stands.
+/* The mechanics every write in this panel shares, with one `invoke` handed in.
 
-   What follows a checkout that worked is the whole list again rather than the
+   Whether a write may be offered at all is `components/git/gitActions.js` — a
+   rule about the project's runs, kept out of here because a store is not where
+   a `.vue` file's disabled state is decided and because a test can reach that
+   file. This function is the mechanics only, and deliberately does not repeat
+   the rule: a second copy would be the half that drifts.
+
+   Git decides the rest. A branch checked out in another worktree, a tree that
+   would have to be overwritten, a merge with nothing to merge — all come back
+   as `VcsError::Git` with git's own stderr in them, and the panel prints that
+   as it stands.
+
+   What follows a write that worked is the whole list again rather than the
    working tree alone: the branch each repository is on is drawn in its row, so
    a status-only refresh would leave the row naming the branch somebody just
-   left. The scope bar goes with it, one store over. */
-export async function checkout(branch) {
+   left. The scope bar goes with it, one store over — and after a rebase that is
+   not a nicety, since HEAD can be detached now and the bar says so. */
+async function write(op, branch, call) {
   const { project, selected } = vcsState
-  if (!selected || !branch || vcsState.checkingOut) return
-  vcsState.checkingOut = branch
-  vcsState.checkoutError = null
+  if (!selected || !branch || vcsState.busy) return
+  const ours = currentBranch()
+  vcsState.busy = { op, branch }
+  vcsState.writeError = null
   try {
-    await invoke('vcs_checkout', { repo: selected, branch })
+    const outcome = await call(selected)
     /* The project alone, deliberately, where the failure path below guards the
-       pair. Repository rows are not held by `checkingOut`, so somebody can pick
+       pair. Repository rows are not held by `busy`, so somebody can pick
        another repository while git works; the branch did move on disk, and
        leaving on the pair would mean nothing refreshed and the row and the mark
        stayed wrong until the next window focus. `refresh()` re-reads every
@@ -234,20 +279,89 @@ export async function checkout(branch) {
        selected by the time it runs — the `selected` half is what `loadStatus`
        and `loadBranchList` need, not this. */
     if (vcsState.project !== project) return
+    /* Rust's own shape, read for the one word the panel branches on. The
+       repository named here is the one the operation ran in, captured before
+       the await: everything the modal then does — the abort, the agent's
+       prompt — is about that repository and not about whichever row is
+       selected by the time git answers. */
+    if (outcome?.kind === 'conflict') {
+      vcsState.conflict = { repo: selected, op, ours, theirs: branch, files: outcome.files ?? [] }
+      vcsState.conflictError = null
+    }
     await refresh()
     /* Awaited, unlike the sweep in `catchUp` that fires the same call and walks
-       on: here it is the second half of one act, so a checkout that has
-       finished means the panel and the bar over it agree. */
+       on: here it is the second half of one act, so a write that has finished
+       means the panel and the bar over it agree. */
     await loadHead(project)
   } catch (err) {
     if (vcsState.project !== project || vcsState.selected !== selected) return
-    vcsState.checkoutError = asError(err)
+    vcsState.writeError = { ...asError(err), op }
   } finally {
     /* Cleared whoever the project is now: this flag is what holds the panel
-       inert, and a switch landing mid-checkout would otherwise leave the new
+       inert, and a switch landing mid-write would otherwise leave the new
        project's list dead with nothing on screen to say why. */
-    if (vcsState.checkingOut === branch) vcsState.checkingOut = null
+    if (vcsState.busy?.op === op && vcsState.busy?.branch === branch) vcsState.busy = null
   }
+}
+
+/* Switch the selected repository to another of its branches. */
+export async function checkout(branch) {
+  await write('checkout', branch, (repo) => invoke('vcs_checkout', { repo, branch }))
+}
+
+/* Bring another branch into the one this repository is on.
+
+   Two answers rather than one: `clean`, and `conflict` with the paths git left
+   unmerged. The second is not a failure — nothing was committed and nothing was
+   lost — so it lands in `conflict` and opens the modal, while the panel behind
+   it refreshes and shows exactly the tree git left. */
+export async function merge(branch) {
+  await write('merge', branch, (repo) => invoke('vcs_merge', { repo, branch }))
+}
+
+/* Replay this repository's branch on top of another one. The same two answers,
+   and the same door out of the second. */
+export async function rebase(onto) {
+  await write('rebase', onto, (repo) => invoke('vcs_rebase', { repo, onto }))
+}
+
+/* The first door out of a conflict: put the tree back exactly as it was.
+
+   `git merge --abort` or `git rebase --abort`, decided by the record's own
+   `op` rather than by anything the component passes — the dialog draws what is
+   in the store and answers about the same thing.
+
+   The record is cleared only on git's answer. It is the one thing on screen
+   saying this tree is conflicted, and taking it down before git said it had put
+   the tree back would leave that state with nothing naming it. */
+export async function abortConflict() {
+  const conflict = vcsState.conflict
+  if (!conflict || vcsState.busy) return
+  const project = vcsState.project
+  vcsState.busy = { op: 'abort', branch: conflict.theirs }
+  vcsState.conflictError = null
+  try {
+    await invoke('vcs_abort', { repo: conflict.repo, op: conflict.op })
+    vcsState.conflict = null
+    if (vcsState.project !== project) return
+    await refresh()
+    await loadHead(project)
+  } catch (err) {
+    vcsState.conflictError = asError(err)
+  } finally {
+    if (vcsState.busy?.op === 'abort') vcsState.busy = null
+  }
+}
+
+/* The second door: an agent session on the conflicted tree, which is left
+   exactly as git left it — so all this does is take the dialog down.
+
+   Starting the session is `DesktopApp.vue`'s, because it is also a switch to
+   the agents side tab and to the terminal in the centre, and no store in this
+   app opens a tab. */
+export function dismissConflict() {
+  vcsState.conflict = null
+  vcsState.conflictError = null
 }
 
 /* One file as HEAD has it — the left-hand side of a diff. `path` is relative to
@@ -284,6 +398,13 @@ function reset() {
   vcsState.tree = null
   vcsState.branches = []
   vcsState.error = null
-  vcsState.checkoutError = null
+  vcsState.writeError = null
+  /* A conflict belongs to a repository of the project being left, and there is
+     nothing in the new one for its two doors to act on: the abort names a
+     repository nobody is looking at, and the agent would be started in the
+     wrong project. The tree itself is untouched and says what it is the moment
+     that project comes back. */
+  vcsState.conflict = null
+  vcsState.conflictError = null
   vcsState.loading = false
 }

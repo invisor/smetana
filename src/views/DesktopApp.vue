@@ -15,6 +15,7 @@ import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
+import ConflictModal from '../components/git/ConflictModal.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
@@ -85,7 +86,17 @@ import {
 import { gitState, loadBranches, loadHead } from '../stores/git.js'
 /* The Git panel's own state, beside git.js rather than inside it: that store is
    the branch in the scope bar and spawns no process, this one runs git. */
-import { checkout, loadRepos, refresh as refreshGit, selectRepo, vcsState } from '../stores/vcs.js'
+import {
+  abortConflict,
+  checkout,
+  dismissConflict,
+  loadRepos,
+  merge,
+  rebase,
+  refresh as refreshGit,
+  selectRepo,
+  vcsState
+} from '../stores/vcs.js'
 import {
   attachFiles,
   attachmentsState,
@@ -409,11 +420,46 @@ const runnableTask = (task) =>
    which is the part of this a test can reach. */
 const runBlockedReason = computed(() => scopeBusyReason({ kind: 'queue' }, runsState.runs))
 
-/* Whether the Git panel may switch branch, and why not when it may not. The
-   rule is `components/git/gitActions.js` — the same family and the same reason
-   as the line above: the runs are the whole of what it reads, so an agent
-   session a person started themselves never reaches it. */
+/* Whether the Git panel may write to the repository it is showing — switch
+   branch, merge, rebase — and why not when it may not. The rule is
+   `components/git/gitActions.js` — the same family and the same reason as the
+   line above: the runs are the whole of what it reads, so an agent session a
+   person started themselves never reaches it. */
 const gitWrites = computed(() => gitActions(runsState.runs))
+
+/* The second door out of a conflict, and the one this view has to carry: the
+   store cannot open a tab or move a side tab, and everything else about the
+   conflict is already in `vcsState`.
+
+   The dialog is taken down first and the tree is left exactly as git left it —
+   that is the whole of what this door does to the repository. Then it is the
+   same three lines "Ask agent to edit" is: the agents panel, the terminal in
+   the centre, and one session.
+
+   The path handed to `createSession` is the **project**, as every other session
+   here is: a session's directory is the project directory and there is no
+   second one. Which repository inside it the work is in rides in the intent,
+   named absolutely, and the prompt is what says so. */
+const resolveConflictWithAgent = async () => {
+  const conflict = vcsState.conflict
+  const path = activePath.value
+  if (!conflict || !path) return
+  dismissConflict()
+  project.sideTab = 'agents'
+  project.activeTab = 'terminal'
+  try {
+    await createSession(path, {
+      kind: 'resolveConflict',
+      repo: conflict.repo,
+      op: conflict.op,
+      ours: conflict.ours ?? '',
+      theirs: conflict.theirs,
+      files: conflict.files
+    })
+  } catch {
+    // already reported — see newAgent above
+  }
+}
 
 const runOpen = ref(false)
 const runScope = ref({ kind: 'queue' })
@@ -2009,13 +2055,15 @@ const toastStackStyle = {
                 :tree="vcsState.tree"
                 :branches="vcsState.branches"
                 :actions="gitWrites"
-                :checking-out="vcsState.checkingOut"
-                :checkout-error="vcsState.checkoutError"
+                :busy="vcsState.busy"
+                :write-error="vcsState.writeError"
                 :error="vcsState.error"
                 :loading="vcsState.loading"
                 :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
                 @select="selectRepo"
                 @checkout="checkout"
+                @merge="merge"
+                @rebase="rebase"
                 @open="openDiff(vcsState.selected, $event.path)"
               />
               <AgentList
@@ -2159,6 +2207,25 @@ const toastStackStyle = {
             <Button variant="primary" @click="resolveFromDialog">Answer questions</Button>
           </template>
         </Modal>
+        <!-- A merge or a rebase that stopped on conflicts. It has no dismiss
+             and takes no `close`: the two doors are the only ways out, because
+             a conflicted tree behind a closed dialog is a state the panel
+             promises to show and has nothing to draw it with. Everything in it
+             comes from the record the store made when git answered, including
+             which repository — the panel's selection can have moved since. -->
+        <ConflictModal
+          v-if="vcsState.conflict"
+          :open="true"
+          :op="vcsState.conflict.op"
+          :repo="vcsState.conflict.repo"
+          :ours="vcsState.conflict.ours"
+          :theirs="vcsState.conflict.theirs"
+          :files="vcsState.conflict.files"
+          :busy="vcsState.busy?.op === 'abort'"
+          :error="vcsState.conflictError"
+          @resolve="resolveConflictWithAgent"
+          @abort="abortConflict"
+        />
         <Modal
           v-if="unsaved"
           :open="true"

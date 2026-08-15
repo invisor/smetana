@@ -383,7 +383,7 @@ git lives in this app finds two answers.
 
 | file | what it does |
 |---|---|
-| `model.rs` | `Repo`, `Change`, `ChangeKind`, `WorkingTree`, `VcsError`, and the **pure** parse of `git status --porcelain=v2 -z --branch`; the tests are here |
+| `model.rs` | `Repo`, `Change`, `ChangeKind`, `WorkingTree`, `Branch`, `OpKind`, `MergeOutcome`, `VcsError`, the **pure** parse of `git status --porcelain=v2 -z --branch` and the reading of a conflict off it; the tests are here |
 | `repos.rs` | what a project is made of — the pure rule, split from the directory read |
 | `run.rs` | the only file that touches the OS |
 | `commands.rs` | thin `#[tauri::command]`s, shaped like `files/`'s |
@@ -411,8 +411,10 @@ Each row's branch comes from `git::head` — a file read, so the whole list cost
 all**.
 
 `run.rs` builds the child's environment from `shell_env::path()`, exactly as `runs/preflight.rs` and
-`terminal/pty.rs` do, and for the reason recorded there. `GIT_OPTIONAL_LOCKS=0` on every read, so
-looking at a status never takes `index.lock` out from under an agent working in the same tree. The
+`terminal/pty.rs` do, and for the reason recorded there. `GIT_OPTIONAL_LOCKS=0` on every call, reads
+and writes alike, so looking at a status never takes `index.lock` out from under an agent working in
+the same tree — it suppresses only the locks git takes on its own account, an index refresh it did
+not have to do, so the merge and the rebase still take the locks their own work needs. The
 working directory is `current_dir` and not `-C`, so an odd character in a path never has to survive
 being an argument. A missing `git` is `VcsError::NoGit` and never an empty list — anything
 unobservable reads as "no", loudly (`runs/browser.rs`) — and a non-zero exit carries git's **own
@@ -423,7 +425,8 @@ against its own stale response the way `git.js`, `terminals.js` and `runs.js` ar
 is selected is remembered per project as `selectedRepo` in `settings.json`, validated in
 `settings/model.rs` like every other field, and a stored path no longer in the list is silently
 replaced by the first — a stored value is a hint, never the truth, the rule `columnOrder.js` states.
-`components/git/` draws it: `GitPanel.vue` over `RepoList.vue` and `ChangeList.vue`, with the pure
+`components/git/` draws it: `GitPanel.vue` over `RepoList.vue`, `ChangeList.vue` and
+`BranchList.vue`, with the pure
 `changeStatus.js` saying what a change is captioned with. Four of its eight kinds — modified, added,
 deleted, untracked — take the `--git-*` token the file tree already marks that file with
 (`files/FileTreeRow.vue`), which is the whole of the agreement between the two: renamed, copied and
@@ -438,6 +441,74 @@ the remembered repository lives in it) and the refresh button in the panel heade
 do not add one**: a third watcher subsystem would fire on every write inside `node_modules` and
 `target`, and the price of the sweep is named — while an agent works, this list is as stale as the
 file tree beside it.
+
+The panel writes three times and they share one rule and one field apiece. A branch row checks out,
+merges into the current branch or rebases the current branch onto it; `gitActions.js` — pure, tested,
+of the `branchChoice.js` family — is the whole of when any of them may be offered, and it reads the
+project's **runs** and nothing else, so a session a person started themselves never dims the panel
+while a batch mid-merge always does. `busy` (`{ op, branch }`) is what makes it one at a time, and
+`writeError` carries git's stderr with the `op` that earned it, since a block reading "did not switch
+branch" over a refused merge would name an operation nobody asked for.
+
+**A conflict is an outcome and not a failure, and it is read off the tree rather than off the
+message.** `git merge`'s prose moves between versions where an unmerged record in `--porcelain=v2`
+does not, so a non-zero exit is not an answer by itself: `run::git_attempt` hands the refusal back
+instead of raising it, the tree is read through the very call `vcs_status` uses, and unmerged records
+decide. Unmerged paths are `MergeOutcome::Conflict`; nothing unmerged is `VcsError::Git` with git's
+own stderr, untouched.
+
+**The tree is read twice — before as well as after — and the first read is what makes that rule
+true.** git refuses to *start* either operation in a tree that already has unmerged entries ("Merging
+is not possible because you have unmerged files", exit 128) and changes nothing, so those same
+records are still in the porcelain afterwards; an "after" read alone reports somebody else's conflict
+as this operation's. What that costs is not hypothetical: leaving a tree conflicted is this app's own
+designed exit from the dialog, so one click later the modal would name a merge git never began, and
+its Abort would run `git merge --abort` against whatever really is in progress and throw away
+resolutions somebody had already staged. `model::new_conflicts` is the rule, pure and measured
+against a real refusal. The price is one `git status` in front of an operation that rewrites the
+working tree.
+
+An unreadable "before" attributes nothing either — not knowing what was there is not evidence that
+nothing was — and **what that arm costs is worse than it sounds, which is why it is written down
+measured**: `refusal()` carries git's stderr, and a *merge* conflict writes nothing to stderr at all
+(its "CONFLICT (content): …" goes to stdout), so a merge conflict lost to that arm draws "Git did not
+merge" over an empty message block. A rebase keeps its words there, since `error: could not apply …`
+does go to stderr. Neither draws the conflicted files: `write()` in `stores/vcs.js` sets `writeError`
+in its catch and returns, where the refresh is on the success path, so the tree stays as the panel
+last read it until the next window focus or a press of refresh. It is still the cheap side of the
+trade — the other side offers an Abort that destroys somebody else's staged work — but a cost
+recorded lower than the real one is what invites the arm to be inverted later.
+
+**And the rule is a comparison of two moments rather than a lock.** An agent that starts a
+conflicting merge in the same tree between the pre-read and the spawn leaves the "before" clean and
+the "after" unmerged, and its conflict is attributed to us exactly as the one-read version attributed
+every one. The window is the tens of milliseconds between two `git status` calls against a failure
+that used to be certain, and no arithmetic over those two lists closes it: only asking git what is
+*in progress* would — a `MERGE_HEAD` / `rebase-merge` probe — which is a file read in the module
+whose header forbids one, and deliberately not taken.
+
+**What the app then offers is two doors and no third**, because there is no merge editor here and
+this epic adds none: `ConflictModal.vue` has no close button, and `overlays/Modal.vue` closes on
+neither Escape nor the scrim, so `closable: false` is the whole of it. A conflicted tree behind a
+closed dialog is a state this panel promises to show and cannot draw. **Abort** is `git merge
+--abort` or `git rebase --abort` — nothing was committed, so nothing is lost — and git's refusal of
+the abort is drawn *inside* the dialog, since a message behind a dialog with no dismiss is one nobody
+can see. **Resolve with an agent** is `Intent::ResolveConflict`, the same idiom "Ask agent to edit"
+and "Answer questions" already use, with the tree left exactly as git left it.
+
+That intent carries the whole of the moment — the repository, which of the two operations, both
+branches and every conflicted path — where `ResolveTask` deliberately carries almost nothing: a
+parked task's questions are in the issue and bd can be asked again, while a stopped rebase leaves
+HEAD detached, so the branch it moved off is readable nowhere afterwards (which is why `ours` is read
+*before* git is asked). The operation rides as `op` and not `kind`, because `Intent`'s own serde tag
+is `kind`. `SessionWork::ResolveConflict` keeps the repository and the branch coming in and leaves
+the paths behind, the way `NewTask` leaves its images. **No skill was added to the library for it**
+and none is named in the prompt: `smetana:merging` is the neighbouring process and the wrong one — it
+is about a *task's* worktrees, its gates and its fast-forward — so the instruction rides as prose in
+`prompt.rs`, which says exactly two things: resolve the conflict, and **finish** the merge or the
+rebase, never `--abort`. That last is a named refusal rather than a silence, because an agent that
+tidies up by aborting has undone the only thing it was asked to do and leaves a clean tree behind,
+which is the one way this fails that looks like success.
 
 ### The terminal: agent sessions
 

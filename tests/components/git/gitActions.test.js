@@ -18,8 +18,10 @@ describe('when the panel may write to a repository', () => {
     expect(gitActions([stopped]).reason).toBe(null)
   })
 
-  /* A checkout under a batch that is mid-merge is a night's work lost to one
-     click, and unlike a person's own session a run is nobody's foreground. */
+  /* A checkout, a merge or a rebase under a batch that is mid-merge is a
+     night's work lost to one click, and unlike a person's own session a run is
+     nobody's foreground. One verdict covers all three: what it is about is no
+     more survivable for one of them than another. */
   it('is refused while a run is going, and says so', () => {
     const verdict = gitActions([live])
     expect(verdict.allowed).toBe(false)
@@ -65,7 +67,7 @@ describe('when the panel may write to a repository', () => {
      dead most of the time. Nothing but the runs list reaches this rule, which
      is what makes that true by construction — this pins the wording that says
      so to a person. */
-  it('names the run and what a checkout under one would cost', () => {
+  it('names the run and what a write under one would cost', () => {
     const reason = gitActions([live]).reason
     expect(reason).toMatch(/^A run is going in this project\./)
     expect(reason).toMatch(/merge/i)

@@ -1,6 +1,7 @@
 <script setup>
-/* The local branches of one repository, which of them it is on, and switching
-   to another.
+/* The local branches of one repository, which of them it is on, and the three
+   things that can be done from a row: switch to it, merge it into the current
+   branch, rebase the current branch onto it.
 
    The order is `git::by_recency`'s and is drawn exactly as it arrives — the
    branch somebody merges into every day is nowhere in particular
@@ -8,20 +9,25 @@
    linked worktree offers the whole repository's list rather than the single
    branch it is itself on, which is `parse_commondir`'s doing one layer down.
 
-   The current branch is marked and is not a target: checking out the branch you
-   are on is the one row in this list with nothing behind it.
+   The current branch is marked and is not a target for any of the three:
+   checking out, merging or rebasing onto the branch you are already on is the
+   one row in this list with nothing behind it.
 
-   Whether a checkout may be offered at all is `gitActions.js` and not this
+   Whether any of it may be offered at all is `gitActions.js` and not this
    file's — a rule about the project's runs, pure and tested, where a `.vue`
    file is the one thing no test in this repository reaches. What arrives here
    is its verdict, and both halves of it are used: the row goes inert on
-   `allowed`, and the tooltip over it is the `reason` that came with it.
+   `allowed`, and the tooltip over it is the `reason` that came with it. The
+   same one verdict covers all three writes, since what it is about — a batch
+   that may be mid-merge — is no more survivable for one of them than another.
 
    Remote branches, upstreams, ahead/behind counts and folders for `feature/…`
-   are outside this epic. So are creating, renaming and deleting a branch: a
-   list that reads and one act that switches is the whole of it. */
+   are outside this epic. So are creating, renaming and deleting a branch, and
+   so is every flag and strategy a merge can take: this offers the merge and the
+   rebase git would do by itself, and nothing else. */
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
+import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { useInteractive } from '../core/interactive.js'
 
@@ -32,10 +38,12 @@ const props = defineProps({
      project with no run going, which is what the gallery and every
      single-branch frame want. */
   actions: { type: Object, default: () => ({ allowed: true, reason: null }) },
-  /* The branch a checkout is in flight for, or null. */
-  checkingOut: { type: String, default: null }
+  /* What git is doing right now — `{ op, branch }` — or null. `op` says which
+     control on that row spins, since all three leave from the same row and a
+     spinner in the wrong place would name the wrong operation. */
+  busy: { type: Object, default: null }
 })
-defineEmits(['checkout'])
+defineEmits(['checkout', 'merge', 'rebase'])
 
 /* Hover is per row and `useInteractive` tracks one control at a time, so an
    instance built inside `rowStyle` would be thrown away on every re-render.
@@ -52,16 +60,21 @@ const interactiveFor = (name) => {
 
 const MARK = 12
 
-/* A run holds the whole list, and so does a checkout already going: what a
+/* A run holds the whole list, and so does an operation already going: what a
    second press would ask for is git working in a tree git is working in. */
-const blocked = computed(() => !props.actions?.allowed || Boolean(props.checkingOut))
+const blocked = computed(() => !props.actions?.allowed || Boolean(props.busy))
 
-/* The sentence over a row nobody may press. A checkout in flight is deliberately
-   not one — it is over in a moment and the row itself is spinning, so a panel of
-   prose about it would be in the way of the thing it explains. */
+/* The sentence over a row nobody may press. An operation in flight is
+   deliberately not one — the row itself is spinning, so a panel of prose about
+   it would be in the way of the thing it explains. */
 const hint = computed(() => (props.actions?.allowed ? '' : (props.actions?.reason ?? '')))
 
 const target = (branch) => !branch.current && !blocked.value
+
+/* Which control on this row is the one git is busy with. `null` everywhere
+   else, including on the very row whose checkout is running: what spins there
+   is the mark, not a button. */
+const spinning = (branch, op) => props.busy?.branch === branch.name && props.busy?.op === op
 
 /* A branch name is an identifier and stays mono. The row highlights only where
    there is something to press: the branch already checked out is not a target,
@@ -98,6 +111,40 @@ const nameStyle = {
   whiteSpace: 'nowrap'
 }
 
+/* The two buttons appear on the row under the pointer, and the spinner of an
+   operation in flight takes their place — one box, so a row never holds both
+   and nothing shifts when one becomes the other.
+
+   The box is held in the layout the rest of the time (`visibility` rather than
+   `v-if`), so nothing on the row moves sideways as the pointer crosses it and a
+   name is measured against the width it will actually have. Drawing eighty
+   buttons on a list of forty branches at all times would be a panel of controls
+   with the names squeezed between them; letting them appear and take the space
+   then would make every name jump on hover.
+
+   They are deliberately not offered on the current branch or while anything is
+   blocked: merging a branch into itself is a no-op git answers "Already up to
+   date" to, and the whole list is inert under a run either way. */
+const working = (branch) => spinning(branch, 'merge') || spinning(branch, 'rebase')
+
+const controlsStyle = (branch) => ({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 'var(--space-1)',
+  flex: 'none',
+  /* The width of the two buttons, held whatever is in the box: the spinner is
+     one glyph and would otherwise let the name grow the moment an operation
+     started and shrink again when it ended. Arithmetic on tokens rather than a
+     number, so it follows both densities and the app-wide font size the way the
+     buttons themselves do. */
+  minWidth: 'calc(var(--control-h-sm) * 2 + var(--space-1))',
+  visibility:
+    working(branch) || (target(branch) && interactiveFor(branch.name).hover.value)
+      ? 'visible'
+      : 'hidden'
+})
+
 /* The mark's box is fixed at the glyph's size so a row does not shift sideways
    between the branch that is current and the ones that are not, or when one of
    them starts spinning — the same reason `ChangeList` fixes its own staged
@@ -115,7 +162,7 @@ const markBox = {
    owns the number, and it is also where `prefers-reduced-motion` zeroes it. */
 const spinStyle = { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' }
 
-/* Git's refusal of a checkout is deliberately **not** drawn here. `GitPanel`
+/* Git's refusal of an operation is deliberately **not** drawn here. `GitPanel`
    puts this list inside a scroller capped at `BRANCH_ROWS`, so a failure block
    under the rows sat below the fold of a small inner box nothing scrolls for
    you — with six branches or more, which is most repositories, it was entirely
@@ -152,6 +199,31 @@ const empty = computed(() => props.branches.length === 0)
         <Icon name="git-branch" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
         <span :style="nameStyle">{{ branch.name }}</span>
         <span :style="{ flex: 1 }" />
+        <!-- `stop` on both: the row itself is the checkout, so a press that
+             reached it would switch branch as well as merge. -->
+        <span :style="controlsStyle(branch)">
+          <Icon
+            v-if="working(branch)"
+            name="loader-circle"
+            :size="MARK"
+            :style="spinStyle"
+            :title="spinning(branch, 'merge') ? 'Merging this branch in' : 'Rebasing onto this branch'"
+          />
+          <template v-else>
+            <IconButton
+              icon="git-merge"
+              size="sm"
+              label="Merge into the current branch"
+              @click.stop="$emit('merge', branch.name)"
+            />
+            <IconButton
+              icon="git-graph"
+              size="sm"
+              label="Rebase the current branch onto this"
+              @click.stop="$emit('rebase', branch.name)"
+            />
+          </template>
+        </span>
         <!-- The tick is the whole of what says which branch this repository is
              on, and it is a glyph rather than the highlight alone: the row's
              surface is also what hover uses, and a state told apart by shade
@@ -161,7 +233,7 @@ const empty = computed(() => props.branches.length === 0)
              reader. -->
         <span :style="markBox">
           <Icon
-            v-if="checkingOut === branch.name"
+            v-if="spinning(branch, 'checkout')"
             name="loader-circle"
             :size="MARK"
             :style="spinStyle"

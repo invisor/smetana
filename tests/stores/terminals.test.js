@@ -238,6 +238,27 @@ describe('agent rows', () => {
     ])
   })
 
+  /* The one work in the list that is about a repository rather than an issue.
+     Both identifiers are drawn and the repository is drawn by its folder's
+     name: the absolute path is most of a 252px row on its own, and the panel
+     already says which project this is. */
+  it('a conflict names the repository and the branch coming in', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit(
+      'terminal:state',
+      session({
+        id: 2,
+        work: { kind: 'resolveConflict', repo: '/p/backend', theirs: 'develop' }
+      })
+    )
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Conflict',
+      tasks: ['backend', 'develop']
+    })
+  })
+
   /* A session the worker described with something this front end has never
      heard of is an ordinary outcome, not an error: it is still an agent, and a
      row that says so is worth more than a blank one. */

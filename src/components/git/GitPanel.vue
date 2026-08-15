@@ -17,7 +17,13 @@
    centre column; which repository it belongs to is the caller's business, since
    this component is handed the selection rather than holding it.
 
-   No merge and no rebase: the last task of this epic. */
+   The three writes — checkout, merge, rebase — leave as three events and are
+   drawn by `BranchList`. What is drawn here is git's refusal of whichever of
+   them was last refused, for the reason recorded beside the block: the branch
+   section is capped at six rows and a message inside that scroller is below the
+   fold in the ordinary case. A conflict is not one of those refusals and is not
+   drawn here at all — it is an outcome with two doors, and the modal is
+   `ConflictModal`. */
 import { computed } from 'vue'
 import BranchList from './BranchList.vue'
 import ChangeList from './ChangeList.vue'
@@ -34,15 +40,16 @@ const props = defineProps({
   /* `[{ name, current }]` in `git::by_recency`'s order, which is drawn as it
      arrives. */
   branches: { type: Array, default: () => [] },
-  /* `{ allowed, reason }` from `gitActions.js`: whether a checkout may be
-     offered at all, and the sentence over it when it may not. Passed through
-     rather than decided here — this panel draws, and the rule is a pure file a
-     test can reach. */
+  /* `{ allowed, reason }` from `gitActions.js`: whether the panel may write to
+     this repository at all, and the sentence over the rows when it may not.
+     Passed through rather than decided here — this panel draws, and the rule is
+     a pure file a test can reach. */
   actions: { type: Object, default: () => ({ allowed: true, reason: null }) },
-  /* The branch a checkout is in flight for, and git's refusal of the last
-     one. */
-  checkingOut: { type: String, default: null },
-  checkoutError: { type: Object, default: null },
+  /* What git is doing right now — `{ op, branch }` — and its refusal of the
+     last write, which carries the `op` it was about so the block can name
+     it. */
+  busy: { type: Object, default: null },
+  writeError: { type: Object, default: null },
   /* `{ kind, message }` as `stores/vcs.js` normalises it. `noGit` is the one
      kind this panel branches on; everything else is git's own words, shown
      untouched, because whoever reads them knows git. */
@@ -52,7 +59,7 @@ const props = defineProps({
      relative, the form every change carries. */
   openPath: { type: String, default: null }
 })
-defineEmits(['select', 'checkout', 'open'])
+defineEmits(['select', 'checkout', 'merge', 'rebase', 'open'])
 
 const rootStyle = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }
 
@@ -92,7 +99,7 @@ const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mo
    prose: this is machine output, and it is shown exactly as git wrote it.
 
    Used twice: inside the changes scroller for a read that failed, and as a flex
-   item of this column for a checkout git refused. `flexShrink: 0` is for the
+   item of this column for a write git refused. `flexShrink: 0` is for the
    second — a flex item shrinks by default, and the lists above it have
    somewhere to give way to, while a refusal clipped to a strip of its own title
    is the defect this block was moved out of the branch cap to fix. It changes
@@ -138,6 +145,25 @@ const failureTitle = computed(() =>
    that is on its way. */
 const settled = computed(() => !props.loading || props.repos.length > 0)
 const changes = computed(() => props.tree?.changes ?? [])
+
+/* Which write git declined, in its own words above git's. One block for the
+   three of them, keyed on the `op` the refusal came with: a message reading
+   "did not switch branch" over a refused merge would name the wrong operation,
+   and three blocks that can never be on screen together would be three copies
+   of one thing.
+
+   An `op` this build has never heard of takes the general sentence rather than
+   nothing at all — a refusal with no title would be git's stderr floating under
+   the branches, which is exactly the state this block exists to prevent. */
+const WRITE_REFUSED = {
+  checkout: 'Git did not switch branch',
+  merge: 'Git did not merge',
+  rebase: 'Git did not rebase',
+  abort: 'Git did not abort'
+}
+const writeRefused = computed(
+  () => WRITE_REFUSED[props.writeError?.op] ?? 'Git refused this operation'
+)
 </script>
 
 <template>
@@ -224,8 +250,10 @@ const changes = computed(() => props.tree?.changes ?? [])
           <BranchList
             :branches="branches"
             :actions="actions"
-            :checking-out="checkingOut"
+            :busy="busy"
             @checkout="$emit('checkout', $event)"
+            @merge="$emit('merge', $event)"
+            @rebase="$emit('rebase', $event)"
           />
         </div>
         <!-- **Outside the scroller above, and that is the whole point.** Drawn
@@ -234,10 +262,14 @@ const changes = computed(() => props.tree?.changes ?? [])
              entirely out of view, so a person pressed a row, the tick did not
              move, and nothing said why. It is the same block the read failure
              above uses, and one copy of it: `failureTitleStyle` is what says
-             which of the two this is. -->
-        <div v-if="checkoutError" :style="failureStyle">
-          <div :style="failureTitleStyle">Git did not switch branch</div>
-          <div :style="failureTextStyle">{{ checkoutError.message }}</div>
+             which of the two this is, and `writeRefused` which of the writes.
+
+             A conflict never reaches here: it is not a refusal, and what draws
+             it is a modal with two doors, because a conflicted tree is a state
+             this panel would otherwise be promising to show and unable to. -->
+        <div v-if="writeError" :style="failureStyle">
+          <div :style="failureTitleStyle">{{ writeRefused }}</div>
+          <div :style="failureTextStyle">{{ writeError.message }}</div>
         </div>
       </template>
     </template>

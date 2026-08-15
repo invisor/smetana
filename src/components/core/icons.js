@@ -33,6 +33,7 @@ import {
   GitBranch,
   GitCompare,
   GitFork,
+  GitGraph,
   GitMerge,
   HardDrive,
   Inbox,
@@ -90,6 +91,12 @@ export const iconNodes = {
   // scope
   'git-branch': GitBranch,
   'git-merge': GitMerge,
+  /* Rebase, beside merge in the branch list. Lucide ships no rebase glyph, and
+     of what it does ship this is the one about the *shape* of the history —
+     which is the whole difference between the two operations. `git-compare` is
+     taken by the diff tab and `git-pull-request-arrow` would name something
+     this app has no idea about. */
+  'git-graph': GitGraph,
   // a diff tab: two columns of one file, HEAD against the working tree
   'git-compare': GitCompare,
   'folder-git-2': FolderGit2,

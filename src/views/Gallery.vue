@@ -21,6 +21,7 @@ import {
   ClaimedTasks,
   CodeBlock,
   ColumnHeader,
+  ConflictModal,
   ContextMenu,
   DependencyMark,
   DiffView,
@@ -358,10 +359,38 @@ const LONG_BRANCHES = [
 
 /* git's own sentence, verbatim from a repository where a second worktree held
    the branch — which is exactly what a run's provisioning phase leaves behind,
-   and the message that tells somebody why the tick did not move. */
+   and the message that tells somebody why the tick did not move. The `op` is
+   what decides the title over it, since one block serves all three writes. */
 const CHECKOUT_REFUSED = {
   kind: 'git',
+  op: 'checkout',
   message: "fatal: 'develop' is already checked out at '/Users/you/dev/smetana/.worktrees/smetana-8ok.3'"
+}
+
+/* The same block for the other two writes: git refused, nothing about the tree
+   changed, and the title is the only thing that differs. */
+const MERGE_REFUSED = {
+  kind: 'git',
+  op: 'merge',
+  message:
+    'error: Your local changes to the following files would be overwritten by merge:\n\tsrc/stores/vcs.js\nPlease commit your changes or stash them before you merge.\nAborting'
+}
+
+/* What a merge or a rebase that stopped on conflicts leaves, in the shape
+   `stores/vcs.js` records it. Several files, because the number is what
+   somebody weighs the two doors with, and a long path because the dialog is
+   480px wide. */
+const CONFLICT = {
+  repo: '/Users/you/dev/smetana',
+  op: 'merge',
+  ours: 'feat/worktree-rename',
+  theirs: 'develop',
+  files: [
+    'src/stores/vcs.js',
+    'src/components/git/BranchList.vue',
+    'src-tauri/src/vcs/commands.rs',
+    'src/views/desktopAppData.js'
+  ]
 }
 
 /* Two issues in bd's own shape: one that has everything the inspector can
@@ -1296,7 +1325,18 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
              and the rest of the list goes inert, since a second press would ask
              git to work in a tree git is already working in. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
-          <BranchList :branches="BRANCHES" checking-out="develop" />
+          <BranchList :branches="BRANCHES" :busy="{ op: 'checkout', branch: 'develop' }" />
+        </div>
+        <!-- And a merge in flight, which spins in the other place: where the
+             two buttons sit, because that is the control that was pressed. The
+             box holds their width either way, so the name beside it does not
+             move as one becomes the other.
+
+             The buttons themselves appear on the row under the pointer — hover
+             any row here to see them, and check that nothing shifts sideways
+             when they do. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" :busy="{ op: 'merge', branch: 'main' }" />
         </div>
         <div :style="{ display: 'flex', width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
           <GitPanel
@@ -1321,7 +1361,23 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             selected="/Users/you/dev/smetana"
             :tree="CLEAN_TREE"
             :branches="LONG_BRANCHES"
-            :checkout-error="CHECKOUT_REFUSED"
+            :write-error="CHECKOUT_REFUSED"
+          />
+        </div>
+        <!-- The same block for a refused **merge**, which is the whole reason
+             the title is keyed on the refusal's own `op`: one block for the
+             three writes, and a message reading "did not switch branch" over
+             this one would name an operation nobody asked for. git's message
+             here runs to several lines, which is what the pre-wrapped mono
+             block is for. -->
+        <div :style="{ display: 'flex', width: '252px', height: '340px', border: 'var(--border-w) solid var(--border)' }">
+          <GitPanel
+            :style="{ flex: 1, minWidth: 0 }"
+            :repos="[REPOS[0]]"
+            selected="/Users/you/dev/smetana"
+            :tree="CLEAN_TREE"
+            :branches="BRANCHES"
+            :write-error="MERGE_REFUSED"
           />
         </div>
         <!-- The same failure with the repository list empty, which is the
@@ -1335,6 +1391,44 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             :repos="[]"
             :tree="null"
             :error="{ kind: 'io', message: 'the repositories of this project could not be listed' }"
+          />
+        </div>
+      </div>
+      <!-- The conflict dialog, which is the only thing in this section that is
+           not a panel. Four frames, because all four states are reachable in a
+           second and none of them can be looked at any other way: a merge, a
+           rebase — the branches swap sides in the sentence, and getting that
+           backwards would send an agent the wrong way round — an abort in
+           flight, and an abort git refused.
+
+           The thing to check in every one of them: there is no close button in
+           the corner and no third way out. That is the whole design, since a
+           conflicted tree behind a closed dialog is a state the panel promises
+           to show and cannot draw. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <div :style="{ position: 'relative', width: '560px', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <ConflictModal v-bind="CONFLICT" :open="true" @resolve="() => {}" @abort="() => {}" />
+        </div>
+        <div :style="{ position: 'relative', width: '560px', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <ConflictModal
+            v-bind="{ ...CONFLICT, op: 'rebase' }"
+            :open="true"
+            @resolve="() => {}"
+            @abort="() => {}"
+          />
+        </div>
+        <div :style="{ position: 'relative', width: '560px', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <ConflictModal v-bind="CONFLICT" :open="true" busy @resolve="() => {}" @abort="() => {}" />
+        </div>
+        <!-- git refusing the abort itself, drawn inside the dialog: there is
+             no dismiss, so a message anywhere else is one nobody can see. -->
+        <div :style="{ position: 'relative', width: '560px', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <ConflictModal
+            v-bind="CONFLICT"
+            :open="true"
+            :error="{ kind: 'git', message: 'fatal: There is no merge to abort (MERGE_HEAD missing).' }"
+            @resolve="() => {}"
+            @abort="() => {}"
           />
         </div>
       </div>
