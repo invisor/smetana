@@ -93,8 +93,8 @@ something looks odd, the design system is the source of truth — match it rathe
 `src/main.js` → `src/App.vue` → either `views/DesktopApp.vue` (the three-column shell: worktree
 files + agents, tab bar over the kanban, task inspector) or `views/Gallery.vue`
 (code-split, never in the app bundle). The board is live tracker data, and so are the file tree, the
-file tabs, the agents and the branch in the scope bar. What is left on the screen — the rest of the
-git state, the dirty-file and agent counters among it — is still fixture state in
+file tabs, the agents, the branch in the scope bar and the sidebar's Git tab. What is left on the
+screen — the scope bar's dirty-file and agent counters among it — is still fixture state in
 `views/desktopAppData.js`. The right column used to end in a log pane fed from that same file; it is
 gone, because invented output under a real issue claimed the app knew something it did not, and a
 session's actual output is the terminal tab. `LogView` itself stays in the library and in the
@@ -168,7 +168,8 @@ answers `tracker_health`. `DesktopApp.vue` renders it where the board would be �
 loud budget belongs to the card that needs a human.
 
 `src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`,
-`src/stores/terminals.js`, `src/stores/git.js`, `src/stores/runs.js`, `src/stores/attachments.js`
+`src/stores/terminals.js`, `src/stores/git.js`, `src/stores/vcs.js`, `src/stores/runs.js`,
+`src/stores/attachments.js`
 and `src/stores/app.js` are the **only** files in `src/` that know Tauri exists — components see
 reactive stores and nothing else. `mockBackend.js` below is the last and the exception that proves
 it: it imports Tauri in order to stand in for the absence of one. `app.js` is the odd one, and it is
@@ -369,6 +370,70 @@ worktree: the same list as the main checkout, in the same reflog order, with HEA
 per-worktree.
 
 The counters next to it — uncommitted files, running agents — are still fixture.
+
+### The Git panel: what only the binary can answer
+
+`src-tauri/src/vcs/` is the one place in the tree that runs `git` as a process, and `git.rs` above is
+untouched by it. **The split is by mechanism, not by subject**: `git.rs` is what can be read off the
+disk, `vcs/` is what only git itself can do — the state of a working tree, and later a diff, a
+checkout, a merge. Folding them together fails in one direction by dragging a process spawn into a
+file whose own header forbids one, and in the other by making the scope bar's branch pay for a
+process on every window focus. `vcs/mod.rs` says so in its header, because a reader who asks where
+git lives in this app finds two answers.
+
+| file | what it does |
+|---|---|
+| `model.rs` | `Repo`, `Change`, `ChangeKind`, `WorkingTree`, `VcsError`, and the **pure** parse of `git status --porcelain=v2 -z --branch`; the tests are here |
+| `repos.rs` | what a project is made of — the pure rule, split from the directory read |
+| `run.rs` | the only file that touches the OS |
+| `commands.rs` | thin `#[tauri::command]`s, shaped like `files/`'s |
+
+There is **no worker**, for the reason `files/` has none: `git status` costs tens of milliseconds
+against a bd call's two seconds, and the module owns no snapshot — the front end holds the list.
+Concurrent writes are serialised by git's own `index.lock`, whose refusal is shown as it is. The
+machine-readable form and never the human one: `--porcelain=v2`'s output is documented and stable
+where `git status`'s prose moves between versions, and `-z` is not tidiness — a path may hold a
+space and it may hold a newline, and the non-`-z` form answers that by quoting, which would be a
+second parser to get wrong. A rename is **two** records, the path and then the path it came from, so
+reading it as one puts the original into the next record's slot and every change after a rename is
+nonsense. An unrecognised record is skipped rather than refused: losing one row beats losing the
+panel.
+
+What a project is made of is one rule with two arms (`repos.rs`): `[project].repos` from
+`.smetana/project.toml` when it is there and non-empty, in its own order, and otherwise the root
+itself plus every directory **one level** below it that git can see. That second arm is the addition,
+and it is for the folder holding five sibling repositories that nobody has set up for runs yet —
+asking only the root would name the accidental repository that container happens to be, which is the
+defect the run dialog already paid for once. It stops at one level on purpose: deeper is not a
+fallback but a search, and it would find every vendored dependency with a `.git` in it. A name that
+resolves to nothing readable is left out rather than shown broken, the rule `git::combine` keeps.
+Each row's branch comes from `git::head` — a file read, so the whole list costs **no process at
+all**.
+
+`run.rs` builds the child's environment from `shell_env::path()`, exactly as `runs/preflight.rs` and
+`terminal/pty.rs` do, and for the reason recorded there. `GIT_OPTIONAL_LOCKS=0` on every read, so
+looking at a status never takes `index.lock` out from under an agent working in the same tree. The
+working directory is `current_dir` and not `-C`, so an odd character in a path never has to survive
+being an argument. A missing `git` is `VcsError::NoGit` and never an empty list — anything
+unobservable reads as "no", loudly (`runs/browser.rs`) — and a non-zero exit carries git's **own
+stderr untouched**, because the person reading it knows git.
+
+On the front end `src/stores/vcs.js` sits beside `git.js` and mirrors that same split; it is guarded
+against its own stale response the way `git.js`, `terminals.js` and `runs.js` are. Which repository
+is selected is remembered per project as `selectedRepo` in `settings.json`, validated in
+`settings/model.rs` like every other field, and a stored path no longer in the list is silently
+replaced by the first — a stored value is a hint, never the truth, the rule `columnOrder.js` states.
+`components/git/` draws it: `GitPanel.vue` over `RepoList.vue` and `ChangeList.vue`, with the pure
+`changeStatus.js` saying what a change is captioned with. Its tokens are the `--git-*` set the file
+tree already marks a modified file with, so one file changed once looks the same in both places.
+Each section has **its own empty state and they say different things** — no git on this machine
+(naming what was looked for), no repository in this folder, nothing uncommitted in this repository:
+one blank area for all three would be a panel saying nothing three different ways. Freshness is
+window focus (`catchUp`), the project switch (`projects.js`, after the new layout has landed, since
+the remembered repository lives in it) and the refresh button in the panel header. **No watcher, and
+do not add one**: a third watcher subsystem would fire on every write inside `node_modules` and
+`target`, and the price of the sweep is named — while an agent works, this list is as stale as the
+file tree beside it.
 
 ### The terminal: agent sessions
 
@@ -1605,8 +1670,9 @@ state and width for each side), `editor` with its own `fontSize`, `agent`, the i
 start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, and `kanban`, how
 the board is drawn. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
-absolute path to its content state (side tab, active tab, selected task, selected path, expanded
-folders, `openTabs`, `previewTab`, `columnOrder`, `runSettings`, `storageWarnedMib`, `usedAt`).
+absolute path to its content state (side tab, active tab, selected task, selected path,
+`selectedRepo`, expanded folders, `openTabs`, `previewTab`, `columnOrder`, `runSettings`,
+`storageWarnedMib`, `usedAt`).
 
 `kanban` is the one that is **global rather than per project**, and deliberately: `columns` (`all` or
 `some`) with `alwaysShow`, and `interval` (`all`, `day`, `week`, `month`) with `unlimited`, are a
@@ -1616,9 +1682,10 @@ whose two closed lists are written out there and again in `model.rs`: the doubli
 the storage ladder carry, with the same obligation — what the front end offers must be a subset of
 what Rust accepts, or the value loses itself on the next save with nothing on screen to say so.
 
-The per-project three are per project for the reason the rest are: a status has no meaning in another
-repository's column order, a branch name has none in another repository, and the attachment folder
-the bell weighs is a different folder for every project. The ladder `storageWarnedMib` is validated
+The per-project four are per project for the reason the rest are: a status has no meaning in another
+repository's column order, a branch name has none in another repository, a repository inside one
+project is not one inside another, and the attachment folder the bell weighs is a different folder
+for every project. The ladder `storageWarnedMib` is validated
 against is a closed list written out twice as well, in `model.rs` and in
 `components/notifications/notifications.js`; a value off it loses itself and costs one repeated
 warning. `runSettings` is what the run dialog opens on next time, a mirror of

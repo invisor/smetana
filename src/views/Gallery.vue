@@ -9,6 +9,7 @@ import {
   AboutSettings,
   AgentList,
   AgentSettings,
+  ChangeList,
   AppShell,
   Assignee,
   AttachmentStrip,
@@ -29,6 +30,7 @@ import {
   FileEditor,
   FileTree,
   GeneralSettings,
+  GitPanel,
   Icon,
   IconButton,
   Input,
@@ -43,6 +45,7 @@ import {
   Panel,
   ProjectList,
   PromoteColumnModal,
+  RepoList,
   ReportView,
   Select,
   RunBar,
@@ -258,6 +261,38 @@ const agentRows = [
      the only place it can be looked at for longer than that. */
   { id: 'start-1', label: 'Creating a task', tasks: [], state: 'running', elapsed: 'starting', starting: true }
 ]
+
+/* The Git panel's three states, in the shape `src-tauri/src/vcs/` answers with.
+   Two repositories rather than one, since a project made of several is what the
+   repository list exists for and the case a single-repository machine can never
+   show; the second is on a detached HEAD, which the row has to say rather than
+   dress up as a branch. */
+const REPOS = [
+  { name: '.', path: '/Users/you/dev/smetana', branch: 'feat/worktree-rename', detached: null },
+  { name: 'admin', path: '/Users/you/dev/smetana/admin', branch: null, detached: 'a1b2c3d' }
+]
+
+/* One row of every kind the panel can draw, including the two that are easiest
+   to get wrong: a rename, which carries the path it came from, and a conflict,
+   which is the one row with a colour of its own. The long path is deliberate —
+   it is what says whether the file's own name survives the truncation. */
+const CHANGES = [
+  { path: 'src/stores/vcs.js', origPath: null, kind: 'modified', staged: false, unstaged: true },
+  { path: 'src/components/git/GitPanel.vue', origPath: null, kind: 'added', staged: true, unstaged: false },
+  { path: 'src/views/desktopAppData.js', origPath: null, kind: 'deleted', staged: true, unstaged: false },
+  {
+    path: 'src/components/git/RepoList.vue',
+    origPath: 'src/components/shell/RepoList.vue',
+    kind: 'renamed',
+    staged: true,
+    unstaged: false
+  },
+  { path: 'src/components/files/editor/languages.js', origPath: null, kind: 'typeChanged', staged: false, unstaged: true },
+  { path: 'notes.txt', origPath: null, kind: 'untracked', staged: false, unstaged: true },
+  { path: 'src/stores/tabs.js', origPath: null, kind: 'conflicted', staged: false, unstaged: true }
+]
+
+const CLEAN_TREE = { branch: 'main', detached: null, changes: [] }
 
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking
@@ -1067,6 +1102,76 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
            with looks like. -->
       <div :style="{ width: '340px', padding: '0 var(--panel-pad)' }">
         <ClaimedTasks :tasks="CLAIMED" selected-id="smetana-9je" @select="() => {}" />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Git</div>
+      <!-- 252px is the left panel's shipped width, so what truncates here
+           truncates in the app, and each frame is wrapped in the same Panel the
+           sidebar puts around it — the refresh button lives in that header
+           rather than inside GitPanel, exactly as it does in DesktopApp.vue.
+
+           Four frames, because the three empty states are the point of this
+           component and each says something different: a repository with files
+           in it, a clean one, a folder that holds no repository at all, and a
+           machine with no git on it. The last one is the only one a person can
+           act on, and it names what was looked for. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <div :style="{ width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
+            </template>
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'feat/worktree-rename', detached: null, changes: CHANGES }"
+            />
+          </Panel>
+        </div>
+        <div :style="{ width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <template #actions>
+              <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
+            </template>
+            <GitPanel :repos="[REPOS[0]]" selected="/Users/you/dev/smetana" :tree="CLEAN_TREE" />
+          </Panel>
+        </div>
+        <div :style="{ width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <GitPanel :repos="[]" :tree="null" />
+          </Panel>
+        </div>
+        <div :style="{ width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false">
+            <GitPanel
+              :repos="[]"
+              :tree="null"
+              :error="{ kind: 'noGit', message: 'git was not found on this machine (looked for `git` on PATH)' }"
+            />
+          </Panel>
+        </div>
+      </div>
+      <!-- The two lists on their own, at the same width: what a row does with a
+           long path, a detached HEAD and a rename's second path is easier to
+           check without a panel around it. The last frame is git's own refusal,
+           shown untouched — the person reading it knows git. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <RepoList :repos="REPOS" selected="/Users/you/dev/smetana" />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <ChangeList :changes="CHANGES" />
+        </div>
+        <div :style="{ width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
+          <GitPanel
+            :repos="[REPOS[0]]"
+            selected="/Users/you/dev/smetana"
+            :tree="null"
+            :error="{ kind: 'git', message: 'fatal: not a git repository (or any of the parent directories): .git' }"
+          />
+        </div>
       </div>
     </section>
 

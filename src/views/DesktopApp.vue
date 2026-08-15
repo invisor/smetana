@@ -15,6 +15,7 @@ import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
+import GitPanel from '../components/git/GitPanel.vue'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
@@ -81,6 +82,9 @@ import {
   switchTo
 } from '../stores/projects.js'
 import { gitState, loadBranches, loadHead } from '../stores/git.js'
+/* The Git panel's own state, beside git.js rather than inside it: that store is
+   the branch in the scope bar and spawns no process, this one runs git. */
+import { loadRepos, refresh as refreshGit, selectRepo, vcsState } from '../stores/vcs.js'
 import {
   attachFiles,
   attachmentsState,
@@ -767,6 +771,9 @@ onMounted(async () => {
   if (!opened) return
   setRoot(opened)
   loadHead(opened)
+  /* Not awaited, like its neighbours: the Git tab fills in when git answers,
+     and nothing on this pass depends on it. */
+  loadRepos(opened)
   loadConfig(opened)
   loadRun(opened)
   /* Not awaited, like the three above it: the bell fills in when the answer
@@ -801,6 +808,14 @@ const catchUp = async () => {
      files: when focus returns. We do not await it: the bar updates on its own,
      and the pass over the tabs is not tied to it. */
   loadHead(activePath.value)
+  /* The working tree is written to by everybody but this window — an agent in
+     the next tab, a person in a terminal, a run cutting a worktree — so the Git
+     panel catches up exactly where the file tree does. Deliberately no watcher:
+     a third watcher subsystem with its own lifecycle would fire on every write
+     inside `node_modules` and `target`. The price is named rather than
+     discovered: while an agent works, this list is as stale as the tree beside
+     it, until focus returns or the refresh button is pressed. */
+  loadRepos(activePath.value)
   /* The setup session writes .smetana/project.toml from outside this window,
      exactly like an agent changing a branch or a file — window focus is how
      this app learns about all of those. Not awaited, for the same reason
@@ -1860,7 +1875,8 @@ const toastStackStyle = {
          left empty on purpose: the component shows worktree-or-branch in that
          slot and appends "@branch" only when both are set, so passing the
          branch alone is what puts it there once, undecorated. The counters
-         are still fixture — nothing in the app reads git's status yet. -->
+         are still fixture: the Git tab reads the working tree, and this bar
+         has not been taught to count it. -->
     <ScopeIndicator
       ref="scopeBar"
       v-bind="scope"
@@ -1907,15 +1923,24 @@ const toastStackStyle = {
           @toggle="layout.leftCollapsed = !layout.leftCollapsed"
         >
           <template #actions>
-            <!-- There is nothing to refresh on the Git and Agents tabs: they
-                 hold a fixture and an empty state, and the button would promise
-                 work that does not exist. -->
+            <!-- There is nothing to refresh on the Agents tab: the sessions
+                 announce their own state, and the button would promise work
+                 that does not exist. The other two both read the disk on window
+                 focus and both offer the same button for the times a person
+                 does not want to wait for it. -->
             <IconButton
               v-if="project.sideTab === 'files'"
               icon="refresh-cw"
               label="Refresh files"
               size="sm"
               @click="refreshTree"
+            />
+            <IconButton
+              v-else-if="project.sideTab === 'git'"
+              icon="refresh-cw"
+              label="Refresh git"
+              size="sm"
+              @click="refreshGit"
             />
             <IconButton icon="plus" label="Add project" size="sm" @click="onAddProject" />
           </template>
@@ -1942,12 +1967,14 @@ const toastStackStyle = {
                 @select="onSelectFile"
                 @open="onOpenFile"
               />
-              <EmptyState
+              <GitPanel
                 v-else-if="project.sideTab === 'git'"
-                compact
-                icon="git-branch"
-                title="Git is not connected"
-                description="Changes and branch state will live here. Nothing in the app reads git yet."
+                :repos="vcsState.repos"
+                :selected="vcsState.selected"
+                :tree="vcsState.tree"
+                :error="vcsState.error"
+                :loading="vcsState.loading"
+                @select="selectRepo"
               />
               <AgentList
                 v-else
