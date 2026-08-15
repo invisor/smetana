@@ -31,6 +31,7 @@ import {
   FolderOpen,
   Gauge,
   GitBranch,
+  GitCompare,
   GitFork,
   GitMerge,
   HardDrive,
@@ -89,6 +90,8 @@ export const iconNodes = {
   // scope
   'git-branch': GitBranch,
   'git-merge': GitMerge,
+  // a diff tab: two columns of one file, HEAD against the working tree
+  'git-compare': GitCompare,
   'folder-git-2': FolderGit2,
   'file-pen': FilePen,
 

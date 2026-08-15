@@ -5,33 +5,78 @@
    the one thing no test here can reach, so the letter, the word and the token
    live outside it.
 
-   The rows are read-only and deliberately do not answer to a click. Opening one
-   as a diff is the next task of this epic, and a row that highlighted under the
-   pointer and then did nothing would promise an interaction the panel does not
-   have yet.
+   A click opens the file as a diff in the centre column — one gesture and no
+   second one: there is no preview here the way the file tree has one, since a
+   diff is already a thing somebody asked to look at rather than a file they may
+   be scanning past. An untracked *folder* is the one row that does not answer,
+   and it cannot: `--untracked-files=normal` reports it as a single record with
+   a trailing slash, and there is no file behind that name to diff.
 
    There is no commit box, no staging and no discard, and that is the design
    rather than an omission: work reaches a branch through `smetana:merging` in
    this project, and a person who wants to commit by hand has a terminal one tab
    away. A second road into the same act would drift from the first. */
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import Icon from '../core/Icon.vue'
+import { useInteractive } from '../core/interactive.js'
 import { basename } from '../../paths.js'
 import { changeStatus } from './changeStatus.js'
 
 const props = defineProps({
-  changes: { type: Array, default: () => [] }
+  changes: { type: Array, default: () => [] },
+  /* The path of the change whose diff is open in the centre, so the row a
+     person is reading is marked in the list they picked it from. */
+  selected: { type: String, default: null }
 })
 
-const rowStyle = {
+const emit = defineEmits(['open'])
+
+/* A folder has no file behind it, so its row stays inert rather than opening a
+   diff of a name. */
+const openable = (change) => !change.path.endsWith('/')
+
+/* Hover per row, cached by path and pruned as the list changes — `RepoList.vue`
+   right beside this one explains why in full: `useInteractive` tracks one
+   control, so an instance built inside `rowStyle` would be thrown away on every
+   re-render, and an uncached map would keep an entry per file that ever
+   changed. */
+const rowInteractive = new Map()
+const interactiveFor = (path) => {
+  let entry = rowInteractive.get(path)
+  if (!entry) {
+    entry = useInteractive()
+    rowInteractive.set(path, entry)
+  }
+  return entry
+}
+
+watch(
+  () => props.changes.map((change) => change.path),
+  (paths) => {
+    const live = new Set(paths)
+    for (const path of rowInteractive.keys()) {
+      if (!live.has(path)) rowInteractive.delete(path)
+    }
+  }
+)
+
+const rowStyle = (change) => ({
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
   height: 'var(--row-h)',
   padding: '0 var(--space-5)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
-  color: 'var(--text-primary)'
-}
+  color: 'var(--text-primary)',
+  background:
+    change.path === props.selected
+      ? 'var(--surface-selected)'
+      : openable(change) && interactiveFor(change.path).hover.value
+        ? 'var(--surface-hover)'
+        : 'transparent',
+  cursor: 'default',
+  transition: 'var(--transition-control)'
+})
 
 const MARK = 12
 
@@ -93,7 +138,13 @@ const empty = computed(() => props.changes.length === 0)
 
 <template>
   <div>
-    <div v-for="change in changes" :key="change.path" :style="rowStyle">
+    <div
+      v-for="change in changes"
+      :key="change.path"
+      :style="rowStyle(change)"
+      v-bind="interactiveFor(change.path).handlers"
+      @click="openable(change) && emit('open', change)"
+    >
       <span :style="stagedBox">
         <!-- Staged and unstaged are two different things to somebody looking at
              what an agent has been doing, and the model keeps them apart, so

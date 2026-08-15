@@ -250,6 +250,24 @@ export async function checkout(branch) {
   }
 }
 
+/* One file as HEAD has it — the left-hand side of a diff. `path` is relative to
+   the repository, exactly as `vcs_status` reported it.
+
+   `null` is a file HEAD does not have: an added or an untracked one, and every
+   file of a repository with no commit in it yet. That is not a failure and the
+   caller diffs it against an empty document, so it is deliberately not
+   normalised into a string here — a caption saying which of the two happened is
+   the panel's to draw.
+
+   No state of its own and no guard: nothing here is written into `vcsState`,
+   the answer belongs to whoever asked, and the diff tab that asked already
+   carries the guard against its own stale response (`tabs.js`). The refusal is
+   raised as it arrives so the tab can say which of them it was — the kinds are
+   `FilesError`'s own, so `fileErrorText` already has the words. */
+export async function fileAtHead(repo, path) {
+  return invoke('vcs_file_at_head', { repo, path })
+}
+
 /* The refresh button in the panel header, and window focus.
 
    The whole list rather than the selected tree alone: a repository can appear

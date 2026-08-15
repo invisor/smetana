@@ -23,6 +23,7 @@ import {
   ColumnHeader,
   ContextMenu,
   DependencyMark,
+  DiffView,
   Dropdown,
   DependencySpine,
   DraftInspector,
@@ -206,6 +207,32 @@ const editorText = ref('fn main() {\n    println!("hello");\n}\n')
 const editorJs = ref('export function openFile(path, { permanent = false } = {}) {\n  // A single click opens a preview tab.\n  const state = project()\n  return state.openTabs.includes(path)\n}\n')
 const editorMd = ref('# Heading\n\nA paragraph with **strong** and *emphasis*, plus a [link](https://example.com).\n\n- an item\n- another item\n')
 const editorPlain = ref('no language for this extension\nplain text, no colour\n')
+
+/* The diff's two sides. Written to show every kind of chunk at once — a line
+   changed in place, a line added, a line taken away — since which of the three
+   is which is the whole of what the colours have to say.
+
+   The third line replaces a word rather than appending to one, and that is the
+   fixture's job rather than an idle choice: an insertion marks characters on
+   the working tree's side only, so a fixture made of insertions alone leaves the
+   HEAD side's intra-line mark undrawn and therefore unchecked. `parse` against
+   `read` puts one on each side. */
+const diffHead = `pub fn head(dir: &Path) -> Head {
+    let git = git_dir(dir);
+    let text = fs::read_to_string(git.join("HEAD")).ok();
+    Head::parse(text.as_deref())
+}
+`
+const diffWork = `pub fn head(dir: &Path) -> Head {
+    // Refs are shared and HEAD is per-worktree.
+    let git = git_dir(dir).unwrap_or_default();
+    let text = fs::read_to_string(git.join("ORIG_HEAD")).ok();
+    Head::read(text.as_deref())
+}
+`
+const diffNew = `notes for the morning
+nothing of this is in HEAD yet
+`
 const choice = ref('running')
 /* The branch picker on its own: its three states are reached by clicking, and
    the dialog around it is not what needs looking at. */
@@ -227,6 +254,7 @@ const tabs = [
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', dirty: true },
   { id: 'agent.rs', kind: 'preview', label: 'agent.rs' },
+  { id: 'git.rs', kind: 'diff', label: 'git.rs', icon: 'git-compare' },
   {
     id: 'logo.png',
     kind: 'file',
@@ -1107,6 +1135,30 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
     </section>
 
     <section :style="sectionStyle">
+      <div :style="headStyle">Diff</div>
+      <!-- The same frame the editor above uses, and for the same reason: the
+           merge view fills the height it is given and scrolls inside it, so a
+           frame with none would grow to the length of the longer file.
+
+           Three frames, because the three things a diff can be are all worth
+           looking at: a file changed on both sides, a file HEAD does not have —
+           where the left column is empty and says which emptiness it is — and
+           one that could not be read at all, which draws the strip and no
+           columns, since a diff of nothing is two blank halves saying nothing.
+           The colours to check are the line grounds and the underline on the
+           characters that actually moved, in both themes and both densities. -->
+      <div :style="{ height: '220px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <DiffView path="src/git.rs" :head="diffHead" :work="diffWork" />
+      </div>
+      <div :style="{ height: '160px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <DiffView path="notes/todo.txt" head="" :work="diffNew" missing-at-head />
+      </div>
+      <div :style="{ height: '100px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <DiffView path="assets/logo.png" notice="Binary file — not shown." />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
       <div :style="headStyle">Terminal</div>
       <!-- TerminalView takes no props — it reads the active session from
            terminals.js itself, so the fixture has to go in through the
@@ -1220,7 +1272,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
           <RepoList :repos="REPOS" selected="/Users/you/dev/smetana" />
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
-          <ChangeList :changes="CHANGES" />
+          <ChangeList :changes="CHANGES" selected="src/stores/vcs.js" />
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />

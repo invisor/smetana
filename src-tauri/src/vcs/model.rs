@@ -110,6 +110,19 @@ pub enum VcsError {
     /// already act on.
     #[error("{stderr}")]
     Git { status: i32, stderr: String },
+    /// The three refusals a file at `HEAD` shares with the editor, and they
+    /// carry `FilesError`'s own `kind` strings deliberately: the same file
+    /// opened in a tab and opened as a diff has to be refused for the same
+    /// reason in the same words, and the front end already has one table
+    /// keyed by those strings (`fileErrorText` in `stores/files.js`). A second
+    /// vocabulary for the same three facts is how the two halves start
+    /// disagreeing. A test in this file pins them to each other.
+    #[error("binary file: {0}")]
+    Binary(String),
+    #[error("file too large: {path} ({bytes} bytes)")]
+    TooLarge { path: String, bytes: u64 },
+    #[error("not UTF-8 text: {0}")]
+    NotUtf8(String),
     #[error("{0}")]
     Io(String),
 }
@@ -121,6 +134,9 @@ impl VcsError {
         match self {
             Self::NoGit(_) => "noGit",
             Self::Git { .. } => "git",
+            Self::Binary(_) => "binary",
+            Self::TooLarge { .. } => "tooLarge",
+            Self::NotUtf8(_) => "notUtf8",
             Self::Io(_) => "io",
         }
     }
@@ -376,6 +392,24 @@ mod tests {
         let tree = parse_status(&porcelain(&["# branch.oid abc", "# branch.head main"]));
         assert!(tree.changes.is_empty());
         assert_eq!(tree.branch.as_deref(), Some("main"));
+    }
+
+    /// The diff and the editor open the same files and refuse them for the same
+    /// three reasons. The front end reads the `kind` and nothing else, so the
+    /// day one of these strings moves, the diff would start refusing in the
+    /// generic "could not read this file" while the tab beside it still names
+    /// the reason — silent, and a test is the only place that could notice.
+    #[test]
+    fn the_refusals_shared_with_the_editor_carry_the_editor_s_own_kinds() {
+        use crate::files::model::FilesError;
+
+        let path = || "src/main.rs".to_string();
+        assert_eq!(VcsError::Binary(path()).kind(), FilesError::Binary(path()).kind());
+        assert_eq!(
+            VcsError::TooLarge { path: path(), bytes: 1 }.kind(),
+            FilesError::TooLarge { path: path(), bytes: 1 }.kind()
+        );
+        assert_eq!(VcsError::NotUtf8(path()).kind(), FilesError::NotUtf8(path()).kind());
     }
 
     /// An unknown record type is git's business, not ours: skipping it loses

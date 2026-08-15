@@ -13,7 +13,11 @@
    of them would be a panel saying nothing four different ways, and the first is
    the one a person can act on.
 
-   No diff, no merge and no rebase: the other tasks of this epic. */
+   A click on a changed file leaves as `open` and opens it as a diff in the
+   centre column; which repository it belongs to is the caller's business, since
+   this component is handed the selection rather than holding it.
+
+   No merge and no rebase: the last task of this epic. */
 import { computed } from 'vue'
 import BranchList from './BranchList.vue'
 import ChangeList from './ChangeList.vue'
@@ -43,9 +47,12 @@ const props = defineProps({
      kind this panel branches on; everything else is git's own words, shown
      untouched, because whoever reads them knows git. */
   error: { type: Object, default: null },
-  loading: { type: Boolean, default: false }
+  loading: { type: Boolean, default: false },
+  /* The path of the change whose diff is open, marked in the list. Repository
+     relative, the form every change carries. */
+  openPath: { type: String, default: null }
 })
-defineEmits(['select', 'checkout'])
+defineEmits(['select', 'checkout', 'open'])
 
 const rootStyle = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }
 
@@ -185,7 +192,12 @@ const changes = computed(() => props.tree?.changes ?? [])
           <div :style="failureTitleStyle">{{ failureTitle }}</div>
           <div :style="failureTextStyle">{{ failure }}</div>
         </div>
-        <ChangeList v-else-if="repos.length && tree" :changes="changes" />
+        <ChangeList
+          v-else-if="repos.length && tree"
+          :changes="changes"
+          :selected="openPath"
+          @open="$emit('open', $event)"
+        />
       </div>
 
       <!-- Third, under the changes, and gated on there being a repository for
