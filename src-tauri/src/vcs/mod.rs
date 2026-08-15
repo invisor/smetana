@@ -17,5 +17,7 @@
 //! owns no snapshot — the front end holds the list. Concurrent writes are
 //! serialised by git's own `index.lock`, whose refusal is shown as it is.
 
+pub mod commands;
 pub mod model;
 pub mod repos;
+pub mod run;
