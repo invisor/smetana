@@ -7,6 +7,22 @@ const repoIn = (project) => [{ name: '.', path: `${project}/.`, branch: 'main', 
 
 const cleanTree = { branch: 'main', detached: null, changes: [] }
 
+/* Two repositories under one project — the workspace the discovery arm in
+   `vcs/repos.rs` exists for, and the only shape in which one project's own
+   repositories can race each other. */
+const siblings = [
+  { name: 'admin', path: '/p/admin', branch: 'main', detached: null },
+  { name: 'backend', path: '/p/backend', branch: 'develop', detached: null }
+]
+
+/* A working tree naming the repository it belongs to, so a tree drawn under the
+   wrong repository is visible in the assertion. */
+const treeOf = (repo) => ({
+  branch: 'main',
+  detached: null,
+  changes: [{ path: `${repo}/file.rs`, origPath: null, kind: 'modified', staged: false, unstaged: true }]
+})
+
 describe('the git panel store', () => {
   /* The same guard git.js, terminals.js and runs.js carry. Two calls can be in
      flight with no ordering guarantee on which invoke resolves first, and
@@ -32,6 +48,39 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.project).toBe('/new')
     expect(stores.vcs.vcsState.repos).toEqual(repoIn('/new'))
     expect(stores.vcs.vcsState.selected).toBe('/new/.')
+  })
+
+  /* The guard is on a pair — the project *and* the selected repository — and
+     this is its second half. Clicking between two repositories of one
+     workspace races two `vcs_status` calls with no ordering guarantee, and
+     without the second half of the guard the slower answer would land under the
+     repository the person has since picked: one repository's files listed under
+     another repository's name, inside a single project, where the project half
+     of the guard sees nothing wrong at all. */
+  it('a slow status for a repository already left is dropped', async () => {
+    const { stores, ipc, nextTick } = await loadStores()
+    ipc.on('vcs_repos', siblings)
+    /* The opening read answers at once for both, so the race below is the only
+       one in the test: a deferred answer here would hang `loadRepos` itself on
+       a call this case is not about. */
+    ipc.on('vcs_status', (args) => treeOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
+    await stores.vcs.loadRepos('/p')
+
+    let releaseAdmin
+    const admin = new Promise((resolve) => {
+      releaseAdmin = () => resolve(treeOf('admin'))
+    })
+    ipc.on('vcs_status', (args) => (args.repo === '/p/admin' ? admin : treeOf('backend')))
+
+    const first = stores.vcs.selectRepo('/p/admin')
+    const second = stores.vcs.selectRepo('/p/backend')
+    await second
+    releaseAdmin()
+    await first
+    await nextTick()
+
+    expect(stores.vcs.vcsState.selected).toBe('/p/backend')
+    expect(stores.vcs.vcsState.tree).toEqual(treeOf('backend'))
   })
 
   it('a failure leaves an error to draw, not a half-filled panel', async () => {
