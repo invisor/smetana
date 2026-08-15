@@ -477,21 +477,40 @@ fn run(
     // that exists for this run and this batch alone. The app can see the board
     // and its own clock and nothing else — what a session *did* comes back from
     // it as an exit code and nothing more — so the account is asked for here.
-    // Stated as a record rather than a gate on purpose: the report's skeleton is
-    // built from the board whatever happens, and a batch that leaves no file is
-    // named in the document rather than drawn as an empty row.
     let _ = write!(
         out,
-        "\n\nWhen this batch is finished, and before you hand back, write your own account of it \
-         to {} — the directory already exists. Smetana reads that file and nobody else does, so \
-         it is JSON in exactly this shape: {{\"tasks\": [{{\"id\": \"<bd id>\", \"did\": \"one or \
-         two sentences on what you actually did\"}}], \"notes\": \"anything about the batch as a \
-         whole, or leave it out\"}}. Put a line in it for every task you touched, the ones you \
-         parked included, saying what stopped them. This is in addition to the report you hand \
-         back in this conversation and replaces no part of it. If the file cannot be written, \
-         carry on regardless — it is a record, not a gate.",
+        "\n\nWhen this batch is finished, write your own account of it to {} — the directory \
+         already exists. Smetana reads that file and nobody else does, so it is JSON in exactly \
+         this shape: {{\"tasks\": [{{\"id\": \"<bd id>\", \"did\": \"one or two sentences on what \
+         you actually did\"}}], \"notes\": \"anything about the batch as a whole, or leave it \
+         out\"}}. Put a line in it for every task you touched, the ones you parked included, \
+         saying what stopped them. This is in addition to the report you hand back in this \
+         conversation and replaces no part of it.",
         reports.join(format!("batch-{batch}.json")).display()
     );
+
+    // What the file *is* differs by mode, and the difference is not a nuance.
+    //
+    // An unattended batch is told to exit, so the app learns the work is over
+    // from the process and the file is a record: the report's skeleton is built
+    // from the board whatever happens, and a batch that leaves none is named in
+    // the document rather than drawn as an empty row.
+    //
+    // The other two modes keep the session alive afterwards, because a person is
+    // in it — so nothing exits, and this file is the only thing that says the
+    // work is done. Telling a lead there it may shrug the file off would be
+    // false, and the cost of the shrug is a run that hangs with nothing on
+    // screen explaining why. Hence a way out that is a sentence a person can
+    // read, rather than a silence they would have to guess at.
+    out.push_str(if settings.mode.unattended() {
+        " If the file cannot be written, carry on regardless — it is a record, not a gate."
+    } else {
+        " Writing it is how you hand the work back: this session stays open afterwards so that \
+          we can keep talking, so the file is the only thing that tells Smetana the work is \
+          done. Write it as soon as the work is finished, before anything else you might say. \
+          If it cannot be written, say so in this conversation, so that somebody can end the \
+          run by hand."
+    });
     out
 }
 
@@ -918,6 +937,35 @@ mod tests {
                 text.contains("replaces no part of it"),
                 "the JSON is beside the prose report, never instead of it: {text}"
             );
+        }
+    }
+
+    #[test]
+    fn an_attended_batch_is_told_its_account_is_how_it_hands_the_work_back() {
+        // The two modes whose session stays alive after the work is done. There
+        // the file is not a record at all — it is the only thing that tells the
+        // app the batch is over, because the process never exits — so the
+        // wording that lets an unattended batch shrug it off would be false
+        // here, and a lead that shrugged would leave the run hanging with
+        // nothing on screen to say why.
+        for mode in [RunMode::Supervised, RunMode::Solo] {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let scope = RunScope::Task { id: "a-1".into() };
+                let text = run_prompt(run_settings(mode, scope), delivery);
+                assert!(text.contains("/p/.smetana/runs/7/batch-2.json"), "{mode:?}: {text}");
+                assert!(
+                    !text.contains("record, not a gate"),
+                    "{mode:?}: here it is exactly a gate: {text}"
+                );
+                assert!(
+                    text.contains("how you hand the work back"),
+                    "{mode:?}: the file has to be named as the hand-back: {text}"
+                );
+                assert!(
+                    text.contains("say so in this conversation"),
+                    "{mode:?}: a file that cannot be written must not be a silence: {text}"
+                );
+            }
         }
     }
 

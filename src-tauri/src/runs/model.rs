@@ -203,6 +203,22 @@ pub struct Run {
     /// the run has stopped — a row pointing at a dead session is worse than no
     /// row, which is the same reasoning that keeps sessions out of settings.
     pub session: Option<u64>,
+    /// The session that ran the last batch, kept whatever became of it —
+    /// including once the run has stopped, which is the whole point of it being
+    /// a second field rather than a longer life for the one above.
+    ///
+    /// A row on screen must not point at a dead session, and a *decision* about
+    /// a finished run has to know whose work it was. The front end's
+    /// `reportDelivery.js` asks exactly that — is the agent this person is
+    /// looking at the one that earned this report — and it asks about a run that
+    /// is over by definition, when `session` is already `None`. Reconstructing
+    /// it there from the last `working` event this window happened to see would
+    /// be a fact derived from an event nobody promised would arrive.
+    ///
+    /// `None` until a batch has started, and never cleared after that: it is not
+    /// a claim that anything is alive, only a record of who did it.
+    #[serde(default)]
+    pub last_session: Option<u64>,
     /// How many batches have been started, including the one running.
     pub batches: u32,
     /// Set when stop was asked for and the batch in flight is still going. The
@@ -283,6 +299,22 @@ impl RunMode {
         match self {
             RunMode::Auto => true,
             RunMode::Supervised | RunMode::Solo => false,
+        }
+    }
+
+    /// What this mode's report is a report *of*, as the document names itself.
+    ///
+    /// One document serves all three, because a run is exactly one task in
+    /// `Solo`, exactly one batch in `Supervised` and a night of batches in
+    /// `Auto` — so the difference is what to call it and not what to build. It
+    /// lives here beside `one_batch`, which is the rule that makes two of those
+    /// sentences true, rather than in `report.rs`, which places the words and
+    /// owns none of them.
+    pub fn report_title(self) -> &'static str {
+        match self {
+            RunMode::Solo => "Task report",
+            RunMode::Supervised => "Batch report",
+            RunMode::Auto => "Run report",
         }
     }
 
@@ -439,6 +471,7 @@ impl Run {
             settings,
             state: RunState::Preflight,
             session: None,
+            last_session: None,
             batches: 0,
             stopping: false,
             reduced: None,
@@ -448,6 +481,18 @@ impl Run {
 
     pub fn is_over(&self) -> bool {
         matches!(self.state, RunState::Stopped { .. })
+    }
+
+    /// A batch has started in this session — the one write that fills both
+    /// session fields, so the pair cannot drift.
+    ///
+    /// Two assignments at the loop's one call site would compile perfectly with
+    /// the second one missing, and the cost would be invisible: reports would
+    /// simply stop appearing in tabs and go to the bell instead, which is a
+    /// legitimate outcome of the very rule that reads this.
+    pub fn working_in(&mut self, session: u64) {
+        self.session = Some(session);
+        self.last_session = Some(session);
     }
 
     /// Nothing revives a stopped run — the same rule `Session::apply` keeps, and
@@ -664,6 +709,21 @@ mod tests {
     }
 
     #[test]
+    fn stopping_still_remembers_which_session_did_the_work() {
+        // The other half of the field above, and the reason there are two: the
+        // front end decides where a finished run's report goes by asking whether
+        // the agent in front of the person is the one that earned it, and
+        // `session` is deliberately empty by then. A session that is over is
+        // still the session that did it.
+        let mut run = Run::new(1, "/p".into(), settings(RunMode::Supervised, RunScope::Queue));
+        run.working_in(3);
+        run.advance(RunState::Stopped { reason: StopReason::BatchDone });
+
+        assert_eq!(run.session, None);
+        assert_eq!(run.last_session, Some(3));
+    }
+
+    #[test]
     fn stop_between_batches_is_immediate_and_stop_mid_batch_waits() {
         let mut idle = Run::new(1, "/p".into(), settings(RunMode::Auto, RunScope::Queue));
         idle.request_stop(false);
@@ -792,6 +852,16 @@ mod tests {
         assert!(RunMode::Auto.unattended());
         assert!(!RunMode::Supervised.unattended());
         assert!(!RunMode::Solo.unattended());
+    }
+
+    #[test]
+    fn each_mode_names_its_report_for_what_that_report_covers() {
+        // One document, three things it can be about, and the person opening it
+        // should not have to work out which. The words live here beside
+        // `one_batch`, which is the rule that makes them true.
+        assert_eq!(RunMode::Solo.report_title(), "Task report");
+        assert_eq!(RunMode::Supervised.report_title(), "Batch report");
+        assert_eq!(RunMode::Auto.report_title(), "Run report");
     }
 
     #[test]

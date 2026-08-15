@@ -309,6 +309,10 @@ export function installMockBackend() {
           },
           state: { kind: 'working', iteration: 0 },
           session: 7,
+          /* The same id, because a run that is working is working in it. The
+             two only part company at the ending, where `session` is cleared and
+             this is what `reportDelivery.js` reads. */
+          last_session: 7,
           batches: 1,
           stopping: false,
           reduced: null

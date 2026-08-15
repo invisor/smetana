@@ -697,9 +697,11 @@ nobody watching; the default is nothing, so a harness with no such switch stops 
 permission prompt and turns `needs-you` — exactly what `Supervised` already is, which is the app
 saying a harness cannot be autonomous by behaving like it rather than pretending otherwise.
 `batch_args` and `transcript` are the last pair and hang off one predicate, `agents::is_batch`: an
-interactive session finishes its work and sits at its prompt, so a run's loop — which comes round
-only when the batch's process is gone — never comes round at all, and the non-interactive form that
-fixes that is also the one printing a machine format nobody reads. So the first says how this
+interactive session finishes its work and sits at its prompt, so a loop waiting on the process would
+never come round at all, and the non-interactive form that fixes that is also the one printing a
+machine format nobody reads. That is the unattended answer, and it is only half of the question —
+the attended modes keep the interactive session on purpose, and what ends a batch there is the
+account it writes rather than the process it never leaves (see `handed_back` under Runs). So the first says how this
 harness is told to carry one batch out and **exit**, in front of everything else on the line, and
 the second says how a line of what it then prints becomes a line in the pane. Their defaults are
 nothing and no translator, working answers again: a harness given neither runs exactly as every
@@ -979,8 +981,8 @@ place for it rather than a fallback, since the root is the part of the store not
 The bell in the scope bar opens a panel of notifications, and the badge counts what is in it —
 `components/notifications/` (the pure `notifications.js`, `NotificationPanel.vue`,
 `NotificationCard.vue`) over `src/stores/notifications.js`. There are two sources — the attachment
-store growing, and a run that is over — and the badge counts one card per stopped run beside the one
-the storage source is ever allowed.
+store growing, and a run that is over — and the badge counts one card per stopped run whose report
+was not put straight in front of the person, beside the one the storage source is ever allowed.
 
 **The list is derived, not an inbox.** A notification is computed from the state of its source and
 thrown away when that state goes away; nothing accumulates on disk — no history, no message log, no
@@ -1036,6 +1038,35 @@ and leaves every other source's cards alone. Which source sits above which is a 
 rather than of who spoke last: `SOURCES` declares the order and both writers hand their result to
 `arrange`, runs above storage, because a night that has ended is what somebody came back to read
 while a folder that has grown will still be there tomorrow.
+
+**The bell is one of two deliveries, though, and never both.** A card asks to be visited; a report
+already open in front of somebody is the visit. `components/run/reportDelivery.js` is the rule — the
+`branchChoice.js` family again — and it asks one thing: was the agent that earned this report the one
+this person has selected. The selection and nothing else, deliberately: not window focus, since
+somebody who left the app with an agent selected comes back to that agent, and not the centre tab
+either, since `activeId` survives leaving the terminal because `AgentList.vue` highlights its row
+from it. Two absent sessions are never one agent — a run from a worker too old to name its session
+met by a window with nothing selected would match under the obvious equality and open a tab neither
+asked for — and with no document there is no tab to open at all, which is the same case the card
+already draws without a button.
+
+Which run's agent that was is `Run.last_session`, a second field beside `session` rather than a
+longer life for it: `session` is cleared the moment a run stops, and must be, because a row pointing
+at a dead session is worse than no row — while this decision is about a run that is over by
+definition. `Run::working_in` is the one write that fills both, since two assignments at the loop's
+one call site would compile perfectly with the second missing and the cost would be invisible: every
+report would simply go to the bell, which is a legitimate outcome of this very rule.
+
+Carrying it out is `DesktopApp.vue`'s, because opening a tab is the one thing no store can do, and
+two details there are load-bearing. The watcher keeps its own set of tokens it has **decided** about
+— the ones left to the bell as well as the ones opened — since `loadRun` replaces the list on every
+focus and every project switch, and remembering only the tabs would open last night's document in
+front of somebody who happened to select that agent hours later. And it rides the default `pre`
+flush: `syncRunCards` makes the card inside `upsert`, so for the moment between that and this the
+bell holds a card about to be taken back, and a `pre` watcher runs before this component's own render
+in the same tick, so the badge never paints the number. `deliveredInTab` is called only when the tab
+actually opened, since suppressing the card on the strength of a tab that never appeared would leave
+the person with neither.
 
 The import between the two stores is circular by construction — `notifications.js` reads `runsState`,
 `runs.js` calls a hoisted function declaration — and **nothing in `notifications.js` may read
@@ -1120,6 +1151,38 @@ for an hour, and reports whole `Run` values back through a channel — the worke
 that ever writes one out. The `token` does the job `generation` does for the tracker: a stop names one
 run by it, every `run:state` event carries it, and a late report from an ended run finds no entry
 rather than the run that started after it.
+
+**What ends a batch is not one question but two, and answering only the first was a defect that hid
+for a fortnight.** An unattended batch is told to exit (`agents::is_batch`, `Profile::batch_args`),
+so `await_exit` is its whole ending. The other two modes run the harness the way a person does —
+that is what Crew and Solo *are* — so the session finishes the work and sits at its prompt for ever,
+and a loop watching the process never came round: `finish` is the only thing in the app that ever
+makes a `RunSummary` or writes a report, so a Crew run's account arrived when somebody eventually
+pressed stop, hours later, or never, because the app was closed first. Evidence in this repository's
+own `.smetana`: a batch whose account file landed at 13:48 against a document stamped 17:45, and a
+run the day before with an account and no document at all.
+
+So in attended modes `watch_batch` waits on whichever comes first — the exit, still, or
+`handed_back`. The signal is the account the lead was already asked for in every mode, and it is
+deliberately **a file that parses** rather than a file that exists: JSON is not written atomically,
+and waking on the first byte would send `read_batch` at half a document a moment later, so the
+report would say the batch left no account of itself in the one case where it left a good one.
+Parsing is that check and there is no second mechanism to keep in step with it. `clear_account` is
+the trap under the rule, and it is certain rather than theoretical: `token` counts from zero on
+every app start — the very property `write_report` refuses to lean on for its own file names — so a
+previous launch's `.smetana/runs/1/batch-1.json` is sitting under this batch's name before it
+spawns, and without clearing it the batch would hand back in the instant it started. Clearing also
+closes a quieter half for every mode, where a batch that crashed before writing a word would have
+had a previous launch's prose put in this run's report.
+
+Two things deliberately do not follow. The session is **left running** — ending the run does not end
+the conversation, which is the mode's whole point — and nothing is orphaned by that, because
+`registry::forget_run` conditions on the processes rather than on the stop reason and keeps a record
+naming one that is still there. And `prompt.rs` says something different to each half: to an
+unattended batch the file is "a record, not a gate", true because its ending is the exit; to an
+attended one it is how the work is handed back, with a way out that is a sentence in the
+conversation rather than a silence, since a lead that shrugged the file off would leave the run
+hanging with nothing on screen to say why.
 
 **Stopping is cooperative, and that is a decision with a cost attached.** `request_stop` sets a flag
 and the loop reads it between batches; the batch in flight is allowed to finish, because a run
@@ -1257,6 +1320,12 @@ not this app's call. One second is not one run, though, since a project holds se
 (smetana-5hf), so `claim_report` *makes* the file with `create_new` and walks a `-2`, `-3` suffix
 rather than checking whether the path exists: two runs are two loop tasks, so the creation itself has
 to be the exclusive step.
+
+**One document serves all three modes, and it names which of them it is.** A run is exactly one task
+in Solo, exactly one batch in Crew and a night of batches in Autopilot, so the difference is what to
+call the thing and not what to build — `RunMode::report_title` owns those three words, beside
+`one_batch`, which is the rule that makes two of the sentences true, and `report.rs` places them in
+the heading and in the tab's own title while owning none of them.
 
 **Three facts about what the app can know decide the whole shape.** It can see the board and its own
 clock, so *which* tasks moved and *how long* the run took are its to work out. It cannot see what was

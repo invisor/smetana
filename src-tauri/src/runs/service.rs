@@ -724,6 +724,12 @@ async fn drive(
         let batch_no = run.batches + 1;
         let batch_started = Instant::now();
 
+        // Before the batch that writes it, never after: this batch's account is
+        // what says it handed the work back, and `token` counts from zero on
+        // every app start, so a previous launch's file can be sitting under this
+        // very name already. See `clear_account`.
+        clear_account(&account.reports, batch_no);
+
         let session = match spawn_batch(&terminal, &run, tasks, &agent, &account.reports, batch_no)
             .await
         {
@@ -741,12 +747,12 @@ async fn drive(
         let group = group_of(&terminal, session).await;
         let _ = report.send(Report::Started { token, session, group });
 
-        run.session = Some(session);
+        run.working_in(session);
         run.batches += 1;
         run.advance(RunState::Working { iteration });
         say(&run);
 
-        let outcome = watch_batch(&terminal, &run, session).await;
+        let outcome = watch_batch(&terminal, &run, session, &account.reports, batch_no).await;
         // Read here rather than at the ending, so that a batch's account is
         // taken while it is the freshest thing on disk and every way out of the
         // match below is covered by one read instead of three.
@@ -757,6 +763,22 @@ async fn drive(
         ));
 
         let exit = match outcome {
+            // The work is done and the session is still alive with a person in
+            // it. There is no exit code to read and none to wait for, so this
+            // arm never reaches the classification below: a hand-back is a
+            // batch that completed, and the crash counter starts over exactly
+            // as a clean exit makes it.
+            //
+            // The session is deliberately left running. Ending the run does not
+            // end the conversation — that is what the mode is for — and the
+            // registry keeps a record naming a process that is still there, by
+            // `forget_run`'s own condition on the processes rather than on the
+            // reason, so nothing is orphaned by this.
+            Batch::HandedBack => {
+                crashes = 0;
+                last_batch = LastBatch::Completed;
+                continue;
+            }
             Batch::Ended(exit) => {
                 // Ended some other way, so the questions-in-a-row count starts
                 // over — see `RepeatedQuestion` for why "in a row" is literal.
@@ -924,6 +946,55 @@ fn read_batch(dir: &Path, n: u32, seconds: u64) -> BatchLine {
     BatchLine { n, seconds, tasks: parsed.tasks, notes: parsed.notes, reported: parsed.reported_ok }
 }
 
+/// Has this batch handed its work back — the question that ends a batch in a
+/// mode with a person in it.
+///
+/// An unattended batch is told to *exit*, so its ending is the process dying
+/// and nothing here is asked. The other two modes run the harness the way a
+/// person does, so the session finishes the work and sits at its prompt for
+/// ever: waiting on the exit meant the run never came round at all, and the
+/// account it had already written sat on disk with nobody reading it.
+///
+/// **A file that parses, never a file that exists.** The lead writes this JSON
+/// with an ordinary write and nothing makes it atomic, so waking on the first
+/// byte would send `read_batch` at half a document a moment later and the report
+/// would say the batch left no account of itself in the one case where it left a
+/// good one. Parsing is that check; there is no second mechanism to keep in step
+/// with this one.
+///
+/// A batch that cannot write its file at all never hands back this way, and the
+/// run waits on the process exactly as it does today — which is why the prompt
+/// asks the lead to say so in the conversation instead. That is a person
+/// pressing stop, not a silence somebody has to guess at.
+/// Take away whatever a previous app process left under this batch's name,
+/// before the batch that will write it starts.
+///
+/// `token` counts from zero on every app start — the property `write_report`
+/// already refuses to lean on for its file names — so this run's directory is
+/// `.smetana/runs/1` and so was one two launches ago. Without this a batch in an
+/// attended mode would hand back in the instant it spawned, on somebody else's
+/// account, and `read_batch` would put a previous launch's prose in this run's
+/// report for a batch that crashed before writing a word.
+///
+/// A leftover belongs to a run that is over and whose document was written long
+/// ago, so nothing is lost by it. A file that is not there is the ordinary case
+/// and not an error; anything else is logged and left, since a batch that then
+/// writes over it lands where it was going anyway.
+fn clear_account(dir: &Path, n: u32) {
+    let path = dir.join(format!("batch-{n}.json"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => log::warn!("could not clear {}: {err}", path.display()),
+    }
+}
+
+fn handed_back(dir: &Path, n: u32) -> bool {
+    std::fs::read_to_string(dir.join(format!("batch-{n}.json")))
+        .map(|text| report::parse_batch(&text).reported_ok)
+        .unwrap_or(false)
+}
+
 /// The document on disk, and the absolute path of it — `None` when it could not
 /// be written, because a card offering a report that is not there is worse than
 /// one without a button.
@@ -948,6 +1019,7 @@ fn write_report(
     let scope = run.settings.scope.describe();
     let finished = now.format("%Y-%m-%d %H:%M").to_string();
     let html = report::render(&report::RunReport {
+        title: run.settings.mode.report_title(),
         project: &run.project,
         scope: &scope,
         finished: &finished,
@@ -1312,6 +1384,10 @@ async fn group_of(terminal: &TerminalHandle, session: u64) -> Option<Proc> {
 enum Batch {
     /// The session's process is gone; `Exit` says how.
     Ended(Exit),
+    /// The batch has written its account and handed the work back, in a mode
+    /// whose session stays alive afterwards because a person is sitting in it.
+    /// The work is over; the conversation is not.
+    HandedBack,
     /// The session stopped to ask a person something, in a run that has no
     /// person in it.
     Unanswered { question: String },
@@ -1344,13 +1420,41 @@ enum Batch {
 /// the rest of the session's life. Ending a run on that would end it on the
 /// agent having finished a task well. A question is also the only form of this
 /// a person can be told anything useful about.
-async fn watch_batch(terminal: &TerminalHandle, run: &Run, session: u64) -> Batch {
+async fn watch_batch(
+    terminal: &TerminalHandle,
+    run: &Run,
+    session: u64,
+    reports: &Path,
+    batch: u32,
+) -> Batch {
     let mut ended = std::pin::pin!(await_exit(terminal, session));
     // A supervised or solo run has somebody who can answer in the terminal, and
     // that is the mode's whole point — ending their run at the first question
     // would be taking it away from them. See `RunMode::unattended`.
+    //
+    // It is also why the process is no signal here at all: the harness runs the
+    // way it does for a person, so it finishes the work and sits at its prompt
+    // for ever. Waiting on the exit meant the run did not end when the work did
+    // — it ended when somebody eventually pressed stop, hours later, or never,
+    // if the app was closed first — and `finish` is the only thing in the app
+    // that ever writes a report. So the account the lead was asked to leave is
+    // read as what it plainly is: handing the work back. See `handed_back` for
+    // why the signal is a file that parses rather than one that exists.
+    //
+    // Whichever comes first wins, and the exit still counts: an agent that does
+    // exit — because the person typed `/exit`, or the harness ended on its own —
+    // ends the batch exactly as it always did.
     if !run.settings.mode.unattended() {
-        return Batch::Ended(ended.await);
+        loop {
+            tokio::select! {
+                exit = &mut ended => return Batch::Ended(exit),
+                _ = tokio::time::sleep(ASK_POLL) => {
+                    if handed_back(reports, batch) {
+                        return Batch::HandedBack;
+                    }
+                }
+            }
+        }
     }
     let mut asked = Asked::default();
     loop {
@@ -1725,6 +1829,67 @@ mod tests {
         assert_eq!(first.file_name().expect("a name"), "2026-08-12-143155.html");
         assert_eq!(second.file_name().expect("a name"), "2026-08-12-143155-2.html");
         assert!(first.exists() && second.exists(), "both are claimed on disk, not just named");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batch_hands_back_by_leaving_an_account_that_parses() {
+        // What ends a batch in an attended mode. The process does not exit
+        // there — a person is sitting in front of it and that is the whole
+        // point of the mode — so the signal is the account the lead was asked
+        // to write, and the signal is deliberately **a file that parses**
+        // rather than a file that exists.
+        //
+        // JSON is not written atomically. Waking on the first byte would hand
+        // `read_batch` half a document a moment later, and the report would say
+        // the batch left no account of itself in exactly the case where it left
+        // a good one. Parsing is that check, and there is no second mechanism
+        // to keep in step with it.
+        let dir =
+            std::env::temp_dir().join(format!("smetana-handback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory to write into");
+
+        assert!(!handed_back(&dir, 1), "nothing written yet is not a hand-back");
+
+        let path = dir.join("batch-1.json");
+        std::fs::write(&path, "{\"tasks\": [{\"id\": \"a-1\", \"di").expect("a partial write");
+        assert!(!handed_back(&dir, 1), "a document caught mid-write is not a hand-back");
+
+        std::fs::write(&path, "{\"tasks\": [{\"id\": \"a-1\", \"did\": \"closed it\"}]}")
+            .expect("the whole account");
+        assert!(handed_back(&dir, 1), "the account is complete, so the work is handed back");
+
+        assert!(!handed_back(&dir, 2), "and it says nothing about any other batch");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batch_starts_with_no_account_left_by_a_previous_app_process() {
+        // The trap under the rule above, and it is certain rather than
+        // theoretical: `token` counts from zero on every app start, so this
+        // run's directory is `.smetana/runs/1` and so was the one two launches
+        // ago. Without this, a batch would hand back in the same instant it
+        // spawned — on a file written by somebody else's night.
+        //
+        // Clearing rather than remembering the file's age: a leftover account
+        // belongs to a run that is over and whose document was written long
+        // ago, so there is nothing there for anybody to read. It also fixes the
+        // quieter half for every mode — `read_batch` would otherwise put a
+        // previous launch's prose into this run's report for a batch that
+        // crashed before writing anything.
+        let dir = std::env::temp_dir().join(format!("smetana-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory to write into");
+        std::fs::write(dir.join("batch-1.json"), "{\"tasks\": []}").expect("a previous account");
+        assert!(handed_back(&dir, 1), "the leftover is a document that parses");
+
+        clear_account(&dir, 1);
+
+        assert!(!handed_back(&dir, 1), "so this batch has handed nothing back yet");
+        clear_account(&dir, 1); // nothing there is an ordinary outcome, not an error
 
         let _ = std::fs::remove_dir_all(&dir);
     }

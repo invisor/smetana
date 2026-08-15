@@ -64,6 +64,10 @@ struct BatchFile {
 /// `RunSummary::tasks` is: an unreadable board and an empty board are opposite
 /// facts, and this document must never turn the first into a confident zero.
 pub struct RunReport<'a> {
+    /// What this document is a report of, which is the run's mode read out —
+    /// `RunMode::report_title`. This file places the words and owns none of
+    /// them.
+    pub title: &'a str,
     pub project: &'a str,
     pub scope: &'a str,
     pub finished: &'a str,
@@ -144,10 +148,14 @@ pub fn render(report: &RunReport) -> String {
     let mut out = String::new();
     out.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-    out.push_str("<title>Run report</title><style>");
+    out.push_str("<title>");
+    out.push_str(&escape(report.title));
+    out.push_str("</title><style>");
     out.push_str(STYLE);
     out.push_str("</style></head><body>");
-    out.push_str("<h1>Run report</h1><p class=\"meta\">");
+    out.push_str("<h1>");
+    out.push_str(&escape(report.title));
+    out.push_str("</h1><p class=\"meta\">");
     out.push_str(&escape(report.project));
     out.push_str(" &middot; ");
     out.push_str(&escape(report.scope));
@@ -280,6 +288,7 @@ mod tests {
 
     fn report<'a>(seconds: u64, tasks: Option<&'a Tasks>, batches: &'a [BatchLine]) -> RunReport<'a> {
         RunReport {
+            title: "Run report",
             project: "/p",
             scope: "the queue",
             finished: "2026-08-12 14:31",
@@ -287,6 +296,21 @@ mod tests {
             tasks,
             batches,
         }
+    }
+
+    #[test]
+    fn the_document_is_named_for_what_it_covers() {
+        // A run is one task in Solo, one batch in Crew and a night of batches
+        // in Autopilot, and somebody opening the document should read which of
+        // those they are looking at. The words are `RunMode::report_title`'s and
+        // this file only places them — in the tab's title as well as the
+        // heading, since a report opened beside another one is told apart by the
+        // tab first.
+        let html = render(&RunReport { title: "Task report", ..report(90, None, &[]) });
+
+        assert!(html.contains("<title>Task report</title>"), "{html}");
+        assert!(html.contains("<h1>Task report</h1>"), "{html}");
+        assert!(!html.contains("Run report"), "and nothing is left calling it the other thing");
     }
 
     #[test]
