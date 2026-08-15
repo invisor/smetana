@@ -192,6 +192,62 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.checkingOut).toBe(null)
   })
 
+  /* The success path's guard is on the **project** and deliberately not on the
+     pair the failure path uses, and this is what says so.
+
+     Repository rows are not held by `checkingOut`, so somebody can pick another
+     repository while git works. The branch moved on disk either way, and on the
+     pair-guard nothing refreshed after it: no second `vcs_repos`, the row still
+     naming the branch just left, and the mark still on it until the next window
+     focus. `refresh()` re-reads every repository and re-picks the remembered
+     one, so it is right whichever repository is selected by the time it runs —
+     which the last assertion holds it to. */
+  it('a repository picked mid-checkout does not cost the refresh', async () => {
+    const { stores, ipc } = await loadStores()
+    /* Two repositories in one project — the only shape in which somebody can
+       leave the repository a checkout is running in. Only admin's branch moves;
+       backend is there to be switched to. */
+    let adminBranch = 'main'
+    ipc.on('vcs_repos', () => [
+      { name: 'admin', path: '/p/admin', branch: adminBranch, detached: null },
+      { name: 'backend', path: '/p/backend', branch: 'main', detached: null }
+    ])
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', (args) =>
+      args.repo === '/p/admin'
+        ? [
+            { name: 'main', current: adminBranch === 'main' },
+            { name: 'develop', current: adminBranch === 'develop' }
+          ]
+        : [{ name: 'main', current: true }]
+    )
+    ipc.on('git_head', () => ({ branch: adminBranch, detached: null }))
+    await stores.vcs.loadRepos('/p')
+    expect(stores.vcs.vcsState.selected).toBe('/p/admin')
+    const readsBefore = ipc.calls('vcs_repos').length
+
+    let release
+    ipc.on('vcs_checkout', (args) => {
+      return new Promise((resolve) => {
+        release = () => {
+          adminBranch = args.branch
+          resolve(null)
+        }
+      })
+    })
+
+    const inFlight = stores.vcs.checkout('develop')
+    // The person moves to the other repository while git is still working.
+    await stores.vcs.selectRepo('/p/backend')
+    release()
+    await inFlight
+
+    expect(ipc.calls('vcs_repos').length).toBe(readsBefore + 1)
+    expect(stores.vcs.vcsState.repos[0].branch).toBe('develop')
+    // And the refresh does not drag the person back to the repository they left.
+    expect(stores.vcs.vcsState.selected).toBe('/p/backend')
+  })
+
   /* One at a time. A second press while git is working would ask it to check a
      branch out in a tree it is already in, and the refusal for that comes from
      `index.lock` rather than from anything a person did wrong. */
