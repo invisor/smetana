@@ -5,7 +5,7 @@
 //! `model.rs`, which is pure and carries the tests.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use super::model::VcsError;
 
@@ -36,24 +36,70 @@ const GIT: &str = "git";
 ///   reading it knows git; a message rewritten here is a worse version of one
 ///   they can already act on.
 pub fn git(repo: &Path, args: &[&str]) -> Result<String, VcsError> {
+    let out = spawn(repo, args)?;
+    if !out.status.success() {
+        return Err(refusal(&out));
+    }
+    // Lossy, because a repository holding a path in some other encoding must
+    // not take the panel down: one mangled row beats no list at all.
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The same call with **one** exit code read as an answer rather than as a
+/// refusal.
+///
+/// git answers "there is nothing by that name" by exiting non-zero, and a
+/// caller that asked a question rather than gave an order has to tell that
+/// apart from a repository git could not read at all. The code is the caller's
+/// to name, so this function never guesses which non-zero exit was a question:
+/// everything else is still a refusal carrying git's own stderr.
+pub fn git_maybe(repo: &Path, args: &[&str], absent: i32) -> Result<Option<String>, VcsError> {
+    let out = spawn(repo, args)?;
+    if out.status.code() == Some(absent) {
+        return Ok(None);
+    }
+    if !out.status.success() {
+        return Err(refusal(&out));
+    }
+    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
+/// The same call, with the bytes exactly as git wrote them.
+///
+/// Everything else here takes the lossy conversion because everything else
+/// reads git's own output, which is text by construction. The contents of a
+/// blob are not: whether it is text at all is the question `looks_binary`
+/// answers, and how many bytes it is is the question the ceiling answers —
+/// both of them about the bytes on disk rather than about a string a
+/// replacement character has already been substituted into.
+pub fn git_bytes(repo: &Path, args: &[&str]) -> Result<Vec<u8>, VcsError> {
+    let out = spawn(repo, args)?;
+    if !out.status.success() {
+        return Err(refusal(&out));
+    }
+    Ok(out.stdout)
+}
+
+/// The child itself: the environment, the working directory and the two ways
+/// spawning can fail. Everything above differs only in what it makes of the
+/// exit code.
+fn spawn(repo: &Path, args: &[&str]) -> Result<Output, VcsError> {
     let mut command = Command::new(GIT);
     command.args(args).current_dir(repo).env("GIT_OPTIONAL_LOCKS", "0");
     if let Some(path) = crate::shell_env::path() {
         command.env("PATH", path);
     }
-    let out = command.output().map_err(|err| match err.kind() {
+    command.output().map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => VcsError::NoGit(GIT.to_string()),
         _ => VcsError::Io(err.to_string()),
-    })?;
-    if !out.status.success() {
-        return Err(VcsError::Git {
-            // `None` is a signal: git was killed rather than exiting. `-1` says
-            // so without a second field nothing else would read.
-            status: out.status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        });
+    })
+}
+
+fn refusal(out: &Output) -> VcsError {
+    VcsError::Git {
+        // `None` is a signal: git was killed rather than exiting. `-1` says
+        // so without a second field nothing else would read.
+        status: out.status.code().unwrap_or(-1),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     }
-    // Lossy, because a repository holding a path in some other encoding must
-    // not take the panel down: one mangled row beats no list at all.
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
