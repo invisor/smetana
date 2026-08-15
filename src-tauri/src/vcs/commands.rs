@@ -55,9 +55,9 @@ pub async fn vcs_branches(repo: String) -> Vec<Branch> {
 
 /// Switch the repository to a branch it already has.
 ///
-/// `git checkout --no-guess <branch>` and nothing more. **Never `--force`**, and
-/// the omission is the feature: the two refusals worth having are exactly the
-/// ones force would drive over — a branch already checked out in another
+/// `git checkout --no-guess <branch> --` and nothing more. **Never `--force`**,
+/// and the omission is the feature: the two refusals worth having are exactly
+/// the ones force would drive over — a branch already checked out in another
 /// worktree, which is what a run's `provisioning` phase cuts, and local changes
 /// the checkout would have to overwrite.
 ///
@@ -67,18 +67,32 @@ pub async fn vcs_branches(repo: String) -> Vec<Branch> {
 /// because the person reading it knows git. `run.rs` carries it through
 /// untouched with git's exit status beside it.
 ///
-/// `--no-guess` is what makes the first line of this comment true. The list
-/// this branch was picked from has no watcher behind it, and a run's `merging`
-/// phase deletes branches, so the row somebody presses can name a branch that
-/// is gone — and git's DWIM would then quietly *create* a local branch from
-/// `origin/<name>` at the remote's tip and check that out. Creating a branch is
-/// outside this epic entirely, and a person who asked to switch to something
-/// they could see would be handed a different commit with nothing saying so.
-/// With the flag a stale row produces git's own "pathspec did not match"
-/// refusal, which is the design this command already commits to.
+/// **The two extra words are what make the first line true, and each closes a
+/// different way of not switching a branch at all.** The list a row was picked
+/// from has no watcher behind it, and a run's `merging` phase deletes branches,
+/// so the name pressed can be one git no longer has:
+///
+/// - Without `--no-guess`, git's DWIM *creates* a local branch from
+///   `origin/<name>` at the remote's tip and checks that out — measured at exit
+///   0. Creating a branch is outside this epic, and somebody who asked to
+///   switch to something they could see would be handed a different commit with
+///   nothing saying so.
+/// - Without the trailing `--`, a name that also exists as a **path** is taken
+///   as a path: measured on git 2.34.1, a top-level file named `shadow` with
+///   the branch `shadow` gone made `git checkout --no-guess shadow` print
+///   "Updated 1 path from the index" and **exit 0**, restoring that file from
+///   the index over an uncommitted edit. This command would have answered
+///   `Ok(())`, the panel would have refreshed, the tick would not have moved,
+///   and somebody's work would be gone with nothing on screen about it.
+///
+/// With both, a name git cannot resolve as a branch is `fatal: invalid
+/// reference: <name>` at exit 128 — a refusal in git's own words, which is what
+/// this command commits to everywhere else. Verified against git 2.34.1 that an
+/// ordinary local branch still switches at exit 0 with a dirty tree, and that
+/// both refusals above still arrive unchanged.
 #[tauri::command]
 pub async fn vcs_checkout(repo: String, branch: String) -> Result<(), VcsError> {
-    run::git(Path::new(&repo), &["checkout", "--no-guess", &branch])?;
+    run::git(Path::new(&repo), &["checkout", "--no-guess", &branch, "--"])?;
     Ok(())
 }
 
