@@ -1370,7 +1370,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
              this one would name an operation nobody asked for. git's message
              here runs to several lines, which is what the pre-wrapped mono
              block is for. -->
-        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+        <div :style="{ display: 'flex', width: '252px', height: '340px', border: 'var(--border-w) solid var(--border)' }">
           <GitPanel
             :style="{ flex: 1, minWidth: 0 }"
             :repos="[REPOS[0]]"

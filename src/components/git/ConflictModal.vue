@@ -141,9 +141,10 @@ const count = computed(() =>
         </template>
         Nothing has been committed.
       </div>
-      <div>
-        <span :style="idStyle">{{ repo }}</span>
-      </div>
+      <!-- Which repository, said in prose so the path is not a line of mono
+           floating on its own: a project of five repositories is the case this
+           dialog has to be unambiguous in, and a project of one still reads. -->
+      <div>In <span :style="idStyle">{{ repo }}</span>.</div>
       <div>{{ count }}:</div>
       <div :style="filesStyle">
         <div v-for="file in files" :key="file" :style="fileStyle">{{ file }}</div>
