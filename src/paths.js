@@ -26,3 +26,28 @@
    for the string that has nothing left after it — a bare `/` is called `/`,
    because a name is more use than an empty gap in a sentence. */
 export const basename = (path) => path.split(/[/\\]/).filter(Boolean).pop() ?? path
+
+/* What a path is called from inside a folder, and `null` when it is not inside
+   it at all.
+
+   The one caller today is the Git panel's diff: a change arrives as a path
+   inside one of the project's repositories, and the file behind it is read
+   through `files_read`, which takes a path relative to the project root and
+   refuses anything outside it. A repository named in `[project].repos` can sit
+   anywhere at all — `../shared` is a legal entry — so "not inside" is an
+   ordinary answer here and not a failure to be papered over with a guess.
+
+   Both separators again, and for the reason above: the two paths come from Rust
+   in the platform's own form while everything relative in `stores/files.js` is
+   written with `/`. Comparing them without normalising would leave every
+   repository on Windows looking like somebody else's folder. A trailing
+   separator on the root is dropped so `/p` and `/p/` answer alike; the root
+   itself answers `''`, which is what `files_list` already calls it. */
+export function relativeTo(root, path) {
+  if (!root || !path) return null
+  const slashes = (value) => value.replace(/\\/g, '/')
+  const base = slashes(root).replace(/\/+$/, '')
+  const full = slashes(path)
+  if (full === base) return ''
+  return full.startsWith(`${base}/`) ? full.slice(base.length + 1) : null
+}

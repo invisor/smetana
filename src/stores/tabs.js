@@ -6,7 +6,9 @@
    therefore lives in settings, the buffers do not and therefore live here. */
 import { computed, reactive } from 'vue'
 import { settings } from './settings.js'
-import { basenameOf, fileErrorText, readFile, writeFile } from './files.js'
+import { basenameOf, fileErrorText, filesState, readFile, writeFile } from './files.js'
+import { fileAtHead } from './vcs.js'
+import { relativeTo } from '../paths.js'
 
 /* Pinned tabs are not stored in settings: they always exist, come first and
    cannot be closed. */
@@ -42,6 +44,41 @@ export const PINNED = [
    needed here, only the fact, and keepMine or reloadTab will bring the fresh
    one. */
 export const buffers = reactive(new Map())
+
+/* The diff tabs, which are not files and are deliberately not remembered.
+
+   They live here, in module scope beside `buffers`, for exactly the reason
+   this file already gives for those: the list of open tabs survives a restart
+   and therefore lives in settings, and what has no life beyond the session
+   lives here. A diff has no file on disk behind it — `openTabs` is a list of
+   paths relative to the project root, re-read on the next launch — so a
+   synthetic entry in that list would come back as a tab trying to read a file
+   by that name, and the read would refuse in a way nobody could act on.
+
+   Each record is `{ id, repo, path, head, work, missingAtHead, error, loading,
+   seq }`: `repo` is the repository's absolute path and `path` is relative to
+   it, the pair `vcs_status` reports and `vcs_file_at_head` takes back. */
+export const diffTabs = reactive([])
+
+/* A diff tab's id, and it has to be a string no file path can ever be: it sits
+   in the same tab row as the paths and lands in `project.activeTab` beside
+   them. A zero byte is what makes that true rather than nearly true — no
+   filesystem allows one in a name, the property `files.js`'s stub marker
+   already leans on.
+
+   Derived from the repository and the path rather than counted out, so
+   clicking the same row twice reaches the tab already open instead of laying a
+   second one beside it. Nothing ever reads the pieces back out of it: the
+   record carries them. */
+const DIFF = '\u0000diff:'
+const diffId = (repo, path) => `${DIFF}${repo}\u0000${path}`
+
+/* A shape rather than a lookup, deliberately: the one caller that matters asks
+   about an `activeTab` restored from settings, at a moment when the list is
+   empty by construction. */
+export const isDiffTab = (id) => typeof id === 'string' && id.startsWith(DIFF)
+
+export const diffTab = (id) => diffTabs.find((tab) => tab.id === id) ?? null
 
 const project = () => settings.project
 
@@ -81,7 +118,21 @@ export const tabList = computed(() => [
       readOnly: !!hint,
       readOnlyHint: hint ?? undefined
     }
-  })
+  }),
+  /* After the files rather than among them: their order is the person's, kept
+     in settings, and a tab nothing remembers has no place inside it. The kind
+     is its own — `Tab.vue` draws anything that is not `pinned` the same way, so
+     what this buys is the one thing a diff must be told apart for: it has no
+     file on disk, and the editor-state sweep in DesktopApp.vue would otherwise
+     build a key out of its id. The glyph says what the tab is; there is no lock
+     beside it, since two labelled columns and no cursor say "read-only" better
+     than a padlock does. */
+  ...diffTabs.map((tab) => ({
+    id: tab.id,
+    kind: 'diff',
+    label: basenameOf(tab.path),
+    icon: 'git-compare'
+  }))
 ])
 
 export const activeBuffer = computed(() => buffers.get(project().activeTab) ?? null)
@@ -206,6 +257,111 @@ export function closeTab(path) {
        same way with the project list. */
     state.activeTab = state.openTabs[at] ?? state.openTabs[at - 1] ?? 'kanban'
   }
+}
+
+/* A changed file from the Git panel, opened as a diff: HEAD on the left, the
+   working tree on the right.
+
+   Always permanent and never a preview: the preview slot belongs to the file
+   tree's single click, and a diff evicting the file somebody is reading would
+   be two mechanics fighting over one slot. Clicking the same row again lands on
+   the tab already open and re-reads it, which is the only freshness this has —
+   the panel has no watcher and neither does this. */
+export function openDiff(repo, path) {
+  const id = diffId(repo, path)
+  if (!diffTabs.some((tab) => tab.id === id)) {
+    diffTabs.push({
+      id,
+      repo,
+      path,
+      head: '',
+      work: '',
+      missingAtHead: false,
+      error: null,
+      loading: true,
+      seq: 0
+    })
+  }
+  project().activeTab = id
+  loadDiff(id)
+}
+
+/* Both sides at once, and neither of them is the other's business: HEAD comes
+   from git through `vcs.js`, the working tree from the disk through `files.js`
+   — the same one `openFile` reads, so a file open in a tab and the right-hand
+   side of its diff can never be two different reads of one file.
+
+   The guard is `seq` and it plays `generation`'s part: two reads of one tab can
+   be in flight with no ordering guarantee, and without it the last *response*
+   would win rather than the last *call* — the same defect `terminals.js` and
+   `git.js` guard against, here landing as one repository's text under another
+   repository's name. */
+async function loadDiff(id) {
+  const tab = diffTab(id)
+  if (!tab) return
+  const seq = tab.seq + 1
+  tab.seq = seq
+  tab.loading = true
+
+  const { repo, path } = tab
+  /* `files_read` takes a path relative to the project root and refuses anything
+     outside it, while a repository can sit anywhere `[project].repos` names. So
+     "outside the project" is answered here rather than by a refusal from a
+     command that would be right to refuse it. */
+  const rel = relativeTo(filesState.root, `${repo}/${path}`)
+  const [head, work] = await Promise.all([
+    fileAtHead(repo, path).then(
+      (text) => ({ text, error: null }),
+      (error) => ({ text: null, error: asError(error) })
+    ),
+    rel === null
+      ? Promise.resolve({ text: '', error: { kind: 'outside' } })
+      : readFile(rel).then(
+          (file) => ({ text: file.text, error: null }),
+          /* A deleted file has nothing in the working tree, and that is the
+             whole content of the right-hand side rather than a failure — the
+             diff of a deletion is exactly an empty side. Every other refusal is
+             one. */
+          (error) =>
+            error?.kind === 'notFound'
+              ? { text: '', error: null }
+              : { text: '', error: asError(error) }
+        )
+  ])
+
+  const current = diffTab(id)
+  if (!current || current.seq !== seq) return
+  current.head = head.text ?? ''
+  current.work = work.text ?? ''
+  /* `null` from `vcs_file_at_head` is a file HEAD does not have — added,
+     untracked, or every file of a repository with no commit yet. The empty left
+     side is the truth, and the flag is what lets the view say which of the two
+     empties it is looking at. */
+  current.missingAtHead = head.error === null && head.text === null
+  current.error = head.error ?? work.error
+  current.loading = false
+}
+
+/* Both stores answer a refusal in Rust's own `{ kind, message }` shape and a
+   transport failure as anything at all; one shape here means the view has one
+   thing to draw. The kinds are `FilesError`'s on both sides, so `fileErrorText`
+   already has the words for them. */
+function asError(error) {
+  if (error && typeof error === 'object' && typeof error.kind === 'string') return error
+  return { kind: 'io', message: String(error?.message ?? error) }
+}
+
+export function closeDiff(id) {
+  const at = diffTabs.findIndex((tab) => tab.id === id)
+  if (at === -1) return
+  diffTabs.splice(at, 1)
+  const state = project()
+  if (state.activeTab !== id) return
+  /* The neighbour on the right, then the one on the left, then back to the
+     files, then the board — `closeTab`'s rule, extended over the seam between
+     the two lists rather than restarted at it. */
+  state.activeTab =
+    diffTabs[at]?.id ?? diffTabs[at - 1]?.id ?? state.openTabs[state.openTabs.length - 1] ?? 'kanban'
 }
 
 /* An edit. It also drops the temporary flag — the second of the two ways to
@@ -337,9 +493,12 @@ export function discardTabs(paths) {
 
 /* Moving to another project: the old project's buffers must not outlive it by
    a single frame. The tab list is left alone — it will come from the new
-   project's settings. */
+   project's settings. The diffs go with the buffers rather than with the list:
+   they name a repository of the project being left, and nothing brings them
+   back. */
 export function resetTabs() {
   buffers.clear()
+  diffTabs.length = 0
 }
 
 /* Restoring after a restart or a project switch. We read everything that was
@@ -347,6 +506,15 @@ export function resetTabs() {
    exactly as an issue that is no longer in the tracker falls out. */
 export async function restoreTabs() {
   const state = project()
+  /* `activeTab` is remembered and a diff tab is not, so a restart can arrive
+     with the one naming the other: the list is empty here by construction and
+     the tab it points at will never appear. Rust already refuses an `activeTab`
+     that is neither pinned nor one of the open files, so on the app's own path
+     this has been dealt with a moment earlier — it is repeated here because
+     `settings.json` is not the only way this state is reached (the browser mock
+     answers `settings_load` itself), and the cost of the two disagreeing is a
+     centre column drawing nothing at all. */
+  if (isDiffTab(state.activeTab)) state.activeTab = state.openTabs[0] ?? 'kanban'
   const paths = [...state.openTabs]
   await Promise.all(paths.map(load))
 
