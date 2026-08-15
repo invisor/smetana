@@ -465,9 +465,27 @@ as this operation's. What that costs is not hypothetical: leaving a tree conflic
 designed exit from the dialog, so one click later the modal would name a merge git never began, and
 its Abort would run `git merge --abort` against whatever really is in progress and throw away
 resolutions somebody had already staged. `model::new_conflicts` is the rule, pure and measured
-against a real refusal, and an unreadable "before" attributes nothing either — not knowing what was
-there is not evidence that nothing was. The price is one `git status` in front of an operation that
-rewrites the working tree.
+against a real refusal. The price is one `git status` in front of an operation that rewrites the
+working tree.
+
+An unreadable "before" attributes nothing either — not knowing what was there is not evidence that
+nothing was — and **what that arm costs is worse than it sounds, which is why it is written down
+measured**: `refusal()` carries git's stderr, and a *merge* conflict writes nothing to stderr at all
+(its "CONFLICT (content): …" goes to stdout), so a merge conflict lost to that arm draws "Git did not
+merge" over an empty message block. A rebase keeps its words there, since `error: could not apply …`
+does go to stderr. Neither draws the conflicted files: `write()` in `stores/vcs.js` sets `writeError`
+in its catch and returns, where the refresh is on the success path, so the tree stays as the panel
+last read it until the next window focus or a press of refresh. It is still the cheap side of the
+trade — the other side offers an Abort that destroys somebody else's staged work — but a cost
+recorded lower than the real one is what invites the arm to be inverted later.
+
+**And the rule is a comparison of two moments rather than a lock.** An agent that starts a
+conflicting merge in the same tree between the pre-read and the spawn leaves the "before" clean and
+the "after" unmerged, and its conflict is attributed to us exactly as the one-read version attributed
+every one. The window is the tens of milliseconds between two `git status` calls against a failure
+that used to be certain, and no arithmetic over those two lists closes it: only asking git what is
+*in progress* would — a `MERGE_HEAD` / `rebase-merge` probe — which is a file read in the module
+whose header forbids one, and deliberately not taken.
 
 **What the app then offers is two doors and no third**, because there is no merge editor here and
 this epic adds none: `ConflictModal.vue` has no close button, and `overlays/Modal.vue` closes on

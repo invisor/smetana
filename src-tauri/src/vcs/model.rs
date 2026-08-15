@@ -176,9 +176,40 @@ pub fn conflicted(tree: &WorkingTree) -> Vec<String> {
 ///
 /// `None` is a tree that could not be read *before*, and it attributes nothing
 /// either: not knowing what was there is not evidence that nothing was. The
-/// direction is deliberate and it is the cheap one — losing the dialog leaves
-/// a conflicted tree drawn in the changes list with git's message beside it,
-/// where claiming one wrongly offers to destroy work.
+/// direction is deliberate and it is still the cheap side, but **what it costs
+/// is worse than it looks and is written down here measured rather than
+/// assumed**, because a cost recorded lower than the real one is what invites
+/// somebody to invert this arm later.
+///
+/// What the caller returns in that arm is `VcsError::Git`, and `refusal()`
+/// carries **stderr only** — while a merge conflict writes nothing to stderr at
+/// all. Measured: `git merge --no-edit other` on a real conflict leaves stderr
+/// empty and puts "CONFLICT (content): Merge conflict in f.txt / Automatic
+/// merge failed" on stdout. So a merge conflict lost to this arm reaches
+/// `GitPanel` as "Git did not merge" over an **empty** message block. A rebase
+/// is the better half of the same case — `error: could not apply …` does go to
+/// stderr — so there the words survive.
+///
+/// And the conflicted files are not drawn either, in either operation:
+/// `write()` in `src/stores/vcs.js` sets `writeError` in its catch and returns,
+/// where `refresh()` and `loadHead()` are on the success path — so the tree
+/// stays as the panel last read it until the next window focus or a press of
+/// the refresh button. Against that: claiming a conflict wrongly offers a
+/// person an Abort that destroys work somebody else staged. Still the cheap
+/// side, and no longer a cheap-sounding one.
+///
+/// **This is a comparison of two moments and not a lock, and the residual is
+/// named rather than left to be discovered.** An agent that *starts* a
+/// conflicting merge in the same tree in between — after the pre-read, before
+/// the spawn — leaves `before` clean and `after` unmerged, and its conflict is
+/// attributed to us exactly as the one-read version attributed every one. The
+/// window is the tens of milliseconds between two `git status` calls, against
+/// the 100% that version hit on the same failure, and no arithmetic over these
+/// two lists can close it: only asking git what is *in progress* would —
+/// a `MERGE_HEAD` / `rebase-merge` probe — which is a file read in a module
+/// whose header forbids one, a different mechanism in a different file, and
+/// deliberately not taken. So do not read this rule as airtight; read it as a
+/// hundredfold narrowing of a failure that used to be certain.
 pub fn new_conflicts(before: Option<&WorkingTree>, after: &WorkingTree) -> Vec<String> {
     match before {
         Some(before) if conflicted(before).is_empty() => conflicted(after),
