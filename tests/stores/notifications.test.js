@@ -287,6 +287,27 @@ describe('the bell and a run that is over', () => {
     expect(stores.notifications.notificationsState.items).toEqual([])
   })
 
+  it('makes no card for a run whose report was put in front of the person', async () => {
+    const { ipc, stores } = await loadStores()
+    openOn(stores)
+    ipc.on('project_config', { state: 'ok', config: {} })
+    ipc.on('run_state', [finished(1)])
+
+    await stores.runs.loadConfig(PROJECT)
+    await stores.runs.loadRun(PROJECT)
+    expect(stores.notifications.notificationsState.items).toHaveLength(1)
+
+    // Delivery is one or the other: a tab already open in front of somebody is
+    // the visit the card would have been asking for.
+    stores.notifications.deliveredInTab(1)
+    expect(stores.notifications.notificationsState.items).toEqual([])
+
+    // And it stays gone, for the reason a dismissed one does: the list it is
+    // derived from is read again on every focus and every project switch.
+    await stores.runs.loadRun(PROJECT)
+    expect(stores.notifications.notificationsState.items).toEqual([])
+  })
+
   it('takes the card away with the project it was made in', async () => {
     const { ipc, stores } = await loadStores()
     openOn(stores)

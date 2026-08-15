@@ -28,6 +28,20 @@
 //! something to get wrong are untouched: `NeedsYou` still comes only from a
 //! bell or from a profile's own match, never from silence of any kind.
 //!
+//! That two-way cut is a rule about a screen a harness draws for a person, and
+//! there is exactly one kind of session it does not hold for: one whose screen
+//! is a rendered transcript of a machine-format stream (`transcript` below).
+//! Such a harness emits bytes only when a tool call begins or ends, so a
+//! five-minute `cargo test` leaves the picture untouched for five minutes while
+//! the agent works flat out — and stillness, which on a TUI means the agent has
+//! stopped, means nothing of the sort here. **That is the mechanism this rule
+//! assumes, read off the stream's own event types rather than watched on a live
+//! batch under this build** — the same standing the smetana-8h7 fix above has.
+//! So layer A does not offer such a session `Idle` at all: what is left to it
+//! is `Running`, with the bell and layer B untouched above it, so `NeedsYou` is
+//! still reachable from either (smetana-07o). The threshold, the fingerprint
+//! and the way quiet is measured do not move for anybody else.
+//!
 //! An agent that has genuinely finished still reaches `Idle` at three seconds,
 //! give or take a sample — not to the millisecond it did before, and the
 //! difference goes both ways. Earlier, because the last bytes a CLI writes are
@@ -132,6 +146,41 @@ pub struct DetectInput<'a> {
     /// since the last byte. See the note at the top of this file.
     pub still_for: Duration,
     pub screen: &'a [String],
+    /// This session's screen is a rendered transcript of a machine-format
+    /// stream rather than a live TUI — `Live::transcript` in service.rs, set
+    /// for a run's batch and for nothing else.
+    ///
+    /// It is a fact about where the picture comes from, not a policy about
+    /// runs, and that is why it is this and not `agents::is_batch`: Codex runs
+    /// its batches interactively, has no translator, and a still screen of its
+    /// means exactly what a person's session's does. What is true of the
+    /// sessions this names is that the harness emits bytes only when a tool
+    /// call begins or ends, so the screen holds still for the whole of a long
+    /// call — three seconds of that is not a stopped agent, it is one halfway
+    /// through `npm install`.
+    ///
+    /// What makes this the same question as "this harness runs
+    /// non-interactively" is not structural but held by a test:
+    /// `a_translator_is_only_ever_installed_over_a_stream_that_was_asked_for`
+    /// in `agents/mod.rs` asserts across `IDS` that a profile answering
+    /// `transcript` is exactly one answering `batch_args`. The case that would
+    /// break the equivalence is the one `Profile::transcript`'s own doc invites
+    /// — a harness printing readable progress by itself, which would keep the
+    /// default of no translator, ask for `batch_args` all the same, have this
+    /// very defect and read `false` here. That test refuses such a harness
+    /// today; whoever relaxes it in order to ship one has to come back to this
+    /// field.
+    ///
+    /// So layer A does not offer such a session `Idle` at all, and the cost is
+    /// named: a batch wedged dead, printing nothing ever again, reads as
+    /// `Running` until its process exits rather than going quiet after
+    /// `IDLE_AFTER`. Nothing is lost by that — a run waits for its batch on the
+    /// exit code and never on this state, and the only readers of a batch's
+    /// `Idle` were the dot in the agent list and `configFreshness`, which is
+    /// the pair this exists to stop lying to. The bell and layer B are
+    /// deliberately untouched here, so neither loud reading is disabled along
+    /// with the quiet one.
+    pub transcript: bool,
     /// Which agent this session runs — layer B is that agent's own dialog
     /// reader, not a hardcoded one.
     pub profile: &'static dyn Profile,
@@ -154,7 +203,7 @@ pub fn detect(input: DetectInput) -> Detected {
     // Layer A: agent-independent, nothing in it to break.
     let state = if input.bell_pending {
         SessionState::NeedsYou
-    } else if input.still_for >= IDLE_AFTER {
+    } else if input.still_for >= IDLE_AFTER && !input.transcript {
         SessionState::Idle
     } else {
         SessionState::Running
@@ -183,6 +232,7 @@ mod tests {
             bell_pending: bell,
             still_for: Duration::from_millis(still_ms),
             screen: Box::leak(lines(screen).into_boxed_slice()),
+            transcript: false,
             profile: crate::agents::resolve("claude").unwrap(),
         }
     }
@@ -234,6 +284,7 @@ mod tests {
             bell_pending: false,
             still_for: Duration::from_millis(500),
             screen: dialog(),
+            transcript: false,
             profile: crate::agents::resolve("claude").unwrap(),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
@@ -246,6 +297,7 @@ mod tests {
             bell_pending: false,
             still_for: Duration::from_millis(20),
             screen: dialog(),
+            transcript: false,
             profile: crate::agents::resolve("claude").unwrap(),
         });
         assert!(out.question.is_none(), "the profile believed a half-drawn screen");
@@ -258,6 +310,7 @@ mod tests {
             bell_pending: false,
             still_for: Duration::from_secs(30),
             screen: dialog(),
+            transcript: false,
             profile: crate::agents::resolve("claude").unwrap(),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
@@ -272,6 +325,7 @@ mod tests {
             bell_pending: false,
             still_for: Duration::from_millis(500),
             screen: dialog(),
+            transcript: false,
             profile: no_layer_b(),
         });
         assert!(out.question.is_none(), "a profile with no layer B was given one");
@@ -321,8 +375,18 @@ mod tests {
     /// simulations below drive this and nothing else, so the arithmetic they
     /// exercise is the arithmetic in `reassess`.
     fn tick(quiet: &mut Quiet, at: Instant, screen: &[String]) -> SessionState {
+        tick_as(quiet, at, screen, false)
+    }
+
+    /// The same tick, told where the picture comes from. `transcript` is what
+    /// service.rs fills from `Live::transcript`, so the two simulations below
+    /// differ in exactly the one fact the rule turns on and in nothing else.
+    fn tick_as(quiet: &mut Quiet, at: Instant, screen: &[String], batch: bool) -> SessionState {
         let still_for = quiet.still_for(screen, at);
-        detect(DetectInput { bell_pending: false, still_for, screen, profile: no_layer_b() }).state
+        let profile = no_layer_b();
+        let input =
+            DetectInput { bell_pending: false, still_for, screen, transcript: batch, profile };
+        detect(input).state
     }
 
     #[test]
@@ -425,6 +489,102 @@ mod tests {
             at += SAMPLE;
             step += 1;
         }
+    }
+
+    /// The whole of what a batch's pane holds while a tool call runs: the row
+    /// `agents::claude::transcript_line` renders for the `tool_use` block that
+    /// started the call, and then nothing at all until it returns.
+    ///
+    /// Rendered here rather than transcribed, so the fixture cannot drift from
+    /// what a batch actually shows — this *is* that renderer's output. Note
+    /// what is therefore absent and could not be present: the stream carries no
+    /// event for a call in progress, so there is no second row saying it is
+    /// running, and none of the interactive TUI's glyphs reach a pane
+    /// `transcript_line` composes.
+    fn mid_tool_call() -> Vec<String> {
+        let pane = crate::agents::claude::transcript_line(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test --manifest-path src-tauri/Cargo.toml"}}]}}"#,
+        );
+        // A typo in that JSON would render nothing, and an empty screen holds
+        // still just as well — the simulations below would pass having measured
+        // a pane no agent ever produced. How many rows it renders is
+        // `claude.rs`'s own business and no stake of theirs: any still,
+        // non-empty screen serves them equally.
+        assert!(!pane.is_empty(), "the batch's pane rendered no row for a tool call");
+        pane
+    }
+
+    #[test]
+    fn a_batch_between_two_stream_events_is_never_called_idle() {
+        // The defect (smetana-07o). A batch runs its harness in print mode, so
+        // between one tool call starting and the next event arriving it emits
+        // nothing at all and the screen holds still for the whole call. Five
+        // minutes of `cargo test` is five minutes of stillness under an agent
+        // working flat out.
+        let mut quiet = Quiet::new();
+        let start = Instant::now();
+        let screen = mid_tool_call();
+        let mut at = start;
+        while at < start + Duration::from_secs(300) {
+            assert_eq!(
+                tick_as(&mut quiet, at, &screen, true),
+                SessionState::Running,
+                "a working batch was called idle after {:?}",
+                at - start
+            );
+            at += SAMPLE;
+        }
+    }
+
+    #[test]
+    fn the_same_still_screen_goes_idle_for_a_session_a_person_started() {
+        // The counterpart, and what makes the test above about the flag rather
+        // than about the screen: nothing else has moved. An ordinary session
+        // whose harness draws for a person still reaches `Idle` at
+        // `IDLE_AFTER`, off this very screen.
+        let mut quiet = Quiet::new();
+        let start = Instant::now();
+        let screen = mid_tool_call();
+        let mut state = SessionState::Starting;
+        let mut at = start;
+        while at < start + Duration::from_secs(5) {
+            state = tick_as(&mut quiet, at, &screen, false);
+            at += SAMPLE;
+        }
+        assert_eq!(state, SessionState::Idle, "the idle rule moved for everybody else");
+    }
+
+    #[test]
+    fn a_bell_is_still_loud_for_a_batch() {
+        // The idle rule is the whole of what this flag switches off. A bell is
+        // the fail-safe layer A keeps whatever the screen is doing, and losing
+        // it here would be silent — a batch that rang for a person would sit
+        // reading as work.
+        let screen = mid_tool_call();
+        let out = detect(DetectInput {
+            bell_pending: true,
+            still_for: Duration::from_secs(600),
+            screen: &screen,
+            transcript: true,
+            profile: no_layer_b(),
+        });
+        assert_eq!(out.state, SessionState::NeedsYou);
+    }
+
+    #[test]
+    fn layer_b_is_still_loud_for_a_batch() {
+        // The other fail-safe. A profile that reads a dialog on the screen is
+        // believed for a batch exactly as for anybody else — the flag is read
+        // after layer B has had its say, not instead of it.
+        let out = detect(DetectInput {
+            bell_pending: false,
+            still_for: Duration::from_secs(600),
+            screen: dialog(),
+            transcript: true,
+            profile: crate::agents::resolve("claude").unwrap(),
+        });
+        assert_eq!(out.state, SessionState::NeedsYou);
+        assert!(out.question.is_some(), "a batch's dialog was read as no question");
     }
 
     #[test]

@@ -416,6 +416,7 @@ dev` starts the binary from a terminal, so the process already has the full `PAT
 | file | what it does |
 |---|---|
 | `model.rs` | `Session`, `SessionState`, `Question`, `TerminalError` — the vocabulary, and the pure rules for entering and leaving each state (`Session::apply`, `finish`) |
+| `transcript.rs` | a batch's machine-format output cut into lines and handed to the profile's own rendering, before anything downstream sees a byte of it |
 | `ring.rs` | the raw-byte scrollback ring, trimmed on overflow to a line boundary |
 | `screen.rs` | a `vt100` grid built from the same bytes — the text a person would actually see |
 | `detect.rs` | layer A: bell and silence, a pure function of the screen, the bell flag and the timings |
@@ -435,7 +436,10 @@ human — exactly what xterm.js repaints itself from on attach — and, separate
 `vt100` grid for the app. The raw stream is cursor moves and repaints with nothing findable in it; a
 `\r` overwriting "thinking..." with "done" is two writes in the ring and one line on the screen.
 Detection reads the screen, never the ring. xterm.js is a third, independent emulation fed the very
-same bytes, so the person's picture and the app's agree by construction rather than by hand.
+same bytes, so the person's picture and the app's agree by construction rather than by hand. A
+batch's chunk is translated before any of the three has seen it, inside `absorb` itself, and that
+position is the whole of why it is safe: one translation ahead of the fork leaves all three reading
+one identical stream, where translating for the pane alone would set them arguing.
 
 `seq` plays the part `generation` plays for the tracker: every flushed output event carries a
 monotonic number, `terminal_attach` hands back the ring's snapshot plus the `seq` to continue from,
@@ -482,6 +486,22 @@ see. The rule cuts the other way too, deliberately: a session whose screen holds
 `IDLE_AFTER` is called idle even while bytes pour in, which is the honest reading and cheap to be
 wrong about.
 
+**That second half is a rule about a screen a harness draws for a person, and one kind of session
+sits outside it**: a run's batch, whose pane is a rendered transcript of a machine-format stream
+(`Live::transcript` in the worker, `DetectInput::transcript` beside it in `detect.rs`). Such a
+harness emits bytes only when a tool call begins or ends, so the picture holds still for the whole of
+a five-minute `cargo test` with the agent working flat out — stillness meaning the opposite of what
+it means on a TUI. **That mechanism is read off the stream's own event types rather than watched on
+a live Autopilot batch under this build**, the same standing the smetana-8h7 fix below has. Layer A
+therefore never calls such a session idle; the bell and layer B sit above it untouched, so
+`needs-you` is still reachable from either. The price is named and small: a batch wedged dead reads
+as running until its process exits, and nothing waits on that state — a run waits on the exit code,
+and the only readers of a batch's idle were the dot in the agent list and `configFreshness`, which
+is the pair the rule exists for (smetana-07o). The marker is `transcript` and not `agents::is_batch`
+on purpose, and that is the narrower fact rather than the tidier one: Codex runs its batches
+interactively, has no translator, and a still screen of its means exactly what a person's session's
+does.
+
 `Quiet` keeps a hash rather than the screen — this runs for every live session on every detection
 tick, and holding the previous screen would mean copying kilobytes per session per tick. **The
 fingerprint deliberately covers the plain text of the visible rows and nothing else**: no colour, no
@@ -498,10 +518,11 @@ and not one that has been observed on the dialog it was aimed at**; the live che
 permission dialog without spending model quota, and the trust dialog is no stand-in, having been
 measured emitting zero bytes after the first 0.6 s. The bell half is not closed: Claude Code still
 rings none on a permission prompt. What an unmatched layer B produces is `Idle`, which reaches the
-front end as `ready`, whose loudness is `live` — so the whole visible cost of a waiting agent no
-profile could read is a dashed dot instead of a spinning one. **Nothing shouts, nothing dims, and
-nothing else in the app acts on the state at all**, and `NeedsYou` comes only from a bell or from a
-profile's own match.
+front end as `ready`, whose loudness is `live` — so in a session a person started, the whole visible
+cost of a waiting agent no profile could read is a dashed dot instead of a spinning one, and in a
+run's batch, which layer A never calls idle at all, it is the opposite dot: a spinning one for as
+long as the process lives. **Nothing shouts, nothing dims, and nothing else in the app acts on the
+state at all**, and `NeedsYou` comes only from a bell or from a profile's own match.
 
 An agent that has genuinely finished still reaches `Idle` at about three seconds, but not to the
 millisecond, and the drift goes both ways: earlier, because the last bytes a CLI writes are often
@@ -515,13 +536,14 @@ even if state hasn't caught up yet (state lags the fact by up to `SETTLE` plus a
 is that same fact arriving sooner). Writing into an open permission dialog would answer, on a human's
 behalf, a question the app never read and the human never saw. **What that guard cannot catch is the
 other half of `smetana-8h7`**: a dialog whose agent rang no bell and whose profile failed to read it.
-Layer A calls that session `Idle`, which is the truth and not a refusal — an idle session is exactly
-what a capture expects to write into, so `Idle` can never join this guard without breaking the
-ordinary case, and layer B is therefore the whole of the protection here. The capture's own settle is
-the one place the stream is still the right thing to measure, and deliberately the opposite of what
-layer A does: a capture has just written into the session and is waiting for an answer to arrive at
-all, so a screen that happens to look unchanged mid-answer is not a settled one, and reading a
-half-finished reply as finished would hand a caller the wrong text with nothing to say so.
+Layer A calls that session `Idle`, which is the truth and not a refusal — and `Running` for a run's
+batch, which it never calls idle at all, no more of a refusal than the other. An idle session is
+exactly what a capture expects to write into, so `Idle` can never join this guard without breaking
+the ordinary case, and layer B is therefore the whole of the protection here. The capture's own
+settle is the one place the stream is still the right thing to measure, and deliberately the opposite
+of what layer A does: a capture has just written into the session and is waiting for an answer to
+arrive at all, so a screen that happens to look unchanged mid-answer is not a settled one, and
+reading a half-finished reply as finished would hand a caller the wrong text with nothing to say so.
 
 Sessions do not survive a restart, and nothing about them is written to `settings.json` — a session
 row with a dead process behind it is worse than an empty list. `RunEvent::Exit` calls
@@ -665,8 +687,8 @@ turned `needs-you` spends one of the one or two loud rows on the screen and make
 `terminal_run_capture` refuse a session with nothing open on it, so a change to that CLI should cost
 a miss rather than a false alarm.
 
-Three more methods on `Profile` are the same split one level down, and each one's **default is a
-working answer rather than a gap** — the shape to keep when a fourth is added. `images` says how
+Five more methods on `Profile` are the same split one level down, and each one's **default is a
+working answer rather than a gap** — the shape to keep when the next one is added. `images` says how
 pixels reach a harness: Codex takes `-i/--image`, Claude Code simply opens a path the prompt names,
 so the default is `InPrompt`, the one channel every CLI has. `usage_command` and `parse_usage` are a
 pair, and a profile answering one without the other reads as unaskable, which the run gate treats as
@@ -674,6 +696,17 @@ no reason to hold anything up. `autonomy` is the extra arguments and environment
 nobody watching; the default is nothing, so a harness with no such switch stops at its first
 permission prompt and turns `needs-you` — exactly what `Supervised` already is, which is the app
 saying a harness cannot be autonomous by behaving like it rather than pretending otherwise.
+`batch_args` and `transcript` are the last pair and hang off one predicate, `agents::is_batch`: an
+interactive session finishes its work and sits at its prompt, so a loop waiting on the process would
+never come round at all, and the non-interactive form that fixes that is also the one printing a
+machine format nobody reads. That is the unattended answer, and it is only half of the question —
+the attended modes keep the interactive session on purpose, and what ends a batch there is the
+account it writes rather than the process it never leaves (see `handed_back` under Runs). So the first says how this
+harness is told to carry one batch out and **exit**, in front of everything else on the line, and
+the second says how a line of what it then prints becomes a line in the pane. Their defaults are
+nothing and no translator, working answers again: a harness given neither runs exactly as every
+harness ran before they existed — which is Codex today, deliberately and with its own task behind
+it.
 
 `agents::IDS` is the single copy of the agent-id list, and `settings/model.rs` validates against it
 rather than repeating it — the side-tab hazard again: a value that survives the session and silently
@@ -948,8 +981,8 @@ place for it rather than a fallback, since the root is the part of the store not
 The bell in the scope bar opens a panel of notifications, and the badge counts what is in it —
 `components/notifications/` (the pure `notifications.js`, `NotificationPanel.vue`,
 `NotificationCard.vue`) over `src/stores/notifications.js`. There are two sources — the attachment
-store growing, and a run that is over — and the badge counts one card per stopped run beside the one
-the storage source is ever allowed.
+store growing, and a run that is over — and the badge counts one card per stopped run whose report
+was not put straight in front of the person, beside the one the storage source is ever allowed.
 
 **The list is derived, not an inbox.** A notification is computed from the state of its source and
 thrown away when that state goes away; nothing accumulates on disk — no history, no message log, no
@@ -1005,6 +1038,35 @@ and leaves every other source's cards alone. Which source sits above which is a 
 rather than of who spoke last: `SOURCES` declares the order and both writers hand their result to
 `arrange`, runs above storage, because a night that has ended is what somebody came back to read
 while a folder that has grown will still be there tomorrow.
+
+**The bell is one of two deliveries, though, and never both.** A card asks to be visited; a report
+already open in front of somebody is the visit. `components/run/reportDelivery.js` is the rule — the
+`branchChoice.js` family again — and it asks one thing: was the agent that earned this report the one
+this person has selected. The selection and nothing else, deliberately: not window focus, since
+somebody who left the app with an agent selected comes back to that agent, and not the centre tab
+either, since `activeId` survives leaving the terminal because `AgentList.vue` highlights its row
+from it. Two absent sessions are never one agent — a run from a worker too old to name its session
+met by a window with nothing selected would match under the obvious equality and open a tab neither
+asked for — and with no document there is no tab to open at all, which is the same case the card
+already draws without a button.
+
+Which run's agent that was is `Run.last_session`, a second field beside `session` rather than a
+longer life for it: `session` is cleared the moment a run stops, and must be, because a row pointing
+at a dead session is worse than no row — while this decision is about a run that is over by
+definition. `Run::working_in` is the one write that fills both, since two assignments at the loop's
+one call site would compile perfectly with the second missing and the cost would be invisible: every
+report would simply go to the bell, which is a legitimate outcome of this very rule.
+
+Carrying it out is `DesktopApp.vue`'s, because opening a tab is the one thing no store can do, and
+two details there are load-bearing. The watcher keeps its own set of tokens it has **decided** about
+— the ones left to the bell as well as the ones opened — since `loadRun` replaces the list on every
+focus and every project switch, and remembering only the tabs would open last night's document in
+front of somebody who happened to select that agent hours later. And it rides the default `pre`
+flush: `syncRunCards` makes the card inside `upsert`, so for the moment between that and this the
+bell holds a card about to be taken back, and a `pre` watcher runs before this component's own render
+in the same tick, so the badge never paints the number. `deliveredInTab` is called only when the tab
+actually opened, since suppressing the card on the strength of a tab that never appeared would leave
+the person with neither.
 
 The import between the two stores is circular by construction — `notifications.js` reads `runsState`,
 `runs.js` calls a hoisted function declaration — and **nothing in `notifications.js` may read
@@ -1089,6 +1151,38 @@ for an hour, and reports whole `Run` values back through a channel — the worke
 that ever writes one out. The `token` does the job `generation` does for the tracker: a stop names one
 run by it, every `run:state` event carries it, and a late report from an ended run finds no entry
 rather than the run that started after it.
+
+**What ends a batch is not one question but two, and answering only the first was a defect that hid
+for a fortnight.** An unattended batch is told to exit (`agents::is_batch`, `Profile::batch_args`),
+so `await_exit` is its whole ending. The other two modes run the harness the way a person does —
+that is what Crew and Solo *are* — so the session finishes the work and sits at its prompt for ever,
+and a loop watching the process never came round: `finish` is the only thing in the app that ever
+makes a `RunSummary` or writes a report, so a Crew run's account arrived when somebody eventually
+pressed stop, hours later, or never, because the app was closed first. Evidence in this repository's
+own `.smetana`: a batch whose account file landed at 13:48 against a document stamped 17:45, and a
+run the day before with an account and no document at all.
+
+So in attended modes `watch_batch` waits on whichever comes first — the exit, still, or
+`handed_back`. The signal is the account the lead was already asked for in every mode, and it is
+deliberately **a file that parses** rather than a file that exists: JSON is not written atomically,
+and waking on the first byte would send `read_batch` at half a document a moment later, so the
+report would say the batch left no account of itself in the one case where it left a good one.
+Parsing is that check and there is no second mechanism to keep in step with it. `clear_account` is
+the trap under the rule, and it is certain rather than theoretical: `token` counts from zero on
+every app start — the very property `write_report` refuses to lean on for its own file names — so a
+previous launch's `.smetana/runs/1/batch-1.json` is sitting under this batch's name before it
+spawns, and without clearing it the batch would hand back in the instant it started. Clearing also
+closes a quieter half for every mode, where a batch that crashed before writing a word would have
+had a previous launch's prose put in this run's report.
+
+Two things deliberately do not follow. The session is **left running** — ending the run does not end
+the conversation, which is the mode's whole point — and nothing is orphaned by that, because
+`registry::forget_run` conditions on the processes rather than on the stop reason and keeps a record
+naming one that is still there. And `prompt.rs` says something different to each half: to an
+unattended batch the file is "a record, not a gate", true because its ending is the exit; to an
+attended one it is how the work is handed back, with a way out that is a sentence in the
+conversation rather than a silence, since a lead that shrugged the file off would leave the run
+hanging with nothing on screen to say why.
 
 **Stopping is cooperative, and that is a decision with a cost attached.** `request_stop` sets a flag
 and the loop reads it between batches; the batch in flight is allowed to finish, because a run
@@ -1226,6 +1320,12 @@ not this app's call. One second is not one run, though, since a project holds se
 (smetana-5hf), so `claim_report` *makes* the file with `create_new` and walks a `-2`, `-3` suffix
 rather than checking whether the path exists: two runs are two loop tasks, so the creation itself has
 to be the exclusive step.
+
+**One document serves all three modes, and it names which of them it is.** A run is exactly one task
+in Solo, exactly one batch in Crew and a night of batches in Autopilot, so the difference is what to
+call the thing and not what to build — `RunMode::report_title` owns those three words, beside
+`one_batch`, which is the rule that makes two of the sentences true, and `report.rs` places them in
+the heading and in the tab's own title while owning none of them.
 
 **Three facts about what the app can know decide the whole shape.** It can see the board and its own
 clock, so *which* tasks moved and *how long* the run took are its to work out. It cannot see what was

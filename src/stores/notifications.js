@@ -166,13 +166,18 @@ export async function measureStorage(project) {
 
 /* ---- the second source: runs that are over --------------------------- */
 
-/* Runs whose card somebody has taken away, by token, in memory and nowhere
-   else. There is nothing for a stored flag to be about: a run does not survive
-   a restart any more than a session does, so the list it is derived from starts
-   empty on every launch and a remembered token would refer to nothing. The
-   token is issued once per app process and never reused, so this set cannot
-   silence a later run — not even one in another project. */
-const dismissedRuns = new Set()
+/* Runs whose ending has already reached the person, by token, in memory and
+   nowhere else. There is nothing for a stored flag to be about: a run does not
+   survive a restart any more than a session does, so the list it is derived
+   from starts empty on every launch and a remembered token would refer to
+   nothing. The token is issued once per app process and never reused, so this
+   set cannot silence a later run — not even one in another project.
+
+   Two ways in, and they are the same fact rather than two: a card somebody took
+   away, and a report the app put in a tab in front of them. Both mean this
+   ending has been delivered, and the bell's whole job is to ask for a visit
+   that has not happened yet. */
+const deliveredRuns = new Set()
 
 /* The run cards, rebuilt from `runsState.runs`.
 
@@ -192,7 +197,7 @@ const dismissedRuns = new Set()
    read anything else about the project, and it does not. */
 export function syncRunCards() {
   const cards = runsState.runs
-    .filter((run) => !dismissedRuns.has(run?.token))
+    .filter((run) => !deliveredRuns.has(run?.token))
     .map(runNotification)
     .filter(Boolean)
   const others = notificationsState.items.filter((item) => item.source !== 'run')
@@ -213,8 +218,22 @@ export function dismiss(id) {
   }
   /* A run card is derived from a list that outlives the card, so taking it out
      of `items` alone would put it straight back on the next sync. The token is
-     remembered instead — and only in memory, for the reason `dismissedRuns`
+     remembered instead — and only in memory, for the reason `deliveredRuns`
      gives. */
-  if (card.source === 'run') dismissedRuns.add(card.token)
+  if (card.source === 'run') deliveredRuns.add(card.token)
   notificationsState.items = notificationsState.items.filter((item) => item.id !== id)
+}
+
+/* This run's account has been opened in a tab in front of the person, so the
+   bell has nothing left to ask for.
+
+   Called by `DesktopApp.vue`, which is the only place that can open a tab, and
+   called *after* the card exists: `syncRunCards` runs inside `upsert`, so the
+   ending and its card arrive together and this takes the card back. That
+   ordering is why the view's watcher is synchronous — see the reason written
+   beside it there — and why this rebuilds the list rather than merely
+   remembering the token. */
+export function deliveredInTab(token) {
+  deliveredRuns.add(token)
+  syncRunCards()
 }

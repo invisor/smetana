@@ -113,6 +113,10 @@ struct Live {
     pty: Pty,
     ring: Ring,
     screen: Screen,
+    /// Set for a batch whose harness prints a machine format — see
+    /// `terminal::transcript`. `None` for every session a person is sitting in
+    /// front of, whose harness is already drawing for them.
+    transcript: Option<crate::terminal::transcript::Transcript>,
     /// A bell rang and has not been cleared yet. It is cleared by a write
     /// into the session — a human answering, from the keyboard or with a
     /// button — by a view attaching, which is a human looking at it, and by
@@ -319,6 +323,14 @@ fn absorb(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>, chunk: Chunk
     match chunk {
         Chunk::Data(id, bytes) => {
             let Some(live) = sessions.get_mut(&id) else { return };
+            // Before the ring, the screen and the queue, so that all three go on
+            // seeing one identical stream — the invariant this subsystem is
+            // built on. A session with no transcript is every session a person
+            // started, and its bytes are its own.
+            let bytes = match live.transcript.as_mut() {
+                Some(transcript) => transcript.feed(&bytes),
+                None => bytes,
+            };
             live.ring.push(&bytes);
             if live.screen.feed(&bytes) {
                 live.bell_pending = true;
@@ -403,6 +415,10 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             bell_pending: live.bell_pending,
             still_for,
             screen: &lines,
+            // The one fact layer A needs about where this picture comes from:
+            // a rendered transcript holds still between tool calls without the
+            // agent having stopped. See `DetectInput::transcript`.
+            transcript: live.transcript.is_some(),
             profile: live.profile,
         });
         let before = (live.session.state, live.session.question.clone());
@@ -563,6 +579,10 @@ fn handle(
                         pty,
                         ring: Ring::new(RING_CAP),
                         screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),
+                        transcript: agents::is_batch(&launch.intent)
+                            .then(|| profile.transcript())
+                            .flatten()
+                            .map(crate::terminal::transcript::Transcript::new),
                         bell_pending: false,
                         quiet: Quiet::new(),
                         last_output: Instant::now(),
