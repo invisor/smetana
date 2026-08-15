@@ -12,6 +12,7 @@ import {
   AppShell,
   Assignee,
   AttachmentStrip,
+  BranchList,
   BranchSelect,
   Button,
   ChangeList,
@@ -296,6 +297,19 @@ const CHANGES = [
 ]
 
 const CLEAN_TREE = { branch: 'main', detached: null, changes: [] }
+
+/* Branches in the order `git::by_recency` gives them and the panel draws them:
+   what was worked on here most recently first, and the tail a fresh clone
+   leaves alphabetical behind it. One is the branch the repository is on, marked
+   and not offered as a target. The long name is deliberate — it is what says
+   whether a row loses its middle rather than pushing the mark off the end. */
+const BRANCHES = [
+  { name: 'feat/worktree-rename', current: true },
+  { name: 'develop', current: false },
+  { name: 'main', current: false },
+  { name: 'feature/smetana-8ok-git-panel-branches', current: false },
+  { name: 'release/7', current: false }
+]
 
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking
@@ -1138,6 +1152,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
               :repos="REPOS"
               selected="/Users/you/dev/smetana"
               :tree="{ branch: 'feat/worktree-rename', detached: null, changes: CHANGES }"
+              :branches="BRANCHES"
             />
           </Panel>
         </div>
@@ -1146,7 +1161,14 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             <template #actions>
               <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
             </template>
-            <GitPanel :repos="[REPOS[0]]" selected="/Users/you/dev/smetana" :tree="CLEAN_TREE" />
+            <!-- A repository with nothing uncommitted and one branch: the two
+                 empty states that are not failures, side by side. -->
+            <GitPanel
+              :repos="[REPOS[0]]"
+              selected="/Users/you/dev/smetana"
+              :tree="CLEAN_TREE"
+              :branches="[{ name: 'main', current: true }]"
+            />
           </Panel>
         </div>
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
@@ -1174,6 +1196,9 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <ChangeList :changes="CHANGES" />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" />
         </div>
         <div :style="{ display: 'flex', width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
           <GitPanel

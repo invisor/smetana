@@ -7,13 +7,15 @@
    behind it. The state itself is `src/stores/vcs.js` and the wiring is
    `views/DesktopApp.vue`.
 
-   Three things can be empty and they are three different sentences: git is not
-   on this machine, this folder holds no repository, this repository has nothing
-   uncommitted. One blank area for all three would be a panel saying nothing in
-   three different ways, and the first of them is the one a person can act on.
+   Four things can be empty and they are four different sentences: git is not on
+   this machine, this folder holds no repository, this repository has nothing
+   uncommitted, this repository has no local branch yet. One blank area for all
+   of them would be a panel saying nothing four different ways, and the first is
+   the one a person can act on.
 
-   No diff, no branch list and no writes: the other three tasks of this epic. */
+   No diff, no merge and no rebase: the other tasks of this epic. */
 import { computed } from 'vue'
+import BranchList from './BranchList.vue'
 import ChangeList from './ChangeList.vue'
 import EmptyState from '../core/EmptyState.vue'
 import RepoList from './RepoList.vue'
@@ -25,13 +27,16 @@ const props = defineProps({
   /* `{ branch, detached, changes }`, or null when it could not be read — never
      an empty tree standing in for a failure. */
   tree: { type: Object, default: null },
+  /* `[{ name, current }]` in `git::by_recency`'s order, which is drawn as it
+     arrives. */
+  branches: { type: Array, default: () => [] },
   /* `{ kind, message }` as `stores/vcs.js` normalises it. `noGit` is the one
      kind this panel branches on; everything else is git's own words, shown
      untouched, because whoever reads them knows git. */
   error: { type: Object, default: null },
   loading: { type: Boolean, default: false }
 })
-defineEmits(['select'])
+defineEmits(['select', 'checkout'])
 
 const rootStyle = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }
 
@@ -140,6 +145,23 @@ const changes = computed(() => props.tree?.changes ?? [])
         </div>
         <ChangeList v-else-if="repos.length && tree" :changes="changes" />
       </div>
+
+      <!-- Third, under the changes, and gated on there being a repository for
+           the same reason the changes caption is: a "Branches" heading over
+           nothing says less than the repository list's own empty sentence
+           already did. The section shrinks rather than growing — the changes
+           above it are what somebody opened this panel for, and a repository
+           with forty branches must not push them off the top. -->
+      <template v-if="repos.length && !failure">
+        <div :style="headerStyle">
+          <span>Branches</span>
+          <span :style="{ flex: 1 }" />
+          <span v-if="branches.length > 1" :style="countStyle">{{ branches.length }}</span>
+        </div>
+        <div :style="{ flex: '0 1 auto', minHeight: 0, overflow: 'auto' }">
+          <BranchList :branches="branches" @checkout="$emit('checkout', $event)" />
+        </div>
+      </template>
     </template>
   </div>
 </template>

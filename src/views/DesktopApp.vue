@@ -1972,6 +1972,7 @@ const toastStackStyle = {
                 :repos="vcsState.repos"
                 :selected="vcsState.selected"
                 :tree="vcsState.tree"
+                :branches="vcsState.branches"
                 :error="vcsState.error"
                 :loading="vcsState.loading"
                 @select="selectRepo"

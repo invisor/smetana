@@ -29,6 +29,12 @@ export const vcsState = reactive({
      `cleanup::refusal` and `projectBytes` keep: an unread list and a clean one
      are opposite facts and the panel says different things about them. */
   tree: null,
+  /* The selected repository's local branches, in the order `git::by_recency`
+     gave them and never re-sorted here: the branch somebody merges into every
+     day is nowhere in particular alphabetically. `[{ name, current }]`, and an
+     empty list is an ordinary answer — a folder outside git has none, and so
+     has a repository whose first commit is not written yet. */
+  branches: [],
   /* `{ kind, message }` — Rust's own shape, normalised here so a rejection that
      is a bare string (the browser mock, a transport failure) draws the same
      way. `kind` is what the panel branches on; the message is git's own words
@@ -91,6 +97,9 @@ export async function loadRepos(project) {
     console.error('[vcs] listing repositories failed:', err)
     vcsState.repos = []
     vcsState.tree = null
+    /* With no repository left to be about, a branch list read a moment ago is
+       one nothing on screen names. */
+    vcsState.branches = []
     vcsState.error = asError(err)
   } finally {
     if (vcsState.project === project) vcsState.loading = false
@@ -105,7 +114,7 @@ export async function loadRepos(project) {
 export async function selectRepo(path) {
   vcsState.selected = path
   settings.project.selectedRepo = path
-  await loadStatus()
+  await Promise.all([loadStatus(), loadBranchList()])
 }
 
 /* The selected repository's working tree.
@@ -136,6 +145,38 @@ async function loadStatus() {
   }
 }
 
+/* The selected repository's branches.
+
+   Guarded on the same pair as `loadStatus` and for the same reason: a list
+   arriving after somebody moved on would offer one repository's branches under
+   another repository's name, and the row a person then clicked would check out
+   a branch in a repository they are not looking at.
+
+   `loading` is deliberately not touched here. It says a first read is in
+   flight, and two functions setting one boolean means whichever finishes first
+   clears it under the other; this read costs no process at all — three file
+   reads through `git.rs` — so there is nothing for a person to wait through. */
+async function loadBranchList() {
+  const { project, selected } = vcsState
+  if (!selected) {
+    vcsState.branches = []
+    return
+  }
+  try {
+    const branches = await invoke('vcs_branches', { repo: selected })
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    vcsState.branches = branches
+  } catch (err) {
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    /* `vcs_branches` answers with a list for everything it can read and refuses
+       nothing, so reaching here means the call itself failed. An empty list is
+       what a folder outside git already produces, and the same read failing for
+       `vcs_status` beside it is what puts a message on screen. */
+    console.error('[vcs] listing branches failed:', err)
+    vcsState.branches = []
+  }
+}
+
 /* The refresh button in the panel header, and window focus.
 
    The whole list rather than the selected tree alone: a repository can appear
@@ -150,6 +191,7 @@ function reset() {
   vcsState.repos = []
   vcsState.selected = null
   vcsState.tree = null
+  vcsState.branches = []
   vcsState.error = null
   vcsState.loading = false
 }

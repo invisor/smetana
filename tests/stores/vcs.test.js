@@ -23,6 +23,14 @@ const treeOf = (repo) => ({
   changes: [{ path: `${repo}/file.rs`, origPath: null, kind: 'modified', staged: false, unstaged: true }]
 })
 
+/* The same trick for the branches: a list naming the repository it came from,
+   so one repository's branches offered under another's name fails an
+   assertion rather than reading as a plausible list. */
+const branchesOf = (repo) => [
+  { name: `${repo}/current`, current: true },
+  { name: `${repo}/other`, current: false }
+]
+
 describe('the git panel store', () => {
   /* The same guard git.js, terminals.js and runs.js carry. Two calls can be in
      flight with no ordering guarantee on which invoke resolves first, and
@@ -37,6 +45,7 @@ describe('the git panel store', () => {
     })
     ipc.on('vcs_repos', (args) => (args.project === '/old' ? old : repoIn('/new')))
     ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', branchesOf('/new'))
 
     const first = stores.vcs.loadRepos('/old')
     const second = stores.vcs.loadRepos('/new')
@@ -64,6 +73,7 @@ describe('the git panel store', () => {
        one in the test: a deferred answer here would hang `loadRepos` itself on
        a call this case is not about. */
     ipc.on('vcs_status', (args) => treeOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
+    ipc.on('vcs_branches', (args) => branchesOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
     await stores.vcs.loadRepos('/p')
 
     let releaseAdmin
@@ -83,9 +93,38 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.tree).toEqual(treeOf('backend'))
   })
 
+  /* The branches carry the same pair-guard as the working tree, and the cost of
+     losing it is one step worse: a list belonging to the repository somebody
+     has just left is a row that, pressed, checks a branch out in a repository
+     they are not looking at. */
+  it('a slow branch list for a repository already left is dropped', async () => {
+    const { stores, ipc, nextTick } = await loadStores()
+    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_status', (args) => treeOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
+    ipc.on('vcs_branches', (args) => branchesOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
+    await stores.vcs.loadRepos('/p')
+
+    let releaseAdmin
+    const admin = new Promise((resolve) => {
+      releaseAdmin = () => resolve(branchesOf('admin'))
+    })
+    ipc.on('vcs_branches', (args) => (args.repo === '/p/admin' ? admin : branchesOf('backend')))
+
+    const first = stores.vcs.selectRepo('/p/admin')
+    const second = stores.vcs.selectRepo('/p/backend')
+    await second
+    releaseAdmin()
+    await first
+    await nextTick()
+
+    expect(stores.vcs.vcsState.selected).toBe('/p/backend')
+    expect(stores.vcs.vcsState.branches).toEqual(branchesOf('backend'))
+  })
+
   it('a failure leaves an error to draw, not a half-filled panel', async () => {
     const { stores, ipc, nextTick } = await loadStores()
     ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_branches', [])
     ipc.fail('vcs_status', 'no git on this machine')
 
     await stores.vcs.loadRepos('/p')
@@ -106,6 +145,7 @@ describe('the git panel store', () => {
     stores.settings.settings.project.selectedRepo = '/p/gone'
     ipc.on('vcs_repos', repoIn('/p'))
     ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', branchesOf('/p'))
 
     await stores.vcs.loadRepos('/p')
 
