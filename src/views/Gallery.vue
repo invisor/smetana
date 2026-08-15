@@ -12,6 +12,7 @@ import {
   AppShell,
   Assignee,
   AttachmentStrip,
+  BranchList,
   BranchSelect,
   Button,
   ChangeList,
@@ -68,6 +69,7 @@ import {
   ToolCall,
   Tooltip
 } from '../components/index.js'
+import { gitActions } from '../components/git/gitActions.js'
 import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
@@ -324,6 +326,43 @@ const CHANGES = [
 ]
 
 const CLEAN_TREE = { branch: 'main', detached: null, changes: [] }
+
+/* Branches in the order `git::by_recency` gives them and the panel draws them:
+   what was worked on here most recently first, and the tail a fresh clone
+   leaves alphabetical behind it. One is the branch the repository is on, marked
+   and not offered as a target. The long name is deliberate — it is what says
+   whether a row loses its middle rather than pushing the mark off the end. */
+const BRANCHES = [
+  { name: 'feat/worktree-rename', current: true },
+  { name: 'develop', current: false },
+  { name: 'main', current: false },
+  { name: 'feature/smetana-8ok-git-panel-branches', current: false },
+  { name: 'release/7', current: false }
+]
+
+/* The verdict a live run produces, taken from the rule itself rather than
+   written out here: a frame quoting a sentence by hand is a copy that goes on
+   reading well long after the rule stopped saying it. */
+const RUN_GOING = gitActions([{ token: 1, state: { kind: 'running' } }])
+
+/* More branches than the branch section's cap, which is the state this
+   repository and most others are actually in — and the one that hid git's
+   refusal of a checkout below the fold of an inner scroller. A frame with five
+   branches cannot show that, so the refusal frame below uses this. */
+const LONG_BRANCHES = [
+  ...BRANCHES,
+  { name: 'feature/smetana-8ok.4-git-panel-merge', current: false },
+  { name: 'fix/smetana-qw6-run-settings-shadowed-project', current: false },
+  { name: 'staging', current: false }
+]
+
+/* git's own sentence, verbatim from a repository where a second worktree held
+   the branch — which is exactly what a run's provisioning phase leaves behind,
+   and the message that tells somebody why the tick did not move. */
+const CHECKOUT_REFUSED = {
+  kind: 'git',
+  message: "fatal: 'develop' is already checked out at '/Users/you/dev/smetana/.worktrees/smetana-8ok.3'"
+}
 
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking
@@ -1190,6 +1229,7 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
               :repos="REPOS"
               selected="/Users/you/dev/smetana"
               :tree="{ branch: 'feat/worktree-rename', detached: null, changes: CHANGES }"
+              :branches="BRANCHES"
             />
           </Panel>
         </div>
@@ -1198,7 +1238,14 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             <template #actions>
               <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
             </template>
-            <GitPanel :repos="[REPOS[0]]" selected="/Users/you/dev/smetana" :tree="CLEAN_TREE" />
+            <!-- A repository with nothing uncommitted and one branch: the two
+                 empty states that are not failures, side by side. -->
+            <GitPanel
+              :repos="[REPOS[0]]"
+              selected="/Users/you/dev/smetana"
+              :tree="CLEAN_TREE"
+              :branches="[{ name: 'main', current: true }]"
+            />
           </Panel>
         </div>
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
@@ -1227,6 +1274,30 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <ChangeList :changes="CHANGES" selected="src/stores/vcs.js" />
         </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" />
+        </div>
+        <!-- The same list with a run going: every row inert, the current one
+             still readable, and the reason on a tooltip over whichever row the
+             pointer is on. The sentence is `gitActions.js`'s own, computed here
+             from a run in the shape `runs.js` holds one, so the frame cannot
+             drift from the rule. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" :actions="RUN_GOING" />
+        </div>
+        <!-- The fourth of the panel's empty sentences, which no `GitPanel`
+             frame can reach: a folder git can see nothing in has no branch to
+             list, and the section is gated on there being a repository, so this
+             is the only place it can be looked at. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="[]" />
+        </div>
+        <!-- A checkout in flight: the pressed row spins in place of its mark
+             and the rest of the list goes inert, since a second press would ask
+             git to work in a tree git is already working in. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" checking-out="develop" />
+        </div>
         <div :style="{ display: 'flex', width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
           <GitPanel
             :style="{ flex: 1, minWidth: 0 }"
@@ -1234,6 +1305,23 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             selected="/Users/you/dev/smetana"
             :tree="null"
             :error="{ kind: 'git', message: 'fatal: not a git repository (or any of the parent directories): .git' }"
+          />
+        </div>
+        <!-- git's refusal of a **checkout**, which is a different failure from
+             the two beside it: the panel read everything perfectly and git
+             declined to switch. Drawn under the branch section rather than
+             inside it, and the eight branches are the point of the frame — the
+             section is capped at six rows, so a refusal drawn inside that
+             scroller was entirely below the fold in exactly this, the ordinary,
+             case. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <GitPanel
+            :style="{ flex: 1, minWidth: 0 }"
+            :repos="[REPOS[0]]"
+            selected="/Users/you/dev/smetana"
+            :tree="CLEAN_TREE"
+            :branches="LONG_BRANCHES"
+            :checkout-error="CHECKOUT_REFUSED"
           />
         </div>
         <!-- The same failure with the repository list empty, which is the

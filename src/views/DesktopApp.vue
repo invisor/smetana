@@ -16,6 +16,7 @@ import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
 import GitPanel from '../components/git/GitPanel.vue'
+import { gitActions } from '../components/git/gitActions.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
@@ -84,7 +85,7 @@ import {
 import { gitState, loadBranches, loadHead } from '../stores/git.js'
 /* The Git panel's own state, beside git.js rather than inside it: that store is
    the branch in the scope bar and spawns no process, this one runs git. */
-import { loadRepos, refresh as refreshGit, selectRepo, vcsState } from '../stores/vcs.js'
+import { checkout, loadRepos, refresh as refreshGit, selectRepo, vcsState } from '../stores/vcs.js'
 import {
   attachFiles,
   attachmentsState,
@@ -407,6 +408,12 @@ const runnableTask = (task) =>
    two sentences joined by a dash. The rule and the words live in runScopes.js,
    which is the part of this a test can reach. */
 const runBlockedReason = computed(() => scopeBusyReason({ kind: 'queue' }, runsState.runs))
+
+/* Whether the Git panel may switch branch, and why not when it may not. The
+   rule is `components/git/gitActions.js` — the same family and the same reason
+   as the line above: the runs are the whole of what it reads, so an agent
+   session a person started themselves never reaches it. */
+const gitWrites = computed(() => gitActions(runsState.runs))
 
 const runOpen = ref(false)
 const runScope = ref({ kind: 'queue' })
@@ -2000,10 +2007,15 @@ const toastStackStyle = {
                 :repos="vcsState.repos"
                 :selected="vcsState.selected"
                 :tree="vcsState.tree"
+                :branches="vcsState.branches"
+                :actions="gitWrites"
+                :checking-out="vcsState.checkingOut"
+                :checkout-error="vcsState.checkoutError"
                 :error="vcsState.error"
                 :loading="vcsState.loading"
                 :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
                 @select="selectRepo"
+                @checkout="checkout"
                 @open="openDiff(vcsState.selected, $event.path)"
               />
               <AgentList

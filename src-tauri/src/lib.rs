@@ -107,6 +107,8 @@ pub fn run() {
       git::git_head,
       vcs::commands::vcs_repos,
       vcs::commands::vcs_status,
+      vcs::commands::vcs_branches,
+      vcs::commands::vcs_checkout,
       vcs::commands::vcs_file_at_head,
       runs::commands::project_config,
       runs::commands::browser_tools,

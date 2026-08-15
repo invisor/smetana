@@ -445,9 +445,9 @@ export function installMockBackend() {
     if (command === 'git_head') {
       return { branch: 'feat/worktree-rename', detached: null }
     }
-    /* The Git panel's two reads. A browser has no git to run, so both answer
-       from a fixture — two repositories rather than one, since a project made
-       of several is the case the repository list exists for and the case a
+    /* The Git panel's three reads. A browser has no git to run, so all of them
+       answer from a fixture — two repositories rather than one, since a project
+       made of several is the case the repository list exists for and the case a
        single-repository machine can never show. */
     if (command === 'vcs_repos') {
       const project = payload?.project ?? MOCK_PROJECTS[0]
@@ -484,6 +484,22 @@ export function installMockBackend() {
           { path: 'src/stores/tabs.js', origPath: null, kind: 'conflicted', staged: false, unstaged: true }
         ]
       }
+    }
+    /* The branch list, in the order `git::by_recency` would have given it: the
+       branch worked on most recently first, the tail alphabetical. The current
+       one is deliberately not the first, since a list where the two coincide
+       could not show that the mark and the order are two different facts.
+       `vcs_checkout` is absent on purpose and falls through to the refusal at
+       the bottom, like every other write: a checkout that looked like it had
+       happened would be the worst kind, since nothing here has a working tree
+       to have changed. */
+    if (command === 'vcs_branches') {
+      return [
+        { name: 'develop', current: false },
+        { name: 'feat/worktree-rename', current: true },
+        { name: 'main', current: false },
+        { name: 'release/7', current: false }
+      ]
     }
     if (command === 'terminal_list') {
       return [

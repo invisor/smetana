@@ -74,10 +74,12 @@ export { default as FileTree } from './files/FileTree.vue'
 export { default as FileTreeRow } from './files/FileTreeRow.vue'
 
 // git
+export { default as BranchList } from './git/BranchList.vue'
 export { default as ChangeList } from './git/ChangeList.vue'
 export { default as GitPanel } from './git/GitPanel.vue'
 export { default as RepoList } from './git/RepoList.vue'
 export { changeStatus } from './git/changeStatus.js'
+export { gitActions } from './git/gitActions.js'
 
 // notifications
 export { default as NotificationCard } from './notifications/NotificationCard.vue'

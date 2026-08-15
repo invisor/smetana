@@ -72,6 +72,22 @@ pub struct Repo {
     pub detached: Option<String>,
 }
 
+/// One local branch of a repository, as the panel lists it.
+///
+/// Two fields and no more: an ahead/behind count, an upstream and a remote
+/// branch are all outside this epic, and a field carried across the wire with
+/// nothing drawing it is a field nobody notices going wrong.
+///
+/// `current` rather than the front end comparing the name against the row's
+/// branch: HEAD is read here, beside the list itself, so the two cannot come
+/// from different moments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Branch {
+    pub name: String,
+    pub current: bool,
+}
+
 /// How many characters of a detached HEAD's hash to show — git's own default
 /// for an abbreviated object name, and the same number `git.rs` uses.
 const SHORT_HASH: usize = 7;

@@ -14,6 +14,13 @@
    list is as stale as the tree beside it is. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+/* The scope bar's branch is git.js's, read straight off `HEAD` with no process
+   — and a checkout here is the one moment in the app that changes it from the
+   inside. Freshness there is window focus and the project switch, neither of
+   which a person switching branches in this panel ever reaches, so the write
+   refreshes it itself: the alternative is a bar naming the branch somebody just
+   left, until they alt-tab away and back. */
+import { loadHead } from './git.js'
 import { settings } from './settings.js'
 
 export const vcsState = reactive({
@@ -29,11 +36,30 @@ export const vcsState = reactive({
      `cleanup::refusal` and `projectBytes` keep: an unread list and a clean one
      are opposite facts and the panel says different things about them. */
   tree: null,
+  /* The selected repository's local branches, in the order `git::by_recency`
+     gave them and never re-sorted here: the branch somebody merges into every
+     day is nowhere in particular alphabetically. `[{ name, current }]`, and an
+     empty list is an ordinary answer — a folder git can see nothing in. Not a
+     repository without a first commit, which has no ref on disk and still
+     answers with one branch: `git.rs` puts HEAD's own name into the list, so
+     that a repository nobody has committed to still has something to merge
+     into. */
+  branches: [],
   /* `{ kind, message }` — Rust's own shape, normalised here so a rejection that
      is a bare string (the browser mock, a transport failure) draws the same
      way. `kind` is what the panel branches on; the message is git's own words
      and is shown untouched. */
   error: null,
+  /* Git's refusal of a checkout, in the same `{ kind, message }` shape and kept
+     apart from `error` above deliberately: that one says the working tree could
+     not be read, this one says it was read and a switch was refused. Folding
+     them together would put a refusal about a branch where the changes should
+     be, and take the list down with it. */
+  checkoutError: null,
+  /* The branch a checkout is in flight for, or null. One at a time: the panel
+     goes inert while git works, so a second row cannot be pressed into a
+     checkout git is already refusing for the first. */
+  checkingOut: null,
   loading: false
 })
 
@@ -91,6 +117,9 @@ export async function loadRepos(project) {
     console.error('[vcs] listing repositories failed:', err)
     vcsState.repos = []
     vcsState.tree = null
+    /* With no repository left to be about, a branch list read a moment ago is
+       one nothing on screen names. */
+    vcsState.branches = []
     vcsState.error = asError(err)
   } finally {
     if (vcsState.project === project) vcsState.loading = false
@@ -105,7 +134,11 @@ export async function loadRepos(project) {
 export async function selectRepo(path) {
   vcsState.selected = path
   settings.project.selectedRepo = path
-  await loadStatus()
+  /* Git's last refusal went with the repository it was about: a message saying
+     a branch is checked out in another worktree, left standing over the branch
+     list of the repository next door, would be a statement about neither. */
+  vcsState.checkoutError = null
+  await Promise.all([loadStatus(), loadBranchList()])
 }
 
 /* The selected repository's working tree.
@@ -133,6 +166,87 @@ async function loadStatus() {
     vcsState.error = asError(err)
   } finally {
     if (vcsState.project === project && vcsState.selected === selected) vcsState.loading = false
+  }
+}
+
+/* The selected repository's branches.
+
+   Guarded on the same pair as `loadStatus` and for the same reason: a list
+   arriving after somebody moved on would offer one repository's branches under
+   another repository's name, and the row a person then clicked would check out
+   a branch in a repository they are not looking at.
+
+   `loading` is deliberately not touched here. It says a first read is in
+   flight, and two functions setting one boolean means whichever finishes first
+   clears it under the other; this read costs no process at all — three file
+   reads through `git.rs` — so there is nothing for a person to wait through. */
+async function loadBranchList() {
+  const { project, selected } = vcsState
+  if (!selected) {
+    vcsState.branches = []
+    return
+  }
+  try {
+    const branches = await invoke('vcs_branches', { repo: selected })
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    vcsState.branches = branches
+  } catch (err) {
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    /* `vcs_branches` answers with a list for everything it can read and refuses
+       nothing, so reaching here means the call itself failed. An empty list is
+       what a folder outside git already produces, and the same read failing for
+       `vcs_status` beside it is what puts a message on screen. */
+    console.error('[vcs] listing branches failed:', err)
+    vcsState.branches = []
+  }
+}
+
+/* Switch the selected repository to another of its branches.
+
+   The one write this panel has. Whether it may be offered at all is
+   `components/git/gitActions.js` — a rule about the project's runs, kept out of
+   here because a store is not where a `.vue` file's disabled state is decided
+   and because a test can reach that file. This function is the mechanics only,
+   and deliberately does not repeat the rule: a second copy would be the half
+   that drifts.
+
+   Git decides the rest. A branch checked out in another worktree, a working
+   tree that would have to be overwritten — both come back as `VcsError::Git`
+   with git's own stderr in them, and the panel prints that as it stands.
+
+   What follows a checkout that worked is the whole list again rather than the
+   working tree alone: the branch each repository is on is drawn in its row, so
+   a status-only refresh would leave the row naming the branch somebody just
+   left. The scope bar goes with it, one store over. */
+export async function checkout(branch) {
+  const { project, selected } = vcsState
+  if (!selected || !branch || vcsState.checkingOut) return
+  vcsState.checkingOut = branch
+  vcsState.checkoutError = null
+  try {
+    await invoke('vcs_checkout', { repo: selected, branch })
+    /* The project alone, deliberately, where the failure path below guards the
+       pair. Repository rows are not held by `checkingOut`, so somebody can pick
+       another repository while git works; the branch did move on disk, and
+       leaving on the pair would mean nothing refreshed and the row and the mark
+       stayed wrong until the next window focus. `refresh()` re-reads every
+       repository and re-picks the remembered one, so it is right whichever is
+       selected by the time it runs — the `selected` half is what `loadStatus`
+       and `loadBranchList` need, not this. */
+    if (vcsState.project !== project) return
+    await refresh()
+    /* Awaited, unlike the sweep in `catchUp` that fires the same call and walks
+       on: here it is the second half of one act, so a checkout that has
+       finished means the panel and the bar over it agree. */
+    await loadHead(project)
+  } catch (err) {
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    vcsState.checkoutError = asError(err)
+  } finally {
+    /* Cleared whoever the project is now: this flag is what holds the panel
+       inert, and a switch landing mid-checkout would otherwise leave the new
+       project's list dead with nothing on screen to say why. */
+    if (vcsState.checkingOut === branch) vcsState.checkingOut = null
   }
 }
 
@@ -168,6 +282,8 @@ function reset() {
   vcsState.repos = []
   vcsState.selected = null
   vcsState.tree = null
+  vcsState.branches = []
   vcsState.error = null
+  vcsState.checkoutError = null
   vcsState.loading = false
 }
