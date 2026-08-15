@@ -9,6 +9,7 @@
 import { computed, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { basename } from '../paths.js'
 import { runsState } from './runs.js'
 import { settings } from './settings.js'
 import { isLockIssue, trackerState } from './tracker.js'
@@ -139,6 +140,9 @@ function startClock() {
    switch, a run's settings. */
 const workOf = (intent) => {
   if (intent.kind === 'editTask') return { kind: 'editTask', id: intent.id }
+  if (intent.kind === 'resolveConflict') {
+    return { kind: 'resolveConflict', repo: intent.repo, theirs: intent.theirs }
+  }
   if (intent.kind === 'newTask') {
     return {
       kind: 'newTask',
@@ -163,6 +167,10 @@ const CAPTION = {
      "Answering smetana-8av" and the word "questions" would only push the id
      toward the ellipsis. */
   resolveTask: 'Answering',
+  /* The one caption about a repository rather than an issue. "Conflict" and
+     not "Resolving a conflict": the identifiers beside it are what say which
+     one, and a row 252px wide spends every character it has on them. */
+  resolveConflict: 'Conflict',
   setup: 'Project setup'
 }
 
@@ -226,6 +234,13 @@ function captionOf(work, claimed) {
   // The two that are about one named issue, and so caption themselves with it.
   if (kind === 'editTask' || kind === 'resolveTask') {
     return { label: CAPTION[kind], tasks: [work.id] }
+  }
+  /* The two identifiers this one is about, in mono beside the word: which
+     repository — its folder's name, since the absolute path is most of a row
+     on its own and the panel already says which project this is — and the
+     branch that was being brought in. */
+  if (kind === 'resolveConflict') {
+    return { label: CAPTION[kind], tasks: [basename(work.repo ?? ''), work.theirs].filter(Boolean) }
   }
   if (kind === 'run' && claimed.length) return { label: null, tasks: claimed }
   return { label: CAPTION[kind] ?? CAPTION.bare, tasks: [] }

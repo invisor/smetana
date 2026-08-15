@@ -208,6 +208,38 @@ const EDIT: &str =
      outside this prompt says what the change is: do not guess at it, do not decide it yourself, \
      and change nothing about the issue until I have answered.";
 
+/// What a conflict session is for, and the whole of it: there is no skill in
+/// the library for this and deliberately none added.
+///
+/// `smetana:merging` is the neighbouring process and is the wrong one — it is
+/// about a *task's* worktrees, its gates and its fast-forward into a target
+/// branch, and naming it here would start an agent on a process nobody asked
+/// for, in a repository that has none of that around it. What is wanted is
+/// narrow enough to say in the prompt, which is what `prompt.rs` is for.
+const CONFLICT: &str =
+    "Git has stopped part-way and left the working tree conflicted, with its own markers in the \
+     files below. That tree is exactly as git left it: nothing has been committed and nothing has \
+     been cleaned up for you. Read both sides of each conflict before you choose, and keep what \
+     both branches were doing rather than taking one side wholesale — if a hunk is genuinely a \
+     question rather than a mechanical resolution, ask me about that one.";
+
+/// The second half, and the one the door exists for.
+///
+/// A person chose this over the abort button that was standing next to it, so
+/// an agent that "tidies up" by aborting has undone the only thing it was asked
+/// to do — and the panel then shows a clean tree, as though nothing had ever
+/// happened, which is the worst way for this to fail because it looks like
+/// success. `--abort` is named as the thing not to do rather than merely left
+/// unmentioned: it is the first thing every guide about a conflict offers, and
+/// a test in this file holds the sentence to naming it.
+const CONFLICT_FINISH: &str =
+    "Then finish what git started: stage what you resolved and complete the operation, so that the \
+     work of both branches ends up in the tree. Do not abort it — no `--abort` of any kind, and no \
+     reset that throws the operation away. I chose to have this resolved instead of pressing the \
+     abort button that was beside it, and a tree quietly put back is the one outcome that looks \
+     like success and is not. If you truly cannot finish, stop and say so in this conversation, \
+     leaving the conflict exactly where it is for me to look at.";
+
 /// What the agent is told to produce when a project has no configuration yet.
 /// The file's path is named here rather than left to the skill: a session that
 /// could not read the skill must still write to the right place.
@@ -332,6 +364,9 @@ fn body(
         }
         Intent::ResolveTask { id, title } => {
             Some(resolve_task(id, title, delivery, skills, text.resolving))
+        }
+        Intent::ResolveConflict { repo, op, ours, theirs, files } => {
+            Some(resolve_conflict(repo, *op, ours, theirs, files))
         }
         Intent::NewTask { brainstorm, spec, plan, draft } => {
             // The cascade first, and nothing below reads the raw two: a
@@ -554,6 +589,47 @@ fn resolve_task(
             }
         },
     }
+    out
+}
+
+/// What a session opens on when it is sent into a conflicted working tree.
+///
+/// Three things are named because nothing else can supply them. The repository,
+/// because the session's own directory is the project and a project can hold
+/// several. Both branches, in the order the operation put them — a merge brings
+/// `theirs` into `ours`, a rebase moves `ours` onto `theirs` — since an agent
+/// that has them the wrong way round resolves every hunk backwards. And every
+/// conflicted path, because the tree is a moment: this is the list git left,
+/// and after the first resolution it is no longer readable from anywhere.
+///
+/// No skill is named in either delivery, so this arm does not take `delivery`
+/// at all. That is the decision rather than an omission — see `CONFLICT`.
+fn resolve_conflict(
+    repo: &str,
+    op: crate::vcs::model::OpKind,
+    ours: &str,
+    theirs: &str,
+    files: &[String],
+) -> String {
+    use crate::vcs::model::OpKind;
+
+    let mut out = String::new();
+    // A repository whose own branch could not be read — a HEAD already
+    // detached, a branch list that had not landed — sends an empty name rather
+    // than a made-up one, and the sentence still has to be true without it.
+    let ours = if ours.trim().is_empty() { "the branch it is on" } else { ours };
+    let _ = write!(out, "Finish a git {} in {repo}.\n\n", op.word());
+    let _ = match op {
+        OpKind::Merge => write!(out, "It is merging {theirs} into {ours}. "),
+        OpKind::Rebase => write!(out, "It is rebasing {ours} onto {theirs}. "),
+    };
+    out.push_str(CONFLICT);
+    out.push_str("\n\nThe conflicted files:\n\n");
+    for file in files {
+        let _ = writeln!(out, "{file}");
+    }
+    out.push('\n');
+    out.push_str(CONFLICT_FINISH);
     out
 }
 
@@ -979,6 +1055,7 @@ mod tests {
             Intent::Setup,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            conflict(crate::vcs::model::OpKind::Merge),
             new_task(Stage::On),
         ] {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
@@ -1204,6 +1281,8 @@ mod tests {
             Intent::Bare,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            conflict(crate::vcs::model::OpKind::Merge),
+            conflict(crate::vcs::model::OpKind::Rebase),
             Intent::Setup,
             new_task(Stage::Auto),
             new_task(Stage::On),
@@ -1246,6 +1325,112 @@ mod tests {
         let intent =
             Intent::ResolveTask { id: "smetana-29j".into(), title: "Show the state".into() };
         build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, text, &english()).unwrap()
+    }
+
+    fn conflict(op: crate::vcs::model::OpKind) -> Intent {
+        Intent::ResolveConflict {
+            repo: "/p/backend".into(),
+            op,
+            ours: "main".into(),
+            theirs: "develop".into(),
+            files: vec!["src/one.rs".into(), "src/two.rs".into()],
+        }
+    }
+
+    fn conflict_prompt(op: crate::vcs::model::OpKind, delivery: SkillDelivery) -> String {
+        build(&conflict(op), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_conflict_prompt_names_the_repository_the_branches_and_the_files() {
+        // Every one of them is unavailable to the agent by any other route. The
+        // repository, because the session's own directory is the project. The
+        // branches, because a stopped rebase leaves HEAD detached and the
+        // branch it moved off is readable nowhere. The paths, because the list
+        // is what git left at that moment and stops being true at the first
+        // resolution.
+        use crate::vcs::model::OpKind;
+
+        for op in [OpKind::Merge, OpKind::Rebase] {
+            for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+                let text = conflict_prompt(op, delivery);
+                assert!(text.contains("/p/backend"), "the repository: {text}");
+                assert!(text.contains("main"), "the branch it was on: {text}");
+                assert!(text.contains("develop"), "the other branch: {text}");
+                assert!(
+                    text.contains("src/one.rs") && text.contains("src/two.rs"),
+                    "every file: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_conflict_prompt_puts_the_branches_the_way_the_operation_did() {
+        // A merge brings `theirs` into `ours`; a rebase moves `ours` onto
+        // `theirs`. An agent handed them the wrong way round resolves every
+        // hunk backwards, and nothing downstream would notice.
+        use crate::vcs::model::OpKind;
+
+        let merge = conflict_prompt(OpKind::Merge, SkillDelivery::PluginDir);
+        assert!(merge.contains("merging develop into main"), "{merge}");
+
+        let rebase = conflict_prompt(OpKind::Rebase, SkillDelivery::PluginDir);
+        assert!(rebase.contains("rebasing main onto develop"), "{rebase}");
+    }
+
+    /// The person chose this door over the abort button that was beside it. An
+    /// agent that tidies up by aborting has undone the only thing it was asked
+    /// to do, and the panel would then show a clean tree as if nothing had
+    /// happened — the one failure here that looks like success.
+    #[test]
+    fn a_conflict_prompt_forbids_aborting() {
+        use crate::vcs::model::OpKind;
+
+        for op in [OpKind::Merge, OpKind::Rebase] {
+            let text = conflict_prompt(op, SkillDelivery::PluginDir);
+            assert!(text.contains("--abort"), "it names the thing not to do: {text}");
+            assert!(text.contains("Do not abort"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_conflict_in_a_repository_with_no_branch_name_still_reads_as_a_sentence() {
+        // The panel sends an empty name rather than inventing one when HEAD is
+        // already detached or the branch list had not landed. "merging develop
+        // into ." would be the alternative.
+        use crate::vcs::model::OpKind;
+
+        let intent = Intent::ResolveConflict {
+            repo: "/p/backend".into(),
+            op: OpKind::Merge,
+            ours: String::new(),
+            theirs: "develop".into(),
+            files: vec!["src/one.rs".into()],
+        };
+        let text =
+            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
+                .unwrap();
+        assert!(text.contains("merging develop into the branch it is on"), "{text}");
+    }
+
+    #[test]
+    fn a_conflict_prompt_names_no_skill_at_all() {
+        // Nothing was added to the library for this, and `smetana:merging` is
+        // the wrong process rather than the near one: it is about a task's
+        // worktrees, its gates and its fast-forward, none of which is what a
+        // person pressing merge in the panel asked for.
+        use crate::vcs::model::OpKind;
+
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = conflict_prompt(OpKind::Merge, delivery);
+            assert!(!text.contains("smetana:"), "{delivery:?}: {text}");
+            assert!(!text.contains("SKILL.md"), "{delivery:?}: {text}");
+            // And it is not a session that writes into bd either, so the
+            // paragraph about how to word an issue has no business here.
+            assert!(!text.contains("bd create --validate"), "{delivery:?}: {text}");
+        }
     }
 
     #[test]

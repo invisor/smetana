@@ -152,6 +152,34 @@ pub enum Intent {
         id: String,
         title: String,
     },
+    /// Finish a merge or a rebase the Git panel started and git stopped on
+    /// conflicts. Started from the modal that opens the moment it does — the
+    /// same idiom as "Ask agent to edit" and "Answer questions", because the
+    /// app has no merge editor and resolving a conflict is work rather than a
+    /// dialog.
+    ///
+    /// It carries the whole of what the agent needs, and that is deliberate
+    /// where `ResolveTask` deliberately carries almost nothing: a parked task's
+    /// questions are in the issue and bd can be asked again, while a conflicted
+    /// tree is a moment — the paths are what git left unmerged *then*, and the
+    /// branch a rebase moved off is not readable from HEAD any more, since a
+    /// stopped rebase leaves it detached.
+    ResolveConflict {
+        /// The repository's absolute path. The session's own directory is the
+        /// project, which is not the same folder in a project of several
+        /// repositories, so the prompt names this one.
+        repo: String,
+        /// Which of the two operations stopped. **`op` and not `kind`**: the
+        /// enum above is tagged `kind`, and a field of that name would be the
+        /// tag's own.
+        op: crate::vcs::model::OpKind,
+        /// The branch this repository was on when it started.
+        ours: String,
+        /// The branch being merged in, or the one being rebased onto.
+        theirs: String,
+        /// Every path git left unmerged.
+        files: Vec<String>,
+    },
     /// Work out what this project is made of and write
     /// `.smetana/project.toml`. Started from the dialog a person gets when
     /// they add a project, and from the project row afterwards.
@@ -201,6 +229,13 @@ impl Intent {
             },
             Intent::EditTask { id, .. } => W::EditTask { id: id.clone() },
             Intent::ResolveTask { id, .. } => W::ResolveTask { id: id.clone() },
+            // The repository and the branch being brought in are what a row can
+            // draw; the conflicted paths are a briefing for the agent, exactly
+            // as a draft's images are, and no row has anywhere to put a dozen
+            // of them.
+            Intent::ResolveConflict { repo, theirs, .. } => {
+                W::ResolveConflict { repo: repo.clone(), theirs: theirs.clone() }
+            }
             Intent::Setup => W::Setup,
             Intent::Run { .. } => W::Run,
         }
@@ -618,6 +653,54 @@ mod tests {
             }
             other => panic!("expected EditTask, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_conflict_intent_deserializes_from_the_front_ends_json() {
+        // Copied from what `resolveConflictWithAgent` in
+        // `src/views/DesktopApp.vue` hands to `createSession`. `op` and not
+        // `kind` is the load-bearing part: the enum's own tag is `kind`, so a
+        // field by that name would be the tag's and this payload would not
+        // deserialize at all — a modal whose one door refused to open.
+        let json = r#"{
+            "kind": "resolveConflict",
+            "repo": "/p/backend",
+            "op": "rebase",
+            "ours": "main",
+            "theirs": "develop",
+            "files": ["src/one.rs", "src/two.rs"]
+        }"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::ResolveConflict { repo, op, ours, theirs, files } => {
+                assert_eq!(repo, "/p/backend");
+                assert_eq!(op, crate::vcs::model::OpKind::Rebase);
+                assert_eq!(ours, "main");
+                assert_eq!(theirs, "develop");
+                assert_eq!(files, ["src/one.rs", "src/two.rs"]);
+            }
+            other => panic!("expected ResolveConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_conflict_intent_carries_where_it_happened_and_leaves_the_paths_behind() {
+        use crate::terminal::model::SessionWork as W;
+        let intent = Intent::ResolveConflict {
+            repo: "/p/backend".into(),
+            op: crate::vcs::model::OpKind::Merge,
+            ours: "main".into(),
+            theirs: "develop".into(),
+            files: vec!["src/one.rs".into(), "src/two.rs".into()],
+        };
+        // The repository and the branch coming in are what a row draws; the
+        // conflicted paths are the agent's briefing, exactly as a draft's
+        // images are, and the branch the repository was on is only wanted to
+        // put the prompt's sentence the right way round.
+        assert_eq!(
+            intent.work(),
+            W::ResolveConflict { repo: "/p/backend".into(), theirs: "develop".into() }
+        );
     }
 
     #[test]

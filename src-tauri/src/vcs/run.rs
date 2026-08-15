@@ -64,6 +64,33 @@ pub fn git_maybe(repo: &Path, args: &[&str], absent: i32) -> Result<Option<Strin
     Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
+/// What a call came to, for a caller that decides from something **other than
+/// the exit code** whether git refused.
+pub enum Attempt {
+    /// git exited zero.
+    Done,
+    /// git exited non-zero, and its refusal is built and ready to be returned
+    /// — carried rather than raised, because the caller may find that this was
+    /// not a refusal at all.
+    Refused(VcsError),
+}
+
+/// The same call again, with the non-zero exit handed back instead of raised.
+///
+/// One caller and one reason: `git merge` and `git rebase` exit non-zero for a
+/// tree they left conflicted exactly as they do for one they refused to touch,
+/// and telling those apart means reading the tree afterwards rather than the
+/// message. Everything else still goes through `git` above, where a non-zero
+/// exit is a refusal and nothing else — a caller that has no second question to
+/// ask must not have to remember to ask this one.
+///
+/// A spawn that failed is still an `Err`: no git on the machine is not an exit
+/// code, and there is no tree to go and look at.
+pub fn git_attempt(repo: &Path, args: &[&str]) -> Result<Attempt, VcsError> {
+    let out = spawn(repo, args)?;
+    Ok(if out.status.success() { Attempt::Done } else { Attempt::Refused(refusal(&out)) })
+}
+
 /// The same call, with the bytes exactly as git wrote them.
 ///
 /// Everything else here takes the lossy conversion because everything else

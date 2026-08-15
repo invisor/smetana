@@ -158,8 +158,8 @@ describe('the git panel store', () => {
     // naming the branch that was just left.
     expect(stores.vcs.vcsState.repos[0].branch).toBe('develop')
     expect(stores.git.gitState.branch).toBe('develop')
-    expect(stores.vcs.vcsState.checkoutError).toBe(null)
-    expect(stores.vcs.vcsState.checkingOut).toBe(null)
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
   })
 
   /* Git's two refusals — a branch already checked out in another worktree, and
@@ -182,14 +182,15 @@ describe('the git panel store', () => {
 
     await stores.vcs.checkout('develop')
 
-    expect(stores.vcs.vcsState.checkoutError).toEqual({
+    expect(stores.vcs.vcsState.writeError).toEqual({
       kind: 'git',
+      op: 'checkout',
       message: "fatal: 'develop' is already checked out at '/p/.worktrees/x'"
     })
     expect(stores.vcs.vcsState.error).toBe(null)
     expect(stores.vcs.vcsState.tree).toEqual(before)
     expect(stores.vcs.vcsState.branches.find((b) => b.current)?.name).toBe('main')
-    expect(stores.vcs.vcsState.checkingOut).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
   })
 
   /* The success path's guard is on the **project** and deliberately not on the
@@ -263,6 +264,170 @@ describe('the git panel store', () => {
     expect(ipc.calls('vcs_checkout')).toEqual([{ repo: '/p/.', branch: 'develop' }])
     release()
     await first
+  })
+
+  /* A merge that git finished. The tree is read again afterwards for the same
+     reason a checkout re-reads it — the row draws each repository's branch, and
+     a merge commit is exactly the sort of thing the changes list has to catch
+     up with — and no dialog opens, because there is nothing to answer. */
+  it('a merge that went through opens nothing and refreshes the panel', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    ipc.on('vcs_merge', { kind: 'clean' })
+    await stores.vcs.loadRepos('/p')
+    const readsBefore = ipc.calls('vcs_repos').length
+
+    await stores.vcs.merge('develop')
+
+    expect(ipc.calls('vcs_merge')).toEqual([{ repo: '/p/.', branch: 'develop' }])
+    expect(stores.vcs.vcsState.conflict).toBe(null)
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+    expect(ipc.calls('vcs_repos').length).toBe(readsBefore + 1)
+  })
+
+  /* The record the modal is drawn from, and the reason it is a record rather
+     than the answer alone: the repository is the one the operation ran in, and
+     `ours` is read *before* git is asked, because a rebase stopped on a
+     conflict leaves HEAD detached and the branch it moved off is then readable
+     nowhere at all. */
+  it('a conflict is recorded whole, with the branch the rebase left behind', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    ipc.on('vcs_rebase', { kind: 'conflict', files: ['src/one.rs', 'src/two.rs'] })
+    /* What a repository mid-rebase actually answers: no branch at all. */
+    ipc.on('git_head', () => ({ branch: null, detached: 'a1b2c3d' }))
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.rebase('develop')
+
+    expect(ipc.calls('vcs_rebase')).toEqual([{ repo: '/p/.', onto: 'develop' }])
+    expect(stores.vcs.vcsState.conflict).toEqual({
+      repo: '/p/.',
+      op: 'rebase',
+      ours: 'main',
+      theirs: 'develop',
+      files: ['src/one.rs', 'src/two.rs']
+    })
+    // A conflict is an outcome and not a failure: nothing goes into the block
+    // under the branch list, which is where git's refusals are drawn.
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* A conflict survives the refresh that follows it. `refresh()` goes back
+     through `loadRepos` with the same project, and a dialog cleared there would
+     be one that opened and closed inside a single call — leaving a conflicted
+     tree with nothing on screen naming it. */
+  it('the refresh that follows a conflict does not take the dialog down', async () => {
+    const { stores, ipc, nextTick } = await loadStores()
+    switching(ipc)
+    ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.rs'] })
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.merge('develop')
+    await stores.vcs.refresh()
+    await nextTick()
+
+    expect(stores.vcs.vcsState.conflict?.files).toEqual(['src/one.rs'])
+  })
+
+  /* Both doors of a conflict act on the project it happened in, so neither
+     means anything after a switch: the abort would name a repository nobody is
+     looking at and the agent would be started in the wrong project. */
+  it('a conflict does not follow the person into another project', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.rs'] })
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.merge('develop')
+    expect(stores.vcs.vcsState.conflict).not.toBe(null)
+
+    await stores.vcs.loadRepos('/other')
+
+    expect(stores.vcs.vcsState.conflict).toBe(null)
+  })
+
+  /* The abort names the operation from the record rather than from anything the
+     dialog passes: what git is told to undo is what git was asked to do. */
+  it('aborting puts the tree back and closes the dialog', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.rs'] })
+    ipc.on('vcs_abort', null)
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.merge('develop')
+
+    await stores.vcs.abortConflict()
+
+    expect(ipc.calls('vcs_abort')).toEqual([{ repo: '/p/.', op: 'merge' }])
+    expect(stores.vcs.vcsState.conflict).toBe(null)
+    expect(stores.vcs.vcsState.conflictError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* An abort git refused leaves the dialog standing with git's own words in
+     it. Closing it would leave a tree that is still conflicted with nothing on
+     screen saying so, and the message cannot go in the panel behind a dialog
+     that has no dismiss. */
+  it('an abort git refused keeps the dialog open and says why', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.rs'] })
+    ipc.fail('vcs_abort', {
+      kind: 'git',
+      message: 'fatal: There is no merge to abort (MERGE_HEAD missing).'
+    })
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.merge('develop')
+
+    await stores.vcs.abortConflict()
+
+    expect(stores.vcs.vcsState.conflict).not.toBe(null)
+    expect(stores.vcs.vcsState.conflictError).toEqual({
+      kind: 'git',
+      message: 'fatal: There is no merge to abort (MERGE_HEAD missing).'
+    })
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* One at a time across all three writes and not one apiece: what a second
+     press asks for is git working in a tree git is already working in, and
+     which of the two operations it was makes no difference to `index.lock`. */
+  it('an operation in flight refuses every other write', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    await stores.vcs.loadRepos('/p')
+    let release
+    ipc.on('vcs_merge', () => new Promise((resolve) => (release = () => resolve({ kind: 'clean' }))))
+
+    const first = stores.vcs.merge('develop')
+    await stores.vcs.checkout('main')
+    await stores.vcs.rebase('main')
+    expect(ipc.calls('vcs_checkout')).toEqual([])
+    expect(ipc.calls('vcs_rebase')).toEqual([])
+    release()
+    await first
+  })
+
+  /* git's refusal of a merge is drawn by the same block a refused checkout
+     gets, and the `op` that comes with it is the whole of what tells them
+     apart: a title reading "did not switch branch" over this would name an
+     operation nobody asked for. */
+  it('a refused merge carries which write it was', async () => {
+    const { stores, ipc } = await loadStores()
+    switching(ipc)
+    await stores.vcs.loadRepos('/p')
+    ipc.fail('vcs_merge', {
+      kind: 'git',
+      message: 'error: Your local changes to the following files would be overwritten by merge:'
+    })
+
+    await stores.vcs.merge('develop')
+
+    expect(stores.vcs.vcsState.writeError?.op).toBe('merge')
+    expect(stores.vcs.vcsState.error).toBe(null)
+    expect(stores.vcs.vcsState.conflict).toBe(null)
   })
 
   it('a failure leaves an error to draw, not a half-filled panel', async () => {
