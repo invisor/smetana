@@ -82,11 +82,19 @@ const BRANCH_ROWS = 6
 const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)' }
 
 /* git's own stderr. Mono and left-aligned rather than an `EmptyState`'s centred
-   prose: this is machine output, and it is shown exactly as git wrote it. */
+   prose: this is machine output, and it is shown exactly as git wrote it.
+
+   Used twice: inside the changes scroller for a read that failed, and as a flex
+   item of this column for a checkout git refused. `flexShrink: 0` is for the
+   second — a flex item shrinks by default, and the lists above it have
+   somewhere to give way to, while a refusal clipped to a strip of its own title
+   is the defect this block was moved out of the branch cap to fix. It changes
+   nothing at the first site, where the parent is not a flex container. */
 const failureStyle = {
   padding: 'var(--space-5)',
   display: 'flex',
   flexDirection: 'column',
+  flexShrink: 0,
   gap: 'var(--space-3)'
 }
 const failureTitleStyle = {
@@ -205,9 +213,19 @@ const changes = computed(() => props.tree?.changes ?? [])
             :branches="branches"
             :actions="actions"
             :checking-out="checkingOut"
-            :error="checkoutError"
             @checkout="$emit('checkout', $event)"
           />
+        </div>
+        <!-- **Outside the scroller above, and that is the whole point.** Drawn
+             under the rows it belonged to, it sat below the fold of a box
+             capped at `BRANCH_ROWS` — with six branches or more the refusal was
+             entirely out of view, so a person pressed a row, the tick did not
+             move, and nothing said why. It is the same block the read failure
+             above uses, and one copy of it: `failureTitleStyle` is what says
+             which of the two this is. -->
+        <div v-if="checkoutError" :style="failureStyle">
+          <div :style="failureTitleStyle">Git did not switch branch</div>
+          <div :style="failureTextStyle">{{ checkoutError.message }}</div>
         </div>
       </template>
     </template>

@@ -33,9 +33,7 @@ const props = defineProps({
      single-branch frame want. */
   actions: { type: Object, default: () => ({ allowed: true, reason: null }) },
   /* The branch a checkout is in flight for, or null. */
-  checkingOut: { type: String, default: null },
-  /* Git's own refusal, `{ kind, message }`, shown exactly as git wrote it. */
-  error: { type: Object, default: null }
+  checkingOut: { type: String, default: null }
 })
 defineEmits(['checkout'])
 
@@ -117,26 +115,12 @@ const markBox = {
    owns the number, and it is also where `prefers-reduced-motion` zeroes it. */
 const spinStyle = { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' }
 
-/* Git's own words, mono and left aligned: this is machine output and the person
-   reading it knows git — a branch held by another worktree and a working tree
-   that would be overwritten are both sentences git already writes better than
-   we would. The shape is `GitPanel`'s failure block, one section down. */
-const failureStyle = {
-  padding: 'var(--space-5)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 'var(--space-3)'
-}
-const failureTitleStyle = {
-  font: 'var(--weight-medium) var(--text-sm)/1 var(--font-sans)',
-  color: 'var(--status-failed-fg)'
-}
-const failureTextStyle = {
-  font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-mono)',
-  color: 'var(--text-secondary)',
-  whiteSpace: 'pre-wrap',
-  overflowWrap: 'anywhere'
-}
+/* Git's refusal of a checkout is deliberately **not** drawn here. `GitPanel`
+   puts this list inside a scroller capped at `BRANCH_ROWS`, so a failure block
+   under the rows sat below the fold of a small inner box nothing scrolls for
+   you — with six branches or more, which is most repositories, it was entirely
+   out of view. The panel draws it outside that cap instead, next to the block
+   it was copied from, which also leaves one copy of how git's stderr looks. */
 
 const empty = computed(() => props.branches.length === 0)
 </script>
@@ -187,16 +171,11 @@ const empty = computed(() => props.branches.length === 0)
         </span>
       </div>
     </component>
-    <!-- Under the list rather than over it: the list is what a person is
-         looking at, and the refusal is about the row they just pressed in
-         it. -->
-    <div v-if="error" :style="failureStyle">
-      <div :style="failureTitleStyle">Git did not switch branch</div>
-      <div :style="failureTextStyle">{{ error.message }}</div>
-    </div>
-    <!-- Its own sentence, like every other empty state in this panel. A
-         repository whose first commit is not written yet has no ref on disk at
-         all, and that is a fact worth stating rather than a blank area. -->
+    <!-- Its own sentence, like every other empty state in this panel, and
+         deliberately narrow about what it can mean. A repository with no commit
+         yet still offers one branch — `git.rs` pushes HEAD's own name into the
+         list precisely so an unborn repository has something to merge into — so
+         what reaches here is a folder git can see nothing in at all. -->
     <div
       v-if="empty"
       :style="{
