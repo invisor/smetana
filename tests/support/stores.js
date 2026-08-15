@@ -32,7 +32,8 @@ export async function loadStores() {
     git,
     runs,
     attachments,
-    notifications
+    notifications,
+    vcs
   ] =
     await Promise.all([
       import('vue'),
@@ -46,7 +47,8 @@ export async function loadStores() {
       import('../../src/stores/git.js'),
       import('../../src/stores/runs.js'),
       import('../../src/stores/attachments.js'),
-      import('../../src/stores/notifications.js')
+      import('../../src/stores/notifications.js'),
+      import('../../src/stores/vcs.js')
     ])
 
   return {
@@ -64,7 +66,8 @@ export async function loadStores() {
       git,
       runs,
       attachments,
-      notifications
+      notifications,
+      vcs
     }
   }
 }

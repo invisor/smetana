@@ -436,6 +436,40 @@ export function installMockBackend() {
     if (command === 'git_head') {
       return { branch: 'feat/worktree-rename', detached: null }
     }
+    /* The Git panel's two reads. A browser has no git to run, so both answer
+       from a fixture — two repositories rather than one, since a project made
+       of several is the case the repository list exists for and the case a
+       single-repository machine can never show. */
+    if (command === 'vcs_repos') {
+      const project = payload?.project ?? MOCK_PROJECTS[0]
+      return [
+        { name: '.', path: project, branch: 'feat/worktree-rename', detached: null },
+        { name: 'admin', path: `${project}/admin`, branch: null, detached: 'a1b2c3d' }
+      ]
+    }
+    /* One of each kind the panel draws, including a rename with its original
+       path and a conflict — the loud row, which is the one worth being able to
+       look at with no worker behind it. */
+    if (command === 'vcs_status') {
+      return {
+        branch: 'feat/worktree-rename',
+        detached: null,
+        changes: [
+          { path: 'src/stores/vcs.js', origPath: null, kind: 'modified', staged: false, unstaged: true },
+          { path: 'src/components/git/GitPanel.vue', origPath: null, kind: 'added', staged: true, unstaged: false },
+          { path: 'src/views/desktopAppData.js', origPath: null, kind: 'deleted', staged: true, unstaged: false },
+          {
+            path: 'src/components/git/RepoList.vue',
+            origPath: 'src/components/shell/RepoList.vue',
+            kind: 'renamed',
+            staged: true,
+            unstaged: false
+          },
+          { path: 'notes/todo.txt', origPath: null, kind: 'untracked', staged: false, unstaged: true },
+          { path: 'src/stores/tabs.js', origPath: null, kind: 'conflicted', staged: false, unstaged: true }
+        ]
+      }
+    }
     if (command === 'terminal_list') {
       return [
         /* The filing agent comes first deliberately: `loadSessions` repairs an
