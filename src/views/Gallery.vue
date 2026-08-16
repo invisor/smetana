@@ -79,7 +79,8 @@ import { gitActions } from '../components/git/gitActions.js'
 import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
-import { fileIcon } from '../fileIcon.js'
+import { fileIconUrl } from '../catppuccinIcon.js'
+import { documentTheme } from '../documentTheme.js'
 import { terminalState } from '../stores/terminals.js'
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
@@ -259,30 +260,34 @@ const switched = ref(true)
    the rule rather than being written out, so a fixture cannot claim a tab looks
    like something the app would never draw — `stores/tabs.js` calls the same
    function. The diff tab keeps its own: there the glyph says what kind of tab it
-   is, not what kind of file. */
-const tabs = [
+   is, not what kind of file.
+
+   A computed and not a plain array: the icon carries a palette rather than a
+   token, so flipping the theme has to rebuild it. In the app `tabList` is
+   already a computed and gets this for free. */
+const tabs = computed(() => [
   { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
-  { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', icon: fileIcon('tabs.rs'), dirty: true },
-  { id: 'agent.rs', kind: 'preview', label: 'agent.rs', icon: fileIcon('agent.rs') },
+  { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', iconUrl: fileIconUrl('tabs.rs', documentTheme.value), dirty: true },
+  { id: 'agent.rs', kind: 'preview', label: 'agent.rs', iconUrl: fileIconUrl('agent.rs', documentTheme.value) },
   { id: 'git.rs', kind: 'diff', label: 'git.rs', icon: 'git-compare' },
   {
     id: 'logo.png',
     kind: 'file',
     label: 'logo.png',
-    icon: fileIcon('logo.png'),
+    iconUrl: fileIconUrl('logo.png', documentTheme.value),
     readOnly: true,
     readOnlyHint: 'Binary file — not shown.'
   }
-]
+])
 
 /* `FileTree` walks a nested `children` array and draws a folder's contents only
    when `expanded` names it, while `MOCK_TREE` is keyed by directory the way
    `files_list` answers — so the gallery nests the one into the other and opens
    the folder. It was handed the flat root before, which drew six rows and left
-   `file-code`, `image`, `file-archive` and the plain page — four of the seven
-   glyphs `src/fileIcon.js` can produce — visible nowhere in the gallery at
-   all. */
+   the language icons, the picture and the archive — the half of
+   `src/catppuccinIcon.js`'s vocabulary a person is most likely to be looking
+   at — visible nowhere in the gallery at all. */
 const galleryTree = MOCK_TREE[''].map((node) =>
   node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
 )

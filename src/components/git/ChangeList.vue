@@ -25,7 +25,8 @@ import { computed, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import { useInteractive } from '../core/interactive.js'
 import { basename } from '../../paths.js'
-import { fileIcon, folderIcon } from '../../fileIcon.js'
+import { fileIconUrl, folderIconUrl } from '../../catppuccinIcon.js'
+import { documentTheme } from '../../documentTheme.js'
 import { changeStatus } from './changeStatus.js'
 
 const props = defineProps({
@@ -107,14 +108,23 @@ const letterStyle = (change) => ({
   color: `var(${changeStatus(change.kind).token})`
 })
 
-/* What the name is, drawn — the tree's own rule (`src/fileIcon.js`), so a file
-   looks the same in the panel it changed in as in the tree it lives in. It is
-   the third mark before the name, after the staged tick and the kind's letter,
-   and it is the only one of the three that is muted and uncoloured: the letter
-   is what this list is about, and a glyph competing with it for the eye would
-   be answering a question nobody asked here. An untracked folder arrives as one
-   record with a trailing slash and takes the folder glyph. */
-const icon = (change) => (change.path.endsWith('/') ? folderIcon(change.path) : fileIcon(change.path))
+/* What the name is, drawn — the tree's own rule, so a file looks the same in the
+   panel it changed in as in the tree it lives in. An untracked folder arrives as
+   one record with a trailing slash and takes the folder icon.
+
+   It is the third mark before the name, after the staged tick and the kind's
+   letter, and unlike the other two it is in colours this app did not choose.
+   The cost is measured rather than suspected: on a modified `.js` the status
+   letter and the icon are **0-1 degrees apart in hue**, and on an added `.vue`
+   the icon's green and the `A`'s green are 3 degrees apart in dark and 10 in
+   light — two marks six pixels apart, one meaning "modified" and one meaning
+   "JavaScript". Nothing here fixes that; it was weighed and accepted with the
+   set. If this row is ever trimmed back, this glyph is the first thing to go,
+   and `core/icons.js` still holds the monochrome page it would go back to. */
+const icon = (change) =>
+  change.path.endsWith('/')
+    ? folderIconUrl(change.path, false, documentTheme.value)
+    : fileIconUrl(change.path, documentTheme.value)
 
 /* The file's own name reads first and its directory follows it muted — the
    shape a person scans a list of changes in. Both in mono: a path is an
@@ -174,7 +184,7 @@ const empty = computed(() => props.changes.length === 0)
         :aria-label="changeStatus(change.kind).label"
         :style="letterStyle(change)"
       >{{ changeStatus(change.kind).letter }}</span>
-      <Icon :name="icon(change)" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
+      <img :src="icon(change)" alt="" :width="MARK + 2" :height="MARK + 2" :style="{ display: 'block', flex: 'none' }" />
       <span :style="nameStyle">{{ label(change.path) }}</span>
       <span :style="pathStyle">{{ [directory(change.path), from(change)].filter(Boolean).join(' ') }}</span>
     </div>
