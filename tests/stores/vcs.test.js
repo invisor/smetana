@@ -449,6 +449,185 @@ describe('the git panel store', () => {
      the last visit must not leave the panel pointed at a folder that is gone,
      and the substitution is silent because nothing a person did today caused
      it. */
+  /* A repository with something uncommitted in it, which is what the commit box
+     needs to be drawn over at all. The tree empties once git has committed, so
+     what the panel says afterwards is what the tests below read. */
+  const committing = (ipc) => {
+    let dirty = true
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', () => ({
+      branch: 'main',
+      detached: null,
+      changes: dirty
+        ? [{ path: 'a.rs', origPath: null, kind: 'modified', staged: false, unstaged: true }]
+        : []
+    }))
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('git_head', () => ({ branch: 'main', detached: null }))
+    ipc.on('vcs_commit', () => {
+      dirty = false
+      return null
+    })
+  }
+
+  it('a commit takes the draft, empties the tree and clears the field', async () => {
+    const { stores, ipc } = await loadStores()
+    committing(ipc)
+    await stores.vcs.loadRepos('/p')
+    stores.vcs.setMessage('fix: the thing')
+
+    await stores.vcs.commit()
+
+    expect(ipc.calls('vcs_commit')).toEqual([{ repo: '/p/.', message: 'fix: the thing' }])
+    expect(stores.vcs.vcsState.tree.changes).toEqual([])
+    expect(stores.vcs.draftMessage()).toBe('')
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* The one thing a refused commit must not do is throw the sentence away: it
+     is what somebody would have to type a second time, and git refusing a hook
+     or an unset identity is exactly the case they will fix and press again. */
+  it('a refused commit keeps the draft and says which write it was', async () => {
+    const { stores, ipc } = await loadStores()
+    committing(ipc)
+    await stores.vcs.loadRepos('/p')
+    stores.vcs.setMessage('fix: the thing')
+    ipc.fail('vcs_commit', {
+      kind: 'git',
+      message: 'Author identity unknown\n\n*** Please tell me who you are.'
+    })
+
+    await stores.vcs.commit()
+
+    expect(stores.vcs.vcsState.writeError?.op).toBe('commit')
+    expect(stores.vcs.draftMessage()).toBe('fix: the thing')
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* `write` bails on a busy panel without doing anything, and the draft has to
+     survive that too: reading "no error afterwards" as "committed" would throw
+     the sentence away with nothing committed, which is the same loss as a
+     refusal and harder to notice. */
+  it('a commit pressed while git is busy keeps the draft', async () => {
+    const { stores, ipc } = await loadStores()
+    committing(ipc)
+    let release
+    ipc.on('vcs_checkout', () => new Promise((resolve) => (release = resolve)))
+    await stores.vcs.loadRepos('/p')
+    stores.vcs.setMessage('fix: the thing')
+
+    const slow = stores.vcs.checkout('main')
+    await stores.vcs.commit()
+
+    expect(ipc.calls('vcs_commit')).toEqual([])
+    expect(stores.vcs.draftMessage()).toBe('fix: the thing')
+    release(null)
+    await slow
+  })
+
+  it('a commit with nothing written asks git nothing at all', async () => {
+    const { stores, ipc } = await loadStores()
+    committing(ipc)
+    await stores.vcs.loadRepos('/p')
+    stores.vcs.setMessage('   \n ')
+
+    await stores.vcs.commit()
+
+    expect(ipc.calls('vcs_commit')).toEqual([])
+  })
+
+  /* Drafts are per repository, because a project is often several of them and
+     the sentences are about different work. Switching away and back has to find
+     the message where it was left — the field is the one place in this panel
+     holding something a person typed. */
+  it('each repository keeps its own draft', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [])
+    await stores.vcs.loadRepos('/p')
+
+    stores.vcs.setMessage('one')
+    await stores.vcs.selectRepo('/p/backend')
+    expect(stores.vcs.draftMessage()).toBe('')
+    stores.vcs.setMessage('two')
+    await stores.vcs.selectRepo('/p/admin')
+
+    expect(stores.vcs.draftMessage()).toBe('one')
+  })
+
+  it('the drafts do not follow the person into another project', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', (args) => repoIn(args.project))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [])
+    await stores.vcs.loadRepos('/p')
+    stores.vcs.setMessage('about this project')
+
+    await stores.vcs.loadRepos('/other')
+
+    expect(stores.vcs.draftMessage()).toBe('')
+  })
+
+  it('the agent’s message lands in the field', async () => {
+    const { stores, ipc } = await loadStores()
+    committing(ipc)
+    ipc.on('vcs_suggest_message', 'chore: bump the sidecar')
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.suggestMessage()
+
+    expect(stores.vcs.draftMessage()).toBe('chore: bump the sidecar')
+    expect(stores.vcs.vcsState.suggesting).toBe(false)
+    expect(stores.vcs.vcsState.suggestError).toBe(null)
+  })
+
+  /* Generating writes nothing, so it must not go through `busy` and take the
+     branch rows down with it — and its failure must not reach `writeError`,
+     where the panel would title it "Git refused this operation" over a party
+     that was never asked. */
+  it('asking the agent leaves the branch rows alone and keeps its own error', async () => {
+    const { stores, ipc } = await loadStores()
+    committing(ipc)
+    ipc.fail('vcs_suggest_message', {
+      kind: 'noAgent',
+      message: 'Smetana looked for claude on your PATH and found nothing.'
+    })
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.suggestMessage()
+
+    expect(stores.vcs.vcsState.suggestError).toEqual({
+      kind: 'noAgent',
+      message: 'Smetana looked for claude on your PATH and found nothing.'
+    })
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+    expect(stores.vcs.vcsState.suggesting).toBe(false)
+  })
+
+  /* The guard that matters most in this store, since what it stops is a
+     sentence about one repository's work sitting in another repository's field
+     one keystroke away from being committed there. */
+  it('a message arriving after the repository changed is dropped', async () => {
+    const { stores, ipc, nextTick } = await loadStores()
+    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [])
+    let release
+    ipc.on('vcs_suggest_message', () => new Promise((resolve) => (release = resolve)))
+    await stores.vcs.loadRepos('/p')
+
+    const asked = stores.vcs.suggestMessage()
+    await stores.vcs.selectRepo('/p/backend')
+    release('feat: about admin')
+    await asked
+    await nextTick()
+
+    expect(stores.vcs.draftMessage()).toBe('')
+    expect(stores.vcs.vcsState.messages['/p/admin']).toBe(undefined)
+  })
+
   it('a remembered repository that is no longer there is replaced by the first', async () => {
     const { stores, ipc } = await loadStores()
     stores.settings.settings.project.selectedRepo = '/p/gone'

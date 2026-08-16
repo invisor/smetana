@@ -84,6 +84,23 @@ export const vcsState = reactive({
      one reason: the dialog cannot be dismissed, so a message put in the panel
      behind it would be one nobody could see. */
   conflictError: null,
+  /* The commit message somebody is part-way through writing, by repository
+     path. Kept per repository because a project is often several of them and
+     the messages are about different work; kept **here** and not in
+     `settings.json` because it is a draft and not a preference — the file holds
+     what somebody chose about the app, and a half-typed sentence restored three
+     days later is not that.
+
+     A key appears on the first keystroke and the whole object goes on `reset`,
+     so it is bounded by the repositories of one project. */
+  messages: {},
+  /* Whether the agent is being asked for a message right now, and its refusal
+     if it had one. Deliberately **not** `busy` and **not** `writeError`:
+     generating writes nothing to the tree, so the branch rows must stay live
+     under it, and "Git refused this operation" over a failure that never
+     reached git would name the wrong party. */
+  suggesting: false,
+  suggestError: null,
   loading: false
 })
 
@@ -124,7 +141,15 @@ export async function loadRepos(project) {
      project rather than hanging over the next one. `refresh()` comes back
      through here with the same project and leaves it standing, which is what
      lets a conflict survive the refresh that follows the merge that made it. */
-  if (project !== vcsState.project) dismissConflict()
+  if (project !== vcsState.project) {
+    dismissConflict()
+    /* The drafts go with the project they were about. `refresh()` comes back
+       through here with the same project and leaves them standing, which is
+       what lets a message survive the refresh a failed commit is followed
+       by. */
+    vcsState.messages = {}
+    vcsState.suggestError = null
+  }
   vcsState.project = project
   if (!project) {
     reset()
@@ -264,7 +289,13 @@ function currentBranch() {
    not a nicety, since HEAD can be detached now and the bar says so. */
 async function write(op, branch, call) {
   const { project, selected } = vcsState
-  if (!selected || !branch || vcsState.busy) return
+  /* A branch is **not** required here, though three of the four writes cannot
+     do without one and guard it themselves. A commit is about the tree rather
+     than about a row, and on a detached HEAD there is no branch to name at all
+     — a guard here would have turned that into a button that did nothing and
+     said nothing. `busy` still carries the branch for the three that have one,
+     since that is what puts the spinner on the right row. */
+  if (!selected || vcsState.busy) return false
   const ours = currentBranch()
   vcsState.busy = { op, branch }
   vcsState.writeError = null
@@ -278,7 +309,7 @@ async function write(op, branch, call) {
        repository and re-picks the remembered one, so it is right whichever is
        selected by the time it runs — the `selected` half is what `loadStatus`
        and `loadBranchList` need, not this. */
-    if (vcsState.project !== project) return
+    if (vcsState.project !== project) return true
     /* Rust's own shape, read for the one word the panel branches on. The
        repository named here is the one the operation ran in, captured before
        the await: everything the modal then does — the abort, the agent's
@@ -293,9 +324,11 @@ async function write(op, branch, call) {
        on: here it is the second half of one act, so a write that has finished
        means the panel and the bar over it agree. */
     await loadHead(project)
+    return true
   } catch (err) {
-    if (vcsState.project !== project || vcsState.selected !== selected) return
+    if (vcsState.project !== project || vcsState.selected !== selected) return false
     vcsState.writeError = { ...asError(err), op }
+    return false
   } finally {
     /* Cleared whoever the project is now: this flag is what holds the panel
        inert, and a switch landing mid-write would otherwise leave the new
@@ -306,6 +339,7 @@ async function write(op, branch, call) {
 
 /* Switch the selected repository to another of its branches. */
 export async function checkout(branch) {
+  if (!branch) return
   await write('checkout', branch, (repo) => invoke('vcs_checkout', { repo, branch }))
 }
 
@@ -316,13 +350,79 @@ export async function checkout(branch) {
    lost — so it lands in `conflict` and opens the modal, while the panel behind
    it refreshes and shows exactly the tree git left. */
 export async function merge(branch) {
+  if (!branch) return
   await write('merge', branch, (repo) => invoke('vcs_merge', { repo, branch }))
 }
 
 /* Replay this repository's branch on top of another one. The same two answers,
    and the same door out of the second. */
 export async function rebase(onto) {
+  if (!onto) return
   await write('rebase', onto, (repo) => invoke('vcs_rebase', { repo, onto }))
+}
+
+/* What is in the draft for the repository on screen. Empty for one nobody has
+   typed into, which is the same thing to a `Textarea`. */
+export function draftMessage() {
+  return vcsState.messages[vcsState.selected] ?? ''
+}
+
+/* Somebody typed, or the agent answered. Keyed by repository, so switching to
+   another and back finds the sentence where it was left. */
+export function setMessage(text) {
+  if (!vcsState.selected) return
+  vcsState.messages[vcsState.selected] = text
+}
+
+/* Commit everything the panel is showing, under the draft message.
+
+   `git add --all` then `git commit` on the far side, which is why the count on
+   the button is the whole list: this app has no staging of its own, so the
+   honest scope is what is on screen. The branch is passed for `busy` to carry
+   and may be null — a detached HEAD is a tree somebody can still commit to.
+
+   The draft is cleared on success only, and "success" is what `write` says
+   rather than what `writeError` looks like afterwards: `write` also bails
+   without doing anything when git is already busy, and reading the absence of
+   an error as a commit would have thrown the sentence away with nothing
+   committed. A commit git refused is one somebody is about to try again, and
+   that sentence is the thing they would otherwise type twice. */
+export async function commit() {
+  const repo = vcsState.selected
+  const message = draftMessage().trim()
+  if (!repo || !message) return
+  const committed = await write('commit', currentBranch(), (selected) =>
+    invoke('vcs_commit', { repo: selected, message })
+  )
+  if (committed) delete vcsState.messages[repo]
+}
+
+/* Ask the agent for a commit message and put it in the field.
+
+   Its own flag rather than `busy`, because this reads: the tree is not touched,
+   so nothing about the branch rows below has to go inert while a model thinks.
+   Its own error field for the same reason — the block that says "Git refused
+   this operation" would be naming a party that was never asked.
+
+   Guarded on the pair, project and repository, exactly as `loadStatus` is: an
+   answer landing after somebody switched repositories would drop one
+   repository's commit message into another repository's field, which is the one
+   way this can do real damage. */
+export async function suggestMessage() {
+  const { project, selected } = vcsState
+  if (!selected || vcsState.suggesting) return
+  vcsState.suggesting = true
+  vcsState.suggestError = null
+  try {
+    const message = await invoke('vcs_suggest_message', { repo: selected })
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    vcsState.messages[selected] = message
+  } catch (err) {
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    vcsState.suggestError = asError(err)
+  } finally {
+    vcsState.suggesting = false
+  }
 }
 
 /* The first door out of a conflict: put the tree back exactly as it was.
@@ -406,5 +506,10 @@ function reset() {
      that project comes back. */
   vcsState.conflict = null
   vcsState.conflictError = null
+  /* The drafts go with the project they were about. Keeping them would mean a
+     sentence about another project's work sitting over this one's file list,
+     one keystroke away from being committed there. */
+  vcsState.messages = {}
+  vcsState.suggestError = null
   vcsState.loading = false
 }

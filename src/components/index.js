@@ -76,11 +76,16 @@ export { default as FileTreeRow } from './files/FileTreeRow.vue'
 // git
 export { default as BranchList } from './git/BranchList.vue'
 export { default as ChangeList } from './git/ChangeList.vue'
+export { default as CommitBox } from './git/CommitBox.vue'
 export { default as ConflictModal } from './git/ConflictModal.vue'
 export { default as GitPanel } from './git/GitPanel.vue'
 export { default as RepoList } from './git/RepoList.vue'
+export { default as SectionHeader } from './git/SectionHeader.vue'
+export { branchRows, currentChain, expandedFolders, toggleFolder } from './git/branchTree.js'
 export { changeStatus } from './git/changeStatus.js'
+export { canCommit, canSuggest, commitHint, commitLabel } from './git/commitBox.js'
 export { gitActions } from './git/gitActions.js'
+export { BRANCH_ROWS, filler, resolveDrag } from './git/sectionHeights.js'
 
 // notifications
 export { default as NotificationCard } from './notifications/NotificationCard.vue'

@@ -76,13 +76,154 @@ do not add one**: a third watcher subsystem would fire on every write inside `no
 `target`, and the price of the sweep is named — while an agent works, this list is as stale as the
 file tree beside it.
 
-The panel writes three times and they share one rule and one field apiece. A branch row checks out,
-merges into the current branch or rebases the current branch onto it; `gitActions.js` — pure, tested,
-of the `branchChoice.js` family — is the whole of when any of them may be offered, and it reads the
-project's **runs** and nothing else, so a session a person started themselves never dims the panel
-while a batch mid-merge always does. `busy` (`{ op, branch }`) is what makes it one at a time, and
-`writeError` carries git's stderr with the `op` that earned it, since a block reading "did not switch
-branch" over a refused merge would name an operation nobody asked for.
+**The three sections fold and two of them are dragged**, and the rule is `components/git/sectionHeights.js`
+— pure, tested, of the `gitActions.js` family; `SectionHeader.vue` is the caption, which is a real
+`<button>` so the keyboard and `aria-expanded` come for free, and `shell/Resizer.vue` is the strip
+between them, at `orientation="horizontal"`. The state is **global**, in `settings.layout.gitSections`
+rather than under the project: how tall somebody likes their branch list is a habit of reading, the
+same argument `kanban` is global on. A folded caption **keeps its count** — folding the branches away
+says "do not draw me the list", not "stop telling me there are nine".
+
+A caption carries `divided`, the hairline above it, and the repositories deliberately do not: every
+section here is `--row-h` and quiet, so with nothing between them the three ran together into one
+column of rows and neither the captions nor the blocks under them read as blocks at all. It is the
+same hairline `Panel` draws under its title, and the topmost caption goes without because the project
+list above this panel already ends in one — two of them meeting would draw a 2px line. The rule sits
+on the caption and not on the `Resizer` above it, since a folded section has no resizer and would
+lose its separator exactly where the captions are stacked tightest. It is drawn inside the height,
+which `box-sizing: border-box` is what makes true: a rule that added a pixel to two of the three
+captions would put the measured row a pixel away from the drawn ones for the whole of the arithmetic
+below.
+
+The arithmetic is in **rows and not pixels**, so a stored height follows `--row-h` through both
+densities and the app-wide font size, and a drag stops on a row boundary instead of leaving half of
+one under the fold. The one pixel measurement is at the edge, in the component: a header *is* a row,
+so it is what a row is measured by, and `getComputedStyle` is no use for it — `--row-h` is a `calc()`
+over an unregistered custom property and comes back unevaluated, the trap `terminal/theme.js`
+records. A `ResizeObserver` watches the panel and that header, because the window moves the first and
+the density and font size move the second without re-rendering anything.
+
+Which section absorbs the leftover is **derived, never stored**: the changes while they are unfolded,
+then the repositories, then the branches. The filler's own separator is not drawn — there is nothing
+on its side of the strip to take height from — which is also what fixes the direction of the other
+two for good: the repositories are always above the filler and the branches always below it, in every
+configuration of folds. Dragging to nothing stops at the minimum rather than folding, unlike a side
+panel: a panel's rail had to invent a fold out of the drag because it carries no other affordance,
+while a chevron here is always on screen, and a fold made by a gesture whose separator then
+disappears is a one-way door. Double click gives a section back to its content.
+
+**The stored number and the drawn number are two numbers**, the rule `panelWidths.js` states one axis
+over, and here it is load-bearing rather than tidy: letting CSS shrink a section below the number it
+holds was tried, and it turns the section's own drawn height into the next drag's starting point, so
+every attempt to pull it up walks the stored number *down*. So a dragged section is `0 0 auto` at a
+height clamped against the panel it is in now, and only a drag writes back. Three numbers earn their
+keep in that clamp and all three were paid for by a defect: the filler's floor is honoured in the
+clamp and deliberately **not** repeated as a `minHeight`, which took its floor out of the sections
+above and drew a 260px panel's repository list as a clipped strip; the ceiling is **floored, not
+rounded**, since a panel with room for 6.8 rows has room for 6 and the seventh comes back out of
+whichever section had no claim; and a section nobody has dragged is owed one whole row — it gives way
+on its own, but giving way to nothing draws the same sliver.
+
+**Branch names group into folders**, the way GitLens does it: everything before a slash is a heading
+and a row draws only the leaf, which is the width it buys back — under one heading the prefix is on
+every row and the tail is the half that identifies a branch. The whole name still travels on the row,
+because that is what the three writes are given. The rule is `components/git/branchTree.js` — pure,
+tested, of the same family — and it nests as deeply as the name does rather than splitting once:
+`fix/legacy/…` is already in this tree, and a rule that split at the first slash would draw a branch
+still called `legacy/warehouse-geocode`.
+
+**A folder stands where its most recent branch stood**, and that is the whole of how the grouping
+keeps the promise `BranchList` opens with. The list arrives in `git::by_recency`'s order because the
+branch somebody merges into every day is nowhere in particular alphabetically; grouping is a re-sort,
+and this is the one arrangement of it that leaves what was worked on last at the top, heading or row.
+Names with no slash in them — `main`, `develop`, half of any repository — stay exactly where they
+were and never become a folder. A folded folder leaves its branches out of the list altogether and
+its count is the only thing saying they are there. A heading is a `<button>`, like the section caption
+above it, and is deliberately **not dimmed while a run blocks the three writes**: unfolding is
+reading, and a heading greyed out beside rows greyed out because they cannot be pressed would be
+saying something untrue about itself.
+
+Which folders are unfolded is per project — `settings.project.branchFolders`, beside the file tree's
+`expanded` — because a `feature/…` convention belongs to a repository where the section heights above
+belong to a person. **`null` and `[]` are different states and the field is an `Option` in Rust for
+exactly that**: `null` is "nobody has chosen here" and unfolds the folder the current branch is in, so
+the tick saying where you are is on screen the first time; `[]` is somebody having folded them all,
+and stays. With a plain list there would be no way to fold the last folder away — the empty list would
+read as the first case and come back unfolded on the next start. `branchTree.js` resolves a press
+against that seed and hands the panel a whole new list, which is what writes the seed out on the
+first press. Nothing reopens a folder afterwards, and it does not need to: the only way to press a
+branch row is to see it, so a branch checked out from this panel was in a folder that was open.
+
+## Committing, and the message somebody does not have to write
+
+**The commit takes the whole tree, and the button says so.** `vcs_commit` runs `git add --all` and
+then `git commit -m`, so what a press takes is exactly the list the section is drawing, untracked
+files included — the ordinary case here, where a change set is often mostly new files and `git commit
+-a` would leave every one of them behind. The cost is stated rather than hidden: somebody who staged
+one hunk by hand loses that distinction, and this app has no staging of its own to express it with.
+Hence the count on the button, `commitLabel` — a button reading only "Commit" would leave the one
+surprising thing about it unsaid. The empty message is refused **before** the add and not left to
+git, whose own refusal is in good words but arrives with the index already rewritten behind it. No
+`--no-verify`: a repository's hooks are part of what committing means there, and the price is the one
+this module pays everywhere — there is no timeout in `run.rs`, so a hook that hangs hangs the panel,
+exactly as a merge driver that hangs already does.
+
+**The draft is per repository, in memory, and never in `settings.json`.** A project is often several
+repositories and the sentences are about different work, so `vcsState.messages` is keyed by path; the
+file holds what somebody *chose* about the app, and a half-typed sentence restored three days later
+is not that. It survives folding the section away, since the panel is handed it rather than holding
+it, and it survives a refusal — a commit git declined is one somebody is about to try again, and the
+sentence is the thing they would otherwise type twice. It does not survive the project changing,
+where it would be a message about other work sitting one keystroke from being committed here.
+
+**The sparkle button is a read, and everything about it follows from that.** `vcs_suggest_message`
+runs `git diff HEAD`, gathers the untracked paths separately — they are in no diff at all, so a
+change set of nothing but new files would otherwise be described as empty — and hands the lot to
+`agents::oneshot`, which is `claude -p` with no PTY: the same spawn `runs/usage.rs` makes, with the
+login shell's `PATH` and a deadline with a kill behind it. Being a read is why it stays live while a
+run holds the three writes (the line `BranchList` already draws for a folder heading), why it uses
+its own `suggesting` flag rather than `busy`, and why its failure is a quiet line under the field
+rather than the panel's "Git refused this operation" block, which would name a party that was never
+asked. Its guard is the pair, project and repository, and that one earns its keep: an answer landing
+after a switch would drop one repository's commit message into another's field.
+
+What the harness can be asked is the harness's own business, so it rides on `Profile::oneshot_args`
+beside `usage_command`, and the front end never learns which agent is configured — the button is
+drawn for everybody and a harness with no non-interactive form says so in a sentence
+(`OneshotError::Unsupported`) rather than being hidden. `commit_prompt` and `clean` are pure and
+carry their tests in `oneshot.rs`: the patch is cut at 48 K with the cut **announced**, since a model
+told the whole diff was there when it was not will describe the half it saw as the whole change, and
+what comes back is taken as its first non-empty line with fences and quotation marks stripped —
+belt and braces, because the instruction asks for one bare line and models add the fence anyway.
+
+The layout is VS Code's, and each half of it is a decision rather than a copy. The **sparkle sits
+inside the field**, at its right edge, because that leaves the commit button the whole width and the
+whole width is what somebody aims at without looking — and because the two buttons are not the same
+kind of thing anyway: one is about the sentence in the box it sits in, the other about the tree. The
+field's placeholder carries the shortcut and **the branch the commit would land on**
+(`messagePlaceholder`, pure and tested), which is the width's best use in a panel people work several
+branches from, given a commit is the write with no undo here; `⌘` or `Ctrl` follows the platform, and
+a detached HEAD names no branch rather than naming nothing. The field is a plain box and deliberately
+not a `<label>`: a label would forward a click on the sparkle to the textarea, which is a press that
+moves the focus on its way to doing nothing.
+
+The box is drawn **stuck** to the top of the change list rather than pinned above it, and that is one
+scroller rather than two: `sectionHeights.js` is untouched by it, and a panel too short for the box
+scrolls to the button instead of clipping it off under the section boundary — which is what the
+pinned version did at 260px. When it may be pressed, and the one sentence it says when it may not, is
+`components/git/commitBox.js`, pure and tested, of the `gitActions.js` family.
+
+The panel's writes share one rule and one field apiece. A branch row checks out, merges into the
+current branch or rebases the current branch onto it, and the commit box takes the tree;
+`gitActions.js` — pure, tested, of the `branchChoice.js` family — is the whole of when any of them
+may be offered, and it reads the project's **runs** and nothing else, so a session a person started
+themselves never dims the panel while a batch mid-merge always does. `busy` (`{ op, branch }`) is
+what makes it one at a time, and `writeError` carries git's stderr with the `op` that earned it,
+since a block reading "did not switch branch" over a refused merge would name an operation nobody
+asked for. The branch in `busy` may be **null**, and only for the commit: three of the four cannot do
+without one and guard it themselves, while a commit is about the tree and on a detached HEAD there is
+no branch to name — a guard in the shared path turned that into a button that did nothing and said
+nothing.
 
 **A conflict is an outcome and not a failure, and it is read off the tree rather than off the
 message.** `git merge`'s prose moves between versions where an unmerged record in `--porcelain=v2`

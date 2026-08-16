@@ -485,6 +485,20 @@ export function installMockBackend() {
         ]
       }
     }
+    /* The commit-message button. A read like the three above — it runs `git
+       diff` and a model, and changes nothing — so it answers here rather than
+       falling through to the refusal, which is what lets the field, the
+       spinner and the button be checked in a browser at all. `vcs_commit` is
+       deliberately **not** here and falls through with every other write: a
+       commit that looked as though it had happened would be the worst kind of
+       lie, since there is no working tree behind any of this.
+
+       The sentence is about the fixture changes above, and it is written the
+       way the prompt asks for one so that what a person sees in the browser is
+       the shape the real thing returns. */
+    if (command === 'vcs_suggest_message') {
+      return 'feat: add a commit box to the Git panel'
+    }
     /* The branch list, in the order `git::by_recency` would have given it: the
        branch worked on most recently first, the tail alphabetical. The current
        one is deliberately not the first, since a list where the two coincide

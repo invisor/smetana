@@ -252,6 +252,11 @@ pub enum VcsError {
     TooLarge { path: String, bytes: u64 },
     #[error("not UTF-8 text: {0}")]
     NotUtf8(String),
+    /// A commit was asked for with nothing to call it. git refuses this too, and
+    /// in good words — but only after the tree has been staged, which is why
+    /// `vcs_commit` answers it first and this variant exists to answer it with.
+    #[error("A commit needs a message.")]
+    NoMessage,
     #[error("{0}")]
     Io(String),
 }
@@ -266,6 +271,7 @@ impl VcsError {
             Self::Binary(_) => "binary",
             Self::TooLarge { .. } => "tooLarge",
             Self::NotUtf8(_) => "notUtf8",
+            Self::NoMessage => "noMessage",
             Self::Io(_) => "io",
         }
     }

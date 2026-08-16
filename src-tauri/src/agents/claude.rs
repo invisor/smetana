@@ -142,6 +142,13 @@ impl Profile for Claude {
         Some(&["-p", "/usage"])
     }
 
+    /// The same `-p`, and nothing beside it: what a one-shot question wants is
+    /// the answer on stdout, which is what print mode without a stream format
+    /// already prints.
+    fn oneshot_args(&self) -> Option<&'static [&'static str]> {
+        Some(&["-p"])
+    }
+
     fn parse_usage(&self, output: &str) -> Option<Usage> {
         usage(output)
     }

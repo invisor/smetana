@@ -67,7 +67,7 @@ turned `needs-you` spends one of the one or two loud rows on the screen and make
 `terminal_run_capture` refuse a session with nothing open on it, so a change to that CLI should cost
 a miss rather than a false alarm.
 
-Five more methods on `Profile` are the same split one level down, and each one's **default is a
+Six more methods on `Profile` are the same split one level down, and each one's **default is a
 working answer rather than a gap** — the shape to keep when the next one is added. `images` says how
 pixels reach a harness: Codex takes `-i/--image`, Claude Code simply opens a path the prompt names,
 so the default is `InPrompt`, the one channel every CLI has. `usage_command` and `parse_usage` are a
@@ -87,6 +87,21 @@ the second says how a line of what it then prints becomes a line in the pane. Th
 nothing and no translator, working answers again: a harness given neither runs exactly as every
 harness ran before they existed — which is Codex today, deliberately and with its own task behind
 it.
+
+`oneshot_args` is the sixth and the only one with no session behind it at all: how this harness is
+asked **one question** and nothing more. Claude Code answers it with the same `-p` `batch_args`
+opens with, and the two are still different questions — that one is "carry this batch out and exit"
+and comes with a stream format and a translator because somebody watches a batch work, this one is
+"answer this and exit" and wants the answer on stdout with nothing around it. The caller is
+`agents::oneshot`, whose one user today is the commit-message button in the Git panel
+(`.claude/rules/vcs-panel.md`), and it is the same spawn `runs/usage.rs` makes — `std::process`, no
+PTY, the login shell's `PATH`, a deadline with a kill behind it — with one difference that decides
+its whole error type: an unreadable allowance is no reason to hold a run up, so `usage::read`
+answers `None` for every way of failing, while here somebody pressed a button and is watching a
+field, so each way of failing keeps its own name and reaches the panel as a sentence. The default is
+`None` again, and the panel draws the button for everybody rather than hiding it: a harness that
+cannot be asked says so, which the front end could not decide for itself anyway, since it never
+learns an agent's name.
 
 `agents::IDS` is the single copy of the agent-id list, and `settings/model.rs` validates against it
 rather than repeating it — the side-tab hazard again: a value that survives the session and silently

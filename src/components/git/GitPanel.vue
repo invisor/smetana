@@ -20,15 +20,55 @@
    The three writes — checkout, merge, rebase — leave as three events and are
    drawn by `BranchList`. What is drawn here is git's refusal of whichever of
    them was last refused, for the reason recorded beside the block: the branch
-   section is capped at six rows and a message inside that scroller is below the
-   fold in the ordinary case. A conflict is not one of those refusals and is not
-   drawn here at all — it is an outcome with two doors, and the modal is
-   `ConflictModal`. */
-import { computed } from 'vue'
+   section is capped and a message inside that scroller is below the fold in the
+   ordinary case. A conflict is not one of those refusals and is not drawn here
+   at all — it is an outcome with two doors, and the modal is `ConflictModal`.
+
+   ## The three sections fold and are dragged
+
+   Each caption is a `SectionHeader`, which is a button, and between the
+   sections are `Resizer`s. How tall a section may be and which of them takes
+   the height nobody claimed is `sectionHeights.js` — pure, tested, of the
+   `gitActions.js` family — and the whole of what this file adds to it is the
+   measurements, which is the half no test here can reach.
+
+   Two of the three captions carry `divided`, the hairline that says a block
+   starts here, and the repositories deliberately do not: this panel is drawn
+   under the project list, which already ends in one of those, and a caption
+   adding its own would draw the pair as a single 2px line. The rule sits on the
+   caption rather than on the `Resizer` above it, because a folded section has
+   no resizer and would lose its separator exactly when the captions are
+   stacked tightest.
+
+   **The stored number and the drawn number are kept apart**, the rule
+   `panelWidths.js` states one axis over: what `settings.json` holds is what a
+   person dragged to, and what a section is drawn at is that number clamped
+   against the panel it is in now. Only a drag writes back, so a shortened
+   window squeezes a section and a lengthened one gives back exactly what was
+   asked for. Letting CSS do the squeezing instead was tried and is the one
+   thing that cannot work here: a section drawn below the number it holds turns
+   its own drawn height into a drag's starting point, and every attempt to pull
+   it up walks the stored number down.
+
+   The height of a row is measured off a header, which *is* one, and never read
+   off the token: `--row-h` is a `calc()` over an unregistered custom property,
+   so `getComputedStyle` hands back the calc unevaluated — the trap
+   `terminal/theme.js` records. */
+import { computed, onBeforeUnmount, ref, watchPostEffect } from 'vue'
 import BranchList from './BranchList.vue'
 import ChangeList from './ChangeList.vue'
+import CommitBox from './CommitBox.vue'
 import EmptyState from '../core/EmptyState.vue'
 import RepoList from './RepoList.vue'
+import Resizer from '../shell/Resizer.vue'
+import SectionHeader from './SectionHeader.vue'
+import {
+  BRANCH_ROWS,
+  UNDRAGGED_ROWS,
+  clampRows,
+  filler,
+  resolveDrag
+} from './sectionHeights.js'
 
 const props = defineProps({
   repos: { type: Array, default: () => [] },
@@ -38,8 +78,17 @@ const props = defineProps({
      an empty tree standing in for a failure. */
   tree: { type: Object, default: null },
   /* `[{ name, current }]` in `git::by_recency`'s order, which is drawn as it
-     arrives. */
+     arrives — grouped into folders by `branchTree.js`, which keeps that
+     order. */
   branches: { type: Array, default: () => [] },
+  /* Which branch folders are unfolded, as `settings.project.branchFolders`
+     keeps it, or null for "nobody has chosen here". Passed straight through:
+     what a folder means and what a press on one leaves behind is
+     `branchTree.js`, and this panel is presentational on it as on everything
+     else. Per project rather than global, unlike the section folds above —
+     `feature/…` is a habit of a repository, while how tall somebody likes their
+     branch list is a habit of theirs. */
+  branchFolders: { type: Array, default: null },
   /* `{ allowed, reason }` from `gitActions.js`: whether the panel may write to
      this repository at all, and the sentence over the rows when it may not.
      Passed through rather than decided here — this panel draws, and the rule is
@@ -57,43 +106,52 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   /* The path of the change whose diff is open, marked in the list. Repository
      relative, the form every change carries. */
-  openPath: { type: String, default: null }
+  openPath: { type: String, default: null },
+  /* The commit message somebody is part-way through, and the two facts about
+     the agent being asked to write one. Held by the store per repository rather
+     than by this panel, for the reason every other value here is: this
+     component draws and emits, and the draft has to survive it being taken off
+     the screen — folding the section away must not throw a sentence out. */
+  message: { type: String, default: '' },
+  suggesting: { type: Boolean, default: false },
+  suggestError: { type: Object, default: null },
+  /* How the three sections are folded and how tall two of them were dragged to,
+     as `settings.layout.gitSections` keeps it: `reposRows` and `branchRows` in
+     rows, or null for "never dragged", plus a flag apiece. Global rather than
+     per project, for the reason `settings.md` gives about the board's own view
+     settings — how tall somebody likes their branch list is a habit of reading
+     rather than a fact about one repository.
+
+     Read through `fold` below rather than directly, so a caller handing over
+     part of it — every gallery frame does — still gets a whole panel. */
+  sections: { type: Object, default: null }
 })
-defineEmits(['select', 'checkout', 'merge', 'rebase', 'open'])
+const emit = defineEmits([
+  'select',
+  'checkout',
+  'merge',
+  'rebase',
+  'commit',
+  'suggest',
+  'message',
+  'open',
+  'toggle',
+  'toggle-folder',
+  'resize'
+])
 
 const rootStyle = { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }
 
-/* A caption over a list, in prose and therefore sans, with the count beside it
-   in mono because it is a measurement.
-
-   `flexShrink: 0` because a caption is a flex item in this column and a flex
-   item shrinks by default: with three sections crowding a short panel the
-   captions gave way with the lists, `--row-h` became a starting point and the
-   text was clipped — the very defect a short list hid in `Dropdown`'s options.
-   A caption is the one thing here that must not move. */
-const headerStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-3)',
-  height: 'var(--row-h)',
-  flexShrink: 0,
-  padding: '0 var(--space-5)',
-  font: 'var(--weight-medium) var(--text-xs)/1 var(--font-sans)',
-  color: 'var(--text-muted)'
-}
-
-/* How many branch rows the section may claim before it scrolls inside itself.
-   A count and not a height, so it follows `--row-h` through both densities and
-   the app-wide font size.
-
-   The cap is what makes "the branches must not push the changes off the top"
-   true. Without it the section's basis is its content, so a repository with
-   forty branches claims forty rows of the column and the list somebody opened
-   this panel for is squeezed to nothing — measured at 0px in a short panel
-   before this. Six rows is enough to reach for a branch and short enough that
-   the changes stay the content. */
-const BRANCH_ROWS = 6
-const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)' }
+/* The whole of the fold state with every hole filled. A frame that hands over
+   nothing at all is the ordinary case in the gallery, and it must draw the
+   panel this feature shipped on top of rather than a folded ruin. */
+const fold = computed(() => ({
+  reposOpen: props.sections?.reposOpen ?? true,
+  changesOpen: props.sections?.changesOpen ?? true,
+  branchesOpen: props.sections?.branchesOpen ?? true,
+  reposRows: props.sections?.reposRows ?? null,
+  branchRows: props.sections?.branchRows ?? null
+}))
 
 /* git's own stderr. Mono and left-aligned rather than an `EmptyState`'s centred
    prose: this is machine output, and it is shown exactly as git wrote it.
@@ -102,8 +160,9 @@ const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mo
    item of this column for a write git refused. `flexShrink: 0` is for the
    second — a flex item shrinks by default, and the lists above it have
    somewhere to give way to, while a refusal clipped to a strip of its own title
-   is the defect this block was moved out of the branch cap to fix. It changes
-   nothing at the first site, where the parent is not a flex container. */
+   is the defect this block was moved out of the branch section to fix. It
+   changes nothing at the first site, where the parent is not a flex
+   container. */
 const failureStyle = {
   padding: 'var(--space-5)',
   display: 'flex',
@@ -159,15 +218,206 @@ const WRITE_REFUSED = {
   checkout: 'Git did not switch branch',
   merge: 'Git did not merge',
   rebase: 'Git did not rebase',
-  abort: 'Git did not abort'
+  abort: 'Git did not abort',
+  commit: 'Git did not commit'
 }
 const writeRefused = computed(
   () => WRITE_REFUSED[props.writeError?.op] ?? 'Git refused this operation'
 )
+
+/* Which captions are on screen. The changes and the branches have none without
+   a repository to have changed anything or to hold one: a heading over nothing
+   would be a second empty state saying less than the repository list's own
+   sentence already said. The repositories always have theirs.
+
+   The changes *region* is drawn regardless, because it is where a failed read
+   is reported, so with no caption over it there is nothing to fold it by — and
+   a section nobody can unfold must never be treated as folded. */
+const changesCaption = computed(() => props.repos.length > 0)
+const branchesDrawn = computed(() => props.repos.length > 0 && !failure.value)
+
+const changesOpen = computed(() => (changesCaption.value ? fold.value.changesOpen : true))
+
+/* What `sectionHeights.js` is asked about: the sections actually drawn, in the
+   order they are drawn. */
+const drawn = computed(() => {
+  const list = [
+    { id: 'repos', open: fold.value.reposOpen },
+    { id: 'changes', open: changesOpen.value }
+  ]
+  if (branchesDrawn.value) list.push({ id: 'branches', open: fold.value.branchesOpen })
+  return list
+})
+const fills = computed(() => filler(drawn.value))
+
+const rows = (n) => `calc(var(--row-h) * ${n})`
+
+/* The measurements, which is the half of this that no test in this repository
+   can reach. A header is exactly one row, so it is what a row is measured by —
+   never `getComputedStyle`, which hands back `--row-h`'s `calc()` unevaluated.
+   The panel's own box is what "how much is there" means.
+
+   Both are watched rather than read once, and both have to be: the panel's
+   height moves with the window, and a row's height moves with the density and
+   the app-wide font size, neither of which re-renders this component. Observing
+   the header covers the second, since a row that changes height is exactly what
+   those two settings do. */
+const panel = ref(null)
+const reposHeader = ref(null)
+
+const rowPx = ref(0)
+const panelPx = ref(0)
+const measure = () => {
+  rowPx.value = reposHeader.value?.el?.getBoundingClientRect().height ?? 0
+  panelPx.value = panel.value?.getBoundingClientRect().height ?? 0
+}
+const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
+/* Re-subscribed rather than subscribed once: `noGit` takes every section off
+   the screen, so the header this measures by is an element that comes and
+   goes. */
+watchPostEffect(() => {
+  if (!observer) return
+  observer.disconnect()
+  if (panel.value) observer.observe(panel.value)
+  if (reposHeader.value?.el) observer.observe(reposHeader.value.el)
+  measure()
+})
+onBeforeUnmount(() => observer?.disconnect())
+
+const available = computed(() => (rowPx.value ? panelPx.value / rowPx.value : 0))
+
+/* What the other section is holding, which is part of this one's ceiling: what
+   it was dragged to, or `UNDRAGGED_ROWS` when nobody has dragged it. An
+   undragged section gives way on its own and is not owed its content — but it
+   is owed a whole row, or dragging its neighbour past it draws it as a sliver
+   of one. A folded section is owed nothing: it is a header, and headers are
+   counted separately. */
+const otherFixed = (id) => {
+  if (id === 'repos') {
+    return branchesDrawn.value && fold.value.branchesOpen
+      ? (fold.value.branchRows ?? UNDRAGGED_ROWS)
+      : 0
+  }
+  return fold.value.reposOpen ? (fold.value.reposRows ?? UNDRAGGED_ROWS) : 0
+}
+
+/* **Stored rows → drawn rows, and the two are different numbers.** The panel is
+   clamped against the room it has now, which is the rule `panelWidths.js`
+   states one axis over, and it is what makes a drag mean anything at all: left
+   to shrink itself under a short panel, a section is drawn below the number it
+   holds, and a drag reading its own drawn height back as the starting point
+   walks the stored number down every time somebody tries to pull it up.
+
+   Before the first measurement lands there is nothing to clamp against, so the
+   stored number is drawn as it stands and corrects on the next frame. */
+const drawnRows = (id) => {
+  const stored = id === 'repos' ? fold.value.reposRows : fold.value.branchRows
+  if (stored === null) return null
+  if (!available.value) return stored
+  return clampRows(stored, {
+    available: available.value,
+    headers: drawn.value.length,
+    fixed: otherFixed(id)
+  })
+}
+
+/* The filler grows into whatever is left. A dragged section is `0 0 auto` at
+   the height it was clamped to — it does not shrink, because the clamp has
+   already left the filler its floor and shrinking on top of that is what made
+   the drawn height disagree with the stored one. A section nobody has dragged
+   is still `0 1 auto` over its own content, exactly as all three were before
+   any of this, so a short panel shares the squeeze between them the way it
+   always has.
+
+   `FILLER_MIN_ROWS` is deliberately not a `minHeight` here. It is honoured by
+   the clamp above, and stating it twice made a short panel worse rather than
+   safer: the floor came out of the sections above it, and a 260px panel drew
+   the repository list as a clipped strip of one row instead of a whole one. */
+const sectionStyle = (id) => {
+  if (fills.value === id) return { flex: '1 1 auto', minHeight: 0, overflow: 'auto' }
+  const height = drawnRows(id)
+  return height === null
+    ? /* The floor the clamp above already reserves for this section, stated
+         where it acts. Without it the reservation only bounds how far a drag may
+         go, and CSS is still free to share the squeeze straight through it —
+         which drew an undragged repository list as a clipped strip while its
+         neighbour held the row that had been set aside for it. One row, so
+         unlike a floor under the filler it cannot crush a short panel. */
+      { flex: '0 1 auto', minHeight: rows(UNDRAGGED_ROWS), overflow: 'auto' }
+    : { flex: '0 0 auto', height: rows(height), minHeight: 0, overflow: 'auto' }
+}
+
+/* Untouched, the repositories follow their content — a project of one
+   repository draws one row and not a reserved block of empty ones — and the
+   branches follow theirs up to the cap they have always had. A drag replaces
+   either with a number. */
+const reposStyle = computed(() => sectionStyle('repos'))
+
+const changesStyle = computed(() => sectionStyle('changes'))
+const branchStyle = computed(() => {
+  const style = sectionStyle('branches')
+  return fold.value.branchRows === null && fills.value !== 'branches'
+    ? { ...style, maxHeight: rows(BRANCH_ROWS) }
+    : style
+})
+
+/* A separator belongs to the section above it and is drawn only where a drag
+   would mean something: not over a folded section, which has no height to give,
+   and not over the filler, which is already taking everything the others do not
+   claim — there is nothing on its side of the strip to take height from. */
+const reposResizer = computed(() => fold.value.reposOpen && fills.value !== 'repos')
+const branchResizer = computed(
+  () => branchesDrawn.value && fold.value.branchesOpen && fills.value !== 'branches'
+)
+
+const reposBox = ref(null)
+const branchBox = ref(null)
+
+/* Everything the drag is resolved against, snapshotted at `dragstart` — the
+   contract `Resizer` states, since a delta measured from the last frame would
+   let a clamped move become the next move's origin and the section would drift
+   away from the pointer. */
+let drag = null
+
+const onDragStart = (section) => {
+  if (!rowPx.value || !available.value) {
+    drag = null
+    return
+  }
+  /* A section that has been dragged starts from the number it holds, drawn
+     exactly; one that never has starts wherever its content left it, which is
+     the only honest answer for a height nobody has chosen. */
+  const stored = drawnRows(section)
+  const box = section === 'repos' ? reposBox.value : branchBox.value
+  drag = {
+    section,
+    base: stored ?? (box ? box.getBoundingClientRect().height / rowPx.value : 0),
+    available: available.value,
+    headers: drawn.value.length,
+    fixed: otherFixed(section)
+  }
+}
+
+const onDrag = (section, delta) => {
+  if (drag?.section !== section) return
+  emit('resize', {
+    section,
+    rows: resolveDrag(section, { ...drag, delta: delta / rowPx.value })
+  })
+}
+
+const onDragEnd = () => {
+  drag = null
+}
+
+/* Double click gives a section back to its content — the branches to their cap
+   and the repositories to their rows — which is this panel's answer to the same
+   gesture that resets a side panel to its shipped width. */
+const onReset = (section) => emit('resize', { section, rows: null })
 </script>
 
 <template>
-  <div :style="rootStyle">
+  <div ref="panel" :style="rootStyle">
     <!-- Named rather than hinted at: the message carries what was looked for,
          which is the difference between a person installing git and a person
          wondering why a panel is blank. -->
@@ -179,41 +429,74 @@ const writeRefused = computed(
       :description="error.message"
     />
     <template v-else>
-      <div :style="headerStyle">
-        <span>Repositories</span>
-        <span :style="{ flex: 1 }" />
-        <span v-if="repos.length > 1" :style="countStyle">{{ repos.length }}</span>
-      </div>
+      <SectionHeader
+        ref="reposHeader"
+        label="Repositories"
+        :count="repos.length > 1 ? repos.length : null"
+        :open="fold.reposOpen"
+        @toggle="emit('toggle', 'repos')"
+      />
       <!-- The list scrolls rather than pushing the changes off the bottom: a
            folder of a dozen sibling repositories is exactly what the discovery
-           arm in `vcs/repos.rs` exists for, and `0 1 auto` is what lets this
-           give way while the changes below keep their share.
+           arm in `vcs/repos.rs` exists for, and giving way before the changes do
+           is what lets the changes keep their share.
 
            With nothing in the list and a failure to report, the list is left
            out altogether: `RepoList`'s "No repositories here" is a statement
            about a folder that was read, and a read that failed has not earned
            it. The failure below says what actually happened. -->
-      <div v-if="repos.length || !failure" :style="{ flex: '0 1 auto', minHeight: 0, overflow: 'auto' }">
-        <RepoList v-if="settled" :repos="repos" :selected="selected" @select="$emit('select', $event)" />
+      <div v-if="fold.reposOpen" ref="reposBox" :style="reposStyle">
+        <RepoList
+          v-if="settled && (repos.length || !failure)"
+          :repos="repos"
+          :selected="selected"
+          @select="$emit('select', $event)"
+        />
       </div>
+      <Resizer
+        v-if="reposResizer"
+        orientation="horizontal"
+        label="Resize the repository list"
+        @dragstart="onDragStart('repos')"
+        @drag="onDrag('repos', $event)"
+        @dragend="onDragEnd"
+        @reset="onReset('repos')"
+      />
 
-      <!-- The caption goes when there is no repository to have changed
-           anything: a "Changes" heading over nothing would be a second empty
-           state saying less than the one above it already said. The failure
-           underneath is not gated on it, so a `vcs_repos` that refuses has
-           somewhere to be drawn. -->
-      <div v-if="repos.length" :style="headerStyle">
-        <span>Changes</span>
-        <span :style="{ flex: 1 }" />
-        <span v-if="tree && changes.length" :style="countStyle">{{ changes.length }}</span>
-      </div>
-      <!-- `1 1 auto` rather than `flex: 1`: with a basis of zero this section
-           only grew into what was left over, while its neighbours claimed their
-           content first, so adding the branch list below squeezed the changes
-           to nothing. On a basis of its own content it takes the largest share
-           of a crowded column and gives ground in proportion, which is what
-           says the changes are what this panel is for. -->
-      <div :style="{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }">
+      <SectionHeader
+        v-if="changesCaption"
+        divided
+        label="Changes"
+        :count="tree && changes.length ? changes.length : null"
+        :open="fold.changesOpen"
+        @toggle="emit('toggle', 'changes')"
+      />
+      <!-- The changes are what somebody opened this panel for, so while they
+           are unfolded they are the section that takes whatever height the
+           others do not claim. -->
+      <div v-if="changesOpen" :style="changesStyle">
+        <!-- At the top of the list and **stuck** there rather than pinned above
+             it, which is one section rather than two and is what keeps this
+             region a plain scroller — `sectionHeights.js` is untouched by the
+             box, and a panel too short for it scrolls to it instead of clipping
+             the button off the bottom.
+
+             Drawn only over a tree with something in it: the list's own "No
+             uncommitted files in this repository" is the whole story there, and
+             a message box under it would be offering to commit nothing. -->
+        <CommitBox
+          v-if="!failure && tree && changes.length"
+          :model-value="message"
+          :changes="changes.length"
+          :branch="tree.branch"
+          :actions="actions"
+          :busy="busy"
+          :suggesting="suggesting"
+          :suggest-error="suggestError"
+          @update:model-value="$emit('message', $event)"
+          @commit="$emit('commit')"
+          @suggest="$emit('suggest')"
+        />
         <div v-if="failure" :style="failureStyle">
           <div :style="failureTitleStyle">{{ failureTitle }}</div>
           <div :style="failureTextStyle">{{ failure }}</div>
@@ -227,42 +510,48 @@ const writeRefused = computed(
       </div>
 
       <!-- Third, under the changes, and gated on there being a repository for
-           the same reason the changes caption is: a "Branches" heading over
-           nothing says less than the repository list's own empty sentence
-           already did. The section shrinks and never grows, and it is capped at
-           `BRANCH_ROWS` on top of that: the changes above it are what somebody
-           opened this panel for, and a repository with forty branches must not
-           push them off the top. -->
-      <template v-if="repos.length && !failure">
-        <div :style="headerStyle">
-          <span>Branches</span>
-          <span :style="{ flex: 1 }" />
-          <span v-if="branches.length > 1" :style="countStyle">{{ branches.length }}</span>
-        </div>
-        <div
-          :style="{
-            flex: '0 1 auto',
-            minHeight: 0,
-            maxHeight: `calc(var(--row-h) * ${BRANCH_ROWS})`,
-            overflow: 'auto'
-          }"
-        >
+           the same reason the changes caption is. Until it is dragged the
+           section is capped at `BRANCH_ROWS`: the changes above it are what
+           somebody opened this panel for, and a repository with forty branches
+           must not push them off the top. -->
+      <template v-if="branchesDrawn">
+        <Resizer
+          v-if="branchResizer"
+          orientation="horizontal"
+          label="Resize the branch list"
+          @dragstart="onDragStart('branches')"
+          @drag="onDrag('branches', $event)"
+          @dragend="onDragEnd"
+          @reset="onReset('branches')"
+        />
+        <SectionHeader
+          divided
+          label="Branches"
+          :count="branches.length > 1 ? branches.length : null"
+          :open="fold.branchesOpen"
+          @toggle="emit('toggle', 'branches')"
+        />
+        <div v-if="fold.branchesOpen" ref="branchBox" :style="branchStyle">
           <BranchList
             :branches="branches"
+            :folders="branchFolders"
             :actions="actions"
             :busy="busy"
             @checkout="$emit('checkout', $event)"
             @merge="$emit('merge', $event)"
             @rebase="$emit('rebase', $event)"
+            @toggle-folder="$emit('toggle-folder', $event)"
           />
         </div>
-        <!-- **Outside the scroller above, and that is the whole point.** Drawn
-             under the rows it belonged to, it sat below the fold of a box
-             capped at `BRANCH_ROWS` — with six branches or more the refusal was
+        <!-- **Outside the scroller above, and outside the fold, and that is the
+             whole point.** Drawn under the rows it belonged to, it sat below the
+             fold of a capped box — with six branches or more the refusal was
              entirely out of view, so a person pressed a row, the tick did not
-             move, and nothing said why. It is the same block the read failure
-             above uses, and one copy of it: `failureTitleStyle` is what says
-             which of the two this is, and `writeRefused` which of the writes.
+             move, and nothing said why. Folding the section away is the same
+             defect by another route, so this block does not fold with it. It is
+             the same block the read failure above uses, and one copy of it:
+             `failureTitleStyle` is what says which of the two this is, and
+             `writeRefused` which of the writes.
 
              A conflict never reaches here: it is not a refusal, and what draws
              it is a modal with two doors, because a conflicted tree is a state

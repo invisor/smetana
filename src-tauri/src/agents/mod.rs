@@ -13,6 +13,7 @@
 pub mod claude;
 pub mod codex;
 pub mod library;
+pub mod oneshot;
 pub mod prompt;
 
 use std::path::PathBuf;
@@ -322,6 +323,24 @@ pub trait Profile: Sync {
     }
 
     fn parse_usage(&self, _output: &str) -> Option<crate::runs::usage::Usage> {
+        None
+    }
+
+    /// How this harness is asked one question with nobody watching, as the
+    /// arguments that go in front of the prompt. `agents::oneshot` is the
+    /// caller, and the commit-message button in the Git panel is what wants it.
+    ///
+    /// Not the same question as `batch_args`, though Claude Code answers both
+    /// with `-p`: that one is "carry this batch out and exit" and comes with a
+    /// stream format and a translator, because a person watches a batch work.
+    /// This one is "answer this and exit", and what is wanted is the answer on
+    /// stdout with nothing around it.
+    ///
+    /// The default is `None`, a working answer rather than a gap in the same
+    /// shape as `usage_command`'s: a harness with no non-interactive form
+    /// simply cannot be asked, and the panel draws no button rather than one
+    /// that fails every time it is pressed.
+    fn oneshot_args(&self) -> Option<&'static [&'static str]> {
         None
     }
 

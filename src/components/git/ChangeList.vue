@@ -12,10 +12,15 @@
    and it cannot: `--untracked-files=normal` reports it as a single record with
    a trailing slash, and there is no file behind that name to diff.
 
-   There is no commit box, no staging and no discard, and that is the design
-   rather than an omission: work reaches a branch through `smetana:merging` in
-   this project, and a person who wants to commit by hand has a terminal one tab
-   away. A second road into the same act would drift from the first. */
+   The commit box is `CommitBox.vue` and it is **not** part of this list: what
+   it takes is the whole tree rather than any row here, so a row that could be
+   included or left out would be promising a choice nothing behind it can make.
+   That is also why there is still **no staging and no discard**. Staging is the
+   one this list looks closest to having — a change already carries `staged`,
+   and the tick draws it — but reading a flag git set is not the same as
+   offering to set it, and a commit that takes everything needs no such gesture.
+   Discard is the other kind of missing: it destroys work with nothing to undo
+   it, and it is out of this epic rather than merely unbuilt. */
 import { computed, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import { useInteractive } from '../core/interactive.js'

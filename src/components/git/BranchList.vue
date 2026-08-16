@@ -21,19 +21,42 @@
    same one verdict covers all three writes, since what it is about — a batch
    that may be mid-merge — is no more survivable for one of them than another.
 
-   Remote branches, upstreams, ahead/behind counts and folders for `feature/…`
-   are outside this epic. So are creating, renaming and deleting a branch, and
-   so is every flag and strategy a merge can take: this offers the merge and the
-   rebase git would do by itself, and nothing else. */
+   ## Folders
+
+   Everything before a slash is a heading, the way GitLens draws one, and what
+   a row shows is the leaf — which is the width this buys back, since the
+   prefix is the same on every row under one heading and the tail is the half
+   that identifies a branch. The whole name still travels on the row, because
+   that is what a checkout, a merge and a rebase are given.
+
+   Which rows those are is `branchTree.js`, pure and tested, of the
+   `gitActions.js` family; this file draws them. The order it hands back is
+   still `git::by_recency`'s — a folder stands where its most recent branch
+   stood — so the promise above survives the grouping.
+
+   A heading can be pressed while a run holds the three writes, and it is
+   deliberately not dimmed with the rows: unfolding is reading, not writing, and
+   a heading greyed out beside branches that are greyed out for a real reason
+   would say something untrue about it.
+
+   Remote branches, upstreams and ahead/behind counts are outside this epic. So
+   are creating, renaming and deleting a branch, and so is every flag and
+   strategy a merge can take: this offers the merge and the rebase git would do
+   by itself, and nothing else. */
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { useInteractive } from '../core/interactive.js'
+import { branchRows, expandedFolders, toggleFolder } from './branchTree.js'
 
 const props = defineProps({
   /* `[{ name, current }]` as `vcs_branches` answers. */
   branches: { type: Array, default: () => [] },
+  /* Which folders are unfolded, as `settings.project.branchFolders` keeps it —
+     or null for "nobody has chosen here", which opens the folder the current
+     branch is in. The two are different states and `branchTree.js` says why. */
+  folders: { type: Array, default: null },
   /* `{ allowed, reason }` from `gitActions.js`. The default is the answer for a
      project with no run going, which is what the gallery and every
      single-branch frame want. */
@@ -43,22 +66,38 @@ const props = defineProps({
      spinner in the wrong place would name the wrong operation. */
   busy: { type: Object, default: null }
 })
-defineEmits(['checkout', 'merge', 'rebase'])
+const emit = defineEmits(['checkout', 'merge', 'rebase', 'toggle-folder'])
 
 /* Hover is per row and `useInteractive` tracks one control at a time, so an
    instance built inside `rowStyle` would be thrown away on every re-render.
-   Cached by name, exactly as `RepoList` caches by path. */
+   Cached by key, exactly as `RepoList` caches by path — and by the row's key
+   rather than by its name, since a heading and a branch can read the same and
+   would otherwise share one hover. */
 const rowInteractive = new Map()
-const interactiveFor = (name) => {
-  let entry = rowInteractive.get(name)
+const interactiveFor = (key) => {
+  let entry = rowInteractive.get(key)
   if (!entry) {
     entry = useInteractive()
-    rowInteractive.set(name, entry)
+    rowInteractive.set(key, entry)
   }
   return entry
 }
 
+/* A folder and a branch can carry the same text — git will not hold both, but
+   the rule draws them side by side if they ever arrive — so the kind is part of
+   the identity of a row. */
+const keyOf = (row) => `${row.kind}:${row.kind === 'folder' ? row.path : row.name}`
+
+const rows = computed(() =>
+  branchRows(props.branches, expandedFolders(props.folders, props.branches))
+)
+
 const MARK = 12
+
+/* A row is indented by its depth, on the same token the file tree indents by:
+   the two are the same gesture in two panels and reading as one tree is the
+   point. */
+const indent = (depth) => `calc(var(--space-5) + ${depth} * var(--tree-indent))`
 
 /* A run holds the whole list, and so does an operation already going: what a
    second press would ask for is git working in a tree git is working in. */
@@ -87,6 +126,7 @@ const rowStyle = (branch) => ({
   gap: 'var(--space-3)',
   height: 'var(--row-h)',
   padding: '0 var(--space-5)',
+  paddingLeft: indent(branch.depth ?? 0),
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
   color: branch.current
     ? 'var(--text-primary)'
@@ -96,12 +136,60 @@ const rowStyle = (branch) => ({
   background:
     branch.current
       ? 'var(--surface-selected)'
-      : target(branch) && interactiveFor(branch.name).hover.value
+      : target(branch) && interactiveFor(keyOf(branch)).hover.value
         ? 'var(--surface-hover)'
         : 'transparent',
   cursor: blocked.value && !branch.current ? 'not-allowed' : 'default',
   transition: 'var(--transition-control)'
 })
+
+/* A heading, in the same mono as the rows under it — a folder here is the first
+   segment of an identifier and not prose, which is where it differs from the
+   sans captions of `SectionHeader` one level up.
+
+   A real `<button>` for the reason that caption is one: Enter and Space, a
+   place in the tab order and the focus ring `tokens/base.css` already draws,
+   none of which a div with a click on it has.
+
+   It is deliberately **not** dimmed while a run blocks the three writes.
+   Unfolding is reading, and the whole meaning of the muted rows below is "this
+   cannot be pressed now" — a heading that greyed out with them and then
+   answered a press would spend that meaning. */
+const folderStyle = (row) => {
+  const { hover, active } = interactiveFor(keyOf(row))
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'var(--space-3)',
+    width: '100%',
+    height: 'var(--row-h)',
+    padding: '0 var(--space-5)',
+    paddingLeft: indent(row.depth),
+    border: 'none',
+    textAlign: 'left',
+    font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
+    color: 'var(--text-secondary)',
+    background: active.value
+      ? 'var(--surface-active)'
+      : hover.value
+        ? 'var(--surface-hover)'
+        : 'transparent',
+    cursor: 'default',
+    transition: 'var(--transition-control)'
+  }
+}
+
+/* How many branches the heading is holding, and it is drawn folded and
+   unfolded alike: it is the only thing saying they are there when they are
+   not on screen, and a number that appeared on folding would be one more thing
+   moving under the pointer. Muted, because it is a measurement beside a name
+   and not a second name. */
+const countStyle = { flex: 'none', color: 'var(--text-muted)' }
+
+/* The whole name, where it is not what the row draws. Left off while the list
+   carries the blocked tooltip: a native title would open under a panel of prose
+   already saying something else about the same row. */
+const fullName = (row) => (!hint.value && row.name !== row.label ? row.name : undefined)
 
 const nameStyle = {
   flex: '0 1 auto',
@@ -140,7 +228,7 @@ const controlsStyle = (branch) => ({
      buttons themselves do. */
   minWidth: 'calc(var(--control-h-sm) * 2 + var(--space-1))',
   visibility:
-    working(branch) || (target(branch) && interactiveFor(branch.name).hover.value)
+    working(branch) || (target(branch) && interactiveFor(keyOf(branch)).hover.value)
       ? 'visible'
       : 'hidden'
 })
@@ -183,66 +271,98 @@ const empty = computed(() => props.branches.length === 0)
          carries beside its own blocked switch. The panel opens to the right,
          where the window has room: this list sits against the left edge and a
          whole sentence over it would cover the rows it is about. -->
-    <component
-      :is="hint ? Tooltip : 'div'"
-      v-for="branch in branches"
-      :key="branch.name"
-      v-bind="hint ? { label: hint, side: 'right' } : {}"
-      :style="{ display: 'block' }"
-    >
-      <div
-        :style="rowStyle(branch)"
-        :aria-disabled="target(branch) ? undefined : 'true'"
-        v-bind="target(branch) ? interactiveFor(branch.name).handlers : {}"
-        @click="target(branch) && $emit('checkout', branch.name)"
+    <template v-for="row in rows" :key="keyOf(row)">
+      <!-- A heading, and the one row here that is a button: it is pressed to
+           unfold and nothing else, so the keyboard comes free with the element
+           rather than being written out. It carries no merge and no rebase —
+           there is no such thing as merging a folder — and no tooltip, since
+           what the tooltip explains is a refusal that does not reach it. -->
+      <button
+        v-if="row.kind === 'folder'"
+        type="button"
+        :style="folderStyle(row)"
+        :aria-expanded="row.expanded"
+        v-bind="interactiveFor(keyOf(row)).handlers"
+        @click="emit('toggle-folder', toggleFolder(folders, branches, row.path))"
       >
-        <Icon name="git-branch" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
-        <span :style="nameStyle">{{ branch.name }}</span>
+        <Icon
+          :name="row.expanded ? 'chevron-down' : 'chevron-right'"
+          :size="MARK"
+          :style="{ flex: 'none' }"
+        />
+        <Icon
+          :name="row.expanded ? 'folder-open' : 'folder'"
+          :size="MARK"
+          :style="{ flex: 'none', color: 'var(--text-muted)' }"
+        />
+        <span :style="nameStyle">{{ row.label }}</span>
         <span :style="{ flex: 1 }" />
-        <!-- `stop` on both: the row itself is the checkout, so a press that
-             reached it would switch branch as well as merge. -->
-        <span :style="controlsStyle(branch)">
-          <Icon
-            v-if="working(branch)"
-            name="loader-circle"
-            :size="MARK"
-            :style="spinStyle"
-            :title="spinning(branch, 'merge') ? 'Merging this branch in' : 'Rebasing onto this branch'"
-          />
-          <template v-else>
-            <IconButton
-              icon="git-merge"
-              size="sm"
-              label="Merge into the current branch"
-              @click.stop="$emit('merge', branch.name)"
+        <span :style="countStyle">{{ row.count }}</span>
+      </button>
+      <component
+        :is="hint ? Tooltip : 'div'"
+        v-else
+        v-bind="hint ? { label: hint, side: 'right' } : {}"
+        :style="{ display: 'block' }"
+      >
+        <div
+          :style="rowStyle(row)"
+          :aria-disabled="target(row) ? undefined : 'true'"
+          v-bind="target(row) ? interactiveFor(keyOf(row)).handlers : {}"
+          @click="target(row) && $emit('checkout', row.name)"
+        >
+          <Icon name="git-branch" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
+          <!-- The leaf, with the whole name behind it: under a heading the
+               prefix is on every row and the tail is the half that identifies
+               one, so drawing the prefix again spends the width the folder was
+               made to save. -->
+          <span :style="nameStyle" :title="fullName(row)">{{ row.label }}</span>
+          <span :style="{ flex: 1 }" />
+          <!-- `stop` on both: the row itself is the checkout, so a press that
+               reached it would switch branch as well as merge. -->
+          <span :style="controlsStyle(row)">
+            <Icon
+              v-if="working(row)"
+              name="loader-circle"
+              :size="MARK"
+              :style="spinStyle"
+              :title="spinning(row, 'merge') ? 'Merging this branch in' : 'Rebasing onto this branch'"
             />
-            <IconButton
-              icon="git-graph"
-              size="sm"
-              label="Rebase the current branch onto this"
-              @click.stop="$emit('rebase', branch.name)"
+            <template v-else>
+              <IconButton
+                icon="git-merge"
+                size="sm"
+                label="Merge into the current branch"
+                @click.stop="$emit('merge', row.name)"
+              />
+              <IconButton
+                icon="git-graph"
+                size="sm"
+                label="Rebase the current branch onto this"
+                @click.stop="$emit('rebase', row.name)"
+              />
+            </template>
+          </span>
+          <!-- The tick is the whole of what says which branch this repository
+               is on, and it is a glyph rather than the highlight alone: the
+               row's surface is also what hover uses, and a state told apart by
+               shade only would be two facts on one channel. `title` rather than
+               a role and a label on the span — it is `Icon`'s own way of being
+               named, and a glyph with no name reads as nothing at all to a
+               screen reader. -->
+          <span :style="markBox">
+            <Icon
+              v-if="spinning(row, 'checkout')"
+              name="loader-circle"
+              :size="MARK"
+              :style="spinStyle"
+              title="Switching to this branch"
             />
-          </template>
-        </span>
-        <!-- The tick is the whole of what says which branch this repository is
-             on, and it is a glyph rather than the highlight alone: the row's
-             surface is also what hover uses, and a state told apart by shade
-             only would be two facts on one channel. `title` rather than a role
-             and a label on the span — it is `Icon`'s own way of being named,
-             and a glyph with no name reads as nothing at all to a screen
-             reader. -->
-        <span :style="markBox">
-          <Icon
-            v-if="spinning(branch, 'checkout')"
-            name="loader-circle"
-            :size="MARK"
-            :style="spinStyle"
-            title="Switching to this branch"
-          />
-          <Icon v-else-if="branch.current" name="check" :size="MARK" title="Current branch" />
-        </span>
-      </div>
-    </component>
+            <Icon v-else-if="row.current" name="check" :size="MARK" title="Current branch" />
+          </span>
+        </div>
+      </component>
+    </template>
     <!-- Its own sentence, like every other empty state in this panel, and
          deliberately narrow about what it can mean. A repository with no commit
          yet still offers one branch — `git.rs` pushes HEAD's own name into the

@@ -54,7 +54,23 @@ const defaults = () => ({
     leftCollapsed: false,
     rightCollapsed: false,
     leftWidth: LEFT_DEFAULT,
-    rightWidth: RIGHT_DEFAULT
+    rightWidth: RIGHT_DEFAULT,
+    /* How the Git panel's three sections are folded, and how tall two of them
+       were dragged to, in rows — `null` for "never dragged", which is a state
+       and not a stand-in for a number: until there is a drag a section follows
+       its own content. Global rather than per project for the reason
+       `GitSections` in Rust records, and the rule that reads it is
+       `components/git/sectionHeights.js`.
+
+       Rust always sends this whole, so `applySection`'s Object.assign replacing
+       it wholesale is the intended behaviour rather than a hazard. */
+    gitSections: {
+      reposRows: null,
+      branchRows: null,
+      reposOpen: true,
+      changesOpen: true,
+      branchesOpen: true
+    }
   },
   /* Which agent the app starts — the Agents tab of the settings window is what
      changes it, through `applyPatch` below. The defaults here and in Rust have
@@ -82,6 +98,12 @@ const defaults = () => ({
        a folder belonging to a project nobody is looking at. */
     selectedRepo: null,
     expanded: [],
+    /* Which branch folders the Git panel has unfolded. **Null and empty are
+       different states**, which is why the default is null and not `[]`: null
+       is "nobody has chosen here" and unfolds the folder the current branch is
+       in, while an empty list is somebody having folded them all. Written out
+       whole on the first press — `branchTree.js` holds both halves of that. */
+    branchFolders: null,
     openTabs: [],
     previewTab: null,
     /* The board's columns in the order a person dragged them to. Empty means

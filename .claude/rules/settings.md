@@ -19,13 +19,35 @@ and where the tests are; `file.rs` is the disk (atomic write through a per-call 
 thin commands.
 
 At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
-state and width for each side), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
+state and width for each side, and `gitSections` beside them), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
 start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, and `kanban`, how
 the board is drawn. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, active tab, selected task, selected path,
-`selectedRepo`, expanded folders, `openTabs`, `previewTab`, `columnOrder`, `runSettings`,
-`storageWarnedMib`, `usedAt`).
+`selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`, `columnOrder`,
+`runSettings`, `storageWarnedMib`, `usedAt`).
+
+`layout.gitSections` is the other thing at the root that could plausibly have gone under a project and
+did not: how the Git panel's three sections are folded, and how tall two of them were dragged to. The
+argument is `kanban`'s below — a habit of reading rather than a fact about one repository — and it
+also keeps five fields out of `ProjectState`, where each would have to be listed in the front end's
+`defaults()` or carry the previous project's value across a switch. The two heights are **counts of
+rows**, so they survive a change of density or of the app-wide font size, and `null` is a real state
+rather than a stand-in for a number: until somebody drags one, a section follows its own content, so
+a project of one repository draws one row instead of a reserved block of empty ones. A count outside
+`2..=40` is **forgotten rather than clamped**, the rule `min_priority` follows — forgetting hands the
+section back to its content, which is a real answer, where a number of ours would be an invention.
+The rule that reads all of it is `components/git/sectionHeights.js` (`.claude/rules/vcs-panel.md`).
+
+`branchFolders` went the other way and is **under the project**, right beside the file tree's
+`expanded` and for the same reason: which folders the Git panel's branch list has unfolded is about a
+repository's naming convention, where the heights above are about a person. It is an
+`Option<Vec<String>>` in Rust, and the `Option` is the point — `None` is "nobody has chosen here" and
+the panel unfolds the folder the current branch is in, while `Some([])` is somebody having folded
+them all and stays folded. A plain list would collapse the two and there would be no way to fold the
+last folder away. The list is cleaned in place rather than forgotten as a whole (blanks, duplicates,
+anything past 200 entries), because one junk path is no reason to refold the rest. The rule that
+reads it is `components/git/branchTree.js` (`.claude/rules/vcs-panel.md`).
 
 `kanban` is the one that is **global rather than per project**, and deliberately: `columns` (`all` or
 `some`) with `alwaysShow`, and `interval` (`all`, `day`, `week`, `month`) with `unlimited`, are a

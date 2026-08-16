@@ -6,9 +6,10 @@
 
 use std::path::Path;
 
-use super::model::{Branch, MergeOutcome, OpKind, Repo, VcsError, WorkingTree};
+use super::model::{Branch, ChangeKind, MergeOutcome, OpKind, Repo, VcsError, WorkingTree};
 use super::run::Attempt;
 use super::{model, repos, run};
+use crate::agents::oneshot::{self, OneshotError};
 use crate::files::model::{looks_binary, BINARY_SNIFF_BYTES, MAX_FILE_BYTES};
 use crate::git;
 
@@ -147,6 +148,107 @@ pub async fn vcs_rebase(repo: String, onto: String) -> Result<MergeOutcome, VcsE
 pub async fn vcs_abort(repo: String, op: OpKind) -> Result<(), VcsError> {
     run::git(Path::new(&repo), &[op.word(), "--abort"])?;
     Ok(())
+}
+
+/// Everything the panel is drawing, as one commit.
+///
+/// **Two calls, and the first one is the scope.** `git add --all` stages the
+/// whole working tree, which is exactly the list this panel shows — untracked
+/// files included, since a change set that is mostly new files is the ordinary
+/// case here and `git commit -a` would leave every one of them behind. What it
+/// costs is stated rather than hidden: somebody who staged one hunk of a file
+/// by hand loses that distinction, because this app has no staging of its own
+/// to express it with.
+///
+/// The message is refused **before** the add, and that ordering is the whole
+/// reason the check is here at all rather than left to git. git refuses an
+/// empty message itself, in good words — but by then the tree is staged, so a
+/// slip would leave the index rewritten behind a failure that said nothing
+/// about it.
+///
+/// No `--no-verify`: a repository's hooks are part of what committing means
+/// there, and skipping them silently from a button is not this app's decision
+/// to take. The cost is the one `run.rs` has everywhere — there is no timeout
+/// anywhere in this module — so a hook that hangs hangs this call, and the
+/// panel with it, exactly as a merge driver that hangs already does.
+#[tauri::command]
+pub async fn vcs_commit(repo: String, message: String) -> Result<(), VcsError> {
+    commit_all(Path::new(&repo), &message)
+}
+
+/// The two calls themselves, split from the command so the tests at the bottom
+/// of this file can drive them against a real repository — which for this one
+/// is worth the temp directory: it is the only path in the module that stages
+/// anything, and the ordering below is the whole of what keeps a slip from
+/// rewriting somebody's index.
+fn commit_all(repo: &Path, message: &str) -> Result<(), VcsError> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err(VcsError::NoMessage);
+    }
+    run::git(repo, &["add", "--all"])?;
+    run::git(repo, &["commit", "-m", message])?;
+    Ok(())
+}
+
+/// A commit message for what is in the tree right now, written by the agent.
+///
+/// Two halves, and they fail differently on purpose. Reading the diff is git
+/// and can only refuse in git's words; asking the harness is
+/// `agents::oneshot`, which has four ways to fail that a person can act on and
+/// keeps them apart. `OneshotError::Git` is where the first lands, so one
+/// message reaches the field whichever half gave way.
+///
+/// `pick` rather than `resolve`, the same call `terminal::service` makes: what
+/// answers is whatever is actually installed. A harness with no one-shot form
+/// says so through `Unsupported` rather than being hidden — the button is drawn
+/// for everybody, because whether the *configured* agent can do this is a fact
+/// the front end deliberately does not know (it never learns an agent's name).
+#[tauri::command]
+pub async fn vcs_suggest_message(
+    app: tauri::AppHandle,
+    repo: String,
+) -> Result<String, OneshotError> {
+    let agent = crate::settings::agent(&app);
+    let profile = crate::agents::pick(&agent, crate::shell_env::path())
+        .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
+    let prompt = describe(Path::new(&repo)).map_err(|err| OneshotError::Git(err.to_string()))?;
+    // `spawn_blocking`, unlike everything else in this file: the calls above
+    // are tens of milliseconds where this one waits on a model, and holding a
+    // runtime thread for ninety seconds would stall every other command in the
+    // app behind it.
+    tokio::task::spawn_blocking(move || oneshot::ask(profile, &prompt))
+        .await
+        .map_err(|err| OneshotError::Io(err.to_string()))?
+}
+
+/// What git has to say about the tree, as the text of a question.
+///
+/// Untracked paths are gathered from the very tree the panel is drawing, and
+/// they have to be gathered separately for a reason that is git's rather than
+/// ours: an untracked file is in no diff at all, so a change set of nothing but
+/// new files would otherwise be described to the agent as an empty one.
+///
+/// A repository with no commit yet has no `HEAD` to diff against, and asking
+/// anyway is `fatal: ambiguous argument 'HEAD'` — a refusal about the wrong
+/// thing entirely. So `HEAD` is verified first, through the one call that reads
+/// a non-zero exit as an answer, and its absence leaves the diff empty: in that
+/// repository every file is untracked and the list above is the whole change.
+fn describe(repo: &Path) -> Result<String, VcsError> {
+    let tree = working_tree(repo)?;
+    let untracked: Vec<String> = tree
+        .changes
+        .iter()
+        .filter(|change| change.kind == ChangeKind::Untracked)
+        .map(|change| change.path.clone())
+        .collect();
+    let born = run::git_maybe(repo, &["rev-parse", "--verify", "--quiet", "HEAD"], 1)?.is_some();
+    let (stat, patch) = if born {
+        (run::git(repo, &["diff", "HEAD", "--stat"])?, run::git(repo, &["diff", "HEAD"])?)
+    } else {
+        (String::new(), String::new())
+    };
+    Ok(oneshot::commit_prompt(&stat, &untracked, &patch))
 }
 
 /// A merge or a rebase, and the reading of what it left behind.
@@ -327,5 +429,66 @@ mod tests {
         let root = scratch("no-git");
         assert!(branch_list(&root).is_empty());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A real repository, since the two tests below are about what git does
+    /// rather than about what we pass it. The identity is set in the repository
+    /// itself and not through the environment: a machine with no `user.email`
+    /// configured is an ordinary machine, and a test that failed there would be
+    /// reporting on the machine rather than on the code.
+    fn repository(name: &str) -> PathBuf {
+        let root = scratch(name);
+        run::git(&root, &["init", "--quiet"]).expect("git init");
+        run::git(&root, &["config", "user.email", "test@example.com"]).expect("set the email");
+        run::git(&root, &["config", "user.name", "Test"]).expect("set the name");
+        root
+    }
+
+    /// The scope of the button, pinned against git itself: `--all` and not
+    /// `commit -a`, so a file git has never seen goes in with the rest. A change
+    /// set that is mostly new files is the ordinary case in this panel, and
+    /// `commit -a` would leave every one of them behind.
+    #[test]
+    fn everything_in_the_tree_is_committed_including_what_git_was_not_tracking() {
+        let repo = repository("commit-all");
+        fs::write(repo.join("tracked.txt"), "one\n").expect("write the tracked file");
+        run::git(&repo, &["add", "tracked.txt"]).expect("stage it");
+        run::git(&repo, &["commit", "-m", "first"]).expect("commit it");
+        fs::write(repo.join("tracked.txt"), "two\n").expect("edit the tracked file");
+        fs::write(repo.join("new.txt"), "three\n").expect("write the untracked file");
+
+        commit_all(&repo, "  fix: both of them  ").expect("commit");
+
+        let tree = working_tree(&repo).expect("read the tree");
+        assert!(tree.changes.is_empty(), "the tree should be clean: {:?}", tree.changes);
+        let last = run::git(&repo, &["log", "-1", "--name-only", "--format=%s"]).expect("read the log");
+        // The message is committed trimmed, which is what the button's own
+        // guard reads and what a person typing a trailing newline expects.
+        assert!(last.contains("fix: both of them"), "{last}");
+        assert!(last.contains("new.txt"), "the untracked file should be in it: {last}");
+        assert!(last.contains("tracked.txt"), "{last}");
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **The refusal comes before the add**, which is the whole reason it is
+    /// ours rather than git's: git refuses an empty message too, in good words,
+    /// but by then the tree is staged and a slip has rewritten the index behind
+    /// a failure that said nothing about it.
+    #[test]
+    fn an_empty_message_is_refused_before_anything_is_staged() {
+        let repo = repository("commit-empty");
+        fs::write(repo.join("new.txt"), "one\n").expect("write the untracked file");
+
+        let refused = commit_all(&repo, " \n ").expect_err("an empty message is refused");
+
+        assert_eq!(refused.kind(), "noMessage");
+        let tree = working_tree(&repo).expect("read the tree");
+        let staged: Vec<&str> =
+            tree.changes.iter().filter(|c| c.staged).map(|c| c.path.as_str()).collect();
+        assert!(staged.is_empty(), "nothing should have been staged: {staged:?}");
+        assert_eq!(tree.changes.len(), 1);
+
+        let _ = fs::remove_dir_all(&repo);
     }
 }

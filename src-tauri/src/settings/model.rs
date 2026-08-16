@@ -35,6 +35,12 @@ const SIDE_TABS: [&str; 3] = ["files", "git", "agents"];
 const MAX_ID_LEN: usize = 200;
 const MAX_PATH_LEN: usize = 4096;
 const MAX_EXPANDED: usize = 500;
+/// How many branch folders an unfolded list may name. Smaller than the file
+/// tree's ceiling above and for a different subject: a repository has a handful
+/// of prefixes — `feature`, `fix`, `release` — where a project has hundreds of
+/// directories, so a list past this is a hand-edited file rather than somebody
+/// who has been unfolding things.
+const MAX_BRANCH_FOLDERS: usize = 200;
 /// How many file tabs we remember. The limit is not about taste but about
 /// keeping the tab row a row, and the settings file readable.
 pub const MAX_OPEN_TABS: usize = 50;
@@ -176,7 +182,54 @@ pub struct Layout {
     pub right_collapsed: bool,
     pub left_width: u32,
     pub right_width: u32,
+    pub git_sections: GitSections,
 }
+
+/// How the three sections of the Git panel are folded, and how tall two of them
+/// were dragged to.
+///
+/// Global rather than per project, and for the reason `KanbanSettings` above is:
+/// how tall somebody likes their branch list and whether they ever want to look
+/// at the repository list are habits of reading, not facts about one
+/// repository. It also keeps five fields out of `ProjectState`, where every one
+/// of them would have to be listed in the front end's `defaults()` or carry the
+/// previous project's value across a switch.
+///
+/// The two heights are counts of rows and not pixels, which is what lets them
+/// survive a change of density or of the app-wide font size — `--row-h` is
+/// defined against both. `None` is "never dragged", and it is a real state
+/// rather than a stand-in for a number: until somebody drags one, a section
+/// follows its own content, so a project of one repository draws one row instead
+/// of a reserved block of empty ones. The rule that reads all of this is
+/// `src/components/git/sectionHeights.js`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GitSections {
+    pub repos_rows: Option<u32>,
+    pub branch_rows: Option<u32>,
+    pub repos_open: bool,
+    pub changes_open: bool,
+    pub branches_open: bool,
+}
+
+impl Default for GitSections {
+    fn default() -> Self {
+        Self {
+            repos_rows: None,
+            branch_rows: None,
+            repos_open: true,
+            changes_open: true,
+            branches_open: true,
+        }
+    }
+}
+
+/// Sanity bounds on a dragged section, mirrored by `MIN_ROWS` and `MAX_ROWS` in
+/// `sectionHeights.js`. Nothing is ever drawn `MAX_SECTION_ROWS` tall — the
+/// front end clamps against the panel it is in now — so this catches a
+/// hand-edited file, not tightness.
+const MIN_SECTION_ROWS: u32 = 2;
+const MAX_SECTION_ROWS: u32 = 40;
 
 /// The defaults are repeated in the front end (`LEFT_DEFAULT`, `RIGHT_DEFAULT`
 /// in `panelWidths.js`): with no back end the app must still open looking the same.
@@ -195,6 +248,7 @@ impl Default for Layout {
             right_collapsed: false,
             left_width: LEFT_WIDTH_DEFAULT,
             right_width: RIGHT_WIDTH_DEFAULT,
+            git_sections: GitSections::default(),
         }
     }
 }
@@ -220,6 +274,18 @@ pub struct ProjectState {
     /// an error about a choice nobody made today.
     pub selected_repo: Option<String>,
     pub expanded: Vec<String>,
+    /// Which branch folders the Git panel has unfolded, by whole path —
+    /// `feature`, `fix/legacy`. Per project because a branch naming convention
+    /// is, the same reasoning `column_order` below carries.
+    ///
+    /// **`None` and `Some([])` are different states and the type is an
+    /// `Option` for exactly that reason.** `None` is "nobody has chosen here"
+    /// and the panel unfolds the folder the current branch is in, so the tick
+    /// saying where you are is on screen the first time. `Some([])` is somebody
+    /// having folded them all, and stays folded — with a plain `Vec` there
+    /// would be no way to fold the last folder away, because the empty list
+    /// would read as the first case and come back unfolded on the next start.
+    pub branch_folders: Option<Vec<String>>,
     /// Open files in tab order. Paths are relative to the project root: the
     /// project's key in the map is already absolute, and duplicating it in
     /// every tab is pointless — it also means a moved folder does not turn the
@@ -273,6 +339,7 @@ impl Default for ProjectState {
             selected_path: None,
             selected_repo: None,
             expanded: Vec::new(),
+            branch_folders: None,
             open_tabs: Vec::new(),
             preview_tab: None,
             column_order: Vec::new(),
@@ -724,6 +791,25 @@ impl Layout {
     fn validate(&mut self) {
         in_range(&mut self.left_width, LEFT_WIDTH_DEFAULT);
         in_range(&mut self.right_width, RIGHT_WIDTH_DEFAULT);
+        self.git_sections.validate();
+    }
+}
+
+impl GitSections {
+    fn validate(&mut self) {
+        forget_odd_rows(&mut self.repos_rows);
+        forget_odd_rows(&mut self.branch_rows);
+    }
+}
+
+/// Out of range is forgotten rather than clamped, the rule `min_priority`
+/// follows: a 900 in this field is not somebody meaning "as tall as it goes",
+/// it is a file that has been edited wrongly, and forgetting it hands the
+/// section back to its own content — which is a real answer, where a number of
+/// ours would be an invention.
+fn forget_odd_rows(value: &mut Option<u32>) {
+    if value.is_some_and(|rows| !(MIN_SECTION_ROWS..=MAX_SECTION_ROWS).contains(&rows)) {
+        *value = None;
     }
 }
 
@@ -746,6 +832,13 @@ impl ProjectState {
         // `column_order` keeps one line above.
         forget_if_junk(&mut self.selected_repo, MAX_PATH_LEN);
         sane_list(&mut self.expanded, MAX_EXPANDED, MAX_PATH_LEN);
+        // Cleaned in place rather than forgotten as a whole: the list is a
+        // record of what somebody unfolded, and one junk entry in it is no
+        // reason to refold the rest. An empty list survives — it is the state
+        // that says "all of them, folded, on purpose".
+        if let Some(folders) = self.branch_folders.as_mut() {
+            sane_list(folders, MAX_BRANCH_FOLDERS, MAX_PATH_LEN);
+        }
         sane_list(&mut self.open_tabs, MAX_OPEN_TABS, MAX_PATH_LEN);
         // A status name, not a path — hence the identifier ceiling. Membership
         // is deliberately not checked: bd's set of statuses is not known here,
@@ -1082,6 +1175,41 @@ mod tests {
     }
 
     #[test]
+    fn a_file_without_git_sections_opens_with_all_three_unfolded() {
+        // A file written before the Git panel's sections learned to fold. Every
+        // section open and neither height dragged is the panel exactly as it was
+        // before any of this — an update must not fold something away.
+        let settings = settings_of(r#"{"version":1,"layout":{"leftWidth":300}}"#);
+        let git = &settings.layout.git_sections;
+        assert!(git.repos_open && git.changes_open && git.branches_open);
+        assert_eq!(git.repos_rows, None);
+        assert_eq!(git.branch_rows, None);
+    }
+
+    #[test]
+    fn a_dragged_section_height_survives_the_trip() {
+        let settings =
+            settings_of(r#"{"version":1,"layout":{"gitSections":{"branchRows":12,"changesOpen":false}}}"#);
+        assert_eq!(settings.layout.git_sections.branch_rows, Some(12));
+        assert!(!settings.layout.git_sections.changes_open);
+        assert!(settings.layout.git_sections.repos_open, "the neighbouring fold must survive");
+    }
+
+    #[test]
+    fn a_section_height_out_of_range_is_forgotten_rather_than_clamped() {
+        // Forgotten hands the section back to its own content, which is a real
+        // answer; a number of ours would be an invention. And it loses only
+        // itself — the field beside it is untouched.
+        let settings =
+            settings_of(r#"{"version":1,"layout":{"gitSections":{"reposRows":900,"branchRows":6}}}"#);
+        assert_eq!(settings.layout.git_sections.repos_rows, None);
+        assert_eq!(settings.layout.git_sections.branch_rows, Some(6));
+
+        let tiny = settings_of(r#"{"version":1,"layout":{"gitSections":{"reposRows":1}}}"#);
+        assert_eq!(tiny.layout.git_sections.repos_rows, None);
+    }
+
+    #[test]
     fn unknown_side_tab_falls_back_to_files() {
         let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"tarot","activeTab":"terminal"}}}"#);
         let state = &settings.projects["/p"];
@@ -1156,6 +1284,45 @@ mod tests {
         assert_eq!(expanded[0], "/a");
         assert_eq!(expanded[1], "/dir0000", "the duplicate, the empty string and the overlong path fell out");
         assert_eq!(expanded.last(), Some(&last_kept), "the tail is trimmed, not the head");
+    }
+
+    /// The whole reason the field is an `Option`. A file written before this
+    /// existed has no key at all, and that must not read as "everything was
+    /// folded on purpose" — the panel would open on a repository with the
+    /// current branch hidden inside a folder nobody closed.
+    #[test]
+    fn a_file_with_no_branch_folders_is_not_a_file_with_none_unfolded() {
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {"expanded": []}}});
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(settings.projects["/p"].branch_folders, None);
+    }
+
+    /// The other half of it: an empty list is a choice and survives the trip as
+    /// one, so folding the last folder away stays folded after a restart.
+    #[test]
+    fn unfolded_branch_folders_survive_the_trip_and_so_does_an_empty_list() {
+        let text = serde_json::json!({
+            "version": 1,
+            "projects": {
+                "/p": {"branchFolders": ["feature", "fix/legacy", "", "feature"]},
+                "/q": {"branchFolders": []}
+            }
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(
+            settings.projects["/p"].branch_folders,
+            Some(vec![String::from("feature"), String::from("fix/legacy")]),
+            "the blank and the duplicate fall out, the rest keeps its order"
+        );
+        assert_eq!(
+            settings.projects["/q"].branch_folders,
+            Some(Vec::new()),
+            "folded on purpose is not the same as never chosen"
+        );
     }
 
     #[test]

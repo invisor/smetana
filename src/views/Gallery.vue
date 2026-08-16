@@ -16,6 +16,7 @@ import {
   BranchSelect,
   Button,
   ChangeList,
+  CommitBox,
   ChatMessage,
   Checkbox,
   ClaimedTasks,
@@ -49,6 +50,7 @@ import {
   ProjectList,
   PromoteColumnModal,
   RepoList,
+  SectionHeader,
   ReportView,
   Select,
   RunBar,
@@ -345,6 +347,62 @@ const BRANCHES = [
    written out here: a frame quoting a sentence by hand is a copy that goes on
    reading well long after the rule stopped saying it. */
 const RUN_GOING = gitActions([{ token: 1, state: { kind: 'running' } }])
+
+/* The Git panel's folds and section heights, kept here so one frame is live:
+   the app holds them in `settings.layout` and this stands in for it, which is
+   what lets a chevron and a separator actually be tried in the gallery. The two
+   handlers are the same two lines `DesktopApp.vue` writes, since the panel is
+   presentational on this too — it emits a resolved row count and is told what
+   the state became. */
+const gitFolds = ref({
+  reposRows: null,
+  branchRows: null,
+  reposOpen: true,
+  changesOpen: true,
+  branchesOpen: true
+})
+const GIT_FOLD_KEY = { repos: 'reposOpen', changes: 'changesOpen', branches: 'branchesOpen' }
+const GIT_ROWS_KEY = { repos: 'reposRows', branches: 'branchRows' }
+const toggleGitSection = (section) => {
+  const key = GIT_FOLD_KEY[section]
+  if (key) gitFolds.value[key] = !gitFolds.value[key]
+}
+const resizeGitSection = ({ section, rows }) => {
+  const key = GIT_ROWS_KEY[section]
+  if (key) gitFolds.value[key] = rows
+}
+
+/* Branch names with slashes in them, which is what most repositories are made
+   of and what the folders are for. Two prefixes, one of them nested a second
+   time, and two names with none — so the frames below show a heading standing
+   where its most recent branch stood, `main` staying exactly where it was, and
+   a leaf drawn without the prefix every one of its siblings repeats. */
+const FOLDER_BRANCHES = [
+  { name: 'feature/holiday-curb-y5bt.8-drop-depot-columns', current: true },
+  { name: 'main', current: false },
+  { name: 'fix/holiday-curb-w78w-warehouse-geocode-precision', current: false },
+  { name: 'feature/smetana-8ok.5-branch-folders', current: false },
+  { name: 'fix/legacy/depot-import', current: false },
+  { name: 'develop', current: false }
+]
+
+/* Which of them are unfolded, held here the way the app holds it under the
+   project. Both start at `null`, which is not the same as an empty list: it
+   means nobody has chosen, and the folder holding the current branch opens by
+   itself so the tick is on screen. Fold that one away and the list becomes
+   empty, which is a choice and stays. */
+const branchFolders = ref(null)
+const gitFolders = ref(null)
+
+/* The caption on its own, in all three of the states it can be in: unfolded
+   with a count, unfolded without one, and folded — which still carries its
+   count, because somebody who folds the branches away is saying they do not
+   want to read the list, not that they no longer want to know there are nine
+   of them. */
+const headerFolds = ref({ withCount: true, bare: true, folded: false })
+/* The live commit box's own draft. Empty to start with, since that is the
+   state the button's refusal is drawn in. */
+const commitDraft = ref('')
 
 /* More branches than the branch section's cap, which is the state this
    repository and most others are actually in — and the one that hid git's
@@ -1282,6 +1340,32 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
             <GitPanel :repos="[]" :tree="null" />
           </Panel>
         </div>
+        <!-- The one live frame: its folds, its section heights and its branch
+             folders are held here the way the app holds them — the first two in
+             `settings.layout` and the third under the project — so the
+             chevrons, the two separators and the headings inside the branch
+             list can all actually be worked. It is taller than its
+             neighbours because a drag needs somewhere to go — the four above are
+             sized to catch what a short panel does to the captions, and this one
+             is sized to catch what a drag does at all. -->
+        <div :style="{ display: 'flex', width: '252px', height: '420px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <template #actions>
+              <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
+            </template>
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'feat/worktree-rename', detached: null, changes: CHANGES }"
+              :branches="LONG_BRANCHES"
+              :sections="gitFolds"
+              :branch-folders="gitFolders"
+              @toggle="toggleGitSection"
+              @toggle-folder="gitFolders = $event"
+              @resize="resizeGitSection"
+            />
+          </Panel>
+        </div>
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
@@ -1296,12 +1380,86 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
            long path, a detached HEAD and a rename's second path is easier to
            check without a panel around it. The last frame is git's own refusal,
            shown untouched — the person reading it knows git. -->
+      <!-- The caption on its own, in its three states, and then the fourth
+           frame: two of them stacked, the lower one `divided`, which is the
+           only way to see what the rule between two blocks actually looks like.
+           All of them fold, so what the chevron does is checkable here without
+           a panel around it; the folded one keeps its count on purpose. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <SectionHeader
+            label="Branches"
+            :count="9"
+            :open="headerFolds.withCount"
+            @toggle="headerFolds.withCount = !headerFolds.withCount"
+          />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <SectionHeader
+            label="Changes"
+            :open="headerFolds.bare"
+            @toggle="headerFolds.bare = !headerFolds.bare"
+          />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <SectionHeader
+            label="Repositories"
+            :count="3"
+            :open="headerFolds.folded"
+            @toggle="headerFolds.folded = !headerFolds.folded"
+          />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <SectionHeader label="Repositories" :count="3" :open="false" />
+          <SectionHeader divided label="Changes" :count="7" :open="false" />
+        </div>
+      </div>
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <RepoList :repos="REPOS" selected="/Users/you/dev/smetana" />
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <ChangeList :changes="CHANGES" selected="src/stores/vcs.js" />
+        </div>
+        <!-- The commit box in its four states, at the panel's own width. Live
+             first: type into it and the button comes alive with the count of
+             what it would take, press the sparkle and the fixture message
+             arrives. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <CommitBox
+            v-model="commitDraft"
+            :changes="CHANGES.length"
+            branch="feat/worktree-rename"
+            @commit="commitDraft = ''"
+            @suggest="commitDraft = 'feat: add a commit box to the Git panel'"
+          />
+        </div>
+        <!-- Nothing written yet, which is the state it opens in: the button is
+             dead and says why on a tooltip rather than leaving somebody to work
+             it out. And a detached HEAD beside it, where the field still invites
+             a commit and has no branch to name — the placeholder's other
+             half. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <CommitBox :changes="6" branch="develop" />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <CommitBox :changes="6" />
+        </div>
+        <!-- The agent thinking, and a run going. Two different questions, and
+             the frame is here to show that they answer differently: the spinner
+             stands in the sparkle's own box so nothing moves, and a run holds
+             the commit while leaving the sparkle live, because asking for a
+             message reads and writes nothing. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <CommitBox model-value="fix: keep the tick on the row" :changes="2" suggesting />
+        </div>
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <CommitBox
+            model-value="fix: keep the tick on the row"
+            :changes="2"
+            :actions="RUN_GOING"
+            :suggest-error="{ kind: 'noAgent', message: 'Smetana looked for claude on your PATH and found nothing.' }"
+          />
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />
@@ -1313,6 +1471,32 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
              drift from the rule. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" :actions="RUN_GOING" />
+        </div>
+        <!-- The folders, live: press a heading and it opens. Nothing was chosen
+             here, so the folder the current branch is in starts open and the
+             others start folded — which is the state a repository is in the
+             first time this panel is looked at. `fix` holds a folder of its own,
+             so the indentation of a second level is checkable here too. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :folders="branchFolders"
+            @toggle-folder="branchFolders = $event"
+          />
+        </div>
+        <!-- Every folder open, which is the same list at its tallest: what to
+             check here is that a leaf is drawn without the prefix its siblings
+             all share, and that the two names with no slash in them are still
+             where recency put them rather than swept under a heading. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="FOLDER_BRANCHES" :folders="['feature', 'fix', 'fix/legacy']" />
+        </div>
+        <!-- And with a run going, where the headings are deliberately the one
+             thing not dimmed: unfolding is reading, and a heading greyed out
+             beside rows that are greyed out because they cannot be pressed
+             would be saying something untrue about itself. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="FOLDER_BRANCHES" :folders="['feature']" :actions="RUN_GOING" />
         </div>
         <!-- The fourth of the panel's empty sentences, which no `GitPanel`
              frame can reach: a folder git can see nothing in has no branch to

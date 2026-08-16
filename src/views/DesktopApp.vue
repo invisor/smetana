@@ -89,12 +89,16 @@ import { gitState, loadBranches, loadHead } from '../stores/git.js'
 import {
   abortConflict,
   checkout,
+  commit,
   dismissConflict,
+  draftMessage,
   loadRepos,
   merge,
   rebase,
   refresh as refreshGit,
   selectRepo,
+  setMessage,
+  suggestMessage,
   vcsState
 } from '../stores/vcs.js'
 import {
@@ -426,6 +430,39 @@ const runBlockedReason = computed(() => scopeBusyReason({ kind: 'queue' }, runsS
    line above: the runs are the whole of what it reads, so an agent session a
    person started themselves never reaches it. */
 const gitWrites = computed(() => gitActions(runsState.runs))
+
+/* The Git panel's own folds and section heights. They live in `layout` rather
+   than under the project — how tall somebody likes their branch list is a habit
+   of reading, not a fact about one repository — and they reach the disk through
+   the same 400 ms debounce every panel drag already uses, so there is no second
+   save path here.
+
+   The panel does the arithmetic, because the measurements are its: what lands
+   here is a row count already resolved by `sectionHeights.js`, or `null` for a
+   section given back to its content by a double click. */
+const gitSections = computed(() => settings.layout.gitSections)
+
+const FOLD_KEY = { repos: 'reposOpen', changes: 'changesOpen', branches: 'branchesOpen' }
+const ROWS_KEY = { repos: 'reposRows', branches: 'branchRows' }
+
+const toggleGitSection = (section) => {
+  const key = FOLD_KEY[section]
+  if (key) gitSections.value[key] = !gitSections.value[key]
+}
+const resizeGitSection = ({ section, rows }) => {
+  const key = ROWS_KEY[section]
+  if (key) gitSections.value[key] = rows
+}
+
+/* Which branch folders are unfolded, and this one *is* under the project: a
+   `feature/…` prefix is a repository's convention where the heights above are a
+   person's habit. What arrives is the whole new list, already resolved by
+   `branchTree.js` — which is what writes the seeded folder out on the first
+   press, so folding it away reaches an empty list rather than the `null` it
+   started from. */
+const toggleBranchFolders = (folders) => {
+  project.branchFolders = folders
+}
 
 /* The second door out of a conflict, and the one this view has to carry: the
    store cannot open a tab or move a side tab, and everything else about the
@@ -2060,10 +2097,21 @@ const toastStackStyle = {
                 :error="vcsState.error"
                 :loading="vcsState.loading"
                 :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
+                :sections="gitSections"
+                :branch-folders="project.branchFolders"
+                :message="draftMessage()"
+                :suggesting="vcsState.suggesting"
+                :suggest-error="vcsState.suggestError"
+                @toggle="toggleGitSection"
+                @toggle-folder="toggleBranchFolders"
+                @resize="resizeGitSection"
                 @select="selectRepo"
                 @checkout="checkout"
                 @merge="merge"
                 @rebase="rebase"
+                @message="setMessage"
+                @commit="commit"
+                @suggest="suggestMessage"
                 @open="openDiff(vcsState.selected, $event.path)"
               />
               <AgentList
