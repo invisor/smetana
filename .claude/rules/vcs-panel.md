@@ -124,8 +124,8 @@ rounded**, since a panel with room for 6.8 rows has room for 6 and the seventh c
 whichever section had no claim; and a section nobody has dragged is owed one whole row — it gives way
 on its own, but giving way to nothing draws the same sliver.
 
-**The three writes a branch row offers are in its right-click menu**, and the row itself draws a name
-and a mark and nothing else. Merging and rebasing used to be two `IconButton`s that appeared under
+**The writes a branch row offers are in its right-click menu**, and the row itself draws a name and a
+mark and nothing else. Merging and rebasing used to be two `IconButton`s that appeared under
 the pointer — a control per row per verb, in a column that also carries a file tree, a change list
 and a commit box — and they are `components/git/branchMenu.js`'s items now, beside a third the row
 had all along without a name anywhere on screen: the checkout its own click performs. A menu is where
@@ -142,6 +142,34 @@ says it once. The current branch wins that caption even under a run, because som
 the row with the tick is asking about that row. The menu opens on **every** branch row including the
 refused ones: a gesture that answers on some rows and does nothing on others reads as a broken row
 rather than a refused one.
+
+**The fourth item is the one that leaves the list longer than it found it**: `New branch from this`,
+cut from the row that was clicked and never from HEAD, which is the whole reason it belongs to a row
+rather than to the section header. It is last, in a group of its own, and it is the item that made
+`branchMenu.js`'s refusals grow two different reaches — a run or an operation in flight refuses it
+like everything else, but *being on the branch* does not, since cutting a branch from where you are
+standing is the ordinary case. So "already on this branch" heads the three moving verbs and stops
+there, and what says how far a caption reaches is the greying under it.
+
+The name comes from `NewBranchModal.vue`, and the rule under it is `components/git/branchName.js` —
+git's own documented refusals (`git help check-ref-format`), plus the one name the list already
+holds. **It is deliberately allowed to be narrower than git and never wider**: `vcs_create_branch`
+runs the real command and git's refusal comes back in git's words like every other refusal here, so a
+name this rule passes and git rejects is an ordinary outcome the panel already draws, while a name it
+refuses and git would have taken is a door somebody cannot open. What it buys is the moment before:
+the button goes dead on the character that broke the name, with one line saying which rule that was,
+instead of a dialog closing onto a red block behind it.
+
+The dialog closes the moment `Create` is pressed rather than waiting on git, which is the shape of
+every write in this panel — the spinner lands on the row the branch is cut **from**, since that is a
+row already drawn and the new branch has none until the refresh. `busy` is keyed on that same branch
+for the same reason. Its checkbox is `git switch -c` against `git branch`, and they are two commands
+rather than a flag on one: the first writes the working tree and carries uncommitted work across, the
+second writes one ref and touches the tree not at all. Somebody who cleared the box asked for the
+second, and creating-then-switching-back would be two writes and a window where the tree sits
+somewhere nobody asked for. `switch` and not `checkout -b`, because `checkout` takes pathspecs and
+this panel has already paid for that once (see `vcs_checkout`'s note about the missing `--`); it
+wants git 2.23 or newer.
 
 The panel it opens is `overlays/PointerMenu.vue`, which is `MenuButton` anchored to a point instead
 of to a trigger — teleported out of the document because every list here sits inside something with
@@ -239,14 +267,15 @@ pinned version did at 260px. When it may be pressed, and the one sentence it say
 `components/git/commitBox.js`, pure and tested, of the `gitActions.js` family.
 
 The panel's writes share one rule and one field apiece. A branch row checks out, merges into the
-current branch or rebases the current branch onto it, and the commit box takes the tree;
+current branch, rebases the current branch onto it or cuts a new branch from it, and the commit box
+takes the tree;
 `gitActions.js` — pure, tested, of the `branchChoice.js` family — is the whole of when any of them
 may be offered, and it reads the project's **runs** and nothing else, so a session a person started
 themselves never dims the panel while a batch mid-merge always does. `busy` (`{ op, branch }`) is
 what makes it one at a time, and `writeError` carries git's stderr with the `op` that earned it,
 since a block reading "did not switch branch" over a refused merge would name an operation nobody
-asked for. The branch in `busy` may be **null**, and only for the commit: three of the four cannot do
-without one and guard it themselves, while a commit is about the tree and on a detached HEAD there is
+asked for. The branch in `busy` may be **null**, and only for the commit: every other write names a
+branch and guards it itself, while a commit is about the tree and on a detached HEAD there is
 no branch to name — a guard in the shared path turned that into a button that did nothing and said
 nothing.
 

@@ -193,6 +193,74 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.busy).toBe(null)
   })
 
+  /* A repository whose branch list grows when git is told to cut one, so the
+     row appearing — and the mark either moving with it or staying put — can be
+     watched from the store. */
+  const cutting = (ipc, at = 'main') => {
+    let branch = at
+    const names = ['main', 'develop']
+    ipc.on('vcs_repos', () => [{ name: '.', path: '/p/.', branch, detached: null }])
+    ipc.on('vcs_status', () => ({ branch, detached: null, changes: [] }))
+    ipc.on('vcs_branches', () => names.map((name) => ({ name, current: name === branch })))
+    ipc.on('git_head', () => ({ branch, detached: null }))
+    ipc.on('vcs_create_branch', (args) => {
+      names.push(args.name)
+      if (args.switch) branch = args.name
+      return null
+    })
+  }
+
+  /* `start` is the row the menu was opened on and has nothing to do with where
+     HEAD is — the whole point of the item is that the row decides. The name is
+     trimmed on the way, since that is the name the dialog's own rule judged. */
+  it('a new branch is cut from the row it was asked about rather than from HEAD', async () => {
+    const { stores, ipc } = await loadStores()
+    cutting(ipc)
+    await stores.vcs.loadRepos('/p')
+    await stores.git.loadHead('/p')
+
+    await stores.vcs.createBranch({ name: '  feat/login  ', from: 'develop', switch: true })
+
+    expect(ipc.calls('vcs_create_branch')).toEqual([
+      { repo: '/p/.', name: 'feat/login', start: 'develop', switch: true }
+    ])
+    expect(stores.vcs.vcsState.branches.map((b) => b.name)).toContain('feat/login')
+    // Switched, so everything drawing the branch moves — the list's mark, the
+    // repository row, and the scope bar one store over.
+    expect(stores.vcs.vcsState.branches.find((b) => b.current)?.name).toBe('feat/login')
+    expect(stores.vcs.vcsState.repos[0].branch).toBe('feat/login')
+    expect(stores.git.gitState.branch).toBe('feat/login')
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* The other half of the checkbox: one ref written, the working tree untouched
+     and the tick exactly where it was. The list still comes back, because the
+     row for the new branch has to appear from somewhere. */
+  it('a branch created without switching leaves the mark where it was', async () => {
+    const { stores, ipc } = await loadStores()
+    cutting(ipc)
+    await stores.vcs.loadRepos('/p')
+    await stores.git.loadHead('/p')
+
+    await stores.vcs.createBranch({ name: 'feat/quiet', from: 'develop', switch: false })
+
+    expect(stores.vcs.vcsState.branches.map((b) => b.name)).toContain('feat/quiet')
+    expect(stores.vcs.vcsState.branches.find((b) => b.current)?.name).toBe('main')
+    expect(stores.git.gitState.branch).toBe('main')
+  })
+
+  it('a name that is only whitespace asks git nothing', async () => {
+    const { stores, ipc } = await loadStores()
+    cutting(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.createBranch({ name: '   ', from: 'develop', switch: true })
+
+    expect(ipc.calls('vcs_create_branch')).toEqual([])
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
   /* The success path's guard is on the **project** and deliberately not on the
      pair the failure path uses, and this is what says so.
 

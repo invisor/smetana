@@ -354,6 +354,22 @@ export async function merge(branch) {
   await write('merge', branch, (repo) => invoke('vcs_merge', { repo, branch }))
 }
 
+/* Cut a new branch from another one — the row the right-click menu was opened
+   on, which is what `start` carries.
+
+   `busy` is keyed on the branch it is cut **from** rather than on the one being
+   made: the panel puts the spinner on a row it is already drawing, and the new
+   branch has no row until the refresh that follows. Which is also why the whole
+   list comes back afterwards rather than the working tree alone — `write` does
+   that for every write here, and this is the one where a row appears. */
+export async function createBranch({ name, from, switch: switchTo = true }) {
+  const wanted = (name ?? '').trim()
+  if (!wanted || !from) return
+  await write('create', from, (repo) =>
+    invoke('vcs_create_branch', { repo, name: wanted, start: from, switch: switchTo })
+  )
+}
+
 /* Replay this repository's branch on top of another one. The same two answers,
    and the same door out of the second. */
 export async function rebase(onto) {

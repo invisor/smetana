@@ -16,6 +16,14 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 
 const focus = ref(false)
+/* The field itself, so a caller can put the keyboard in it. A dialog that opens
+   for one name and does not focus its own field makes a person click before
+   they can type — see `git/NewBranchModal.vue`, which is what asked for this.
+   Exposed rather than an `autofocus` prop: attributes fall through to the
+   wrapper below, not to the input, so the attribute would land on a `div` and
+   do nothing at all. */
+const el = ref(null)
+defineExpose({ focus: () => el.value?.focus() })
 const borderColor = computed(() =>
   props.invalid ? 'var(--status-failed-fg)' : focus.value ? 'var(--focus-ring)' : 'var(--border)'
 )
@@ -52,6 +60,7 @@ const inputStyle = computed(() => ({
       <slot name="prefix" />
     </span>
     <input
+      ref="el"
       :type="type"
       :value="modelValue"
       :placeholder="placeholder"

@@ -131,6 +131,7 @@ const emit = defineEmits([
   'checkout',
   'merge',
   'rebase',
+  'new-branch',
   'commit',
   'suggest',
   'message',
@@ -218,6 +219,7 @@ const WRITE_REFUSED = {
   checkout: 'Git did not switch branch',
   merge: 'Git did not merge',
   rebase: 'Git did not rebase',
+  create: 'Git did not create the branch',
   abort: 'Git did not abort',
   commit: 'Git did not commit'
 }
@@ -540,6 +542,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
             @checkout="$emit('checkout', $event)"
             @merge="$emit('merge', $event)"
             @rebase="$emit('rebase', $event)"
+            @new-branch="$emit('new-branch', $event)"
             @toggle-folder="$emit('toggle-folder', $event)"
           />
         </div>

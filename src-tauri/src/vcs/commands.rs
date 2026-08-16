@@ -109,6 +109,54 @@ pub async fn vcs_checkout(repo: String, branch: String) -> Result<(), VcsError> 
     Ok(())
 }
 
+/// Cut a new branch from an existing one.
+///
+/// `start` is the branch the row was on, never HEAD: the whole point of the
+/// menu item is that the row somebody right-clicked decides where the new
+/// branch begins, and a command that quietly used HEAD would give the same
+/// answer from every row in the list.
+///
+/// Two commands rather than one flag, because they are two different acts.
+/// `switch -c` writes the working tree — it moves HEAD, and it carries
+/// uncommitted work across with it — while `branch` writes one ref and touches
+/// the tree not at all. Somebody who cleared the checkbox asked for the second,
+/// and running the first with a switch back afterwards would be two writes and
+/// a window where the tree is somewhere nobody asked for.
+///
+/// Everything git refuses comes back in git's own words at exit 128 — a name it
+/// will not take (`fatal: '...' is not a valid branch name`), a name already in
+/// use (`fatal: a branch named '...' already exists`), a start point it cannot
+/// resolve. `branchName.js` refuses the documented cases before the dialog
+/// closes; this is what refuses the rest, and it is the one that decides.
+///
+/// `switch` rather than `checkout -b`, and the choice is the lesson recorded
+/// above: `checkout` takes pathspecs, which is how a branch name that also
+/// names a file quietly restored that file instead. `switch` takes none at all —
+/// splitting them is the whole reason it exists — so there is nothing here for a
+/// name to be mistaken for and no `--` to remember. It wants git 2.23 or newer,
+/// which is 2019; verified against 2.34.1, the same build the tests run on.
+///
+/// `branch` takes no pathspec either, so the quiet half needs no guard.
+#[tauri::command]
+pub async fn vcs_create_branch(
+    repo: String,
+    name: String,
+    start: String,
+    switch: bool,
+) -> Result<(), VcsError> {
+    create_branch(Path::new(&repo), &name, &start, switch)
+}
+
+fn create_branch(repo: &Path, name: &str, start: &str, switch: bool) -> Result<(), VcsError> {
+    let args = if switch {
+        vec!["switch", "-c", name, start]
+    } else {
+        vec!["branch", name, start]
+    };
+    run::git(repo, &args)?;
+    Ok(())
+}
+
 /// Bring another branch's work into the one this repository is on.
 ///
 /// `--no-edit` is the only word added, and it is about not hanging rather than
@@ -488,6 +536,82 @@ mod tests {
             tree.changes.iter().filter(|c| c.staged).map(|c| c.path.as_str()).collect();
         assert!(staged.is_empty(), "nothing should have been staged: {staged:?}");
         assert_eq!(tree.changes.len(), 1);
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A repository with two commits on two branches, and HEAD deliberately on
+    /// the second: everything the branch tests below are about is the difference
+    /// between the row that was clicked and where HEAD happens to be.
+    fn two_branches(name: &str) -> (PathBuf, String, String) {
+        let repo = repository(name);
+        fs::write(repo.join("a.txt"), "one\n").expect("write a file");
+        run::git(&repo, &["add", "."]).expect("stage");
+        run::git(&repo, &["commit", "-m", "first"]).expect("commit");
+        // Whatever this git calls its first branch — the default is a machine's
+        // configuration, not this test's business.
+        let first = head_branch(&repo);
+        run::git(&repo, &["switch", "-c", "second"]).expect("cut the second branch");
+        fs::write(repo.join("b.txt"), "two\n").expect("write another file");
+        run::git(&repo, &["add", "."]).expect("stage");
+        run::git(&repo, &["commit", "-m", "second"]).expect("commit");
+        (repo, first, "second".into())
+    }
+
+    fn head_branch(repo: &Path) -> String {
+        run::git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).expect("read HEAD").trim().into()
+    }
+
+    fn sha(repo: &Path, rev: &str) -> String {
+        run::git(repo, &["rev-parse", rev]).expect("resolve the revision").trim().into()
+    }
+
+    /// **The start point is the row, never HEAD.** The menu item exists because
+    /// the row somebody right-clicked decides where the branch begins; a command
+    /// reading HEAD would answer the same from every row in the list, and the
+    /// commit somebody chose is exactly the thing they would not be able to see
+    /// was wrong.
+    #[test]
+    fn a_new_branch_starts_at_the_branch_it_was_cut_from() {
+        let (repo, first, _) = two_branches("branch-start");
+
+        create_branch(&repo, "cut", &first, false).expect("create the branch");
+
+        assert_eq!(sha(&repo, "cut"), sha(&repo, &first));
+        assert_ne!(sha(&repo, "cut"), sha(&repo, "second"));
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// The checkbox, pinned against git: one call moves HEAD and the other
+    /// leaves the tree exactly where it stood.
+    #[test]
+    fn switching_is_the_checkbox_and_nothing_else_moves_head() {
+        let (repo, first, _) = two_branches("branch-switch");
+
+        create_branch(&repo, "quiet", &first, false).expect("create without switching");
+        assert_eq!(head_branch(&repo), "second");
+
+        create_branch(&repo, "loud", &first, true).expect("create and switch");
+        assert_eq!(head_branch(&repo), "loud");
+        assert_eq!(sha(&repo, "HEAD"), sha(&repo, &first));
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A name git will not take is git's refusal, in git's words, and nothing is
+    /// created. `branchName.js` refuses this one before the dialog closes; what
+    /// is pinned here is that the back end does not quietly accept what the
+    /// front end happened to miss.
+    #[test]
+    fn a_name_git_refuses_creates_nothing() {
+        let (repo, first, _) = two_branches("branch-bad-name");
+
+        let refused = create_branch(&repo, "no spaces", &first, false).expect_err("git refuses");
+
+        assert_eq!(refused.kind(), "git");
+        let branches: Vec<String> = branch_list(&repo).into_iter().map(|b| b.name).collect();
+        assert_eq!(branches.iter().filter(|n| n.contains("spaces")).count(), 0, "{branches:?}");
 
         let _ = fs::remove_dir_all(&repo);
     }

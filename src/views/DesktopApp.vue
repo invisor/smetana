@@ -16,6 +16,7 @@ import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
+import NewBranchModal from '../components/git/NewBranchModal.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
@@ -90,6 +91,7 @@ import {
   abortConflict,
   checkout,
   commit,
+  createBranch,
   dismissConflict,
   draftMessage,
   loadRepos,
@@ -430,6 +432,25 @@ const runBlockedReason = computed(() => scopeBusyReason({ kind: 'queue' }, runsS
    line above: the runs are the whole of what it reads, so an agent session a
    person started themselves never reaches it. */
 const gitWrites = computed(() => gitActions(runsState.runs))
+
+/* Which branch the new-branch dialog was opened from, and null for closed. The
+   branch is the state rather than a boolean beside it: what the dialog is about
+   is entirely the row somebody right-clicked, and a flag with the name kept
+   somewhere else is two things to clear instead of one.
+
+   It is deliberately not held in the store. Nothing about a dialog somebody has
+   half filled in survives a project switch, and the store is where the things
+   that do survive live. */
+const newBranchFrom = ref(null)
+
+/* The dialog closes first and git runs after, which is the shape of every write
+   in this panel: the spinner lands on the row the branch is cut from, and a
+   refusal is drawn where the panel draws the rest of git's refusals. A dialog
+   held open over that spinner would be a second place saying the same thing. */
+const cutBranch = (ask) => {
+  newBranchFrom.value = null
+  createBranch(ask)
+}
 
 /* The Git panel's own folds and section heights. They live in `layout` rather
    than under the project — how tall somebody likes their branch list is a habit
@@ -2109,6 +2130,7 @@ const toastStackStyle = {
                 @checkout="checkout"
                 @merge="merge"
                 @rebase="rebase"
+                @new-branch="newBranchFrom = $event"
                 @message="setMessage"
                 @commit="commit"
                 @suggest="suggestMessage"
@@ -2261,6 +2283,21 @@ const toastStackStyle = {
              promises to show and has nothing to draw it with. Everything in it
              comes from the record the store made when git answered, including
              which repository — the panel's selection can have moved since. -->
+        <!-- Cutting a branch, from the row the menu was opened on. It lives here
+             beside the conflict dialog rather than inside `GitPanel` for the
+             reason that one does: a modal belongs to the window, and a panel
+             that is 252px wide and scrolls is no place to hang one from. The
+             verdict and `busy` go in live, because a run can start while the
+             dialog is open and the button has to go dead when it does. -->
+        <NewBranchModal
+          :open="newBranchFrom !== null"
+          :from="newBranchFrom"
+          :branches="vcsState.branches"
+          :actions="gitWrites"
+          :busy="Boolean(vcsState.busy)"
+          @close="newBranchFrom = null"
+          @create="cutBranch"
+        />
         <ConflictModal
           v-if="vcsState.conflict"
           :open="true"

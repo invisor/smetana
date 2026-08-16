@@ -31,6 +31,7 @@ import {
   FolderOpen,
   Gauge,
   GitBranch,
+  GitBranchPlus,
   GitCompare,
   GitFork,
   GitGraph,
@@ -90,6 +91,7 @@ export const iconNodes = {
 
   // scope
   'git-branch': GitBranch,
+  'git-branch-plus': GitBranchPlus,
   'git-merge': GitMerge,
   /* Rebase, beside merge in the branch list. Lucide ships no rebase glyph, and
      of what it does ship this is the one about the *shape* of the history —

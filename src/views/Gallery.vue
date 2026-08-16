@@ -43,6 +43,7 @@ import {
   KanbanSettings,
   LogView,
   MenuButton,
+  NewBranchModal,
   Modal,
   PointerMenu,
   NewTaskModal,
@@ -1067,6 +1068,22 @@ const menuTargetStyle = {
       </div>
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <SetupProjectModal :open="true" name="holiday-curb" existing @close="() => {}" @confirm="() => {}" />
+      </div>
+      <!-- Cutting a branch, from a row in the branch list. Live, because the
+           line under the field is the half worth looking at: type a space or
+           `develop` into it and it says which rule that broke, and the button
+           goes dead as it does. The box is held whether or not there is a
+           sentence in it, so the checkbox under it does not step up and down as
+           somebody types. -->
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <NewBranchModal :open="true" from="develop" :branches="BRANCHES" @close="() => {}" @create="() => {}" />
+      </div>
+      <!-- And the same dialog with a run holding the repository, which is the
+           state it can arrive in without being reopened: the button is dead and
+           the line under the field carries `gitActions.js`'s own sentence
+           instead of anything about the name. -->
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <NewBranchModal :open="true" from="feat/worktree-rename" :branches="BRANCHES" :actions="RUN_GOING" @close="() => {}" @create="() => {}" />
       </div>
       <!-- Three, because the fields differ between them: solo is offered for a
            single task and refused for a queue, and that is the model's rule

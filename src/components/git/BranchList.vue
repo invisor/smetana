@@ -1,9 +1,9 @@
 <script setup>
-/* The local branches of one repository, which of them it is on, and the three
+/* The local branches of one repository, which of them it is on, and the four
    things that can be done from a row: switch to it, merge it into the current
-   branch, rebase the current branch onto it.
+   branch, rebase the current branch onto it, cut a new branch from it.
 
-   **All three live in the row's right-click menu**, and the first of them is
+   **All four live in the row's right-click menu**, and the first of them is
    also the row's own click. Merging and rebasing used to be two buttons that
    appeared on the row under the pointer, which is a control per row per verb in
    a panel that also draws a file tree, a change list and a commit box; they are
@@ -19,16 +19,18 @@
    linked worktree offers the whole repository's list rather than the single
    branch it is itself on, which is `parse_commondir`'s doing one layer down.
 
-   The current branch is marked and is not a target for any of the three:
-   checking out, merging or rebasing onto the branch you are already on is the
-   one row in this list with nothing behind it.
+   The current branch is marked and is not a target for the first three:
+   checking out, merging or rebasing onto the branch you are already on is a row
+   with nothing behind it. The fourth is live there like anywhere else — a
+   branch cut from where you are standing is the ordinary case, not an edge
+   one — which is why `branchMenu.js`'s refusals have two different reaches.
 
    Whether any of it may be offered at all is `gitActions.js` and not this
    file's — a rule about the project's runs, pure and tested, where a `.vue`
    file is the one thing no test in this repository reaches. What arrives here
    is its verdict, and both halves of it are used: the row goes inert on
    `allowed`, and the tooltip over it is the `reason` that came with it. The
-   same one verdict covers all three writes, since what it is about — a batch
+   same one verdict covers every write here, since what it is about — a batch
    that may be mid-merge — is no more survivable for one of them than another.
 
    ## Folders
@@ -37,7 +39,8 @@
    a row shows is the leaf — which is the width this buys back, since the
    prefix is the same on every row under one heading and the tail is the half
    that identifies a branch. The whole name still travels on the row, because
-   that is what a checkout, a merge and a rebase are given.
+   that is what a checkout, a merge, a rebase and a new branch's start point are
+   given.
 
    Which rows those are is `branchTree.js`, pure and tested, of the
    `gitActions.js` family; this file draws them. The order it hands back is
@@ -50,9 +53,10 @@
    would say something untrue about it.
 
    Remote branches, upstreams and ahead/behind counts are outside this epic. So
-   are creating, renaming and deleting a branch, and so is every flag and
-   strategy a merge can take: this offers the merge and the rebase git would do
-   by itself, and nothing else. */
+   are renaming and deleting a branch, and so is every flag and strategy a merge
+   can take: this offers the merge and the rebase git would do by itself, and
+   nothing else. Creating one was outside it too until a row's menu had somewhere
+   to put it. */
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
@@ -77,7 +81,7 @@ const props = defineProps({
      spinner in the wrong place would name the wrong operation. */
   busy: { type: Object, default: null }
 })
-const emit = defineEmits(['checkout', 'merge', 'rebase', 'toggle-folder'])
+const emit = defineEmits(['checkout', 'merge', 'rebase', 'new-branch', 'toggle-folder'])
 
 /* Hover is per row and `useInteractive` tracks one control at a time, so an
    instance built inside `rowStyle` would be thrown away on every re-render.
@@ -138,12 +142,13 @@ const openMenu = (row, event) => {
 /* The branch is handed back with the pick rather than read from `menuFor`,
    which closing has already cleared — see `PointerMenu`'s header. Written out
    rather than emitted as `item.kind`: the kinds and the events happen to be the
-   same three words today, and a rule file free to add a fourth verb must not be
+   same four words today, and a rule file free to add a fifth verb must not be
    able to make this component emit something nobody declared. */
 const pick = (item, name) => {
   if (item.kind === 'checkout') emit('checkout', name)
   else if (item.kind === 'merge') emit('merge', name)
   else if (item.kind === 'rebase') emit('rebase', name)
+  else if (item.kind === 'new-branch') emit('new-branch', name)
 }
 
 const rows = computed(() =>
@@ -267,7 +272,8 @@ const nameStyle = {
 const OPERATIONS = {
   checkout: 'Switching to this branch',
   merge: 'Merging this branch in',
-  rebase: 'Rebasing onto this branch'
+  rebase: 'Rebasing onto this branch',
+  create: 'Cutting a new branch from this'
 }
 
 const operation = (branch) =>
