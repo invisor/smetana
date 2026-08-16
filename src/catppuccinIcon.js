@@ -1,8 +1,8 @@
-/* EXPERIMENT — variant A of the file-icon estimate, on this branch only.
-
-   What a file or a folder is drawn as, using the Catppuccin VS Code icon set
+/* What a file or a folder is drawn as, using the Catppuccin VS Code icon set
    (MIT): 656 multicolour icons resolved by name and handed to an `<img>` as a
-   `data:` URL.
+   `data:` URL. The tree's rows, the document tabs and the Git panel's change
+   list all draw from here, which is why it sits at the top of `src/` rather
+   than under any one of them — the reason `paths.js` gives about itself.
 
    The set ships as SVGs written against `var(--vscode-ctp-<colour>)` — one
    semantic colour name per icon, sixteen names in all — and
@@ -11,28 +11,29 @@
    theme, and the two palettes cost one copy of the artwork rather than two:
    Latte for the light theme, Macchiato for the dark one.
 
-   That substitution is the whole reason the first version of this file was
-   thrown away. It imported the compiled Macchiato build, and Macchiato is a dark
-   palette: its dominant colour measured 1.38:1 against `--surface`, so in the
-   light theme two thirds of the tree's icons were not there. Latte's own `text`
-   is `#4c4f69` and lands near 9:1 on the same surface.
-
-   Two of this repository's written rules are still suspended here, and that is
-   the point of the branch rather than an oversight:
+   Two of this repository's written rules are bought out here rather than kept,
+   and both were weighed with measurements in hand:
 
    1. Colour. Sixteen hues from a foreign palette enter the interface, where
-      `CLAUDE.md` says the saturated range belongs to status. The measured cost
-      is real and dark-theme-specific: on a tab, the peach of a Rust icon sits
-      four pixels from the amber dot that means "unsaved", and in the change list
-      a yellow `js` badge outweighs the git status letter beside it.
-   2. `core/icons.js` is no longer the only file that names an icon set, and this
-      one is not tree-shaken — the whole vendored body table is imported.
+      `CLAUDE.md` otherwise says the saturated range belongs to status. The cost
+      is real and it is where status is most load-bearing: in the change list a
+      modified `.js` puts the status letter and the icon **within one degree of
+      hue** of each other, and on a tab the peach of a Rust icon is 17 degrees
+      from the amber dot that means "unsaved". Nine of the sixteen Latte hues
+      also sit under 3:1 on `--surface` — legible, and visibly softer than the
+      label beside them.
+   2. `core/icons.js` is no longer the only file that names an icon set, and
+      this one is not tree-shaken: the whole vendored body table is imported,
+      which is what the bundle grew by. A hand-kept list of 656 names resolved
+      at runtime is not a thing that can be tree-shaken at all.
 
-   What is *not* suspended any more is the theme: the icons repaint on
-   `data-theme`, because the palette is applied here rather than baked into the
-   file. `src/fileIcon.js` beside this is the monochrome rule this replaces; it
-   stays in place and unused so the two can be compared and so dropping the
-   experiment is one revert. */
+   What is *not* given up is the theme. The icons repaint on `data-theme`,
+   because the palette is applied here rather than baked in — which is the whole
+   reason the first version of this file was thrown away. It imported the
+   compiled Macchiato build, and Macchiato is a dark palette: its dominant
+   colour measured 1.38:1 against `--surface`, so in the light theme most of the
+   tree's icons were simply not on screen. The same measurement now reads
+   7.41:1. */
 import bodies from './catppuccinBodies.json'
 import tables from './catppuccinAssociations.json'
 

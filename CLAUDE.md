@@ -32,6 +32,7 @@ npm run build
 npm run preview      # serve the production build
 npm run tauri dev    # the actual desktop app: Rust worker, real bd, live board
 npm run fetch-bd     # download the bd binary explicitly (fails hard, unlike postinstall)
+node scripts/fetch-icon-associations.mjs   # re-vendor the file-type icons; output is committed
 npm test             # front-end tests (vitest), single run
 npm run test:watch   # the same, in watch mode
 cd src-tauri && cargo test
@@ -156,16 +157,25 @@ window — so there is no one part of the interface to file them under. It is de
 sizes themselves are the stylesheet's, and this file only says by how much. Its DOM half is split off
 into `views/useAppearance.js`, which is what keeps the rules themselves reachable by a test.
 
-`src/fileIcon.js` is the third of them, and the reason is the same shape: what glyph a file's name is
-drawn with is wanted by the tree's rows, by the document tabs' store and by the Git panel's change
-list, so it belongs to none of the three. It answers one of six groups — code, prose, configuration,
-manifest, image, archive — and the plain page for a name none of them claims, which is an ordinary
-outcome here exactly as an unknown extension is in `editor/languages.js`. Two things about it are
-load-bearing rather than incidental: the glyphs are **groups and never languages**, since lucide has
-no language logos and an invented one per language is unreadable at 13px, and **no group carries a
-colour** — the two lists draw it in `--text-muted` and a tab lets it inherit the tab's own
-foreground, because the saturated range belongs to status and in both lists the row's one colour is
-already spoken for.
+`src/catppuccinIcon.js` is the third of them, and the reason is the same shape: what a file's name is
+drawn as is wanted by the tree's rows, by the document tabs' store and by the Git panel's change
+list, so it belongs to none of the three. It is the **second icon source in the tree**, beside
+`core/icons.js`, and the split is by question: lucide answers "what does this control mean", in one
+colour, from a hand-kept list; this answers "what kind of file is this", from 656 icons named after
+languages and tools. A vocabulary that size cannot be a list somebody maintains by hand, which is
+also why it is not tree-shaken — the whole vendored table ships, and the bundle grew by a third for
+it.
+
+**It is the one place in the front end that draws colours this design system did not choose**, and
+the exception is bought rather than overlooked. `scripts/fetch-icon-associations.mjs` vendors
+Catppuccin's own build (MIT), whose SVGs are written against colour *names* rather than hexes, so the
+bodies are stored once and a palette is substituted per theme — Latte on light, Macchiato on dark.
+Taking a compiled flavour instead is the version that was thrown away: one dark palette measured
+1.38:1 against `--surface`, and most of the tree's icons were not on screen in the light theme. What
+is still paid: sixteen foreign hues sit near the status colours they are not allowed to be confused
+with, and in the change list a modified `.js` puts the status letter and the icon within one degree
+of hue of each other. The file's own header carries the measurements; do not re-open the question
+without them.
 
 ### Where the rest of this document went
 
@@ -354,9 +364,13 @@ in the status idiom is a red `failed` pill to anyone scanning quickly.
 `core/icons.js` is the only file that names Lucide, and it registers glyphs explicitly so the build
 tree-shakes to the ones actually used — the file is the list, and a number written here would be
 wrong within a month. Adding a glyph to the UI means adding it there first; `Icon` warns in dev for
-an unregistered name. Swapping icon sets means replacing that one file. Note
-`message-circle-question-mark` is kept as the design-system key and mapped to lucide 0.469's
-`MessageCircleQuestion`.
+an unregistered name. Note `message-circle-question-mark` is kept as the design-system key and mapped
+to lucide 0.469's `MessageCircleQuestion`.
+
+It is not the only icon source any more: `src/catppuccinIcon.js` above draws **files and folders by
+name**, in colour, from a vendored set of 656. Everything else on screen — every control, every
+status, every empty state — is this file's, in one colour, from a list a person can read. Adding a
+glyph for a *file type* means the vendoring script; adding one for anything else means here.
 
 ### Adding a component
 
@@ -367,14 +381,18 @@ alias exists in `vite.config.js` but is currently unused, so prefer relative pat
 
 ## Constraints
 
-- **No gradients, images, glass, blur or emoji.** Partly taste, partly the WebKitGTK constraint.
-  One raster is drawn in the whole interface and it is the app icon itself, on the About tab
-  (`src/assets/app-icon.png`): the exception is the artwork rather than the medium, since this
-  picture is the app's identity and a version redrawn from tokens would be a second copy to keep in
-  step with the first. It carries its own black ground and squircle, which lets one file serve both
-  themes with no border and no radius from the component. Anything else wanting a picture is still a
-  design-system question. `scripts/make-app-icon.py` builds it and the bundle icons from one source,
-  so the two cannot drift; `app-icon.png` at the repository root is that 1024 master.
+- **No gradients, glass, blur or emoji.** Partly taste, partly the WebKitGTK constraint.
+  Two things are drawn as images rather than as tokens, and both are exceptions with a reason. The
+  app icon on the About tab (`src/assets/app-icon.png`) is the one **raster**: the exception is the
+  artwork rather than the medium, since this picture is the app's identity and a version redrawn from
+  tokens would be a second copy to keep in step with the first. The file-type icons
+  (`src/catppuccinIcon.js`) are the other, and they are vector inside an `<img>` — which is the part
+  that costs: a `data:` URL is opaque to the stylesheet, so nothing in them can be a token and
+  nothing repaints on its own. They carry their palette in JS instead, which is why they follow the
+  theme at all. Anything else wanting a picture is still a design-system question. The app icon
+  carries its own black ground and squircle, which lets one file serve both themes with no border and
+  no radius from the component; `scripts/make-app-icon.py` builds it and the bundle icons from one
+  source, so the two cannot drift, and `app-icon.png` at the repository root is that 1024 master.
 - **No native right-click menu, anywhere.** `src/main.js` refuses every `contextmenu` event in
   the document (`src/nativeMenu.js`), in the app and in the dev server alike, because a check is
   worth having only if it shows what the app does. What the webview offers is the platform's, not

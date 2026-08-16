@@ -67,10 +67,12 @@ deleted, untracked — take the `--git-*` token the file tree already marks that
 type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares
 `--git-conflict` while the letters differ, `C` here against the tree's `!`. Borrowing the four rather
 than inventing a palette is the point; claiming the two lists match everywhere would not be true. The
-glyph between the letter and the name is borrowed the same way — `src/fileIcon.js`, the tree's own
-rule — and it is the third mark on a row that already carries a staged tick and a coloured letter,
-which is the most this row can hold: it is muted and uncoloured on purpose, because the letter is
-what this list is about.
+icon between the letter and the name is borrowed the same way — `src/catppuccinIcon.js`, the tree's
+own table — and it is the third mark on a row that already carries a staged tick and a coloured
+letter, which is the most this row can hold. Unlike the other two it is in colours this app did not
+choose, and the cost is measured: on a modified `.js` the status letter and the icon are within one
+degree of hue of each other. It was accepted with the set; if this row is ever trimmed back, that
+glyph is the first thing to go.
 Each section has **its own empty state and they say different things** — no git on this machine
 (naming what was looked for), no repository in this folder, nothing uncommitted in this repository:
 one blank area for all three would be a panel saying nothing three different ways. Freshness is

@@ -9,8 +9,7 @@ import { settings } from './settings.js'
 import { basenameOf, fileErrorText, filesState, readFile, writeFile } from './files.js'
 import { fileAtHead } from './vcs.js'
 import { relativeTo } from '../paths.js'
-/* EXPERIMENT (variant A): the Catppuccin set, in place of `../fileIcon.js`.
-   The theme is read from the document root rather than from settings.js beside
+/* The theme is read from the document root rather than from settings.js beside
    this file: a tab's icon is about what is painted, and the gallery paints a
    theme no store holds. */
 import { fileIconUrl } from '../catppuccinIcon.js'

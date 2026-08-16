@@ -285,9 +285,9 @@ const tabs = computed(() => [
    when `expanded` names it, while `MOCK_TREE` is keyed by directory the way
    `files_list` answers — so the gallery nests the one into the other and opens
    the folder. It was handed the flat root before, which drew six rows and left
-   `file-code`, `image`, `file-archive` and the plain page — four of the seven
-   glyphs `src/fileIcon.js` can produce — visible nowhere in the gallery at
-   all. */
+   the language icons, the picture and the archive — the half of
+   `src/catppuccinIcon.js`'s vocabulary a person is most likely to be looking
+   at — visible nowhere in the gallery at all. */
 const galleryTree = MOCK_TREE[''].map((node) =>
   node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
 )

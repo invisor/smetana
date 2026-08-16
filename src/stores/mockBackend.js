@@ -62,7 +62,7 @@ const BROKEN_CONFIG_PROJECT = '/Users/you/dev/holiday-curb'
    entries.
 
    The names are deliberately of several kinds rather than four `.rs` files:
-   `src/fileIcon.js` draws a row by its name, and a fixture of one kind would
+   `src/catppuccinIcon.js` draws a row by its name, and a fixture of one kind would
    show one glyph — so the tree that used to prove FileTree renders now also
    shows whether the whole vocabulary does. */
 export const MOCK_TREE = {

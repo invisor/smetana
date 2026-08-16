@@ -2,9 +2,6 @@
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
-/* EXPERIMENT (variant A): the Catppuccin set replaces the monochrome rule in
-   `../../fileIcon.js`, which stays beside it unused so the two can be compared
-   and so dropping this is one revert. */
 import { fileIconUrl, folderIconUrl } from '../../catppuccinIcon.js'
 import { documentTheme } from '../../documentTheme.js'
 
