@@ -2,7 +2,10 @@
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
-import { fileIcon, folderIcon } from '../../fileIcon.js'
+/* EXPERIMENT (variant A): the Catppuccin set replaces the monochrome rule in
+   `../../fileIcon.js`, which stays beside it unused so the two can be compared
+   and so dropping this is one revert. */
+import { fileIconUrl, folderIconUrl } from '../../catppuccinIcon.js'
 
 const GIT = {
   modified: { c: 'var(--git-modified)', l: 'M' },
@@ -28,11 +31,10 @@ const emit = defineEmits(['toggle', 'select', 'open'])
 const hover = ref(false)
 const g = computed(() => (props.git ? GIT[props.git] : null))
 
-/* What the name is, drawn — `src/fileIcon.js`, shared with the document tabs
-   and the Git panel's change list. It stays `--text-muted` whatever it resolves
-   to: the one colour a row here carries is the git letter at its end. */
-const icon = computed(() =>
-  props.kind === 'dir' ? folderIcon(props.name, props.expanded) : fileIcon(props.name)
+/* What the name is, drawn — a `data:` URL rather than a glyph name, since the
+   set's colours are inside the SVG. Nothing about it follows the theme. */
+const iconUrl = computed(() =>
+  props.kind === 'dir' ? folderIconUrl(props.name, props.expanded) : fileIconUrl(props.name)
 )
 
 const style = computed(() => ({
@@ -85,7 +87,10 @@ const onDoubleClick = () => {
     <span :style="{ width: '12px', display: 'flex', color: 'var(--text-muted)' }">
       <Icon v-if="kind === 'dir'" :name="expanded ? 'chevron-down' : 'chevron-right'" :size="12" />
     </span>
-    <Icon :name="icon" :size="13" :style="{ color: 'var(--text-muted)' }" />
+    <!-- 15px and not the row's usual 13: this set draws on a 16 grid with its
+         own padding, where a lucide glyph fills its box. `alt` is empty because
+         the name is right beside it. -->
+    <img :src="iconUrl" alt="" width="15" height="15" :style="{ display: 'block', flex: '0 0 auto' }" />
     <span :style="nameStyle">{{ name }}</span>
     <Icon
       v-if="readOnly"

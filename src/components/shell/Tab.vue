@@ -19,6 +19,11 @@ const props = defineProps({
   kind: { type: String, default: 'file' },
   label: { type: String, required: true },
   icon: { type: String, default: undefined },
+  /* EXPERIMENT (variant A): a file tab's icon arrives as a `data:` URL from the
+     Catppuccin set, while a diff tab still names a lucide glyph above. Two props
+     rather than one because the two are drawn by different elements — an `<img>`
+     cannot take a token colour and an `<svg>` cannot take a URL. */
+  iconUrl: { type: String, default: undefined },
   active: { type: Boolean, default: false },
   dirty: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
@@ -78,7 +83,15 @@ const onClose = (e) => {
     @mouseenter="hover = true"
     @mouseleave="hover = false"
   >
-    <Icon v-if="icon" :name="icon" :size="13" :style="{ color: readOnly ? 'var(--text-muted)' : undefined }" />
+    <img
+      v-if="iconUrl"
+      :src="iconUrl"
+      alt=""
+      width="15"
+      height="15"
+      :style="{ display: 'block', flex: '0 0 auto' }"
+    />
+    <Icon v-else-if="icon" :name="icon" :size="13" :style="{ color: readOnly ? 'var(--text-muted)' : undefined }" />
     <span :style="labelStyle">{{ label }}</span>
     <!-- The hint hangs on the wrapper rather than on Icon: Icon's `title` is a
          prop that becomes an aria-label and never reaches the pointer — the SVG

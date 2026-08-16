@@ -25,7 +25,8 @@ import { computed, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import { useInteractive } from '../core/interactive.js'
 import { basename } from '../../paths.js'
-import { fileIcon, folderIcon } from '../../fileIcon.js'
+/* EXPERIMENT (variant A): the Catppuccin set, in place of `../../fileIcon.js`. */
+import { fileIconUrl, folderIconUrl } from '../../catppuccinIcon.js'
 import { changeStatus } from './changeStatus.js'
 
 const props = defineProps({
@@ -114,7 +115,8 @@ const letterStyle = (change) => ({
    is what this list is about, and a glyph competing with it for the eye would
    be answering a question nobody asked here. An untracked folder arrives as one
    record with a trailing slash and takes the folder glyph. */
-const icon = (change) => (change.path.endsWith('/') ? folderIcon(change.path) : fileIcon(change.path))
+const icon = (change) =>
+  change.path.endsWith('/') ? folderIconUrl(change.path) : fileIconUrl(change.path)
 
 /* The file's own name reads first and its directory follows it muted — the
    shape a person scans a list of changes in. Both in mono: a path is an
@@ -174,7 +176,7 @@ const empty = computed(() => props.changes.length === 0)
         :aria-label="changeStatus(change.kind).label"
         :style="letterStyle(change)"
       >{{ changeStatus(change.kind).letter }}</span>
-      <Icon :name="icon(change)" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
+      <img :src="icon(change)" alt="" :width="MARK + 2" :height="MARK + 2" :style="{ display: 'block', flex: 'none' }" />
       <span :style="nameStyle">{{ label(change.path) }}</span>
       <span :style="pathStyle">{{ [directory(change.path), from(change)].filter(Boolean).join(' ') }}</span>
     </div>

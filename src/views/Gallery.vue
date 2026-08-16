@@ -79,7 +79,7 @@ import { gitActions } from '../components/git/gitActions.js'
 import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
-import { fileIcon } from '../fileIcon.js'
+import { fileIconUrl } from '../catppuccinIcon.js'
 import { terminalState } from '../stores/terminals.js'
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
@@ -263,14 +263,14 @@ const switched = ref(true)
 const tabs = [
   { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
-  { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', icon: fileIcon('tabs.rs'), dirty: true },
-  { id: 'agent.rs', kind: 'preview', label: 'agent.rs', icon: fileIcon('agent.rs') },
+  { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', iconUrl: fileIconUrl('tabs.rs'), dirty: true },
+  { id: 'agent.rs', kind: 'preview', label: 'agent.rs', iconUrl: fileIconUrl('agent.rs') },
   { id: 'git.rs', kind: 'diff', label: 'git.rs', icon: 'git-compare' },
   {
     id: 'logo.png',
     kind: 'file',
     label: 'logo.png',
-    icon: fileIcon('logo.png'),
+    iconUrl: fileIconUrl('logo.png'),
     readOnly: true,
     readOnlyHint: 'Binary file — not shown.'
   }
