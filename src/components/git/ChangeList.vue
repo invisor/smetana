@@ -27,6 +27,7 @@ import { useInteractive } from '../core/interactive.js'
 import { basename } from '../../paths.js'
 /* EXPERIMENT (variant A): the Catppuccin set, in place of `../../fileIcon.js`. */
 import { fileIconUrl, folderIconUrl } from '../../catppuccinIcon.js'
+import { documentTheme } from '../../documentTheme.js'
 import { changeStatus } from './changeStatus.js'
 
 const props = defineProps({
@@ -108,15 +109,21 @@ const letterStyle = (change) => ({
   color: `var(${changeStatus(change.kind).token})`
 })
 
-/* What the name is, drawn — the tree's own rule (`src/fileIcon.js`), so a file
-   looks the same in the panel it changed in as in the tree it lives in. It is
-   the third mark before the name, after the staged tick and the kind's letter,
-   and it is the only one of the three that is muted and uncoloured: the letter
-   is what this list is about, and a glyph competing with it for the eye would
-   be answering a question nobody asked here. An untracked folder arrives as one
-   record with a trailing slash and takes the folder glyph. */
+/* What the name is, drawn — the tree's own rule, so a file looks the same in the
+   panel it changed in as in the tree it lives in. An untracked folder arrives as
+   one record with a trailing slash and takes the folder icon.
+
+   EXPERIMENT (variant A): this is now the third mark before the name, after the
+   staged tick and the kind's letter, and unlike the other two it is in colours
+   this app did not choose. That is measured rather than suspected — a yellow
+   `js` badge outweighs the git letter beside it, and on an added `.vue` the
+   icon's green and the `A`'s green are near the same hue carrying different
+   meanings. It is the strongest argument on this branch for keeping the change
+   list monochrome even if the tree does not stay that way. */
 const icon = (change) =>
-  change.path.endsWith('/') ? folderIconUrl(change.path) : fileIconUrl(change.path)
+  change.path.endsWith('/')
+    ? folderIconUrl(change.path, false, documentTheme.value)
+    : fileIconUrl(change.path, documentTheme.value)
 
 /* The file's own name reads first and its directory follows it muted — the
    shape a person scans a list of changes in. Both in mono: a path is an

@@ -6,6 +6,7 @@ import Tooltip from '../core/Tooltip.vue'
    `../../fileIcon.js`, which stays beside it unused so the two can be compared
    and so dropping this is one revert. */
 import { fileIconUrl, folderIconUrl } from '../../catppuccinIcon.js'
+import { documentTheme } from '../../documentTheme.js'
 
 const GIT = {
   modified: { c: 'var(--git-modified)', l: 'M' },
@@ -32,9 +33,13 @@ const hover = ref(false)
 const g = computed(() => (props.git ? GIT[props.git] : null))
 
 /* What the name is, drawn — a `data:` URL rather than a glyph name, since the
-   set's colours are inside the SVG. Nothing about it follows the theme. */
+   set's colours live inside the SVG. Reading `documentTheme` here is what makes
+   the row repaint when the theme flips: the URL is rebuilt against the other
+   palette, because nothing in a `data:` URL can be reached by the stylesheet. */
 const iconUrl = computed(() =>
-  props.kind === 'dir' ? folderIconUrl(props.name, props.expanded) : fileIconUrl(props.name)
+  props.kind === 'dir'
+    ? folderIconUrl(props.name, props.expanded, documentTheme.value)
+    : fileIconUrl(props.name, documentTheme.value)
 )
 
 const style = computed(() => ({

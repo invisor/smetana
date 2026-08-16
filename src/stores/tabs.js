@@ -9,8 +9,12 @@ import { settings } from './settings.js'
 import { basenameOf, fileErrorText, filesState, readFile, writeFile } from './files.js'
 import { fileAtHead } from './vcs.js'
 import { relativeTo } from '../paths.js'
-/* EXPERIMENT (variant A): the Catppuccin set, in place of `../fileIcon.js`. */
+/* EXPERIMENT (variant A): the Catppuccin set, in place of `../fileIcon.js`.
+   The theme is read from the document root rather than from settings.js beside
+   this file: a tab's icon is about what is painted, and the gallery paints a
+   theme no store holds. */
 import { fileIconUrl } from '../catppuccinIcon.js'
+import { documentTheme } from '../documentTheme.js'
 
 /* Pinned tabs are not stored in settings: they always exist, come first and
    cannot be closed. */
@@ -120,7 +124,7 @@ export const tabList = computed(() => [
          `iconUrl` and not `icon`: a diff tab below still names a lucide glyph,
          since there the mark says what kind of tab it is rather than what kind
          of file, so `Tab.vue` has to draw both kinds. */
-      iconUrl: fileIconUrl(path),
+      iconUrl: fileIconUrl(path, documentTheme.value),
       dirty: isDirty(path),
       readOnly: !!hint,
       readOnlyHint: hint ?? undefined
