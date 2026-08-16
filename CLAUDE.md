@@ -364,6 +364,13 @@ alias exists in `vite.config.js` but is currently unused, so prefer relative pat
   themes with no border and no radius from the component. Anything else wanting a picture is still a
   design-system question. `scripts/make-app-icon.py` builds it and the bundle icons from one source,
   so the two cannot drift; `app-icon.png` at the repository root is that 1024 master.
+- **No native right-click menu, anywhere.** `src/main.js` refuses every `contextmenu` event in
+  the document (`src/nativeMenu.js`), in the app and in the dev server alike, because a check is
+  worth having only if it shows what the app does. What the webview offers is the platform's, not
+  this product's — Look Up, Translate, Share, Inspect Element — and it opens over any word on the
+  screen. A menu this app wants is its own — `overlays/PointerMenu.vue` on the rows that have earned
+  one, a project row and a branch row so far — and those keep working: refusing a default stops no
+  propagation.
 - Sentence case everywhere; identifiers in mono (`--font-mono`), prose in sans.
 - The primary button is ink on paper with no brand hue — the entire saturated range belongs to
   status.

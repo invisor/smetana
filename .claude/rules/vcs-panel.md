@@ -124,6 +124,31 @@ rounded**, since a panel with room for 6.8 rows has room for 6 and the seventh c
 whichever section had no claim; and a section nobody has dragged is owed one whole row — it gives way
 on its own, but giving way to nothing draws the same sliver.
 
+**The three writes a branch row offers are in its right-click menu**, and the row itself draws a name
+and a mark and nothing else. Merging and rebasing used to be two `IconButton`s that appeared under
+the pointer — a control per row per verb, in a column that also carries a file tree, a change list
+and a commit box — and they are `components/git/branchMenu.js`'s items now, beside a third the row
+had all along without a name anywhere on screen: the checkout its own click performs. A menu is where
+somebody goes to find out what a place can do, so a place whose main action is missing from its menu
+reads as a place that cannot do it.
+
+What that costs is a gesture nobody is told about: nothing on the row says the two verbs exist. It is
+the deliberate trade, and the only thing paying it back is that the project list one level up answers
+the same gesture the same way. **The refusal is one caption above the rows, not a clause on each**,
+which is where this parts company with `shell/projectMenu.js`: there the items are refused for
+different reasons and each has to say its own, while here one fact refuses all three — the branch is
+the one already checked out, a run holds the repository, or git is mid-operation — and the caption
+says it once. The current branch wins that caption even under a run, because somebody right-clicking
+the row with the tick is asking about that row. The menu opens on **every** branch row including the
+refused ones: a gesture that answers on some rows and does nothing on others reads as a broken row
+rather than a refused one.
+
+The panel it opens is `overlays/PointerMenu.vue`, which is `MenuButton` anchored to a point instead
+of to a trigger — teleported out of the document because every list here sits inside something with
+`overflow`, flipped above the pointer when there is no room below, closed on a scroll anywhere
+underneath. All of it was inline in `shell/ProjectList.vue` while that was the only caller; this made
+it the second, and the component is the one copy both now use.
+
 **Branch names group into folders**, the way GitLens does it: everything before a slash is a heading
 and a row draws only the leaf, which is the width it buys back — under one heading the prefix is on
 every row and the tail is the half that identifies a branch. The whole name still travels on the row,

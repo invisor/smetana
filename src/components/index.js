@@ -81,6 +81,7 @@ export { default as ConflictModal } from './git/ConflictModal.vue'
 export { default as GitPanel } from './git/GitPanel.vue'
 export { default as RepoList } from './git/RepoList.vue'
 export { default as SectionHeader } from './git/SectionHeader.vue'
+export { branchMenuItems } from './git/branchMenu.js'
 export { branchRows, currentChain, expandedFolders, toggleFolder } from './git/branchTree.js'
 export { changeStatus } from './git/changeStatus.js'
 export { canCommit, canSuggest, commitHint, commitLabel } from './git/commitBox.js'
@@ -104,6 +105,7 @@ export {
 export { default as ContextMenu } from './overlays/ContextMenu.vue'
 export { default as MenuButton } from './overlays/MenuButton.vue'
 export { default as Modal } from './overlays/Modal.vue'
+export { default as PointerMenu } from './overlays/PointerMenu.vue'
 export { default as Toast } from './overlays/Toast.vue'
 
 // run

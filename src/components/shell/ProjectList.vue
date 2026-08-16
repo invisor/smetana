@@ -24,11 +24,11 @@
    No header of its own: the enclosing Panel already shows "Projects" and
    carries the "+" in its actions slot, so a second copy here would print the
    same word twice in a row. */
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
-import ContextMenu from '../overlays/ContextMenu.vue'
+import PointerMenu from '../overlays/PointerMenu.vue'
 import { projectMenuItems } from './projectMenu.js'
 
 const props = defineProps({
@@ -149,33 +149,17 @@ const onRowClick = (project, event) => {
   emit('select', project.path)
 }
 
-/* The menu. It could not have been drawn here at all until `ContextMenu`'s
-   panel started leaving the document: an absolutely positioned descendant is
-   clipped by any ancestor with `overflow`, which is `listStyle` above and
-   `Panel`'s own scroll container after it. Teleported to the body and fixed in
-   window coordinates, neither can reach it.
+/* The menu. Which row it is about is this file's business — the items are
+   built from that row, and the row under an open panel keeps its highlight —
+   and everything else about it is `PointerMenu`'s: placement, the flip above
+   the pointer, the arrow keys, and closing on a scroll or a press outside. All
+   of that was inline here until `BranchList` wanted the same menu on the same
+   gesture, and that component's header records why it became a component
+   rather than a second copy.
 
-   Placement is repeated from `MenuButton.vue` rather than shared with it, for
-   the reason recorded in that file's own header — and it is not the same
-   routine anyway: `MenuButton` anchors to a trigger's rect, this one to the
-   point the pointer was at, which is the only thing a secondary click gives. */
-const box = ref(null)
-/* Where the panel goes, in window coordinates. Null until measured — the one
-   state it must not be seen in, since it would be sitting in the corner. */
-const at = ref(null)
-const point = ref({ x: 0, y: 0 })
-const cursor = ref(-1)
-/* Where the keyboard was when the menu opened, so Esc can hand it back. There
-   is no trigger to return it to the way `MenuButton` has one: the row is a
-   place, not a control, and it takes no focus. */
-const returnTo = ref(null)
-
-/* The distance from the pointer, and the closest the panel may come to the
-   window's edge. Operands in arithmetic against getBoundingClientRect rather
-   than values handed to the browser, which is why they are numbers here and not
-   token references — the same note MenuButton, Dropdown and Tooltip carry. */
-const GAP = 4
-const EDGE = 8
+   The row is handed to `open` as well as kept here, because the pick arrives
+   after the menu has closed and closing is what clears the copy. */
+const menu = ref(null)
 
 /* Wide enough for the longest row it can hold, "New agent — switch to this
    project first", since `ContextMenu` clips a label rather than wrapping it.
@@ -200,137 +184,16 @@ const items = computed(() =>
   })
 )
 
-/* Separators and greyed rows are drawn but never walked to. */
-const walkable = computed(() =>
-  items.value.map((it, i) => (it.type || it.disabled ? -1 : i)).filter((i) => i >= 0)
-)
-
-function place() {
-  const rect = box.value?.getBoundingClientRect()
-  if (!rect) return
-  const { x, y } = point.value
-  const room = window.innerHeight - y - GAP - EDGE
-  /* Flipped above the pointer when the panel does not fit below it and there is
-     more room above — the bottom row of a five-row list is exactly that case.
-     The clamp below still applies afterwards, for a window too short for either
-     side to hold the whole panel. */
-  const above = rect.height > room && y - GAP - EDGE > room
-  const top = above ? y - GAP - rect.height : y + GAP
-  at.value = {
-    left: Math.max(EDGE, Math.min(x + GAP, window.innerWidth - rect.width - EDGE)),
-    top: Math.max(EDGE, Math.min(top, window.innerHeight - rect.height - EDGE))
-  }
-}
-
-const openMenu = async (project, event) => {
-  point.value = { x: event.clientX, y: event.clientY }
+const openMenu = (project, event) => {
   menuFor.value = project.path
-  cursor.value = -1
-  at.value = null
-  returnTo.value = document.activeElement
-  document.addEventListener('pointerdown', onDocumentPointerdown, true)
-  // Capture, so a scroll inside any ancestor is seen, not only the window's.
-  window.addEventListener('scroll', onScroll, true)
-  window.addEventListener('resize', place)
-  await nextTick()
-  place()
-  /* A second tick before the focus, and it is not spare. `place` only writes
-     the position; the panel is `visibility: hidden` until that write has been
-     rendered, and an element that is not visible refuses focus — silently, and
-     the whole keyboard with it. */
-  await nextTick()
-  box.value?.focus()
+  menu.value?.open(event, project.path)
 }
 
-const hide = () => {
-  if (menuFor.value === null) return
-  /* Read before anything is torn down, because closing is what makes the answer
-     unavailable: the panel leaves the document and `document.activeElement`
-     falls back to `<body>`, at which point there is no telling whether the
-     keyboard had been in here at all. */
-  const held = box.value?.contains(document.activeElement)
-  menuFor.value = null
-  at.value = null
-  cursor.value = -1
-  document.removeEventListener('pointerdown', onDocumentPointerdown, true)
-  window.removeEventListener('scroll', onScroll, true)
-  window.removeEventListener('resize', place)
-  /* Only when focus was inside, and that guard is not decoration: `hide` is
-     also the unmount handler and the outside-click handler. On unmount there is
-     nothing left to hand anything back to, and on an outside click the browser
-     is a moment away from focusing whatever was clicked — moving it here first
-     would be a flicker at best and a theft at worst. */
-  const back = returnTo.value
-  returnTo.value = null
-  if (held && back?.isConnected) back.focus?.()
-}
-
-/* The whole list can leave under an open menu — the left panel collapsing to
-   its rail, or the view being torn down — and the two document-level listeners
-   would outlive it, since they are the document's and not this component's.
-   Removing a *row* is not the case here, whatever the same guard in
-   `MenuButton` is for: one menu lives per card there, so a deletion unmounts
-   it, while one `ProjectList` holds every row and outlives any one of them. */
-onBeforeUnmount(hide)
-
-/* Scrolling closes rather than re-places, which is where this parts company
-   with `MenuButton`. Its panel hangs off a trigger that moves with the scroll,
-   so following it keeps the two together; this one hangs off a point the
-   pointer was at, and the row that point named slides out from under it. A
-   panel left behind would be offering three verbs about a project nothing on
-   screen still connects it to. */
-const onScroll = () => hide()
-
-/* Pointerdown rather than click: a press that starts inside the panel and ends
-   outside it would otherwise close the menu out from under the pointer. The
-   panel is teleported to the body, so it is not inside this component's own
-   tree and has to be checked on its own. */
-const onDocumentPointerdown = (event) => {
-  if (!box.value?.contains(event.target)) hide()
-}
-
-const pick = (item) => {
-  if (!item || item.disabled || item.type) return
-  const path = menuFor.value
-  hide()
+const pick = (item, path) => {
   if (item.kind === 'setup') emit('setup', path, item.existing)
   else if (item.kind === 'add-agent') emit('add-agent', path)
   else if (item.kind === 'remove') emit('remove', path)
 }
-
-/* One step along the list of walkable indices, wrapping at both ends. From
-   nowhere (-1) a step down lands on the first row and a step up on the last,
-   which is what makes the first arrow key after opening do the obvious thing. */
-const step = (list, current, delta) => {
-  if (!list.length) return -1
-  const pos = list.indexOf(current)
-  return list[(pos + delta + (pos < 0 ? (delta > 0 ? 0 : 1) : 0) + list.length) % list.length]
-}
-
-const onKeydown = (event) => {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    hide()
-  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-    event.preventDefault()
-    cursor.value = step(walkable.value, cursor.value, event.key === 'ArrowDown' ? 1 : -1)
-  } else if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault()
-    pick(items.value[cursor.value])
-  }
-}
-
-const panelStyle = computed(() => ({
-  position: 'fixed',
-  top: `${at.value?.top ?? 0}px`,
-  left: `${at.value?.left ?? 0}px`,
-  // Hidden until measured: one frame of it in the window's corner reads as a
-  // flash, and it has to be in the document at its natural height to be
-  // measured at all.
-  visibility: at.value ? 'visible' : 'hidden',
-  zIndex: 'var(--z-popover)',
-  outline: 'none'
-}))
 </script>
 
 <template>
@@ -416,26 +279,6 @@ const panelStyle = computed(() => ({
       </div>
     </div>
 
-    <Teleport to="body">
-      <!-- The keydown sits on this wrapper rather than on `ContextMenu`: this
-           is the element that takes the focus, and a listener on a component
-           tag would have to fall through as an attribute to reach a node at
-           all. -->
-      <div
-        v-if="menuFor !== null"
-        ref="box"
-        :style="panelStyle"
-        tabindex="-1"
-        @keydown="onKeydown"
-      >
-        <ContextMenu
-          :items="items"
-          :cursor="cursor"
-          :width="MENU_W"
-          @select="pick"
-          @hover="cursor = $event"
-        />
-      </div>
-    </Teleport>
+    <PointerMenu ref="menu" :items="items" :width="MENU_W" @select="pick" @close="menuFor = null" />
   </div>
 </template>

@@ -3,6 +3,16 @@
    things that can be done from a row: switch to it, merge it into the current
    branch, rebase the current branch onto it.
 
+   **All three live in the row's right-click menu**, and the first of them is
+   also the row's own click. Merging and rebasing used to be two buttons that
+   appeared on the row under the pointer, which is a control per row per verb in
+   a panel that also draws a file tree, a change list and a commit box; they are
+   `branchMenu.js`'s three items now and the row draws its name, its mark and
+   nothing else. What that costs is real and worth writing down: a right-click
+   is a gesture somebody has to know about, and nothing on the row says the two
+   verbs exist. The menu is `PointerMenu`, the same panel on the same gesture as
+   the project list one level up, which is the closest thing to a hint there is.
+
    The order is `git::by_recency`'s and is drawn exactly as it arrives — the
    branch somebody merges into every day is nowhere in particular
    alphabetically, so re-sorting here would bury the one row that matters. A
@@ -43,11 +53,12 @@
    are creating, renaming and deleting a branch, and so is every flag and
    strategy a merge can take: this offers the merge and the rebase git would do
    by itself, and nothing else. */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
-import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
+import PointerMenu from '../overlays/PointerMenu.vue'
 import { useInteractive } from '../core/interactive.js'
+import { branchMenuItems } from './branchMenu.js'
 import { branchRows, expandedFolders, toggleFolder } from './branchTree.js'
 
 const props = defineProps({
@@ -88,6 +99,53 @@ const interactiveFor = (key) => {
    the identity of a row. */
 const keyOf = (row) => `${row.kind}:${row.kind === 'folder' ? row.path : row.name}`
 
+/* The menu, and which branch it is open on. The name is kept here because the
+   items are built from it and because the row under an open panel has to keep
+   its highlight — the panel is teleported to the body, so the pointer moving
+   into it leaves the row, and a menu naming nothing on screen is a menu about
+   nothing. Everything else about it is `PointerMenu`'s.
+ *
+ * Wide enough for "Rebase the current branch onto this", measured in the
+ * gallery rather than reasoned about: 203px of `--text-sm` sans, and 70px of
+ * `ContextMenu` chrome around it — 2×`--border-w`, 2×`--space-2` of panel
+ * padding, 2×`--space-4` of row padding, two 14px gutters and their two
+ * `--space-4` gaps. 240 clipped that row to "Rebase the current branch …" and
+ * a menu row has no tooltip to recover a label from. The caption above the
+ * rows is shorter at `--text-2xs`, uppercase and tracked as it is. The number
+ * carries the trade every `MENU_W` in this app carries: px does not follow the
+ * app-wide font size, so a person running the interface large loses the tail
+ * of that one row. */
+const menu = ref(null)
+const menuFor = ref(null)
+const MENU_W = 280
+
+/* Read from the branches rather than from the drawn rows: what the menu asks is
+   whether this is the branch the repository is on, which is a fact about the
+   repository and not about how the list happens to be folded. */
+const items = computed(() =>
+  branchMenuItems({
+    current: props.branches.some((branch) => branch.name === menuFor.value && branch.current),
+    allowed: props.actions?.allowed !== false,
+    busy: Boolean(props.busy)
+  })
+)
+
+const openMenu = (row, event) => {
+  menuFor.value = row.name
+  menu.value?.open(event, row.name)
+}
+
+/* The branch is handed back with the pick rather than read from `menuFor`,
+   which closing has already cleared — see `PointerMenu`'s header. Written out
+   rather than emitted as `item.kind`: the kinds and the events happen to be the
+   same three words today, and a rule file free to add a fourth verb must not be
+   able to make this component emit something nobody declared. */
+const pick = (item, name) => {
+  if (item.kind === 'checkout') emit('checkout', name)
+  else if (item.kind === 'merge') emit('merge', name)
+  else if (item.kind === 'rebase') emit('rebase', name)
+}
+
 const rows = computed(() =>
   branchRows(props.branches, expandedFolders(props.folders, props.branches))
 )
@@ -110,11 +168,6 @@ const hint = computed(() => (props.actions?.allowed ? '' : (props.actions?.reaso
 
 const target = (branch) => !branch.current && !blocked.value
 
-/* Which control on this row is the one git is busy with. `null` everywhere
-   else, including on the very row whose checkout is running: what spins there
-   is the mark, not a button. */
-const spinning = (branch, op) => props.busy?.branch === branch.name && props.busy?.op === op
-
 /* A branch name is an identifier and stays mono. The row highlights only where
    there is something to press: the branch already checked out is not a target,
    and neither is any row while a run is going, so hovering must not promise
@@ -136,7 +189,12 @@ const rowStyle = (branch) => ({
   background:
     branch.current
       ? 'var(--surface-selected)'
-      : target(branch) && interactiveFor(keyOf(branch)).hover.value
+      : /* The row with the menu open counts as hovered whether or not anything
+           on it may be pressed: the panel is teleported to the body, so the
+           pointer moving into it leaves the row, and a menu explaining why a
+           row is refused would be doing it over a row nothing points at. */
+        menuFor.value === branch.name ||
+          (target(branch) && interactiveFor(keyOf(branch)).hover.value)
         ? 'var(--surface-hover)'
         : 'transparent',
   cursor: blocked.value && !branch.current ? 'not-allowed' : 'default',
@@ -199,39 +257,21 @@ const nameStyle = {
   whiteSpace: 'nowrap'
 }
 
-/* The two buttons appear on the row under the pointer, and the spinner of an
-   operation in flight takes their place — one box, so a row never holds both
-   and nothing shifts when one becomes the other.
+/* Which operation this row is in the middle of, if any, and what to call it.
+   All three spin in the one box at the end of the row: the row holds a single
+   glyph at a time — the tick, or whichever operation is running — so there is
+   nothing to keep apart and no width to reserve twice. When the two buttons
+   were still on the row they needed a box of their own beside this one, held in
+   the layout at all times so a name never jumped on hover; with them in the
+   menu that box and its arithmetic are gone. */
+const OPERATIONS = {
+  checkout: 'Switching to this branch',
+  merge: 'Merging this branch in',
+  rebase: 'Rebasing onto this branch'
+}
 
-   The box is held in the layout the rest of the time (`visibility` rather than
-   `v-if`), so nothing on the row moves sideways as the pointer crosses it and a
-   name is measured against the width it will actually have. Drawing eighty
-   buttons on a list of forty branches at all times would be a panel of controls
-   with the names squeezed between them; letting them appear and take the space
-   then would make every name jump on hover.
-
-   They are deliberately not offered on the current branch or while anything is
-   blocked: merging a branch into itself is a no-op git answers "Already up to
-   date" to, and the whole list is inert under a run either way. */
-const working = (branch) => spinning(branch, 'merge') || spinning(branch, 'rebase')
-
-const controlsStyle = (branch) => ({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'flex-end',
-  gap: 'var(--space-1)',
-  flex: 'none',
-  /* The width of the two buttons, held whatever is in the box: the spinner is
-     one glyph and would otherwise let the name grow the moment an operation
-     started and shrink again when it ended. Arithmetic on tokens rather than a
-     number, so it follows both densities and the app-wide font size the way the
-     buttons themselves do. */
-  minWidth: 'calc(var(--control-h-sm) * 2 + var(--space-1))',
-  visibility:
-    working(branch) || (target(branch) && interactiveFor(keyOf(branch)).hover.value)
-      ? 'visible'
-      : 'hidden'
-})
+const operation = (branch) =>
+  props.busy?.branch === branch.name && OPERATIONS[props.busy?.op] ? props.busy.op : null
 
 /* The mark's box is fixed at the glyph's size so a row does not shift sideways
    between the branch that is current and the ones that are not, or when one of
@@ -305,11 +345,22 @@ const empty = computed(() => props.branches.length === 0)
         v-bind="hint ? { label: hint, side: 'right' } : {}"
         :style="{ display: 'block' }"
       >
+        <!-- `.prevent` for the browser's own menu, which `main.js` refuses
+             across the whole app anyway: it is said here too because this row
+             is where the reason is legible — a person right-clicking a branch
+             is offered this panel and nothing else.
+
+             The menu opens on every branch row, including the one with the
+             tick and every row a run has frozen. A gesture that answers on some
+             rows and does nothing on others reads as a broken row rather than a
+             refused one; `branchMenu.js` puts the refusal at the top of the
+             panel instead, once, and greys what it is about. -->
         <div
           :style="rowStyle(row)"
           :aria-disabled="target(row) ? undefined : 'true'"
           v-bind="target(row) ? interactiveFor(keyOf(row)).handlers : {}"
           @click="target(row) && $emit('checkout', row.name)"
+          @contextmenu.prevent="openMenu(row, $event)"
         >
           <Icon name="git-branch" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
           <!-- The leaf, with the whole name behind it: under a heading the
@@ -318,31 +369,6 @@ const empty = computed(() => props.branches.length === 0)
                made to save. -->
           <span :style="nameStyle" :title="fullName(row)">{{ row.label }}</span>
           <span :style="{ flex: 1 }" />
-          <!-- `stop` on both: the row itself is the checkout, so a press that
-               reached it would switch branch as well as merge. -->
-          <span :style="controlsStyle(row)">
-            <Icon
-              v-if="working(row)"
-              name="loader-circle"
-              :size="MARK"
-              :style="spinStyle"
-              :title="spinning(row, 'merge') ? 'Merging this branch in' : 'Rebasing onto this branch'"
-            />
-            <template v-else>
-              <IconButton
-                icon="git-merge"
-                size="sm"
-                label="Merge into the current branch"
-                @click.stop="$emit('merge', row.name)"
-              />
-              <IconButton
-                icon="git-graph"
-                size="sm"
-                label="Rebase the current branch onto this"
-                @click.stop="$emit('rebase', row.name)"
-              />
-            </template>
-          </span>
           <!-- The tick is the whole of what says which branch this repository
                is on, and it is a glyph rather than the highlight alone: the
                row's surface is also what hover uses, and a state told apart by
@@ -352,11 +378,11 @@ const empty = computed(() => props.branches.length === 0)
                screen reader. -->
           <span :style="markBox">
             <Icon
-              v-if="spinning(row, 'checkout')"
+              v-if="operation(row)"
               name="loader-circle"
               :size="MARK"
               :style="spinStyle"
-              title="Switching to this branch"
+              :title="OPERATIONS[operation(row)]"
             />
             <Icon v-else-if="row.current" name="check" :size="MARK" title="Current branch" />
           </span>
@@ -378,5 +404,6 @@ const empty = computed(() => props.branches.length === 0)
     >
       No local branches in this repository.
     </div>
+    <PointerMenu ref="menu" :items="items" :width="MENU_W" @select="pick" @close="menuFor = null" />
   </div>
 </template>

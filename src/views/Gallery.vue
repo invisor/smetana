@@ -4,6 +4,7 @@
    reachable at ?view=gallery. */
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
+import { branchMenuItems } from '../components/git/branchMenu.js'
 import { taskMenuItems } from '../components/kanban/taskMenu.js'
 import {
   AboutSettings,
@@ -43,6 +44,7 @@ import {
   LogView,
   MenuButton,
   Modal,
+  PointerMenu,
   NewTaskModal,
   NotificationCard,
   NotificationPanel,
@@ -746,6 +748,22 @@ const headStyle = {
   letterSpacing: 'var(--tracking-caps)', textTransform: 'uppercase', color: 'var(--text-muted)'
 }
 const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)', flexWrap: 'wrap' }
+
+/* `PointerMenu` draws nothing at all until a secondary click gives it a point
+   to hang off, so unlike every other component here it needs somewhere to be
+   clicked. The box is the frame; the menu is what opens over it, at the
+   pointer, and both branch cases are here because the refused one is where the
+   caption above the greyed rows can be read. */
+const branchMenu = ref(null)
+const refusedBranchMenu = ref(null)
+const BRANCH_MENU = branchMenuItems()
+const REFUSED_BRANCH_MENU = branchMenuItems({ allowed: false })
+const menuTargetStyle = {
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  width: '200px', height: 'calc(3 * var(--row-h))',
+  border: 'var(--border-w) dashed var(--border-strong)', borderRadius: 'var(--radius-3)',
+  color: 'var(--text-muted)', fontSize: 'var(--text-xs)', cursor: 'default'
+}
 </script>
 
 <template>
@@ -1511,14 +1529,15 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" :busy="{ op: 'checkout', branch: 'develop' }" />
         </div>
-        <!-- And a merge in flight, which spins in the other place: where the
-             two buttons sit, because that is the control that was pressed. The
-             box holds their width either way, so the name beside it does not
-             move as one becomes the other.
+        <!-- And a merge in flight, which spins in the same one box as a
+             checkout does: the row holds a single glyph at a time — the tick,
+             or whichever of the three operations is running — so there is
+             nothing to keep apart and no second width to hold.
 
-             The buttons themselves appear on the row under the pointer — hover
-             any row here to see them, and check that nothing shifts sideways
-             when they do. -->
+             The merge and the rebase are in the row's right-click menu now, so
+             what to check here is that a row draws its name, its mark and
+             nothing else, and that a secondary click anywhere on it opens the
+             panel `branchMenu.js` builds. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" :busy="{ op: 'merge', branch: 'main' }" />
         </div>
@@ -2049,6 +2068,21 @@ const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)',
              short verbs gets: the width is the caller's business, so both ends
              of it belong here. -->
         <MenuButton :items="menuItems" label="Worktree actions" @select="() => {}" />
+        <!-- The pointer-anchored panel, which has no trigger to draw: these two
+             boxes stand in for the rows it opens over in the branch list. The
+             second is a menu whose every verb is refused, which is the state
+             worth looking at — the reason is a caption above the group rather
+             than a clause repeated on each row. -->
+        <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
+          <div :style="menuTargetStyle" @contextmenu.prevent="branchMenu?.open($event)">
+            Right-click for a branch menu
+          </div>
+          <div :style="menuTargetStyle" @contextmenu.prevent="refusedBranchMenu?.open($event)">
+            Right-click for a refused one
+          </div>
+          <PointerMenu ref="branchMenu" :items="BRANCH_MENU" :width="280" @select="() => {}" />
+          <PointerMenu ref="refusedBranchMenu" :items="REFUSED_BRANCH_MENU" :width="280" @select="() => {}" />
+        </div>
         <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
           <Toast tone="warning" title="claude-1 needs you" description="bd-a1b2 · worktree name collision · 4m" />
           <Toast tone="error" title="claude-2 failed" description="exit 101 in wt/bd-3c9d" />
