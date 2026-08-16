@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
+import { fileIcon, folderIcon } from '../../fileIcon.js'
 
 const GIT = {
   modified: { c: 'var(--git-modified)', l: 'M' },
@@ -26,6 +27,13 @@ const emit = defineEmits(['toggle', 'select', 'open'])
 
 const hover = ref(false)
 const g = computed(() => (props.git ? GIT[props.git] : null))
+
+/* What the name is, drawn — `src/fileIcon.js`, shared with the document tabs
+   and the Git panel's change list. It stays `--text-muted` whatever it resolves
+   to: the one colour a row here carries is the git letter at its end. */
+const icon = computed(() =>
+  props.kind === 'dir' ? folderIcon(props.name, props.expanded) : fileIcon(props.name)
+)
 
 const style = computed(() => ({
   display: 'flex',
@@ -77,11 +85,7 @@ const onDoubleClick = () => {
     <span :style="{ width: '12px', display: 'flex', color: 'var(--text-muted)' }">
       <Icon v-if="kind === 'dir'" :name="expanded ? 'chevron-down' : 'chevron-right'" :size="12" />
     </span>
-    <Icon
-      :name="kind === 'dir' ? (expanded ? 'folder-open' : 'folder') : 'file'"
-      :size="13"
-      :style="{ color: 'var(--text-muted)' }"
-    />
+    <Icon :name="icon" :size="13" :style="{ color: 'var(--text-muted)' }" />
     <span :style="nameStyle">{{ name }}</span>
     <Icon
       v-if="readOnly"

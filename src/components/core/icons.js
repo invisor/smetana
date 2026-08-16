@@ -9,6 +9,7 @@ import {
   ArrowRightToLine,
   Bell,
   Bot,
+  Braces,
   Bug,
   Check,
   ChevronDown,
@@ -23,8 +24,10 @@ import {
   Ellipsis,
   ExternalLink,
   File,
+  FileArchive,
   FileCode,
   FilePen,
+  FileText,
   FileX,
   Folder,
   FolderGit2,
@@ -37,6 +40,7 @@ import {
   GitGraph,
   GitMerge,
   HardDrive,
+  Image,
   Inbox,
   Info,
   Layers,
@@ -45,6 +49,7 @@ import {
   MessageCircleQuestion,
   Milestone,
   Minus,
+  Package,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -107,9 +112,24 @@ export const iconNodes = {
   // attachments
   paperclip: Paperclip,
 
-  // files
+  /* files. Six of these are the whole vocabulary of `src/fileIcon.js`, which
+     says what a name is drawn as in the tree, on a document tab and in the Git
+     panel's change list. They are groups rather than languages on purpose:
+     lucide has no language logos, and the difference between two invented ones
+     is unreadable at the 13px a row draws them at. */
   file: File,
   'file-code': FileCode,
+  // Prose: a readme, a licence, a markdown document.
+  'file-text': FileText,
+  /* Configuration and structured data — json, toml, yaml, and any dotfile
+     nothing else claims. Deliberately not a fourth page silhouette: three of
+     them are already in this list and a page holding a gear cannot be told from
+     a page holding angle brackets at this size. */
+  braces: Braces,
+  // What the project is made of: a manifest and its lock file.
+  package: Package,
+  image: Image,
+  'file-archive': FileArchive,
   folder: Folder,
   'folder-open': FolderOpen,
 

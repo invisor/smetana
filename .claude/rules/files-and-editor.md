@@ -30,6 +30,12 @@ own lifecycle and error reporting, costs more than the sweep in `catchUp` (`Desk
 re-lists the open directories and re-stats the open tabs whenever the window is focused — plus the
 refresh button next to the project list.
 
+What a row's glyph is comes from `src/fileIcon.js` and not from this component — see `CLAUDE.md` for
+why it sits at the top of `src/` — and the tabs in the centre and the Git panel's change list draw it
+from the same rule, so one file looks the same wherever it is named. It stays `--text-muted`
+whichever of the six groups it resolves to: the only colour a tree row carries is the git letter at
+its end.
+
 `src/stores/tabs.js` owns the centre's tabs — order, which one is temporary, which is active, the
 buffers and their dirtiness — and knows nothing about Tauri; the disk is `files.js`. The split is by
 lifetime: the list of open tabs survives a restart and lives in settings, the buffers do not and live

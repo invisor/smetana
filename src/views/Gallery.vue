@@ -79,6 +79,7 @@ import { gitActions } from '../components/git/gitActions.js'
 import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
+import { fileIcon } from '../fileIcon.js'
 import { terminalState } from '../stores/terminals.js'
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
@@ -254,21 +255,38 @@ const checked = ref(true)
 const switched = ref(true)
 
 /* The gallery's tab row is its own: in the app it comes from a store, while
-   here we need a fixed set showing all four kinds at once. */
+   here we need a fixed set showing all four kinds at once. The glyphs come from
+   the rule rather than being written out, so a fixture cannot claim a tab looks
+   like something the app would never draw — `stores/tabs.js` calls the same
+   function. The diff tab keeps its own: there the glyph says what kind of tab it
+   is, not what kind of file. */
 const tabs = [
   { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
-  { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', dirty: true },
-  { id: 'agent.rs', kind: 'preview', label: 'agent.rs' },
+  { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', icon: fileIcon('tabs.rs'), dirty: true },
+  { id: 'agent.rs', kind: 'preview', label: 'agent.rs', icon: fileIcon('agent.rs') },
   { id: 'git.rs', kind: 'diff', label: 'git.rs', icon: 'git-compare' },
   {
     id: 'logo.png',
     kind: 'file',
     label: 'logo.png',
+    icon: fileIcon('logo.png'),
     readOnly: true,
     readOnlyHint: 'Binary file — not shown.'
   }
 ]
+
+/* `FileTree` walks a nested `children` array and draws a folder's contents only
+   when `expanded` names it, while `MOCK_TREE` is keyed by directory the way
+   `files_list` answers — so the gallery nests the one into the other and opens
+   the folder. It was handed the flat root before, which drew six rows and left
+   `file-code`, `image`, `file-archive` and the plain page — four of the seven
+   glyphs `src/fileIcon.js` can produce — visible nowhere in the gallery at
+   all. */
+const galleryTree = MOCK_TREE[''].map((node) =>
+  node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
+)
+const galleryTreeExpanded = { src: true }
 
 /* AgentList reads rows and activeId as props, unlike TerminalView below,
    which reads the store directly — so a plain local fixture is enough here. */
@@ -1206,13 +1224,16 @@ const menuTargetStyle = {
     <section :style="sectionStyle">
       <div :style="headStyle">Shell</div>
       <TabBar :tabs="tabs" active-id="kanban" />
-      <div :style="{ height: '160px', border: 'var(--border-w) solid var(--border)' }">
-        <AppShell :height="160" :left-width="180" :right-width="180">
+      <!-- Taller than the other boxes on this page, and the file tree is why:
+           at 160px the shell showed five rows of it, so half the tree's glyph
+           vocabulary sat below a fold in the one place it can be checked. -->
+      <div :style="{ height: '320px', border: 'var(--border-w) solid var(--border)' }">
+        <AppShell :height="320" :left-width="180" :right-width="180">
           <template #left>
             <Panel title="Files" side="left">
               <FileTree
-                :nodes="MOCK_TREE['']"
-                :expanded="{}"
+                :nodes="galleryTree"
+                :expanded="galleryTreeExpanded"
                 selected-path="Cargo.toml"
               />
             </Panel>

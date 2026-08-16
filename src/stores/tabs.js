@@ -9,6 +9,7 @@ import { settings } from './settings.js'
 import { basenameOf, fileErrorText, filesState, readFile, writeFile } from './files.js'
 import { fileAtHead } from './vcs.js'
 import { relativeTo } from '../paths.js'
+import { fileIcon } from '../fileIcon.js'
 
 /* Pinned tabs are not stored in settings: they always exist, come first and
    cannot be closed. */
@@ -114,6 +115,10 @@ export const tabList = computed(() => [
       id: path,
       kind: path === project().previewTab ? 'preview' : 'file',
       label: basenameOf(path),
+      /* The same glyph the file tree drew on the row this tab was opened from —
+         `src/fileIcon.js`. A diff tab below keeps its own, since there the glyph
+         says what kind of tab it is rather than what kind of file. */
+      icon: fileIcon(path),
       dirty: isDirty(path),
       readOnly: !!hint,
       readOnlyHint: hint ?? undefined

@@ -156,6 +156,17 @@ window — so there is no one part of the interface to file them under. It is de
 sizes themselves are the stylesheet's, and this file only says by how much. Its DOM half is split off
 into `views/useAppearance.js`, which is what keeps the rules themselves reachable by a test.
 
+`src/fileIcon.js` is the third of them, and the reason is the same shape: what glyph a file's name is
+drawn with is wanted by the tree's rows, by the document tabs' store and by the Git panel's change
+list, so it belongs to none of the three. It answers one of six groups — code, prose, configuration,
+manifest, image, archive — and the plain page for a name none of them claims, which is an ordinary
+outcome here exactly as an unknown extension is in `editor/languages.js`. Two things about it are
+load-bearing rather than incidental: the glyphs are **groups and never languages**, since lucide has
+no language logos and an invented one per language is unreadable at 13px, and **no group carries a
+colour** — the two lists draw it in `--text-muted` and a tab lets it inherit the tab's own
+foreground, because the saturated range belongs to status and in both lists the row's one colour is
+already spoken for.
+
 ### Where the rest of this document went
 
 This file used to hold a section per subsystem and had grown past 168 000

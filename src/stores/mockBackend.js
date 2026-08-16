@@ -59,19 +59,35 @@ const BROKEN_CONFIG_PROJECT = '/Users/you/dev/holiday-curb'
 /* The tree that used to live in views/desktopAppData.js. The real tree comes
    from disk, but a browser has no disk and Gallery needs something to show
    FileTree with. The shape is files_list's answers: a directory's path → its
-   entries. */
+   entries.
+
+   The names are deliberately of several kinds rather than four `.rs` files:
+   `src/fileIcon.js` draws a row by its name, and a fixture of one kind would
+   show one glyph — so the tree that used to prove FileTree renders now also
+   shows whether the whole vocabulary does. */
 export const MOCK_TREE = {
   '': [
     { name: 'src', path: 'src', kind: 'dir' },
-    { name: 'Cargo.toml', path: 'Cargo.toml', kind: 'file' }
+    { name: '.gitignore', path: '.gitignore', kind: 'file' },
+    { name: 'Cargo.toml', path: 'Cargo.toml', kind: 'file' },
+    { name: 'LICENSE', path: 'LICENSE', kind: 'file' },
+    { name: 'README.md', path: 'README.md', kind: 'file' },
+    { name: 'tauri.conf.json', path: 'tauri.conf.json', kind: 'file' }
   ],
   src: [
     { name: 'agent.rs', path: 'src/agent.rs', kind: 'file' },
+    { name: 'app-icon.png', path: 'src/app-icon.png', kind: 'file' },
+    { name: 'bd-aarch64.tar.gz', path: 'src/bd-aarch64.tar.gz', kind: 'file' },
     { name: 'scratch.rs', path: 'src/scratch.rs', kind: 'file' },
     { name: 'tabs.rs', path: 'src/tabs.rs', kind: 'file' },
+    { name: 'unknown-binary', path: 'src/unknown-binary', kind: 'file' },
     { name: 'worktree.rs', path: 'src/worktree.rs', kind: 'file' }
   ]
 }
+
+/* The entries of the tree above that a real `files_read` would refuse. Named
+   rather than sniffed: a fixture has no bytes to look at. */
+const MOCK_BINARY = new Set(['src/app-icon.png', 'src/bd-aarch64.tar.gz', 'src/unknown-binary'])
 
 const MOCK_FILE = `fn main() {\n    println!("hello from the mock backend");\n}\n`
 const MOCK_MTIME = 1754006400000
@@ -433,7 +449,17 @@ export function installMockBackend() {
       return { dir, entries: MOCK_TREE[dir] ?? [], truncated: 0 }
     }
     if (command === 'files_read') {
-      return { path: payload?.path ?? '', text: MOCK_FILE, mtime: MOCK_MTIME }
+      const path = payload?.path ?? ''
+      /* The three fixture files that are not text refuse the way the real
+         backend refuses them, and the refusal is by name because there are no
+         bytes here to sniff. Without it, clicking the png in the dev tree opens
+         a tab of Rust source: the tree would be drawing a picture's glyph over
+         a file the app claims to have read as text, which is the one thing this
+         fixture was extended to make visible. */
+      if (MOCK_BINARY.has(path)) {
+        throw { kind: 'binary', message: `mockBackend: ${path} is not text` }
+      }
+      return { path, text: MOCK_FILE, mtime: MOCK_MTIME }
     }
     /* Nothing changed: there is nowhere for files to change in a browser. */
     if (command === 'files_stat') {

@@ -66,7 +66,11 @@ deleted, untracked — take the `--git-*` token the file tree already marks that
 (`files/FileTreeRow.vue`), which is the whole of the agreement between the two: renamed, copied and
 type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares
 `--git-conflict` while the letters differ, `C` here against the tree's `!`. Borrowing the four rather
-than inventing a palette is the point; claiming the two lists match everywhere would not be true.
+than inventing a palette is the point; claiming the two lists match everywhere would not be true. The
+glyph between the letter and the name is borrowed the same way — `src/fileIcon.js`, the tree's own
+rule — and it is the third mark on a row that already carries a staged tick and a coloured letter,
+which is the most this row can hold: it is muted and uncoloured on purpose, because the letter is
+what this list is about.
 Each section has **its own empty state and they say different things** — no git on this machine
 (naming what was looked for), no repository in this folder, nothing uncommitted in this repository:
 one blank area for all three would be a panel saying nothing three different ways. Freshness is
