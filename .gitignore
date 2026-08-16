@@ -8,7 +8,13 @@ dist/
 .dolt/
 *.db
 .beads-credential-key
-.claude
+# The contents rather than the directory itself: git cannot re-include anything
+# under an excluded parent, and `.claude/rules/` has to be tracked. It is the
+# other half of CLAUDE.md, for the reason that document's own preamble gives —
+# one kept out of every worktree cut for a task is one nothing working in a
+# worktree can correct when the code moves underneath it.
+.claude/*
+!.claude/rules/
 docs
 .beads
 .smetana

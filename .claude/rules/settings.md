@@ -1,0 +1,202 @@
+---
+paths:
+  - "src-tauri/src/settings/**"
+  - "src-tauri/src/window.rs"
+  - "src/stores/settings.js"
+  - "src/components/settings/**"
+  - "src/views/SettingsWindow.vue"
+  - "src/appearance.js"
+  - "src/views/useAppearance.js"
+---
+
+# Settings
+
+What the app remembers between runs lives in one JSON file in `app_config_dir()`
+(`~/Library/Application Support/com.invisor.smetana/settings.json` on macOS).
+`src-tauri/src/settings/` owns it: `model.rs` is the schema, the validation and the merge — pure,
+and where the tests are; `file.rs` is the disk (atomic write through a per-call temp file that is
+`sync_all`ed and renamed, a `.bak` copy of anything unparseable or too new); `commands.rs` is two
+thin commands.
+
+At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
+state and width for each side), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
+start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, and `kanban`, how
+the board is drawn. Below that, `openProjects` is the list of projects the window has open,
+`lastProject` is the one active when it last closed, and `projects` is a map from each project's
+absolute path to its content state (side tab, active tab, selected task, selected path,
+`selectedRepo`, expanded folders, `openTabs`, `previewTab`, `columnOrder`, `runSettings`,
+`storageWarnedMib`, `usedAt`).
+
+`kanban` is the one that is **global rather than per project**, and deliberately: `columns` (`all` or
+`some`) with `alwaysShow`, and `interval` (`all`, `day`, `week`, `month`) with `unlimited`, are a
+person's way of reading a board rather than a fact about one repository, and the defaults are today's
+behaviour exactly — every column, every task. The rule it feeds is `components/kanban/boardView.js`,
+whose two closed lists are written out there and again in `model.rs`: the doubling `SIDE_TABS` and
+the storage ladder carry, with the same obligation — what the front end offers must be a subset of
+what Rust accepts, or the value loses itself on the next save with nothing on screen to say so.
+
+The per-project four are per project for the reason the rest are: a status has no meaning in another
+repository's column order, a branch name has none in another repository, a repository inside one
+project is not one inside another, and the attachment folder the bell weighs is a different folder
+for every project. The ladder `storageWarnedMib` is validated
+against is a closed list written out twice as well, in `model.rs` and in
+`components/notifications/notifications.js`; a value off it loses itself and costs one repeated
+warning. `runSettings` is what the run dialog opens on next time, a mirror of
+`runs::model::RunSettings` **minus the scope** — its own type rather than a reuse, since this one
+lives in a file people edit by hand and has to tolerate anything while the other crosses the IPC
+boundary and must not, and without the scope, since that comes from whichever play button was pressed
+and remembering it would open the dialog claiming to run something nobody clicked. The open tabs are
+paths relative to the project root, so a moved folder does not turn the list into rubbish. The map
+never crosses the IPC boundary: `settings_load` returns the resolved view for one project and
+`settings_save` puts it back, stamps `usedAt` and trims `projects` toward the 20 most recently used —
+never evicting the current project or anything still in `openProjects`, so the cap only bites entries
+from past visits that were closed.
+
+The front end owns the truth here — the opposite of the tracker, where bd owns it.
+`src/stores/settings.js` holds a reactive object and writes it back with a 400 ms debounce, one
+write in flight at a time; components read and write plain fields. Closing the window does not wait
+for the debounce: the store holds the close through `onCloseRequested`, flushes with a two-second
+ceiling and then destroys the window itself — the window always closes, a slow back end costs the
+last edit rather than the app.
+
+Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
+an opened tab. A handful of fields are the exception and they are what the settings window edits —
+`appearance.theme`, `appearance.uiFontSize`, `editor.fontSize`, `agent`, the two languages beside it,
+and the four `kanban` fields. Density is not among them, deliberately: nothing has asked for it yet,
+and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
+still override the first two for one run and are deliberately **not** written back — one visit to the
+dev server must not repaint the app forever. `?view=gallery` neither reads nor writes.
+
+## The settings window
+
+The gear in the scope bar opens a **second `WebviewWindow`**, not a modal (`window.rs`:
+`settings_window_open`), and that is the whole of why this is a window: a modal cannot be dragged
+outside the app's own bounds, so it cannot sit beside what it is changing. It loads the same bundle
+under `?view=settings`, so there is one front end and one set of tokens; the label `settings` is what
+makes a second press focus the window instead of making another, and it is also the name the
+capability in `capabilities/default.json` lists beside `main` — a window not named there reaches no
+core plugin at all, and the settings UI would come up unable to send an event or read the version.
+
+It is built as a **child of the main window** (`parent`), which keeps it in front of the thing it is
+changing: without it, the first click on the board buried the settings behind the app, and the only
+way back was the gear that opened it. `parent` says exactly that and nothing wider, in each
+platform's own words — an owner window on Windows, transient-for on Linux, a child `NSWindow` on
+macOS — where `always_on_top` would float over every other application on the machine, and an app
+somebody has switched away from has no business sitting on top of their browser. The price on macOS
+is that a child moves when its parent moves; it can still be dragged anywhere, including clear of the
+app, which is the whole reason this is a window and not a modal.
+
+**The main window stays the only writer.** `settings_save` writes the whole resolved view — panel
+widths, project map, open tabs — so a second window calling it would post its own idea of all of
+that, and the later write would win. So the settings window holds no settings store: it asks
+(`settings:hello`), it is told (`settings:state`), and it sends one edit at a time
+(`settings:apply`), which lands in the main window's reactive object and reaches disk through the
+debounce every panel drag already uses. `stores/settings.js` owns all three, and `applyPatch` is
+where an event is checked — a field that fails takes its previous value, not the shipped default,
+because an event is not a response to anything and a malformed one must cost nothing. The settings
+window applies an edit locally *before* sending it, so a dropdown answers in the same frame and the
+announcement that follows is the correction when a value was refused. It also follows that this
+window cannot outlive the main one, so `close_settings_with_main` takes it down on the main window's
+`Destroyed`, which is also what lets the app still exit on its last window.
+
+Appearance reaches the screen through the document root and nothing else (`views/useAppearance.js`).
+`theme: system` is not a third palette — it is the absence of a choice, so the word is stored as it
+stands, never resolved on the way to disk, and `prefers-color-scheme` is *watched* rather than read
+once: a laptop that switches at sunset must not leave the app wrong all evening.
+
+`uiFontSize` is **a factor in the stylesheet, not a set of sizes in JS**, and the difference is the
+whole of why this works. `paintRoot` writes exactly two custom properties — `--ui-scale` (the chosen
+size ÷ 13) and `--text-code-size` — and `tokens/typography.css` defines each of its eight steps as
+`calc(<n> * var(--ui-scale) * 1px)`. Computing the eight sizes in JS and writing them onto the root
+works and quietly kills the stylesheet, since an inline custom property beats every rule in a file:
+editing a step there would then change nothing on screen with every gate still green. A factor is
+also what keeps the hierarchy — moving only the semantic aliases flattens it at every size but the
+default. `tokens/space.css` carries the same factor on **the heights and nothing else** (`--row-h`,
+the `--control-h` set, `--tab-h`, `--titlebar-h`, `--scope-bar-h`, `--icon-*`, in both densities),
+because compact's 22px `--row-h` would clip text that reaches 22px at the top of the range; the
+`--space-*` scale deliberately does **not** scale, since padding and gaps are the rhythm of the
+interface rather than a container for a glyph. `tests/styles/tokens.test.js` reads both files and
+pins all of it.
+
+Three consequences worth knowing. `editor.fontSize` sets `--text-code-size`, the one step the factor
+does not reach (chrome and code are two questions) and also what `CodeBlock` and `LogLine` draw with,
+so the editor setting moves them too. The terminal was handed a resolved *number* rather than a
+token, so it re-reads on the `data-ui-font` attribute `paintRoot` stamps for that purpose — and it
+cannot read that number out of `--text-xs`, since the computed value of an unregistered custom
+property keeps its `calc()` unevaluated, so `terminal/theme.js` measures a throwaway element whose
+`font-size` is the token. And **icons do not scale**: the `--icon-*` tokens are referenced nowhere
+and the `Icon` call sites pass numeric literals, so glyphs stay put while their labels grow.
+
+The tabs are `components/settings/` — the directory is the list, for the reason the note under
+Commands gives — and each is presentational, handed values and emitting what was picked, so the whole
+window renders in `?view=gallery` too. The sections themselves are a closed list in
+`SettingsWindow.vue` alone (General, Editor, Agents, Kanban, Storage, About); Rust guards the *shape*
+of a `?tab=` name so nothing can smuggle a second parameter into the URL, never its vocabulary, and
+an unknown section opens on General.
+
+Every list on them is `Dropdown`, and with that **`Select` is drawn nowhere outside the gallery any
+more.** Its bargain — one element, accessible for free — buys a menu the operating system paints, in
+its own colours, font and row height, none of them reachable by a token and none following the theme,
+the density or the app-wide font size this very window exists to change. `Select` stays in the
+library because it is not broken; nothing in the app reaches for it. The switch also turned up the
+defect a short list had been hiding in `Dropdown`: its options are flex items in a column, so past
+the eighth the `--row-h` height became a starting point and fifteen rows shared the ceiling at 15px
+each instead of scrolling at 28. `flexShrink: 0` is the fix, and a list that genuinely scrolls then
+needed `reveal`, the cursor's row brought into view on opening and on walking off either end.
+
+Agents is the one place in the front end that ever *names* an agent: the ids are still `agents::IDS`
+and Rust still drops one it does not ship, so this is a set of labels for ids Rust already knows. The
+two language pickers under it are the same doubling against `agents::LANGUAGES`, accepted for the
+same reason — Rust validates the ids, so drift costs a stale label rather than a lost setting — and
+all three rows share one control column, wider than the shipped default because `Dropdown`
+ellipsises a label that does not fit and "Chinese (Simplified)" is the longest either list holds. The
+subscription block under it is a placeholder with dashes and a sentence saying so: invented numbers
+under a real setting would claim the app knows something it does not, which is what the fixture log
+pane was removed for. Kanban is the same shape one tab over, and the one tab whose lists are not a
+closed vocabulary at all — the columns it offers are the active project's own, read from the tracker,
+so with no project open or no answer yet it says so rather than drawing an empty list.
+
+**Storage is the one tab that is not a setting**, and it is the exception that keeps the rule
+readable. Nothing on it reaches `settings.json`: it asks Rust what the attachment store weighs
+(`attachments_survey`) and, on a press, tells Rust to sweep the active project's folder
+(`attachments_clean`) — two commands about the app's own data directory, so the main window is still
+the only writer of settings. It is read when the tab is opened rather than when the window mounts,
+since the answer queues behind the tracker worker, which may be two seconds into a bd call, and the
+other tabs have no use for it. The window hands over no path and no project, which is what leaves the
+deleting confined in Rust; the component takes the survey whole in Rust's own shape and
+`settings/storage.js` — pure, tested, another of the `branchChoice.js` family — turns it into the
+sentence somebody reads before an irreversible press.
+
+About's link goes out through `tauri-plugin-opener` (`opener:allow-open-url`, scoped to
+`https://github.com/*`): inside this webview it would replace the app with a web page, and there is
+no address bar here to come back from. Which branch `openExternal` takes is decided **before** the
+call and not by catching its failure, because the two failures are opposites: in the app a rejected
+`openUrl` is the ACL doing its job, and falling back to `window.open` would navigate to exactly what
+the scope declined. The predicate is "is there a real back end", which is **not**
+`window.__TAURI_INTERNALS__` — `mockIPC` sets that property itself, so the obvious test reads true in
+the dev server and quietly took the app's branch there, leaving the link opening nothing at all.
+`mockBackend.js` publishes what it decided (`usingMockBackend`), the only honest answer.
+
+A missing file is the first run, not an error. A broken or too-new file is copied to
+`settings.json.bak` and the app starts from defaults. One that cannot be read at all — wrong
+permissions, a directory in its place — has nothing to copy, so it is logged *and* `settings_save`
+refuses: overwriting a file nobody could read would destroy it sight unseen. Damage is contained
+field by field where it can be: a field whose *value* is outside its allowed set loses that field,
+while a section whose *type* is wrong (`{"layout": {"leftCollapsed": "yes"}}`) fails to deserialize
+and loses the whole section to its defaults, the same for one project entry among many. A file
+written before the list existed carries `lastProject` and no `openProjects`; reading it makes the
+list that one project, so an update does not open to an empty panel. That leniency lives on the
+file-reading side only — an empty list from the front end means the last project was closed on
+purpose and stays empty.
+
+The side-tab set is a closed list written out twice, in `model.rs` and in `views/DesktopApp.vue`.
+Changing one without the other is silent: the value survives the session and comes back as Files.
+
+Window size and position are not in this file: `tauri-plugin-window-state` handles them, and
+`src-tauri/src/window.rs` is the one thing added on top. The plugin keeps geometry in memory and
+writes it to disk in exactly one place — `RunEvent::Exit` — so any run that does not reach a clean
+exit leaves the last run's geometry behind, and the symptom (a window opening at the configured
+1440×900 whatever size it was left at) is invisible from the front end, since `settings.json` keeps
+saving on its own debounce the whole time. So `persist_geometry` subscribes to `Resized`/`Moved` and
+saves 500 ms after the last one — a debounce that is not only about disk traffic, since it also
+settles handler order: the plugin's own listener has long since updated the cache by then.
