@@ -1,5 +1,11 @@
-/* Agent sessions on the front end. Components know only this store; only it
-   knows Tauri exists.
+/* The worker's sessions on the front end. Components know only this store; only
+   it knows Tauri exists.
+
+   Not all of them are agents. A session is either a CLI agent, which the agents
+   panel draws a row for and the centre's one Agent tab shows, or the person's
+   own shell, which has no row at all and a centre tab of its own. `sessions`
+   holds both, because the worker does and there is no second list to keep in
+   agreement with it; `isShellSession` is the whole of the difference.
 
    The split follows cost: session state arrives as events for every session
    at once — it is cheap, and needed even for an agent nobody is looking at.
@@ -86,6 +92,44 @@ const visibleStarts = () =>
   terminalState.starting.filter(
     (ticket) => !terminalState.project || ticket.project === terminalState.project
   )
+
+/* Whether a session is the person's own shell rather than an agent. One
+   variant of `SessionWork` is the whole of the difference — see
+   `SessionWork::Shell` in `src-tauri/src/terminal/model.rs` — and it is asked
+   here rather than spelled out at each of the three places that care, because
+   the three have to agree: a shell has no row in the agents panel, does not
+   count towards the centre's Agent tab, and gets a centre tab of its own.
+
+   Written as "is a shell" and not "is an agent" on purpose: work this front end
+   has never heard of is an agent, which is the reading that keeps a session
+   visible. */
+export const isShellSession = (session) => session?.work?.kind === 'shell'
+
+/* The agent sessions, and the shells, out of the one list the worker keeps.
+   Both are derived rather than stored for the reason the tab row is: a second
+   array beside `sessions` would be a copy to hold in agreement with it, and
+   `loadSessions` already replaces the one. */
+const agentSessions = () => terminalState.sessions.filter((s) => !isShellSession(s))
+export const shellSessions = computed(() => terminalState.sessions.filter(isShellSession))
+
+/* Where the selection goes when what it named is gone: the newest agent, or
+   nothing. The newest, because a new session always takes the highest id and so
+   is the one most recently started; and never a shell, for the reason
+   `selected` below gives. */
+const lastAgent = () => agentSessions().at(-1)?.id ?? null
+
+/* Whether this project has an agent at all — a live one, or one still coming
+   up. What hangs off it is the centre's Agent tab (`hasAgentTab` in tabs.js):
+   the tab exists exactly as long as there is an agent to draw in it.
+
+   `starting` counts, and not for tidiness: a spawn takes about a second, and a
+   tab that appeared only when the worker answered would leave the button
+   somebody pressed with no visible effect for that second — the same reason
+   `starting` exists for the panel at all. A shell has no start ticket to add
+   here, and needs none: it opens a tab of its own, which is not this one. */
+export const hasAgentSession = computed(
+  () => agentSessions().length > 0 || visibleStarts().length > 0
+)
 
 /* The session's internal state and the design system's status are different
    vocabularies, and the translation lives here, the way bd's status
@@ -266,7 +310,12 @@ function describeWork(work, sessionId) {
   return { work: work ?? null, claimed, ...captionOf(work, claimed) }
 }
 
-/* Sessions first, in the worker's own order, then whatever is still starting.
+/* Agent sessions first, in the worker's own order, then whatever is still
+   starting. The shells are not here at all: this list is the agents panel, and
+   a shell is not an agent — it has no work, no state anybody draws and nothing
+   to say about itself. It is on screen as a centre tab and nowhere else.
+
+
    A new session always takes the highest id, so a start belongs at the bottom
    both before and after it lands, and the row a person is watching does not
    move under them when it becomes real.
@@ -285,7 +334,7 @@ function describeWork(work, sessionId) {
    separate state: `running` already draws the live dot, and `starting` in the
    corner says the rest. */
 export const agentRows = computed(() => [
-  ...terminalState.sessions.map((session) => ({
+  ...agentSessions().map((session) => ({
     id: session.id,
     ...describeWork(session.work, session.id),
     state: toUiState(session),
@@ -366,6 +415,16 @@ function report(kind, error) {
    snapshot on a generation gap. */
 let seq = 0
 let attaching = null
+/* Which session the worker is streaming output to this window, which is the
+   *other* thing `activeId` used to mean. Splitting it out is what lets a
+   terminal tab draw a shell without moving the selection in the agents panel:
+   the pane says what it is attached to (`TerminalView`'s `sessionId` prop), and
+   the field below says which agent a person picked. While one field served
+   both, attaching to a shell would have highlighted a row that does not exist
+   and taken the Agent tab off the agent it was showing.
+   Not reactive, and not in `terminalState`: it is transport bookkeeping, the
+   same as `seq` and `attaching` above it, and nothing draws it. */
+let streaming = null
 /* Ticket ids only have to be unique within this window's lifetime, and nothing
    ever reads the number. */
 let tickets = 0
@@ -423,12 +482,17 @@ export async function initTerminals() {
     const { id } = event.payload
     terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
     if (terminalState.activeId === id) {
-      terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
+      terminalState.activeId = lastAgent()
     }
   })
   await listen('terminal:output', (event) => {
     const { id, seq: next, data } = event.payload
-    if (id !== terminalState.activeId) return
+    /* The session this window attached to, and not the selected agent: the two
+       are the same on the Agent tab and deliberately different on a terminal
+       tab. The worker sends output for one session at a time anyway; this
+       guard is what keeps the last chunks of the one just left off the screen
+       of the one just opened. */
+    if (id !== streaming) return
     if (next !== seq + 1) {
       // Fired from an event listener, not awaited by anyone: attach() no
       // longer throws (it reports instead), but the .catch() stays as a
@@ -481,7 +545,7 @@ export async function loadSessions(project) {
     terminalState.sessions = sessions
     for (const session of late) upsert(session)
     if (!selected()) {
-      terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
+      terminalState.activeId = lastAgent()
     }
     terminalState.lastError = null
   } catch (err) {
@@ -491,16 +555,22 @@ export async function loadSessions(project) {
 }
 
 /* Whether what `activeId` names is still something a person can be looking at:
-   a session in the list, or a start that has not answered yet. A start counts —
+   an agent in the list, or a start that has not answered yet. A start counts —
    it is the newest thing in the panel and the reason the human is watching at
    all, and repairing the selection past it would hand the terminal back to some
-   older agent one moment before the new one arrives. */
+   older agent one moment before the new one arrives.
+
+   An agent and not any session: `activeId` is the row a person picked in the
+   agents panel, and a shell has no row there. One that ever landed in this
+   field would highlight nothing in the panel while the Agent tab drew somebody
+   else's shell — the two meanings this field used to carry, back again. */
 function selected() {
   const id = terminalState.activeId
   if (id == null) return false
   if (isStarting(id)) return visibleStarts().some((ticket) => ticket.id === id)
-  return terminalState.sessions.some((s) => s.id === id)
+  return agentSessions().some((s) => s.id === id)
 }
+
 
 /* The one write that still rejects: its caller turns a failed spawn into
    something the human sees, and an agent asked for that never appeared needs
@@ -551,11 +621,38 @@ export async function createSession(project, intent = { kind: 'bare' }) {
   }
 }
 
+/* A shell of the person's own, in the project's root. A worker session like any
+   other and not an agent: no intent, no agent id, no profile — see
+   `terminal_shell` in `src-tauri/src/terminal/commands.rs`.
+
+   Nothing here touches `activeId`: a shell has no row in the agents panel to
+   select, and the tab it opens comes from the session appearing in the list.
+   That is also why there is no start ticket to match `createSession`'s. A
+   ticket buys the second between the press and the worker's answer, and it buys
+   it for a panel that would otherwise draw an empty state over an agent
+   somebody had just asked for; a tab that is not there yet draws nothing at
+   all, so there is nothing to cover.
+
+   The refusal is reported and not rethrown, the way `removeSession`'s is: there
+   is no dialog to keep open and nothing on screen to take back — the toast is
+   the whole of what a caller could do with it. */
+export async function createShell(project) {
+  try {
+    const session = await invoke('terminal_shell', { project })
+    upsert(session)
+    terminalState.lastError = null
+    return session
+  } catch (err) {
+    report('write', err)
+    return null
+  }
+}
+
 export async function removeSession(id) {
   try {
     await invoke('terminal_remove', { id })
     terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
-    if (terminalState.activeId === id) terminalState.activeId = terminalState.sessions.at(-1)?.id ?? null
+    if (terminalState.activeId === id) terminalState.activeId = lastAgent()
     terminalState.lastError = null
   } catch (err) {
     report('write', err)
@@ -566,7 +663,12 @@ export async function removeSession(id) {
    scratch: whatever it was showing before is either another session's past,
    or a piece of this same session already folded into the snapshot. */
 export async function attach(id) {
-  terminalState.activeId = id
+  /* Deliberately not `activeId = id`, which is what this used to do. Attaching
+     is the transport's half; which agent is selected is the person's, and a
+     shell in a terminal tab attaches without being either. The one caller that
+     also means "select this" says so itself (`selectAgent` in
+     DesktopApp.vue). */
+  streaming = id
   /* A start has no ring, no seq and no id the worker would recognise: asking
      about it would come back as `no session` and report a failure at the one
      moment nothing has failed. The view attaches again on its own when the
@@ -606,6 +708,11 @@ export async function attach(id) {
    whatever it was, so the next mount can reattach to it. */
 export async function detach(id) {
   if (id == null || isStarting(id)) return
+  /* Only if it is still this one. A detach and an attach reach the worker in no
+     guaranteed order, and forgetting unconditionally would drop the output of
+     the session that overtook this one on the floor — the front-end half of the
+     very defect the id argument exists for. */
+  if (streaming === id) streaming = null
   try {
     await invoke('terminal_detach', { id })
     terminalState.lastError = null

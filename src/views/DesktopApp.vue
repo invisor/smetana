@@ -14,6 +14,7 @@ import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
+import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
@@ -37,6 +38,7 @@ import DraftInspector from '../components/kanban/DraftInspector.vue'
 import ClaimedTasks from '../components/agent/ClaimedTasks.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Modal from '../components/overlays/Modal.vue'
+import MenuButton from '../components/overlays/MenuButton.vue'
 import Toast from '../components/overlays/Toast.vue'
 import ProjectList from '../components/shell/ProjectList.vue'
 import Skeleton from '../components/core/Skeleton.vue'
@@ -47,6 +49,7 @@ import AgentList from '../components/agent/AgentList.vue'
 import {
   agentRows,
   createSession,
+  createShell,
   initTerminals,
   lastHandover,
   lastRunStart,
@@ -148,11 +151,15 @@ import {
   buffers,
   closeDiff,
   closeTab,
+  closeTerminalTab,
   confirmUnsaved,
   diffTab,
   discardTabs,
+  dropAgentTab,
+  hasAgentTab,
   isDiffTab,
   isDirty,
+  isTerminalTab,
   keepMine,
   markGone,
   markStale,
@@ -165,7 +172,9 @@ import {
   saveTab,
   saveTabs,
   setText,
-  tabList
+  tabList,
+  terminalTab,
+  terminalTabFor
 } from '../stores/tabs.js'
 import FileEditor from '../components/files/FileEditor.vue'
 import DiffView from '../components/files/editor/DiffView.vue'
@@ -344,6 +353,36 @@ async function newAgent() {
   } catch {
     // already reported — see comment above
   }
+}
+
+/* A shell of the person's own, in the project's root, in a tab of its own.
+
+   No side tab and no centre tab are set here, unlike `newAgent` above: the tab
+   this opens is derived from the session, so it appears when the worker answers
+   — about a second — and there is nothing to point at before then. What a
+   ticket buys an agent is a panel that would otherwise draw an empty state over
+   a row somebody just asked for, and a tab that is not there yet draws nothing
+   at all.
+
+   It is `activeTab` and not `sideTab` that moves, and only once the session is
+   real: a shell has no row in the Agents panel, so there is nothing there to
+   show anybody. */
+async function newTerminal() {
+  const path = activePath.value
+  if (!path) return
+  const session = await createShell(path)
+  /* Null is a refusal, already on screen as a toast — see `createShell`. */
+  if (!session) return
+  const tab = terminalTabFor(session.id)
+  if (tab) project.activeTab = tab.id
+}
+
+/* Which row does what. The rows themselves are `newTabMenu.js`'s — two callers
+   and no test can reach a template, the same split every other menu in this app
+   keeps. */
+const onNewTab = (item) => {
+  if (item.kind === 'agent') newAgent()
+  else if (item.kind === 'terminal') newTerminal()
 }
 
 /* The project whose setup is being offered. Null when the dialog is closed —
@@ -876,6 +915,29 @@ watch(lastRunStart, (id) => {
   project.sideTab = 'agents'
   selectAgent(id)
 })
+
+/* The Agent tab is derived from the sessions, so it goes on its own when the
+   last agent does — but `project.activeTab` is remembered state and does not,
+   and a person left on a tab that is no longer in the row would be looking at a
+   centre column with nothing in it. The board is where they land, which is the
+   fallback `closeTab` and `closeDiff` already use.
+
+   A watcher here rather than in the store, and that is not a preference:
+   `tabs.js` is one half of an import cycle with `settings.js`, so a module-scope
+   `watch` in it would read `terminals.js` at evaluation time — the failure
+   `notifications.js` carries a note about, which works in the dev server and
+   leaves a white window in the built app. The rule itself is in the store
+   (`dropAgentTab`), where a test can reach it; this is only the thing that
+   notices. */
+watch(hasAgentTab, (has) => {
+  if (!has) dropAgentTab()
+})
+
+/* The shell a terminal tab draws, and `null` for anything else in the centre —
+   including an id left over from a tab whose session is gone, which is why this
+   hangs off the record rather than off `isTerminalTab`. The same shape
+   `activeDiff` has, for the same reason. */
+const activeTerminal = computed(() => terminalTab(project.activeTab))
 
 /* The tree and the tabs open together with the project. By this point settings
    have already read the active project — App.vue awaits loadSettings before it
@@ -1566,7 +1628,13 @@ const fileTabActive = computed(
     project.activeTab !== 'terminal' &&
     project.activeTab !== 'kanban' &&
     !reportTabActive.value &&
-    !isDiffTab(project.activeTab)
+    !isDiffTab(project.activeTab) &&
+    /* And minus the terminals, which are a fifth kind, and for the same reason
+       the diffs are excluded: a shell's tab names no file in `openTabs`, so a
+       `FileEditor` on one would ask the disk for a path built out of a tab id.
+       This computed is what stands between that and the editor, since the
+       editor's branch comes first in the template. */
+    !isTerminalTab(project.activeTab)
 )
 
 /* The text a diff refuses with. `fileErrorText` is the editor's own table and
@@ -1695,6 +1763,11 @@ const onCloseTab = async (id) => {
   /* A diff holds nothing of anybody's, so there is nothing to ask about and
      nothing in `openTabs` to take out. */
   if (isDiffTab(id)) return closeDiff(id)
+  /* A terminal is the other way round: there is nothing unsaved in it either,
+     but closing it kills the shell behind it — the tab is only a view of a
+     session, and one that merely hid a live shell would leave a process nobody
+     can see. The store owns both halves of that. */
+  if (isTerminalTab(id)) return closeTerminalTab(id)
   if (isDirty(id) && !(await confirmUnsaved([id]))) return
   closeTab(id)
 }
@@ -1722,10 +1795,10 @@ const absoluteEditorPath = (relPath) => (filesState.root ? `${filesState.root}/$
 
 /* Editor state lives exactly as long as the tab. Cleanup follows the tab
    list, not the close button: the same watcher covers switching projects and
-   a path that fell out because the file stopped being readable. Pinned tabs
-   (terminal, kanban) are filtered out: they have no file on disk, and there
-   is no reason to build a composite path for them — nothing is ever saved
-   under their id.
+   a path that fell out because the file stopped being readable. Everything that
+   is not a file is filtered out — the pinned tabs (Agent, Kanban), the diffs and
+   the terminals: none has a file on disk, and there is no reason to build a
+   composite path for one — nothing is ever saved under its id.
 
    flush: 'post' is required, not cosmetic. closeTab trims openTabs; this
    watcher at the default (flush: 'pre') would fire before FileEditor gets a
@@ -1740,7 +1813,7 @@ watch(
   (tabs) =>
     keepOnly(
       tabs
-        .filter((tab) => tab.kind !== 'pinned' && tab.kind !== 'diff')
+        .filter((tab) => tab.kind === 'file' || tab.kind === 'preview')
         .map((tab) => absoluteEditorPath(tab.id))
     ),
   { flush: 'post' }
@@ -2253,7 +2326,22 @@ const toastStackStyle = {
           @select="project.activeTab = $event"
           @close="onCloseTab"
           @promote="promote"
-        />
+        >
+          <!-- Beside the board tab rather than at the far right of the row: it
+               is about these first two tabs, and past the strut it would drift
+               away from them. Disabled with no project open, where neither row
+               has anywhere to start anything. -->
+          <template #afterPinned>
+            <MenuButton
+              icon="plus"
+              label="New agent or terminal"
+              :items="NEW_TAB_ITEMS"
+              :width="180"
+              :disabled="!activePath"
+              @select="onNewTab"
+            />
+          </template>
+        </TabBar>
         <NewTaskModal
           :open="newTaskOpen"
           :busy="creating"
@@ -2433,7 +2521,15 @@ const toastStackStyle = {
           @reload="reloadTab(project.activeTab)"
           @keep-mine="keepMine(project.activeTab)"
         />
-        <TerminalView v-else-if="project.activeTab === 'terminal'" />
+        <!-- The Agent tab shows the agent a person picked; a terminal tab shows
+             its own shell. Two branches over one component, and the session is a
+             prop rather than something the pane reads for itself: see the note
+             on `sessionId` in TerminalView.vue. -->
+        <TerminalView
+          v-else-if="project.activeTab === 'terminal'"
+          :session-id="terminalState.activeId"
+        />
+        <TerminalView v-else-if="activeTerminal" :session-id="activeTerminal.session" />
         <!-- bd init is the one wait that keeps its EmptyState: the skeleton
              would replace the very sentence that explains what is happening,
              and the busy button says it better than six grey lines. Every

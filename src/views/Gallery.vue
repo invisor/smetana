@@ -6,6 +6,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
 import { taskMenuItems } from '../components/kanban/taskMenu.js'
+import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import {
   AboutSettings,
   AgentList,
@@ -271,6 +272,10 @@ const tabs = computed(() => [
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', iconUrl: fileIconUrl('tabs.rs', documentTheme.value), dirty: true },
   { id: 'agent.rs', kind: 'preview', label: 'agent.rs', iconUrl: fileIconUrl('agent.rs', documentTheme.value) },
   { id: 'git.rs', kind: 'diff', label: 'git.rs', icon: 'git-compare' },
+  /* A shell's tab: closable like a file's, captioned in words like a pinned
+     one. In the app its id is a zero byte and a session number, which nothing
+     here draws — the shape that matters on screen is the kind. */
+  { id: 'term:1', kind: 'terminal', label: 'Terminal 1', icon: 'terminal' },
   {
     id: 'logo.png',
     kind: 'file',
@@ -721,11 +726,16 @@ const PARKED_CARD_MENU = taskMenuItems({
   busy: false
 })
 
-/* TerminalView has no props of its own to feed a fixture through, unlike
-   FileTree above — it reads the active session straight from the store.
-   Pointing terminalState at session 1 makes it attach on mount, which the
-   mock backend answers with terminalFixture.js's captured output. */
+/* The + button's own two rows, from the same module the app reads them from —
+   the gallery draws what ships, never a second copy of the words. */
+
+/* TerminalView is handed the session it draws, the way the app's two tab
+   branches hand it one. The store still has to know about the session — the
+   attach on mount goes through it, and the mock backend answers that with
+   terminalFixture.js's captured output — but which session is on screen is the
+   prop's answer, not the store's. */
 terminalState.activeId = 1
+const GALLERY_SESSION = 1
 
 /* The settings window's own state lives in that window and reaches it as
    events from the app window; here the tabs are simply driven by local refs, so
@@ -1280,7 +1290,15 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Shell</div>
-      <TabBar :tabs="tabs" active-id="kanban" />
+      <TabBar :tabs="tabs" active-id="kanban">
+        <!-- The row's second slot, inside the scrolling strip and right after
+             the pinned tabs, which is where the app puts it: the control is
+             about those tabs and has to stay beside them however many files are
+             open. -->
+        <template #afterPinned>
+          <MenuButton icon="plus" label="New agent or terminal" :items="NEW_TAB_ITEMS" :width="180" />
+        </template>
+      </TabBar>
       <!-- Taller than the other boxes on this page, and the file tree is why:
            at 160px the shell showed five rows of it, so half the tree's glyph
            vocabulary sat below a fold in the one place it can be checked. -->
@@ -1360,11 +1378,10 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Terminal</div>
-      <!-- TerminalView takes no props — it reads the active session from
-           terminals.js itself, so the fixture has to go in through the
-           store, the way terminalFixture.js already does for the app's own
-           terminal tab. Height is a token multiple, not a pixel number:
-           the terminal fills whatever height it is given. -->
+      <!-- The session arrives as a prop; its output comes from the store, which
+           the mock backend answers out of terminalFixture.js. Height is a token
+           multiple, not a pixel number: the terminal fills whatever height it
+           is given. -->
       <div
         :style="{
           display: 'flex',
@@ -1372,7 +1389,7 @@ const menuTargetStyle = {
           border: 'var(--border-w) solid var(--border)'
         }"
       >
-        <TerminalView />
+        <TerminalView :session-id="GALLERY_SESSION" />
       </div>
     </section>
 

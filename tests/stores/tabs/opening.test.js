@@ -184,21 +184,20 @@ describe('tabList', () => {
 
     const list = tabs.tabList.value
 
-    expect(list.slice(0, 2).map((tab) => tab.id)).toEqual(['terminal', 'kanban'])
-    expect(list[0].kind).toBe('pinned')
+    expect(list[0]).toMatchObject({ id: 'kanban', kind: 'pinned' })
   })
 
   it('a preview tab is marked with its own kind', async () => {
     await opened('a.txt')
 
-    expect(tabs.tabList.value[2]).toMatchObject({ id: 'a.txt', kind: 'preview', label: 'a.txt' })
+    expect(tabs.tabList.value[1]).toMatchObject({ id: 'a.txt', kind: 'preview', label: 'a.txt' })
   })
 
   it('a tab with a read refusal carries the lock and its reason', async () => {
     ipc.fail('files_read', { kind: 'tooLarge', message: 'too large' })
     await opened('big.log')
 
-    expect(tabs.tabList.value[2]).toMatchObject({
+    expect(tabs.tabList.value[1]).toMatchObject({
       readOnly: true,
       readOnlyHint: 'File is too large to open here.'
     })
@@ -213,22 +212,22 @@ describe('tabList', () => {
        emptiness rather than that the tab really is in the loading state with no
        lock. */
     expect(tabs.buffers.get('a.txt').loading).toBe(true)
-    expect(tabs.tabList.value[2].readOnly).toBe(false)
+    expect(tabs.tabList.value[1].readOnly).toBe(false)
   })
 
   it("a tab's label is only the last segment of the path", async () => {
     await opened('src/stores/tabs.js')
 
-    expect(tabs.tabList.value[2].label).toBe('tabs.js')
+    expect(tabs.tabList.value[1].label).toBe('tabs.js')
   })
 
-  /* The id is what sits in settings.json and in the closed list on the Rust
-     side; the label is what a person reads. They are allowed to diverge, but the
-     id 'chat' must never come back. */
-  it('the pinned tab is called terminal, not chat', async () => {
+  /* The board is the one tab a project always has. The Agent tab used to sit
+     beside it and is now derived from the sessions — see
+     tests/stores/tabs/terminal.test.js, which is where both halves of that
+     live. */
+  it('the board is the only tab that is always there', async () => {
     const { stores } = await loadStores()
-    expect(stores.tabs.PINNED.map((t) => t.id)).toEqual(['terminal', 'kanban'])
-    expect(stores.tabs.PINNED[0].label).toBe('Agent')
+    expect(stores.tabs.PINNED.map((t) => t.id)).toEqual(['kanban'])
   })
 })
 

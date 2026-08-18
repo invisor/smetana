@@ -821,6 +821,107 @@ describe('starting a session', () => {
   })
 })
 
+/* The person's own shell. It is a worker session like any other and not an
+   agent, and every assertion here is one half of that sentence: it is in
+   `sessions`, and it is in nothing else. */
+describe('a shell session', () => {
+  const shell = (over = {}) => session({ work: { kind: 'shell' }, agent: '/bin/zsh', ...over })
+
+  it('is asked for by project alone — no agent, no intent', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_shell', shell({ id: 5 }))
+
+    const opened = await stores.terminals.createShell('/p')
+
+    expect(ipc.calls('terminal_shell')).toEqual([{ project: '/p' }])
+    expect(opened.id).toBe(5)
+    expect(stores.terminals.terminalState.sessions.map((s) => s.id)).toEqual([1, 5])
+  })
+
+  /* The agents panel is rows of work, and a shell has none: nothing asked it to
+     do anything, and there would be nothing to caption the row with. */
+  it('is not a row in the agents panel', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), shell({ id: 5 })])
+    await stores.terminals.loadSessions('/p')
+
+    expect(stores.terminals.agentRows.value.map((row) => row.id)).toEqual([1])
+    expect(stores.terminals.shellSessions.value.map((s) => s.id)).toEqual([5])
+    expect(stores.terminals.hasAgentSession.value).toBe(true)
+  })
+
+  it('does not make a project with only shells in it look like one with agents', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [shell({ id: 5 })])
+    await stores.terminals.loadSessions('/p')
+
+    expect(stores.terminals.agentRows.value).toEqual([])
+    expect(stores.terminals.hasAgentSession.value).toBe(false)
+  })
+
+  /* `activeId` is the row a person picked in the agents panel, and a shell has
+     no row there. One that landed in this field would highlight nothing in the
+     panel while the Agent tab drew somebody else's shell — the two meanings this
+     field used to carry, back again. */
+  it('is never what the selection falls back to when an agent goes', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), shell({ id: 5 })])
+    ipc.on('terminal_remove', null)
+    await stores.terminals.loadSessions('/p')
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+
+    await stores.terminals.removeSession(1)
+
+    expect(stores.terminals.terminalState.activeId).toBeNull()
+  })
+
+  /* Attaching is the transport's half; selecting is the person's. The pane for a
+     shell attaches without picking anything, which is what lets a terminal tab
+     be open while the Agent tab still shows the agent it was showing. */
+  it('can be attached to without moving the selected agent', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), shell({ id: 5 })])
+    await stores.terminals.loadSessions('/p')
+
+    await stores.terminals.attach(5)
+
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+  })
+
+  /* The other half of that split: output follows what the window is attached to
+     and not what the panel has selected, or a shell's tab would sit blank while
+     the worker streamed to it. */
+  it('its output reaches the subscriber while another session is selected', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), shell({ id: 5 })])
+    await stores.terminals.loadSessions('/p')
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+
+    await stores.terminals.attach(5)
+    await emit('terminal:output', { id: 5, seq: 1, data: b64('$ ') })
+    await nextTick()
+
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+    expect(seen.at(-1)).toBe('$ ')
+  })
+
+  /* And the same rule the other way: the session that was left goes quiet, or
+     the tab just opened would be written into by the one just closed. */
+  it('what the window has left stops reaching the subscriber', async () => {
+    const { stores, emit, nextTick } = await ready()
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+
+    await stores.terminals.attach(1)
+    await stores.terminals.detach(1)
+    await emit('terminal:output', { id: 1, seq: 1, data: b64('too late') })
+    await nextTick()
+
+    expect(seen).not.toContain('too late')
+  })
+})
+
 describe('back-end errors', () => {
   it('a terminal_attach refusal does not throw but settles into lastError', async () => {
     const { ipc, stores } = await ready()

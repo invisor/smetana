@@ -234,6 +234,26 @@ fn inherited(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
+/// The program a terminal of this person's own opens: `$SHELL`, and the one
+/// path that exists on every Unix when launchd hands the bundle an environment
+/// with nothing in it at all.
+///
+/// Here rather than in `terminal/pty.rs` because the probe below already had to
+/// decide this and a second copy would be free to disagree — the probe would
+/// then be reporting the environment of one shell while a terminal tab ran
+/// another.
+#[cfg(unix)]
+pub fn shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
+/// The same question where there is no `$SHELL` to ask. `ComSpec` is what the
+/// platform itself names, and `cmd.exe` is on `PATH` when it does not.
+#[cfg(not(unix))]
+pub fn shell() -> String {
+    std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string())
+}
+
 /// Start resolving now, on a thread of its own, so the first agent a person
 /// starts does not pay for it.
 ///
@@ -273,7 +293,7 @@ fn resolve_within(timeout: std::time::Duration) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
 
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let shell = shell();
     // `/usr/bin/env` rather than `printf '%s' "$PATH"` because `$PATH` is a list
     // in fish and would come back space-separated; `env` prints the colon form
     // every shell keeps for its children, which is the one we want anyway.
