@@ -46,6 +46,7 @@ describe('the git panel store', () => {
     ipc.on('vcs_repos', (args) => (args.project === '/old' ? old : repoIn('/new')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', branchesOf('/new'))
+    ipc.on('vcs_tracking', [])
 
     const first = stores.vcs.loadRepos('/old')
     const second = stores.vcs.loadRepos('/new')
@@ -74,6 +75,7 @@ describe('the git panel store', () => {
        a call this case is not about. */
     ipc.on('vcs_status', (args) => treeOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
     ipc.on('vcs_branches', (args) => branchesOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
+    ipc.on('vcs_tracking', [])
     await stores.vcs.loadRepos('/p')
 
     let releaseAdmin
@@ -102,6 +104,7 @@ describe('the git panel store', () => {
     ipc.on('vcs_repos', siblings)
     ipc.on('vcs_status', (args) => treeOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
     ipc.on('vcs_branches', (args) => branchesOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
+    ipc.on('vcs_tracking', [])
     await stores.vcs.loadRepos('/p')
 
     let releaseAdmin
@@ -132,6 +135,7 @@ describe('the git panel store', () => {
       { name: 'main', current: branch === 'main' },
       { name: 'develop', current: branch === 'develop' }
     ])
+    ipc.on('vcs_tracking', [])
     ipc.on('git_head', () => ({ branch, detached: null }))
     ipc.on('vcs_checkout', (args) => {
       branch = args.branch
@@ -202,6 +206,7 @@ describe('the git panel store', () => {
     ipc.on('vcs_repos', () => [{ name: '.', path: '/p/.', branch, detached: null }])
     ipc.on('vcs_status', () => ({ branch, detached: null, changes: [] }))
     ipc.on('vcs_branches', () => names.map((name) => ({ name, current: name === branch })))
+    ipc.on('vcs_tracking', [])
     ipc.on('git_head', () => ({ branch, detached: null }))
     ipc.on('vcs_create_branch', (args) => {
       names.push(args.name)
@@ -290,6 +295,7 @@ describe('the git panel store', () => {
           ]
         : [{ name: 'main', current: true }]
     )
+    ipc.on('vcs_tracking', [])
     ipc.on('git_head', () => ({ branch: adminBranch, detached: null }))
     await stores.vcs.loadRepos('/p')
     expect(stores.vcs.vcsState.selected).toBe('/p/admin')
@@ -502,6 +508,7 @@ describe('the git panel store', () => {
     const { stores, ipc, nextTick } = await loadStores()
     ipc.on('vcs_repos', repoIn('/p'))
     ipc.on('vcs_branches', [])
+    ipc.on('vcs_tracking', [])
     ipc.fail('vcs_status', 'no git on this machine')
 
     await stores.vcs.loadRepos('/p')
@@ -531,6 +538,7 @@ describe('the git panel store', () => {
         : []
     }))
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
     ipc.on('git_head', () => ({ branch: 'main', detached: null }))
     ipc.on('vcs_commit', () => {
       dirty = false
@@ -613,6 +621,7 @@ describe('the git panel store', () => {
     ipc.on('vcs_repos', siblings)
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [])
+    ipc.on('vcs_tracking', [])
     await stores.vcs.loadRepos('/p')
 
     stores.vcs.setMessage('one')
@@ -629,6 +638,7 @@ describe('the git panel store', () => {
     ipc.on('vcs_repos', (args) => repoIn(args.project))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [])
+    ipc.on('vcs_tracking', [])
     await stores.vcs.loadRepos('/p')
     stores.vcs.setMessage('about this project')
 
@@ -682,6 +692,7 @@ describe('the git panel store', () => {
     ipc.on('vcs_repos', siblings)
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [])
+    ipc.on('vcs_tracking', [])
     let release
     ipc.on('vcs_suggest_message', () => new Promise((resolve) => (release = resolve)))
     await stores.vcs.loadRepos('/p')
@@ -702,11 +713,79 @@ describe('the git panel store', () => {
     ipc.on('vcs_repos', repoIn('/p'))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', branchesOf('/p'))
+    ipc.on('vcs_tracking', [])
 
     await stores.vcs.loadRepos('/p')
 
     expect(stores.vcs.vcsState.selected).toBe('/p/.')
     expect(stores.settings.settings.project.selectedRepo).toBe('/p/.')
     expect(stores.vcs.vcsState.error).toBe(null)
+  })
+  /* The tracking read is a second answer merged by name, which is what lets
+     `vcs_branches` stay the process-free call its own documentation promises.
+     Keyed rather than listed, because every consumer of it has a branch name in
+     its hand and no consumer wants the order. */
+  it('tracking is merged into the panel keyed by branch name', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }, { name: 'spike', current: false }])
+    ipc.on('vcs_tracking', [
+      { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 2, gone: false }
+    ])
+
+    await stores.vcs.loadRepos('/p')
+
+    expect(stores.vcs.vcsState.tracking.main.behind).toBe(2)
+    expect(stores.vcs.vcsState.tracking.spike).toBeUndefined()
+  })
+
+  /* The same guard every read in this store carries. An answer landing after
+     somebody switched repositories would mark one repository's branches with
+     another repository's counts — and the mark is the thing a person acts on. */
+  it('tracking for a repository already left is dropped', async () => {
+    const { stores, ipc, nextTick } = await loadStores()
+    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    await stores.vcs.loadRepos('/p')
+
+    /* Held back until after the switch, exactly as the branch list above is:
+       the opening read has to answer at once, or `loadRepos` itself would hang
+       on a call this case is not about. */
+    let releaseAdmin
+    const admin = new Promise((resolve) => {
+      releaseAdmin = () =>
+        resolve([{ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 9, gone: false }])
+    })
+    ipc.on('vcs_tracking', (args) => (args.repo === '/p/admin' ? admin : []))
+
+    const first = stores.vcs.selectRepo('/p/admin')
+    const second = stores.vcs.selectRepo('/p/backend')
+    await second
+    releaseAdmin()
+    await first
+    await nextTick()
+
+    expect(stores.vcs.vcsState.selected).toBe('/p/backend')
+    expect(stores.vcs.vcsState.tracking.main).toBeUndefined()
+  })
+
+  /* A failure here takes no mark and no message: the row goes back to what it
+     looked like before this feature existed, which is a true statement about
+     what is known. */
+  it('a tracking read that failed leaves the panel unmarked and quiet', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', () => Promise.reject(new Error('no git')))
+
+    await stores.vcs.loadRepos('/p')
+
+    expect(stores.vcs.vcsState.tracking).toEqual({})
+    expect(stores.vcs.vcsState.error).toBeNull()
+    expect(stores.vcs.vcsState.writeError).toBeNull()
   })
 })

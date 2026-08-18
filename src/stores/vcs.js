@@ -45,6 +45,18 @@ export const vcsState = reactive({
      that a repository nobody has committed to still has something to merge
      into. */
   branches: [],
+  /* Where each local branch stands against its upstream, keyed by branch name:
+     `{ upstream, ahead, behind, gone }` as `vcs_tracking` answers. Keyed rather
+     than listed because every reader has a name in its hand — a row, or the
+     current branch — and none of them wants the order.
+
+     A second answer beside `branches` rather than a richer `branches`, which is
+     the seam Rust is split on: the branch list is three file reads that cannot
+     fail, this is a process that can. An empty object is "nothing is known",
+     which is what a repository with no remote, a git that could not be run, and
+     a fetch that has not happened yet all look like — and all three draw the
+     same row, which is the one from before this feature existed. */
+  tracking: {},
   /* `{ kind, message }` — Rust's own shape, normalised here so a rejection that
      is a bare string (the browser mock, a transport failure) draws the same
      way. `kind` is what the panel branches on; the message is git's own words
@@ -196,7 +208,7 @@ export async function selectRepo(path) {
      conflict is deliberately not cleared here — it is a tree somebody still has
      to answer for, and its own record names the repository it belongs to. */
   vcsState.writeError = null
-  await Promise.all([loadStatus(), loadBranchList()])
+  await Promise.all([loadStatus(), loadBranchList(), loadTracking()])
 }
 
 /* The selected repository's working tree.
@@ -256,6 +268,36 @@ async function loadBranchList() {
        `vcs_status` beside it is what puts a message on screen. */
     console.error('[vcs] listing branches failed:', err)
     vcsState.branches = []
+  }
+}
+
+/* Where the selected repository's branches stand against their upstreams.
+
+   Guarded on the pair, project and repository, exactly as `loadStatus` is: a
+   list arriving after somebody moved on would mark one repository's branches
+   with another repository's counts, and the mark is what a person then acts on.
+
+   `loading` is deliberately untouched, for `loadBranchList`'s reason: two
+   functions setting one boolean means whichever finishes first clears it under
+   the other.
+
+   A failure is quiet. `vcs_tracking` refuses nothing, so reaching the catch
+   means the call itself failed — and a panel that shouted about it would be
+   shouting about a mark, on a machine that may simply have no remote. */
+async function loadTracking() {
+  const { project, selected } = vcsState
+  if (!selected) {
+    vcsState.tracking = {}
+    return
+  }
+  try {
+    const records = await invoke('vcs_tracking', { repo: selected })
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    vcsState.tracking = Object.fromEntries(records.map((record) => [record.branch, record]))
+  } catch (err) {
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    console.error('[vcs] reading upstreams failed:', err)
+    vcsState.tracking = {}
   }
 }
 
@@ -513,6 +555,7 @@ function reset() {
   vcsState.selected = null
   vcsState.tree = null
   vcsState.branches = []
+  vcsState.tracking = {}
   vcsState.error = null
   vcsState.writeError = null
   /* A conflict belongs to a repository of the project being left, and there is
