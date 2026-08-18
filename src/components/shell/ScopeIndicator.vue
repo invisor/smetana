@@ -10,7 +10,16 @@ const props = defineProps({
   repo: { type: String, required: true },
   worktree: { type: String, default: '' },
   branch: { type: String, default: '' },
-  dirtyCount: { type: Number, default: 0 },
+  /* `null` and deliberately not `0`, the way `git/SectionHeader.vue` declares
+     its own count: a working tree that could not be read has an unknown number
+     of uncommitted files, which is the opposite fact to a clean one, and
+     `stores/vcs.js` says so by handing over `null`. Both come out as no icon
+     and no number here — the difference is that nothing in this component ever
+     claims a repository is tidy on the strength of not knowing. */
+  dirtyCount: { type: Number, default: null },
+  /* Zero, because this one is never unknown: the store counts sessions and
+     start tickets it is already holding, and there is no read behind it that
+     could fail. */
   agentsActive: { type: Number, default: 0 },
   notifications: { type: Number, default: 0 }
 })
@@ -41,6 +50,19 @@ const truncate = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'elli
 const counter = (color) => ({ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', color })
 
 const scopeName = computed(() => props.worktree || props.branch)
+
+/* The counters' tooltips. Both were glued together with a plural noun and
+   said "1 uncommitted files" for the commonest case there is, which nobody saw
+   while the numbers were a fixture holding 3 and 2 — the bell below had the
+   same fault and was fixed for the same reason. Neither label is ever drawn
+   over a count of zero: the counter itself is hidden then, so there is no third
+   case to word. */
+const dirtyLabel = computed(() =>
+  props.dirtyCount === 1 ? '1 uncommitted file' : `${props.dirtyCount} uncommitted files`
+)
+const agentsLabel = computed(() =>
+  props.agentsActive === 1 ? '1 agent running' : `${props.agentsActive} agents running`
+)
 
 /* The bell's name, and the tooltip over it. It used to say "unread", which is a
    ledger this app deliberately does not keep — a notification here is derived
@@ -79,12 +101,12 @@ const badgeStyle = {
     </span>
     <span v-if="branch && worktree" :style="{ color: 'var(--text-muted)' }">@{{ branch }}</span>
 
-    <Tooltip v-if="dirtyCount > 0" :label="`${dirtyCount} uncommitted files`">
+    <Tooltip v-if="dirtyCount > 0" :label="dirtyLabel">
       <span :style="counter('var(--git-modified)')">
         <Icon name="file-pen" :size="12" />{{ dirtyCount }}
       </span>
     </Tooltip>
-    <Tooltip v-if="agentsActive > 0" :label="`${agentsActive} agents running`">
+    <Tooltip v-if="agentsActive > 0" :label="agentsLabel">
       <span :style="counter('var(--attn-live)')">
         <Icon name="bot" :size="12" />{{ agentsActive }}
       </span>

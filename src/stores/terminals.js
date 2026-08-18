@@ -300,6 +300,31 @@ export const agentRows = computed(() => [
   }))
 ])
 
+/* How many of this project's agents are alive — the scope bar's agents counter,
+   and the list above minus the rows that have finished.
+
+   `exited` is the one state that does not count. A session that fell over
+   yesterday is still a row somebody may want to read, which is why it stays in
+   the list at all, but counting it as running is how a number in the bar stops
+   meaning anything. Every other state counts, `needs-you` among them: an agent
+   waiting for an answer is the reason a person is looking at this bar, and a
+   counter that dropped by one the moment attention was demanded would be
+   pointing away from the thing it exists to point at.
+
+   Starts count as well, through the same `visibleStarts` the rows use rather
+   than a second copy of the rule — a spawn takes about a second, the row is
+   drawn for that second, and a counter that waited for the worker would
+   disagree with the list beside it for exactly as long. Sessions need no
+   filter of their own: the list already holds this project's and nothing else,
+   and it holds all of its tasks at once, so there is nothing to narrow.
+
+   Deliberately a count and not `agentRows.value.length`: the rows carry
+   captions and elapsed times, `now` ticks every thirty seconds, and this number
+   has no business being recomputed by the clock. */
+export const liveAgentCount = computed(
+  () => terminalState.sessions.filter((s) => s.state !== 'exited').length + visibleStarts().length
+)
+
 /* Exactly one output subscriber exists at a time — the terminal view. A Set,
    not a single field, so unsubscribing never depends on who mounted last. */
 const sinks = new Set()

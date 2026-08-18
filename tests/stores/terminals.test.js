@@ -883,3 +883,76 @@ describe('elapsed time', () => {
     expect(stores.terminals.formatElapsed(-90 * 60_000)).toBe('0m')
   })
 })
+
+/* The scope bar's second counter, which is this list minus the rows that have
+   finished. Three cases carry the whole rule: what stops counting, what keeps
+   counting when it would be easiest to drop, and whose starts count. */
+describe('the live agent count in the scope bar', () => {
+  it('an agent that has exited is a row to read, not one that is running', async () => {
+    const { stores, emit, nextTick } = await ready()
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+
+    await emit('terminal:state', session({ state: 'exited', exitCode: 0 }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.sessions).toHaveLength(1)
+    expect(stores.terminals.liveAgentCount.value).toBe(0)
+  })
+
+  /* The one state it would be tempting to drop, and the reason the rule is "not
+     exited" rather than "running": an agent waiting for an answer is why
+     somebody is looking at this bar at all, and a counter that fell by one on a
+     demand for attention would point away from it. */
+  it('an agent waiting for a person still counts', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 2, state: 'idle' }))
+    await nextTick()
+
+    expect(stores.terminals.liveAgentCount.value).toBe(2)
+  })
+
+  /* Starts count from the moment their row is drawn — a spawn takes about a
+     second and the counter must not disagree with the list beside it for that
+     second — but only the ones that belong to the project on screen, which is
+     the same filter `agentRows` applies and not a second copy of it. */
+  it('a start counts before the worker answers, and only in its own project', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    stores.terminals.createSession('/other', { kind: 'bare' })
+    expect(stores.terminals.terminalState.starting).toHaveLength(1)
+    expect(stores.terminals.agentRows.value).toHaveLength(1)
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+
+    stores.terminals.createSession('/p', { kind: 'bare' })
+    expect(stores.terminals.agentRows.value).toHaveLength(2)
+    expect(stores.terminals.liveAgentCount.value).toBe(2)
+  })
+
+  /* The counter and the list, tied together in one assertion, because what the
+     bar promises is the list minus the rows that have finished and the two are
+     only equal through `toUiState`: `exited` is the one session state it maps
+     onto `done` and `failed`, and the counter skips exactly that state. A
+     seventh state mapped onto a finished-looking row tomorrow would move the
+     list and leave the counter behind, silently, and the arithmetic here is the
+     only thing that would notice. */
+  it('the count is the list minus the rows that have finished', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    await emit('terminal:state', session({ id: 2, state: 'exited', exitCode: 0 }))
+    await emit('terminal:state', session({ id: 3, state: 'exited', exitCode: 1 }))
+    await emit('terminal:state', session({ id: 4, state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 5, state: 'idle' }))
+    await nextTick()
+    stores.terminals.createSession('/p', { kind: 'bare' })
+
+    const rows = stores.terminals.agentRows.value
+    expect(rows.map((r) => r.state)).toEqual(['running', 'done', 'failed', 'needs-you', 'ready', 'running'])
+    expect(stores.terminals.liveAgentCount.value).toBe(
+      rows.filter((r) => r.state !== 'done' && r.state !== 'failed').length
+    )
+    expect(stores.terminals.liveAgentCount.value).toBe(4)
+  })
+})

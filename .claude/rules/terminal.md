@@ -200,6 +200,15 @@ That register is a `Set` and every subscriber gets every chunk: a single field w
 unsubscribing to who mounted last, exactly the ordering the rest of this subsystem refuses to depend
 on.
 
+`liveAgentCount` reads that same session state and is the scope bar's agents counter
+(`.claude/rules/git-head.md`): the agent list minus the rows that have finished, which is every
+session whose state is not `exited`, plus the starts `visibleStarts` says belong to this project.
+`needs-you` counts, which is the whole decision: an agent waiting for an answer is why somebody is
+looking at the bar, and a counter that fell by one the moment attention was demanded would point away
+from the thing it exists to point at. It is a count of its own rather than `agentRows.value.length`
+because those rows carry elapsed times off a thirty-second clock, and this number has no business
+being recomputed by it.
+
 `activeId` looks like it names one thing and actually names two, and conflating them was a real
 defect: "which agent the human has selected" has to survive leaving the terminal tab, because
 `AgentList.vue` highlights its row from this same field, while "which session the worker is streaming

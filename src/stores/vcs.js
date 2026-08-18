@@ -12,7 +12,7 @@
    panel's own refresh button — the same answer the file tree gives. The price
    is named rather than discovered: while an agent works in the repository, this
    list is as stale as the tree beside it is. */
-import { reactive } from 'vue'
+import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 /* The scope bar's branch is git.js's, read straight off `HEAD` with no process
    — and a checkout here is the one moment in the app that changes it from the
@@ -135,6 +135,33 @@ export const vcsState = reactive({
   fetching: false,
   loading: false
 })
+
+/* How many files in the selected repository are uncommitted — the scope bar's
+   uncommitted-files counter. Every kind of change counts as one file:
+   staged, unstaged, untracked and conflicted alike, because that is exactly
+   what the panel's own change list draws, so the number in the bar is the
+   number of rows in the panel and a person can check it by looking rather than
+   by counting in their head. A counter that quietly left the untracked files out
+   would be a difference nobody could explain without a tooltip.
+
+   `null`, never `0`, for a tree that could not be read — the rule `tree` itself
+   keeps above. An unread tree and a clean one are opposite facts, and the bar
+   answers a clean one by drawing nothing and an unread one by drawing nothing
+   either; what it must not do is claim a repository with unknown contents is
+   tidy. The counter is hidden for anything not greater than zero, so `null` is
+   all it takes.
+
+   It is the *selected* repository and not the whole project, which is a
+   decision rather than an omission: a sum over every repository means a
+   `git status` apiece, with its own freshness and its own failures, and this
+   number is meant to be the one already on screen. As fresh as that list and
+   no fresher — there is no watcher here (see the header), so while an agent
+   works in the repository this ages with the tree beside it.
+
+   A computed in the store rather than in the view for the mechanical reason
+   `runs.js` keeps `needsSetup` here: no test in this repository can reach a
+   `.vue` file, so a rule living in one is covered by nothing. */
+export const dirtyCount = computed(() => (vcsState.tree ? vcsState.tree.changes.length : null))
 
 /* A rejection becomes something the panel can both branch on and print. The
    message is never rewritten: for a non-zero git it is git's own stderr, and
