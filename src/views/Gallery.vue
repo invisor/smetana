@@ -431,6 +431,14 @@ const TRACKING = {
   old: { upstream: 'origin/old', ahead: 0, behind: 0, gone: true }
 }
 
+/* The list the two caption buttons are checked against: every name in it has a
+   record in `TRACKING`, so which branch a frame is *on* is the whole of what
+   changes between them — behind, ahead and behind at once, never pushed, or an
+   upstream deleted on the remote. `current` is set per frame rather than here,
+   because the pair in the caption is about that one branch and nothing else. */
+const REMOTE_BRANCHES = ['feat/worktree-rename', 'develop', 'main', 'spike', 'old']
+const onBranch = (name) => REMOTE_BRANCHES.map((branch) => ({ name: branch, current: branch === name }))
+
 /* The same for the folded list, where the point is the heading rather than the
    row: `fix/legacy/depot-import` is behind, and it is inside two folded
    folders, so the bare `↓` has to reach the heading of each. */
@@ -1470,6 +1478,85 @@ const menuTargetStyle = {
               :repos="[]"
               :tree="null"
               :error="{ kind: 'noGit', message: 'Smetana looked for git on your PATH and found nothing.' }"
+            />
+          </Panel>
+        </div>
+      </div>
+      <!-- The Branches caption with its two buttons, which is the one place in
+           the app the remote can be reached from — and the states are the
+           branch the repository is *on*, since that is what both of them are
+           about. What to check: that neither button crowds the count out of the
+           caption, that the refused one is legible rather than invisible, and
+           that its reason opens on hover from the wrapper around it rather than
+           from the disabled control itself. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <!-- The everyday pair: three commits waiting and nothing of ours to
+             send, so Pull carries the count and Push is refused. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'feat/worktree-rename', detached: null, changes: CHANGES }"
+              :branches="onBranch('feat/worktree-rename')"
+              :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+        <!-- Diverged: both live, both with a number, and the row for the branch
+             they are about carries the same two marks. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'main', detached: null, changes: CHANGES }"
+              :branches="onBranch('main')"
+              :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+        <!-- A branch nobody has pushed — the ordinary state of one cut in this
+             very panel. Push becomes "Publish branch" and Pull is refused:
+             there is nothing there yet to pull from. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'spike', detached: null, changes: CHANGES }"
+              :branches="onBranch('spike')"
+              :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+        <!-- A run going: both refused by the same verdict that mutes the rows,
+             and both say so in `gitActions.js`'s own sentence. A fetch is still
+             allowed underneath — it writes no tree — but nothing here shows
+             that, because nothing on screen ever does. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'main', detached: null, changes: CHANGES }"
+              :branches="onBranch('main')"
+              :tracking="TRACKING"
+              :actions="RUN_GOING"
+            />
+          </Panel>
+        </div>
+        <!-- A detached HEAD draws neither button at all: there is no branch for
+             an upstream to be about, and two dead controls say less than the
+             empty caption does. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: null, detached: 'a1b2c3d', changes: CHANGES }"
+              :branches="onBranch(null)"
+              :tracking="TRACKING"
             />
           </Panel>
         </div>
