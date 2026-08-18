@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use super::model::{Branch, ChangeKind, MergeOutcome, OpKind, Repo, VcsError, WorkingTree};
+use super::model::{Branch, ChangeKind, MergeOutcome, OpKind, Repo, Tracking, VcsError, WorkingTree};
 use super::run::Attempt;
 use super::{model, repos, run};
 use crate::agents::oneshot::{self, OneshotError};
@@ -64,6 +64,36 @@ fn working_tree(repo: &Path) -> Result<WorkingTree, VcsError> {
 #[tauri::command]
 pub async fn vcs_branches(repo: String) -> Vec<Branch> {
     branch_list(Path::new(&repo))
+}
+
+/// Where every local branch stands against its upstream, in one process.
+///
+/// **Apart from `vcs_branches` on purpose.** That command's own documentation
+/// promises two things this would end: it spawns nothing at all, and it can
+/// never refuse. Both are load-bearing — the first is why the branch list is
+/// cheap enough for every window focus, the second is why a project holding a
+/// folder that is not a repository still draws a list. So the counts arrive as
+/// a second answer and the front end merges the two by name; a branch in one
+/// and not the other simply draws no mark until the next refresh, which is the
+/// freshness this whole panel already promises.
+///
+/// Never a refusal, for the same reason `vcs_branches` never refuses: a folder
+/// git cannot read has no upstreams to report, and the status read beside it is
+/// what puts a message on screen.
+///
+/// `%(upstream:track,nobracket)` rather than `git status`'s `# branch.ab`: that
+/// line answers for the current branch alone, and the mark this feeds is drawn
+/// on every row.
+#[tauri::command]
+pub async fn vcs_tracking(repo: String) -> Vec<Tracking> {
+    tracking(Path::new(&repo))
+}
+
+fn tracking(repo: &Path) -> Vec<Tracking> {
+    const FORMAT: &str = "%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)";
+    run::git(repo, &["for-each-ref", "--format", FORMAT, "refs/heads"])
+        .map(|out| model::parse_tracking(&out))
+        .unwrap_or_default()
 }
 
 /// Switch the repository to a branch it already has.
@@ -182,6 +212,70 @@ pub async fn vcs_merge(repo: String, branch: String) -> Result<MergeOutcome, Vcs
 #[tauri::command]
 pub async fn vcs_rebase(repo: String, onto: String) -> Result<MergeOutcome, VcsError> {
     attempt(Path::new(&repo), &["rebase", &onto])
+}
+
+/// Bring the remote's refs up to date, so the marks mean something.
+///
+/// `--prune`, so a branch deleted on the remote reads as `gone` rather than as
+/// a branch level with an upstream that is not there any more.
+///
+/// This writes remote-tracking refs and touches neither the working tree nor
+/// the index, which is why the panel treats it as a read: it stays live while a
+/// run holds the three writes, exactly as the commit box's suggest button does.
+#[tauri::command]
+pub async fn vcs_fetch(repo: String) -> Result<(), VcsError> {
+    run::git_network(Path::new(&repo), &["fetch", "--prune"])?;
+    Ok(())
+}
+
+/// Bring the upstream's commits into the branch this repository is on.
+///
+/// `--no-rebase` is explicit and is the point of naming it: with `pull.rebase`
+/// set in somebody's config the same button would merge in one repository and
+/// rebase in the next, and the conflict dialog would then offer
+/// `git merge --abort` for a rebase. The panel's own Rebase item is one
+/// right-click away for anybody who wants that.
+///
+/// `--no-edit` for the reason `vcs_merge` has it: there is no editor here, and
+/// git waiting on one is a hang.
+///
+/// A conflict is an outcome and not a failure, read off the tree rather than
+/// off the message — `attempt_with` is the whole of that rule, shared with
+/// `vcs_merge`, so a conflicted pull reaches `ConflictModal` as
+/// `OpKind::Merge`, whose abort is the right one.
+#[tauri::command]
+pub async fn vcs_pull(repo: String) -> Result<MergeOutcome, VcsError> {
+    attempt_with(
+        Path::new(&repo),
+        &["pull", "--no-rebase", "--no-edit"],
+        run::git_network_attempt,
+    )
+}
+
+/// Send this branch's commits to its upstream.
+///
+/// **Never `--force`, and never `--force-with-lease`.** The refusal force would
+/// drive over is the one protecting somebody else's commits, and a rejected
+/// push comes back in git's own words, which already name the fix.
+///
+/// `set_upstream` is the one branch: `git push` alone refuses a branch that has
+/// no upstream, which is the ordinary state of a branch cut in this very panel.
+/// The front end decides it from the tracking record it is already drawing —
+/// and a stale decision is harmless in both directions, since `-u` against a
+/// branch that has since gained an upstream sets the same one again, and a
+/// plain push of a branch that has since lost it is refused in git's words.
+/// `origin` is named here because a branch with no upstream has no other answer
+/// to give, and a repository whose remote is called something else is told so
+/// by git.
+#[tauri::command]
+pub async fn vcs_push(repo: String, set_upstream: bool) -> Result<(), VcsError> {
+    let dir = Path::new(&repo);
+    if set_upstream {
+        run::git_network(dir, &["push", "--set-upstream", "origin", "HEAD"])?;
+    } else {
+        run::git_network(dir, &["push"])?;
+    }
+    Ok(())
 }
 
 /// Put the tree back exactly as it was before the operation that conflicted.
@@ -321,8 +415,21 @@ fn describe(repo: &Path) -> Result<String, VcsError> {
 /// a status nobody asked for: the first one is what they can act on, and an
 /// unreadable tree is not evidence about what is unmerged in it.
 fn attempt(repo: &Path, args: &[&str]) -> Result<MergeOutcome, VcsError> {
+    attempt_with(repo, args, run::git_attempt)
+}
+
+/// The tree read before, the operation, the tree read after — and
+/// `new_conflicts` deciding whether this operation is what conflicted. The
+/// runner is a parameter because a pull does all of this over the network and
+/// none of the reasoning changes: `git pull`'s non-zero exit is exactly as
+/// ambiguous as `git merge`'s.
+fn attempt_with(
+    repo: &Path,
+    args: &[&str],
+    run: fn(&Path, &[&str]) -> Result<Attempt, VcsError>,
+) -> Result<MergeOutcome, VcsError> {
     let before = working_tree(repo).ok();
-    match run::git_attempt(repo, args)? {
+    match run(repo, args)? {
         Attempt::Done => Ok(MergeOutcome::Clean),
         Attempt::Refused(refusal) => {
             let files = working_tree(repo)
