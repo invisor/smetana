@@ -344,3 +344,156 @@ is about a *task's* worktrees, its gates and its fast-forward — so the instruc
 rebase, never `--abort`. That last is a named refusal rather than a silence, because an agent that
 tidies up by aborting has undone the only thing it was asked to do and leaves a clean tree behind,
 which is the one way this fails that looks like success.
+
+## The remote: what is behind, and the two verbs that reach it
+
+**Network is the second way this module runs git, and it is a second function rather than a flag.**
+`run.rs` deliberately has no deadline anywhere else, and that is recorded as a decision rather than
+an omission: a commit hook that hangs was started by somebody watching the screen, and killing their
+build at sixty seconds would be this app inventing a policy for a repository it knows nothing about.
+A network call is the opposite case in both halves — nobody pressed it (a window came back into
+focus) and there is nobody for git to ask (there is no terminal on this process, so a prompt for a
+password is at best a dialog from some other program and at worst a wait with no end). So
+`git_network` and `git_network_attempt` add `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=never`,
+`GIT_SSH_COMMAND="ssh -o BatchMode=yes"` and a **60 second deadline with a kill behind it** — the
+same poll-and-kill loop `agents::oneshot` already runs, which is the one place in this tree that had
+put a ceiling on a child. `StrictHostKeyChecking` is deliberately left alone: what a machine trusts
+is not this function's business. Everything local — `status`, `merge`, `commit`, the branch reads —
+goes on running through `git`/`git_attempt` with no ceiling at all.
+
+An expired deadline is **`VcsError::Timeout`, its own variant with its own `kind()` of `"timeout"`**,
+and never a `Git { stderr }` with an empty message. git said nothing; this app decided, and the
+sentence says so ("Smetana stopped git after 60 seconds"). It cannot reach the editor's own table of
+refusals (`ERRORS` in `stores/files.js`, which falls back silently to "Could not read this file"),
+because the only commands that can produce it are the three networked ones and no file read is among
+them — a diff is `vcs_file_at_head` through the local runner.
+
+**Where a branch stands against its upstream is `vcs_tracking`, a separate command, and folding it
+into `vcs_branches` would end two documented properties of that one.** `vcs_branches` spawns no
+process at all (three file reads through `git.rs`), which is why the branch list can be re-read on
+every window focus, and it cannot refuse, which is why a project holding a folder that is not a
+repository still draws a list. One `git for-each-ref --format='%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)' refs/heads`
+answers for the whole list in one process, and the front end merges the two answers by name — a
+branch in one and not the other draws no mark until the next refresh, which is the freshness this
+panel already promises everywhere else. Rejected: the `# branch.ab` line of `git status
+--porcelain=v2 --branch`, which is already parsed and free, and answers only about the current
+branch, where the mark is wanted on every row. The parse is a pure function in `model.rs` with its
+tests, tolerant in the direction `parse_status` is: an unrecognised `track` string counts as zero
+rather than raising, because this runs against whatever git is on somebody's machine and a row with
+no mark beats a panel with no rows. A newline is a safe record separator here where it would not be
+for a path — `git check-ref-format` forbids control characters in a ref name.
+
+**"There is something to pull" is `behind > 0` against that branch's own upstream, and nothing
+else.** Not "origin has moved on": a branch with no upstream is not orange (there is nothing to pull
+from), and neither is one whose upstream was deleted on the remote (`gone`), where the honest state
+is that the other end is gone rather than ahead. `gone` is its own field rather than an absent
+`upstream` because the two are opposite facts — never pushed against pushed and then deleted — and
+the panel refuses a pull for different reasons in different words.
+
+**The orange is `--git-modified`, the token the file tree and the change list one section above
+already draw "differs from what is committed" in**; "differs from origin" is the same sentence one
+step further out, and borrowing it is what keeps the panel one vocabulary. Deliberately **not**
+`--status-needs-you`: that hue is budgeted at one or two rows on a screen, and a branch list can
+hold ten branches that are behind, so spending the loud colour here would end the rule that loud
+means a person is needed. And **never colour alone** — `↓N` is drawn beside the name in the same
+token, so the mark survives a monochrome screen and anybody who does not separate those two hues.
+Ahead is `↑N` in the neutral `--type-plain-fg` and does **not** colour the row: what was asked for
+was the branch with something to bring in, and colouring both would leave the two indistinguishable
+at a glance. A branch both ahead and behind carries both marks and takes the colour. The counts keep
+their own token while a run mutes the rows — they are a fact about the remote rather than an offer —
+but the *name* gives its colour up with the row, since one name in orange over a panel nobody may
+press would be saying a press was possible.
+
+**A folded folder carries a bare `↓` for the branches it is hiding**, with no number of its own.
+Without it the feature would be invisible in exactly the repositories that need it — one `feature/`
+folder holding thirty branches, folded, which is the ordinary state of this list. No number, because
+the heading already carries the count of what it holds and a second number beside it reads as a
+subtotal of the first; what tells the two apart is that the count is `--text-muted` and the arrow is
+not.
+
+**Pull and Push belong to the branch the repository is on, so they live in the Branches caption and
+not in a row's menu**, which is where every other write in this panel lives. On nine rows out of ten
+the item would be refused, and a menu here answers about the row it was opened on. The caption also
+gives these two the one thing merge and rebase do without: something on screen saying they exist.
+The structural cost is real — `SectionHeader.vue` **is** a `<button>`, and a button inside a button
+is invalid HTML that also folds the section on the way through — so the caption grew an `actions`
+slot drawn **beside** the caption button inside a wrapper, and `--row-h`, `flexShrink: 0` and the
+`divided` hairline moved onto that wrapper, because the wrapper is the element `GitPanel` measures a
+row by (`sectionHeights.js` is untouched, and a drag still stops on a row boundary). Whether the
+slot was filled is a **function argument rather than a `computed` over `useSlots()`**: a slot's
+presence is not a reactive dependency, so a cached answer would go on insetting a caption whose
+controls have since gone — which happens on every detached HEAD, where neither button is drawn at
+all.
+
+The two controls are `Button` in `ghost`, icon-only, each inside its own `Tooltip`, and that is
+**deliberately not `IconButton`**, the icon-only control everywhere else in this app. `IconButton`
+carries a `Tooltip` of its own around its `label`, and a refused button needs a wrapper tooltip — a
+native disabled button raises no pointer events of its own, so an explanation living inside it is
+the one thing a person cannot reach. Nested, the two opened together on hover: the name above the
+glyph and the reason beside it, two panels over a caption 152 pixels wide. So the wrapper is the
+only tooltip, in both states — the control's own name when it may be pressed, the sentence saying
+why when it may not, with the 400 ms delay `Tooltip`'s own note reserves for prose somebody is
+crossing on the way to something else. The accessible name `IconButton` would have enforced is
+passed by hand as `aria-label`.
+
+What either button says and whether it may be pressed is `components/git/tracking.js` — pure,
+tested, of the `gitActions.js` family, for the reason that family exists. It does not repeat
+`gitActions.js`: whether this panel may write at all is that file's one verdict and arrives here as
+an argument, since a second copy of a rule is the half that drifts. **Pull stays live wherever there
+is an upstream, including when nothing is behind** — asking the remote and finding nothing is a
+legitimate press, and it is how somebody makes the count they are reading current. **Push is refused
+when the branch is level**, and it has a second shape rather than a second control: a branch with no
+upstream — the ordinary state of one cut by `New branch from this` — is published, which is
+`git push --set-upstream origin HEAD` and the word **Publish branch** on the control, since "push"
+for a branch the remote has never heard of says less than what is about to happen. A branch whose
+upstream was deleted is the same act. Which of the two forms it is, is decided on the front end from
+the tracking record the button was drawn from, and a stale answer is harmless both ways: `-u`
+against a branch that has since gained an upstream sets the same one again, and a plain push of one
+that has since lost it comes back refused in git's own words. **Never `--force`, and never
+`--force-with-lease`** — the same default `vcs_checkout` documents, and the argument is stronger
+here, since the refusal force would drive over is the one protecting somebody else's commits.
+
+**Pull is a merge, and the abort follows from that.** `vcs_pull` runs `git pull --no-rebase
+--no-edit` through the very machinery `vcs_merge` uses — the tree read before and after,
+`model::new_conflicts` deciding, `MergeOutcome::Conflict` opening the existing `ConflictModal` with
+`OpKind::Merge`, whose `git merge --abort` is the call that puts this tree back. `--no-rebase` is
+named explicitly rather than left to the config: with `pull.rebase` set in somebody's, one button
+would merge in one repository and rebase in the next, and the dialog would offer the abort of an
+operation that never started. Rejected: `--ff-only`, which is simplest and cannot conflict, but
+leaves a diverged branch with no move at all inside the app — there are no remote branches in this
+list to merge from — and `--rebase`, whose stopped state is a detached HEAD, which is the state this
+panel draws worst. The store records the conflict with `op: 'merge'` for the same reason, since
+`OpKind` knows two words and `pull` is not one of them.
+
+**Freshness is a background `git fetch --prune`, throttled and silent.** It goes out on window focus
+(from `catchUp`, where the file tree and the branch list already catch up) and on the project
+change, and the project half is keyed on **the repository the panel settled on** rather than on the
+project path: which repository a project shows is decided an invoke later, so a fetch fired on the
+path itself would ask about the repository being left and stamp that one's throttle. Watching the
+selection covers a person picking another repository too, which is the same question one row along.
+The store holds the cost down — the setting first, then once every five minutes per repository, then
+one call in flight per repository, since a second would queue behind a network call that may run for
+a minute. **Nothing waits for it**: the panel draws from what is already known, and when the answer
+lands the tracking read is repeated and the marks change underneath. The interval is a constant and
+not a setting, because a person can reasonably decide whether this happens at all and cannot
+reasonably decide whether four minutes beats five.
+
+**A background fetch that fails says nothing on screen**, sets neither `error` nor `writeError`, and
+goes to the console alone. The block over the branch list reads "Git refused this operation" and
+there was no operation — nobody pressed anything — so a laptop with no network would spend all day
+accusing the panel of a failure that is the machine's ordinary state. The stamp is written **even on
+failure**, so an unreachable remote is asked once every five minutes rather than on every focus.
+A pressed Pull or Push is the opposite and is loud like every other write here: it goes through the
+same `write` helper, takes the same `busy`, and its refusal lands in the same block carrying its own
+`op`. Fetch also stays **live under a run** while Pull and Push are dimmed with the rest: it writes
+remote-tracking refs and touches neither the working tree nor the index, which is the argument that
+already keeps the commit box's sparkle alive under a batch.
+
+Whether any of it happens at all is one setting, the root `git.autoFetch` in `settings.json`,
+shipped on, with a switch on the settings window's General tab (`.claude/rules/settings.md`). It
+exists for a metered connection, a VPN that is not always up and a key with a passphrase that would
+otherwise fail on every sweep. With it off the app makes no network call of its own at all, and both
+buttons go on working when pressed. In `npm run dev` the marks come from `mockBackend.js`, which
+answers `vcs_tracking` with one branch behind, one ahead, one level and one nobody has pushed;
+`vcs_fetch` is deliberately **not** answered there, so the browser exercises the silent failure
+rather than pretending a remote was reached.

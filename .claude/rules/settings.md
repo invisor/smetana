@@ -20,8 +20,8 @@ thin commands.
 
 At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
 state and width for each side, and `gitSections` beside them), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
-start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, and `kanban`, how
-the board is drawn. Below that, `openProjects` is the list of projects the window has open,
+start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, `kanban`, how
+the board is drawn, and `git`, the one thing the app does on its own initiative. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, active tab, selected task, selected path,
 `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`, `columnOrder`,
@@ -57,6 +57,22 @@ whose two closed lists are written out there and again in `model.rs`: the doubli
 the storage ladder carry, with the same obligation — what the front end offers must be a subset of
 what Rust accepts, or the value loses itself on the next save with nothing on screen to say so.
 
+`git` is the second global section and holds one field, `autoFetch`, **shipped on**. It is the
+answer to a question no other setting here asks: whether this app may open a socket by itself. The
+Git panel fetches from the selected repository's remote when the window comes back into focus and
+when the project changes, throttled to once every five minutes per repository, and this switch is
+whether any of that happens at all (`.claude/rules/vcs-panel.md`). Global rather than under a
+project, on `layout.gitSections`' argument rather than `branchFolders`': what it is about is a
+connection and a person — a metered link, a VPN that is not always up, an SSH key with a passphrase
+that would fail on every sweep — and none of those is a fact about one repository. The interval
+beside it is deliberately **not** a field: a person can reasonably decide whether their machine
+reaches the network on its own, and cannot reasonably decide whether four minutes is better than
+five, so a number here would be a question with no way to answer it. Default on, because a feature
+that does nothing until somebody finds a switch is a feature nobody finds — and the two other copies
+of that default, `defaults()` in `stores/settings.js` and `view` in `SettingsWindow.vue`, have to
+agree with `GitSettings::default()` or the switch draws the opposite of what the app is doing for as
+long as it takes the first answer to arrive.
+
 The per-project four are per project for the reason the rest are: a status has no meaning in another
 repository's column order, a branch name has none in another repository, a repository inside one
 project is not one inside another, and the attachment folder the bell weighs is a different folder
@@ -84,7 +100,7 @@ last edit rather than the app.
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
 `appearance.theme`, `appearance.uiFontSize`, `editor.fontSize`, `agent`, the two languages beside it,
-and the four `kanban` fields. Density is not among them, deliberately: nothing has asked for it yet,
+the four `kanban` fields and `git.autoFetch`. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
 still override the first two for one run and are deliberately **not** written back — one visit to the
 dev server must not repaint the app forever. `?view=gallery` neither reads nor writes.
