@@ -15,6 +15,7 @@
 import { computed, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import { useInteractive } from '../core/interactive.js'
+import { repoLabel } from './repoLabel.js'
 
 const props = defineProps({
   repos: { type: Array, default: () => [] },
@@ -115,7 +116,7 @@ const empty = computed(() => props.repos.length === 0)
         :size="MARK"
         :style="{ flex: 'none', color: repo.path === selected ? 'var(--text-primary)' : 'var(--text-muted)' }"
       />
-      <span :style="nameStyle">{{ repo.name }}</span>
+      <span :style="nameStyle">{{ repoLabel(repo) }}</span>
       <span :style="{ flex: 1 }" />
       <span :style="branchBox">
         <Icon name="git-branch" :size="MARK" :style="{ flex: 'none' }" />
