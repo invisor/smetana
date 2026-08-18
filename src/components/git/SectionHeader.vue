@@ -78,6 +78,15 @@ const { hover, active, handlers } = useInteractive()
 const rowStyle = (hasActions) => ({
   display: 'flex',
   alignItems: 'center',
+  /* The controls in the slot are siblings in this flex, and with nothing
+     between them two of them meet edge to edge: a pair whose refused state is
+     a filled, bordered chip then fuses into one slab with a 2px seam down the
+     middle and reads as a segmented control rather than as two verbs — the
+     same two hairlines meeting this file's `divided` note is about. One step,
+     the smallest there is, since these are controls in a row and not blocks.
+     Harmless on a caption with an empty slot: a flex with one child has
+     nowhere to put a gap. */
+  gap: 'var(--space-1)',
   width: '100%',
   height: 'var(--row-h)',
   flexShrink: 0,
