@@ -82,4 +82,16 @@ since the log directory was not there either. Live-checked against this reposito
 worktree: the same list as the main checkout, in the same reflog order, with HEAD still reading
 per-worktree.
 
-The counters next to it — uncommitted files, running agents — are still fixture.
+The two counters next to it are live now, and neither of them is this store's. The uncommitted files
+are `dirtyCount` in `stores/vcs.js` — the length of the change list the Git panel draws for the
+repository selected there, so the number in the bar is the number of rows in the panel. The running
+agents are `liveAgentCount` in `stores/terminals.js` — the sessions that have not exited, plus the
+starts the worker has not answered for yet. Both are computeds in their stores rather than in
+`DesktopApp.vue`, which is a rule about testability and not about tidiness: no test in this
+repository can reach a `.vue` file.
+
+One consequence belongs here rather than there, because it is about this bar: **the branch and the
+file count can be about different repositories.** The branch is the project root's HEAD, read here;
+the count is whichever repository the Git panel has selected, which in a project of several is often
+not the root. It was accepted knowingly — a count summed over every repository would be a `git status`
+apiece, and the number would then match no list on screen at all.

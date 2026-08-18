@@ -10,6 +10,10 @@ const props = defineProps({
   repo: { type: String, required: true },
   worktree: { type: String, default: '' },
   branch: { type: String, default: '' },
+  /* Either counter may arrive as `null` — "nobody knows yet", which is not the
+     same fact as zero and is what the stores say when the working tree could
+     not be read. Both are drawn only above zero, so `null` and `0` both come
+     out as no icon and no number, and neither invents a tidy repository. */
   dirtyCount: { type: Number, default: 0 },
   agentsActive: { type: Number, default: 0 },
   notifications: { type: Number, default: 0 }
@@ -41,6 +45,19 @@ const truncate = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'elli
 const counter = (color) => ({ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', color })
 
 const scopeName = computed(() => props.worktree || props.branch)
+
+/* The two counters' tooltips. Both were glued together with a plural noun and
+   said "1 uncommitted files" for the commonest case there is, which nobody saw
+   while the numbers were a fixture holding 3 and 2 — the bell below had the
+   same fault and was fixed for the same reason. Neither label is ever drawn
+   over a count of zero: the counter itself is hidden then, so there is no third
+   case to word. */
+const dirtyLabel = computed(() =>
+  props.dirtyCount === 1 ? '1 uncommitted file' : `${props.dirtyCount} uncommitted files`
+)
+const agentsLabel = computed(() =>
+  props.agentsActive === 1 ? '1 agent running' : `${props.agentsActive} agents running`
+)
 
 /* The bell's name, and the tooltip over it. It used to say "unread", which is a
    ledger this app deliberately does not keep — a notification here is derived
@@ -79,12 +96,12 @@ const badgeStyle = {
     </span>
     <span v-if="branch && worktree" :style="{ color: 'var(--text-muted)' }">@{{ branch }}</span>
 
-    <Tooltip v-if="dirtyCount > 0" :label="`${dirtyCount} uncommitted files`">
+    <Tooltip v-if="dirtyCount > 0" :label="dirtyLabel">
       <span :style="counter('var(--git-modified)')">
         <Icon name="file-pen" :size="12" />{{ dirtyCount }}
       </span>
     </Tooltip>
-    <Tooltip v-if="agentsActive > 0" :label="`${agentsActive} agents running`">
+    <Tooltip v-if="agentsActive > 0" :label="agentsLabel">
       <span :style="counter('var(--attn-live)')">
         <Icon name="bot" :size="12" />{{ agentsActive }}
       </span>
