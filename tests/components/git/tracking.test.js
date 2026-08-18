@@ -92,6 +92,15 @@ describe('what a folded folder stands in for', () => {
   it('no tracking at all marks no folder', () => {
     expect(folderBehind('fix', branches, {})).toBe(false)
   })
+
+  /* The current branch is not in the fold at all — `branchTree.js` lifts it to
+     the first row — so a heading standing in for it would be marking a row
+     that is on screen with its own count beside it. */
+  it('passes over the branch the repository is on', () => {
+    const named = [{ name: 'fix/legacy/depot-import', current: true }]
+
+    expect(folderBehind('fix', named, tracking)).toBe(false)
+  })
 })
 
 describe('the two buttons in the section header', () => {

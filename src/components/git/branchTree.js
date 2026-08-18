@@ -16,6 +16,15 @@
    and the branches inside it keep the order they came in. What was worked on
    last is still at the top, whether it is a row or a heading.
 
+   **The current branch is lifted out of the tree and drawn first**, whatever
+   the reflog says and whatever folder its name puts it in. It is the row the
+   section's own Pull and Push are about and the one fact somebody opens the
+   panel to read, and a folded `feature/` heading could hide it altogether —
+   which is the state this rule exists for. It draws its whole name rather than
+   its leaf, since there is no heading above it carrying the prefix, and it is
+   left out of the tree below so the list never holds it twice; a folder that
+   held nothing else is then not drawn at all.
+
    The tree is flattened to a single list, exactly as `FileTree.vue` flattens
    its own — one `v-for` over rows carrying their own depth, rather than a
    component recursing into itself. */
@@ -82,13 +91,27 @@ function build(branches) {
  * merge and a rebase are given, while `label` is the leaf and all that is
  * drawn.
  *
+ * The current branch is the first row whatever else is true, at depth 0 and
+ * carrying `pinned` and its whole name as the label: it is the header's own
+ * subject and the answer somebody opens the panel for, and it is the one row a
+ * fold could otherwise take off the screen. It is taken out of what the tree is
+ * built from, so nothing draws it twice.
+ *
  * A folded folder leaves its branches out of the list altogether rather than
  * hiding them, which is both the height this buys back and what makes the count
  * on the heading the only thing saying they are there.
  */
 export function branchRows(branches, expanded) {
+  const list = branches ?? []
+  /* A branch with no name at all is dropped here for the reason `build` drops
+     it below — there is no row to draw for it — rather than being lifted to the
+     top as an empty one. */
+  const current = list.find((branch) => branch?.current && segments(branch?.name).length > 0)
   const open = new Set(expanded ?? [])
   const rows = []
+  if (current) {
+    rows.push({ ...current, kind: 'branch', label: current.name, depth: 0, pinned: true })
+  }
   const walk = (nodes) => {
     for (const node of nodes) {
       if (node.kind === 'branch') {
@@ -101,7 +124,7 @@ export function branchRows(branches, expanded) {
       if (isOpen) walk(children)
     }
   }
-  walk(build(branches))
+  walk(build(current ? list.filter((branch) => branch !== current) : list))
   return rows
 }
 
@@ -123,9 +146,16 @@ export function currentChain(branches) {
  *
  * **`null` and `[]` are different states**, the distinction `sectionHeights.js`
  * keeps one file over for a height nobody has dragged. `null` is "nobody has
- * chosen here" and opens the folder the repository's current branch is in, so
- * the tick saying where you are is on screen the first time the panel is
- * opened. `[]` is somebody having folded them all, and stays folded.
+ * chosen here" and opens the folder the repository's current branch is in;
+ * `[]` is somebody having folded them all, and stays folded.
+ *
+ * That seed used to be about the tick — the current branch was inside the tree
+ * and a fold could take it off the screen. It is the first row now whatever is
+ * folded, so what is left of the argument is the rest of that folder: the
+ * branches beside the one being worked on are the ones most likely to be
+ * wanted next. Where a folder held nothing but the current branch it is not
+ * drawn at all, and the seed names a heading that is not there — harmless, and
+ * the alternative is a second rule saying which folders still exist.
  *
  * After that the stored list rules absolutely, and a checkout does not reopen
  * anything: the only way to press a branch row is to see it, so a branch

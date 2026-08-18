@@ -51,12 +51,19 @@ export function trackingMark(tracking) {
    which is what keeps the mark on screen while the fold is closed at any level.
    Here rather than in the component drawing it, for the reason the rest of this
    file is here: a `.vue` file is the one thing no test in this repository can
-   reach. */
+   reach.
+
+   The current branch is passed over however its name reads, because
+   `branchTree.js` lifts it out of the tree and draws it first: a heading
+   standing in for a row that is on screen anyway would be saying it twice, and
+   saying it about a branch the fold is not hiding. */
 export function folderBehind(path, branches, tracking) {
   const prefix = `${path}/`
   return branches.some(
     (branch) =>
-      String(branch?.name ?? '').startsWith(prefix) && trackingMark(tracking[branch.name]).orange
+      !branch?.current &&
+      String(branch?.name ?? '').startsWith(prefix) &&
+      trackingMark(tracking[branch.name]).orange
   )
 }
 

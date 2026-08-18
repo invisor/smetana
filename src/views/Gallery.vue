@@ -1718,6 +1718,23 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />
         </div>
+        <!-- The branch the repository is on, lifted to the top out of the order
+             recency put it in and out of the folder its name puts it in: it is
+             last here and in a `feature/` heading that is folded, and it is
+             still the first row, drawing its whole name with the hairline under
+             it. What to check is that the rule reads as a separator and not as
+             a row of its own, and that the row below it is not pushed a pixel
+             down by it. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="[
+              { name: 'main', current: false },
+              { name: 'develop', current: false },
+              { name: 'feature/smetana-8ok.5-branch-folders', current: true }
+            ]"
+            :folders="[]"
+          />
+        </div>
         <!-- The same list against its upstreams, which is every state a row can
              be in: behind (orange, `↓3`), ahead (`↑2` and no colour), both at
              once, level with the remote, and a branch nobody has pushed, which
@@ -1760,8 +1777,11 @@ const menuTargetStyle = {
         <!-- The folders, live: press a heading and it opens. Nothing was chosen
              here, so the folder the current branch is in starts open and the
              others start folded — which is the state a repository is in the
-             first time this panel is looked at. `fix` holds a folder of its own,
-             so the indentation of a second level is checkable here too. -->
+             first time this panel is looked at. The current branch itself is
+             the first row rather than a row inside that open heading, so what
+             the seed is worth here is the branches beside it. `fix` holds a
+             folder of its own, so the indentation of a second level is
+             checkable here too. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList
             :branches="FOLDER_BRANCHES"
