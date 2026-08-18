@@ -929,4 +929,30 @@ describe('the live agent count in the scope bar', () => {
     expect(stores.terminals.agentRows.value).toHaveLength(2)
     expect(stores.terminals.liveAgentCount.value).toBe(2)
   })
+
+  /* The counter and the list, tied together in one assertion, because what the
+     bar promises is the list minus the rows that have finished and the two are
+     only equal through `toUiState`: `exited` is the one session state it maps
+     onto `done` and `failed`, and the counter skips exactly that state. A
+     seventh state mapped onto a finished-looking row tomorrow would move the
+     list and leave the counter behind, silently, and the arithmetic here is the
+     only thing that would notice. */
+  it('the count is the list minus the rows that have finished', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    await emit('terminal:state', session({ id: 2, state: 'exited', exitCode: 0 }))
+    await emit('terminal:state', session({ id: 3, state: 'exited', exitCode: 1 }))
+    await emit('terminal:state', session({ id: 4, state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 5, state: 'idle' }))
+    await nextTick()
+    stores.terminals.createSession('/p', { kind: 'bare' })
+
+    const rows = stores.terminals.agentRows.value
+    expect(rows.map((r) => r.state)).toEqual(['running', 'done', 'failed', 'needs-you', 'ready', 'running'])
+    expect(stores.terminals.liveAgentCount.value).toBe(
+      rows.filter((r) => r.state !== 'done' && r.state !== 'failed').length
+    )
+    expect(stores.terminals.liveAgentCount.value).toBe(4)
+  })
 })

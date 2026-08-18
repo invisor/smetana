@@ -300,8 +300,8 @@ export const agentRows = computed(() => [
   }))
 ])
 
-/* How many of this project's agents are alive — the second of the two counters
-   in the scope bar, and the list above minus the rows that have finished.
+/* How many of this project's agents are alive — the scope bar's agents counter,
+   and the list above minus the rows that have finished.
 
    `exited` is the one state that does not count. A session that fell over
    yesterday is still a row somebody may want to read, which is why it stays in

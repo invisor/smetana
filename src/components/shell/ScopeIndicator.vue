@@ -10,11 +10,16 @@ const props = defineProps({
   repo: { type: String, required: true },
   worktree: { type: String, default: '' },
   branch: { type: String, default: '' },
-  /* Either counter may arrive as `null` — "nobody knows yet", which is not the
-     same fact as zero and is what the stores say when the working tree could
-     not be read. Both are drawn only above zero, so `null` and `0` both come
-     out as no icon and no number, and neither invents a tidy repository. */
-  dirtyCount: { type: Number, default: 0 },
+  /* `null` and deliberately not `0`, the way `git/SectionHeader.vue` declares
+     its own count: a working tree that could not be read has an unknown number
+     of uncommitted files, which is the opposite fact to a clean one, and
+     `stores/vcs.js` says so by handing over `null`. Both come out as no icon
+     and no number here — the difference is that nothing in this component ever
+     claims a repository is tidy on the strength of not knowing. */
+  dirtyCount: { type: Number, default: null },
+  /* Zero, because this one is never unknown: the store counts sessions and
+     start tickets it is already holding, and there is no read behind it that
+     could fail. */
   agentsActive: { type: Number, default: 0 },
   notifications: { type: Number, default: 0 }
 })
@@ -46,7 +51,7 @@ const counter = (color) => ({ display: 'inline-flex', alignItems: 'center', gap:
 
 const scopeName = computed(() => props.worktree || props.branch)
 
-/* The two counters' tooltips. Both were glued together with a plural noun and
+/* The counters' tooltips. Both were glued together with a plural noun and
    said "1 uncommitted files" for the commonest case there is, which nobody saw
    while the numbers were a fixture holding 3 and 2 — the bell below had the
    same fault and was fixed for the same reason. Neither label is ever drawn

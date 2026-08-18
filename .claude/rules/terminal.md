@@ -200,8 +200,8 @@ That register is a `Set` and every subscriber gets every chunk: a single field w
 unsubscribing to who mounted last, exactly the ordering the rest of this subsystem refuses to depend
 on.
 
-`liveAgentCount` is the third reader of that same state — the scope bar's second counter
-(`.claude/rules/git-head.md`) — and it is the agent list minus the rows that have finished: every
+`liveAgentCount` reads that same session state and is the scope bar's agents counter
+(`.claude/rules/git-head.md`): the agent list minus the rows that have finished, which is every
 session whose state is not `exited`, plus the starts `visibleStarts` says belong to this project.
 `needs-you` counts, which is the whole decision: an agent waiting for an answer is why somebody is
 looking at the bar, and a counter that fell by one the moment attention was demanded would point away

@@ -82,7 +82,7 @@ since the log directory was not there either. Live-checked against this reposito
 worktree: the same list as the main checkout, in the same reflog order, with HEAD still reading
 per-worktree.
 
-The two counters next to it are live now, and neither of them is this store's. The uncommitted files
+The counters next to it are live now, and neither of them is this store's. The uncommitted files
 are `dirtyCount` in `stores/vcs.js` — the length of the change list the Git panel draws for the
 repository selected there, so the number in the bar is the number of rows in the panel. The running
 agents are `liveAgentCount` in `stores/terminals.js` — the sessions that have not exited, plus the
