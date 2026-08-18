@@ -145,11 +145,7 @@ const runFixture = (state, extra = {}) => ({
 /* A run's document, shortened. `report.rs` writes the real one and this is the
    same shape — its own `<style>`, its own colours, its own `prefers-color-scheme`
    block — because the point of drawing it here is seeing that the frame hands the
-   document the whole box and paints nothing of its own over it. It deliberately
-   does not follow `data-theme`: the document has to be readable in a browser with
-   nothing of ours loaded, so it follows the reader's own theme instead, and in
-   this gallery that means the operating system rather than the switch at the top
-   of the page.
+   document the whole box and paints nothing of its own over it.
 
    The `<script>` is not filler, and what it does had to be chosen with some
    care. It is the one thing the sandbox exists for — `report.rs` writes no
@@ -171,10 +167,12 @@ const runFixture = (state, extra = {}) => ({
 /* Its stylesheet is a copy of the one `src-tauri/src/runs/report.rs` writes, and
    the copy has to keep that file's *shape*: the palette on a bare `:root`, again
    under `prefers-color-scheme`, and again under `[data-theme]`. That last block is
-   the only reason the theme switch does anything to this section — `reportTheme.js`
-   names a theme on the root tag and the document's own rules answer it — so a
-   fixture written the old way would sit here light in a dark gallery and look like
-   the bug rather than the fix.
+   the only reason this section changes palette at all: `reportTheme.js` names a
+   theme on the root tag and the document's own rules answer it. **Nothing on the
+   page moves it** — there is no theme control in this gallery, only `?theme=dark`
+   and `?theme=light` on the URL, so the two palettes are checked by loading the
+   page twice. A fixture written the old way would sit here light in a dark gallery
+   and look like the bug rather than the fix.
 
    It is a fixture, and its colours are the document's rather than this system's:
    that is what a stand-in for a file another language writes costs, and it is the

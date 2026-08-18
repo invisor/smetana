@@ -487,12 +487,20 @@ mod tests {
         // carries the complete light palette and every dark block only redefines.
         let html = render(&report(90, None, &[]));
         let light = names(block(&html, ":root{"));
-        let dark = names(block(&html, ":root[data-theme=\"dark\"]{"));
-
         assert!(!light.is_empty(), "the light palette is the one that must be complete");
-        assert!(!dark.is_empty(), "and the dark one has to redefine something");
-        for name in dark {
-            assert!(light.contains(&name), "{name} is defined only in the dark palette");
+
+        // Both dark placements, and the media one is the point: it is itself a
+        // block one reader never looks in — a document opened in a browser on a
+        // light machine — and the two agreeing today is only the consequence of
+        // one constant being interpolated twice. That is the accident this test
+        // is insurance against, so checking the attribute block alone would leave
+        // it insuring nothing.
+        for selector in [":root[data-theme=\"dark\"]{", ":root:not([data-theme=\"light\"]){"] {
+            let dark = names(block(&html, selector));
+            assert!(!dark.is_empty(), "{selector} has to redefine something");
+            for name in dark {
+                assert!(light.contains(&name), "{name} is defined only under {selector}");
+            }
         }
     }
 
@@ -505,7 +513,12 @@ mod tests {
         let html = render(&report(90, None, &[]));
         let rules = &html[html.find("body{font:").expect("the body rule")..];
         let rules = &rules[..rules.find("</style>").expect("the end of the stylesheet")];
-        assert!(!rules.contains('#'), "a colour outside the palette blocks: {rules}");
+        // A hex is the shape this file has always written, and the other two are
+        // the shapes a later hand would reach for; a rule naming any of them would
+        // hold a colour no attribute and no media query could move.
+        for form in ["#", "rgb(", "hsl("] {
+            assert!(!rules.contains(form), "a colour outside the palette blocks: {rules}");
+        }
     }
 
     #[test]
