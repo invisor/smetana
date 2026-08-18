@@ -22,6 +22,12 @@ import { invoke } from '@tauri-apps/api/core'
    left, until they alt-tab away and back. */
 import { loadHead } from './git.js'
 import { settings } from './settings.js'
+/* The one rule this store shares with the button that starts it — see `push`
+   below. A pure module out of `components/`, which is what `runs.js`,
+   `notifications.js` and `settings.js` already reach into that family for: the
+   rules live beside the part of the interface they are about, and nothing in
+   them is Vue. */
+import { publishes } from '../components/git/tracking.js'
 
 export const vcsState = reactive({
   /* The project the rest of this object is about. Also the guard token: every
@@ -489,11 +495,17 @@ export async function pull() {
    already on this side and is what the button was drawn from — and a stale
    answer is harmless either way: `-u` against a branch that has since gained an
    upstream sets the same one again, and a plain push of one that has since lost
-   it is refused in git's own words. */
+   it is refused in git's own words.
+
+   Which of the two it is, is `publishes` in `components/git/tracking.js` and
+   never a second copy of that expression here: the caption is drawn from the
+   same call, and a rule written out twice is one that will one day say "Publish
+   branch" over a plain `git push`. Answered here rather than carried on the
+   event so that a caller going round the button — the panel is not the only way
+   into this store — cannot ask for the wrong one. */
 export async function push() {
   const branch = currentBranch()
-  const tracking = branch ? vcsState.tracking[branch] : null
-  const setUpstream = !tracking?.upstream || Boolean(tracking?.gone)
+  const setUpstream = publishes(branch ? vcsState.tracking[branch] : null)
   await write('push', branch, (repo) => invoke('vcs_push', { repo, setUpstream }))
 }
 
@@ -695,9 +707,20 @@ function reset() {
   vcsState.messages = {}
   vcsState.suggestError = null
   vcsState.loading = false
-  /* The sweep's memory goes with the project, so a repository opened again
-     after a while asks the remote once rather than waiting out a throttle set
-     in a session that is over. */
+  /* The throttle's memory, and only when there is no project at all — this
+     runs on the way to an empty window and nowhere else, so switching between
+     two projects deliberately keeps the stamps: the same repository opened
+     again a minute later has not become stale because somebody looked at
+     something else. Dropped here because a window with no project is a session
+     ending, and a repository re-opened after that should ask the remote once
+     rather than wait out a throttle set before it.
+
+     `fetching` is deliberately **not** cleared with it. It is not memory but a
+     guard over a call that is still running: a fetch in flight goes on running
+     across this, and its own `finally` takes the repository back out of the set
+     when it lands. Emptying it here would drop the guard while the call it
+     guards is still open, so re-opening that project could start a second
+     `git fetch` in the same repository — the one thing this set exists to
+     prevent. */
   fetchedAt.clear()
-  fetching.clear()
 }

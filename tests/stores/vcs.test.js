@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
+/* The very rule the button is drawn from, imported here so the two answers can
+   be asserted to be one answer. Static rather than through `loadStores`: it is
+   a pure module with no state to rebuild. */
+import { pushAction } from '../../src/components/git/tracking.js'
 
 /* One repository, named after the project it was asked for, so a response
    landing under the wrong project is visible in the assertion. */
@@ -879,6 +883,42 @@ describe('the git panel store', () => {
 
     expect(stores.vcs.vcsState.tracking.main.behind).toBe(1)
   })
+  /* The guard is not memory, and the difference shows only here: closing the
+     project empties the throttle's stamps, and emptying the set of what is in
+     flight with them would drop the guard over a call that is still open —
+     leaving the very next sweep free to open a second `git fetch` in the same
+     repository. */
+  it('a fetch still in flight keeps its guard when the project is closed', async () => {
+    const { stores, ipc } = await loadStores()
+    let fetches = 0
+    let land = null
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    ipc.on('vcs_fetch', () => {
+      fetches += 1
+      /* Deliberately never resolved until the end: a network call is the one
+         thing here that can still be open a minute later. */
+      return new Promise((resolve) => {
+        land = resolve
+      })
+    })
+
+    await stores.vcs.loadRepos('/p')
+    const inFlight = stores.vcs.autoFetch()
+    /* A window with no project at all, which is the only thing that resets this
+       store — and then the same project again. */
+    await stores.vcs.loadRepos(null)
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.autoFetch()
+
+    expect(fetches).toBe(1)
+
+    land(null)
+    await inFlight
+  })
+
   /* A conflicted pull is an outcome and not a failure, and it must reach the
      same dialog a conflicted merge reaches — with `merge` as its op, since that
      is what decides whether the abort runs `git merge --abort`. */
@@ -972,5 +1012,62 @@ describe('the git panel store', () => {
     await stores.vcs.push()
 
     expect(asked).toMatchObject({ repo: '/p/.', setUpstream: false })
+  })
+
+  /* The third state, and the one a second copy of the rule would get wrong
+     first: a branch whose upstream was deleted on the remote still names one,
+     so anything reading `upstream` alone would push plainly and be refused by
+     git for a branch this app had just offered to publish. */
+  it('a branch whose upstream is gone is published rather than pushed', async () => {
+    const { stores, ipc } = await loadStores()
+    let asked = null
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'old', current: true }])
+    ipc.on('vcs_tracking', [
+      { branch: 'old', upstream: 'origin/old', ahead: 1, behind: 0, gone: true }
+    ])
+    ipc.on('git_head', { branch: 'old', detached: null })
+    ipc.on('vcs_push', (args) => {
+      asked = args
+      return null
+    })
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.push()
+
+    expect(asked).toMatchObject({ repo: '/p/.', setUpstream: true })
+  })
+
+  /* What none of the three above can catch on its own, and the reason the rule
+     is one exported function rather than one expression written out twice: the
+     word on the button and the arguments git is run with have to be answers to
+     the same question. A copy that drifted would leave the caption reading
+     "Publish branch" over a plain `git push`, with `tracking.test.js` and this
+     file both still green. */
+  it('what the caption says it will do is what the store asks for', async () => {
+    const records = [
+      { branch: 'main', upstream: 'origin/main', ahead: 2, behind: 0, gone: false },
+      { branch: 'main', upstream: null, ahead: 0, behind: 0, gone: false },
+      { branch: 'main', upstream: 'origin/main', ahead: 1, behind: 0, gone: true }
+    ]
+    for (const record of records) {
+      const { stores, ipc } = await loadStores()
+      let asked = null
+      ipc.on('vcs_repos', repoIn('/p'))
+      ipc.on('vcs_status', cleanTree)
+      ipc.on('vcs_branches', [{ name: 'main', current: true }])
+      ipc.on('vcs_tracking', [record])
+      ipc.on('git_head', { branch: 'main', detached: null })
+      ipc.on('vcs_push', (args) => {
+        asked = args
+        return null
+      })
+
+      await stores.vcs.loadRepos('/p')
+      await stores.vcs.push()
+
+      expect(asked.setUpstream).toBe(pushAction(record, { allowed: true }).setUpstream)
+    }
   })
 })

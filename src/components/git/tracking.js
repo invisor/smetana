@@ -76,6 +76,20 @@ export function pullAction(tracking, actions) {
 
 const NOTHING_TO_PUSH = 'This branch has nothing the remote does not already have.'
 
+/* Whether sending this branch means publishing it — the one question the label
+   on the button and the arguments git is run with are both answers to.
+
+   Exported, and read by `stores/vcs.js` as well as by `pushAction` below,
+   because those two are exactly the pair that must not disagree: the caption
+   would otherwise say "Publish branch" while the store ran a plain `git push`
+   that git then refuses, or say "Push 2" while the store re-pointed the
+   branch's upstream. Neither would fail a test — `tracking.test.js` pins one
+   copy and `vcs.test.js` the other, and both go on passing while the two come
+   apart — which is the whole reason this rule is one expression in one file. */
+export function publishes(tracking) {
+  return !tracking?.upstream || Boolean(tracking?.gone)
+}
+
 /* Push has a second shape rather than a second button. A branch with no
    upstream — the ordinary state of one cut by `New branch from this` — is
    published, which is `git push --set-upstream origin HEAD` and a different
@@ -84,7 +98,7 @@ const NOTHING_TO_PUSH = 'This branch has nothing the remote does not already hav
    is the same act: there is nothing there to push to. */
 export function pushAction(tracking, actions) {
   const { ahead } = trackingMark(tracking)
-  const setUpstream = !tracking?.upstream || Boolean(tracking?.gone)
+  const setUpstream = publishes(tracking)
   const label = setUpstream ? 'Publish branch' : ahead ? `Push ${ahead}` : 'Push'
   if (!actions.allowed) {
     return { allowed: false, reason: actions.reason, label, count: ahead, setUpstream }
