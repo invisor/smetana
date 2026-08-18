@@ -23,6 +23,17 @@
    number — the trap `terminal/theme.js` records. Measuring the row that is
    already on screen beats standing a throwaway element up beside it.
 
+   **The caption is not the row any more, and the wrapper around it is.** The
+   `actions` slot puts controls in the header — the Git panel's Pull and Push —
+   and they cannot go inside the caption: it is a `<button>`, a button inside a
+   button is invalid HTML, and a press on Pull would fold the section on its way
+   through. So they are a sibling, and what moves with them is the height and
+   the hairline: `sectionHeights.js` learns what a row is by measuring the
+   element exposed here, and a rule that spanned only the caption would leave
+   the controls standing above the line. The caption keeps `height: 100%` so its
+   own hover surface is still the whole row and still reads as "press here to
+   fold", and `flex: 1` so it is everything the controls do not take.
+
    `divided` is the rule above the caption, and it is what makes a caption read
    as the start of a block rather than as one more row of the list above it: the
    sections are all `--row-h`, all quiet, and with nothing between them a panel
@@ -53,30 +64,61 @@ defineExpose({ el })
 
 const { hover, active, handlers } = useInteractive()
 
-/* `flexShrink: 0` because a caption is a flex item in this column and a flex
-   item shrinks by default: with three sections crowding a short panel the
-   captions gave way with the lists, `--row-h` became a starting point and the
-   text was clipped — the very defect a short list hid in `Dropdown`'s options.
-   A caption is the one thing here that must not move. */
-const style = computed(() => ({
+/* The row, and it is this element rather than the caption that `GitPanel`
+   measures. `flexShrink: 0` because a caption is a flex item in that column and
+   a flex item shrinks by default: with three sections crowding a short panel
+   the captions gave way with the lists, `--row-h` became a starting point and
+   the text was clipped — the very defect a short list hid in `Dropdown`'s
+   options. A caption is the one thing here that must not move.
+
+   A function of whether the slot was filled rather than a `computed` over
+   `useSlots()`: a slot's presence is not a reactive dependency, so a cached
+   answer would go on insetting a caption whose controls have since gone — the
+   Git panel takes both of its buttons off the header on a detached HEAD. */
+const rowStyle = (hasActions) => ({
   display: 'flex',
   alignItems: 'center',
-  gap: 'var(--space-3)',
+  /* The controls in the slot are siblings in this flex, and with nothing
+     between them two of them meet edge to edge: a pair whose refused state is
+     a filled, bordered chip then fuses into one slab with a 2px seam down the
+     middle and reads as a segmented control rather than as two verbs — the
+     same two hairlines meeting this file's `divided` note is about. One step,
+     the smallest there is, since these are controls in a row and not blocks.
+     Harmless on a caption with an empty slot: a flex with one child has
+     nowhere to put a gap. */
+  gap: 'var(--space-1)',
   width: '100%',
   height: 'var(--row-h)',
   flexShrink: 0,
-  padding: '0 var(--space-5)',
-  border: 'none',
+  /* The controls would otherwise sit against the panel's own edge. Only where
+     there are controls: adding it always would move the count of every caption
+     in the panel by a step, for a header that has nothing to inset. */
+  paddingRight: hasActions ? 'var(--space-3)' : '0',
   /* Inside the height rather than on top of it, which is `box-sizing:
      border-box` doing its work: a header is what `GitPanel` measures a row by,
      and a rule that added a pixel to two of the three captions would put the
      measured row and the drawn rows a pixel apart for the whole of that panel's
      arithmetic. */
-  /* `'none'` and not `undefined` on the other branch. Vue removes a style
-     property handed `undefined`, and removing `border-top` from a `<button>`
-     hands it straight back to the user agent's own `2px outset` — which drew a
-     white rule over every caption that had asked for no rule at all. */
-  borderTop: props.divided ? 'var(--border-w) solid var(--border-subtle)' : 'none',
+  borderTop: props.divided ? 'var(--border-w) solid var(--border-subtle)' : 'none'
+})
+
+/* The caption itself: everything the `actions` slot does not take, at the whole
+   height of the row so its hover surface is the row rather than a strip through
+   the middle of one.
+
+   `border: 'none'` and never `undefined` on a `<button>`: Vue removes a style
+   property handed `undefined`, and a button with no border of its own is handed
+   straight back to the user agent's `2px outset` — which drew a white rule over
+   every caption in the panel. */
+const style = computed(() => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  flex: 1,
+  minWidth: 0,
+  height: '100%',
+  padding: '0 var(--space-5)',
+  border: 'none',
   textAlign: 'left',
   font: 'var(--weight-medium) var(--text-xs)/1 var(--font-sans)',
   color: 'var(--text-muted)',
@@ -96,17 +138,22 @@ const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mo
 </script>
 
 <template>
-  <button
-    ref="el"
-    type="button"
-    :style="style"
-    :aria-expanded="open"
-    v-bind="handlers"
-    @click="$emit('toggle')"
-  >
-    <Icon :name="open ? 'chevron-down' : 'chevron-right'" :size="MARK" :style="{ flex: 'none' }" />
-    <span>{{ label }}</span>
-    <span :style="{ flex: 1 }" />
-    <span v-if="count" :style="countStyle">{{ count }}</span>
-  </button>
+  <div ref="el" :style="rowStyle(Boolean($slots.actions))">
+    <button
+      type="button"
+      :style="style"
+      :aria-expanded="open"
+      v-bind="handlers"
+      @click="$emit('toggle')"
+    >
+      <Icon :name="open ? 'chevron-down' : 'chevron-right'" :size="MARK" :style="{ flex: 'none' }" />
+      <span>{{ label }}</span>
+      <span :style="{ flex: 1 }" />
+      <span v-if="count" :style="countStyle">{{ count }}</span>
+    </button>
+    <!-- Beside the caption and never inside it: a button inside a button is
+         invalid, and a press on one of these would fold the section on its way
+         through. -->
+    <slot name="actions" />
+  </div>
 </template>

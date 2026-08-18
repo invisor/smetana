@@ -88,6 +88,77 @@ pub struct Branch {
     pub current: bool,
 }
 
+/// One local branch's standing against its upstream.
+///
+/// Apart from `Branch` rather than folded into it, and the seam is the same one
+/// `vcs_branches` and `vcs_tracking` are split on: a branch list is three file
+/// reads that cannot fail, and this is a process that can. Two answers merged
+/// by name on the front end is what keeps the first of those properties true.
+///
+/// `gone` is its own field rather than an absent `upstream`: a branch nobody
+/// has pushed and a branch whose upstream was deleted on the remote are
+/// opposite facts — the first has never had one, the second has lost one — and
+/// the panel refuses a pull for different reasons in different words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tracking {
+    pub branch: String,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub gone: bool,
+}
+
+/// What `git for-each-ref` printed, one record per line, three fields split by
+/// `%00`.
+///
+/// A newline is a safe record separator here where it would not be for a path:
+/// `git check-ref-format` forbids control characters in a ref name, so a branch
+/// cannot contain one. The `%00` between the fields is what keeps an empty
+/// upstream distinguishable from a field that is not there.
+///
+/// Tolerant in the same direction `parse_status` is tolerant: a line it cannot
+/// read is skipped, and a `track` string it does not recognise counts as zero
+/// rather than as a failure. This runs against whatever git is on somebody's
+/// machine, and a row with no mark beats a panel with no rows.
+pub fn parse_tracking(out: &str) -> Vec<Tracking> {
+    out.lines().filter_map(parse_tracking_line).collect()
+}
+
+fn parse_tracking_line(line: &str) -> Option<Tracking> {
+    let mut fields = line.split('\0');
+    let branch = fields.next()?.trim();
+    if branch.is_empty() {
+        return None;
+    }
+    let upstream = fields.next().unwrap_or("").trim();
+    let track = fields.next().unwrap_or("").trim();
+    let gone = track == "gone";
+    let (ahead, behind) = if gone { (0, 0) } else { counts(track) };
+    Some(Tracking {
+        branch: branch.to_string(),
+        upstream: (!upstream.is_empty()).then(|| upstream.to_string()),
+        ahead,
+        behind,
+        gone,
+    })
+}
+
+/// `ahead 1, behind 2`, either half alone, or nothing at all.
+fn counts(track: &str) -> (u32, u32) {
+    let mut ahead = 0;
+    let mut behind = 0;
+    for part in track.split(',') {
+        let part = part.trim();
+        if let Some(n) = part.strip_prefix("ahead ") {
+            ahead = n.trim().parse().unwrap_or(0);
+        } else if let Some(n) = part.strip_prefix("behind ") {
+            behind = n.trim().parse().unwrap_or(0);
+        }
+    }
+    (ahead, behind)
+}
+
 /// Which of the two operations put a repository where it is, and therefore
 /// which one an abort has to undo.
 ///
@@ -257,6 +328,11 @@ pub enum VcsError {
     /// `vcs_commit` answers it first and this variant exists to answer it with.
     #[error("A commit needs a message.")]
     NoMessage,
+    /// A network call that was still running when its deadline passed, and was
+    /// killed. Its own variant rather than a `Git { .. }` with an empty stderr:
+    /// git said nothing, this app decided, and the sentence has to say so.
+    #[error("Smetana stopped git after {0} seconds — the remote did not answer.")]
+    Timeout(u64),
     #[error("{0}")]
     Io(String),
 }
@@ -272,6 +348,7 @@ impl VcsError {
             Self::TooLarge { .. } => "tooLarge",
             Self::NotUtf8(_) => "notUtf8",
             Self::NoMessage => "noMessage",
+            Self::Timeout(_) => "timeout",
             Self::Io(_) => "io",
         }
     }
@@ -547,6 +624,19 @@ mod tests {
         assert_eq!(VcsError::NotUtf8(path()).kind(), FilesError::NotUtf8(path()).kind());
     }
 
+    /// The panel branches on `kind` and never on the message, so a variant whose
+    /// kind was not added is one the front end cannot tell from an ordinary
+    /// refusal — and this one must not be attributed to git at all: nothing git
+    /// said produced it.
+    #[test]
+    fn a_timeout_is_its_own_kind_and_names_this_app_rather_than_git() {
+        let err = VcsError::Timeout(60);
+
+        assert_eq!(err.kind(), "timeout");
+        assert!(err.to_string().contains("60"), "the message says how long was waited");
+        assert!(err.to_string().starts_with("Smetana"), "the sentence is this app's, not git's");
+    }
+
     /// The rule the whole merge door rests on. `git merge`'s own wording moves
     /// between versions — "Automatic merge failed; fix conflicts" is not a
     /// promise anybody made — while an unmerged record in the porcelain is
@@ -662,5 +752,74 @@ mod tests {
         let tree = parse_status(&porcelain(&["! ignored.txt", "x whatever", "? real.txt"]));
         assert_eq!(tree.changes.len(), 1);
         assert_eq!(tree.changes[0].path, "real.txt");
+    }
+
+    /// The four shapes `%(upstream:track,nobracket)` produces, and the two ways a
+    /// branch has no answer to give. Pinned here because this string is the whole
+    /// of what decides whether a row is drawn orange, and it is the one part of
+    /// this feature that a version of git could word differently.
+    #[test]
+    fn parse_tracking_reads_every_shape_of_track() {
+        let out = "main\0origin/main\0ahead 1, behind 2\n\
+                   feature/one\0origin/feature/one\0ahead 3\n\
+                   feature/two\0origin/feature/two\0behind 4\n\
+                   level\0origin/level\0\n\
+                   orphan\0\0\n\
+                   old\0origin/old\0gone\n";
+        let tracking = parse_tracking(out);
+
+        assert_eq!(tracking.len(), 6, "one record per line");
+        assert_eq!(
+            tracking[0],
+            Tracking {
+                branch: "main".into(),
+                upstream: Some("origin/main".into()),
+                ahead: 1,
+                behind: 2,
+                gone: false
+            }
+        );
+        assert_eq!((tracking[1].ahead, tracking[1].behind), (3, 0));
+        assert_eq!((tracking[2].ahead, tracking[2].behind), (0, 4));
+        assert_eq!(
+            (tracking[3].ahead, tracking[3].behind),
+            (0, 0),
+            "level with its upstream"
+        );
+        assert_eq!(tracking[4].upstream, None, "a branch nobody has pushed");
+        assert!(!tracking[4].gone, "no upstream is not a gone upstream");
+        assert!(tracking[5].gone, "the upstream was deleted on the remote");
+    }
+
+    /// A shape this parse has never seen is an ordinary outcome, not a panic and
+    /// not a lost row: the branch exists, and leaving it out of the list would
+    /// take its row off the panel. Zero counts draw no mark, which is the same
+    /// thing on screen as a branch level with its upstream.
+    #[test]
+    fn parse_tracking_survives_a_track_string_it_does_not_recognise() {
+        let tracking = parse_tracking("main\0origin/main\0hinter 1, hinnen 2\n");
+
+        assert_eq!(tracking.len(), 1);
+        assert_eq!((tracking[0].ahead, tracking[0].behind), (0, 0));
+    }
+
+    /// A slash is ordinary in a branch name and the format's own separator is
+    /// `%00`, so nothing about a folder name reaches the field split.
+    #[test]
+    fn parse_tracking_keeps_a_branch_name_whole() {
+        let tracking =
+            parse_tracking("fix/legacy/warehouse\0origin/fix/legacy/warehouse\0behind 1\n");
+
+        assert_eq!(tracking[0].branch, "fix/legacy/warehouse");
+        assert_eq!(tracking[0].behind, 1);
+    }
+
+    /// A blank line is what a repository with no branches at all prints, and an
+    /// empty list is the honest answer to it — not a record with no name that
+    /// every reader would then have to guard against.
+    #[test]
+    fn parse_tracking_takes_no_record_from_an_empty_line() {
+        assert!(parse_tracking("\n\n").is_empty());
+        assert!(parse_tracking("").is_empty());
     }
 }

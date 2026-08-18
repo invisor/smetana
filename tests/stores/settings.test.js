@@ -32,6 +32,10 @@ describe('loading', () => {
       uiFontSize: 13
     })
     expect(settings.settings.editor).toEqual({ fontSize: 12 })
+    /* On, because the marks the Git panel draws are worthless when nothing goes
+       and asks. The switch is for the machines where background network is not
+       free, and `settings/model.rs` carries this same default. */
+    expect(settings.settings.git).toEqual({ autoFetch: true })
     /* Today's board exactly: every column, every task. Nothing on anybody's
        screen moves until they go and choose. */
     expect(settings.settings.kanban).toEqual({
@@ -367,6 +371,24 @@ describe('the settings window', () => {
     expect(settings.settings.kanban.unlimited).toEqual([], 'a list that is not one is skipped')
   })
 
+  /* The one setting whose value the app acts on by opening a socket, so `false`
+     has to reach the store from the settings window intact — and anything that
+     is not a boolean has to be skipped rather than coerced, since coercion
+     would turn a malformed event into a deliberate-looking "off". */
+  it('takes the background fetch switch, and only a boolean one', async () => {
+    await emit(settings.SETTINGS_APPLY, { gitAutoFetch: false })
+    await nextTick()
+    expect(settings.settings.git.autoFetch).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { gitAutoFetch: 'yes' })
+    await nextTick()
+    expect(settings.settings.git.autoFetch).toBe(false, 'a value that is not a boolean is skipped')
+
+    await emit(settings.SETTINGS_APPLY, { gitAutoFetch: true })
+    await nextTick()
+    expect(settings.settings.git.autoFetch).toBe(true)
+  })
+
   it('answers a hello with what this window holds, not with what is on disk', async () => {
     settings.settings.appearance.uiFontSize = 20
     const heard = []
@@ -384,6 +406,7 @@ describe('the settings window', () => {
       kanbanAlwaysShow: [],
       kanbanInterval: 'all',
       kanbanUnlimited: [],
+      gitAutoFetch: true,
       agent: 'claude',
       agentLanguage: 'en',
       taskLanguage: 'en'
@@ -412,6 +435,7 @@ describe('the settings window', () => {
       kanbanAlwaysShow: [],
       kanbanInterval: 'all',
       kanbanUnlimited: [],
+      gitAutoFetch: true,
       agent: 'codex',
       agentLanguage: 'en',
       taskLanguage: 'en'

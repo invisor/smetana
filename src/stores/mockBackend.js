@@ -471,9 +471,9 @@ export function installMockBackend() {
     if (command === 'git_head') {
       return { branch: 'feat/worktree-rename', detached: null }
     }
-    /* The Git panel's three reads. A browser has no git to run, so all of them
-       answer from a fixture — two repositories rather than one, since a project
-       made of several is the case the repository list exists for and the case a
+    /* The Git panel's reads. A browser has no git to run, so all of them answer
+       from a fixture — two repositories rather than one, since a project made
+       of several is the case the repository list exists for and the case a
        single-repository machine can never show. */
     if (command === 'vcs_repos') {
       const project = payload?.project ?? MOCK_PROJECTS[0]
@@ -541,6 +541,42 @@ export function installMockBackend() {
         { name: 'feat/worktree-rename', current: true },
         { name: 'main', current: false },
         { name: 'release/7', current: false }
+      ]
+    }
+    /* Where those branches stand against their upstreams, which is the one read
+       of this panel whose answer nothing on disk could give: it is a process,
+       and in a browser it is this. One branch behind, one ahead, one level with
+       its upstream and one nobody has pushed — so every mark a row can carry is
+       reachable in `npm run dev`, where they would otherwise be a feature only
+       the gallery has ever drawn.
+
+       The caption's two buttons are **not**, beyond the one state the branch
+       this mock is on happens to be in: Pull live with three to bring in and
+       Push refused with nothing to send. The current branch is fixed at
+       `feat/worktree-rename` and `vcs_checkout` falls through to the refusal
+       below with every other write, so no browser can put this panel on
+       `develop`, `main` or `release/7` and see what the pair says there. The
+       other three states are the gallery's, which draws all of them side by
+       side.
+
+       `vcs_fetch` is deliberately **not** here, and it is not a write either: it
+       falls through to the refusal at the bottom because a browser has no
+       remote to ask, and what that produces is the behaviour this store
+       promises for a machine with no network — one line in the console and
+       nothing at all on screen. Which makes the silent half checkable here too.
+       `vcs_pull` and `vcs_push` are absent with the other writes. */
+    if (command === 'vcs_tracking') {
+      return [
+        { branch: 'develop', upstream: 'origin/develop', ahead: 2, behind: 0, gone: false },
+        {
+          branch: 'feat/worktree-rename',
+          upstream: 'origin/feat/worktree-rename',
+          ahead: 0,
+          behind: 3,
+          gone: false
+        },
+        { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, gone: false },
+        { branch: 'release/7', upstream: null, ahead: 0, behind: 0, gone: false }
       ]
     }
     if (command === 'terminal_list') {

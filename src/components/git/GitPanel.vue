@@ -17,9 +17,14 @@
    centre column; which repository it belongs to is the caller's business, since
    this component is handed the selection rather than holding it.
 
-   The three writes — checkout, merge, rebase — leave as three events and are
-   drawn by `BranchList`. What is drawn here is git's refusal of whichever of
-   them was last refused, for the reason recorded beside the block: the branch
+   The writes a branch row offers — checkout, merge, rebase, new branch — leave
+   as events and are drawn by `BranchList`. Two more leave from the Branches
+   caption rather than from a row: Pull and Push are about the branch this
+   repository is **on**, so a row's menu would refuse them on nine rows in ten,
+   and the caption is also the one thing on screen saying the two verbs exist.
+   What they say and whether they may be pressed is `tracking.js`, pure and
+   tested; this file draws its verdict. What is drawn here is git's refusal of
+   whichever write was last refused, for the reason recorded beside the block: the branch
    section is capped and a message inside that scroller is below the fold in the
    ordinary case. A conflict is not one of those refusals and is not drawn here
    at all — it is an outcome with two doors, and the modal is `ConflictModal`.
@@ -56,12 +61,14 @@
    `terminal/theme.js` records. */
 import { computed, onBeforeUnmount, ref, watchPostEffect } from 'vue'
 import BranchList from './BranchList.vue'
+import Button from '../core/Button.vue'
 import ChangeList from './ChangeList.vue'
 import CommitBox from './CommitBox.vue'
 import EmptyState from '../core/EmptyState.vue'
 import RepoList from './RepoList.vue'
 import Resizer from '../shell/Resizer.vue'
 import SectionHeader from './SectionHeader.vue'
+import Tooltip from '../core/Tooltip.vue'
 import {
   BRANCH_ROWS,
   UNDRAGGED_ROWS,
@@ -69,6 +76,7 @@ import {
   filler,
   resolveDrag
 } from './sectionHeights.js'
+import { pullAction, pushAction } from './tracking.js'
 
 const props = defineProps({
   repos: { type: Array, default: () => [] },
@@ -89,6 +97,11 @@ const props = defineProps({
      `feature/…` is a habit of a repository, while how tall somebody likes their
      branch list is a habit of theirs. */
   branchFolders: { type: Array, default: null },
+  /* Where each branch stands against its upstream, keyed by name, as
+     `vcsState.tracking` holds it. It draws the marks on the rows and it is what
+     the two buttons in the Branches caption are made of — an empty object is a
+     repository with no remote, and every row and both buttons still answer. */
+  tracking: { type: Object, default: () => ({}) },
   /* `{ allowed, reason }` from `gitActions.js`: whether the panel may write to
      this repository at all, and the sentence over the rows when it may not.
      Passed through rather than decided here — this panel draws, and the rule is
@@ -132,6 +145,8 @@ const emit = defineEmits([
   'merge',
   'rebase',
   'new-branch',
+  'pull',
+  'push',
   'commit',
   'suggest',
   'message',
@@ -221,11 +236,63 @@ const WRITE_REFUSED = {
   rebase: 'Git did not rebase',
   create: 'Git did not create the branch',
   abort: 'Git did not abort',
-  commit: 'Git did not commit'
+  commit: 'Git did not commit',
+  pull: 'Git did not pull',
+  push: 'Git did not push'
 }
 const writeRefused = computed(
   () => WRITE_REFUSED[props.writeError?.op] ?? 'Git refused this operation'
 )
+
+/* The branch this repository is on, as the list says.
+
+   The list rather than the tree, for the reason `currentBranch()` in the store
+   reads it there: `vcs_branches` carries `current` from a HEAD read beside it,
+   so the two cannot come from different moments. The tree is the fall-back for
+   a repository whose branch list has not landed yet, and both are empty on a
+   detached HEAD — which is what takes the two buttons off the header. */
+const currentBranchName = computed(
+  () => props.branches.find((branch) => branch.current)?.name ?? props.tree?.branch ?? null
+)
+
+/* Neither button on a detached HEAD: there is no upstream to talk about, and
+   two dead controls say less than nothing at all — the instinct every empty
+   state in this panel already follows. */
+const hasBranch = computed(() => Boolean(currentBranchName.value))
+
+/* What the two of them say and whether they may be pressed, which is
+   `tracking.js` and none of it this file's. `actions` — the runs verdict — goes
+   in as an argument rather than being asked again there: one rule, one copy.
+
+   `busy` is deliberately not folded into that verdict either. A refusal has a
+   sentence a person can read, and "git is already working" is a state a
+   spinner in the branch list is already saying. */
+const pull = computed(() => pullAction(props.tracking[currentBranchName.value], props.actions))
+const push = computed(() => pushAction(props.tracking[currentBranchName.value], props.actions))
+
+/* Prose over a control somebody is on their way past waits; a control's own
+   name does not. `Tooltip`'s own note is the rule, and a refused button here is
+   the first kind — a whole sentence about something a pointer crosses on the
+   way to the branch list.
+
+   The hint sits on a wrapper rather than on the button, which is what makes it
+   reachable at all: the two of them spend most of their life refused, and the
+   panel explaining a refusal must not be the one thing the refusal hides. The
+   wrapper is a `Tooltip` in both states rather than only in the refused one —
+   this is a control whose name is a glyph, so there is always something to say,
+   and one panel that changes what it says beats two elements taking turns.
+
+   `Button` and deliberately not `IconButton`, which is the icon-only control
+   everywhere else in this app: that one carries a `Tooltip` of its own around
+   its `label`, and inside this wrapper the two of them opened together — the
+   name above the glyph and the reason beside it, two panels over a caption
+   152 pixels wide. The accessible name it enforces is passed here by hand
+   instead, so nothing is lost but the second panel. */
+const TIP_DELAY = 400
+const hintProps = (action) =>
+  action.allowed
+    ? { label: action.label }
+    : { label: action.reason, side: 'left', delay: TIP_DELAY }
 
 /* Which captions are on screen. The changes and the branches have none without
    a repository to have changed anything or to hold one: a heading over nothing
@@ -532,10 +599,43 @@ const onReset = (section) => emit('resize', { section, rows: null })
           :count="branches.length > 1 ? branches.length : null"
           :open="fold.branchesOpen"
           @toggle="emit('toggle', 'branches')"
-        />
+        >
+          <!-- The two remote verbs, in the caption rather than in a row's menu:
+               they are about the current branch, so on nine rows in ten the
+               item would be refused, and a menu here answers about the row it
+               was opened on. The caption is also the one thing on screen saying
+               these two verbs exist at all.
+
+               A `<button>` cannot hold a button, which is why the caption has a
+               slot beside it rather than inside it — press one of these and the
+               section would otherwise fold on the way through. -->
+          <template v-if="hasBranch" #actions>
+            <Tooltip v-bind="hintProps(pull)">
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="arrow-down"
+                :aria-label="pull.label"
+                :disabled="!pull.allowed || Boolean(busy)"
+                @click="$emit('pull')"
+              />
+            </Tooltip>
+            <Tooltip v-bind="hintProps(push)">
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="arrow-up"
+                :aria-label="push.label"
+                :disabled="!push.allowed || Boolean(busy)"
+                @click="$emit('push')"
+              />
+            </Tooltip>
+          </template>
+        </SectionHeader>
         <div v-if="fold.branchesOpen" ref="branchBox" :style="branchStyle">
           <BranchList
             :branches="branches"
+            :tracking="tracking"
             :folders="branchFolders"
             :actions="actions"
             :busy="busy"

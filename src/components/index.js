@@ -89,6 +89,7 @@ export { changeStatus } from './git/changeStatus.js'
 export { canCommit, canSuggest, commitHint, commitLabel } from './git/commitBox.js'
 export { gitActions } from './git/gitActions.js'
 export { BRANCH_ROWS, filler, resolveDrag } from './git/sectionHeights.js'
+export { AHEAD_TOKEN, BEHIND_TOKEN, folderBehind, pullAction, pushAction, trackingMark } from './git/tracking.js'
 
 // notifications
 export { default as NotificationCard } from './notifications/NotificationCard.vue'

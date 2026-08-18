@@ -412,6 +412,41 @@ const FOLDER_BRANCHES = [
   { name: 'develop', current: false }
 ]
 
+/* Every state a row can be in against its upstream, keyed by branch name the
+   way `vcsState.tracking` holds it: behind, ahead, both at once, level with the
+   remote, a branch nobody has pushed (no record at all, like `release/7`) and
+   one whose upstream was deleted there. Only the first three draw a mark and
+   only the two with something to pull take the colour. */
+const TRACKING = {
+  'feat/worktree-rename': { upstream: 'origin/feat/worktree-rename', ahead: 0, behind: 3, gone: false },
+  develop: { upstream: 'origin/develop', ahead: 2, behind: 0, gone: false },
+  main: { upstream: 'origin/main', ahead: 4, behind: 12, gone: false },
+  'feature/smetana-8ok-git-panel-branches': {
+    upstream: 'origin/feature/smetana-8ok-git-panel-branches',
+    ahead: 0,
+    behind: 0,
+    gone: false
+  },
+  spike: { upstream: null, ahead: 0, behind: 0, gone: false },
+  old: { upstream: 'origin/old', ahead: 0, behind: 0, gone: true }
+}
+
+/* The list the two caption buttons are checked against: every name in it has a
+   record in `TRACKING`, so which branch a frame is *on* is the whole of what
+   changes between them — behind, ahead and behind at once, never pushed, or an
+   upstream deleted on the remote. `current` is set per frame rather than here,
+   because the pair in the caption is about that one branch and nothing else. */
+const REMOTE_BRANCHES = ['feat/worktree-rename', 'develop', 'main', 'spike', 'old']
+const onBranch = (name) => REMOTE_BRANCHES.map((branch) => ({ name: branch, current: branch === name }))
+
+/* The same for the folded list, where the point is the heading rather than the
+   row: `fix/legacy/depot-import` is behind, and it is inside two folded
+   folders, so the bare `↓` has to reach the heading of each. */
+const FOLDER_TRACKING = {
+  'fix/legacy/depot-import': { upstream: 'origin/fix/legacy/depot-import', ahead: 0, behind: 2, gone: false },
+  main: { upstream: 'origin/main', ahead: 1, behind: 0, gone: false }
+}
+
 /* Which of them are unfolded, held here the way the app holds it under the
    project. Both start at `null`, which is not the same as an empty list: it
    means nobody has chosen, and the folder holding the current branch opens by
@@ -419,13 +454,17 @@ const FOLDER_BRANCHES = [
    empty, which is a choice and stays. */
 const branchFolders = ref(null)
 const gitFolders = ref(null)
+/* Everything folded, which is the state the heading's own mark exists for —
+   and live, so unfolding one heading and watching the mark move to the next is
+   a thing that can be done here. */
+const foldedTracking = ref([])
 
 /* The caption on its own, in all three of the states it can be in: unfolded
    with a count, unfolded without one, and folded — which still carries its
    count, because somebody who folds the branches away is saying they do not
    want to read the list, not that they no longer want to know there are nine
    of them. */
-const headerFolds = ref({ withCount: true, bare: true, folded: false })
+const headerFolds = ref({ withCount: true, bare: true, folded: false, withActions: true })
 /* The live commit box's own draft. Empty to start with, since that is the
    state the button's refusal is drawn in. */
 const commitDraft = ref('')
@@ -688,6 +727,12 @@ terminalState.activeId = 1
 const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
+/* Local like the two above, and for the same reason: in the app this value
+   comes from the main window and goes back to it as an event, and neither end
+   exists here. Bound rather than left to its default so the switch actually
+   moves when it is pressed — a control that does not respond is the one thing
+   this page cannot be used to check. */
+const galleryGitAutoFetch = ref(true)
 const galleryAgent = ref('claude')
 /* The Agents tab's two language pickers. Not both on English: the longest label
    either list holds is the one worth looking at, and a tab showing "English"
@@ -1437,6 +1482,89 @@ const menuTargetStyle = {
           </Panel>
         </div>
       </div>
+      <!-- The Branches caption with its two buttons, which is the one place in
+           the app the remote can be reached from — and the states are the
+           branch the repository is *on*, since that is what both of them are
+           about. What to check: that neither button crowds the count out of the
+           caption, that the refused one is legible rather than invisible, and
+           that its reason opens on hover from the wrapper around it rather than
+           from the disabled control itself. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <!-- The everyday pair: three commits waiting and nothing of ours to
+             send, so Pull is live and Push is refused. Both are icon-only, so
+             the count lives in the tooltip and in `aria-label` — hover the
+             arrow to read `Pull 3`; nothing of it is drawn beside the glyph. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'feat/worktree-rename', detached: null, changes: CHANGES }"
+              :branches="onBranch('feat/worktree-rename')"
+              :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+        <!-- Diverged: both live, each naming its own number on hover, and the
+             row for the branch they are about carries the same two marks —
+             which is where the number is actually on screen. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'main', detached: null, changes: CHANGES }"
+              :branches="onBranch('main')"
+              :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+        <!-- A branch nobody has pushed — the ordinary state of one cut in this
+             very panel. Push is named "Publish branch" — in its tooltip and to
+             a screen reader, since the glyph is the same arrow — and Pull is
+             refused: there is nothing there yet to pull from. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'spike', detached: null, changes: CHANGES }"
+              :branches="onBranch('spike')"
+              :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+        <!-- A run going: both refused by the same verdict that mutes the rows,
+             and both say so in `gitActions.js`'s own sentence. A fetch is still
+             allowed underneath — it writes no tree — but nothing here shows
+             that, because nothing on screen ever does. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'main', detached: null, changes: CHANGES }"
+              :branches="onBranch('main')"
+              :tracking="TRACKING"
+              :actions="RUN_GOING"
+            />
+          </Panel>
+        </div>
+        <!-- A detached HEAD draws neither button at all: there is no branch for
+             an upstream to be about, and two dead controls say less than the
+             empty caption does. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: null, detached: 'a1b2c3d', changes: CHANGES }"
+              :branches="onBranch(null)"
+              :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+      </div>
       <!-- The two lists on their own, at the same width: what a row does with a
            long path, a detached HEAD and a rename's second path is easier to
            check without a panel around it. The last frame is git's own refusal,
@@ -1473,6 +1601,26 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <SectionHeader label="Repositories" :count="3" :open="false" />
           <SectionHeader divided label="Changes" :count="7" :open="false" />
+        </div>
+        <!-- The `actions` slot, which is why the row is a wrapper around the
+             caption rather than the caption itself: the controls are a sibling
+             of a `<button>` and not its children, and both halves have to sit
+             inside one `--row-h`. Beside it the same caption with nothing in
+             the slot, so what the gutter does to the count is visible in one
+             glance. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <SectionHeader
+            label="Branches"
+            :count="9"
+            :open="headerFolds.withActions"
+            @toggle="headerFolds.withActions = !headerFolds.withActions"
+          >
+            <template #actions>
+              <IconButton icon="arrow-down" label="Pull 2" size="sm" />
+              <IconButton icon="arrow-up" label="Push 1" size="sm" />
+            </template>
+          </SectionHeader>
+          <SectionHeader divided label="Branches" :count="9" :open="true" />
         </div>
       </div>
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
@@ -1525,6 +1673,37 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />
         </div>
+        <!-- The same list against its upstreams, which is every state a row can
+             be in: behind (orange, `↓3`), ahead (`↑2` and no colour), both at
+             once, level with the remote, and a branch nobody has pushed, which
+             has no record and draws nothing at all. What to check is that the
+             marks do not push a long name into an ellipsis it did not have
+             before, and that the orange is legible on both themes. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" :tracking="TRACKING" />
+        </div>
+        <!-- And with the deleted upstream and the unpushed branch in the list,
+             neither of which is orange: there is nothing to pull into either,
+             and a colour on them would send somebody to a button that
+             refuses. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="[
+              { name: 'main', current: true },
+              { name: 'spike', current: false },
+              { name: 'old', current: false }
+            ]"
+            :tracking="TRACKING"
+          />
+        </div>
+        <!-- A run going over the marks: the rows are muted and the names give
+             the colour up with them, since one name in orange over a panel
+             nobody may press would be saying a press was possible. The counts
+             keep their own token — they are a fact about the remote and not an
+             offer. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" :tracking="TRACKING" :actions="RUN_GOING" />
+        </div>
         <!-- The same list with a run going: every row inert, the current one
              still readable, and the reason on a tooltip over whichever row the
              pointer is on. The sentence is `gitActions.js`'s own, computed here
@@ -1551,6 +1730,19 @@ const menuTargetStyle = {
              where recency put them rather than swept under a heading. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="FOLDER_BRANCHES" :folders="['feature', 'fix', 'fix/legacy']" />
+        </div>
+        <!-- The heading's own mark, which is the whole reason it exists: every
+             folder is folded, `fix/legacy/depot-import` is behind, and both
+             headings above it carry a bare `↓` — no number, since the count
+             beside it is already a number about the same heading. Unfold `fix`
+             and the mark moves down to `legacy` with the branch it is about. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :folders="foldedTracking"
+            :tracking="FOLDER_TRACKING"
+            @toggle-folder="foldedTracking = $event"
+          />
         </div>
         <!-- And with a run going, where the headings are deliberately the one
              thing not dimmed: unfolding is reading, and a heading greyed out
@@ -2030,8 +2222,10 @@ const menuTargetStyle = {
           <GeneralSettings
             :theme="galleryTheme"
             :ui-font-size="galleryUiFont"
+            :git-auto-fetch="galleryGitAutoFetch"
             @update:theme="galleryTheme = $event"
             @update:ui-font-size="galleryUiFont = $event"
+            @update:git-auto-fetch="galleryGitAutoFetch = $event"
           />
         </div>
         <div :style="{ width: '380px' }">

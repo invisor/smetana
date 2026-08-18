@@ -89,6 +89,7 @@ import { gitState, loadBranches, loadHead } from '../stores/git.js'
    the branch in the scope bar and spawns no process, this one runs git. */
 import {
   abortConflict,
+  autoFetch,
   checkout,
   commit,
   createBranch,
@@ -96,6 +97,8 @@ import {
   draftMessage,
   loadRepos,
   merge,
+  pull,
+  push,
   rebase,
   refresh as refreshGit,
   selectRepo,
@@ -932,6 +935,19 @@ const catchUp = async () => {
      discovered: while an agent works, this list is as stale as the tree beside
      it, until focus returns or the refresh button is pressed. */
   loadRepos(activePath.value)
+  /* And the one thing in that panel the disk cannot answer: whether anybody
+     else has pushed. It goes out from here rather than from the store itself
+     because a store that opened sockets on its own would be doing it on every
+     repository row somebody clicks — the two moments this app catches up with
+     the world are window focus and a project change, and this is the first of
+     them.
+
+     Not awaited, and nothing downstream of it: the panel is drawn from what is
+     already known, the marks change when the answer lands, and a remote that
+     never answers costs this sweep nothing. Whether it goes at all is the
+     person's own setting, and the throttle is the store's — both are checked
+     there, so this line is a question rather than an order. */
+  autoFetch()
   /* The setup session writes .smetana/project.toml from outside this window,
      exactly like an agent changing a branch or a file — window focus is how
      this app learns about all of those. Not awaited, for the same reason
@@ -1710,6 +1726,28 @@ watch(activePath, (path) => {
   loadRun(path)
 })
 
+/* The other half of the background fetch, and it is keyed on the repository the
+   Git panel settled on rather than on the project path beside it.
+
+   The path is what changes first and it is the wrong moment to ask: which
+   repository a project shows is decided an invoke later — `loadRepos` reads the
+   list, `selectRepo` picks the remembered one — so a fetch fired on the path
+   would go out for the repository being left, against a remote nobody is
+   looking at any more, and stamp that one's throttle. Waiting for the selection
+   asks about what is on screen.
+
+   It also covers a person picking another repository inside one project, which
+   is the same question one row further along: the panel is now drawing marks
+   for a repository this session has never asked the remote about. The store
+   holds the cost down — one call in flight per repository and one every five
+   minutes — and the setting decides whether any of it happens at all. */
+watch(
+  () => vcsState.selected,
+  (repo) => {
+    if (repo) autoFetch()
+  }
+)
+
 /* What stands in the scope bar: the chosen project's name and its branch. A
    detached HEAD is not a branch, and it is labelled as plainly as it looks: a
    short hash with a word. A dash means "there is nothing to show" — a folder
@@ -2112,6 +2150,7 @@ const toastStackStyle = {
                 :selected="vcsState.selected"
                 :tree="vcsState.tree"
                 :branches="vcsState.branches"
+                :tracking="vcsState.tracking"
                 :actions="gitWrites"
                 :busy="vcsState.busy"
                 :write-error="vcsState.writeError"
@@ -2130,6 +2169,8 @@ const toastStackStyle = {
                 @checkout="checkout"
                 @merge="merge"
                 @rebase="rebase"
+                @pull="pull"
+                @push="push"
                 @new-branch="newBranchFrom = $event"
                 @message="setMessage"
                 @commit="commit"

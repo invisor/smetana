@@ -44,6 +44,14 @@ const defaults = () => ({
      `UI_FONT_DEFAULT` / `EDITOR_FONT_DEFAULT`. */
   appearance: { theme: 'dark', density: 'comfortable', uiFontSize: UI_FONT_DEFAULT },
   editor: { fontSize: EDITOR_FONT_DEFAULT },
+  /* What the Git panel may do on its own: `autoFetch` is whether this app opens
+     a socket by itself — on window focus, throttled, and silently — to find out
+     whether a branch has commits waiting for it. Global rather than per project
+     for the reason `GitSettings` in Rust records: it is a fact about a
+     connection and a person, not about a repository, and that file carries the
+     same default. A section missing there is a section this window cannot
+     draw. */
+  git: { autoFetch: true },
   /* How the board is drawn — which columns get a slot and how far back a card
      is worth looking at. Global rather than per project, for the reason
      `KanbanSettings` in Rust records, and shipped as today's board exactly:
@@ -291,6 +299,7 @@ export async function loadSettings() {
     const base = defaults()
     applySection(settings.appearance, base.appearance, stored.appearance)
     applySection(settings.editor, base.editor, stored.editor)
+    applySection(settings.git, base.git, stored.git)
     applySection(settings.kanban, base.kanban, stored.kanban)
     applySection(settings.layout, base.layout, stored.layout)
     applySection(settings.project, base.project, stored.project)
@@ -348,6 +357,7 @@ function toShared(source) {
   const appearance = { ...base.appearance, ...source.appearance }
   const editor = { ...base.editor, ...source.editor }
   const kanban = { ...base.kanban, ...source.kanban }
+  const git = { ...base.git, ...source.git }
   return {
     theme: appearance.theme,
     density: appearance.density,
@@ -361,6 +371,8 @@ function toShared(source) {
     kanbanAlwaysShow: kanban.alwaysShow,
     kanbanInterval: kanban.interval,
     kanbanUnlimited: kanban.unlimited,
+    /* Flat for the same reason the four above it are. */
+    gitAutoFetch: git.autoFetch,
     agent: source.agent ?? base.agent,
     agentLanguage: source.agentLanguage ?? base.agentLanguage,
     taskLanguage: source.taskLanguage ?? base.taskLanguage
@@ -423,6 +435,13 @@ export function applyPatch(patch) {
   }
   if (Array.isArray(patch.kanbanUnlimited)) {
     settings.kanban.unlimited = columnNames(patch.kanbanUnlimited)
+  }
+  /* A switch, so the whole check is the type: anything that is not a boolean is
+     not an answer to this question and is skipped rather than coerced — `false`
+     has to be reachable, and `Boolean(patch.gitAutoFetch)` would turn a
+     malformed event into a deliberate-looking "off". */
+  if (typeof patch.gitAutoFetch === 'boolean') {
+    settings.git.autoFetch = patch.gitAutoFetch
   }
 }
 

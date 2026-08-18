@@ -22,6 +22,12 @@ import { invoke } from '@tauri-apps/api/core'
    left, until they alt-tab away and back. */
 import { loadHead } from './git.js'
 import { settings } from './settings.js'
+/* The one rule this store shares with the button that starts it — see `push`
+   below. A pure module out of `components/`, which is what `runs.js`,
+   `notifications.js` and `settings.js` already reach into that family for: the
+   rules live beside the part of the interface they are about, and nothing in
+   them is Vue. */
+import { publishes } from '../components/git/tracking.js'
 
 export const vcsState = reactive({
   /* The project the rest of this object is about. Also the guard token: every
@@ -45,6 +51,18 @@ export const vcsState = reactive({
      that a repository nobody has committed to still has something to merge
      into. */
   branches: [],
+  /* Where each local branch stands against its upstream, keyed by branch name:
+     `{ upstream, ahead, behind, gone }` as `vcs_tracking` answers. Keyed rather
+     than listed because every reader has a name in its hand — a row, or the
+     current branch — and none of them wants the order.
+
+     A second answer beside `branches` rather than a richer `branches`, which is
+     the seam Rust is split on: the branch list is three file reads that cannot
+     fail, this is a process that can. An empty object is "nothing is known",
+     which is what a repository with no remote, a git that could not be run, and
+     a fetch that has not happened yet all look like — and all three draw the
+     same row, which is the one from before this feature existed. */
+  tracking: {},
   /* `{ kind, message }` — Rust's own shape, normalised here so a rejection that
      is a bare string (the browser mock, a transport failure) draws the same
      way. `kind` is what the panel branches on; the message is git's own words
@@ -66,8 +84,11 @@ export const vcsState = reactive({
   /* What git is doing right now — `{ op, branch }` — or null. One at a time:
      the panel goes inert while git works, so a second row cannot be pressed
      into an operation git is already in the middle of for the first. `op` is
-     `checkout`, `merge`, `rebase` or `abort`, and the branch is the row it was
-     asked for, which is where the spinner goes. */
+     `checkout`, `merge`, `rebase`, `create`, `commit`, `abort`, `pull` or
+     `push`, and the branch is the row it was asked for, which is where the
+     spinner goes. The last two are about the current branch and carry its name
+     for that reason: they leave from the section header rather than from a row,
+     and the row they are about is the one with the tick. */
   busy: null,
   /* A merge or a rebase that stopped on conflicts, which is an outcome and not
      a failure — hence its own field beside `writeError` rather than in it.
@@ -113,6 +134,23 @@ function asError(err) {
   }
   return { kind: 'io', message: String(err) }
 }
+
+/* How often this app may go to a remote on its own, per repository.
+
+   A constant and not a setting: what a person actually wants to decide is
+   whether this happens at all (`settings.git.autoFetch`), and a number of
+   minutes in the settings window would be a control nobody can answer well.
+   Five is short enough that a branch somebody else pushed to is orange by the
+   time it matters and long enough that alt-tabbing does not open a socket every
+   few seconds. */
+const FETCH_EVERY_MS = 5 * 60 * 1000
+
+/* When each repository was last fetched, by path, and which are in flight.
+   In memory and never in `settings.json`: it is a fact about this session, and
+   a stored timestamp would mean a machine that was asleep for a week comes back
+   believing it is current. */
+const fetchedAt = new Map()
+const fetching = new Set()
 
 /* Which repository to show, out of the list that has just arrived.
 
@@ -196,7 +234,7 @@ export async function selectRepo(path) {
      conflict is deliberately not cleared here — it is a tree somebody still has
      to answer for, and its own record names the repository it belongs to. */
   vcsState.writeError = null
-  await Promise.all([loadStatus(), loadBranchList()])
+  await Promise.all([loadStatus(), loadBranchList(), loadTracking()])
 }
 
 /* The selected repository's working tree.
@@ -259,6 +297,36 @@ async function loadBranchList() {
   }
 }
 
+/* Where the selected repository's branches stand against their upstreams.
+
+   Guarded on the pair, project and repository, exactly as `loadStatus` is: a
+   list arriving after somebody moved on would mark one repository's branches
+   with another repository's counts, and the mark is what a person then acts on.
+
+   `loading` is deliberately untouched, for `loadBranchList`'s reason: two
+   functions setting one boolean means whichever finishes first clears it under
+   the other.
+
+   A failure is quiet. `vcs_tracking` refuses nothing, so reaching the catch
+   means the call itself failed — and a panel that shouted about it would be
+   shouting about a mark, on a machine that may simply have no remote. */
+async function loadTracking() {
+  const { project, selected } = vcsState
+  if (!selected) {
+    vcsState.tracking = {}
+    return
+  }
+  try {
+    const records = await invoke('vcs_tracking', { repo: selected })
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    vcsState.tracking = Object.fromEntries(records.map((record) => [record.branch, record]))
+  } catch (err) {
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    console.error('[vcs] reading upstreams failed:', err)
+    vcsState.tracking = {}
+  }
+}
+
 /* The branch the selected repository is on right now, as the list says.
 
    Read before an operation rather than after it, because a rebase leaves HEAD
@@ -268,6 +336,17 @@ async function loadBranchList() {
 function currentBranch() {
   return vcsState.branches.find((branch) => branch.current)?.name ?? vcsState.tree?.branch ?? null
 }
+
+/* Which operation a conflicted tree is aborted as, where that is not the name
+   of the write that made it.
+
+   A pull is `git pull --no-rebase`, so what git stopped in the middle of is a
+   merge: `git merge --abort` is the call that puts the tree back, and the
+   record's `op` is the whole of what `abortConflict` reads — `OpKind` in
+   `vcs/model.rs` knows two words and `pull` is not one of them. The refusal
+   block keeps the write's own name, because "Git did not pull" is what somebody
+   pressed. */
+const CONFLICT_OP = { pull: 'merge' }
 
 /* The mechanics every write in this panel shares, with one `invoke` handed in.
 
@@ -282,12 +361,17 @@ function currentBranch() {
    as `VcsError::Git` with git's own stderr in them, and the panel prints that
    as it stands.
 
+   `theirs` is what the conflict record calls the other side, and it is the same
+   branch as `busy`'s for every write but the pull: there the row the spinner
+   belongs on is the current branch, while what git was bringing in is that
+   branch's upstream, and the modal's sentence is about the second.
+
    What follows a write that worked is the whole list again rather than the
    working tree alone: the branch each repository is on is drawn in its row, so
    a status-only refresh would leave the row naming the branch somebody just
    left. The scope bar goes with it, one store over — and after a rebase that is
    not a nicety, since HEAD can be detached now and the bar says so. */
-async function write(op, branch, call) {
+async function write(op, branch, call, theirs = branch) {
   const { project, selected } = vcsState
   /* A branch is **not** required here, though three of the four writes cannot
      do without one and guard it themselves. A commit is about the tree rather
@@ -316,7 +400,13 @@ async function write(op, branch, call) {
        prompt — is about that repository and not about whichever row is
        selected by the time git answers. */
     if (outcome?.kind === 'conflict') {
-      vcsState.conflict = { repo: selected, op, ours, theirs: branch, files: outcome.files ?? [] }
+      vcsState.conflict = {
+        repo: selected,
+        op: CONFLICT_OP[op] ?? op,
+        ours,
+        theirs,
+        files: outcome.files ?? []
+      }
       vcsState.conflictError = null
     }
     await refresh()
@@ -375,6 +465,48 @@ export async function createBranch({ name, from, switch: switchTo = true }) {
 export async function rebase(onto) {
   if (!onto) return
   await write('rebase', onto, (repo) => invoke('vcs_rebase', { repo, onto }))
+}
+
+/* Bring the upstream's commits into the branch this repository is on.
+
+   Through `write` like every other write here, so it takes the same `busy`, the
+   same refusal block and the same refresh afterwards — and `busy` is keyed on
+   the current branch, which is the row the spinner belongs on.
+
+   The conflict it can end in is `merge`'s, and it is recorded as `merge`
+   deliberately: `vcs_pull` runs `git pull --no-rebase`, so the abort that puts
+   the tree back is `git merge --abort`, and the record's own `op` is what
+   `abortConflict` reads. */
+export async function pull() {
+  const branch = currentBranch()
+  /* The upstream is what a conflict here is *with*, and the modal draws it:
+     "Git stopped merging origin/main into main" is the sentence, where the
+     branch's own name on both sides would be one about nothing. Pull is refused
+     without an upstream (`components/git/tracking.js`), so the fall-back is for
+     a caller that went round the button rather than for a state on screen. */
+  const upstream = branch ? vcsState.tracking[branch]?.upstream : null
+  await write('pull', branch, (repo) => invoke('vcs_pull', { repo }), upstream ?? branch)
+}
+
+/* Send this branch's commits to its upstream, publishing the branch if it has
+   none.
+
+   The decision is taken here rather than in Rust because the tracking record is
+   already on this side and is what the button was drawn from — and a stale
+   answer is harmless either way: `-u` against a branch that has since gained an
+   upstream sets the same one again, and a plain push of one that has since lost
+   it is refused in git's own words.
+
+   Which of the two it is, is `publishes` in `components/git/tracking.js` and
+   never a second copy of that expression here: the caption is drawn from the
+   same call, and a rule written out twice is one that will one day say "Publish
+   branch" over a plain `git push`. Answered here rather than carried on the
+   event so that a caller going round the button — the panel is not the only way
+   into this store — cannot ask for the wrong one. */
+export async function push() {
+  const branch = currentBranch()
+  const setUpstream = publishes(branch ? vcsState.tracking[branch] : null)
+  await write('push', branch, (repo) => invoke('vcs_push', { repo, setUpstream }))
 }
 
 /* What is in the draft for the repository on screen. Empty for one nobody has
@@ -508,11 +640,58 @@ export async function refresh() {
   await loadRepos(vcsState.project)
 }
 
+/* Ask the remote whether there is anything new, for the selected repository.
+
+   Called from window focus and from the project switch — the same two moments
+   everything else in this panel refreshes on — and from nowhere else. Three
+   things keep it from being a cost:
+
+   - the setting, which is the person's own answer to whether this app may open
+     a socket by itself;
+   - the throttle, so a person alt-tabbing does not fetch every few seconds;
+   - one in flight per repository, since a second request would queue behind a
+     network call that may be running for a minute.
+
+   Nothing waits for it. The branch list, the status and the marks are drawn
+   from what is already known, and when this lands the tracking read is repeated
+   and the marks change under them.
+
+   **Its failure is silent, and that is the design.** `writeError` draws "Git
+   refused this operation" and there was no operation: nobody pressed anything.
+   A laptop off the network must be usable all day without a red block in the
+   sidebar, and what is on screen stays as stale as the last fetch that worked —
+   the same promise the file tree beside it makes. */
+export async function autoFetch() {
+  const { project, selected } = vcsState
+  if (!selected || !settings.git.autoFetch) return
+  if (fetching.has(selected)) return
+  const last = fetchedAt.get(selected) ?? 0
+  if (Date.now() - last < FETCH_EVERY_MS) return
+  fetching.add(selected)
+  try {
+    await invoke('vcs_fetch', { repo: selected })
+    fetchedAt.set(selected, Date.now())
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    await loadTracking()
+  } catch (err) {
+    /* Recorded where a developer can see it and nowhere a person can: the
+       ordinary cases here are no network, no credentials and no remote, and
+       none of them is something this panel should interrupt anybody about. */
+    console.error('[vcs] background fetch failed:', err)
+    /* Stamped even on failure, so an unreachable remote is asked once every
+       five minutes rather than on every window focus. */
+    fetchedAt.set(selected, Date.now())
+  } finally {
+    fetching.delete(selected)
+  }
+}
+
 function reset() {
   vcsState.repos = []
   vcsState.selected = null
   vcsState.tree = null
   vcsState.branches = []
+  vcsState.tracking = {}
   vcsState.error = null
   vcsState.writeError = null
   /* A conflict belongs to a repository of the project being left, and there is
@@ -528,4 +707,20 @@ function reset() {
   vcsState.messages = {}
   vcsState.suggestError = null
   vcsState.loading = false
+  /* The throttle's memory, and only when there is no project at all — this
+     runs on the way to an empty window and nowhere else, so switching between
+     two projects deliberately keeps the stamps: the same repository opened
+     again a minute later has not become stale because somebody looked at
+     something else. Dropped here because a window with no project is a session
+     ending, and a repository re-opened after that should ask the remote once
+     rather than wait out a throttle set before it.
+
+     `fetching` is deliberately **not** cleared with it. It is not memory but a
+     guard over a call that is still running: a fetch in flight goes on running
+     across this, and its own `finally` takes the repository back out of the set
+     when it lands. Emptying it here would drop the guard while the call it
+     guards is still open, so re-opening that project could start a second
+     `git fetch` in the same repository — the one thing this set exists to
+     prevent. */
+  fetchedAt.clear()
 }
