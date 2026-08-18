@@ -73,7 +73,12 @@ const view = reactive({
   kanbanColumns: 'all',
   kanbanAlwaysShow: [],
   kanbanInterval: 'all',
-  kanbanUnlimited: []
+  kanbanUnlimited: [],
+  /* Whether the Git panel goes to a remote by itself. Shipped on, the same as
+     `settings/model.rs` and `stores/settings.js` — the three copies of this
+     default have to agree, or the switch draws the opposite of what the app is
+     doing for the moment before the first answer arrives. */
+  gitAutoFetch: true
 })
 const FIELDS = Object.keys(view)
 
@@ -288,8 +293,10 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           v-if="tab === 'general'"
           :theme="view.theme"
           :ui-font-size="view.uiFontSize"
+          :git-auto-fetch="view.gitAutoFetch"
           @update:theme="change({ theme: $event })"
           @update:ui-font-size="change({ uiFontSize: $event })"
+          @update:git-auto-fetch="change({ gitAutoFetch: $event })"
         />
         <EditorSettings
           v-else-if="tab === 'editor'"

@@ -89,6 +89,26 @@ impl Default for EditorSettings {
     }
 }
 
+/// What the Git panel does on its own.
+///
+/// Global rather than under a project, the argument `kanban` and
+/// `layout.git_sections` are global on: whether this machine should go to the
+/// network by itself is a fact about a connection and a person, not about one
+/// repository.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GitSettings {
+    /// Fetch from the remote by itself — on window focus, throttled, and
+    /// silently. The front end owns the throttle; this is only the switch.
+    pub auto_fetch: bool,
+}
+
+impl Default for GitSettings {
+    fn default() -> Self {
+        Self { auto_fetch: true }
+    }
+}
+
 /// The shipped sizes, in pixels: today's `--text-md` for the app and today's
 /// `--text-code-size` for the editor. Repeated in the front end
 /// (`src/appearance.js`), for the same reason the panel widths are: with no back
@@ -430,6 +450,9 @@ pub struct Settings {
     /// How the board is drawn. At the root rather than under a project, for the
     /// reason `KanbanSettings` records.
     pub kanban: KanbanSettings,
+    /// What the Git panel may do on its own. At the root for the reason
+    /// `GitSettings` records.
+    pub git: GitSettings,
     /// Which CLI agent the app starts. A habit of the person's, not a property
     /// of the repository, so it sits at the root rather than under a project.
     ///
@@ -463,6 +486,7 @@ impl Default for Settings {
             layout: Layout::default(),
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
+            git: GitSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -489,6 +513,8 @@ pub struct ResolvedSettings {
     pub editor: EditorSettings,
     /// How the board is drawn. See `Settings::kanban`.
     pub kanban: KanbanSettings,
+    /// What the Git panel may do on its own. See `Settings::git`.
+    pub git: GitSettings,
     /// Which CLI agent the app starts. See `Settings::agent`.
     pub agent: String,
     /// The two languages. See `Settings::agent_language`.
@@ -512,6 +538,7 @@ impl Default for ResolvedSettings {
             layout: Layout::default(),
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
+            git: GitSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -553,6 +580,7 @@ pub fn parse(text: &str) -> Outcome {
         layout: section(&object, "layout"),
         editor: section(&object, "editor"),
         kanban: section(&object, "kanban"),
+        git: section(&object, "git"),
         agent: object.get("agent").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| "claude".into()),
         agent_language: language_field(&object, "agentLanguage"),
         task_language: language_field(&object, "taskLanguage"),
@@ -593,6 +621,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         layout: file.layout.clone(),
         editor: file.editor.clone(),
         kanban: file.kanban.clone(),
+        git: file.git.clone(),
         agent: file.agent.clone(),
         agent_language: file.agent_language.clone(),
         task_language: file.task_language.clone(),
@@ -615,6 +644,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.layout = resolved.layout;
     file.editor = resolved.editor;
     file.kanban = resolved.kanban;
+    file.git = resolved.git;
     file.agent = resolved.agent;
     file.agent_language = resolved.agent_language;
     file.task_language = resolved.task_language;
@@ -1039,6 +1069,27 @@ mod tests {
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert_eq!(written.appearance.ui_font_size, 16, "merge must carry them back into the file");
         assert_eq!(written.editor.font_size, 18);
+    }
+
+    /// Default on, because a feature that does nothing until somebody finds a
+    /// switch is a feature nobody finds. The switch exists for the machines where
+    /// background network is not free — a metered connection, a VPN that is not
+    /// always up, a key with a passphrase that would fail on every sweep.
+    #[test]
+    fn auto_fetch_defaults_on_and_a_stored_false_survives_the_merge() {
+        assert!(Settings::default().git.auto_fetch);
+        // Every settings file on a person's disk right now is this file.
+        assert!(settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#).git.auto_fetch);
+
+        let file = settings_of(r#"{"version":1,"git":{"autoFetch":false}}"#);
+        assert!(!file.git.auto_fetch, "parse must read it off the disk");
+
+        let resolved = resolve(&file, None);
+        assert!(!resolved.git.auto_fetch, "resolve must carry it to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert!(!written.git.auto_fetch, "merge must carry it back into the file");
     }
 
     #[test]

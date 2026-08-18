@@ -688,6 +688,12 @@ terminalState.activeId = 1
 const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
+/* Local like the two above, and for the same reason: in the app this value
+   comes from the main window and goes back to it as an event, and neither end
+   exists here. Bound rather than left to its default so the switch actually
+   moves when it is pressed — a control that does not respond is the one thing
+   this page cannot be used to check. */
+const galleryGitAutoFetch = ref(true)
 const galleryAgent = ref('claude')
 /* The Agents tab's two language pickers. Not both on English: the longest label
    either list holds is the one worth looking at, and a tab showing "English"
@@ -2030,8 +2036,10 @@ const menuTargetStyle = {
           <GeneralSettings
             :theme="galleryTheme"
             :ui-font-size="galleryUiFont"
+            :git-auto-fetch="galleryGitAutoFetch"
             @update:theme="galleryTheme = $event"
             @update:ui-font-size="galleryUiFont = $event"
+            @update:git-auto-fetch="galleryGitAutoFetch = $event"
           />
         </div>
         <div :style="{ width: '380px' }">
