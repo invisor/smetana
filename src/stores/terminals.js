@@ -362,15 +362,25 @@ export const agentRows = computed(() => [
    Starts count as well, through the same `visibleStarts` the rows use rather
    than a second copy of the rule — a spawn takes about a second, the row is
    drawn for that second, and a counter that waited for the worker would
-   disagree with the list beside it for exactly as long. Sessions need no
-   filter of their own: the list already holds this project's and nothing else,
-   and it holds all of its tasks at once, so there is nothing to narrow.
+   disagree with the list beside it for exactly as long.
+
+   Sessions come through `agentSessions` for the same reason and not through
+   `terminalState.sessions`: that list holds the person's own shells too, and a
+   shell is not an agent — it has no row in the panel this number is read
+   against, so counting one would put the bar and the list one apart with
+   nothing on screen to explain the difference. This is the same exclusion
+   `agentRows` makes, through the same function deliberately: the two are one
+   sentence in the product — "how many agents are running" and "which agents are
+   running" — and a second spelling of "not a shell" here is exactly how they
+   would come to disagree. That is not hypothetical. This counter and the shell
+   sessions arrived on two branches at once and merged without a textual
+   conflict, each correct alone, and the number was wrong the moment they met.
 
    Deliberately a count and not `agentRows.value.length`: the rows carry
    captions and elapsed times, `now` ticks every thirty seconds, and this number
    has no business being recomputed by the clock. */
 export const liveAgentCount = computed(
-  () => terminalState.sessions.filter((s) => s.state !== 'exited').length + visibleStarts().length
+  () => agentSessions().filter((s) => s.state !== 'exited').length + visibleStarts().length
 )
 
 /* Exactly one output subscriber exists at a time — the terminal view. A Set,

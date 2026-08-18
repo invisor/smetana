@@ -1054,6 +1054,26 @@ describe('the live agent count in the scope bar', () => {
     expect(stores.terminals.liveAgentCount.value).toBe(2)
   })
 
+  /* A shell is a session of the worker's and not an agent: it has no row in the
+     panel this number is read against, so counting one would put the bar one
+     ahead of the list with nothing on screen to say why. The two rules meet in
+     `agentSessions`, which is what both this counter and `agentRows` filter
+     through — this is the test that would have caught them coming apart. */
+  it('a shell is not a running agent', async () => {
+    const { stores, emit, nextTick } = await ready()
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+
+    await emit('terminal:state', session({ id: 2, work: { kind: 'shell' }, agent: '/bin/zsh' }))
+    await emit('terminal:state', session({ id: 3, work: { kind: 'shell' }, agent: '/bin/zsh' }))
+    await nextTick()
+
+    // Both shells are in the worker's list, and in neither of the two things a
+    // person compares: the count and the rows.
+    expect(stores.terminals.terminalState.sessions).toHaveLength(3)
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+    expect(stores.terminals.agentRows.value).toHaveLength(1)
+  })
+
   /* The counter and the list, tied together in one assertion, because what the
      bar promises is the list minus the rows that have finished and the two are
      only equal through `toUiState`: `exited` is the one session state it maps
@@ -1069,10 +1089,15 @@ describe('the live agent count in the scope bar', () => {
     await emit('terminal:state', session({ id: 3, state: 'exited', exitCode: 1 }))
     await emit('terminal:state', session({ id: 4, state: 'needs-you' }))
     await emit('terminal:state', session({ id: 5, state: 'idle' }))
+    /* A shell among them, because the equality is what the criterion is worded
+       as and a shell is the one session that must not disturb either side of
+       it: it is in the list the worker keeps and in neither of these two. */
+    await emit('terminal:state', session({ id: 6, work: { kind: 'shell' }, agent: '/bin/zsh' }))
     await nextTick()
     stores.terminals.createSession('/p', { kind: 'bare' })
 
     const rows = stores.terminals.agentRows.value
+    expect(stores.terminals.terminalState.sessions).toHaveLength(6)
     expect(rows.map((r) => r.state)).toEqual(['running', 'done', 'failed', 'needs-you', 'ready', 'running'])
     expect(stores.terminals.liveAgentCount.value).toBe(
       rows.filter((r) => r.state !== 'done' && r.state !== 'failed').length
