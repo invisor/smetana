@@ -53,6 +53,7 @@ import {
   initTerminals,
   lastHandover,
   lastRunStart,
+  liveAgentCount,
   loadSessions,
   removeSession,
   terminalState
@@ -97,6 +98,7 @@ import {
   checkout,
   commit,
   createBranch,
+  dirtyCount,
   dismissConflict,
   draftMessage,
   loadRepos,
@@ -132,7 +134,6 @@ import {
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { scopeBusyReason } from '../components/run/runScopes.js'
-import { scope } from './desktopAppData.js'
 import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
 import {
   basenameOf,
@@ -2174,15 +2175,24 @@ const toastStackStyle = {
     <!-- The project's name and the branch it is on, both live. `worktree` is
          left empty on purpose: the component shows worktree-or-branch in that
          slot and appends "@branch" only when both are set, so passing the
-         branch alone is what puts it there once, undecorated. The counters
-         are still fixture: the Git tab reads the working tree, and this bar
-         has not been taught to count it. -->
+         branch alone is what puts it there once, undecorated.
+
+         Both counters are the stores' own computeds and neither is counted
+         here: the files are the Git panel's selected repository, so the number
+         is the length of the list that panel draws, and the agents are the
+         left column's rows minus the ones that have finished. The two rules
+         live in vcs.js and terminals.js because a rule in this file is a rule
+         no test can reach. Note that with several repositories in one project
+         the branch beside them is the project root's while the count is the
+         selected repository's — the panel is where a person is looking at that
+         list, and this is the number they can check against it. -->
     <ScopeIndicator
       ref="scopeBar"
-      v-bind="scope"
       :repo="activePath ? basename(activePath) : '—'"
       worktree=""
       :branch="branchLabel"
+      :dirty-count="dirtyCount"
+      :agents-active="liveAgentCount"
       :notifications="notificationsState.items.length"
       @notifications="toggleNotifications"
       @settings="openSettingsWindow()"

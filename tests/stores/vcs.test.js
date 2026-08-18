@@ -1175,3 +1175,52 @@ describe('the git panel store', () => {
     }
   })
 })
+
+/* The scope bar's first counter. It reads the very list the panel draws, and
+   these three cases are the whole of the rule: every kind of change counts,
+   nothing to commit is zero, and a tree nobody could read is not zero. */
+describe('the uncommitted file count in the scope bar', () => {
+  const load = async (statusReply) => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', repoIn('/p'))
+    statusReply(ipc)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    await stores.vcs.loadRepos('/p')
+    return stores.vcs
+  }
+
+  it('a clean tree counts zero, which is a fact and not an absence', async () => {
+    const vcs = await load((ipc) => ipc.on('vcs_status', cleanTree))
+    expect(vcs.vcsState.tree).not.toBeNull()
+    expect(vcs.dirtyCount.value).toBe(0)
+  })
+
+  /* Every kind is one file, untracked and conflicted included. The counter is
+     the length of the list on screen and nothing cleverer, so a person can
+     check the bar against the panel by looking; a version that counted only
+     tracked files would differ from the list under it by however many files
+     had just been created. */
+  it('every kind of change counts as one file', async () => {
+    const changes = [
+      { path: 'a.rs', origPath: null, kind: 'modified', staged: false, unstaged: true },
+      { path: 'b.rs', origPath: null, kind: 'added', staged: true, unstaged: false },
+      { path: 'c.rs', origPath: null, kind: 'deleted', staged: true, unstaged: false },
+      { path: 'd.rs', origPath: 'was.rs', kind: 'renamed', staged: true, unstaged: false },
+      { path: 'e.rs', origPath: null, kind: 'untracked', staged: false, unstaged: true },
+      { path: 'f.rs', origPath: null, kind: 'conflicted', staged: false, unstaged: true }
+    ]
+    const vcs = await load((ipc) => ipc.on('vcs_status', { branch: 'main', detached: null, changes }))
+    expect(vcs.dirtyCount.value).toBe(6)
+  })
+
+  /* Unknown is not zero — the opposition the store keeps for `tree` itself. A
+     repository whose status could not be read has an unknown number of
+     uncommitted files, and the bar draws no counter for it; answering `0` would
+     be this app telling somebody their work is committed. */
+  it('a tree that could not be read counts nothing at all, not zero', async () => {
+    const vcs = await load((ipc) => ipc.fail('vcs_status', { kind: 'noGit', message: 'git not found' }))
+    expect(vcs.vcsState.tree).toBeNull()
+    expect(vcs.dirtyCount.value).toBeNull()
+  })
+})

@@ -78,11 +78,3 @@ export const logLines = [
   { time: '14:02:58', text: `${E}[31merror${E}[0m: assertion failed at src/tabs.rs:118`, level: 'error' },
   { time: '14:03:09', text: `${E}[35m?${E}[0m worktree name collides with wt/bd-77e1 — overwrite?` }
 ]
-
-export const scope = {
-  repo: 'invisor/smetana',
-  worktree: 'wt/bd-a1b2',
-  branch: 'feat/worktree-rename',
-  dirtyCount: 3,
-  agentsActive: 2
-}
