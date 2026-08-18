@@ -3,9 +3,19 @@
 //! No test module: this is the disk and the process table, the same standing
 //! `files/fs.rs` and `tracker/bd.rs` have. What it produces is fed to
 //! `model.rs`, which is pure and carries the tests.
+//!
+//! **Two spawns, and the second one goes to a remote.** Everything above
+//! `git_network` is local — a status, a merge, a commit — and deliberately has
+//! no deadline at all: a hook that hangs was started by somebody who is
+//! standing over it. A fetch against an unreachable host is not that. Nobody
+//! may be watching it, git has no terminal here to ask a password on, and the
+//! panel would sit dead with nothing on screen saying why. So `git_network`
+//! adds the two things that difference calls for, and nothing else about the
+//! call changes.
 
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use super::model::VcsError;
 
@@ -105,6 +115,88 @@ pub fn git_bytes(repo: &Path, args: &[&str]) -> Result<Vec<u8>, VcsError> {
         return Err(refusal(&out));
     }
     Ok(out.stdout)
+}
+
+/// How long a call to a remote may run before it is killed.
+///
+/// The number is a judgement rather than a measurement: a clone-sized fetch on
+/// a slow line can pass it, and the alternative — no ceiling at all — is the
+/// panel dead with nothing on screen. A person who hits it presses the button
+/// again.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The same call as `git`, for the three commands that reach a remote.
+///
+/// Two things are different, and both exist because nobody is standing over a
+/// background fetch the way somebody stands over a commit hook.
+///
+/// **git may not ask anybody anything.** There is no terminal on this process,
+/// so a prompt for a username, a password or an SSH passphrase is at best a
+/// dialog from some other program and at worst a wait with no end.
+/// `GIT_TERMINAL_PROMPT=0` refuses the first, `SSH_ASKPASS_REQUIRE=never` the
+/// second, and `BatchMode=yes` makes ssh fail instead of asking.
+/// `StrictHostKeyChecking` is deliberately left alone: what a machine trusts is
+/// not this app's to change.
+///
+/// **There is a deadline with a kill behind it**, which the rest of this module
+/// deliberately does without. A hook that hangs was started by somebody who is
+/// watching; a fetch against an unreachable host was started by a window
+/// getting focus.
+pub fn git_network(repo: &Path, args: &[&str]) -> Result<String, VcsError> {
+    let out = spawn_network(repo, args)?;
+    if !out.status.success() {
+        return Err(refusal(&out));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `git_network`, with the non-zero exit handed back instead of raised — the
+/// networked half of `git_attempt`, and for the same one caller: a pull that
+/// conflicted has to be told from a pull git refused, and only the tree can say
+/// which.
+pub fn git_network_attempt(repo: &Path, args: &[&str]) -> Result<Attempt, VcsError> {
+    let out = spawn_network(repo, args)?;
+    Ok(if out.status.success() { Attempt::Done } else { Attempt::Refused(refusal(&out)) })
+}
+
+fn spawn_network(repo: &Path, args: &[&str]) -> Result<Output, VcsError> {
+    let mut command = Command::new(GIT);
+    command
+        .args(args)
+        .current_dir(repo)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        // Nothing may be asked of a person who is not there.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("SSH_ASKPASS_REQUIRE", "never")
+        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(path) = crate::shell_env::path() {
+        command.env("PATH", path);
+    }
+
+    let mut child = command.spawn().map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => VcsError::NoGit(GIT.to_string()),
+        _ => VcsError::Io(err.to_string()),
+    })?;
+
+    // The same loop `agents::oneshot` runs, and deliberately the same shape: it
+    // is the one place in this tree that already puts a ceiling on a child.
+    let deadline = Instant::now() + NETWORK_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                return Err(VcsError::Timeout(NETWORK_TIMEOUT.as_secs()));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(err) => return Err(VcsError::Io(err.to_string())),
+        }
+    }
+
+    child.wait_with_output().map_err(|err| VcsError::Io(err.to_string()))
 }
 
 /// The child itself: the environment, the working directory and the two ways

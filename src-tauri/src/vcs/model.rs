@@ -328,6 +328,11 @@ pub enum VcsError {
     /// `vcs_commit` answers it first and this variant exists to answer it with.
     #[error("A commit needs a message.")]
     NoMessage,
+    /// A network call that was still running when its deadline passed, and was
+    /// killed. Its own variant rather than a `Git { .. }` with an empty stderr:
+    /// git said nothing, this app decided, and the sentence has to say so.
+    #[error("Smetana stopped git after {0} seconds — the remote did not answer.")]
+    Timeout(u64),
     #[error("{0}")]
     Io(String),
 }
@@ -343,6 +348,7 @@ impl VcsError {
             Self::TooLarge { .. } => "tooLarge",
             Self::NotUtf8(_) => "notUtf8",
             Self::NoMessage => "noMessage",
+            Self::Timeout(_) => "timeout",
             Self::Io(_) => "io",
         }
     }
@@ -616,6 +622,19 @@ mod tests {
             FilesError::TooLarge { path: path(), bytes: 1 }.kind()
         );
         assert_eq!(VcsError::NotUtf8(path()).kind(), FilesError::NotUtf8(path()).kind());
+    }
+
+    /// The panel branches on `kind` and never on the message, so a variant whose
+    /// kind was not added is one the front end cannot tell from an ordinary
+    /// refusal — and this one must not be attributed to git at all: nothing git
+    /// said produced it.
+    #[test]
+    fn a_timeout_is_its_own_kind_and_names_this_app_rather_than_git() {
+        let err = VcsError::Timeout(60);
+
+        assert_eq!(err.kind(), "timeout");
+        assert!(err.to_string().contains("60"), "the message says how long was waited");
+        assert!(err.to_string().starts_with("Smetana"), "the sentence is this app's, not git's");
     }
 
     /// The rule the whole merge door rests on. `git merge`'s own wording moves
