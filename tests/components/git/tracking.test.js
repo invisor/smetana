@@ -134,9 +134,11 @@ describe('the two buttons in the section header', () => {
     expect(pullAction(level, free).count).toBe(0)
   })
 
-  /* The counts are on the labels, because a button that says how much it is
-     about to move is the one thing on screen saying the marks and the verbs are
-     the same fact. */
+  /* The counts are on the labels, which the caption spends on the tooltip and
+     the accessible name rather than on anything drawn: both buttons are
+     icon-only, so `Pull 3` is what a pointer resting on the arrow says and what
+     a screen reader announces. That is where the `↓3` on the row and the verb
+     in the caption are joined up as one fact. */
   it('the counts reach the labels', () => {
     expect(pullAction(behind, free).label).toBe('Pull 3')
     expect(pushAction(ahead, free).label).toBe('Push 2')

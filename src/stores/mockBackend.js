@@ -546,10 +546,18 @@ export function installMockBackend() {
     /* Where those branches stand against their upstreams, which is the one read
        of this panel whose answer nothing on disk could give: it is a process,
        and in a browser it is this. One branch behind, one ahead, one level with
-       its upstream and one nobody has pushed — so the orange, both marks, and
-       the caption's two buttons in three of their four states are all reachable
-       in `npm run dev`, where the marks would otherwise be a feature only the
-       gallery has ever drawn.
+       its upstream and one nobody has pushed — so every mark a row can carry is
+       reachable in `npm run dev`, where they would otherwise be a feature only
+       the gallery has ever drawn.
+
+       The caption's two buttons are **not**, beyond the one state the branch
+       this mock is on happens to be in: Pull live with three to bring in and
+       Push refused with nothing to send. The current branch is fixed at
+       `feat/worktree-rename` and `vcs_checkout` falls through to the refusal
+       below with every other write, so no browser can put this panel on
+       `develop`, `main` or `release/7` and see what the pair says there. The
+       other three states are the gallery's, which draws all of them side by
+       side.
 
        `vcs_fetch` is deliberately **not** here, and it is not a write either: it
        falls through to the refusal at the bottom because a browser has no

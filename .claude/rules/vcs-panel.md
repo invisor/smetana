@@ -355,11 +355,38 @@ A network call is the opposite case in both halves — nobody pressed it (a wind
 focus) and there is nobody for git to ask (there is no terminal on this process, so a prompt for a
 password is at best a dialog from some other program and at worst a wait with no end). So
 `git_network` and `git_network_attempt` add `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=never`,
-`GIT_SSH_COMMAND="ssh -o BatchMode=yes"` and a **60 second deadline with a kill behind it** — the
-same poll-and-kill loop `agents::oneshot` already runs, which is the one place in this tree that had
-put a ceiling on a child. `StrictHostKeyChecking` is deliberately left alone: what a machine trusts
-is not this function's business. Everything local — `status`, `merge`, `commit`, the branch reads —
-goes on running through `git`/`git_attempt` with no ceiling at all.
+`GIT_SSH_COMMAND="ssh -o BatchMode=yes"` and a **60 second deadline with a kill behind it**.
+`StrictHostKeyChecking` is deliberately left alone: what a machine trusts is not this function's
+business. Everything local — `status`, `merge`, `commit`, the branch reads — goes on running through
+`git`/`git_attempt` with no ceiling at all.
+
+**How that wait is done is `bounded`, and it is deliberately not the poll-and-kill loop in
+`agents::oneshot::ask` it started as.** That loop reads both pipes only once the child is gone, and
+its own comment names the precondition that makes it safe: the output is bounded, one line asked
+for. Nothing here is. `git pull` writes a merge diffstat of one line per changed file and
+`git fetch --prune` a line per updated ref, so past the 64 KiB a pipe holds git blocks in `write`,
+`try_wait` never answers `Some`, and the deadline kills a git that had **already written the merge
+commit** — under a sentence blaming a remote that answered perfectly. So standard output goes to
+`/dev/null` (no caller has ever read it, which is why `git_network` returns `()`), and standard
+error is drained on a thread of its own while the wait happens.
+
+The kill has two halves for the same reason. `Child` has no reaping `Drop`, so a `kill` with no
+`wait` behind it leaves a defunct process for the lifetime of the app — and this is the call a
+five-minute sweep makes, so a blackholed route is a hundred zombies a day against
+`kern.maxprocperuid`, after which the app cannot fork at all and nothing on screen says why. And the
+signal goes to the **process group**, as `runs/preflight.rs::terminate` does and for its reason: the
+process actually blocked on the socket is `ssh` or `git-remote-https`, a child of git's, and killing
+git alone leaves it holding both the connection and the stderr pipe. `bounded` is the one thing in
+`run.rs` with tests under it — a script that floods a pipe, and one that outstays its deadline and
+is then looked for in the process table, since a zombie still answers `kill(pid, 0)` and a reaped
+child does not.
+
+**The three networked commands are `spawn_blocking`, unlike every other command in `vcs/`.** They
+are the first in the module that can take a minute by design, and every IPC call in the app — the
+file tree, the editor, the tracker, the terminals — shares that runtime: a hung fetch and a hung
+push on a two-core machine is every worker gone and the whole window drawn from stale state, with
+nothing saying why. `vcs_suggest_message` documents the same rule for the same reason one field
+over.
 
 An expired deadline is **`VcsError::Timeout`, its own variant with its own `kind()` of `"timeout"`**,
 and never a `Git { stderr }` with an empty message. git said nothing; this app decided, and the
@@ -444,14 +471,23 @@ is an upstream, including when nothing is behind** — asking the remote and fin
 legitimate press, and it is how somebody makes the count they are reading current. **Push is refused
 when the branch is level**, and it has a second shape rather than a second control: a branch with no
 upstream — the ordinary state of one cut by `New branch from this` — is published, which is
-`git push --set-upstream origin HEAD` and the word **Publish branch** on the control, since "push"
-for a branch the remote has never heard of says less than what is about to happen. A branch whose
-upstream was deleted is the same act. Which of the two forms it is, is decided on the front end from
-the tracking record the button was drawn from, and a stale answer is harmless both ways: `-u`
-against a branch that has since gained an upstream sets the same one again, and a plain push of one
-that has since lost it comes back refused in git's own words. **Never `--force`, and never
-`--force-with-lease`** — the same default `vcs_checkout` documents, and the argument is stronger
-here, since the refusal force would drive over is the one protecting somebody else's commits.
+`git push --set-upstream origin HEAD` and a different name for the control: **Publish branch**,
+since "push" for a branch the remote has never heard of says less than what is about to happen. A
+branch whose upstream was deleted is the same act. **A name here is not a caption**: both controls
+are icon-only — two arrows — so `Pull 3`, `Push 4` and `Publish branch` are what the tooltip says,
+what `aria-label` carries and what a screen reader announces, and nothing of any of them is drawn
+beside the glyph. That is the same bargain every other icon-only control in this app makes, and it
+is why the wrapper is a `Tooltip` in both states rather than only in the refused one: a control
+whose name is a glyph always has something to say.
+
+Which of the two forms it is, is decided on the front end from the tracking record the button was
+drawn from — `publishes` in `components/git/tracking.js`, which `stores/vcs.js` reads as well, so
+that the word on the control and the arguments git is run with cannot come apart. A stale answer is
+harmless both ways: `-u` against a branch that has since gained an upstream sets the same one
+again, and a plain push of one that has since lost it comes back refused in git's own words.
+**Never `--force`, and never `--force-with-lease`** — the same default `vcs_checkout` documents,
+and the argument is stronger here, since the refusal force would drive over is the one protecting
+somebody else's commits.
 
 **Pull is a merge, and the abort follows from that.** `vcs_pull` runs `git pull --no-rebase
 --no-edit` through the very machinery `vcs_merge` uses — the tree read before and after,

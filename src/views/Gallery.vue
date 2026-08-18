@@ -1491,7 +1491,9 @@ const menuTargetStyle = {
            from the disabled control itself. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <!-- The everyday pair: three commits waiting and nothing of ours to
-             send, so Pull carries the count and Push is refused. -->
+             send, so Pull is live and Push is refused. Both are icon-only, so
+             the count lives in the tooltip and in `aria-label` — hover the
+             arrow to read `Pull 3`; nothing of it is drawn beside the glyph. -->
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
@@ -1503,8 +1505,9 @@ const menuTargetStyle = {
             />
           </Panel>
         </div>
-        <!-- Diverged: both live, both with a number, and the row for the branch
-             they are about carries the same two marks. -->
+        <!-- Diverged: both live, each naming its own number on hover, and the
+             row for the branch they are about carries the same two marks —
+             which is where the number is actually on screen. -->
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
@@ -1517,8 +1520,9 @@ const menuTargetStyle = {
           </Panel>
         </div>
         <!-- A branch nobody has pushed — the ordinary state of one cut in this
-             very panel. Push becomes "Publish branch" and Pull is refused:
-             there is nothing there yet to pull from. -->
+             very panel. Push is named "Publish branch" — in its tooltip and to
+             a screen reader, since the glyph is the same arrow — and Pull is
+             refused: there is nothing there yet to pull from. -->
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
