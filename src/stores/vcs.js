@@ -126,6 +126,23 @@ function asError(err) {
   return { kind: 'io', message: String(err) }
 }
 
+/* How often this app may go to a remote on its own, per repository.
+
+   A constant and not a setting: what a person actually wants to decide is
+   whether this happens at all (`settings.git.autoFetch`), and a number of
+   minutes in the settings window would be a control nobody can answer well.
+   Five is short enough that a branch somebody else pushed to is orange by the
+   time it matters and long enough that alt-tabbing does not open a socket every
+   few seconds. */
+const FETCH_EVERY_MS = 5 * 60 * 1000
+
+/* When each repository was last fetched, by path, and which are in flight.
+   In memory and never in `settings.json`: it is a fact about this session, and
+   a stored timestamp would mean a machine that was asleep for a week comes back
+   believing it is current. */
+const fetchedAt = new Map()
+const fetching = new Set()
+
 /* Which repository to show, out of the list that has just arrived.
 
    The remembered path is a hint and never the truth — the rule columnOrder.js
@@ -550,6 +567,52 @@ export async function refresh() {
   await loadRepos(vcsState.project)
 }
 
+/* Ask the remote whether there is anything new, for the selected repository.
+
+   Called from window focus and from the project switch — the same two moments
+   everything else in this panel refreshes on — and from nowhere else. Three
+   things keep it from being a cost:
+
+   - the setting, which is the person's own answer to whether this app may open
+     a socket by itself;
+   - the throttle, so a person alt-tabbing does not fetch every few seconds;
+   - one in flight per repository, since a second request would queue behind a
+     network call that may be running for a minute.
+
+   Nothing waits for it. The branch list, the status and the marks are drawn
+   from what is already known, and when this lands the tracking read is repeated
+   and the marks change under them.
+
+   **Its failure is silent, and that is the design.** `writeError` draws "Git
+   refused this operation" and there was no operation: nobody pressed anything.
+   A laptop off the network must be usable all day without a red block in the
+   sidebar, and what is on screen stays as stale as the last fetch that worked —
+   the same promise the file tree beside it makes. */
+export async function autoFetch() {
+  const { project, selected } = vcsState
+  if (!selected || !settings.git.autoFetch) return
+  if (fetching.has(selected)) return
+  const last = fetchedAt.get(selected) ?? 0
+  if (Date.now() - last < FETCH_EVERY_MS) return
+  fetching.add(selected)
+  try {
+    await invoke('vcs_fetch', { repo: selected })
+    fetchedAt.set(selected, Date.now())
+    if (vcsState.project !== project || vcsState.selected !== selected) return
+    await loadTracking()
+  } catch (err) {
+    /* Recorded where a developer can see it and nowhere a person can: the
+       ordinary cases here are no network, no credentials and no remote, and
+       none of them is something this panel should interrupt anybody about. */
+    console.error('[vcs] background fetch failed:', err)
+    /* Stamped even on failure, so an unreachable remote is asked once every
+       five minutes rather than on every window focus. */
+    fetchedAt.set(selected, Date.now())
+  } finally {
+    fetching.delete(selected)
+  }
+}
+
 function reset() {
   vcsState.repos = []
   vcsState.selected = null
@@ -571,4 +634,9 @@ function reset() {
   vcsState.messages = {}
   vcsState.suggestError = null
   vcsState.loading = false
+  /* The sweep's memory goes with the project, so a repository opened again
+     after a while asks the remote once rather than waiting out a throttle set
+     in a session that is over. */
+  fetchedAt.clear()
+  fetching.clear()
 }

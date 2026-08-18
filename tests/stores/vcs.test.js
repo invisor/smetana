@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
 
 /* One repository, named after the project it was asked for, so a response
@@ -787,5 +787,96 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.tracking).toEqual({})
     expect(stores.vcs.vcsState.error).toBeNull()
     expect(stores.vcs.vcsState.writeError).toBeNull()
+  })
+  /* Five minutes, in a store that has no clock of its own: the test moves the
+     clock rather than waiting, and what is asserted is that the second sweep
+     did not go to the network at all. */
+  it('the background fetch runs once and then not again for five minutes', async () => {
+    vi.useFakeTimers()
+    try {
+      const { stores, ipc } = await loadStores()
+      let fetches = 0
+      ipc.on('vcs_repos', repoIn('/p'))
+      ipc.on('vcs_status', cleanTree)
+      ipc.on('vcs_branches', [{ name: 'main', current: true }])
+      ipc.on('vcs_tracking', [])
+      ipc.on('vcs_fetch', () => {
+        fetches += 1
+        return null
+      })
+
+      await stores.vcs.loadRepos('/p')
+      await stores.vcs.autoFetch()
+      await stores.vcs.autoFetch()
+      expect(fetches).toBe(1)
+
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1)
+      await stores.vcs.autoFetch()
+      expect(fetches).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* The switch is the whole of what it promises: off means this app opens no
+     socket by itself. */
+  it('the background fetch does nothing when the setting is off', async () => {
+    const { stores, ipc } = await loadStores()
+    let fetches = 0
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    ipc.on('vcs_fetch', () => {
+      fetches += 1
+      return null
+    })
+
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.git.autoFetch = false
+    await stores.vcs.autoFetch()
+
+    expect(fetches).toBe(0)
+  })
+
+  /* Nobody started it, so nobody is told. An offline machine must be usable all
+     day without a red block in the sidebar. */
+  it('a background fetch that failed says nothing on screen', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    ipc.on('vcs_fetch', () => Promise.reject({ kind: 'git', message: 'could not read from remote' }))
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.autoFetch()
+
+    expect(stores.vcs.vcsState.writeError).toBeNull()
+    expect(stores.vcs.vcsState.error).toBeNull()
+  })
+
+  /* A fetch that landed is only half of what the sweep is for: the marks are
+     drawn from the tracking read, so one that is not repeated afterwards leaves
+     the panel exactly as stale as it was before the network call. */
+  it('the marks are read again once a fetch has landed', async () => {
+    const { stores, ipc } = await loadStores()
+    let fetched = false
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', () =>
+      fetched ? [{ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 1, gone: false }] : []
+    )
+    ipc.on('vcs_fetch', () => {
+      fetched = true
+      return null
+    })
+
+    await stores.vcs.loadRepos('/p')
+    expect(stores.vcs.vcsState.tracking.main).toBeUndefined()
+    await stores.vcs.autoFetch()
+
+    expect(stores.vcs.vcsState.tracking.main.behind).toBe(1)
   })
 })
