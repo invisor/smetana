@@ -78,8 +78,11 @@ export const vcsState = reactive({
   /* What git is doing right now — `{ op, branch }` — or null. One at a time:
      the panel goes inert while git works, so a second row cannot be pressed
      into an operation git is already in the middle of for the first. `op` is
-     `checkout`, `merge`, `rebase` or `abort`, and the branch is the row it was
-     asked for, which is where the spinner goes. */
+     `checkout`, `merge`, `rebase`, `create`, `commit`, `abort`, `pull` or
+     `push`, and the branch is the row it was asked for, which is where the
+     spinner goes. The last two are about the current branch and carry its name
+     for that reason: they leave from the section header rather than from a row,
+     and the row they are about is the one with the tick. */
   busy: null,
   /* A merge or a rebase that stopped on conflicts, which is an outcome and not
      a failure — hence its own field beside `writeError` rather than in it.
@@ -328,6 +331,17 @@ function currentBranch() {
   return vcsState.branches.find((branch) => branch.current)?.name ?? vcsState.tree?.branch ?? null
 }
 
+/* Which operation a conflicted tree is aborted as, where that is not the name
+   of the write that made it.
+
+   A pull is `git pull --no-rebase`, so what git stopped in the middle of is a
+   merge: `git merge --abort` is the call that puts the tree back, and the
+   record's `op` is the whole of what `abortConflict` reads — `OpKind` in
+   `vcs/model.rs` knows two words and `pull` is not one of them. The refusal
+   block keeps the write's own name, because "Git did not pull" is what somebody
+   pressed. */
+const CONFLICT_OP = { pull: 'merge' }
+
 /* The mechanics every write in this panel shares, with one `invoke` handed in.
 
    Whether a write may be offered at all is `components/git/gitActions.js` — a
@@ -341,12 +355,17 @@ function currentBranch() {
    as `VcsError::Git` with git's own stderr in them, and the panel prints that
    as it stands.
 
+   `theirs` is what the conflict record calls the other side, and it is the same
+   branch as `busy`'s for every write but the pull: there the row the spinner
+   belongs on is the current branch, while what git was bringing in is that
+   branch's upstream, and the modal's sentence is about the second.
+
    What follows a write that worked is the whole list again rather than the
    working tree alone: the branch each repository is on is drawn in its row, so
    a status-only refresh would leave the row naming the branch somebody just
    left. The scope bar goes with it, one store over — and after a rebase that is
    not a nicety, since HEAD can be detached now and the bar says so. */
-async function write(op, branch, call) {
+async function write(op, branch, call, theirs = branch) {
   const { project, selected } = vcsState
   /* A branch is **not** required here, though three of the four writes cannot
      do without one and guard it themselves. A commit is about the tree rather
@@ -375,7 +394,13 @@ async function write(op, branch, call) {
        prompt — is about that repository and not about whichever row is
        selected by the time git answers. */
     if (outcome?.kind === 'conflict') {
-      vcsState.conflict = { repo: selected, op, ours, theirs: branch, files: outcome.files ?? [] }
+      vcsState.conflict = {
+        repo: selected,
+        op: CONFLICT_OP[op] ?? op,
+        ours,
+        theirs,
+        files: outcome.files ?? []
+      }
       vcsState.conflictError = null
     }
     await refresh()
@@ -434,6 +459,42 @@ export async function createBranch({ name, from, switch: switchTo = true }) {
 export async function rebase(onto) {
   if (!onto) return
   await write('rebase', onto, (repo) => invoke('vcs_rebase', { repo, onto }))
+}
+
+/* Bring the upstream's commits into the branch this repository is on.
+
+   Through `write` like every other write here, so it takes the same `busy`, the
+   same refusal block and the same refresh afterwards — and `busy` is keyed on
+   the current branch, which is the row the spinner belongs on.
+
+   The conflict it can end in is `merge`'s, and it is recorded as `merge`
+   deliberately: `vcs_pull` runs `git pull --no-rebase`, so the abort that puts
+   the tree back is `git merge --abort`, and the record's own `op` is what
+   `abortConflict` reads. */
+export async function pull() {
+  const branch = currentBranch()
+  /* The upstream is what a conflict here is *with*, and the modal draws it:
+     "Git stopped merging origin/main into main" is the sentence, where the
+     branch's own name on both sides would be one about nothing. Pull is refused
+     without an upstream (`components/git/tracking.js`), so the fall-back is for
+     a caller that went round the button rather than for a state on screen. */
+  const upstream = branch ? vcsState.tracking[branch]?.upstream : null
+  await write('pull', branch, (repo) => invoke('vcs_pull', { repo }), upstream ?? branch)
+}
+
+/* Send this branch's commits to its upstream, publishing the branch if it has
+   none.
+
+   The decision is taken here rather than in Rust because the tracking record is
+   already on this side and is what the button was drawn from — and a stale
+   answer is harmless either way: `-u` against a branch that has since gained an
+   upstream sets the same one again, and a plain push of one that has since lost
+   it is refused in git's own words. */
+export async function push() {
+  const branch = currentBranch()
+  const tracking = branch ? vcsState.tracking[branch] : null
+  const setUpstream = !tracking?.upstream || Boolean(tracking?.gone)
+  await write('push', branch, (repo) => invoke('vcs_push', { repo, setUpstream }))
 }
 
 /* What is in the draft for the repository on screen. Empty for one nobody has

@@ -879,4 +879,98 @@ describe('the git panel store', () => {
 
     expect(stores.vcs.vcsState.tracking.main.behind).toBe(1)
   })
+  /* A conflicted pull is an outcome and not a failure, and it must reach the
+     same dialog a conflicted merge reaches — with `merge` as its op, since that
+     is what decides whether the abort runs `git merge --abort`. */
+  it('a pull that conflicted opens the conflict dialog as a merge', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [
+      { branch: 'main', upstream: 'origin/main', ahead: 1, behind: 1, gone: false }
+    ])
+    ipc.on('git_head', { branch: 'main', detached: null })
+    ipc.on('vcs_pull', { kind: 'conflict', files: ['src/lib.rs'] })
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.pull()
+
+    expect(stores.vcs.vcsState.conflict).toMatchObject({
+      repo: '/p/.',
+      op: 'merge',
+      ours: 'main',
+      /* What git was bringing in, which for a pull is the upstream and not the
+         branch: the modal draws both sides of the sentence, and a record naming
+         `main` twice would be one about nothing. */
+      theirs: 'origin/main',
+      files: ['src/lib.rs']
+    })
+  })
+
+  /* Git refused a push somebody pressed, so this one is loud — the opposite of
+     the background fetch, and the difference is who asked. */
+  it('a refused push lands in writeError with its op', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [
+      { branch: 'main', upstream: 'origin/main', ahead: 1, behind: 0, gone: false }
+    ])
+    ipc.on('vcs_push', () => Promise.reject({ kind: 'git', message: 'rejected: non-fast-forward' }))
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.push()
+
+    expect(stores.vcs.vcsState.writeError).toMatchObject({
+      op: 'push',
+      message: 'rejected: non-fast-forward'
+    })
+  })
+
+  /* The one place the front end decides how git is called: a branch with no
+     upstream is published rather than pushed. */
+  it('a branch with no upstream is pushed with set-upstream', async () => {
+    const { stores, ipc } = await loadStores()
+    let asked = null
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'spike', current: true }])
+    ipc.on('vcs_tracking', [{ branch: 'spike', upstream: null, ahead: 0, behind: 0, gone: false }])
+    ipc.on('git_head', { branch: 'spike', detached: null })
+    ipc.on('vcs_push', (args) => {
+      asked = args
+      return null
+    })
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.push()
+
+    expect(asked).toMatchObject({ repo: '/p/.', setUpstream: true })
+  })
+
+  /* The ordinary shape, and the half of the decision the test above cannot
+     see: a branch with an upstream is pushed to the one it has, and `-u` would
+     be this app choosing a remote for a branch that already named one. */
+  it('a branch with an upstream is pushed without set-upstream', async () => {
+    const { stores, ipc } = await loadStores()
+    let asked = null
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [
+      { branch: 'main', upstream: 'origin/main', ahead: 2, behind: 0, gone: false }
+    ])
+    ipc.on('git_head', { branch: 'main', detached: null })
+    ipc.on('vcs_push', (args) => {
+      asked = args
+      return null
+    })
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.push()
+
+    expect(asked).toMatchObject({ repo: '/p/.', setUpstream: false })
+  })
 })
