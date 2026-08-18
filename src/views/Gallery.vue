@@ -436,7 +436,14 @@ const TRACKING = {
    changes between them — behind, ahead and behind at once, never pushed, or an
    upstream deleted on the remote. `current` is set per frame rather than here,
    because the pair in the caption is about that one branch and nothing else. */
-const REMOTE_BRANCHES = ['feat/worktree-rename', 'develop', 'main', 'spike', 'old']
+const REMOTE_BRANCHES = [
+  'feat/worktree-rename',
+  'develop',
+  'main',
+  'spike',
+  'old',
+  'feature/smetana-8ok-git-panel-branches'
+]
 const onBranch = (name) => REMOTE_BRANCHES.map((branch) => ({ name: branch, current: branch === name }))
 
 /* The same for the folded list, where the point is the heading rather than the
@@ -1482,13 +1489,15 @@ const menuTargetStyle = {
           </Panel>
         </div>
       </div>
-      <!-- The Branches caption with its two buttons, which is the one place in
-           the app the remote can be reached from — and the states are the
-           branch the repository is *on*, since that is what both of them are
-           about. What to check: that neither button crowds the count out of the
-           caption, that the refused one is legible rather than invisible, and
-           that its reason opens on hover from the wrapper around it rather than
-           from the disabled control itself. -->
+      <!-- The Branches caption with its three buttons, which is the one place
+           in the app the remote can be reached from — and the states are the
+           branch the repository is *on*, since that is what the two verbs are
+           about. The check beside them is about the repository and is in every
+           frame, including the ones where both verbs are gone. What to check:
+           that three buttons do not crowd the count out of a caption 152
+           pixels wide, that a refused one is legible rather than invisible,
+           and that its reason opens on hover from the wrapper around it rather
+           than from the disabled control itself. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <!-- The everyday pair: three commits waiting and nothing of ours to
              send, so Pull is live and Push is refused. Both are icon-only, so
@@ -1502,6 +1511,38 @@ const menuTargetStyle = {
               :tree="{ branch: 'feat/worktree-rename', detached: null, changes: CHANGES }"
               :branches="onBranch('feat/worktree-rename')"
               :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+        <!-- Level with the remote: both verbs refused, each in its own words,
+             and the check between them the only thing left to press. This is
+             the ordinary state of a repository nobody else has pushed to, and
+             the frame the third button exists for. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'feature/smetana-8ok-git-panel-branches', detached: null, changes: CHANGES }"
+              :branches="onBranch('feature/smetana-8ok-git-panel-branches')"
+              :tracking="TRACKING"
+            />
+          </Panel>
+        </div>
+        <!-- The check while its answer is out: the glyph is `loader-circle` at
+             `--attn-live`, turning, and the button is refused until it lands —
+             the one spinner this panel has, in the idiom the branch rows
+             already use over a write. The two verbs beside it stay live: a
+             fetch freezes no row. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <GitPanel
+              :repos="REPOS"
+              selected="/Users/you/dev/smetana"
+              :tree="{ branch: 'main', detached: null, changes: CHANGES }"
+              :branches="onBranch('main')"
+              :tracking="TRACKING"
+              fetching
             />
           </Panel>
         </div>
@@ -1534,10 +1575,12 @@ const menuTargetStyle = {
             />
           </Panel>
         </div>
-        <!-- A run going: both refused by the same verdict that mutes the rows,
-             and both say so in `gitActions.js`'s own sentence. A fetch is still
-             allowed underneath — it writes no tree — but nothing here shows
-             that, because nothing on screen ever does. -->
+        <!-- A run going: both verbs refused by the same verdict that mutes the
+             rows, and both say so in `gitActions.js`'s own sentence. The check
+             is live beside them, which is that rule drawn rather than merely
+             stated: it writes remote-tracking refs and touches neither the
+             tree nor the index, so a batch mid-merge has nothing to lose by
+             it. -->
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel
@@ -1550,9 +1593,11 @@ const menuTargetStyle = {
             />
           </Panel>
         </div>
-        <!-- A detached HEAD draws neither button at all: there is no branch for
-             an upstream to be about, and two dead controls say less than the
-             empty caption does. -->
+        <!-- A detached HEAD draws neither verb: there is no branch for an
+             upstream to be about, and two dead controls say less than the
+             caption does without them. The check stays — asking the remote
+             what it has is a question about the repository, and a detached
+             HEAD has not stopped it being one. -->
         <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
           <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
             <GitPanel

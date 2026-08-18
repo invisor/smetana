@@ -73,8 +73,9 @@ const { hover, active, handlers } = useInteractive()
 
    A function of whether the slot was filled rather than a `computed` over
    `useSlots()`: a slot's presence is not a reactive dependency, so a cached
-   answer would go on insetting a caption whose controls have since gone — the
-   Git panel takes both of its buttons off the header on a detached HEAD. */
+   answer would go on insetting a caption whose controls have since gone. Only
+   one of the Git panel's three captions fills it at all, which is the ordinary
+   case this guards. */
 const rowStyle = (hasActions) => ({
   display: 'flex',
   alignItems: 'center',

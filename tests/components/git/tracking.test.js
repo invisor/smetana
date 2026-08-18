@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { folderBehind, pullAction, pushAction, trackingMark } from '../../../src/components/git/tracking.js'
+import {
+  fetchAction,
+  folderBehind,
+  pullAction,
+  pushAction,
+  trackingMark
+} from '../../../src/components/git/tracking.js'
 
 const free = { allowed: true, reason: null }
 const held = { allowed: false, reason: 'A run is going in this project.' }
@@ -127,10 +133,14 @@ describe('the two buttons in the section header', () => {
     expect(pushAction(level, free).allowed).toBe(false)
   })
 
-  /* A pull on a branch that is only ahead still runs: fetching and finding
-     nothing is a legitimate thing to ask for, and the count is what says so. */
-  it('pull stays live on a branch with nothing to pull', () => {
-    expect(pullAction(level, free).allowed).toBe(true)
+  /* The other half of the same rule, and it reads the same way: a branch that
+     is level has nothing coming in, so the control offering to bring it in is
+     a control whose only answer would be that nothing happened. Asking the
+     remote whether the count is still true is the third button's job, not
+     this one's. */
+  it('pull is refused when the branch is level with its upstream', () => {
+    expect(pullAction(level, free).allowed).toBe(false)
+    expect(pullAction(level, free).reason).toMatch(/already has everything/i)
     expect(pullAction(level, free).count).toBe(0)
   })
 
@@ -151,5 +161,42 @@ describe('the two buttons in the section header', () => {
   it('a branch with no record at all still answers for both buttons', () => {
     expect(pullAction(undefined, free).allowed).toBe(false)
     expect(pushAction(undefined, free)).toMatchObject({ allowed: true, setUpstream: true })
+  })
+})
+
+/* The third control in the caption, and the one that answers when the other
+   two are dimmed. */
+describe('the check in the section header', () => {
+  const held = { allowed: false, reason: 'A run is going in this project.' }
+
+  /* The whole reason it is there: a branch that is level dims both verbs, and
+     without this the number they are dimmed over could not be refreshed at
+     all with the background sweep switched off. */
+  it('is live with nothing in flight', () => {
+    expect(fetchAction(false)).toMatchObject({ allowed: true, reason: null })
+  })
+
+  /* It is not a write: `git fetch` moves remote-tracking refs and leaves the
+     working tree and the index alone, which is the argument that keeps the
+     background sweep going under a batch as well. The run verdict is not even
+     an argument here, so this asserts the shape rather than the wiring. */
+  it('takes no run verdict, so a run cannot dim it', () => {
+    expect(fetchAction.length).toBe(1)
+    expect(fetchAction(false).reason).toBe(null)
+    expect(held.allowed).toBe(false)
+  })
+
+  /* The same call saying it is still running, in the words the spinner on the
+     control is already saying. */
+  it('refuses a second press while the first is still out', () => {
+    expect(fetchAction(true).allowed).toBe(false)
+    expect(fetchAction(true).reason).toMatch(/remote/i)
+  })
+
+  /* Icon-only, like the two beside it, so the label is the tooltip and the
+     accessible name and nothing drawn. */
+  it('keeps one name in both states', () => {
+    expect(fetchAction(false).label).toBe('Check the remote')
+    expect(fetchAction(true).label).toBe('Check the remote')
   })
 })

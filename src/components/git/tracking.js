@@ -62,16 +62,27 @@ export function folderBehind(path, branches, tracking) {
 
 const NO_UPSTREAM = 'This branch has no upstream yet, so there is nothing to pull.'
 const UPSTREAM_GONE = 'The upstream of this branch was deleted on the remote.'
+const NOTHING_TO_PULL = 'This branch already has everything the remote has.'
 
-/* Pull is live wherever there is an upstream, including when there is nothing
-   behind: asking the remote and finding nothing is a legitimate thing to press,
-   and it is how somebody makes the count they are reading current. */
+/* Pull is refused when the branch is level, which is the same shape as Push
+   one function down: a control offering an act with no effect is a control
+   somebody presses to find out, and the two verbs answer that question the
+   same way rather than one each.
+
+   It was the other way around once — live wherever there was an upstream, on
+   the argument that pressing it is how a person makes the count they are
+   reading current. That argument was right about the need and wrong about the
+   control: what it describes is a *fetch*, and the panel now has one of its
+   own in the same caption. With somewhere else to ask the remote, a live Pull
+   over `behind: 0` was only a button whose whole answer was "nothing
+   happened". */
 export function pullAction(tracking, actions) {
   const count = trackingMark(tracking).behind
   if (!actions.allowed) return { allowed: false, reason: actions.reason, label: 'Pull', count }
   if (tracking?.gone) return { allowed: false, reason: UPSTREAM_GONE, label: 'Pull', count }
   if (!tracking?.upstream) return { allowed: false, reason: NO_UPSTREAM, label: 'Pull', count }
-  return { allowed: true, reason: null, label: count ? `Pull ${count}` : 'Pull', count }
+  if (count === 0) return { allowed: false, reason: NOTHING_TO_PULL, label: 'Pull', count: 0 }
+  return { allowed: true, reason: null, label: `Pull ${count}`, count }
 }
 
 const NOTHING_TO_PUSH = 'This branch has nothing the remote does not already have.'
@@ -107,4 +118,32 @@ export function pushAction(tracking, actions) {
     return { allowed: false, reason: NOTHING_TO_PUSH, label, count: 0, setUpstream }
   }
   return { allowed: true, reason: null, label, count: ahead, setUpstream }
+}
+
+const FETCHING = 'Asking the remote what it has…'
+
+/* The third control in the caption, and the only one of the three that is
+   about the repository rather than about the branch it is on.
+
+   It is live in every state the other two are refused in, and that is the
+   whole reason it exists: with Pull dimmed when the branch is level and Push
+   dimmed when it is ahead of nothing, a person reading `behind: 0` had no way
+   left to ask whether that number is still true. The background sweep answers
+   it every five minutes and answers it not at all with `git.autoFetch` off, and
+   a fact somebody is deciding on is a fact they must be able to refresh
+   themselves.
+
+   `actions` — the runs verdict `gitActions.js` returns — is deliberately not a
+   parameter. That rule is about a write under a batch that may be mid-merge,
+   and `git fetch` writes remote-tracking refs and touches neither the working
+   tree nor the index. It is the argument that already keeps the commit box's
+   sparkle alive under a run, and the store keeps the same line: the background
+   sweep goes out under a batch too.
+
+   The one state that refuses is one already in flight, which is not really a
+   refusal but the same call saying it is still running — the same word the
+   spinner on the control is saying. */
+export function fetchAction(fetching) {
+  if (fetching) return { allowed: false, reason: FETCHING, label: 'Check the remote' }
+  return { allowed: true, reason: null, label: 'Check the remote' }
 }

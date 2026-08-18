@@ -122,6 +122,17 @@ export const vcsState = reactive({
      reached git would name the wrong party. */
   suggesting: false,
   suggestError: null,
+  /* Whether a fetch somebody pressed for is out right now. Deliberately not
+     `busy`, for the reason `suggesting` beside it is not: `busy` is what holds
+     the branch rows inert, and a fetch writes remote-tracking refs alone — the
+     rows it would freeze are rows it cannot affect. It is the spinner on one
+     button and nothing else.
+
+     The background sweep does **not** set it. That one is silent by design and
+     a spinner is the loudest thing a caption has; a panel that started
+     twirling on its own every five minutes would be reporting a decision the
+     person did not make. */
+  fetching: false,
   loading: false
 })
 
@@ -145,12 +156,20 @@ function asError(err) {
    few seconds. */
 const FETCH_EVERY_MS = 5 * 60 * 1000
 
-/* When each repository was last fetched, by path, and which are in flight.
-   In memory and never in `settings.json`: it is a fact about this session, and
-   a stored timestamp would mean a machine that was asleep for a week comes back
-   believing it is current. */
+/* When each repository was last fetched, by path, and the call still out for
+   it. In memory and never in `settings.json`: it is a fact about this session,
+   and a stored timestamp would mean a machine that was asleep for a week comes
+   back believing it is current.
+
+   The second is the promise and not a flag, which costs nothing here and buys
+   the one case a flag answered badly: a press landing while the background
+   sweep is still out. A flag makes that press a no-op — the guard refuses it,
+   nothing spins, nothing is said — which is exactly the kind of control this
+   button was added to remove. Holding the promise lets the press join the call
+   already running: it spins over somebody else's fetch and answers when that
+   one answers, which is what it would have done with a fetch of its own. */
 const fetchedAt = new Map()
-const fetching = new Set()
+const fetching = new Map()
 
 /* Which repository to show, out of the list that has just arrived.
 
@@ -662,27 +681,107 @@ export async function refresh() {
    sidebar, and what is on screen stays as stale as the last fetch that worked —
    the same promise the file tree beside it makes. */
 export async function autoFetch() {
-  const { project, selected } = vcsState
+  const { selected } = vcsState
   if (!selected || !settings.git.autoFetch) return
   if (fetching.has(selected)) return
   const last = fetchedAt.get(selected) ?? 0
   if (Date.now() - last < FETCH_EVERY_MS) return
-  fetching.add(selected)
+  await fetchRepo(selected, false)
+}
+
+/* The same call, pressed.
+
+   It exists because the two buttons beside it are refused in exactly the state
+   somebody most wants to check: a branch that is level dims both, and the
+   number they are dimmed over is as old as the last sweep that worked. With
+   `git.autoFetch` off there has been no sweep at all, and without this control
+   the panel would hold a count it offered no way of refreshing — a fact
+   somebody is deciding on that they cannot ask about again.
+
+   Three things it deliberately does not share with the sweep above. **It
+   ignores the setting**, because the setting is about what this app does on
+   its own and a press is not that — the prose for it says as much: with it off
+   the app makes no network call of its own, and both buttons go on working.
+   **It ignores the throttle**, and resets it: five minutes is a budget for
+   calls nobody asked for, and a person who presses twice knows they pressed
+   twice. **Its failure is loud**, in the same block, with the same `op`
+   machinery every pressed write here uses — the argument that keeps the
+   sweep's own failure silent is that nobody pressed anything, and here
+   somebody did.
+
+   What it keeps is the one-in-flight guard, since a second `git fetch` in the
+   same repository would only queue behind the first — and that guard is also
+   what dims the button while it is out. */
+export async function fetchNow() {
+  const { selected } = vcsState
+  if (!selected) return false
+  vcsState.fetching = true
+  /* Cleared on the way out rather than on the way back, which is what every
+     other pressed write here does: the block under the branches is about the
+     last thing somebody asked for, and leaving a refused pull on screen while
+     its replacement is already out would be the panel answering a question
+     nobody is asking any more. */
+  vcsState.writeError = null
   try {
-    await invoke('vcs_fetch', { repo: selected })
-    fetchedAt.set(selected, Date.now())
-    if (vcsState.project !== project || vcsState.selected !== selected) return
-    await loadTracking()
-  } catch (err) {
-    /* Recorded where a developer can see it and nowhere a person can: the
-       ordinary cases here are no network, no credentials and no remote, and
-       none of them is something this panel should interrupt anybody about. */
-    console.error('[vcs] background fetch failed:', err)
-    /* Stamped even on failure, so an unreachable remote is asked once every
-       five minutes rather than on every window focus. */
-    fetchedAt.set(selected, Date.now())
+    /* The sweep's own call, joined rather than duplicated: a second
+       `git fetch` in one repository would only queue behind the first, and the
+       answer this press is waiting for is the answer that one is about to
+       bring back. Its failure stays silent — nobody pressed *that* one, and
+       the press cannot retroactively make the sweep loud — so what this press
+       gets is the verdict without the block. */
+    const inFlight = fetching.get(selected)
+    if (inFlight) return await inFlight
+    return await fetchRepo(selected, true)
   } finally {
-    fetching.delete(selected)
+    /* Cleared whatever the panel is looking at now: this flag only dims one
+       button, and a repository switched under a fetch would otherwise leave
+       the new one's caption spinning over a call about a repository nobody is
+       looking at. */
+    vcsState.fetching = false
+  }
+}
+
+/* `git fetch --prune` in one repository, and what to do with the answer.
+
+   The one place the network call is written, shared by the sweep and by the
+   button, so the two cannot come apart on the part that matters — the guard,
+   the stamp, and re-reading the tracking when it lands. What differs is
+   handed in: `loud` is whether a failure reaches the screen.
+
+   Stamped even on failure, so an unreachable remote is asked once every five
+   minutes rather than on every window focus. A pressed fetch stamps too: it
+   did reach out, and the sweep behind it has no reason to go again a second
+   later. */
+function fetchRepo(repo, loud) {
+  const call = runFetch(repo, loud).finally(() => fetching.delete(repo))
+  fetching.set(repo, call)
+  return call
+}
+
+/* The call itself, which is the half above holds on to. Split in two so the
+   map is written before the first `await` inside it: a version that registered
+   itself from within its own body would leave a window in which a second
+   caller sees no call in flight and starts one. */
+async function runFetch(repo, loud) {
+  const { project } = vcsState
+  try {
+    await invoke('vcs_fetch', { repo })
+    fetchedAt.set(repo, Date.now())
+    if (vcsState.project !== project || vcsState.selected !== repo) return true
+    await loadTracking()
+    return true
+  } catch (err) {
+    fetchedAt.set(repo, Date.now())
+    if (!loud) {
+      /* Recorded where a developer can see it and nowhere a person can: the
+         ordinary cases here are no network, no credentials and no remote, and
+         none of them is something this panel should interrupt anybody about. */
+      console.error('[vcs] background fetch failed:', err)
+      return false
+    }
+    if (vcsState.project !== project || vcsState.selected !== repo) return false
+    vcsState.writeError = { ...asError(err), op: 'fetch' }
+    return false
   }
 }
 
@@ -706,6 +805,11 @@ function reset() {
      one keystroke away from being committed there. */
   vcsState.messages = {}
   vcsState.suggestError = null
+  /* The spinner and not the guard, which is the split `fetching` below is
+     about: the call may still be running, and its own `finally` is what takes
+     the repository back out of that set. What goes here is only the dimming of
+     a button in a panel that is about to draw another project. */
+  vcsState.fetching = false
   vcsState.loading = false
   /* The throttle's memory, and only when there is no project at all — this
      runs on the way to an empty window and nowhere else, so switching between
@@ -716,11 +820,11 @@ function reset() {
      rather than wait out a throttle set before it.
 
      `fetching` is deliberately **not** cleared with it. It is not memory but a
-     guard over a call that is still running: a fetch in flight goes on running
-     across this, and its own `finally` takes the repository back out of the set
-     when it lands. Emptying it here would drop the guard while the call it
-     guards is still open, so re-opening that project could start a second
-     `git fetch` in the same repository — the one thing this set exists to
+     hold on a call that is still running: a fetch in flight goes on running
+     across this, and its own `finally` takes the repository back out of the map
+     when it lands. Emptying it here would drop that hold while the call it
+     holds is still open, so re-opening that project could start a second
+     `git fetch` in the same repository — the one thing this map exists to
      prevent. */
   fetchedAt.clear()
 }

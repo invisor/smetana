@@ -59,9 +59,12 @@ what Rust accepts, or the value loses itself on the next save with nothing on sc
 
 `git` is the second global section and holds one field, `autoFetch`, **shipped on**. It is the
 answer to a question no other setting here asks: whether this app may open a socket by itself. The
-Git panel fetches from the selected repository's remote when the window comes back into focus and
-when the project changes, throttled to once every five minutes per repository, and this switch is
-whether any of that happens at all (`.claude/rules/vcs-panel.md`). Global rather than under a
+Git panel fetches from the selected repository's remote when the window comes back into focus, when
+the project changes and on a one-minute tick under that same throttle — once every five minutes per
+repository — and this switch is whether any of that happens at all. What it does **not** reach is
+the check in the Branches caption: a press is not this app acting on its own, so that button goes
+on working with the switch off, which is the only way a count stays refreshable at all in that
+state (`.claude/rules/vcs-panel.md`). Global rather than under a
 project, on `layout.gitSections`' argument rather than `branchFolders`': what it is about is a
 connection and a person — a metered link, a VPN that is not always up, an SSH key with a passphrase
 that would fail on every sweep — and none of those is a fact about one repository. The interval

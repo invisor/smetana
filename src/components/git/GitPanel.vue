@@ -18,10 +18,14 @@
    this component is handed the selection rather than holding it.
 
    The writes a branch row offers — checkout, merge, rebase, new branch — leave
-   as events and are drawn by `BranchList`. Two more leave from the Branches
+   as events and are drawn by `BranchList`. Three more leave from the Branches
    caption rather than from a row: Pull and Push are about the branch this
    repository is **on**, so a row's menu would refuse them on nine rows in ten,
    and the caption is also the one thing on screen saying the two verbs exist.
+   Beside them is the check — a `git fetch`, asking the remote what it has —
+   which is about the repository rather than about any branch, and which is
+   there because both verbs beside it are refused in the state somebody most
+   wants to ask about: a branch level with its upstream.
    What they say and whether they may be pressed is `tracking.js`, pure and
    tested; this file draws its verdict. What is drawn here is git's refusal of
    whichever write was last refused, for the reason recorded beside the block: the branch
@@ -65,6 +69,7 @@ import Button from '../core/Button.vue'
 import ChangeList from './ChangeList.vue'
 import CommitBox from './CommitBox.vue'
 import EmptyState from '../core/EmptyState.vue'
+import Icon from '../core/Icon.vue'
 import RepoList from './RepoList.vue'
 import Resizer from '../shell/Resizer.vue'
 import SectionHeader from './SectionHeader.vue'
@@ -76,7 +81,7 @@ import {
   filler,
   resolveDrag
 } from './sectionHeights.js'
-import { pullAction, pushAction } from './tracking.js'
+import { fetchAction, pullAction, pushAction } from './tracking.js'
 
 const props = defineProps({
   repos: { type: Array, default: () => [] },
@@ -111,6 +116,10 @@ const props = defineProps({
      last write, which carries the `op` it was about so the block can name
      it. */
   busy: { type: Object, default: null },
+  /* Whether a fetch somebody pressed for is still out. Its own flag and not
+     `busy`, for the reason the store gives: a fetch freezes no row, so it dims
+     one button and spins on it, and the branch list under it stays live. */
+  fetching: { type: Boolean, default: false },
   writeError: { type: Object, default: null },
   /* `{ kind, message }` as `stores/vcs.js` normalises it. `noGit` is the one
      kind this panel branches on; everything else is git's own words, shown
@@ -147,6 +156,7 @@ const emit = defineEmits([
   'new-branch',
   'pull',
   'push',
+  'fetch',
   'commit',
   'suggest',
   'message',
@@ -238,7 +248,13 @@ const WRITE_REFUSED = {
   abort: 'Git did not abort',
   commit: 'Git did not commit',
   pull: 'Git did not pull',
-  push: 'Git did not push'
+  push: 'Git did not push',
+  /* The one entry here for something that is not a write to the tree. It is in
+     this table all the same, because a fetch somebody pressed for fails the way
+     a pressed write fails — in this block, in git's own words — and the
+     sentence has to name what was refused rather than reach for the general
+     one. */
+  fetch: 'Git did not reach the remote'
 }
 const writeRefused = computed(
   () => WRITE_REFUSED[props.writeError?.op] ?? 'Git refused this operation'
@@ -255,9 +271,11 @@ const currentBranchName = computed(
   () => props.branches.find((branch) => branch.current)?.name ?? props.tree?.branch ?? null
 )
 
-/* Neither button on a detached HEAD: there is no upstream to talk about, and
-   two dead controls say less than nothing at all — the instinct every empty
-   state in this panel already follows. */
+/* Neither of the two verbs on a detached HEAD: there is no upstream to talk
+   about, and two dead controls say less than nothing at all — the instinct
+   every empty state in this panel already follows. The check stays, since
+   asking the remote what it has is a question about the repository and a
+   detached HEAD has not stopped it being one. */
 const hasBranch = computed(() => Boolean(currentBranchName.value))
 
 /* What the two of them say and whether they may be pressed, which is
@@ -269,6 +287,21 @@ const hasBranch = computed(() => Boolean(currentBranchName.value))
    spinner in the branch list is already saying. */
 const pull = computed(() => pullAction(props.tracking[currentBranchName.value], props.actions))
 const push = computed(() => pushAction(props.tracking[currentBranchName.value], props.actions))
+
+/* The third of them, and the one that survives everything that dims the other
+   two: a detached HEAD, a run, and — since Pull is refused when the branch is
+   level — the ordinary state of a repository nobody else has pushed to. It is
+   about the repository rather than about a branch, which is why it takes
+   neither the tracking record nor the runs verdict. */
+const check = computed(() => fetchAction(props.fetching))
+
+/* The glyph turns while the answer is out. `Button` has no loading state and
+   is not getting one for this: what says "still going" in this panel is
+   `loader-circle` at `--attn-live` turning at `--dur-pulse`, which is what the
+   branch rows already draw over a write, and handing it in through the slot
+   keeps the one spinner this panel has in one idiom. */
+const SPIN = 13
+const spinStyle = { color: 'var(--attn-live)', animation: 'sm-spin var(--dur-pulse) linear infinite' }
 
 /* Prose over a control somebody is on their way past waits; a control's own
    name does not. `Tooltip`'s own note is the rule, and a refused button here is
@@ -600,7 +633,8 @@ const onReset = (section) => emit('resize', { section, rows: null })
           :open="fold.branchesOpen"
           @toggle="emit('toggle', 'branches')"
         >
-          <!-- The two remote verbs, in the caption rather than in a row's menu:
+          <!-- The two remote verbs and the check, in the caption rather than in
+               a row's menu:
                they are about the current branch, so on nine rows in ten the
                item would be refused, and a menu here answers about the row it
                was opened on. The caption is also the one thing on screen saying
@@ -609,8 +643,45 @@ const onReset = (section) => emit('resize', { section, rows: null })
                A `<button>` cannot hold a button, which is why the caption has a
                slot beside it rather than inside it — press one of these and the
                section would otherwise fold on the way through. -->
-          <template v-if="hasBranch" #actions>
-            <Tooltip v-bind="hintProps(pull)">
+          <template #actions>
+            <!-- First of the three and the only one always here: it is the
+                 question the other two are answers to, and with both of them
+                 refused over a branch that is level it is the whole of what
+                 this caption can still do. On a detached HEAD it is the only
+                 control in the row. -->
+            <Tooltip v-bind="hintProps(check)">
+              <!-- Two buttons and not one with a `v-if` inside its slot, which
+                   is the version this shipped as and the defect it shipped
+                   with. `Button` draws its slot as `<span v-if="$slots.default">`,
+                   and a slot **function** is there whether or not the `v-if`
+                   inside it renders anything: the empty span stayed a flex
+                   child, the button spent its `gap` on nothing and came out
+                   6px wider than the two arrows beside it — then snapped back
+                   to their width the moment a fetch started, sliding the count
+                   and both arrows sideways. Interaction is a surface step and
+                   never a shift. Handing the slot over only in the state that
+                   fills it is what keeps all three buttons one width. -->
+              <Button
+                v-if="fetching"
+                variant="ghost"
+                size="sm"
+                :aria-label="check.label"
+                :disabled="!check.allowed"
+                @click="$emit('fetch')"
+              >
+                <Icon name="loader-circle" :size="SPIN" :style="spinStyle" />
+              </Button>
+              <Button
+                v-else
+                variant="ghost"
+                size="sm"
+                icon="refresh-cw"
+                :aria-label="check.label"
+                :disabled="!check.allowed"
+                @click="$emit('fetch')"
+              />
+            </Tooltip>
+            <Tooltip v-if="hasBranch" v-bind="hintProps(pull)">
               <Button
                 variant="ghost"
                 size="sm"
@@ -620,7 +691,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
                 @click="$emit('pull')"
               />
             </Tooltip>
-            <Tooltip v-bind="hintProps(push)">
+            <Tooltip v-if="hasBranch" v-bind="hintProps(push)">
               <Button
                 variant="ghost"
                 size="sm"

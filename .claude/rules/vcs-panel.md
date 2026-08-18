@@ -449,10 +449,27 @@ slot drawn **beside** the caption button inside a wrapper, and `--row-h`, `flexS
 row by (`sectionHeights.js` is untouched, and a drag still stops on a row boundary). Whether the
 slot was filled is a **function argument rather than a `computed` over `useSlots()`**: a slot's
 presence is not a reactive dependency, so a cached answer would go on insetting a caption whose
-controls have since gone — which happens on every detached HEAD, where neither button is drawn at
-all.
+controls have since gone.
 
-The two controls are `Button` in `ghost`, icon-only, each inside its own `Tooltip`, and that is
+**Beside them is a third control, and it is about the repository rather than about the branch**: a
+`git fetch` somebody presses for, `Check the remote`, drawn first of the three. It is there because
+of what the other two do when there is nothing to do — Pull is refused when the branch is level and
+Push when it is ahead of nothing — so the state a person most wants to ask about is exactly the
+state in which the caption had nothing left to press. The count they are reading is only as fresh
+as the last sweep that worked, and with `git.autoFetch` off there has been no sweep at all: a fact
+somebody decides on has to be a fact they can ask about again. It stays on a detached HEAD, where
+neither verb is drawn, since a repository is still a repository with no branch checked out in it.
+
+The check is **two `Button`s under one `Tooltip`**, one per state, and that is a defect's shape rather
+than a preference: `Button` draws its slot as `<span v-if="$slots.default">`, and a slot function is
+present whether or not a `v-if` inside it renders anything, so a single button carrying the spinner
+in its slot kept an empty span as a flex child — spending its `gap` on nothing, coming out 6px wider
+than the arrows beside it, and snapping back to their width the moment a fetch started, which slid
+the caption's count and both arrows sideways. Interaction is a surface step and never a shift. The
+glyph decides which of the two is drawn; `fetchAction`'s verdict decides `disabled` on both, so the
+rule stays in one place.
+
+The three controls are `Button` in `ghost`, icon-only, each inside its own `Tooltip`, and that is
 **deliberately not `IconButton`**, the icon-only control everywhere else in this app. `IconButton`
 carries a `Tooltip` of its own around its `label`, and a refused button needs a wrapper tooltip — a
 native disabled button raises no pointer events of its own, so an explanation living inside it is
@@ -466,10 +483,17 @@ passed by hand as `aria-label`.
 What either button says and whether it may be pressed is `components/git/tracking.js` — pure,
 tested, of the `gitActions.js` family, for the reason that family exists. It does not repeat
 `gitActions.js`: whether this panel may write at all is that file's one verdict and arrives here as
-an argument, since a second copy of a rule is the half that drifts. **Pull stays live wherever there
-is an upstream, including when nothing is behind** — asking the remote and finding nothing is a
-legitimate press, and it is how somebody makes the count they are reading current. **Push is refused
-when the branch is level**, and it has a second shape rather than a second control: a branch with no
+an argument, since a second copy of a rule is the half that drifts. **Both verbs are refused when
+the branch is level with its upstream**, in a sentence each, and that is one rule read twice rather
+than two rules: a control offering an act with no effect is a control somebody presses to find out.
+Pull was live in that state once, on the argument that pressing it is how a person makes the count
+they are reading current — right about the need and wrong about the control, since what it
+describes is a fetch, and the fetch now has a button of its own in the same caption. **The check
+takes neither the tracking record nor the runs verdict**: `git fetch` writes remote-tracking refs
+and touches neither the working tree nor the index, which is the argument that already keeps the
+background sweep going under a batch, and the one state that refuses it is one already in flight —
+where the control spins rather than explains, `loader-circle` at `--attn-live`, the idiom the branch
+rows already use over a write. Push has a second shape rather than a second control: a branch with no
 upstream — the ordinary state of one cut by `New branch from this` — is published, which is
 `git push --set-upstream origin HEAD` and a different name for the control: **Publish branch**,
 since "push" for a branch the remote has never heard of says less than what is about to happen. A
@@ -502,8 +526,8 @@ panel draws worst. The store records the conflict with `op: 'merge'` for the sam
 `OpKind` knows two words and `pull` is not one of them.
 
 **Freshness is a background `git fetch --prune`, throttled and silent.** It goes out on window focus
-(from `catchUp`, where the file tree and the branch list already catch up) and on the project
-change, and the project half is keyed on **the repository the panel settled on** rather than on the
+(from `catchUp`, where the file tree and the branch list already catch up), on the project
+change, **and on a one-minute tick while the window is open**, and the project half is keyed on **the repository the panel settled on** rather than on the
 project path: which repository a project shows is decided an invoke later, so a fetch fired on the
 path itself would ask about the repository being left and stamp that one's throttle. Watching the
 selection covers a person picking another repository too, which is the same question one row along.
@@ -513,6 +537,33 @@ a minute. **Nothing waits for it**: the panel draws from what is already known, 
 lands the tracking read is repeated and the marks change underneath. The interval is a constant and
 not a setting, because a person can reasonably decide whether this happens at all and cannot
 reasonably decide whether four minutes beats five.
+
+The tick is the one of the three that is not somebody doing something, and it is there because
+whether a colleague pushed is the one thing in this window that changes with nobody touching this
+machine. Everything else `catchUp` refreshes is local, so a window left alone cannot have it move;
+a window left on the board for an afternoon would otherwise spend the afternoon believing a branch
+is level because the last answer said so — and that number is what dims Pull. **A minute is the
+tick and not the interval**: what decides when a socket actually opens is the same five-minute
+throttle per repository, and ticking under it is what makes the timer robust the two ordinary ways
+a timer goes wrong — a laptop that slept through six ticks fetches once on waking rather than six
+times, and a tick landing a second before the throttle expires is followed by another a minute
+later rather than by a whole interval of waiting. It lives in `DesktopApp.vue` beside the focus
+listener and not in the store, for the reason the focus sweep is wired there: a store that started
+timers of its own would open sockets from a module nobody mounted.
+
+**A pressed check is the same call, loud, and past both guards it has.** `fetchNow` in the store
+ignores the setting — that switch is about what this app does on its own, and a press is not that,
+which is what the setting's own prose already promised — and ignores the throttle, and resets it,
+since five minutes is a budget for calls nobody asked for. What it keeps is the one-in-flight hold,
+which is also what dims the button and spins it — and that hold is the promise rather than a flag,
+so a press landing while the sweep is still out **joins that call** instead of being refused by it.
+A guard would have made exactly the press this button exists to prevent: nothing spins, nothing is
+said, nothing happens. The joined call stays silent on failure, since nobody pressed *that* one. Its failure lands in the panel's refusal block with
+`op: 'fetch'` and the title **Git did not reach the remote** — the one entry in that table for
+something that is not a write to the tree, because a fetch somebody pressed for fails the way a
+pressed write fails. `vcsState.fetching` is deliberately not `busy`: `busy` is what holds the branch
+rows inert, and a fetch freezes no row it could affect. The background sweep sets neither, so a
+panel never starts twirling over a decision the person did not make.
 
 **A background fetch that fails says nothing on screen**, sets neither `error` nor `writeError`, and
 goes to the console alone. The block over the branch list reads "Git refused this operation" and
@@ -532,4 +583,6 @@ otherwise fail on every sweep. With it off the app makes no network call of its 
 buttons go on working when pressed. In `npm run dev` the marks come from `mockBackend.js`, which
 answers `vcs_tracking` with one branch behind, one ahead, one level and one nobody has pushed;
 `vcs_fetch` is deliberately **not** answered there, so the browser exercises the silent failure
-rather than pretending a remote was reached.
+rather than pretending a remote was reached — and, since the check reached the caption, the loud
+one as well: pressing it in `npm run dev` draws the refusal block, which is the only place that
+block's fetch title can be seen at all.

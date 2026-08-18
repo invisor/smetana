@@ -90,6 +90,7 @@ import { gitState, loadBranches, loadHead } from '../stores/git.js'
 import {
   abortConflict,
   autoFetch,
+  fetchNow,
   checkout,
   commit,
   createBranch,
@@ -992,6 +993,36 @@ const catchUp = async () => {
 
 onMounted(() => window.addEventListener('focus', catchUp))
 onUnmounted(() => window.removeEventListener('focus', catchUp))
+
+/* Window focus is not enough on its own for the one thing in this window that
+   the disk cannot answer.
+
+   Everything else `catchUp` refreshes is local — files, the branch, the
+   repositories — and a window left open and untouched cannot have any of it
+   change without somebody touching this machine. Whether a colleague pushed is
+   the exception: it happens while nobody here does anything at all, and a
+   window somebody leaves on the board for an afternoon would go the whole
+   afternoon believing a branch is level because the last answer said so. That
+   number is now what dims Pull, which makes it a fact somebody reads and
+   decides on rather than a decoration.
+
+   A minute is the tick and not the interval. What decides how often a socket
+   actually opens is the store's own five-minute throttle per repository, and
+   ticking under it is what makes this robust against the two ordinary ways a
+   timer goes wrong: a laptop that slept through six of them fetches once on
+   waking rather than six times, and a tick that lands a second before the
+   throttle expires is followed by another a minute later instead of waiting
+   out a whole second interval. The setting is checked in the store too, so
+   with `git.autoFetch` off this line costs one early return a minute. */
+const SWEEP_EVERY_MS = 60 * 1000
+let sweep = null
+onMounted(() => {
+  sweep = setInterval(autoFetch, SWEEP_EVERY_MS)
+})
+onUnmounted(() => {
+  if (sweep) clearInterval(sweep)
+  sweep = null
+})
 
 const initing = ref(false)
 const initHere = async () => {
@@ -2153,6 +2184,7 @@ const toastStackStyle = {
                 :tracking="vcsState.tracking"
                 :actions="gitWrites"
                 :busy="vcsState.busy"
+                :fetching="vcsState.fetching"
                 :write-error="vcsState.writeError"
                 :error="vcsState.error"
                 :loading="vcsState.loading"
@@ -2171,6 +2203,7 @@ const toastStackStyle = {
                 @rebase="rebase"
                 @pull="pull"
                 @push="push"
+                @fetch="fetchNow"
                 @new-branch="newBranchFrom = $event"
                 @message="setMessage"
                 @commit="commit"

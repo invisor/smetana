@@ -919,6 +919,110 @@ describe('the git panel store', () => {
     await inFlight
   })
 
+  /* The button exists because both verbs beside it are refused over a branch
+     that is level, and the sweep behind it may have been switched off. A press
+     that then had to wait out a five-minute throttle would be a control that
+     did nothing and said nothing. */
+  it('a pressed check ignores both the setting and the throttle', async () => {
+    const { stores, ipc } = await loadStores()
+    let fetches = 0
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    ipc.on('vcs_fetch', () => {
+      fetches += 1
+      return null
+    })
+
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.git.autoFetch = false
+    await stores.vcs.fetchNow()
+    await stores.vcs.fetchNow()
+
+    expect(fetches).toBe(2)
+  })
+
+  /* The whole point of the press: the number the panel dims Pull over is read
+     again, so a branch that has fallen behind since the last sweep says so. */
+  it('a pressed check reads the marks again', async () => {
+    const { stores, ipc } = await loadStores()
+    let fetched = false
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', () =>
+      fetched ? [{ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 2, gone: false }] : []
+    )
+    ipc.on('vcs_fetch', () => {
+      fetched = true
+      return null
+    })
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.fetchNow()
+
+    expect(stores.vcs.vcsState.tracking.main.behind).toBe(2)
+  })
+
+  /* The opposite of the sweep's silence, and for the reason the sweep is
+     silent: somebody pressed this one, so a remote that cannot be reached is
+     an answer they are waiting for rather than a machine's ordinary state. */
+  it('a pressed check that failed says so in the panel', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    ipc.on('vcs_fetch', () => Promise.reject({ kind: 'git', message: 'could not read from remote' }))
+
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.fetchNow()
+
+    expect(stores.vcs.vcsState.writeError).toMatchObject({
+      op: 'fetch',
+      message: 'could not read from remote'
+    })
+    expect(stores.vcs.vcsState.fetching).toBe(false)
+  })
+
+  /* One call per repository, whoever asked for it: a second `git fetch` would
+     only queue behind the first. What the press does instead is join the call
+     already running — it spins over the sweep's fetch and answers when that
+     one answers, rather than being the no-op a plain guard would have made
+     it. */
+  it('a press while a sweep is still out joins it instead of opening a second', async () => {
+    const { stores, ipc } = await loadStores()
+    let fetches = 0
+    let land = null
+    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    ipc.on('vcs_fetch', () => {
+      fetches += 1
+      return new Promise((resolve) => {
+        land = resolve
+      })
+    })
+
+    await stores.vcs.loadRepos('/p')
+    const inFlight = stores.vcs.autoFetch()
+    const pressed = stores.vcs.fetchNow()
+    await Promise.resolve()
+
+    expect(fetches).toBe(1)
+    /* The button is spinning over somebody else's call, which is the whole
+       point of joining it. */
+    expect(stores.vcs.vcsState.fetching).toBe(true)
+
+    land(null)
+    await inFlight
+    await pressed
+
+    expect(stores.vcs.vcsState.fetching).toBe(false)
+  })
+
   /* A conflicted pull is an outcome and not a failure, and it must reach the
      same dialog a conflicted merge reaches — with `merge` as its op, since that
      is what decides whether the abort runs `git merge --abort`. */
