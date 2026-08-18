@@ -79,7 +79,7 @@ import PointerMenu from '../overlays/PointerMenu.vue'
 import { useInteractive } from '../core/interactive.js'
 import { branchMenuItems } from './branchMenu.js'
 import { branchRows, expandedFolders, toggleFolder } from './branchTree.js'
-import { AHEAD_TOKEN, BEHIND_TOKEN, trackingMark } from './tracking.js'
+import { AHEAD_TOKEN, BEHIND_TOKEN, folderBehind, trackingMark } from './tracking.js'
 
 const props = defineProps({
   /* `[{ name, current }]` as `vcs_branches` answers. */
@@ -311,18 +311,10 @@ const behindStyle = {
 }
 const aheadStyle = { ...behindStyle, color: `var(${AHEAD_TOKEN})` }
 
-/* A folded folder leaves its branches out of the list altogether, so without
-   this the feature would be invisible in exactly the repositories that need it
-   — one `feature/` folder holding thirty branches. No number beside it: the
-   heading already carries the count of what it holds, and a second number would
-   read as a subtotal of the first. */
-const folderBehind = (row) =>
-  !row.expanded &&
-  props.branches.some(
-    (branch) =>
-      String(branch?.name ?? '').startsWith(`${row.path}/`) &&
-      trackingMark(props.tracking[branch.name]).orange
-  )
+/* What a fold is hiding, which is `tracking.js`'s answer and not this file's —
+   the unfolded case is the only half that belongs here, since a heading with
+   its rows on screen has nothing left to stand in for. */
+const folderMark = (row) => !row.expanded && folderBehind(row.path, props.branches, props.tracking)
 
 const folderMarkStyle = { flex: 'none', color: `var(${BEHIND_TOKEN})` }
 
@@ -337,7 +329,13 @@ const OPERATIONS = {
   checkout: 'Switching to this branch',
   merge: 'Merging this branch in',
   rebase: 'Rebasing onto this branch',
-  create: 'Cutting a new branch from this'
+  create: 'Cutting a new branch from this',
+  /* The two that leave from the section header rather than from a row. They
+     are about the current branch and `busy` carries its name, so the spinner
+     lands on the row with the tick — which is the rule this panel already keeps
+     for every other write. */
+  pull: 'Pulling into this branch',
+  push: 'Pushing this branch'
 }
 
 const operation = (branch) =>
@@ -411,7 +409,7 @@ const empty = computed(() => props.branches.length === 0)
              is already a number about this heading, and a second one beside it
              would read as a subtotal of the first. -->
         <Icon
-          v-if="folderBehind(row)"
+          v-if="folderMark(row)"
           name="arrow-down"
           :size="MARK"
           :style="folderMarkStyle"

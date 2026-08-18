@@ -41,7 +41,7 @@
    `Panel` draws under its title and `ProjectList` under its rows, and it is
    asked for rather than assumed, because the topmost caption in a panel already
    has one of those above it and two hairlines meeting is a 2px line. */
-import { computed, ref, useSlots } from 'vue'
+import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import { useInteractive } from '../core/interactive.js'
 
@@ -64,20 +64,18 @@ defineExpose({ el })
 
 const { hover, active, handlers } = useInteractive()
 
-/* Whether anything was handed to the slot at all, which is what decides the
-   gutter below: a caption on its own keeps the count exactly where the other
-   panels put theirs, and only a header carrying controls insets them from the
-   panel's edge. */
-const slots = useSlots()
-const hasActions = computed(() => Boolean(slots.actions))
-
 /* The row, and it is this element rather than the caption that `GitPanel`
    measures. `flexShrink: 0` because a caption is a flex item in that column and
    a flex item shrinks by default: with three sections crowding a short panel
    the captions gave way with the lists, `--row-h` became a starting point and
    the text was clipped — the very defect a short list hid in `Dropdown`'s
-   options. A caption is the one thing here that must not move. */
-const rowStyle = computed(() => ({
+   options. A caption is the one thing here that must not move.
+
+   A function of whether the slot was filled rather than a `computed` over
+   `useSlots()`: a slot's presence is not a reactive dependency, so a cached
+   answer would go on insetting a caption whose controls have since gone — the
+   Git panel takes both of its buttons off the header on a detached HEAD. */
+const rowStyle = (hasActions) => ({
   display: 'flex',
   alignItems: 'center',
   width: '100%',
@@ -86,14 +84,14 @@ const rowStyle = computed(() => ({
   /* The controls would otherwise sit against the panel's own edge. Only where
      there are controls: adding it always would move the count of every caption
      in the panel by a step, for a header that has nothing to inset. */
-  paddingRight: hasActions.value ? 'var(--space-3)' : '0',
+  paddingRight: hasActions ? 'var(--space-3)' : '0',
   /* Inside the height rather than on top of it, which is `box-sizing:
      border-box` doing its work: a header is what `GitPanel` measures a row by,
      and a rule that added a pixel to two of the three captions would put the
      measured row and the drawn rows a pixel apart for the whole of that panel's
      arithmetic. */
   borderTop: props.divided ? 'var(--border-w) solid var(--border-subtle)' : 'none'
-}))
+})
 
 /* The caption itself: everything the `actions` slot does not take, at the whole
    height of the row so its hover surface is the row rather than a strip through
@@ -131,7 +129,7 @@ const countStyle = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mo
 </script>
 
 <template>
-  <div ref="el" :style="rowStyle">
+  <div ref="el" :style="rowStyle(Boolean($slots.actions))">
     <button
       type="button"
       :style="style"

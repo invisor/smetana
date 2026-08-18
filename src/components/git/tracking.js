@@ -37,6 +37,29 @@ export function trackingMark(tracking) {
   return { behind, ahead, orange: behind > 0 }
 }
 
+/* What a folded folder has to say for the branches it is hiding.
+
+   A folded folder leaves its rows out of the list altogether, so without this
+   the mark would be missing in exactly the repositories that need it — one
+   `feature/` folder holding thirty branches is the ordinary state of this list.
+   It answers yes or no and never a number: the heading already carries the
+   count of what it holds, and a second number beside it would read as a
+   subtotal of the first.
+
+   The prefix test is the folder's path and a slash, so a heading answers for
+   everything below it however deep — `fix` is behind because `fix/legacy/…` is,
+   which is what keeps the mark on screen while the fold is closed at any level.
+   Here rather than in the component drawing it, for the reason the rest of this
+   file is here: a `.vue` file is the one thing no test in this repository can
+   reach. */
+export function folderBehind(path, branches, tracking) {
+  const prefix = `${path}/`
+  return branches.some(
+    (branch) =>
+      String(branch?.name ?? '').startsWith(prefix) && trackingMark(tracking[branch.name]).orange
+  )
+}
+
 const NO_UPSTREAM = 'This branch has no upstream yet, so there is nothing to pull.'
 const UPSTREAM_GONE = 'The upstream of this branch was deleted on the remote.'
 

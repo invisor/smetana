@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pullAction, pushAction, trackingMark } from '../../../src/components/git/tracking.js'
+import { folderBehind, pullAction, pushAction, trackingMark } from '../../../src/components/git/tracking.js'
 
 const free = { allowed: true, reason: null }
 const held = { allowed: false, reason: 'A run is going in this project.' }
@@ -38,6 +38,53 @@ describe('what a branch row draws for its upstream', () => {
      the two indistinguishable at a glance. */
   it('a branch both ahead and behind carries both counts', () => {
     expect(trackingMark(both)).toEqual({ behind: 3, ahead: 2, orange: true })
+  })
+})
+
+describe('what a folded folder stands in for', () => {
+  const branches = [
+    { name: 'main', current: true },
+    { name: 'fix/legacy/depot-import', current: false },
+    { name: 'feature/one', current: false }
+  ]
+  const tracking = {
+    'fix/legacy/depot-import': {
+      branch: 'fix/legacy/depot-import',
+      upstream: 'origin/fix/legacy/depot-import',
+      ahead: 0,
+      behind: 2,
+      gone: false
+    },
+    'feature/one': { branch: 'feature/one', upstream: 'origin/feature/one', ahead: 4, behind: 0, gone: false }
+  }
+
+  /* The mark reaches every heading above the branch it is about, however deep
+     the fold is closed: a list folded at `fix` hides the row entirely, and that
+     is the case this exists for. */
+  it('a heading answers for everything below it, at any depth', () => {
+    expect(folderBehind('fix', branches, tracking)).toBe(true)
+    expect(folderBehind('fix/legacy', branches, tracking)).toBe(true)
+  })
+
+  /* A folder holding only branches that are ahead has nothing to pull, and a
+     mark on it would send somebody to a button that refuses. */
+  it('a folder with nothing behind it draws nothing', () => {
+    expect(folderBehind('feature', branches, tracking)).toBe(false)
+  })
+
+  /* The separator is the slash, so a folder is never confused with a branch
+     whose name merely starts the same way. */
+  it('a folder is its own path and a slash, never a prefix of a name', () => {
+    const named = [{ name: 'fixture', current: false }]
+    const marked = { fixture: { branch: 'fixture', upstream: 'origin/fixture', ahead: 0, behind: 1, gone: false } }
+
+    expect(folderBehind('fix', named, marked)).toBe(false)
+  })
+
+  /* A repository with no tracking answer yet — the two lists are merged by
+     name, and a heading is drawn before the counts land. */
+  it('no tracking at all marks no folder', () => {
+    expect(folderBehind('fix', branches, {})).toBe(false)
   })
 })
 
