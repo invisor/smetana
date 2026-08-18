@@ -20,6 +20,13 @@ beforeEach(async () => {
   ipc.on('files_list', (args) => listing({ dir: args.dir }))
   ipc.on('tracker_set_project', snapshot())
   ipc.on('tracker_probe', (args) => args.paths.map((path) => ({ path, tracked: true })))
+  /* A move loads the new project's sessions before restoring its tabs, so every
+     test in this file reaches this command whether or not it is about agents.
+     Answered with nothing rather than left to refuse: an unregistered command
+     rejects, `loadSessions` swallows it, and the move would carry on through a
+     caught error — which works, and which would make the two tests below that
+     answer this deliberately look like nothing special. */
+  ipc.on('terminal_list', [])
 
   /* Mandatory: the settings watcher is installed only inside loadSettings.
      Without it flushPending has nothing to flush, settings_save never happens,

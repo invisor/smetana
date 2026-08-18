@@ -700,17 +700,26 @@ const startTheRun = async (chosen) => {
     }
     /* A run is agent sessions, and watching them is the point — the same move
        filing a task and "Ask agent to edit" already make. The side panel only,
-       though, and that is the whole of what this may promise here: `run_start`
-       answers as soon as the worker has noted the request, which is before
-       preflight and well before the first batch has a session, and this window
-       mints no start ticket for a run — the run worker asks the terminal worker
-       itself. So there is no agent yet, therefore no Agent tab, and a centre
-       pointed at one would name a tab that is not in the row and draw "No
-       agents in this project" at the very moment somebody pressed Start run.
-       The centre is moved by the `lastRunStart` watcher below, when the batch's
-       session actually arrives, which is the one place that rule is written.
-       Until then the board is the honest thing to be looking at, and the press
-       is not without visible effect: the run bar has it. */
+       and the centre deliberately not: `run_start` answers as soon as the worker
+       has noted the request, which is before preflight and well before the first
+       batch has a session, and this window mints no start ticket for a run — the
+       run worker asks the terminal worker itself. So there is no agent yet and
+       therefore no Agent tab, and a centre pointed at one would have named a tab
+       that is not in the row, drawn no tab as active, and shown an empty
+       terminal at the very moment somebody pressed Start run. The centre is
+       moved by the `lastRunStart` watcher below, when the batch's session
+       actually arrives, which is the one place that rule is written.
+
+       What this line does promise is only where the agents will appear, not that
+       there is anything to see yet: for the whole of preflight the panel draws
+       AgentList's own empty state, which says no agent is running and offers the
+       + row — the same untruth the centre tab was just taken off, one panel over
+       and in much quieter type. It is left standing because it is pre-existing,
+       because the panel is genuinely the destination, and because a side panel
+       saying "nothing yet" is a smaller lie than a centre column drawing a pane
+       behind a tab nobody can see. Do not read this line as evidence the empty
+       state was thought through. The press's visible effect meanwhile is the run
+       bar, which is where a run's own progress is reported. */
     project.sideTab = 'agents'
   } catch (err) {
     runError.value = runFailure(err)

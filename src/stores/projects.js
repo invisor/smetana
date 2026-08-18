@@ -83,25 +83,37 @@ async function moveTo(path) {
      nothing about the move waits on git. */
   loadRepos(path)
   if (path) {
-    await listDir('')
-    await Promise.all(settings.project.expanded.map((dir) => listDir(dir)))
-    /* Before the tabs, and awaited, which is the one ordering in this function
-       that is about another store's answer rather than about this one's work.
+    /* Started here and awaited below, which is deliberate on both ends.
        `restoreTabs` repairs an `activeTab` of "terminal" when the project has no
        agent — sessions do not survive a restart — and it reads the session list
-       to decide. The list is also loaded by the `activePath` watcher in
-       DesktopApp.vue, but that is a race this may not lose: `terminal_list`
-       queues behind whatever the terminal worker is already doing, and a spawn
-       is about a second, while the two `files_list_dir` calls above are far
-       quicker. Left unordered, switching to a project *while an agent starts*
-       repairs it against the previous project's list — the new project opens on
-       the board although its agent is live, and the repaired value is then
-       written into its settings by the debounce. `onMounted` in DesktopApp.vue
-       already orders these two the same way explicitly; this is the other
-       caller. The duplicate request costs one round trip and nothing else —
+       to decide, so it may not run before that list is the *new* project's. Left
+       unordered it is a race this loses often enough to matter: `terminal_list`
+       queues behind whatever the terminal worker is already doing and a spawn is
+       about a second, while the directory reads below are far quicker — so
+       switching to a project *while an agent starts* would repair it against the
+       project just left, opening it on the board although its agent is live and
+       writing that over its settings on the next debounce. `onMounted` in
+       DesktopApp.vue orders the same two calls explicitly; this is the other
+       caller.
+
+       Started before the directory reads rather than after them because the
+       ordering this needs is against `restoreTabs` alone, and nothing above that
+       line reads the session list. Awaiting it here instead would serialise the
+       whole switch — `setProject` and its tracker call included — behind that
+       same queued second, and `switchTo` ignores clicks while a move is up, so
+       the window in which the project list stops responding would grow by it.
+       `loadSessions` sets `terminalState.project` synchronously, before its
+       first await, so the guard that drops a stale answer is armed the moment
+       this is called rather than when it is awaited.
+
+       The list is loaded a second time by the `activePath` watcher in
+       DesktopApp.vue. That duplicate costs one round trip and nothing else —
        `loadSessions` guards against its own stale response — which is the same
        trade the duplicated `loadConfig` beside it already makes. */
-    await loadSessions(path)
+    const sessions = loadSessions(path)
+    await listDir('')
+    await Promise.all(settings.project.expanded.map((dir) => listDir(dir)))
+    await sessions
     await restoreTabs()
   }
   await setProject(path)

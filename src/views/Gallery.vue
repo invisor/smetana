@@ -82,7 +82,6 @@ import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
-import { terminalState } from '../stores/terminals.js'
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
    written out as data URLs, which is exactly the shape `attachments.js` builds
@@ -735,12 +734,9 @@ const PARKED_CARD_MENU = taskMenuItems({
 
 /* TerminalView is handed the session it draws, the way the app's two tab
    branches hand it one: the prop is what it attaches to, and the mock backend
-   answers that attach with terminalFixture.js's captured output.
-
-   `activeId` is set beside it because the agents panel above draws its
-   selection from that field and the two fixtures name the same session — not
-   because the terminal reads it. It does not, any more. */
-terminalState.activeId = 1
+   answers that attach with terminalFixture.js's captured output. Nothing in
+   this file touches the terminal store — the panel below it takes its rows and
+   its selection as props too. */
 const GALLERY_SESSION = 1
 
 /* The settings window's own state lives in that window and reaches it as
