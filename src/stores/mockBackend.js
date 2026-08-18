@@ -666,6 +666,12 @@ export function installMockBackend() {
     /* Detach and resize change nothing on disk and have nothing to lie
        about. */
     if (command === 'terminal_detach' || command === 'terminal_resize') return null
+    /* Everything that *starts* something — `terminal_create` and
+       `terminal_shell` — is deliberately not answered here and falls through to
+       the rejection below. There is no PTY in a browser, and a session handed
+       back with nothing behind it would put a row in the agents panel or a tab
+       in the centre whose terminal could never say a word. The loud refusal is
+       the honest answer, and it is the same one every write gets. */
     // Any write command (tracker_update/close/reopen, files_write, and
     // whatever appears later) has to reject explicitly rather than silently
     // return a plausible but foreign issue — otherwise a "write" in the browser

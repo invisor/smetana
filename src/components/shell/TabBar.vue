@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import IconButton from '../core/IconButton.vue'
 import Tab from './Tab.vue'
 
@@ -10,6 +10,24 @@ const props = defineProps({
 })
 
 defineEmits(['select', 'close', 'promote'])
+
+/* The row has two slots and they are in different places, which is the whole
+   reason there are two. `actions` sits past the `flex: 1` strut at the far
+   right of the bar, for anything about the row as a whole. `afterPinned` sits
+   *inside* the scrolling strip, between the tabs that are always there and the
+   ones a project brought — so a control about those first tabs stays beside
+   them however many files are open, instead of drifting to the far end where
+   the scrollbar is hidden and it could be pushed off the edge.
+
+   Which tabs those are is read off the list rather than passed in as a count:
+   the leading run of pinned ones is what "the tabs that are always there"
+   means, and `tabs.js` is already the one place that decides it. */
+const pinned = computed(() => {
+  const at = props.tabs.findIndex((tab) => tab.kind !== 'pinned')
+  return at === -1 ? props.tabs : props.tabs.slice(0, at)
+})
+
+const rest = computed(() => props.tabs.slice(pinned.value.length))
 
 /* The tab strip scrolls, but its own scrollbar is hidden (sm-scroll-hidden)
    and the overflow menu (overflowCount) is not wired up — without this the
@@ -71,6 +89,17 @@ const barStyle = {
   borderBottom: 'var(--border-w) solid var(--border)',
   minWidth: 0
 }
+/* Its own border on the right, so the control reads as part of the pinned block
+   rather than as the first of the file tabs — the same separator every tab
+   draws. `flex: '0 0 auto'` because it lives inside a scrolling strip and must
+   not be squeezed by it. */
+const afterPinnedStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  flex: '0 0 auto',
+  padding: '0 var(--space-2)',
+  borderRight: 'var(--border-w) solid var(--border-subtle)'
+}
 const overflowStyle = {
   display: 'flex',
   alignItems: 'center',
@@ -87,7 +116,19 @@ const overflowStyle = {
       :style="{ display: 'flex', minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }"
     >
       <Tab
-        v-for="t in props.tabs"
+        v-for="t in pinned"
+        :key="t.id"
+        v-bind="t"
+        :active="t.id === activeId"
+        @select="$emit('select', t.id)"
+        @close="$emit('close', t.id)"
+        @promote="$emit('promote', t.id)"
+      />
+      <div v-if="$slots.afterPinned" :style="afterPinnedStyle">
+        <slot name="afterPinned" />
+      </div>
+      <Tab
+        v-for="t in rest"
         :key="t.id"
         v-bind="t"
         :active="t.id === activeId"

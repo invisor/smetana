@@ -14,7 +14,32 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import EmptyState from '../core/EmptyState.vue'
 import { terminalFont, terminalTheme } from './theme.js'
-import { attach, detach, isStarting, resize, send, subscribeOutput, terminalState } from '../../stores/terminals.js'
+import {
+  attach,
+  detach,
+  isShellSession,
+  isStarting,
+  resize,
+  send,
+  subscribeOutput,
+  terminalState
+} from '../../stores/terminals.js'
+
+/* Which session this pane shows, handed in rather than read from the store.
+
+   `terminalState.activeId` used to be both the answer to this and the answer to
+   "which agent has the person selected", and the two came apart the moment a
+   session could be something other than an agent: a shell drawn in its own
+   centre tab would have moved the highlight in the agents panel onto a row that
+   does not exist there, and taken the Agent tab off whatever it was showing.
+   So the field keeps the one meaning it is named for, the Agent tab passes it
+   in, and a terminal tab passes its own shell.
+
+   `null` is a pane with nothing behind it — the Agent tab with no agent picked
+   — and it draws the empty state rather than nothing at all. */
+const props = defineProps({
+  sessionId: { type: [String, Number], default: null }
+})
 
 const host = ref(null)
 let term = null
@@ -68,9 +93,12 @@ const overlayStyle = {
    gets its own word rather than either of the two the empty state already has:
    "No agent selected" under a row a person picked themselves reads as the app
    having lost it. */
-const starting = computed(() => isStarting(terminalState.activeId))
-const idle = computed(() => !terminalState.activeId)
-const noSessions = computed(() => terminalState.sessions.length === 0)
+const starting = computed(() => isStarting(props.sessionId))
+const idle = computed(() => !props.sessionId)
+/* Agents, not sessions: this empty state belongs to the Agent tab, which is the
+   only pane that can be handed nothing, and a project whose shells are open is
+   still a project with no agent in it. */
+const noSessions = computed(() => !terminalState.sessions.some((s) => !isShellSession(s)))
 
 /* Fitting the terminal to its pane has nothing to do with whether a session
    is attached — an empty terminal still has to fill the space it is given.
@@ -79,7 +107,7 @@ const noSessions = computed(() => terminalState.sessions.length === 0)
 function applySize() {
   if (!fit || !term) return
   fit.fit()
-  if (terminalState.activeId) resize(terminalState.activeId, term.cols, term.rows)
+  if (props.sessionId) resize(props.sessionId, term.cols, term.rows)
 }
 
 onMounted(() => {
@@ -89,7 +117,7 @@ onMounted(() => {
   term.open(host.value)
 
   term.onData((data) => {
-    if (terminalState.activeId) send(terminalState.activeId, data)
+    if (props.sessionId) send(props.sessionId, data)
   })
 
   unsubscribe = subscribeOutput((bytes, meta) => {
@@ -124,8 +152,8 @@ onMounted(() => {
   sizes = new ResizeObserver(applySize)
   sizes.observe(host.value)
 
-  if (terminalState.activeId && !isStarting(terminalState.activeId)) {
-    attached = terminalState.activeId
+  if (props.sessionId && !isStarting(props.sessionId)) {
+    attached = props.sessionId
     attach(attached).then(applySize)
   }
 })
@@ -133,15 +161,15 @@ onMounted(() => {
 /* Switched to a different agent — the new ring's snapshot arrives with
    meta.reset, and the subscriber above clears the screen before writing it.
 
-   Losing the selection while the view stays mounted (switching to a project
+   Losing the session while the view stays mounted (switching to a project
    with no sessions, removing the last agent) is the same seam and needs the
    same work: without it the previous session's frame keeps sitting on screen
    while the worker still calls it active and encodes its bytes every tick for
    a listener that drops every one — and typing goes nowhere, because onData
-   guards on activeId. Clearing activeId is not this view's to do, though:
-   the selection belongs to the store. */
+   guards on the prop. Clearing the selection is not this view's to do, though:
+   it belongs to the store. */
 watch(
-  () => terminalState.activeId,
+  () => props.sessionId,
   (id) => {
     /* An agent still being spawned goes through this same seam: there is
        nothing to attach to yet, and leaving the previous session attached

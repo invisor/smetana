@@ -5,7 +5,15 @@ import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
 
 /* Tab kinds
-   pinned  - Terminal and Kanban. Always first, no close affordance.
+   pinned  - Agent and Kanban. Always first, no close affordance. (The Agent tab
+             is only drawn while the project has one, but closing it is taking
+             the last agent away, not a cross on the tab — which is what this
+             kind means here.)
+   terminal - a shell of the person's own, one per session. Closable, and
+             closing it kills the shell. Its label is prose rather than a path,
+             which is the one thing it does not share with a file tab: the
+             system's rule is identifiers in mono and prose in sans, so it is
+             set the way the pinned tabs are.
    file    - a normal opened file tab, closable, may be dirty or read-only.
    preview - single-click temporary tab, replaced by the next preview.
              Italic, as in VS Code: the mechanic is VS Code's, and so is its
@@ -39,6 +47,11 @@ const emit = defineEmits(['select', 'close', 'promote'])
 const hover = ref(false)
 const preview = computed(() => props.kind === 'preview')
 
+/* Which kinds are captioned in words rather than by a name off the disk. Every
+   other tab's label is a file's own name, and those are set in mono like every
+   identifier in this system. */
+const PROSE = new Set(['pinned', 'terminal'])
+
 const style = computed(() => ({
   display: 'inline-flex',
   alignItems: 'center',
@@ -51,7 +64,7 @@ const style = computed(() => ({
   color: props.active ? 'var(--text-primary)' : 'var(--text-secondary)',
   borderRight: 'var(--border-w) solid var(--border-subtle)',
   boxShadow: props.active ? 'inset 0 2px 0 0 var(--text-primary)' : 'none',
-  font: `var(--weight-regular) var(--text-sm)/1 ${props.kind === 'pinned' ? 'var(--font-sans)' : 'var(--font-mono)'}`,
+  font: `var(--weight-regular) var(--text-sm)/1 ${PROSE.has(props.kind) ? 'var(--font-sans)' : 'var(--font-mono)'}`,
   cursor: 'default',
   maxWidth: '200px',
   transition: 'var(--transition-control)'

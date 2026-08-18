@@ -6,6 +6,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
 import { taskMenuItems } from '../components/kanban/taskMenu.js'
+import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import {
   AboutSettings,
   AgentList,
@@ -81,7 +82,6 @@ import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
-import { terminalState } from '../stores/terminals.js'
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
    written out as data URLs, which is exactly the shape `attachments.js` builds
@@ -278,7 +278,14 @@ const tabs = computed(() => [
     iconUrl: fileIconUrl('logo.png', documentTheme.value),
     readOnly: true,
     readOnlyHint: 'Binary file — not shown.'
-  }
+  },
+  /* Last, which is where `tabList` puts it — after the files and after the
+     diffs, because the order of the file tabs is the person's own and a tab
+     nobody remembers has no place inside it. Closable like a file's, captioned
+     in words like a pinned one. In the app its id is a zero byte and a session
+     number, which nothing here draws: the shape that matters on screen is the
+     kind. */
+  { id: 'term:1', kind: 'terminal', label: 'Terminal 1', icon: 'terminal' }
 ])
 
 /* `FileTree` walks a nested `children` array and draws a folder's contents only
@@ -293,8 +300,9 @@ const galleryTree = MOCK_TREE[''].map((node) =>
 )
 const galleryTreeExpanded = { src: true }
 
-/* AgentList reads rows and activeId as props, unlike TerminalView below,
-   which reads the store directly — so a plain local fixture is enough here. */
+/* AgentList reads rows and activeId as props, so a plain local fixture is
+   enough here — as it is for TerminalView below, which takes the session it
+   draws as a prop too and reaches the store only for the output behind it. */
 /* Every caption the store can produce, once each: a run that has taken work
    and one that has not, an edit, a filing, a setup, and a bare agent. That is
    the whole of what `captionOf` in `src/stores/terminals.js` answers, and this
@@ -721,11 +729,15 @@ const PARKED_CARD_MENU = taskMenuItems({
   busy: false
 })
 
-/* TerminalView has no props of its own to feed a fixture through, unlike
-   FileTree above — it reads the active session straight from the store.
-   Pointing terminalState at session 1 makes it attach on mount, which the
-   mock backend answers with terminalFixture.js's captured output. */
-terminalState.activeId = 1
+/* The + button's own two rows, from the same module the app reads them from —
+   the gallery draws what ships, never a second copy of the words. */
+
+/* TerminalView is handed the session it draws, the way the app's two tab
+   branches hand it one: the prop is what it attaches to, and the mock backend
+   answers that attach with terminalFixture.js's captured output. Nothing in
+   this file touches the terminal store — the panel below it takes its rows and
+   its selection as props too. */
+const GALLERY_SESSION = 1
 
 /* The settings window's own state lives in that window and reaches it as
    events from the app window; here the tabs are simply driven by local refs, so
@@ -1280,7 +1292,15 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Shell</div>
-      <TabBar :tabs="tabs" active-id="kanban" />
+      <TabBar :tabs="tabs" active-id="kanban">
+        <!-- The row's second slot, inside the scrolling strip and right after
+             the pinned tabs, which is where the app puts it: the control is
+             about those tabs and has to stay beside them however many files are
+             open. -->
+        <template #afterPinned>
+          <MenuButton icon="plus" label="New agent or terminal" :items="NEW_TAB_ITEMS" :width="180" />
+        </template>
+      </TabBar>
       <!-- Taller than the other boxes on this page, and the file tree is why:
            at 160px the shell showed five rows of it, so half the tree's glyph
            vocabulary sat below a fold in the one place it can be checked. -->
@@ -1360,11 +1380,10 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Terminal</div>
-      <!-- TerminalView takes no props — it reads the active session from
-           terminals.js itself, so the fixture has to go in through the
-           store, the way terminalFixture.js already does for the app's own
-           terminal tab. Height is a token multiple, not a pixel number:
-           the terminal fills whatever height it is given. -->
+      <!-- The session arrives as a prop; its output comes from the store, which
+           the mock backend answers out of terminalFixture.js. Height is a token
+           multiple, not a pixel number: the terminal fills whatever height it
+           is given. -->
       <div
         :style="{
           display: 'flex',
@@ -1372,7 +1391,7 @@ const menuTargetStyle = {
           border: 'var(--border-w) solid var(--border)'
         }"
       >
-        <TerminalView />
+        <TerminalView :session-id="GALLERY_SESSION" />
       </div>
     </section>
 

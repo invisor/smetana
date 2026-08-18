@@ -55,6 +55,18 @@ pub async fn terminal_create(
     ask(&handle, |tx| Request::Create(project, agent, intent, tx)).await?
 }
 
+/// A shell in the project's root, with no agent and no intent behind it. Its own
+/// command rather than an `Intent` variant on the one above: `terminal_create`
+/// takes an agent id and turns it into a command line through a profile, and a
+/// shell has none of that — the request it puts on the queue is a different one.
+#[tauri::command]
+pub async fn terminal_shell(
+    handle: State<'_, TerminalHandle>,
+    project: String,
+) -> Result<Session, TerminalError> {
+    ask(&handle, |tx| Request::CreateShell(project, tx)).await?
+}
+
 #[tauri::command]
 pub async fn terminal_remove(
     handle: State<'_, TerminalHandle>,

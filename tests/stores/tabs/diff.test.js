@@ -59,12 +59,7 @@ describe('opening a changed file as a diff', () => {
     tabs.openFile('a.txt')
     await opened(REPO, 'src/main.rs')
 
-    expect(tabs.tabList.value.map((entry) => entry.kind)).toEqual([
-      'pinned',
-      'pinned',
-      'preview',
-      'diff'
-    ])
+    expect(tabs.tabList.value.map((entry) => entry.kind)).toEqual(['pinned', 'preview', 'diff'])
   })
 
   it('clicking the same row again lands on the tab already open and re-reads it', async () => {
