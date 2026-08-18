@@ -906,6 +906,29 @@ describe('a shell session', () => {
     expect(seen.at(-1)).toBe('$ ')
   })
 
+  /* The condition that makes the split correct, and the one no other test
+     reaches. A detach and an attach travel as two IPC calls with no ordering
+     guarantee, so the old view's detach can arrive *after* the new one has
+     attached — a `streaming = null` written unconditionally would then drop
+     every byte of the session the person is now looking at, with no error and
+     no event to say why. Two sessions and a late detach is exactly that
+     sequence. */
+  it('a detach that arrives after the next attach does not silence it', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), session({ id: 2 })])
+    await stores.terminals.loadSessions('/p')
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+
+    await stores.terminals.attach(2)
+    // The view being left detaches last, naming the session it is leaving.
+    await stores.terminals.detach(1)
+    await emit('terminal:output', { id: 2, seq: 1, data: b64('still here') })
+    await nextTick()
+
+    expect(seen.at(-1)).toBe('still here')
+  })
+
   /* And the same rule the other way: the session that was left goes quiet, or
      the tab just opened would be written into by the one just closed. */
   it('what the window has left stops reaching the subscriber', async () => {

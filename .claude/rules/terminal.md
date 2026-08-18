@@ -5,6 +5,11 @@ paths:
   - "src/components/terminal/**"
   - "src/components/agent/**"
   - "src/stores/terminals.js"
+  # Half of the tab row is derived from the sessions this file is about — the
+  # Agent tab and one tab per shell — so the rule has to load for whoever is
+  # editing that half, not only for whoever is editing the worker.
+  - "src/stores/tabs.js"
+  - "src/components/shell/**"
 ---
 
 # The terminal: agent sessions, and one shell
@@ -18,8 +23,8 @@ agent to edit". The reason the subsystem exists at all is the second half of tha
 when an agent is waiting on a human, including one in a tab nobody is looking at.
 
 **That tab is drawn on demand and is not stored anywhere.** It exists exactly while the project has an
-agent session — live in `terminalState.sessions`, or still coming up in `terminalState.starting` — and
-`hasAgentTab` in `src/stores/tabs.js` is the whole of the rule, over `hasAgentSession` in
+agent session — live in `terminalState.sessions`, or still coming up in `terminalState.starting` —
+and `hasAgentTab` in `src/stores/tabs.js` is the whole of the rule, over `hasAgentSession` in
 `terminals.js`. Before that it was pinned beside the board, so a project opened on an empty folder
 offered a tab whose entire content was an empty terminal. A *start* counts and not only a session:
 a spawn takes about a second, and a tab that appeared only when the worker answered would leave the
@@ -41,7 +46,8 @@ An agent started for a piece of work opens on it. What `terminal_create` takes i
 `Intent` — file this task, edit that issue, or nothing at all — plus the id of the agent to run; the
 words are the profile's business (see `.claude/rules/agents.md`), and `build_command` in `pty.rs` adds
 only what every session alike needs: the working directory, and then `apply_environment` — `TERM`, the
-locale, and the bundled `bd` on the front of `PATH` — which the shell branch below shares with it. Whatever prompt the profile does produce rides as the agent's positional argument. Not as
+locale, and the bundled `bd` on the front of `PATH` — which the shell branch below shares with it.
+Whatever prompt the profile does produce rides as the agent's positional argument. Not as
 bytes written after the spawn — the agent takes a moment to come up, and anything sent into an input
 that is not reading yet is lost with no acknowledgement to wait for and no way to tell that it went.
 
@@ -97,9 +103,13 @@ person's own bd commands belong in the audit trail under their own name.
 
 `Pty::spawn` and `Pty::spawn_shell` differ in exactly the command they build; the PTY, the reader
 thread, the ring and the kill path are one `Pty::start` below both. In particular **there is no second
-way to kill a session**: closing a terminal tab is `removeSession` → `terminal_remove`, the path that
-already exists, and the ordering rule that goes with it (reap before signalling — a recycled pid names
-somebody else's process group) is not restated anywhere.
+way to end a session**: closing a terminal tab is `removeSession` → `terminal_remove`, the path that
+already exists, and what that path does is `Pty::kill` — the child is killed outright and the session
+leaves the worker's map. It is not the graceful path: that one is `kill_all`, described below, which
+hangs up the whole process group and waits, and which runs when the window closes rather than when a
+row or a tab is closed. Whatever the shell itself started outlives a `terminal_remove` exactly as an
+agent's own children do; that is the existing behaviour of this command and not something a shell
+introduces.
 
 Detection runs over a shell and is welcome to. Layer A is agent-independent and there is nothing about
 it to switch off; a shell that rings the bell has rung it for the person sitting in front of it, and
@@ -112,12 +122,16 @@ paragraph above for where it would end up.
 
 On the front end `terminals.js` keeps both kinds in one `sessions` list, because the worker does and a
 second list would be one to hold in agreement with it. `isShellSession` is the whole of the
-difference, and three things read it: `agentRows` (a shell has no row — no work to caption it by),
-`hasAgentSession` (a project holding only shells has no Agent tab), and the selection repair, which
-falls back to the newest *agent* and never to a shell. `createShell` mints no start ticket, unlike
-`createSession`: a ticket buys the second before the worker answers, and it buys it for a panel that
-would otherwise draw an empty state over a row somebody just asked for — a tab that is not there yet
-draws nothing at all, so there is nothing to cover.
+difference, and where its readers are is the thing to know rather than how many there are — a number
+written here is wrong by the next commit. They are the derivations at the top of `terminals.js` —
+`agentSessions` and `shellSessions` read it, `lastAgent` and `hasAgentSession` read those — which
+between them decide that a shell has no row in the panel, that it has a tab of its own, that the
+selection repair never lands on one, and that a project holding only shells has no Agent tab. The one
+reader outside that file is `noSessions` in `TerminalView.vue`, which asks the same question about an
+empty state; everything else goes through a derivation rather than the predicate. `createShell` mints
+no start ticket, unlike `createSession`: a ticket buys the second before the worker answers, and it
+buys it for a panel that would otherwise draw an empty state over a row somebody just asked for — a
+tab that is not there yet draws nothing at all, so there is nothing to cover.
 
 ## A shell's tab
 
@@ -137,6 +151,13 @@ that only hid a live shell would leave a process nobody can see and nobody will 
 the tab is a view of a session anyway — there is nothing else in it to close. `closeTerminalTab` works
 the neighbour out before the kill and moves the selection only if the removal actually took, so a
 refusal leaves both the shell and its tab where they were.
+
+**The other direction is deliberately not symmetric.** A shell the person exits themselves — `exit`, or
+Ctrl-D — reaches `Exited` and stays in the worker's map, which only `Request::Remove` empties, and the
+tabs are derived by `work.kind` rather than by state: so the tab stands, with a dead PTY behind it and
+its last screen still in the ring, until somebody closes it. That is the intended behaviour and not an
+oversight — it is what a terminal emulator with "close on exit" switched off does, it leaves the last
+words of whatever was running there to be read, and closing it is the same one gesture as before.
 
 What such a tab draws is `TerminalView.vue` with a `sessionId` prop, and the Agent tab is the same
 component with `terminalState.activeId` passed in. The prop is what the pane attaches to, sends

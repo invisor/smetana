@@ -455,9 +455,13 @@ export function closeDiff(id) {
    stop, and the tab is derived from the session anyway: there is nothing to
    close but the session.
 
-   The kill is `removeSession`'s, which is the one path there is — SIGHUP to the
-   process group and then what is left of it. Nothing here signals anything
-   itself.
+   The kill is `removeSession`'s → `terminal_remove`, which is the one path there
+   is, and what that path does is `Pty::kill`: the process is killed outright and
+   the session leaves the worker's map. It is the same end the remove button in
+   the agents panel gives an agent, and deliberately not the app's own exit path
+   — `kill_all` in `service.rs` hangs up the process group and waits, and that
+   one runs when the window closes. Nothing here signals anything itself, and
+   nothing here is a second way to end a session.
 
    The neighbour is worked out before the await, against the list as it stands,
    and the selection is only moved if the removal actually took: a refusal leaves

@@ -118,7 +118,12 @@ describe('the Agent tab', () => {
 
   /* The other half of that guard: a project switch inside one session can
      arrive at a project that does have agents running, and taking a person to
-     the board then would repair something that was not broken. */
+     the board then would repair something that was not broken.
+
+     This is the repair in isolation, with the session list already loaded. That
+     the *app* loads it first — `moveTo` awaits `loadSessions` before this, and
+     the race it would otherwise lose is real — is pinned over in
+     tests/stores/projects.test.js, where the list deliberately answers late. */
   it('a project that does have an agent stays on it', async () => {
     await listed(session({ id: 4 }))
     state().activeTab = 'terminal'
@@ -136,6 +141,25 @@ describe('a terminal tab', () => {
 
     expect(tabs.tabList.value.map((tab) => tab.kind)).toEqual(['pinned', 'preview', 'terminal'])
     expect(tabs.tabList.value.at(-1)).toMatchObject({ label: 'Terminal 1', icon: 'terminal' })
+  })
+
+  /* After the diffs as well as after the files, which is the decision rather
+     than an accident of there being nothing else in the row: both lists are
+     things nobody remembers, and the file order is the person's own, so neither
+     belongs inside it. A diff has to be present for that half to be checked at
+     all. */
+  it('sits after the diff tabs too', async () => {
+    ipc.on('vcs_file_at_head', 'HEAD of it')
+    tabs.openFile('a.txt')
+    tabs.openDiff('/p', 'src/main.rs')
+    await listed(shell({ id: 2 }))
+
+    expect(tabs.tabList.value.map((tab) => tab.kind)).toEqual([
+      'pinned',
+      'preview',
+      'diff',
+      'terminal'
+    ])
   })
 
   /* The id shares the tab row with paths and can land in `project.activeTab`

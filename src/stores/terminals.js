@@ -315,7 +315,6 @@ function describeWork(work, sessionId) {
    a shell is not an agent — it has no work, no state anybody draws and nothing
    to say about itself. It is on screen as a centre tab and nowhere else.
 
-
    A new session always takes the highest id, so a start belongs at the bottom
    both before and after it lands, and the row a person is watching does not
    move under them when it becomes real.
@@ -571,7 +570,6 @@ function selected() {
   return agentSessions().some((s) => s.id === id)
 }
 
-
 /* The one write that still rejects: its caller turns a failed spawn into
    something the human sees, and an agent asked for that never appeared needs
    to say why — swallowing the error here would leave nothing to show.
@@ -690,22 +688,24 @@ export async function attach(id) {
   }
 }
 
-/* activeId carries two different meanings, and detach is only allowed to
-   touch one of them. It is "which agent the human selected" — that has to
-   survive leaving the terminal tab, because the agent list highlights its
-   row from this same field, and switching tabs must not un-pick it. It is
-   also "which session the worker is currently streaming to this window",
-   and that is what a view's unmount ends: the worker must stop pushing
-   output nobody is listening to.
-   The id argument is what keeps that stop from misfiring: switching agents
-   is two separate IPC calls with no ordering guarantee at the worker, so a
-   detach must name the session it is leaving. Without a name — or if this
-   function cleared activeId unconditionally — the old session's detach
-   arriving after the new session's attach would leave the worker with no
-   active session, and output for the session the human is now looking at
-   would silently stop arriving. No error, no event — the terminal just
-   goes still. Selection is not the transport's to forget, though: it stays
-   whatever it was, so the next mount can reattach to it. */
+/* The two things a session can be to this window are two fields, and detach
+   touches exactly one of them. `activeId` is "which agent the person picked":
+   it has to survive leaving the terminal tab, because the agent list highlights
+   its row from that same field, and switching tabs must not un-pick it — detach
+   never touches it, and neither does attach. `streaming` is "which session the
+   worker is pushing output to this window", and that is what a view's unmount
+   ends: the worker must stop sending bytes nobody is listening to.
+
+   The id argument is what keeps that stop from misfiring, on both sides of the
+   wire. Switching sessions is two separate IPC calls with no ordering guarantee
+   at the worker, so a detach must name the session it is leaving: without a
+   name, the old session's detach arriving after the new session's attach would
+   leave the worker with no active session, and output for the session the person
+   is now looking at would silently stop arriving. No error, no event — the pane
+   just goes still. `streaming` is cleared under the same condition and for the
+   same reason: only when it still names the session being left. Clearing it
+   unconditionally would drop the output of whichever session overtook this one
+   on the floor, which is the same defect one field further in. */
 export async function detach(id) {
   if (id == null || isStarting(id)) return
   /* Only if it is still this one. A detach and an attach reach the worker in no

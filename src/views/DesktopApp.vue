@@ -699,9 +699,19 @@ const startTheRun = async (chosen) => {
       fileFindings: chosen.file_findings
     }
     /* A run is agent sessions, and watching them is the point — the same move
-       filing a task and "Ask agent to edit" already make. */
+       filing a task and "Ask agent to edit" already make. The side panel only,
+       though, and that is the whole of what this may promise here: `run_start`
+       answers as soon as the worker has noted the request, which is before
+       preflight and well before the first batch has a session, and this window
+       mints no start ticket for a run — the run worker asks the terminal worker
+       itself. So there is no agent yet, therefore no Agent tab, and a centre
+       pointed at one would name a tab that is not in the row and draw "No
+       agents in this project" at the very moment somebody pressed Start run.
+       The centre is moved by the `lastRunStart` watcher below, when the batch's
+       session actually arrives, which is the one place that rule is written.
+       Until then the board is the honest thing to be looking at, and the press
+       is not without visible effect: the run bar has it. */
     project.sideTab = 'agents'
-    project.activeTab = 'terminal'
   } catch (err) {
     runError.value = runFailure(err)
   } finally {

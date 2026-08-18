@@ -272,10 +272,6 @@ const tabs = computed(() => [
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', iconUrl: fileIconUrl('tabs.rs', documentTheme.value), dirty: true },
   { id: 'agent.rs', kind: 'preview', label: 'agent.rs', iconUrl: fileIconUrl('agent.rs', documentTheme.value) },
   { id: 'git.rs', kind: 'diff', label: 'git.rs', icon: 'git-compare' },
-  /* A shell's tab: closable like a file's, captioned in words like a pinned
-     one. In the app its id is a zero byte and a session number, which nothing
-     here draws — the shape that matters on screen is the kind. */
-  { id: 'term:1', kind: 'terminal', label: 'Terminal 1', icon: 'terminal' },
   {
     id: 'logo.png',
     kind: 'file',
@@ -283,7 +279,14 @@ const tabs = computed(() => [
     iconUrl: fileIconUrl('logo.png', documentTheme.value),
     readOnly: true,
     readOnlyHint: 'Binary file — not shown.'
-  }
+  },
+  /* Last, which is where `tabList` puts it — after the files and after the
+     diffs, because the order of the file tabs is the person's own and a tab
+     nobody remembers has no place inside it. Closable like a file's, captioned
+     in words like a pinned one. In the app its id is a zero byte and a session
+     number, which nothing here draws: the shape that matters on screen is the
+     kind. */
+  { id: 'term:1', kind: 'terminal', label: 'Terminal 1', icon: 'terminal' }
 ])
 
 /* `FileTree` walks a nested `children` array and draws a folder's contents only
@@ -298,8 +301,9 @@ const galleryTree = MOCK_TREE[''].map((node) =>
 )
 const galleryTreeExpanded = { src: true }
 
-/* AgentList reads rows and activeId as props, unlike TerminalView below,
-   which reads the store directly — so a plain local fixture is enough here. */
+/* AgentList reads rows and activeId as props, so a plain local fixture is
+   enough here — as it is for TerminalView below, which takes the session it
+   draws as a prop too and reaches the store only for the output behind it. */
 /* Every caption the store can produce, once each: a run that has taken work
    and one that has not, an edit, a filing, a setup, and a bare agent. That is
    the whole of what `captionOf` in `src/stores/terminals.js` answers, and this
@@ -730,10 +734,12 @@ const PARKED_CARD_MENU = taskMenuItems({
    the gallery draws what ships, never a second copy of the words. */
 
 /* TerminalView is handed the session it draws, the way the app's two tab
-   branches hand it one. The store still has to know about the session — the
-   attach on mount goes through it, and the mock backend answers that with
-   terminalFixture.js's captured output — but which session is on screen is the
-   prop's answer, not the store's. */
+   branches hand it one: the prop is what it attaches to, and the mock backend
+   answers that attach with terminalFixture.js's captured output.
+
+   `activeId` is set beside it because the agents panel above draws its
+   selection from that field and the two fixtures name the same session — not
+   because the terminal reads it. It does not, any more. */
 terminalState.activeId = 1
 const GALLERY_SESSION = 1
 
