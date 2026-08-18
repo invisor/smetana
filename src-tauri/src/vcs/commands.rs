@@ -224,8 +224,27 @@ pub async fn vcs_rebase(repo: String, onto: String) -> Result<MergeOutcome, VcsE
 /// run holds the three writes, exactly as the commit box's suggest button does.
 #[tauri::command]
 pub async fn vcs_fetch(repo: String) -> Result<(), VcsError> {
-    run::git_network(Path::new(&repo), &["fetch", "--prune"])?;
-    Ok(())
+    off_the_runtime(move || run::git_network(Path::new(&repo), &["fetch", "--prune"])).await
+}
+
+/// The three calls below, run somewhere other than on a runtime worker.
+///
+/// `spawn_blocking`, for the reason `vcs_suggest_message` records at the foot
+/// of this file and with one thing added: every other call here is tens of
+/// milliseconds, where these three have a **sixty-second** ceiling by design
+/// (`run::NETWORK_TIMEOUT`) and are the first in this module that can take a
+/// minute on purpose. Every IPC call in the app — the file tree, the editor,
+/// the tracker, the terminals — shares that runtime, so a hung fetch and a hung
+/// push on a two-core machine is every worker gone and the whole window drawn
+/// from stale state for a minute, with nothing on screen saying why.
+async fn off_the_runtime<T, F>(work: F) -> Result<T, VcsError>
+where
+    F: FnOnce() -> Result<T, VcsError> + Send + 'static,
+    T: Send + 'static,
+{
+    // A blocking task that panicked, or a runtime shutting down under it: an
+    // `Io` refusal in this app's own words, since git never said anything.
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|err| Err(VcsError::Io(err.to_string())))
 }
 
 /// Bring the upstream's commits into the branch this repository is on.
@@ -245,11 +264,11 @@ pub async fn vcs_fetch(repo: String) -> Result<(), VcsError> {
 /// `OpKind::Merge`, whose abort is the right one.
 #[tauri::command]
 pub async fn vcs_pull(repo: String) -> Result<MergeOutcome, VcsError> {
-    attempt_with(
-        Path::new(&repo),
-        &["pull", "--no-rebase", "--no-edit"],
-        run::git_network_attempt,
-    )
+    off_the_runtime(move || {
+        let args = &["pull", "--no-rebase", "--no-edit"];
+        attempt_with(Path::new(&repo), args, run::git_network_attempt)
+    })
+    .await
 }
 
 /// Send this branch's commits to its upstream.
@@ -269,13 +288,15 @@ pub async fn vcs_pull(repo: String) -> Result<MergeOutcome, VcsError> {
 /// by git.
 #[tauri::command]
 pub async fn vcs_push(repo: String, set_upstream: bool) -> Result<(), VcsError> {
-    let dir = Path::new(&repo);
-    if set_upstream {
-        run::git_network(dir, &["push", "--set-upstream", "origin", "HEAD"])?;
-    } else {
-        run::git_network(dir, &["push"])?;
-    }
-    Ok(())
+    off_the_runtime(move || {
+        let dir = Path::new(&repo);
+        if set_upstream {
+            run::git_network(dir, &["push", "--set-upstream", "origin", "HEAD"])
+        } else {
+            run::git_network(dir, &["push"])
+        }
+    })
+    .await
 }
 
 /// Put the tree back exactly as it was before the operation that conflicted.
