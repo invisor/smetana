@@ -10,8 +10,10 @@
    and a control's glyph cannot be a colour somebody else chose. */
 import {
   Anchor,
+  ArrowDown,
   ArrowDownToLine,
   ArrowRightToLine,
+  ArrowUp,
   Bell,
   Bot,
   Bug,
@@ -154,6 +156,11 @@ export const iconNodes = {
   // in the world uses, and there is no `stop` glyph in lucide.
   square: Square,
   'arrow-down-to-line': ArrowDownToLine,
+  // The Git panel's two remote verbs, and the marks on a branch row that is
+  // behind or ahead of its upstream. The bare arrows and not the `-to-line`
+  // pair beside them: those two mean "all the way", and this is a direction.
+  'arrow-down': ArrowDown,
+  'arrow-up': ArrowUp,
   // A whole column moved into the queue, in the deferred header. Deliberately
   // not the play: that glyph means a run starts, and this one only changes a
   // status. The line at the end is what makes it "all the way into the queue"

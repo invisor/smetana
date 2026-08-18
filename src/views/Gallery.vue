@@ -425,7 +425,7 @@ const gitFolders = ref(null)
    count, because somebody who folds the branches away is saying they do not
    want to read the list, not that they no longer want to know there are nine
    of them. */
-const headerFolds = ref({ withCount: true, bare: true, folded: false })
+const headerFolds = ref({ withCount: true, bare: true, folded: false, withActions: true })
 /* The live commit box's own draft. Empty to start with, since that is the
    state the button's refusal is drawn in. */
 const commitDraft = ref('')
@@ -1479,6 +1479,26 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <SectionHeader label="Repositories" :count="3" :open="false" />
           <SectionHeader divided label="Changes" :count="7" :open="false" />
+        </div>
+        <!-- The `actions` slot, which is why the row is a wrapper around the
+             caption rather than the caption itself: the controls are a sibling
+             of a `<button>` and not its children, and both halves have to sit
+             inside one `--row-h`. Beside it the same caption with nothing in
+             the slot, so what the gutter does to the count is visible in one
+             glance. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <SectionHeader
+            label="Branches"
+            :count="9"
+            :open="headerFolds.withActions"
+            @toggle="headerFolds.withActions = !headerFolds.withActions"
+          >
+            <template #actions>
+              <IconButton icon="arrow-down" label="Pull 2" size="sm" />
+              <IconButton icon="arrow-up" label="Push 1" size="sm" />
+            </template>
+          </SectionHeader>
+          <SectionHeader divided label="Branches" :count="9" :open="true" />
         </div>
       </div>
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
