@@ -412,6 +412,33 @@ const FOLDER_BRANCHES = [
   { name: 'develop', current: false }
 ]
 
+/* Every state a row can be in against its upstream, keyed by branch name the
+   way `vcsState.tracking` holds it: behind, ahead, both at once, level with the
+   remote, a branch nobody has pushed (no record at all, like `release/7`) and
+   one whose upstream was deleted there. Only the first three draw a mark and
+   only the two with something to pull take the colour. */
+const TRACKING = {
+  'feat/worktree-rename': { upstream: 'origin/feat/worktree-rename', ahead: 0, behind: 3, gone: false },
+  develop: { upstream: 'origin/develop', ahead: 2, behind: 0, gone: false },
+  main: { upstream: 'origin/main', ahead: 4, behind: 12, gone: false },
+  'feature/smetana-8ok-git-panel-branches': {
+    upstream: 'origin/feature/smetana-8ok-git-panel-branches',
+    ahead: 0,
+    behind: 0,
+    gone: false
+  },
+  spike: { upstream: null, ahead: 0, behind: 0, gone: false },
+  old: { upstream: 'origin/old', ahead: 0, behind: 0, gone: true }
+}
+
+/* The same for the folded list, where the point is the heading rather than the
+   row: `fix/legacy/depot-import` is behind, and it is inside two folded
+   folders, so the bare `↓` has to reach the heading of each. */
+const FOLDER_TRACKING = {
+  'fix/legacy/depot-import': { upstream: 'origin/fix/legacy/depot-import', ahead: 0, behind: 2, gone: false },
+  main: { upstream: 'origin/main', ahead: 1, behind: 0, gone: false }
+}
+
 /* Which of them are unfolded, held here the way the app holds it under the
    project. Both start at `null`, which is not the same as an empty list: it
    means nobody has chosen, and the folder holding the current branch opens by
@@ -419,6 +446,10 @@ const FOLDER_BRANCHES = [
    empty, which is a choice and stays. */
 const branchFolders = ref(null)
 const gitFolders = ref(null)
+/* Everything folded, which is the state the heading's own mark exists for —
+   and live, so unfolding one heading and watching the mark move to the next is
+   a thing that can be done here. */
+const foldedTracking = ref([])
 
 /* The caption on its own, in all three of the states it can be in: unfolded
    with a count, unfolded without one, and folded — which still carries its
@@ -1551,6 +1582,37 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />
         </div>
+        <!-- The same list against its upstreams, which is every state a row can
+             be in: behind (orange, `↓3`), ahead (`↑2` and no colour), both at
+             once, level with the remote, and a branch nobody has pushed, which
+             has no record and draws nothing at all. What to check is that the
+             marks do not push a long name into an ellipsis it did not have
+             before, and that the orange is legible on both themes. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" :tracking="TRACKING" />
+        </div>
+        <!-- And with the deleted upstream and the unpushed branch in the list,
+             neither of which is orange: there is nothing to pull into either,
+             and a colour on them would send somebody to a button that
+             refuses. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="[
+              { name: 'main', current: true },
+              { name: 'spike', current: false },
+              { name: 'old', current: false }
+            ]"
+            :tracking="TRACKING"
+          />
+        </div>
+        <!-- A run going over the marks: the rows are muted and the names give
+             the colour up with them, since one name in orange over a panel
+             nobody may press would be saying a press was possible. The counts
+             keep their own token — they are a fact about the remote and not an
+             offer. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" :tracking="TRACKING" :actions="RUN_GOING" />
+        </div>
         <!-- The same list with a run going: every row inert, the current one
              still readable, and the reason on a tooltip over whichever row the
              pointer is on. The sentence is `gitActions.js`'s own, computed here
@@ -1577,6 +1639,19 @@ const menuTargetStyle = {
              where recency put them rather than swept under a heading. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="FOLDER_BRANCHES" :folders="['feature', 'fix', 'fix/legacy']" />
+        </div>
+        <!-- The heading's own mark, which is the whole reason it exists: every
+             folder is folded, `fix/legacy/depot-import` is behind, and both
+             headings above it carry a bare `↓` — no number, since the count
+             beside it is already a number about the same heading. Unfold `fix`
+             and the mark moves down to `legacy` with the branch it is about. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :folders="foldedTracking"
+            :tracking="FOLDER_TRACKING"
+            @toggle-folder="foldedTracking = $event"
+          />
         </div>
         <!-- And with a run going, where the headings are deliberately the one
              thing not dimmed: unfolding is reading, and a heading greyed out

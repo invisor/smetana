@@ -52,11 +52,26 @@
    a heading greyed out beside branches that are greyed out for a real reason
    would say something untrue about it.
 
-   Remote branches, upstreams and ahead/behind counts are outside this epic. So
-   are renaming and deleting a branch, and so is every flag and strategy a merge
-   can take: this offers the merge and the rebase git would do by itself, and
-   nothing else. Creating one was outside it too until a row's menu had somewhere
-   to put it. */
+   ## Where a branch stands against its upstream
+
+   A row whose upstream holds commits it does not draws its name in
+   `--git-modified` and a `↓N` beside it, and one that is ahead draws `↑N` in
+   the neutral `--type-plain-fg` without taking the colour: what was asked for is
+   a branch with something to **pull**, and colouring both would leave the two
+   indistinguishable at a glance. Never colour alone, which is what the count is
+   for — the mark survives a monochrome screen and anybody who does not separate
+   those two hues. A folded heading carries a bare `↓` for the branches it is
+   hiding, since otherwise the mark would be invisible in exactly the
+   repositories that need it.
+
+   What any of that means is `tracking.js`, pure and tested, of the
+   `gitActions.js` family; this file draws its verdict and holds none of it.
+
+   Remote branches as rows of their own are still outside this epic, and so is
+   checking one out. So are renaming and deleting a branch, and so is every flag
+   and strategy a merge can take: this offers the merge and the rebase git would
+   do by itself, and nothing else. Creating one was outside it too until a row's
+   menu had somewhere to put it. */
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
@@ -64,10 +79,16 @@ import PointerMenu from '../overlays/PointerMenu.vue'
 import { useInteractive } from '../core/interactive.js'
 import { branchMenuItems } from './branchMenu.js'
 import { branchRows, expandedFolders, toggleFolder } from './branchTree.js'
+import { AHEAD_TOKEN, BEHIND_TOKEN, trackingMark } from './tracking.js'
 
 const props = defineProps({
   /* `[{ name, current }]` as `vcs_branches` answers. */
   branches: { type: Array, default: () => [] },
+  /* Where each branch stands against its upstream, keyed by name, as
+     `vcsState.tracking` holds it. A branch with no record draws no mark, which
+     is what a repository with no remote looks like — and what every row looked
+     like before this existed. */
+  tracking: { type: Object, default: () => ({}) },
   /* Which folders are unfolded, as `settings.project.branchFolders` keeps it —
      or null for "nobody has chosen here", which opens the folder the current
      branch is in. The two are different states and `branchTree.js` says why. */
@@ -262,6 +283,49 @@ const nameStyle = {
   whiteSpace: 'nowrap'
 }
 
+/* What this row's upstream is holding — the token and the two counts, from
+   `tracking.js` rather than from anything worked out here: the rule is testable
+   and a `.vue` file is not. */
+const mark = (row) => trackingMark(props.tracking[row.name])
+
+/* The name takes the colour when there is something to bring in, and the row's
+   own muting still wins over it: while a run holds the panel every row is
+   `--text-muted`, and one name in orange there would say a press was possible.
+   The current branch is deliberately **not** an exception — it is the row Pull
+   is about, and its `↓N` is drawn in the same token whatever the name does. */
+const branchNameStyle = (row) =>
+  !blocked.value && mark(row).orange
+    ? { ...nameStyle, color: `var(${BEHIND_TOKEN})` }
+    : nameStyle
+
+/* The count beside the arrow, and never the colour alone: the mark has to
+   survive a monochrome screen and anybody who does not separate those hues.
+   Mono, because it is a measurement. */
+const behindStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 'var(--space-1)',
+  flex: 'none',
+  color: `var(${BEHIND_TOKEN})`,
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
+}
+const aheadStyle = { ...behindStyle, color: `var(${AHEAD_TOKEN})` }
+
+/* A folded folder leaves its branches out of the list altogether, so without
+   this the feature would be invisible in exactly the repositories that need it
+   — one `feature/` folder holding thirty branches. No number beside it: the
+   heading already carries the count of what it holds, and a second number would
+   read as a subtotal of the first. */
+const folderBehind = (row) =>
+  !row.expanded &&
+  props.branches.some(
+    (branch) =>
+      String(branch?.name ?? '').startsWith(`${row.path}/`) &&
+      trackingMark(props.tracking[branch.name]).orange
+  )
+
+const folderMarkStyle = { flex: 'none', color: `var(${BEHIND_TOKEN})` }
+
 /* Which operation this row is in the middle of, if any, and what to call it.
    All three spin in the one box at the end of the row: the row holds a single
    glyph at a time — the tick, or whichever operation is running — so there is
@@ -343,6 +407,16 @@ const empty = computed(() => props.branches.length === 0)
         />
         <span :style="nameStyle">{{ row.label }}</span>
         <span :style="{ flex: 1 }" />
+        <!-- What the fold is hiding, with no number on it: the count next door
+             is already a number about this heading, and a second one beside it
+             would read as a subtotal of the first. -->
+        <Icon
+          v-if="folderBehind(row)"
+          name="arrow-down"
+          :size="MARK"
+          :style="folderMarkStyle"
+          title="Branches in here are behind their upstream"
+        />
         <span :style="countStyle">{{ row.count }}</span>
       </button>
       <component
@@ -373,7 +447,17 @@ const empty = computed(() => props.branches.length === 0)
                prefix is on every row and the tail is the half that identifies
                one, so drawing the prefix again spends the width the folder was
                made to save. -->
-          <span :style="nameStyle" :title="fullName(row)">{{ row.label }}</span>
+          <span :style="branchNameStyle(row)" :title="fullName(row)">{{ row.label }}</span>
+          <!-- Beside the name rather than at the end of the row: it is a fact
+               about this branch, where the box at the end is about what the row
+               is doing. `↓` colours the name and `↑` does not — what was asked
+               for is a branch with something to pull. -->
+          <span v-if="mark(row).behind" :style="behindStyle">
+            <Icon name="arrow-down" :size="MARK" />{{ mark(row).behind }}
+          </span>
+          <span v-if="mark(row).ahead" :style="aheadStyle">
+            <Icon name="arrow-up" :size="MARK" />{{ mark(row).ahead }}
+          </span>
           <span :style="{ flex: 1 }" />
           <!-- The tick is the whole of what says which branch this repository
                is on, and it is a glyph rather than the highlight alone: the
