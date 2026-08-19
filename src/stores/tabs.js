@@ -429,8 +429,12 @@ async function loadDiff(id) {
 
 /* Both stores answer a refusal in Rust's own `{ kind, message }` shape and a
    transport failure as anything at all; one shape here means the view has one
-   thing to draw. The kinds are `FilesError`'s on both sides, so `fileErrorText`
-   already has the words for them. */
+   thing to draw. The kinds overlap on both sides rather than matching: the
+   three a file shares with the editor are pinned to `FilesError` by a test in
+   Rust, but the left-hand side of a diff is `vcs_file_at_head`, which is git
+   and can also refuse as `timeout` — `run.rs` has a ceiling on every call. That
+   kind is in `ERRORS` for this reason, and a kind that is not there draws the
+   generic "Could not read this file." with nothing anywhere saying so. */
 function asError(error) {
   if (error && typeof error === 'object' && typeof error.kind === 'string') return error
   return { kind: 'io', message: String(error?.message ?? error) }

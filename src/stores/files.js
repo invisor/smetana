@@ -43,6 +43,12 @@ const ERRORS = {
   notUtf8: 'Not UTF-8 text — not shown.',
   outside: 'That path is outside the project.',
   stale: 'This file changed on disk since it was opened.',
+  /* The one kind here that no file read can produce. It arrives from the other
+     side of this table: a diff's left-hand side is `vcs_file_at_head`, which is
+     three git calls, and every git call has a ceiling now (`run.rs`). Without
+     this line a git stopped on its ceiling would draw "Could not read this
+     file." — silently, since the fallback is what an unknown kind gets. */
+  timeout: 'Git took too long and was stopped.',
   io: 'Could not read this file.'
 }
 

@@ -368,7 +368,11 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<Vec<u8>> {
 fn terminate(child: &mut Child) {
     // SIGKILL rather than the SIGHUP a session gets: nothing here has a screen
     // to restore or a buffer to flush, and a declared command that ignored the
-    // signal would hold the stop open for as long as it liked.
+    // signal would hold the stop open for as long as it liked. `vcs/run.rs`'s
+    // twin of this function deliberately asks with SIGTERM first, and the
+    // difference is what its child is holding: git unlinks its `*.lock` files
+    // from a signal handler, so a git killed outright leaves a repository that
+    // refuses every later command. Nothing here holds a lock of ours.
     unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
     let _ = child.kill();
     let _ = child.wait();
