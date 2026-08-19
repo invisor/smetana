@@ -15,6 +15,7 @@ import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
+import { headline } from '../components/shell/headline.js'
 import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
@@ -49,6 +50,7 @@ import IconButton from '../components/core/IconButton.vue'
 import { TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import {
+  agentCounts,
   agentRows,
   createSession,
   createShell,
@@ -2026,6 +2028,21 @@ const showReport = (report) => {
    have last night's document open itself in front of them. */
 const decidedRuns = new Set()
 
+/* The scope bar's one sentence about this project. Derived rather than stored,
+   like everything else in this bar: the rule is components/shell/headline.js and
+   both of its inputs are already reactive here.
+
+   The agents come from `agentCounts` and not from the rail's `projectStates`,
+   which is the map that knows about every project at once. That map is built
+   from session marks, and a mark carries no work kind — so a shell that rang
+   the bell would have reached it as `needs-you` and had this bar announce an
+   agent waiting on somebody in a project holding no agent at all. The store
+   comment beside `agentCounts` has the whole of it. This is the active
+   project's bar, so the active project's own list is the right source anyway. */
+const scopeHeadline = computed(() =>
+  headline({ row: agentCounts.value, runs: runsState.runs })
+)
+
 /* Which runs have stopped, as a value that changes exactly when one does —
    `configFreshness.js`'s shape, and for the same reason: `upsert` writes a run
    back into the list in place, so a watcher over the array itself would need
@@ -2270,6 +2287,8 @@ const toastStackStyle = {
       :branch="branchLabel"
       :dirty-count="dirtyCount"
       :agents-active="liveAgentCount"
+      :headline="scopeHeadline.text"
+      :headline-level="scopeHeadline.level"
       :notifications="notificationsState.items.length"
       @notifications="toggleNotifications"
       @settings="openSettingsWindow()"

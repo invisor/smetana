@@ -439,6 +439,37 @@ export const liveAgentCount = computed(
   () => agentSessions().filter((s) => s.state !== 'exited').length + visibleStarts().length
 )
 
+/* The same agents, split the way the scope bar's headline needs them: how many
+   are waiting on the person, and how many of the rest are alive.
+   `components/shell/headline.js` turns this into the one sentence at the top of
+   the window.
+
+   Through `agentSessions` and `liveAgentCount`, deliberately, and this is the
+   whole reason the computed lives here rather than in the view. The obvious
+   source was `projectStates` above — the rail's map, which already answers
+   `loud`/`live` per project — and it is the wrong one: `SessionMark` carries
+   `id`, `project` and `state` and no work kind, so nothing on this side can
+   apply `isShellSession` to it. A shell that finished a build and rang the bell
+   reaches `needs-you` like any other session, and the headline would have said
+   "1 agent needs you", loudly and with a triangle, about a project with no
+   agent in it — beside an agents counter correctly showing nothing, since that
+   one does filter shells out. The rail can afford the coarser map: it draws a
+   dot, not a sentence naming agents.
+
+   `live` is the counter minus the waiting ones rather than a filter of its own,
+   which is what keeps the sentence and the counter beside it in agreement by
+   construction. They sit about one gap apart in the same bar and say the same
+   noun, so any second spelling of "alive" here is a pair of numbers that
+   disagree in front of somebody — the failure this file already carries a
+   paragraph about, one merge too late. The subtraction is exact today, every
+   `needs-you` session being one of the non-exited ones the counter adds up; the
+   clamp is there so that if that ever stops being true the sentence goes quiet
+   instead of announcing "-1 agents running". */
+export const agentCounts = computed(() => {
+  const loud = agentSessions().filter((s) => s.state === 'needs-you').length
+  return { loud, live: Math.max(0, liveAgentCount.value - loud) }
+})
+
 /* Exactly one output subscriber exists at a time — the terminal view. A Set,
    not a single field, so unsubscribing never depends on who mounted last. */
 const sinks = new Set()
