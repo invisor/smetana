@@ -13,10 +13,12 @@
 //! decision is pure and carries the tests, the waiting is I/O and does not.
 
 use std::io;
+use std::io::Read;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,6 +35,16 @@ pub const HEALTH_INTERVAL: Duration = Duration::from_secs(2);
 /// forever: a command that blocks is indistinguishable from one that hung, and
 /// the run would sit there with nothing on screen to say why.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// How long the two readers are given once the child itself has already
+/// exited.
+///
+/// Not a work budget, and nothing waits this out in the ordinary case: the
+/// child is the last writer, both pipes are at EOF the moment it goes, and the
+/// wait is zero. It is a grace for the one case where something the command
+/// left running still holds the pipe it inherited — a second is far more than a
+/// reader already at EOF needs, and far less than a run notices.
+const OUTPUT_GRACE: Duration = Duration::from_secs(1);
 
 /// The stop button, reaching a command that is already running.
 ///
@@ -197,6 +209,18 @@ fn tcp_open(port: u16) -> bool {
 /// where it stands: a declared command brings infrastructure up and is expected
 /// to be run again from the top next time, which is not the merge-in-progress
 /// the cooperative stop between batches exists to protect.
+///
+/// **Both pipes are drained while the wait happens, and that is the whole of
+/// why this is not a loop over `try_wait` alone** (smetana-5fj). A pipe holds
+/// 64 KiB; a child that writes more of it than that and is not being read
+/// blocks in `write` for good, `try_wait` never answers `Some`, and the
+/// deadline then reports "still running after 600s" about a command that did
+/// its work in milliseconds. `npm install` on a cold tree is well past 64 KiB,
+/// and it is the first declared command of this project. `vcs/run.rs::bounded`
+/// is the same rule against the same failure and differs in one thing only: no
+/// caller there has ever read standard output, so it goes to `/dev/null`, while
+/// what a person is shown here is `tail` over **both** streams — so both are
+/// read, on a thread apiece, and neither may be discarded.
 pub fn run_command(root: &Path, command: &str, cancel: &Cancel) -> Result<Ran, PreflightError> {
     // Asked before anything is started, so a stop that lands between two
     // declared commands does not start the next one at all.
@@ -212,22 +236,19 @@ pub fn run_command(root: &Path, command: &str, cancel: &Cancel) -> Result<Ran, P
             detail: err.to_string(),
         })?;
 
+    // Started before the first look at the child, so nothing it writes has to
+    // wait for one.
+    let reading_stdout = drain(child.stdout.take());
+    let reading_stderr = drain(child.stderr.take());
+
     let deadline = Instant::now() + COMMAND_TIMEOUT;
-    loop {
+    let status = loop {
         if cancel.asked() {
             terminate(&mut child);
             return Ok(Ran::Cancelled);
         }
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(Ran::Done),
-            Ok(Some(status)) => {
-                let output = child.wait_with_output().map(|o| tail(&o.stderr, &o.stdout)).unwrap_or_default();
-                return Err(PreflightError::Command {
-                    command: command.to_string(),
-                    code: status.code(),
-                    output,
-                });
-            }
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
                 terminate(&mut child);
                 return Err(PreflightError::Command {
@@ -238,13 +259,96 @@ pub fn run_command(root: &Path, command: &str, cancel: &Cancel) -> Result<Ran, P
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(200)),
             Err(err) => {
+                // The one arm that leaves both the child and its readers where
+                // they are. `try_wait` fails when the kernel will not say what
+                // became of this pid — `ECHILD` if something else reaped it —
+                // and a pid that may already have been reaped is exactly the
+                // pid `terminate` may not name, since the group it stands for
+                // could be somebody else's by now. A reader left holding a
+                // buffer nobody reads is the smaller of those two.
                 return Err(PreflightError::Spawn {
                     command: command.to_string(),
                     detail: err.to_string(),
                 })
             }
         }
+    };
+
+    // The ordinary path, and the only one that waits on the readers at all —
+    // the same division, and the same reason, as `vcs/run.rs::bounded`. The
+    // child has exited, so in the ordinary case the write ends are closed, both
+    // readers are at EOF already and this costs nothing; the two give-up paths
+    // above wait on neither, because a reader ends only once the last writer
+    // has, which there is what `terminate`'s kill of the whole process group
+    // brings about rather than anything waiting here could.
+    //
+    // **The wait is bounded, and that is the one place this parts company with
+    // `bounded`, which joins outright.** The child is not always the last
+    // writer: a declared command that leaves something running behind it
+    // (`something &`, rather than `docker compose up -d`, whose containers are
+    // the daemon's children and hold nothing of ours) leaves that descendant
+    // holding the pipe it inherited, and nothing here can close a write end it
+    // does not own. An outright join there never returns — past
+    // `COMMAND_TIMEOUT`, past the next look at `cancel`, with the stop button
+    // dead and `service.rs`'s "bounded by one poll of `run_command`" no longer
+    // true of the phase it is written about. So the readers are given
+    // `OUTPUT_GRACE` and then abandoned, exactly as the give-up paths abandon
+    // them and for the reason written beside them. What that costs is a
+    // truncated or empty tail in that one case; what it buys is a call that
+    // always comes back. `bounded` still has the unbounded form, deliberately
+    // and not yet: the difference between the two files is this paragraph.
+    //
+    // A reader that panicked drops its sender, which disconnects the channel
+    // and lands in the same fallback: the exit code is the fact the caller
+    // branches on, and the tail is a message to read.
+    //
+    // One deadline across both, rather than one apiece: what is granted is a
+    // moment for the pipes to close, and two graces in a row would make the
+    // ceiling twice the number the constant states.
+    let grace = Instant::now() + OUTPUT_GRACE;
+    let stdout = collect(&reading_stdout, grace);
+    let stderr = collect(&reading_stderr, grace);
+
+    if status.success() {
+        return Ok(Ran::Done);
     }
+    Err(PreflightError::Command {
+        command: command.to_string(),
+        code: status.code(),
+        output: tail(&stderr, &stdout),
+    })
+}
+
+/// One reader's answer, or nothing if it has not come by the deadline the
+/// caller set. `Duration::ZERO` is not a special case for `recv_timeout`: it
+/// looks once and gives up, which is exactly what a spent grace means.
+fn collect(reader: &mpsc::Receiver<Vec<u8>>, by: Instant) -> Vec<u8> {
+    reader.recv_timeout(by.saturating_duration_since(Instant::now())).unwrap_or_default()
+}
+
+/// One pipe, read to the end on a thread of its own, so the child is never
+/// waiting on this one to catch up. Nothing bounds what it collects: `tail`
+/// keeps ten lines of it, but a command is entitled to write a build log first
+/// and holding that in memory for the length of one declared command is the
+/// cheaper half of the trade against reading it in pieces here.
+///
+/// A channel rather than a `JoinHandle`, for one reason: a join cannot be given
+/// up on and a `recv_timeout` can. Which matters only in the case the caller's
+/// comment describes — a descendant still holding the write end — and matters
+/// completely there, since that is the difference between a call that returns
+/// with less to show and one that does not return.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<Vec<u8>> {
+    let (reader, read) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut said = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut said);
+        }
+        // Nobody left to hand it to is an ordinary end, not a failure: the
+        // caller gave up on this reader and said so by dropping its receiver.
+        let _ = reader.send(said);
+    });
+    read
 }
 
 /// End the command and whatever it started, then reap it.
@@ -408,6 +512,117 @@ mod tests {
             }
             other => panic!("expected a command failure, got {other:?}"),
         }
+    }
+
+    /// The regression the two reader threads exist for (smetana-5fj). A pipe
+    /// holds 64 KiB; a command that writes more of it than that and is not
+    /// being read blocks in `write` for good, `try_wait` never answers `Some`,
+    /// and the run fails at `COMMAND_TIMEOUT` with "still running after 600s"
+    /// about a command that did its work in milliseconds. `npm install` on a
+    /// cold tree writes well past 64 KiB, and it is the first declared command
+    /// of this very project.
+    #[test]
+    fn a_command_that_writes_more_than_a_pipe_holds_still_finishes() {
+        // Both pipes, because either one of them is enough to wedge the wait
+        // and only one of the two can be answered by discarding it.
+        for command in ["yes 0123456789 | head -c 200000", "yes 0123456789 | head -c 200000 1>&2"] {
+            assert_eq!(within(Duration::from_secs(30), command), Ok(Ran::Done), "{command}");
+        }
+    }
+
+    /// What a person is shown when a declared command fails is built from both
+    /// pipes, which is why neither of them may be sent to `/dev/null` the way
+    /// `vcs/run.rs::bounded` sends standard output. Standard error wins when
+    /// both said something — `tail`'s own rule, unchanged — and a failure that
+    /// only ever wrote to standard output is still explained, which is the half
+    /// that proves standard output is read rather than discarded.
+    #[test]
+    fn a_failing_commands_tail_carries_what_both_pipes_said() {
+        let err = within(Duration::from_secs(30), "echo on-stdout; echo on-stderr >&2; exit 1")
+            .expect_err("exit 1 is a failure");
+        match err {
+            PreflightError::Command { code, output, .. } => {
+                assert_eq!(code, Some(1));
+                assert!(output.contains("on-stderr"), "{output}");
+                // `tail` picks one stream, it does not join the two — assert
+                // the half that is a rule, or a `tail` rewritten to
+                // concatenate would pass this test unchanged.
+                assert!(!output.contains("on-stdout"), "{output}");
+            }
+            other => panic!("expected a command failure, got {other:?}"),
+        }
+
+        let err = within(Duration::from_secs(30), "echo only-on-stdout; exit 1")
+            .expect_err("exit 1 is a failure");
+        match err {
+            PreflightError::Command { output, .. } => {
+                assert!(output.contains("only-on-stdout"), "{output}");
+            }
+            other => panic!("expected a command failure, got {other:?}"),
+        }
+    }
+
+    /// A command that floods a pipe **and** fails: the tail is the last ten
+    /// lines of it and not the 200 KB that came before, and it arrives at all,
+    /// which the deadlocked version could not manage either.
+    #[test]
+    fn a_flood_that_then_fails_still_comes_back_as_a_tail() {
+        let err = within(Duration::from_secs(30), "yes the-flood | head -c 200000 >&2; echo the-reason >&2; exit 2")
+            .expect_err("exit 2 is a failure");
+        match err {
+            PreflightError::Command { code, output, .. } => {
+                assert_eq!(code, Some(2));
+                assert!(output.contains("the-reason"), "{output}");
+                assert!(output.len() < 4096, "the tail is a tail, not a build log: {} bytes", output.len());
+            }
+            other => panic!("expected a command failure, got {other:?}"),
+        }
+    }
+
+    /// The regression the bounded wait exists for, and the one case where the
+    /// child is not the last writer: a command that exits zero having left
+    /// something running behind it, holding the standard output it inherited.
+    /// An outright join on the readers would wait for the descendant instead of
+    /// for the command — past `COMMAND_TIMEOUT`, past the next look at
+    /// `cancel`, breaking what `service.rs` states about `bring_up`: bounded by
+    /// one poll of `run_command`, not by the command. So what is asserted is
+    /// the clock and not only the answer.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_leaves_something_holding_the_pipe_comes_back_anyway() {
+        // Warmed before the clock starts, because the first call anywhere in
+        // the process runs an interactive login shell and takes about a second
+        // of its own — which is not what this test is timing.
+        let _ = crate::shell_env::path();
+
+        let started = Instant::now();
+        // Five seconds of descendant against a one-second grace: long enough
+        // that waiting it out is unmistakable on the clock, short enough that
+        // nothing is left behind worth the name.
+        let ran = within(Duration::from_secs(30), "sleep 5 & exit 0");
+        let waited = started.elapsed();
+
+        assert_eq!(ran, Ok(Ran::Done));
+        assert!(
+            waited < OUTPUT_GRACE + Duration::from_secs(2),
+            "it waited for what the command left running rather than for the command: {waited:?}"
+        );
+    }
+
+    /// Run a declared command on a thread of the test's own, so a `run_command`
+    /// that waits on a child whose pipes nobody is reading fails this in
+    /// seconds rather than sitting on `COMMAND_TIMEOUT` for ten minutes. The
+    /// thread is abandoned on failure deliberately: nothing can interrupt a
+    /// wait that is already blocked, and the harness is on its way out anyway.
+    fn within(patience: Duration, command: &str) -> Result<Ran, PreflightError> {
+        let (answer, answered) = std::sync::mpsc::channel();
+        let owned = command.to_string();
+        std::thread::spawn(move || {
+            let _ = answer.send(run_command(&std::env::temp_dir(), &owned, &Cancel::default()));
+        });
+        answered.recv_timeout(patience).unwrap_or_else(|_| {
+            panic!("`{command}` never came back: nothing was reading the pipe it filled")
+        })
     }
 
     #[test]
