@@ -33,9 +33,25 @@ export const RAIL = 32
  */
 export const RAIL_CONTROL_MAX = 24
 
+/** The project rail: fixed, and outside the panel's own width.
+ *
+ * Fixed for the reason `RAIL` and `RAIL_CONTROL_MAX` are: these functions do
+ * arithmetic with the number — what the board has left, what a third of the
+ * window comes to — and a width that grew with `--ui-scale` would have to be
+ * threaded through every one of them to make a 44px strip wider. What sits in
+ * it is a 28px tile with two mono characters, and a strip is a strip.
+ */
+export const PROJECT_RAIL = 44
+
 export const LEFT_MIN = 180
 export const RIGHT_MIN = 240
-export const LEFT_DEFAULT = 252
+/* 236 is the handoff's panel. A width already in settings.json is honoured as
+   it stands: this is what somebody who has never dragged the separator gets,
+   and rewriting a stored preference to match a new default would be an edit
+   nobody asked for. The same number is `LEFT_WIDTH_DEFAULT` in
+   `src-tauri/src/settings/model.rs`, so that a file with no width in it opens
+   the same width the front end would have chosen on its own. */
+export const LEFT_DEFAULT = 236
 export const RIGHT_DEFAULT = 340
 
 /** The board keeps this much no matter what the panels want. */
@@ -58,10 +74,19 @@ const bounds = (side) =>
 /**
  * The most this panel may occupy right now: a third of the window, and never
  * so much that the board drops below its floor. The other panel is part of the
- * sum — collapsed it costs a rail, open it costs its own width.
+ * sum — collapsed it costs a rail, open it costs its own width — and so is the
+ * project rail, which is drawn out of the same window and would otherwise leave
+ * this arithmetic measuring a window 44px wider than the one there is. Off by
+ * default, so a caller that has not heard of it keeps the meaning it had.
+ *
+ * It joins the sum that protects the board and not the third-of-the-window cap,
+ * and the split is deliberate: the floor is a guarantee about how much room the
+ * board actually has, which 44px of rail genuinely takes away, while the
+ * fraction is a rule about how much of a window one panel may dominate, and a
+ * strip of chrome does not change the answer to that.
  */
-export function maxWidth({ other, otherCollapsed, viewport }) {
-  const taken = otherCollapsed ? RAIL : other
+export function maxWidth({ other, otherCollapsed, viewport, railOpen = false }) {
+  const taken = (otherCollapsed ? RAIL : other) + (railOpen ? PROJECT_RAIL : 0)
   return Math.min(viewport * MAX_FRACTION, viewport - taken - CENTER_MIN)
 }
 
@@ -71,9 +96,9 @@ export function maxWidth({ other, otherCollapsed, viewport }) {
  * and the board takes the squeeze: the board's content scrolls, a file tree at
  * 90px does not. Someone who needs that room collapses the panel outright.
  */
-export function clampWidth(want, { side, other, otherCollapsed, viewport }) {
+export function clampWidth(want, { side, other, otherCollapsed, viewport, railOpen = false }) {
   const { min } = bounds(side)
-  const max = maxWidth({ other, otherCollapsed, viewport })
+  const max = maxWidth({ other, otherCollapsed, viewport, railOpen })
   if (max < min) return min
   return Math.round(Math.min(Math.max(want, min), max))
 }
@@ -84,13 +109,18 @@ export function clampWidth(want, { side, other, otherCollapsed, viewport }) {
  * the right panel shrinks.
  *
  * Collapsing keeps the stored width untouched: the panel folds to a rail and
- * comes back the width it left at, whether it is reopened by this gesture or
- * by the button in the panel header.
+ * comes back the width it left at, whether it is reopened by this gesture or by
+ * the button inside the folded rail. The left panel's *header* button is not one
+ * of the two: it hides the project rail beside the panel and leaves the panel
+ * where it is.
  */
-export function resolveDrag(side, { base, delta, collapsed, other, otherCollapsed, viewport }) {
+export function resolveDrag(
+  side,
+  { base, delta, collapsed, other, otherCollapsed, viewport, railOpen = false }
+) {
   const { min, fallback } = bounds(side)
   const grow = side === 'left' ? delta : -delta
-  const geometry = { side, other, otherCollapsed, viewport }
+  const geometry = { side, other, otherCollapsed, viewport, railOpen }
 
   /* From the rail exactly two things can happen, and neither of them is a
      width: it opens, or it stays a rail. Anything in between would make the

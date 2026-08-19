@@ -19,7 +19,8 @@ and where the tests are; `file.rs` is the disk (atomic write through a per-call 
 thin commands.
 
 At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
-state and width for each side, and `gitSections` beside them), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
+state and width for each side, `railOpen` for whether the project rail is drawn beside the left
+panel, and `gitSections` beside them), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
 start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, `kanban`, how
 the board is drawn, and `git`, the one thing the app does on its own initiative. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's

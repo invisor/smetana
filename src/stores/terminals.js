@@ -50,12 +50,23 @@ export const terminalState = reactive({
    the session that just left `needs-you` was the last loud one in its project. */
 const marks = reactive(new Map())
 
-/* The one fact a project's tile draws, per project path: `loud` if an agent is
-   waiting on somebody there, `live` if one is working, `idle` otherwise.
+/* The one fact a project's tile draws, per project path: `loud` if something is
+   waiting on somebody there, `live` if something is working, `idle` otherwise.
 
-   `loud` wins over `live`: a project with an agent waiting on a person is the
-   reason the rail exists, and it must not be hidden by another agent in the
+   `loud` wins over `live`: a project with something waiting on a person is the
+   reason the rail exists, and it must not be hidden by another session in the
    same project getting on with its work.
+
+   **Something**, not an agent, and the imprecision is the honest word rather
+   than a loose one: a `SessionMark` carries an id, a project and a state and no
+   work kind at all, so a plain shell is counted here exactly like an agent, and
+   a shell that rings the bell reaches `needs-you` the same way one does. The
+   tile's dot claims only that something there wants you, which is true of a
+   shell; `components/shell/projectState.js` holds the words beside it to the
+   same, and its header carries the whole of the reasoning. Telling the two
+   apart needs a work kind on the mark, in Rust and here — it is not a rewording
+   anywhere downstream. `liveAgentCount` below is the one that may say "agent",
+   because it filters through `isShellSession` and this map cannot.
 
    `starting` counts as live for the reason it counts in `hasAgentSession`: a
    spawn takes about a second, and a tile that stayed grey through it would

@@ -4,11 +4,13 @@
    This diverges from the design system in behaviour, not in styling, the same
    way Resizer does, and for a reason the design system never had to face: its
    panel is absolutely positioned inside the trigger, which any scrolling
-   ancestor clips. `ProjectList` is one — a list capped at five rows — and a
-   tooltip inside it was cut off above and below by the list's own edges, so
-   the only direction left to open was sideways, into the gap after the
-   project's name, where the panel read as a slab wedged into the row rather
-   than a hint about a glyph.
+   ancestor clips. The project list this app used to draw was one — capped at
+   five rows — and a tooltip inside it was cut off above and below by the list's
+   own edges, so the only direction left to open was sideways, into the gap
+   after the project's name, where the panel read as a slab wedged into the row
+   rather than a hint about a glyph. The rail that replaced that list scrolls
+   too, and its tiles ask for `side="right"` out of the strip for the same
+   reason.
 
    So the panel is teleported to the body and positioned in window
    coordinates: nothing clips it, and it can be told where to go rather than

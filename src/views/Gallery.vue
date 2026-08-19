@@ -52,7 +52,8 @@ import {
   NotificationCard,
   NotificationPanel,
   Panel,
-  ProjectList,
+  ProjectRail,
+  ProjectTile,
   PromoteColumnModal,
   RepoList,
   ScopeIndicator,
@@ -427,6 +428,24 @@ const galleryTree = MOCK_TREE[''].map((node) =>
   node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
 )
 const galleryTreeExpanded = { src: true }
+
+/* Four projects for the rail, one of them without a bd tracker and one whose
+   name has no separator in it — `smetana` is the case `monogram` answers by
+   taking the first two characters rather than the first letter of two
+   segments, and a rail of nothing but hyphenated names would never show it.
+   The states are `projectStates`' shape from stores/terminals.js: one waiting,
+   one working, and two with nothing going on. */
+const galleryProjects = [
+  { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
+  { path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true },
+  { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true },
+  { path: '/Users/you/notes', name: 'notes', tracked: false }
+]
+const galleryProjectStates = {
+  '/Users/you/dev/smetana': { state: 'live', live: 1, loud: 0 },
+  '/Users/you/dev/holiday-curb': { state: 'loud', live: 0, loud: 1 },
+  '/Users/you/dev/beads-viewer': { state: 'live', live: 2, loud: 0 }
+}
 
 /* AgentList reads rows and activeId as props, so a plain local fixture is
    enough here — as it is for TerminalView below, which takes the session it
@@ -2241,125 +2260,132 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Projects</div>
-      <!-- ProjectList carries no header of its own — the surrounding Panel owns
-           "Projects" and the "+" in its actions slot, so the demo wraps it the
-           same way DesktopApp.vue does, to catch the pairing breaking too.
+      <!-- The rail is what the left column opens with: one 28×28 tile per
+           project, the state dot in the corner, and the dashed tile that adds
+           one. Nothing else on this page draws two hues on an 8px circle, which
+           is the exception the tooltip's words are the price of — hover a tile
+           and read the third segment.
 
-           Right-click the rows: every one of them opens the row's three actions
-           at the pointer, and the two that are only meaningful for the project
-           the window is pointed at are greyed with the reason in the row on
-           every other. The setup item is the frames' second job here — it reads
-           "Set up" where there is no configuration and "Set up again" where
-           there is one, damaged or not — and the last frame is where the
-           placement can be checked, since nothing else on this page opens a
-           panel from a point rather than from a control. -->
+           Right-click a tile: every one of them opens the project's three
+           actions at the pointer, and the two that only mean anything for the
+           project the window is pointed at are greyed with the reason in the
+           row on every other. The setup item is the frames' second job — it
+           reads "Set up" where there is no configuration and "Set up again"
+           where there is one, damaged or not. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList
-              :projects="[
-                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
-                { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }
-              ]"
-              active-path="/Users/you/dev/smetana"
-              can-add-agent
-              needs-setup
-            />
-          </Panel>
+        <div :style="{ display: 'flex', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectRail
+            :projects="galleryProjects"
+            active-path="/Users/you/dev/smetana"
+            :states="galleryProjectStates"
+            :branches="{ '/Users/you/dev/smetana': 'develop' }"
+            can-add-agent
+            configured
+          />
+          <!-- The panel beside it, so the header, the segmented tab row and the
+               footer are checked against the rail they sit next to and at the
+               236px the column ships at. -->
+          <div :style="{ width: '236px' }">
+            <Panel
+              title="smetana"
+              subtitle="develop · 1 running"
+              side="left"
+              toggle-label="Hide projects"
+            >
+              <template #marks>
+                <Tooltip label="Not set up for runs">
+                  <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+                </Tooltip>
+              </template>
+              <template #actions>
+                <IconButton icon="refresh-cw" label="Refresh files" size="sm" />
+              </template>
+              <div :style="{ padding: 'var(--panel-pad)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }">
+                The tab row and its content are DesktopApp.vue&apos;s, not the panel&apos;s.
+              </div>
+              <template #footer>
+                <div
+                  :style="{
+                    font: 'var(--weight-regular) var(--text-2xs)/var(--leading-snug) var(--font-mono)',
+                    color: 'var(--text-muted)',
+                    wordBreak: 'break-all'
+                  }"
+                >
+                  /Users/you/dev/smetana
+                </div>
+              </template>
+            </Panel>
+          </div>
         </div>
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <!-- The one frame with a run configuration that reads. Nothing on
-                 the row says so — a project that is set up has nothing to
-                 report — so it is only visible in the right-click menu, where
-                 this active row is the one that reads "Set up again". -->
-            <ProjectList
-              :projects="[
-                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
-                { path: '/Users/you/notes', name: 'notes', tracked: false }
-              ]"
-              active-path="/Users/you/notes"
-              configured
-            />
-          </Panel>
+        <!-- The same panel folded, which is what dragging the separator past the
+             left minimum leaves. The rail is not drawn beside it in the app —
+             two rails would be two rails — and the vertical title follows the
+             header's rule: a subtitle means this is a name, so it is not
+             uppercased down the strip. -->
+        <div :style="{ display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="smetana" subtitle="develop · 1 running" side="left" collapsed />
         </div>
-        <!-- Both marks on one row — a folder just added, with neither a tracker
-             nor a run configuration. The two triangles are the same glyph in
-             two colours, so this is the frame that shows whether position and
-             pairing carry the difference on their own. -->
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList
-              :projects="[{ path: '/Users/you/dev/scratch', name: 'scratch', tracked: false }]"
-              active-path="/Users/you/dev/scratch"
-              needs-setup
-            />
-          </Panel>
+        <!-- A rail longer than it is tall, which is where it starts to scroll,
+             and the one with a project that has no bd tracker in it: that mark
+             has nowhere to go on a tile, so it is the fourth segment of the
+             tooltip and nothing else. -->
+        <div :style="{ display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectRail
+            :projects="[
+              ...galleryProjects,
+              { path: '/Users/you/dev/tracker-notes', name: 'tracker-notes', tracked: false },
+              { path: '/Users/you/dev/archive', name: 'archive', tracked: true },
+              { path: '/Users/you/dev/scratch', name: 'scratch', tracked: true }
+            ]"
+            active-path="/Users/you/notes"
+            :states="galleryProjectStates"
+          />
         </div>
-        <!-- The damaged configuration, deliberately on an untracked folder so
-             that its mark stands next to the tracker's. The two are the only
-             pair on this row that both stand alone, so this is the frame that
-             says whether the silhouettes carry the difference — a triangle and
-             a page — or whether it was resting on hue after all. There is no
-             gear beside the red one on purpose, and it must not read as a
-             button that failed to render. -->
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList
-              :projects="[{ path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: false }]"
-              active-path="/Users/you/dev/holiday-curb"
-              can-add-agent
-              config-broken
-            />
-          </Panel>
+        <!-- An empty rail: no projects yet, only the place for one. -->
+        <div :style="{ display: 'flex', height: '120px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectRail :projects="[]" />
         </div>
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList :projects="[]" />
-          </Panel>
-        </div>
-        <!-- A list past the fifth row, which is where it starts to scroll, and
-             the frame the menu's placement is checked in. Right-click the last
-             row a person can see: the panel is teleported to the body and fixed
-             in window coordinates, so neither the list's own scroll container
-             nor this frame may clip it, and it flips above the pointer when the
-             window has no room below. Scroll the list under an open menu and it
-             closes — the point it was opened at no longer names a row. -->
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList
-              :projects="[
-                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
-                { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true },
-                { path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true },
-                { path: '/Users/you/dev/tracker-notes', name: 'tracker-notes', tracked: false },
-                { path: '/Users/you/dev/scratch', name: 'scratch', tracked: true },
-                { path: '/Users/you/dev/archive', name: 'archive', tracked: true }
-              ]"
-              active-path="/Users/you/dev/holiday-curb"
-              can-add-agent
-              configured
-            />
-          </Panel>
-        </div>
+      </div>
+
+      <div :style="headStyle">Project tile</div>
+      <!-- The four states side by side, out of the rail, on the rail's own
+           ground: selected, and the three the dot can be in. The dot is cut out
+           of `--surface-sunken`, so a tile drawn on any other surface would
+           show the ring as a colour rather than as a gap. -->
+      <div
+        :style="{
+          display: 'flex',
+          gap: 'var(--space-5)',
+          alignItems: 'center',
+          padding: 'var(--space-5)',
+          background: 'var(--surface-sunken)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ProjectTile
+          :project="{ path: '/Users/you/dev/smetana', name: 'smetana', tracked: true }"
+          active
+          state="live"
+          state-label="1 running"
+          branch="develop"
+        />
+        <ProjectTile
+          :project="{ path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true }"
+          state="loud"
+          state-label="1 waiting on you"
+          branch="main"
+        />
+        <ProjectTile
+          :project="{ path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }"
+          state="live"
+          state-label="2 running"
+          branch="main"
+        />
+        <ProjectTile
+          :project="{ path: '/Users/you/notes', name: 'notes', tracked: false }"
+          state="idle"
+          state-label="idle"
+        />
       </div>
     </section>
 
