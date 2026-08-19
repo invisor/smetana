@@ -38,7 +38,12 @@ change list resolve from the same table, so one file looks the same wherever it 
 follow `data-theme` at all, since nothing inside a `data:` URL is reachable by the stylesheet.
 
 `src/stores/tabs.js` owns the centre's tabs — order, which one is temporary, which is active, the
-buffers and their dirtiness — and knows nothing about Tauri; the disk is `files.js`. The split is by
+buffers and their dirtiness — and knows nothing about Tauri; the disk is `files.js`. Not all of that
+row is files, and two of its kinds are **derived rather than remembered**: the Agent tab, which exists
+only while the project has an agent session, and one tab per shell session. Both come from
+`terminals.js` and both are `.claude/rules/terminal.md`'s to explain; what matters here is that
+neither is in `openTabs`, so nothing about them survives a restart, and a consumer of `tabList` has to
+switch on `kind` rather than assume a tab id is a path. The split is by
 lifetime: the list of open tabs survives a restart and lives in settings, the buffers do not and live
 here. The mechanics are VS Code's: a single click opens a preview tab that the next single click
 replaces in place, a double click makes it permanent, and so does the first edit — which is what

@@ -892,10 +892,22 @@ impl ProjectState {
             self.preview_tab = None;
         }
 
-        // There is no closed list of tabs in the centre: `terminal` and `kanban`
-        // always exist, everything else is an open file. Hence the limit is on
-        // path length, not identifier length — a file tab with a long path used
-        // to silently become the board on every restart.
+        // There is no closed list of tabs in the centre: `kanban` always exists,
+        // `terminal` is a name the front end may or may not be drawing right
+        // now, and everything else is an open file. Hence the limit is on path
+        // length, not identifier length — a file tab with a long path used to
+        // silently become the board on every restart.
+        //
+        // `terminal` passes whether or not that tab exists, and deliberately.
+        // It is drawn only while the project has an agent session, and sessions
+        // do not survive a restart, so on every launch this value names a tab
+        // that is not there yet — but how many sessions there are is not known
+        // here, and rewriting the value would destroy the only place the `chat`
+        // migration below can land. The front end repairs it instead, in
+        // `restoreTabs` (`src/stores/tabs.js`), beside the identical repair for
+        // a diff tab. A terminal tab's own id is a different case and needs
+        // nothing: it begins with a zero byte, so it is neither of the two names
+        // nor any file path, and falls through to the board below.
         //
         // `chat` was this tab's name before it grew a terminal. Files with that
         // name already sit on people's disks, and without the substitution the

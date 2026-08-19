@@ -110,6 +110,18 @@ pub enum SessionWork {
     /// and nothing reports that back. The front end crosses the run's session
     /// with what the tracker holds in progress.
     Run,
+    /// The person's own shell, and the one entry in this list that is not an
+    /// agent at all: there is no `Intent` behind it, no profile, and nothing
+    /// this app asked it to do.
+    ///
+    /// It carries nothing, and there is nothing it could carry — a shell is for
+    /// whatever gets typed into it. What makes the variant worth existing is
+    /// that it is the **only** thing by which the rest of the app tells the two
+    /// kinds of session apart: `agentRows` in `src/stores/terminals.js` filters
+    /// it out of the agents panel, the presence of the centre's Agent tab is
+    /// counted on everything that is not this, and each of these gets a centre
+    /// tab of its own instead.
+    Shell,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

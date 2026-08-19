@@ -67,6 +67,68 @@ const UTF8_LOCALE: &str = "C.UTF-8";
 pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     let mut cmd = launch.profile.command(launch);
     cmd.cwd(&launch.cwd);
+    apply_environment(&mut cmd);
+    // The environment half of running without a person. The argument half is
+    // applied by the profile itself, because it has to go in front of the
+    // positional prompt and `CommandBuilder` only appends; the environment has
+    // no order and belongs here, beside the other variables every agent gets.
+    // Only a `Run` has a mode, and only a `Run` gets any of this.
+    if let Intent::Run { settings, .. } = &launch.intent {
+        for (key, value) in launch.profile.autonomy(settings.mode).env {
+            cmd.env(key, value);
+        }
+        // The run's name in bd's audit trail, and the whole of what makes bd's
+        // claim a mutual exclusion. bd refuses `--claim` only when the issue is
+        // held by a *different* actor, and its default actor — `$BEADS_ACTOR`,
+        // else `git user.name`, else `$USER` — is identical for two runs on one
+        // machine, so without a per-run name both would "successfully" claim
+        // the same task. The session id is unique within this app instance,
+        // which is what makes the name unique per batch here; ids restart at 1
+        // on every launch, so a run after a restart — or in a second app
+        // instance — can mint the same name. That cross-instance gap is open
+        // and recorded rather than solved.
+        //
+        // The environment variable rather than `bd --actor` on every call: the
+        // skills would have to thread the flag through each bd invocation they
+        // document, and one forgotten call silently reverts to the shared
+        // default. And only for a `Run`: a person filing or editing a task
+        // through an agent keeps their own name in the audit trail.
+        // `run_actor` and not a format string here: the runs worker derives
+        // the same name to find what this session claimed, and two copies of
+        // the format would drift silently.
+        cmd.env("BEADS_ACTOR", crate::terminal::model::run_actor(id));
+    }
+    cmd
+}
+
+/// The person's own shell, in the project's root, with the same environment an
+/// agent gets. There is no profile and no intent behind it: what a shell is for
+/// is whatever the person types into it, and this app has nothing to tell it.
+///
+/// A terminal a person opens is interactive by construction — the process's
+/// stdin is a PTY — so no flag is passed to say so, and none is passed to make
+/// it a login shell either: what is wanted is the shell they would get from
+/// their own terminal application, not a second reading of their profile files.
+///
+/// `cwd` is the project root, the same directory an agent starts in. A task's
+/// worktree would be another answer and is not this one — see the rule file.
+pub fn build_shell_command(program: &str, cwd: &Path) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(program);
+    cmd.cwd(cwd);
+    apply_environment(&mut cmd);
+    cmd
+}
+
+/// Everything about the environment that is true of every process this app
+/// starts under a PTY, agent or shell alike: the terminal type, the locale, and
+/// the `PATH` with the bundled `bd` in front of it.
+///
+/// One function and not two copies, and the reason is the last of those three.
+/// A shell built from a second copy of these decisions would drift from this
+/// one, and the most expensive way to drift is the quietest: a shell without the
+/// sidecar in front of its `PATH` runs whatever `bd` the machine happens to have
+/// against a board whose version this app pins and checks.
+fn apply_environment(cmd: &mut CommandBuilder) {
     cmd.env("TERM", "xterm-256color");
     // What encoding the bytes in that terminal are in, which is the second half
     // of `TERM` and is missing for the same launchd reason `PATH` is: a bundled
@@ -100,37 +162,7 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
         cmd.env_remove(key);
     }
     cmd.env(locale.key, locale.value.as_deref().unwrap_or(UTF8_LOCALE));
-    // The environment half of running without a person. The argument half is
-    // applied by the profile itself, because it has to go in front of the
-    // positional prompt and `CommandBuilder` only appends; the environment has
-    // no order and belongs here, beside the other two variables every agent
-    // gets. Only a `Run` has a mode, and only a `Run` gets any of this.
-    if let Intent::Run { settings, .. } = &launch.intent {
-        for (key, value) in launch.profile.autonomy(settings.mode).env {
-            cmd.env(key, value);
-        }
-        // The run's name in bd's audit trail, and the whole of what makes bd's
-        // claim a mutual exclusion. bd refuses `--claim` only when the issue is
-        // held by a *different* actor, and its default actor — `$BEADS_ACTOR`,
-        // else `git user.name`, else `$USER` — is identical for two runs on one
-        // machine, so without a per-run name both would "successfully" claim
-        // the same task. The session id is unique within this app instance,
-        // which is what makes the name unique per batch here; ids restart at 1
-        // on every launch, so a run after a restart — or in a second app
-        // instance — can mint the same name. That cross-instance gap is open
-        // and recorded rather than solved.
-        //
-        // The environment variable rather than `bd --actor` on every call: the
-        // skills would have to thread the flag through each bd invocation they
-        // document, and one forgotten call silently reverts to the shared
-        // default. And only for a `Run`: a person filing or editing a task
-        // through an agent keeps their own name in the audit trail.
-        // `run_actor` and not a format string here: the runs worker derives
-        // the same name to find what this session claimed, and two copies of
-        // the format would drift silently.
-        cmd.env("BEADS_ACTOR", crate::terminal::model::run_actor(id));
-    }
-    // What the agent's own `PATH` is built on: the login shell's, because a
+    // What every child's own `PATH` is built on: the login shell's, because a
     // bundled app inherits launchd's, which holds nothing a person installed —
     // an agent started with that finds neither `git` nor `node` nor the helpers
     // it shells out to. `crate::shell_env::path` already falls back to the
@@ -152,7 +184,6 @@ pub fn build_command(id: SessionId, launch: &Launch) -> CommandBuilder {
     if let Some(path) = path {
         cmd.env("PATH", path);
     }
-    cmd
 }
 
 /// The directory the bundled `bd` sits in — `None` only when the running
@@ -210,9 +241,37 @@ pub struct Pty {
 }
 
 impl Pty {
+    /// A session running a coding agent.
     pub fn spawn(
         id: SessionId,
         launch: &Launch,
+        cols: u16,
+        rows: u16,
+        out: mpsc::UnboundedSender<Chunk>,
+    ) -> Result<Self, TerminalError> {
+        Self::start(id, build_command(id, launch), launch.profile.binary(), cols, rows, out)
+    }
+
+    /// A session running the person's own shell, with no agent behind it. The
+    /// PTY, the reader thread and everything after the spawn are the same —
+    /// what a session runs is not this file's business past `build_command`.
+    pub fn spawn_shell(
+        id: SessionId,
+        cwd: &Path,
+        cols: u16,
+        rows: u16,
+        out: mpsc::UnboundedSender<Chunk>,
+    ) -> Result<Self, TerminalError> {
+        let program = crate::shell_env::shell();
+        Self::start(id, build_shell_command(&program, cwd), &program, cols, rows, out)
+    }
+
+    /// The spawn itself. `what` names the program only so a failure can say what
+    /// it was that did not start.
+    fn start(
+        id: SessionId,
+        command: CommandBuilder,
+        what: &str,
         cols: u16,
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
@@ -231,8 +290,8 @@ impl Pty {
 
         let child = pair
             .slave
-            .spawn_command(build_command(id, launch))
-            .map_err(|e| TerminalError::Spawn(format!("{}: {e}", launch.profile.binary())))?;
+            .spawn_command(command)
+            .map_err(|e| TerminalError::Spawn(format!("{what}: {e}")))?;
 
         // The slave side must be dropped here, not kept alongside the master:
         // a PTY only signals EOF to the master's reader once every open
@@ -497,6 +556,53 @@ mod tests {
         let given: Vec<_> =
             std::env::split_paths(cmd.get_env("PATH").expect("PATH must reach the agent")).collect();
         assert_eq!(given[1..], base[..]);
+    }
+
+    /// The shell branch, and what it is worth a test for is not the shell — it
+    /// is that the environment is one piece of code and not two. Every one of
+    /// these three is a decision the agent branch above is already tested for,
+    /// asked again of the branch that has no profile behind it.
+    #[test]
+    fn a_shell_is_given_the_same_environment_an_agent_is() {
+        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"));
+
+        // What runs is the person's own shell, with no argument telling it what
+        // to be: a PTY is what makes it interactive.
+        assert_eq!(cmd.get_argv(), &vec![OsString::from("/bin/zsh")]);
+        assert_eq!(cmd.get_cwd(), Some(&OsString::from("/tmp/project")));
+
+        // The bundled bd in front, which is the expensive one to lose: without
+        // it a shell runs whatever bd the machine has against a board whose
+        // version this app pins and checks.
+        let dir = sidecar_dir().expect("the test binary has a location");
+        let path = cmd.get_env("PATH").expect("PATH must reach the shell");
+        assert_eq!(std::env::split_paths(path).next(), Some(dir));
+
+        // `iter_extra_env_as_str` and never `get_env` for these two, for the
+        // reason the agent's locale test spells out: `get_env` answers out of a
+        // snapshot of this process's own environment, where both are likely to
+        // be set already and an assertion on them would pass with the lines it
+        // guards deleted.
+        let told: Vec<_> = cmd.iter_extra_env_as_str().collect();
+        assert!(told.contains(&("TERM", "xterm-256color")), "{told:?}");
+        assert_eq!(
+            told.iter().filter(|(key, _)| crate::shell_env::LOCALE_KEYS.contains(key)).count(),
+            1,
+            "{told:?} — a shell told nothing about the encoding runs in the C locale too"
+        );
+    }
+
+    /// The other half of that: what a shell is *not* given. Everything the
+    /// agent branch adds beyond the shared piece is about an agent or about a
+    /// run, and a shell has neither — a `BEADS_ACTOR` leaking into one would
+    /// put a person's own bd commands into a run's audit trail under a session
+    /// id that means nothing to them.
+    #[test]
+    fn a_shell_is_told_nothing_about_agents_or_runs() {
+        let cmd = build_shell_command("/bin/zsh", Path::new("/tmp/project"));
+        let keys: Vec<_> = cmd.iter_extra_env_as_str().map(|(key, _)| key).collect();
+        assert_eq!(keys.len(), 3, "{keys:?} — the shared piece is TERM, a locale and PATH");
+        assert!(!keys.contains(&"BEADS_ACTOR"), "{keys:?}");
     }
 
     #[test]

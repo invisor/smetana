@@ -183,7 +183,16 @@ pub struct DetectInput<'a> {
     pub transcript: bool,
     /// Which agent this session runs — layer B is that agent's own dialog
     /// reader, not a hardcoded one.
-    pub profile: &'static dyn Profile,
+    ///
+    /// `None` for a session that runs no agent, which today is the person's own
+    /// shell (`SessionWork::Shell`). Layer A still runs over it and is welcome
+    /// to: a shell that rings the bell has rung it for the person sitting in
+    /// front of it, and nothing in this app acts on a shell's state — it has no
+    /// row in the agents panel, and notifications are raised by a run. What
+    /// there is no honest answer for is layer B, which is one named harness's
+    /// interface being read; a shell has no harness, so the reading is skipped
+    /// rather than handed to whichever profile happened to be configured.
+    pub profile: Option<&'static dyn Profile>,
 }
 
 pub struct Detected {
@@ -195,7 +204,7 @@ pub fn detect(input: DetectInput) -> Detected {
     // Layer B: the profile knows exactly what is being asked, so it takes
     // precedence. Trusted only once the screen has settled — see SETTLE.
     if input.still_for >= SETTLE {
-        if let Some(question) = input.profile.question(input.screen) {
+        if let Some(question) = input.profile.and_then(|p| p.question(input.screen)) {
             return Detected { state: SessionState::NeedsYou, question: Some(question) };
         }
     }
@@ -233,7 +242,7 @@ mod tests {
             still_for: Duration::from_millis(still_ms),
             screen: Box::leak(lines(screen).into_boxed_slice()),
             transcript: false,
-            profile: crate::agents::resolve("claude").unwrap(),
+            profile: Some(crate::agents::resolve("claude").unwrap()),
         }
     }
 
@@ -285,7 +294,7 @@ mod tests {
             still_for: Duration::from_millis(500),
             screen: dialog(),
             transcript: false,
-            profile: crate::agents::resolve("claude").unwrap(),
+            profile: Some(crate::agents::resolve("claude").unwrap()),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
         assert!(out.question.expect("there is no question").text.ends_with('?'));
@@ -298,7 +307,7 @@ mod tests {
             still_for: Duration::from_millis(20),
             screen: dialog(),
             transcript: false,
-            profile: crate::agents::resolve("claude").unwrap(),
+            profile: Some(crate::agents::resolve("claude").unwrap()),
         });
         assert!(out.question.is_none(), "the profile believed a half-drawn screen");
         assert_eq!(out.state, SessionState::Running);
@@ -311,9 +320,36 @@ mod tests {
             still_for: Duration::from_secs(30),
             screen: dialog(),
             transcript: false,
-            profile: crate::agents::resolve("claude").unwrap(),
+            profile: Some(crate::agents::resolve("claude").unwrap()),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
+    }
+
+    /// The session a person opened a shell in: no agent, so no layer B, and
+    /// layer A left running because there is nothing about it to switch off.
+    #[test]
+    fn a_session_with_no_agent_behind_it_still_gets_layer_a() {
+        let quiet = detect(DetectInput {
+            bell_pending: false,
+            still_for: Duration::from_secs(30),
+            screen: dialog(),
+            transcript: false,
+            profile: None,
+        });
+        // A dialog a profile would have read, on a screen that has no profile
+        // to read it: the shell is simply quiet, which is what it looks like.
+        assert!(quiet.question.is_none(), "a session with no profile was given a question");
+        assert_eq!(quiet.state, SessionState::Idle);
+
+        let rang = detect(DetectInput {
+            bell_pending: true,
+            still_for: Duration::from_millis(0),
+            screen: dialog(),
+            transcript: false,
+            profile: None,
+        });
+        // The bell is the person's own `\a`, and it costs nothing to believe.
+        assert_eq!(rang.state, SessionState::NeedsYou);
     }
 
     #[test]
@@ -326,7 +362,7 @@ mod tests {
             still_for: Duration::from_millis(500),
             screen: dialog(),
             transcript: false,
-            profile: no_layer_b(),
+            profile: Some(no_layer_b()),
         });
         assert!(out.question.is_none(), "a profile with no layer B was given one");
     }
@@ -383,7 +419,7 @@ mod tests {
     /// differ in exactly the one fact the rule turns on and in nothing else.
     fn tick_as(quiet: &mut Quiet, at: Instant, screen: &[String], batch: bool) -> SessionState {
         let still_for = quiet.still_for(screen, at);
-        let profile = no_layer_b();
+        let profile = Some(no_layer_b());
         let input =
             DetectInput { bell_pending: false, still_for, screen, transcript: batch, profile };
         detect(input).state
@@ -566,7 +602,7 @@ mod tests {
             still_for: Duration::from_secs(600),
             screen: &screen,
             transcript: true,
-            profile: no_layer_b(),
+            profile: Some(no_layer_b()),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
     }
@@ -581,7 +617,7 @@ mod tests {
             still_for: Duration::from_secs(600),
             screen: dialog(),
             transcript: true,
-            profile: crate::agents::resolve("claude").unwrap(),
+            profile: Some(crate::agents::resolve("claude").unwrap()),
         });
         assert_eq!(out.state, SessionState::NeedsYou);
         assert!(out.question.is_some(), "a batch's dialog was read as no question");

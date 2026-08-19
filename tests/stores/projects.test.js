@@ -20,6 +20,13 @@ beforeEach(async () => {
   ipc.on('files_list', (args) => listing({ dir: args.dir }))
   ipc.on('tracker_set_project', snapshot())
   ipc.on('tracker_probe', (args) => args.paths.map((path) => ({ path, tracked: true })))
+  /* A move loads the new project's sessions before restoring its tabs, so every
+     test in this file reaches this command whether or not it is about agents.
+     Answered with nothing rather than left to refuse: an unregistered command
+     rejects, `loadSessions` swallows it, and the move would carry on through a
+     caught error — which works, and which would make the two tests below that
+     answer this deliberately look like nothing special. */
+  ipc.on('terminal_list', [])
 
   /* Mandatory: the settings watcher is installed only inside loadSettings.
      Without it flushPending has nothing to flush, settings_save never happens,
@@ -81,6 +88,68 @@ describe('switchTo', () => {
     expect(commands.indexOf('settings_save')).toBeLessThan(
       commands.indexOf('tracker_set_project')
     )
+  })
+
+  /* The ordering the Agent tab's repair rests on, and it is a repair that has
+     to see the *new* project's sessions. `restoreTabs` sends an `activeTab` of
+     "terminal" back to the board when the project has no agent — sessions do not
+     survive a restart, so the remembered value usually names a tab that cannot
+     exist yet. Read against the previous project's list it would do the
+     opposite of its job: a project with a live agent, left on the Agent tab,
+     would open on the board and have that written into its settings.
+
+     The list answers late here on purpose. In the app it is `terminal_list`
+     queueing behind a spawn — about a second — against two quick directory
+     reads, which is the race this ordering exists to lose safely. */
+  it('a project with a live agent keeps its Agent tab even when the list answers late', async () => {
+    settings.settings.openProjects = ['/a', '/b']
+    settings.settings.activeProject = '/a'
+    ipc.on('settings_load', (args) =>
+      args.project === '/b' ? { project: { activeTab: 'terminal' } } : {}
+    )
+    ipc.on(
+      'terminal_list',
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve([
+                {
+                  id: 1,
+                  agent: 'claude',
+                  cwd: '/b',
+                  project: '/b',
+                  state: 'running',
+                  question: null,
+                  startedAt: '2026-08-19T10:00:00Z',
+                  exitCode: null,
+                  work: { kind: 'bare' }
+                }
+              ]),
+            20
+          )
+        )
+    )
+
+    await projects.switchTo('/b')
+
+    expect(settings.settings.project.activeTab).toBe('terminal')
+    expect(tabs.hasAgentTab.value).toBe(true)
+  })
+
+  /* The other half, and the reason the repair exists at all: the same remembered
+     value, in a project whose sessions really are gone. */
+  it('a project with no agent left on the Agent tab opens on the board', async () => {
+    settings.settings.openProjects = ['/a', '/b']
+    settings.settings.activeProject = '/a'
+    ipc.on('settings_load', (args) =>
+      args.project === '/b' ? { project: { activeTab: 'terminal' } } : {}
+    )
+    ipc.on('terminal_list', [])
+
+    await projects.switchTo('/b')
+
+    expect(settings.settings.project.activeTab).toBe('kanban')
   })
 
   it('moving to the current project does nothing', async () => {
