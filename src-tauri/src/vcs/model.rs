@@ -328,10 +328,22 @@ pub enum VcsError {
     /// `vcs_commit` answers it first and this variant exists to answer it with.
     #[error("A commit needs a message.")]
     NoMessage,
-    /// A network call that was still running when its deadline passed, and was
-    /// killed. Its own variant rather than a `Git { .. }` with an empty stderr:
-    /// git said nothing, this app decided, and the sentence has to say so.
-    #[error("Smetana stopped git after {0} seconds — the remote did not answer.")]
+    /// A call that was still running when its ceiling passed, and was stopped.
+    /// Its own variant rather than a `Git { .. }` with an empty stderr: git
+    /// said nothing, this app decided, and the sentence has to say so.
+    ///
+    /// **One variant for all three ceilings, and the sentence says only what is
+    /// true of all three.** It read "the remote did not answer" while the only
+    /// calls that could produce it were the networked ones; local reads and
+    /// writes have ceilings of their own now (`run::READ_CEILING`,
+    /// `run::WRITE_CEILING`), and that clause would be a lie about a commit
+    /// hook. A second variant was the alternative and buys nothing: both would
+    /// carry this same `kind`, since what the panel does about them is
+    /// identical, so nothing on the front end could have told them apart — and
+    /// the one thing the old clause added is already on screen, where the
+    /// panel's own heading names the operation that was refused ("Git did not
+    /// reach the remote", "Git did not commit").
+    #[error("Smetana stopped git after {0} seconds — it had not finished.")]
     Timeout(u64),
     #[error("{0}")]
     Io(String),
@@ -628,6 +640,10 @@ mod tests {
     /// kind was not added is one the front end cannot tell from an ordinary
     /// refusal — and this one must not be attributed to git at all: nothing git
     /// said produced it.
+    ///
+    /// The sentence is checked for what it does **not** say as well. One
+    /// variant now answers for three ceilings, two of them local, so a clause
+    /// about a remote would be a lie under every commit that outstayed a hook.
     #[test]
     fn a_timeout_is_its_own_kind_and_names_this_app_rather_than_git() {
         let err = VcsError::Timeout(60);
@@ -635,6 +651,10 @@ mod tests {
         assert_eq!(err.kind(), "timeout");
         assert!(err.to_string().contains("60"), "the message says how long was waited");
         assert!(err.to_string().starts_with("Smetana"), "the sentence is this app's, not git's");
+        assert!(
+            !err.to_string().contains("remote"),
+            "a local read and a local write reach this variant too"
+        );
     }
 
     /// The rule the whole merge door rests on. `git merge`'s own wording moves

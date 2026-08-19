@@ -13,12 +13,54 @@ use crate::agents::oneshot::{self, OneshotError};
 use crate::files::model::{looks_binary, BINARY_SNIFF_BYTES, MAX_FILE_BYTES};
 use crate::git;
 
+/// **Every command in this file runs its work here, and none of it in the body
+/// of the `async fn`.** `spawn_blocking`, rather than making the commands
+/// synchronous: Tauri will take either, and this one keeps the door open for a
+/// command that has something genuinely asynchronous beside its git call
+/// (`vcs_suggest_message` already does).
+///
+/// The reason used to be the three networked calls alone — they were the first
+/// in the module that could take a minute on purpose, where everything else was
+/// tens of milliseconds. That argument is now the general one instead of the
+/// exception: since `run.rs` gained a ceiling for local reads and writes too,
+/// **every** call here has a length this app has committed to waiting, up to
+/// two minutes for a write sitting on somebody's `pre-commit`. Every IPC call
+/// in the app — the file tree, the editor, the tracker, the terminals — shares
+/// the runtime these commands are polled on, so a git that is merely slow would
+/// otherwise take workers out of everything else on screen with nothing saying
+/// why. The blocking pool is where a thread is *meant* to be parked on a
+/// process.
+async fn off_the_runtime<T, F>(work: F) -> Result<T, VcsError>
+where
+    F: FnOnce() -> Result<T, VcsError> + Send + 'static,
+    T: Send + 'static,
+{
+    // A blocking task that panicked, or a runtime shutting down under it: an
+    // `Io` refusal in this app's own words, since git never said anything.
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|err| Err(VcsError::Io(err.to_string())))
+}
+
+/// The same, for the three commands documented as never refusing.
+///
+/// They have no error to return and that promise is load-bearing — a project
+/// holding a folder that is not a repository still draws a list — so a join
+/// that failed answers with what "nothing is known" already looks like here:
+/// the empty list. It is the same answer those commands give for a folder git
+/// cannot read, which is the only other way they come back with nothing.
+async fn off_the_runtime_or_empty<T, F>(work: F) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Default + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.unwrap_or_default()
+}
+
 /// The repositories of a project. Never a refusal: a folder that is not a
 /// repository, or holds none, is an empty list, which the panel draws as an
 /// empty state of its own.
 #[tauri::command]
 pub async fn vcs_repos(project: String) -> Vec<Repo> {
-    repos::discover(Path::new(&project))
+    off_the_runtime_or_empty(move || repos::discover(Path::new(&project))).await
 }
 
 /// The working tree of one repository.
@@ -27,7 +69,7 @@ pub async fn vcs_repos(project: String) -> Vec<Repo> {
 /// untracked directory, and a person who wants that opens the file tree.
 #[tauri::command]
 pub async fn vcs_status(repo: String) -> Result<WorkingTree, VcsError> {
-    working_tree(Path::new(&repo))
+    off_the_runtime(move || working_tree(Path::new(&repo))).await
 }
 
 /// The porcelain call itself, written once.
@@ -37,7 +79,7 @@ pub async fn vcs_status(repo: String) -> Result<WorkingTree, VcsError> {
 /// the same records the panel is already drawing, so a second argument list
 /// here would be a second answer free to disagree with what is on screen.
 fn working_tree(repo: &Path) -> Result<WorkingTree, VcsError> {
-    let out = run::git(
+    let out = run::git_read(
         repo,
         &["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=normal"],
     )?;
@@ -63,7 +105,7 @@ fn working_tree(repo: &Path) -> Result<WorkingTree, VcsError> {
 /// error.
 #[tauri::command]
 pub async fn vcs_branches(repo: String) -> Vec<Branch> {
-    branch_list(Path::new(&repo))
+    off_the_runtime_or_empty(move || branch_list(Path::new(&repo))).await
 }
 
 /// Where every local branch stands against its upstream, in one process.
@@ -86,12 +128,12 @@ pub async fn vcs_branches(repo: String) -> Vec<Branch> {
 /// on every row.
 #[tauri::command]
 pub async fn vcs_tracking(repo: String) -> Vec<Tracking> {
-    tracking(Path::new(&repo))
+    off_the_runtime_or_empty(move || tracking(Path::new(&repo))).await
 }
 
 fn tracking(repo: &Path) -> Vec<Tracking> {
     const FORMAT: &str = "%(refname:short)%00%(upstream:short)%00%(upstream:track,nobracket)";
-    run::git(repo, &["for-each-ref", "--format", FORMAT, "refs/heads"])
+    run::git_read(repo, &["for-each-ref", "--format", FORMAT, "refs/heads"])
         .map(|out| model::parse_tracking(&out))
         .unwrap_or_default()
 }
@@ -135,8 +177,10 @@ fn tracking(repo: &Path) -> Vec<Tracking> {
 /// both refusals above still arrive unchanged.
 #[tauri::command]
 pub async fn vcs_checkout(repo: String, branch: String) -> Result<(), VcsError> {
-    run::git(Path::new(&repo), &["checkout", "--no-guess", &branch, "--"])?;
-    Ok(())
+    off_the_runtime(move || {
+        run::git_write(Path::new(&repo), &["checkout", "--no-guess", &branch, "--"])
+    })
+    .await
 }
 
 /// Cut a new branch from an existing one.
@@ -174,7 +218,7 @@ pub async fn vcs_create_branch(
     start: String,
     switch: bool,
 ) -> Result<(), VcsError> {
-    create_branch(Path::new(&repo), &name, &start, switch)
+    off_the_runtime(move || create_branch(Path::new(&repo), &name, &start, switch)).await
 }
 
 fn create_branch(repo: &Path, name: &str, start: &str, switch: bool) -> Result<(), VcsError> {
@@ -183,8 +227,7 @@ fn create_branch(repo: &Path, name: &str, start: &str, switch: bool) -> Result<(
     } else {
         vec!["branch", name, start]
     };
-    run::git(repo, &args)?;
-    Ok(())
+    run::git_write(repo, &args)
 }
 
 /// Bring another branch's work into the one this repository is on.
@@ -200,7 +243,7 @@ fn create_branch(repo: &Path, name: &str, start: &str, switch: bool) -> Result<(
 /// A conflict is **not** a failure here — see `attempt`.
 #[tauri::command]
 pub async fn vcs_merge(repo: String, branch: String) -> Result<MergeOutcome, VcsError> {
-    attempt(Path::new(&repo), &["merge", "--no-edit", &branch])
+    off_the_runtime(move || attempt(Path::new(&repo), &["merge", "--no-edit", &branch])).await
 }
 
 /// Replay this repository's branch on top of another one.
@@ -211,7 +254,7 @@ pub async fn vcs_merge(repo: String, branch: String) -> Result<MergeOutcome, Vcs
 /// one is outside this epic.
 #[tauri::command]
 pub async fn vcs_rebase(repo: String, onto: String) -> Result<MergeOutcome, VcsError> {
-    attempt(Path::new(&repo), &["rebase", &onto])
+    off_the_runtime(move || attempt(Path::new(&repo), &["rebase", &onto])).await
 }
 
 /// Bring the remote's refs up to date, so the marks mean something.
@@ -225,26 +268,6 @@ pub async fn vcs_rebase(repo: String, onto: String) -> Result<MergeOutcome, VcsE
 #[tauri::command]
 pub async fn vcs_fetch(repo: String) -> Result<(), VcsError> {
     off_the_runtime(move || run::git_network(Path::new(&repo), &["fetch", "--prune"])).await
-}
-
-/// The three calls below, run somewhere other than on a runtime worker.
-///
-/// `spawn_blocking`, for the reason `vcs_suggest_message` records at the foot
-/// of this file and with one thing added: every other call here is tens of
-/// milliseconds, where these three have a **sixty-second** ceiling by design
-/// (`run::NETWORK_TIMEOUT`) and are the first in this module that can take a
-/// minute on purpose. Every IPC call in the app — the file tree, the editor,
-/// the tracker, the terminals — shares that runtime, so a hung fetch and a hung
-/// push on a two-core machine is every worker gone and the whole window drawn
-/// from stale state for a minute, with nothing on screen saying why.
-async fn off_the_runtime<T, F>(work: F) -> Result<T, VcsError>
-where
-    F: FnOnce() -> Result<T, VcsError> + Send + 'static,
-    T: Send + 'static,
-{
-    // A blocking task that panicked, or a runtime shutting down under it: an
-    // `Io` refusal in this app's own words, since git never said anything.
-    tokio::task::spawn_blocking(work).await.unwrap_or_else(|err| Err(VcsError::Io(err.to_string())))
 }
 
 /// Bring the upstream's commits into the branch this repository is on.
@@ -309,8 +332,7 @@ pub async fn vcs_push(repo: String, set_upstream: bool) -> Result<(), VcsError> 
 /// abort itself could not finish), comes back in its own words.
 #[tauri::command]
 pub async fn vcs_abort(repo: String, op: OpKind) -> Result<(), VcsError> {
-    run::git(Path::new(&repo), &[op.word(), "--abort"])?;
-    Ok(())
+    off_the_runtime(move || run::git_write(Path::new(&repo), &[op.word(), "--abort"])).await
 }
 
 /// Everything the panel is drawing, as one commit.
@@ -331,12 +353,14 @@ pub async fn vcs_abort(repo: String, op: OpKind) -> Result<(), VcsError> {
 ///
 /// No `--no-verify`: a repository's hooks are part of what committing means
 /// there, and skipping them silently from a button is not this app's decision
-/// to take. The cost is the one `run.rs` has everywhere — there is no timeout
-/// anywhere in this module — so a hook that hangs hangs this call, and the
-/// panel with it, exactly as a merge driver that hangs already does.
+/// to take. What that costs is `run::WRITE_CEILING`: a hook is somebody else's
+/// program and may reasonably lint or compile, so this call is allowed two
+/// minutes and then stopped — with git given the chance to take `index.lock`
+/// back off the disk on its way out, which is what keeps a stopped commit from
+/// leaving a repository nothing can be committed to.
 #[tauri::command]
 pub async fn vcs_commit(repo: String, message: String) -> Result<(), VcsError> {
-    commit_all(Path::new(&repo), &message)
+    off_the_runtime(move || commit_all(Path::new(&repo), &message)).await
 }
 
 /// The two calls themselves, split from the command so the tests at the bottom
@@ -349,9 +373,8 @@ fn commit_all(repo: &Path, message: &str) -> Result<(), VcsError> {
     if message.is_empty() {
         return Err(VcsError::NoMessage);
     }
-    run::git(repo, &["add", "--all"])?;
-    run::git(repo, &["commit", "-m", message])?;
-    Ok(())
+    run::git_write(repo, &["add", "--all"])?;
+    run::git_write(repo, &["commit", "-m", message])
 }
 
 /// A commit message for what is in the tree right now, written by the agent.
@@ -372,17 +395,22 @@ pub async fn vcs_suggest_message(
     app: tauri::AppHandle,
     repo: String,
 ) -> Result<String, OneshotError> {
-    let agent = crate::settings::agent(&app);
-    let profile = crate::agents::pick(&agent, crate::shell_env::path())
-        .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
-    let prompt = describe(Path::new(&repo)).map_err(|err| OneshotError::Git(err.to_string()))?;
-    // `spawn_blocking`, unlike everything else in this file: the calls above
-    // are tens of milliseconds where this one waits on a model, and holding a
-    // runtime thread for ninety seconds would stall every other command in the
-    // app behind it.
-    tokio::task::spawn_blocking(move || oneshot::ask(profile, &prompt))
-        .await
-        .map_err(|err| OneshotError::Io(err.to_string()))?
+    // `spawn_blocking`, the same rule as `off_the_runtime` above and for the
+    // same reason — that wrapper cannot be the one used, because what comes
+    // back here is `OneshotError`, one message for a person however the call
+    // gave way. **The whole body is inside it**, not the ask alone: reading the
+    // settings file, probing the login shell for a `PATH` and the four git
+    // calls of `describe` are every one of them blocking, and the ask itself
+    // then waits on a model for as long as ninety seconds.
+    tokio::task::spawn_blocking(move || {
+        let agent = crate::settings::agent(&app);
+        let profile = crate::agents::pick(&agent, crate::shell_env::path())
+            .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
+        let prompt = describe(Path::new(&repo)).map_err(|err| OneshotError::Git(err.to_string()))?;
+        oneshot::ask(profile, &prompt)
+    })
+    .await
+    .map_err(|err| OneshotError::Io(err.to_string()))?
 }
 
 /// What git has to say about the tree, as the text of a question.
@@ -407,7 +435,7 @@ fn describe(repo: &Path) -> Result<String, VcsError> {
         .collect();
     let born = run::git_maybe(repo, &["rev-parse", "--verify", "--quiet", "HEAD"], 1)?.is_some();
     let (stat, patch) = if born {
-        (run::git(repo, &["diff", "HEAD", "--stat"])?, run::git(repo, &["diff", "HEAD"])?)
+        (run::git_read(repo, &["diff", "HEAD", "--stat"])?, run::git_read(repo, &["diff", "HEAD"])?)
     } else {
         (String::new(), String::new())
     };
@@ -513,7 +541,12 @@ const NO_SUCH_OBJECT: i32 = 1;
 /// file.
 #[tauri::command]
 pub async fn vcs_file_at_head(repo: String, path: String) -> Result<Option<String>, VcsError> {
-    let dir = Path::new(&repo);
+    off_the_runtime(move || file_at_head(Path::new(&repo), path)).await
+}
+
+/// The command's whole body, off the runtime and synchronous — every line of it
+/// is a git call or a decision taken from one.
+fn file_at_head(dir: &Path, path: String) -> Result<Option<String>, VcsError> {
     let object = format!("HEAD:{path}");
     let Some(name) = run::git_maybe(
         dir,
@@ -528,7 +561,7 @@ pub async fn vcs_file_at_head(repo: String, path: String) -> Result<Option<Strin
     // An answer that will not parse is not a reason to refuse the file: it
     // costs the cheap check and leaves the one below it, which reads the bytes
     // that actually arrived and cannot be wrong about them.
-    if let Ok(bytes) = run::git(dir, &["cat-file", "-s", &name])?.trim().parse::<u64>() {
+    if let Ok(bytes) = run::git_read(dir, &["cat-file", "-s", &name])?.trim().parse::<u64>() {
         if bytes > MAX_FILE_BYTES {
             return Err(VcsError::TooLarge { path, bytes });
         }
@@ -614,9 +647,10 @@ mod tests {
     /// reporting on the machine rather than on the code.
     fn repository(name: &str) -> PathBuf {
         let root = scratch(name);
-        run::git(&root, &["init", "--quiet"]).expect("git init");
-        run::git(&root, &["config", "user.email", "test@example.com"]).expect("set the email");
-        run::git(&root, &["config", "user.name", "Test"]).expect("set the name");
+        run::git_write(&root, &["init", "--quiet"]).expect("git init");
+        run::git_write(&root, &["config", "user.email", "test@example.com"])
+            .expect("set the email");
+        run::git_write(&root, &["config", "user.name", "Test"]).expect("set the name");
         root
     }
 
@@ -628,8 +662,8 @@ mod tests {
     fn everything_in_the_tree_is_committed_including_what_git_was_not_tracking() {
         let repo = repository("commit-all");
         fs::write(repo.join("tracked.txt"), "one\n").expect("write the tracked file");
-        run::git(&repo, &["add", "tracked.txt"]).expect("stage it");
-        run::git(&repo, &["commit", "-m", "first"]).expect("commit it");
+        run::git_write(&repo, &["add", "tracked.txt"]).expect("stage it");
+        run::git_write(&repo, &["commit", "-m", "first"]).expect("commit it");
         fs::write(repo.join("tracked.txt"), "two\n").expect("edit the tracked file");
         fs::write(repo.join("new.txt"), "three\n").expect("write the untracked file");
 
@@ -637,7 +671,8 @@ mod tests {
 
         let tree = working_tree(&repo).expect("read the tree");
         assert!(tree.changes.is_empty(), "the tree should be clean: {:?}", tree.changes);
-        let last = run::git(&repo, &["log", "-1", "--name-only", "--format=%s"]).expect("read the log");
+        let last = run::git_read(&repo, &["log", "-1", "--name-only", "--format=%s"])
+            .expect("read the log");
         // The message is committed trimmed, which is what the button's own
         // guard reads and what a person typing a trailing newline expects.
         assert!(last.contains("fix: both of them"), "{last}");
@@ -674,24 +709,25 @@ mod tests {
     fn two_branches(name: &str) -> (PathBuf, String, String) {
         let repo = repository(name);
         fs::write(repo.join("a.txt"), "one\n").expect("write a file");
-        run::git(&repo, &["add", "."]).expect("stage");
-        run::git(&repo, &["commit", "-m", "first"]).expect("commit");
+        run::git_write(&repo, &["add", "."]).expect("stage");
+        run::git_write(&repo, &["commit", "-m", "first"]).expect("commit");
         // Whatever this git calls its first branch — the default is a machine's
         // configuration, not this test's business.
         let first = head_branch(&repo);
-        run::git(&repo, &["switch", "-c", "second"]).expect("cut the second branch");
+        run::git_write(&repo, &["switch", "-c", "second"]).expect("cut the second branch");
         fs::write(repo.join("b.txt"), "two\n").expect("write another file");
-        run::git(&repo, &["add", "."]).expect("stage");
-        run::git(&repo, &["commit", "-m", "second"]).expect("commit");
+        run::git_write(&repo, &["add", "."]).expect("stage");
+        run::git_write(&repo, &["commit", "-m", "second"]).expect("commit");
         (repo, first, "second".into())
     }
 
     fn head_branch(repo: &Path) -> String {
-        run::git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).expect("read HEAD").trim().into()
+        let out = run::git_read(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).expect("read HEAD");
+        out.trim().into()
     }
 
     fn sha(repo: &Path, rev: &str) -> String {
-        run::git(repo, &["rev-parse", rev]).expect("resolve the revision").trim().into()
+        run::git_read(repo, &["rev-parse", rev]).expect("resolve the revision").trim().into()
     }
 
     /// **The start point is the row, never HEAD.** The menu item exists because

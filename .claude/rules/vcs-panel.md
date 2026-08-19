@@ -233,9 +233,9 @@ one hunk by hand loses that distinction, and this app has no staging of its own 
 Hence the count on the button, `commitLabel` — a button reading only "Commit" would leave the one
 surprising thing about it unsaid. The empty message is refused **before** the add and not left to
 git, whose own refusal is in good words but arrives with the index already rewritten behind it. No
-`--no-verify`: a repository's hooks are part of what committing means there, and the price is the one
-this module pays everywhere — there is no timeout in `run.rs`, so a hook that hangs hangs the panel,
-exactly as a merge driver that hangs already does.
+`--no-verify`: a repository's hooks are part of what committing means there, and the price is
+`run::WRITE_CEILING` — a hook is somebody else's program, so the commit is allowed two minutes and is
+then stopped, with git given the chance to take `index.lock` back off the disk on its way out.
 
 **The draft is per repository, in memory, and never in `settings.json`.** A project is often several
 repositories and the sentences are about different work, so `vcsState.messages` is keyed by path; the
@@ -358,27 +358,48 @@ which is the one way this fails that looks like success.
 ## The remote: what is behind, and the two verbs that reach it
 
 **Network is the second way this module runs git, and it is a second function rather than a flag.**
-`run.rs` deliberately has no deadline anywhere else, and that is recorded as a decision rather than
-an omission: a commit hook that hangs was started by somebody watching the screen, and killing their
-build at sixty seconds would be this app inventing a policy for a repository it knows nothing about.
-A network call is the opposite case in both halves — nobody pressed it (a window came back into
-focus) and there is nobody for git to ask (there is no terminal on this process, so a prompt for a
-password is at best a dialog from some other program and at worst a wait with no end). So
-`git_network` and `git_network_attempt` add `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=never`,
-`GIT_SSH_COMMAND="ssh -o BatchMode=yes"` and a **60 second deadline with a kill behind it**.
+What makes it its own pair of functions is the environment rather than the number: nobody pressed it
+(a window came back into focus) and there is nobody for git to ask (there is no terminal on this
+process, so a prompt for a password is at best a dialog from some other program and at worst a wait
+with no end). So `git_network` and `git_network_attempt` add `GIT_TERMINAL_PROMPT=0`,
+`SSH_ASKPASS_REQUIRE=never`, `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` and a **60 second deadline**.
 `StrictHostKeyChecking` is deliberately left alone: what a machine trusts is not this function's
-business. Everything local — `status`, `merge`, `commit`, the branch reads — goes on running through
-`git`/`git_attempt` with no ceiling at all.
+business.
 
-**How that wait is done is `bounded`, and it is deliberately not the poll-and-kill loop in
-`agents::oneshot::ask` it started as.** That loop reads both pipes only once the child is gone, and
+**Every local call has a ceiling too, and there are two of them.** `run.rs` used to record having
+none as a decision — a commit hook that hangs was started by somebody watching the screen, and
+stopping their build would be this app inventing a policy for a repository it knows nothing about.
+That argument held while the module only read; it lost the day the module started writing. There is
+no worker in `vcs/` and no queue, so a git that never returns is an IPC call that never answers: the
+button stays inert, nothing on screen says why, and the way out is restarting the app. Somebody
+standing over a hook can watch it in their own terminal; nobody can press a dead button, and a call
+that comes back can be pressed again. So a call site says which kind of call it is by the function it
+names — **`run::git_read` under `READ_CEILING` (30 s), `run::git_write` and `run::git_attempt` under
+`WRITE_CEILING` (120 s)**, with `git_maybe` and `git_bytes` reads by construction. Thirty seconds is
+two orders of magnitude over the 220 ms a cold `git status` measures on this repository; two minutes
+is `runs/preflight.rs`'s health-check number, taken for its reason rather than its digit — the wait
+on a command a person configured and this app knows nothing about the cost of.
+
+**The stop is SIGTERM first, then SIGKILL, and the grace is not politeness.** git removes the
+`*.lock` files it holds from a signal handler and re-raises; SIGKILL cannot be caught, so a write
+killed outright leaves `.git/index.lock` behind and every later git command in that repository
+refuses with "Another git process seems to be running" until somebody deletes the file by hand —
+a worse state than the hang the ceiling exists to end. Measured on git 2.34.1 against a `pre-commit`
+hook that sleeps: SIGTERM to the group leaves no lock, SIGKILL leaves one, and a test in `run.rs`
+drives a real commit through the ceiling and then commits again to prove it. The kill still follows
+the two-second grace, because a hook that ignores SIGTERM must not turn the ceiling back into a wait
+with no end.
+
+**How every one of those waits is done is `bounded`, and it is deliberately not the poll-and-kill
+loop in `agents::oneshot::ask` it started as.** That loop reads both pipes only once the child is gone, and
 its own comment names the precondition that makes it safe: the output is bounded, one line asked
 for. Nothing here is. `git pull` writes a merge diffstat of one line per changed file and
 `git fetch --prune` a line per updated ref, so past the 64 KiB a pipe holds git blocks in `write`,
 `try_wait` never answers `Some`, and the deadline kills a git that had **already written the merge
-commit** — under a sentence blaming a remote that answered perfectly. So standard output goes to
-`/dev/null` (no caller has ever read it, which is why `git_network` returns `()`), and standard
-error is drained on a thread of its own while the wait happens.
+commit** — under a sentence saying this app stopped it. So **every pipe that is opened is drained on
+a thread of its own** while the wait happens, and a caller with nothing to do with standard output
+says so (`Capture::Discard`) and it is never opened at all — which is why `git_network` and
+`git_write` return `()`. A read asks for it and pays for the second thread.
 
 The kill has two halves for the same reason. `Child` has no reaping `Drop`, so a `kill` with no
 `wait` behind it leaves a defunct process for the lifetime of the app — and this is the call a
@@ -391,19 +412,26 @@ git alone leaves it holding both the connection and the stderr pipe. `bounded` i
 is then looked for in the process table, since a zombie still answers `kill(pid, 0)` and a reaped
 child does not.
 
-**The three networked commands are `spawn_blocking`, unlike every other command in `vcs/`.** They
-are the first in the module that can take a minute by design, and every IPC call in the app — the
-file tree, the editor, the tracker, the terminals — shares that runtime: a hung fetch and a hung
-push on a two-core machine is every worker gone and the whole window drawn from stale state, with
-nothing saying why. `vcs_suggest_message` documents the same rule for the same reason one field
-over.
+**Every command in `vcs/` runs its work in `spawn_blocking` and none of it in the body of the
+`async fn`** — `off_the_runtime`, or `off_the_runtime_or_empty` for the three that are documented as
+never refusing and so have no error to hand back a failed join. This started as the three networked
+commands alone, the first that could take a minute by design; it is the general rule now that every
+call has a length this app has committed to waiting. Every IPC call in the app — the file tree, the
+editor, the tracker, the terminals — shares the runtime these commands are polled on, so a git that
+is merely slow would otherwise take workers out of everything else on screen with nothing saying
+why. `vcs_suggest_message` keeps its own wrapper, since what comes back from it is
+`OneshotError`.
 
-An expired deadline is **`VcsError::Timeout`, its own variant with its own `kind()` of `"timeout"`**,
+An expired ceiling is **`VcsError::Timeout`, its own variant with its own `kind()` of `"timeout"`**,
 and never a `Git { stderr }` with an empty message. git said nothing; this app decided, and the
-sentence says so ("Smetana stopped git after 60 seconds"). It cannot reach the editor's own table of
-refusals (`ERRORS` in `stores/files.js`, which falls back silently to "Could not read this file"),
-because the only commands that can produce it are the three networked ones and no file read is among
-them — a diff is `vcs_file_at_head` through the local runner.
+sentence says so ("Smetana stopped git after 120 seconds — it had not finished"). One variant for all
+three ceilings, and the sentence says only what is true of all three: it named the remote while only
+the networked calls could produce it, which would now be a lie about a commit hook, and a second
+variant would have carried this same `kind` — nothing on the front end could have told them apart,
+and the operation is already named by the panel's own heading over the message. It **does** reach the
+editor's table of refusals now (`ERRORS` in `stores/files.js`), since a diff's left-hand side is
+`vcs_file_at_head` and that is three git calls; `timeout` is a key there for that reason, and without
+it the fallback would draw "Could not read this file." over a git this app stopped.
 
 **Where a branch stands against its upstream is `vcs_tracking`, a separate command, and folding it
 into `vcs_branches` would end two documented properties of that one.** `vcs_branches` spawns no
