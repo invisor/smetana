@@ -15,6 +15,7 @@
 import { computed, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { basename } from '../paths.js'
 import { runsState } from './runs.js'
 import { settings } from './settings.js'
@@ -778,5 +779,67 @@ export async function resize(id, cols, rows) {
     terminalState.lastError = null
   } catch (err) {
     report('read', err)
+  }
+}
+
+/* A file dragged over the window, and where it was let go.
+
+   Tauri intercepts file drops before the webview sees them — `dragDropEnabled`
+   is on by default and this app leaves it on — so there is no `dragover` and no
+   `drop` to listen for in a component: the gesture arrives as a window event
+   carrying absolute paths. That is why the subscription is here at all, beside
+   `watchDrops` in attachments.js, which is the same event read for the other
+   consumer: only a store may import Tauri.
+
+   What this hands over is a point in CSS pixels and the paths, and no opinion
+   about whose drop it is. `payload.position` is physical, so it is divided by
+   the device pixel ratio here — the one place that knows the event's units —
+   and what comes out is measured from the top left of the viewport, which is
+   exactly the coordinate space `document.elementFromPoint` reads. Deciding
+   whether the point is inside a particular pane is the pane's own business, and
+   has to be: two subscribers on one window event need no arbiter as long as a
+   hit test cannot give them both the same drop, and it cannot.
+
+   `paths` rides along with `over` too, because the enter event is the only one
+   that carries them and a caller wanting to say how many are coming has nowhere
+   else to read it; the events in the middle of a drag carry `null`.
+
+   In a browser there is no webview to ask, and getCurrentWebview throws before
+   the subscription — a normal mode, the same one attachments.js reads a throw
+   as, so it is logged at debug and nothing else happens. */
+export function watchSessionDrops({ over, leave, drop } = {}) {
+  let webview
+  try {
+    webview = getCurrentWebview()
+  } catch {
+    console.debug('[terminals] no webview: drops are a Tauri-only gesture')
+    return () => {}
+  }
+  let stop = null
+  let stopped = false
+  webview
+    .onDragDropEvent(({ payload }) => {
+      /* Anything that is not the drag being over the window ends it, which is
+         `leave` and also whatever a future Tauri adds beside it: forgetting the
+         response is the safe reading of an event this code does not know. */
+      if (payload.type !== 'enter' && payload.type !== 'over' && payload.type !== 'drop') {
+        leave?.()
+        return
+      }
+      const { x, y } = payload.position.toLogical(window.devicePixelRatio)
+      const at = { x, y, paths: payload.paths ?? null }
+      if (payload.type === 'drop') drop?.(at)
+      else over?.(at)
+    })
+    .then((unlisten) => {
+      stop = unlisten
+      /* The view unmounted while the subscription was still on its way. */
+      if (stopped) stop()
+    })
+    .catch((err) => console.error('[terminals] listening for drops failed:', err))
+
+  return () => {
+    stopped = true
+    if (stop) stop()
   }
 }

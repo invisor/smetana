@@ -1105,3 +1105,108 @@ describe('the live agent count in the scope bar', () => {
     expect(stores.terminals.liveAgentCount.value).toBe(4)
   })
 })
+
+/* A file dropped on the window. Tauri intercepts the gesture before the webview
+   sees it, so these arrive as real events through the same transport the state
+   deltas do — the store's part is the units and the plumbing, and nothing else:
+   whose drop it is belongs to the pane that can ask what is drawn at the point.
+
+   `onDragDropEvent` is four `listen` calls deep, each one a round trip through
+   the mocked transport, so the subscription is not in place on the next
+   microtask. */
+describe('drops on the window', () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  const watch = async (stores) => {
+    const seen = []
+    const stop = stores.terminals.watchSessionDrops({
+      over: (at) => seen.push({ type: 'over', ...at }),
+      leave: () => seen.push({ type: 'leave' }),
+      drop: (at) => seen.push({ type: 'drop', ...at })
+    })
+    await settle()
+    return { seen, stop }
+  }
+
+  it('hands over the paths and the point they were let go at', async () => {
+    const { stores, emit } = await ready()
+    const { seen } = await watch(stores)
+
+    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 40, y: 60 } })
+    await settle()
+
+    expect(seen).toEqual([{ type: 'drop', x: 40, y: 60, paths: ['/tmp/a.png'] }])
+  })
+
+  /* The event's position is physical and `document.elementFromPoint` reads CSS
+     pixels, so the conversion happens here — the one place that knows which
+     units arrived. On a retina screen an unconverted point lands at twice the
+     distance from the corner, which on a three-column window is a different
+     panel altogether. */
+  it('turns the physical point into CSS pixels', async () => {
+    const { stores, emit } = await ready()
+    vi.stubGlobal('devicePixelRatio', 2)
+    const { seen } = await watch(stores)
+
+    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 40, y: 60 } })
+    await settle()
+    vi.unstubAllGlobals()
+
+    expect(seen).toEqual([{ type: 'drop', x: 20, y: 30, paths: ['/tmp/a.png'] }])
+  })
+
+  /* Entering carries the paths and the events in the middle of the drag do not,
+     which is the whole reason `over` is handed them at all: a caller saying how
+     many files are coming has nowhere else to read the number. */
+  it('carries the paths on entering and null while moving', async () => {
+    const { stores, emit } = await ready()
+    const { seen } = await watch(stores)
+
+    await emit('tauri://drag-enter', { paths: ['/tmp/a.png', '/tmp/b.png'], position: { x: 1, y: 2 } })
+    await emit('tauri://drag-over', { position: { x: 3, y: 4 } })
+    await settle()
+
+    expect(seen).toEqual([
+      { type: 'over', x: 1, y: 2, paths: ['/tmp/a.png', '/tmp/b.png'] },
+      { type: 'over', x: 3, y: 4, paths: null }
+    ])
+  })
+
+  it('the drag leaving the window ends the response', async () => {
+    const { stores, emit } = await ready()
+    const { seen } = await watch(stores)
+
+    await emit('tauri://drag-leave', {})
+    await settle()
+
+    expect(seen).toEqual([{ type: 'leave' }])
+  })
+
+  it('after unsubscribing a drop reaches nothing', async () => {
+    const { stores, emit } = await ready()
+    const { seen, stop } = await watch(stores)
+
+    stop()
+    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 1, y: 2 } })
+    await settle()
+
+    expect(seen).toEqual([])
+  })
+
+  /* Unmounting before the subscription has finished being set up: the pane goes
+     as soon as the person switches tab, and the promise behind
+     `onDragDropEvent` may still be in flight — without the flag the listener
+     would be installed after its owner was gone and would never come off. */
+  it('unsubscribing before the subscription lands still leaves nothing listening', async () => {
+    const { stores, emit } = await ready()
+    const seen = []
+    const stop = stores.terminals.watchSessionDrops({ drop: (at) => seen.push(at) })
+    stop()
+    await settle()
+
+    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 1, y: 2 } })
+    await settle()
+
+    expect(seen).toEqual([])
+  })
+})

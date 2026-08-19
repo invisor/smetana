@@ -169,6 +169,53 @@ Nothing about a shell reaches `settings.json`: it is not in `openTabs`, which is
 that lands in `activeTab` is rejected on the next launch by `validate` (it is neither of the two names
 nor a path) and again by `restoreTabs`.
 
+## Dropping a file on the panel
+
+Dropping a file on the terminal panel types its absolute path into the session's input and stops
+there, the way iTerm and Terminal.app do it. **Return is not sent**: a path is nearly always part of a
+sentence — "look at X and fix it" — rather than the whole of one, and a message sent on somebody's
+behalf cannot be taken back out of an agent. The text ends in one space so the person goes on typing
+around what landed. Both places `TerminalView.vue` is drawn get this at once, the Agent tab and a
+shell's tab, because it is the pane's behaviour rather than the tab's.
+
+Nothing is copied anywhere. That is the difference from a task's attachments, which `attachment_import`
+copies because a path written into a filed issue has to outlive somebody tidying `~/Downloads` next
+week; a live session has no such duty — the agent reads the file within the minute — and a copy would
+cost storage, narrow the gesture to the four image formats `sniff` knows, and leave rubbish nothing
+refers to.
+
+**Three pieces, and the split is the point.** `components/terminal/dropPaths.js` is the whole of the
+text rule, pure and outside the component because a `.vue` file is the one thing no test here can
+reach (`tests/components/terminal/dropPaths.test.js`). A path goes in bare and takes single quotes only
+when it needs them — shlex's own safe set — since the ordinary case is a path with nothing special in
+it and a bare one reads better in the middle of a half-typed sentence; an inner quote is written
+`'\''`. **Quoting is not the whole of the text rule**, because this string is typed into a PTY rather
+than parsed by a shell: a control character is read by the line discipline and the TUI before any
+shell sees a word, and single quotes do not reach it — a line feed or a carriage return in a filename
+*is* a Return, the one keystroke the gesture exists not to press. Such a path is refused outright and
+per path, never stripped or escaped: a repaired path would no longer name the file somebody dropped,
+and the other files of the same drop still go in.
+
+`watchSessionDrops` in `terminals.js` is the subscription, over the webview's `onDragDropEvent`,
+mirroring `watchDrops` in attachments.js down to the browser case — `getCurrentWebview` throws there,
+which is an ordinary mode and gets one debug line. It converts the event's *physical* position with
+`toLogical(devicePixelRatio)` and hands over CSS pixels, and no opinion about whose drop it is.
+
+**Whose drop it is is a hit test, not layout arithmetic.** `TerminalView.vue` asks
+`document.elementFromPoint` at that point and takes the drop only if what is drawn there is inside its
+own xterm host. The same question settles the argument with the new task dialog for free: with that
+modal open the point lands on its scrim, so the panel refuses of its own accord and the two subscribers
+on the one window event never need to know about each other — which is why there is no dispatcher
+between them, and why a future overlay is separated by the same property rather than by a list of
+exceptions. The pane's own drop response is a sibling of the host and carries `pointerEvents: 'none'`
+for exactly this reason: taking pointer events would make the response itself the answer to the hit
+test, and it would switch off the instant it appeared.
+
+The response — a frame and one line of caption over the terminal — is drawn only while a live session
+is behind the panel. `send` already drops what is written to a session still coming up, so there is
+nothing to promise in that state and nothing is promised. Without any response at all the gesture is
+invisible and indistinguishable from the broken state this replaced, which is the reason it exists.
+
 | file | what it does |
 |---|---|
 | `model.rs` | `Session`, `SessionState`, `Question`, `TerminalError` — the vocabulary, and the pure rules for entering and leaving each state (`Session::apply`, `finish`) |
