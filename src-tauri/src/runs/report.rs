@@ -300,8 +300,10 @@ td{border-top:1px solid var(--doc-rule);padding:.4rem .5rem;vertical-align:top}\
 
 /// The document's whole appearance.
 ///
-/// **The palette is placed three times because the document has two readers that
-/// ask differently.** Opened in a browser, with nothing of ours loaded, it has
+/// **The palette is placed four times because the document has two readers that
+/// ask differently.** Light on a bare `:root` and dark under the media query is
+/// the browser's pair; dark and light again under `[data-theme]` is this app's.
+/// Opened in a browser, with nothing of ours loaded, the document has
 /// only `prefers-color-scheme` to go on, and that is left exactly as it was.
 /// Opened in a tab of this app it is handed `data-theme` by
 /// `src/components/run/reportTheme.js` — the app has already resolved `system`
