@@ -173,9 +173,15 @@ export const dirtyPaths = computed(() => project().openTabs.filter(isDirty))
 const readOnlyHint = (buffer) => (buffer?.error ? fileErrorText(buffer.error) : null)
 
 export const tabList = computed(() => [
-  /* Before the board, which is where it has always been drawn. */
-  ...(hasAgentTab.value ? [AGENT_TAB] : []),
   ...PINNED,
+  /* After the board and before everything else. The board is the one tab every
+     project has, so it is the fixed point of the row and reads best as its
+     first entry; the Agent tab keeps second place because, like the board, a
+     project has at most one of it and neither closes by a cross. Both stay
+     `kind: 'pinned'`, which is what keeps them a single leading run for
+     `TabBar.vue` and keeps the "+ New agent or terminal" button (the
+     `afterPinned` slot) beside the pair rather than adrift among the files. */
+  ...(hasAgentTab.value ? [AGENT_TAB] : []),
   ...project().openTabs.map((path) => {
     const hint = readOnlyHint(buffers.get(path))
     return {

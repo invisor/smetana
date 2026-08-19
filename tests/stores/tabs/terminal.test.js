@@ -60,12 +60,14 @@ describe('the Agent tab', () => {
     expect(tabs.hasAgentTab.value).toBe(false)
   })
 
-  it('is there, in front of the board, as soon as the project has an agent', async () => {
+  it('is there, straight after the board, as soon as the project has an agent', async () => {
     await listed(session({ id: 4 }))
 
-    expect(ids()).toEqual(['terminal', 'kanban'])
+    expect(ids()).toEqual(['kanban', 'terminal'])
+    // The board is the fixed point of the row and stays its first entry.
+    expect(tabs.tabList.value[0]).toMatchObject({ kind: 'pinned', label: 'Kanban' })
     // Sans label and no close button, which is what `pinned` means to Tab.vue.
-    expect(tabs.tabList.value[0]).toMatchObject({ kind: 'pinned', label: 'Agent' })
+    expect(tabs.tabList.value[1]).toMatchObject({ kind: 'pinned', label: 'Agent' })
   })
 
   /* A spawn takes about a second. A tab that appeared only when the worker
@@ -77,7 +79,7 @@ describe('the Agent tab', () => {
 
     terminals.createSession('/p', { kind: 'bare' })
 
-    expect(ids()).toEqual(['terminal', 'kanban'])
+    expect(ids()).toEqual(['kanban', 'terminal'])
   })
 
   it('goes with the last agent, and a person on it lands on the board', async () => {
@@ -181,8 +183,8 @@ describe('a terminal tab', () => {
     await listed(shell({ id: 1 }), session({ id: 2 }), shell({ id: 3 }))
 
     expect(tabs.tabList.value.map((tab) => tab.label)).toEqual([
-      'Agent',
       'Kanban',
+      'Agent',
       'Terminal 1',
       'Terminal 2'
     ])
@@ -270,7 +272,7 @@ describe('a shell is not an agent', () => {
 
     expect(terminals.terminalState.activeId).toBe(4)
     expect(ipc.calls('terminal_shell')).toEqual([{ project: '/p' }])
-    expect(tabs.tabList.value.map((tab) => tab.label)).toEqual(['Agent', 'Kanban', 'Terminal 1'])
+    expect(tabs.tabList.value.map((tab) => tab.label)).toEqual(['Kanban', 'Agent', 'Terminal 1'])
   })
 })
 

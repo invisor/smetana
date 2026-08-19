@@ -18,7 +18,7 @@ The centre's `terminal` tab (`chat` before it grew a terminal — `ProjectState:
 old name on load, since files on people's disks carry it and without the substitution that tab would
 fail the closed-list check and silently become the board) runs CLI coding agents under real PTYs, one
 per session, listed in the sidebar's Agents view (`components/agent/AgentList.vue`) and started from
-its "+ New agent" row, from the `+` button beside the board tab, or from the task inspector's "Ask
+its "+ New agent" row, from the `+` button beside the pinned tabs, or from the task inspector's "Ask
 agent to edit". The reason the subsystem exists at all is the second half of that sentence: it notices
 when an agent is waiting on a human, including one in a tab nobody is looking at.
 
