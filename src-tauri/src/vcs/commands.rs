@@ -55,14 +55,17 @@ where
 /// shrug, and a panicked task would have it made about a folder nobody looked
 /// at — against this module's own rule that anything unobservable reads as
 /// "no", loudly. Nothing on screen can carry it, since the shape of the answer
-/// has no room for a refusal, so it goes where a developer will find it.
-async fn off_the_runtime_or_empty<T, F>(work: F) -> T
+/// has no room for a refusal, so it goes where a developer will find it — and
+/// the caller names itself, because `JoinError`'s own text carries a task id
+/// and the panic and never the command, which in a wrapper three of them share
+/// would leave the line unable to say which read gave way.
+async fn off_the_runtime_or_empty<T, F>(read: &'static str, work: F) -> T
 where
     F: FnOnce() -> T + Send + 'static,
     T: Default + Send + 'static,
 {
     tokio::task::spawn_blocking(work).await.unwrap_or_else(|err| {
-        log::error!("vcs: a read gave way and is being reported as nothing at all: {err}");
+        log::error!("vcs: {read} gave way and is being reported as nothing at all: {err}");
         T::default()
     })
 }
@@ -72,7 +75,7 @@ where
 /// empty state of its own.
 #[tauri::command]
 pub async fn vcs_repos(project: String) -> Vec<Repo> {
-    off_the_runtime_or_empty(move || repos::discover(Path::new(&project))).await
+    off_the_runtime_or_empty("vcs_repos", move || repos::discover(Path::new(&project))).await
 }
 
 /// The working tree of one repository.
@@ -117,7 +120,7 @@ fn working_tree(repo: &Path) -> Result<WorkingTree, VcsError> {
 /// error.
 #[tauri::command]
 pub async fn vcs_branches(repo: String) -> Vec<Branch> {
-    off_the_runtime_or_empty(move || branch_list(Path::new(&repo))).await
+    off_the_runtime_or_empty("vcs_branches", move || branch_list(Path::new(&repo))).await
 }
 
 /// Where every local branch stands against its upstream, in one process.
@@ -140,7 +143,7 @@ pub async fn vcs_branches(repo: String) -> Vec<Branch> {
 /// on every row.
 #[tauri::command]
 pub async fn vcs_tracking(repo: String) -> Vec<Tracking> {
-    off_the_runtime_or_empty(move || tracking(Path::new(&repo))).await
+    off_the_runtime_or_empty("vcs_tracking", move || tracking(Path::new(&repo))).await
 }
 
 fn tracking(repo: &Path) -> Vec<Tracking> {

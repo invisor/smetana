@@ -389,8 +389,8 @@ it.
 
 **A stopped write is not a clean no-op, and there is no door in the panel to what it leaves.**
 `WRITE_CEILING` governs `checkout`, `merge` and `rebase` as well as the commit, and a merge or a
-rebase killed part-way leaves `MERGE_HEAD` or `rebase-merge` on the disk and a half-updated tree
-behind it. `ConflictModal` does not open on that: it opens on `MergeOutcome::Conflict`, which is a
+rebase killed part-way leaves `MERGE_HEAD`, or `rebase-merge`/`rebase-apply` depending on which
+backend the repository is configured for, on the disk with a half-updated tree behind it. `ConflictModal` does not open on that: it opens on `MergeOutcome::Conflict`, which is a
 tree read *after* an operation that finished. So what a person gets is the timeout sentence and a
 repository mid-operation, and the way back is git in a terminal. That door is deliberately not built
 — naming the state is the whole of what is owed here.
