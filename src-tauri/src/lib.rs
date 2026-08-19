@@ -130,6 +130,7 @@ pub fn run() {
       settings::commands::settings_save,
       window::settings_window_open,
       terminal::commands::terminal_list,
+      terminal::commands::terminal_marks,
       terminal::commands::terminal_create,
       terminal::commands::terminal_shell,
       terminal::commands::terminal_remove,

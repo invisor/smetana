@@ -6,7 +6,7 @@
 use tauri::State;
 use tokio::sync::oneshot;
 
-use super::model::{Session, SessionId, TerminalError};
+use super::model::{Session, SessionId, SessionMark, TerminalError};
 use super::service::{Attached, Request, TerminalHandle};
 use crate::agents::Intent;
 
@@ -40,6 +40,19 @@ pub async fn terminal_list(
     project: String,
 ) -> Result<Vec<Session>, TerminalError> {
     ask(&handle, |tx| Request::List(project, tx)).await
+}
+
+/// Every session the worker holds, of every project, as the project rail draws
+/// them. Read once when a window opens. There is no second read and no polling:
+/// the `terminal:state` and `terminal:removed` events are emitted for every
+/// session of every project already, so the front end maintains this from
+/// them — this command exists because a window that has just opened has been
+/// told about nothing.
+#[tauri::command]
+pub async fn terminal_marks(
+    handle: State<'_, TerminalHandle>,
+) -> Result<Vec<SessionMark>, TerminalError> {
+    ask(&handle, Request::Marks).await
 }
 
 /// `intent` is why the session is being started; the profile turns it into a

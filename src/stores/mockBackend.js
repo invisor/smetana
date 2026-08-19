@@ -660,6 +660,26 @@ export function installMockBackend() {
         }
       ]
     }
+    /* Every session the worker holds, of every project, as the project rail
+       reads them. A read, and answered here for the reason every other read is:
+       a browser has no worker, and a command that threw would have the store
+       log an error on every start of `npm run dev`.
+
+       Deliberately not derived from `terminal_list` above: that stub answers
+       with the same three sessions whatever project it is asked about, which is
+       fine for a panel that only ever draws one, and would make every tile on
+       the rail identical. These are three states across three projects instead —
+       one project waiting on a person, one working, one with nothing going on —
+       so the rail's three dots can all be seen at once. The three ids on the
+       first project are `terminal_list`'s own, with its states. */
+    if (command === 'terminal_marks') {
+      return [
+        { id: 1, project: MOCK_PROJECTS[0], state: 'running' },
+        { id: 2, project: MOCK_PROJECTS[0], state: 'needs-you' },
+        { id: 7, project: MOCK_PROJECTS[0], state: 'running' },
+        { id: 11, project: MOCK_PROJECTS[2], state: 'running' }
+      ]
+    }
     if (command === 'terminal_attach') {
       return { data: toBase64(MOCK_SESSION_OUTPUT), seq: 0 }
     }
