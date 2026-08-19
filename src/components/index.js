@@ -36,7 +36,8 @@ export {
 // shell
 export { default as AppShell } from './shell/AppShell.vue'
 export { default as Panel } from './shell/Panel.vue'
-export { default as ProjectList } from './shell/ProjectList.vue'
+export { default as ProjectRail } from './shell/ProjectRail.vue'
+export { default as ProjectTile } from './shell/ProjectTile.vue'
 export { default as Resizer } from './shell/Resizer.vue'
 export { default as ScopeIndicator } from './shell/ScopeIndicator.vue'
 export { default as Tab } from './shell/Tab.vue'

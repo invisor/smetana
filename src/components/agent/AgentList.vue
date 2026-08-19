@@ -4,7 +4,7 @@
    made it unreadable.
 
    Starting an agent is not here: it belongs to a project, and it is offered
-   on the project's own row in ProjectList.vue. This component is the
+   in the menu on the project's tile in ProjectRail.vue. This component is the
    sessions and nothing else.
 
    Colour is never the only signal here: needs-you is the status system's
@@ -33,7 +33,7 @@ const body = { flex: 1, minHeight: 0, overflow: 'auto' }
    every re-render, since that would build a new pair of refs each time. So
    each row's instance is created once and cached by id, the way a keyed
    ref would be. Press is not tracked: a row is not a button, it is a
-   place, the same reasoning ProjectList.vue uses. */
+   place, the same reasoning ClaimedTasks.vue uses. */
 const rowInteractive = new Map()
 const interactiveFor = (id) => {
   let entry = rowInteractive.get(id)
@@ -175,7 +175,7 @@ const empty = computed(() => props.rows.length === 0)
         />
       </div>
       <div v-if="empty" :style="{ padding: 'var(--space-5)', color: 'var(--text-muted)', font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)' }">
-        No agents running. Start one with + on the project row.
+        No agents running. Right-click a project to start one.
       </div>
     </div>
   </div>

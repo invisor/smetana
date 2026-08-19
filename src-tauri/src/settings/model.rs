@@ -200,6 +200,13 @@ impl KanbanSettings {
 pub struct Layout {
     pub left_collapsed: bool,
     pub right_collapsed: bool,
+    /// Whether the project rail is drawn beside the left panel.
+    ///
+    /// Per window rather than per project, the same as the widths beside it:
+    /// it is a preference about this window's chrome. `serde(default)` on the
+    /// struct is what makes a file written before this field existed read back
+    /// with the rail open, which is the shipped state.
+    pub rail_open: bool,
     pub left_width: u32,
     pub right_width: u32,
     pub git_sections: GitSections,
@@ -253,7 +260,7 @@ const MAX_SECTION_ROWS: u32 = 40;
 
 /// The defaults are repeated in the front end (`LEFT_DEFAULT`, `RIGHT_DEFAULT`
 /// in `panelWidths.js`): with no back end the app must still open looking the same.
-pub const LEFT_WIDTH_DEFAULT: u32 = 252;
+pub const LEFT_WIDTH_DEFAULT: u32 = 236;
 pub const RIGHT_WIDTH_DEFAULT: u32 = 340;
 /// Sanity bounds, not layout ones. A zero would come from a panel collapsed
 /// into a rail, and after a restart it would expand into nothing; the upper
@@ -266,6 +273,7 @@ impl Default for Layout {
         Self {
             left_collapsed: false,
             right_collapsed: false,
+            rail_open: true,
             left_width: LEFT_WIDTH_DEFAULT,
             right_width: RIGHT_WIDTH_DEFAULT,
             git_sections: GitSections::default(),
@@ -1270,6 +1278,19 @@ mod tests {
 
         let tiny = settings_of(r#"{"version":1,"layout":{"gitSections":{"reposRows":1}}}"#);
         assert_eq!(tiny.layout.git_sections.repos_rows, None);
+    }
+
+    #[test]
+    fn a_settings_file_written_before_the_rail_keeps_it_open() {
+        // The rail shipped after this struct did, so every file already on disk
+        // is missing the field. Open is the shipped state, and a person who
+        // never asked for anything must not have it taken away by an upgrade.
+        let stored = settings_of(r#"{"version":1,"layout":{"leftWidth":300}}"#);
+        assert!(stored.layout.rail_open);
+        assert_eq!(stored.layout.left_width, 300, "the neighbouring field must survive");
+
+        let hidden = settings_of(r#"{"version":1,"layout":{"railOpen":false}}"#);
+        assert!(!hidden.layout.rail_open, "a stored flag survives the load");
     }
 
     #[test]

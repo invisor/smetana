@@ -70,6 +70,18 @@ describe('loading', () => {
     expect(settings.settings.appearance.density).toBe('comfortable')
   })
 
+  it('the rail is open until somebody hides it, and a stored flag survives a load', async () => {
+    ipc.on('settings_load', { layout: { leftWidth: 300 } })
+    await settings.loadSettings()
+    expect(settings.settings.layout.railOpen).toBe(true)
+    expect(settings.settings.layout.leftWidth).toBe(300)
+
+    const hidden = await loadStores()
+    hidden.ipc.on('settings_load', { layout: { railOpen: false } })
+    await hidden.stores.settings.loadSettings()
+    expect(hidden.stores.settings.settings.layout.railOpen).toBe(false)
+  })
+
   it('a read refusal leaves the defaults and does not break startup', async () => {
     ipc.fail('settings_load', new Error('the file does not read'))
 
