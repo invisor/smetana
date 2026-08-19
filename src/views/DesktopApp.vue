@@ -2523,7 +2523,7 @@ const toastStackStyle = {
              and error handling every other tab has. What it does not inherit is
              the field — a report is read, never edited, which is why this is a
              branch of its own rather than a mode of FileEditor. -->
-        <ReportView v-if="reportTabActive" :html="activeBuffer?.text ?? ''" />
+        <ReportView v-if="reportTabActive" :html="activeBuffer?.text ?? ''" :theme="theme" />
         <!-- A changed file, HEAD against the working tree. Before the editor
              branch for the same reason the report is: it is a tab of its own
              kind, with no buffer behind it and nothing to save. -->

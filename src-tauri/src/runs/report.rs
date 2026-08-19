@@ -151,7 +151,7 @@ pub fn render(report: &RunReport) -> String {
     out.push_str("<title>");
     out.push_str(&escape(report.title));
     out.push_str("</title><style>");
-    out.push_str(STYLE);
+    out.push_str(&style());
     out.push_str("</style></head><body>");
     out.push_str("<h1>");
     out.push_str(&escape(report.title));
@@ -254,24 +254,86 @@ fn section(out: &mut String, title: &str, lines: &[TaskLine], batches: &[BatchLi
     out.push_str("</table>");
 }
 
-/// The document's whole appearance. See the module comment for why literals are
-/// allowed here and nowhere else in this repository. It follows the reader's own
-/// theme rather than picking one, which is the nearest thing to a token there
-/// is with no stylesheet of ours around.
-const STYLE: &str = "\
+/// The document's palette, light — and the complete one, because it stands on a
+/// bare `:root` and every dark block below only redefines these names. A colour
+/// whose sole definition sat inside a media query or an attribute block would
+/// simply be absent for the reader that block does not match, and nothing on
+/// screen would say a colour had gone missing.
+///
+/// The values are exactly the ones this file has always drawn. The *names* are
+/// the document's own and deliberately not the app's token names: these are not
+/// the values `tokens/color-surfaces.css` holds, so calling this `#fff`
+/// `--canvas` would read as a copy of a token the app paints differently and
+/// drift from it in silence. See the module comment for why literals live here
+/// and nowhere else in this repository.
+///
+/// `color-scheme` is the one declaration here that is not a colour, and it earns
+/// its place: the frame's scrollbar and every default the user agent paints —
+/// selection among them — follow it rather than the rules below, so without it a
+/// dark report comes with a light scrollbar down its side.
+const LIGHT: &str = "color-scheme:light;\
+--doc-fg:#1a1a1a;--doc-bg:#fff;--doc-meta:#666;--doc-rule:#eee;--doc-rule-strong:#ddd";
+
+/// The same names again, dark: the values that used to sit under
+/// `prefers-color-scheme:dark` and nowhere else. Written once and placed twice,
+/// because the document has two readers that ask differently — see `style`.
+const DARK: &str = "color-scheme:dark;\
+--doc-fg:#e6e6e6;--doc-bg:#141414;--doc-meta:#999;--doc-rule:#2a2a2a;--doc-rule-strong:#2a2a2a";
+
+/// What the document actually draws, through the names above and no colour of its
+/// own. The type, the spacing and the mono stack are character for character what
+/// this file wrote before: the palette moved into custom properties and nothing
+/// was restyled.
+const RULES: &str = "\
 body{font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;\
-max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fff}\
+max-width:52rem;margin:2rem auto;padding:0 1rem;color:var(--doc-fg);background:var(--doc-bg)}\
 h1{font-size:1.5rem;margin:0 0 .25rem}\
 h2{font-size:1.05rem;margin:2rem 0 .5rem}\
 h3{font-size:.95rem;font-weight:600;margin:1.25rem 0 .25rem}\
-.meta{color:#666;font-size:.85rem;font-weight:400}\
-.unknown{color:#666;font-style:italic}\
-.total{margin-top:2rem;border-top:1px solid #ddd;padding-top:.75rem;font-weight:600}\
+.meta{color:var(--doc-meta);font-size:.85rem;font-weight:400}\
+.unknown{color:var(--doc-meta);font-style:italic}\
+.total{margin-top:2rem;border-top:1px solid var(--doc-rule-strong);padding-top:.75rem;\
+font-weight:600}\
 table{border-collapse:collapse;width:100%}\
-td{border-top:1px solid #eee;padding:.4rem .5rem;vertical-align:top}\
-.id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}\
-@media(prefers-color-scheme:dark){body{color:#e6e6e6;background:#141414}\
-.meta,.unknown{color:#999}td{border-color:#2a2a2a}.total{border-color:#2a2a2a}}";
+td{border-top:1px solid var(--doc-rule);padding:.4rem .5rem;vertical-align:top}\
+.id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}";
+
+/// The document's whole appearance.
+///
+/// **The palette is placed four times because the document has two readers that
+/// ask differently.** Light on a bare `:root` and dark under the media query is
+/// the browser's pair; dark and light again under `[data-theme]` is this app's.
+/// Opened in a browser, with nothing of ours loaded, the document has
+/// only `prefers-color-scheme` to go on, and that is left exactly as it was.
+/// Opened in a tab of this app it is handed `data-theme` by
+/// `src/components/run/reportTheme.js` — the app has already resolved `system`
+/// and knows which of the two it is painting — and the attribute has to win in
+/// *both* directions.
+///
+/// Winning is said twice, and the hard direction is the one that needs it said
+/// at all: a light app on a dark machine, the mirror of the bug this fixed, where
+/// the machine's answer has to be refused rather than merely followed. The media
+/// query is guarded with `:not([data-theme="light"])`, so that reader is never
+/// told dark in the first place; and the attribute blocks are written after it,
+/// so at the equal specificity these selectors have, source order settles it.
+/// Either would carry the case alone. Both are here because they fail differently
+/// — the guard says which reader the query is for and survives being moved, and
+/// the order says nothing and does not.
+///
+/// The frame cannot be reached from our side to have an attribute set on it —
+/// `sandbox=""` gives the document its own origin — which is why the attribute
+/// goes into the string the frame is built from and not onto an element. Nothing
+/// rewrites what a past run wrote: a document already on disk carries this
+/// stylesheet only if it was written after this change.
+fn style() -> String {
+    format!(
+        ":root{{{LIGHT}}}\
+         @media(prefers-color-scheme:dark){{:root:not([data-theme=\"light\"]){{{DARK}}}}}\
+         :root[data-theme=\"dark\"]{{{DARK}}}\
+         :root[data-theme=\"light\"]{{{LIGHT}}}\
+         {RULES}"
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -356,6 +418,109 @@ mod tests {
         assert!(!html.contains("http://") && !html.contains("https://"));
         assert!(!html.contains("<script"), "no script, in the document or out of it");
         assert!(!html.contains("<img"), "and no image");
+    }
+
+    /// Everything between a selector's `{` and the `}` that closes it. No palette
+    /// block in this stylesheet holds a nested rule, so the first `}` is the
+    /// right one and a parser is not owed here.
+    fn block<'a>(html: &'a str, selector: &str) -> &'a str {
+        let at = html.find(selector).unwrap_or_else(|| panic!("no {selector} in the document"));
+        let open = at + selector.len();
+        let close = html[open..].find('}').expect("an unclosed block");
+        &html[open..open + close]
+    }
+
+    /// The custom properties a block defines, by name. `color-scheme` and any
+    /// other ordinary declaration is not a name a palette has to match on.
+    fn names(block: &str) -> Vec<&str> {
+        block
+            .split(';')
+            .filter_map(|declaration| declaration.split(':').next())
+            .map(str::trim)
+            .filter(|name| name.starts_with("--"))
+            .collect()
+    }
+
+    #[test]
+    fn the_document_carries_both_the_media_branch_and_rules_by_attribute() {
+        // The two readers of this document ask differently. In a browser, with
+        // nothing of ours loaded, it has only `prefers-color-scheme` to go on;
+        // in a tab of this app it is handed `data-theme` by `reportTheme.js`,
+        // because an empty sandbox puts the frame's own DOM out of reach and the
+        // string is the only thing our side can compose.
+        let html = render(&report(90, None, &[]));
+
+        assert!(html.contains(":root{"), "the light palette stands on a bare root");
+        assert!(
+            html.contains("@media(prefers-color-scheme:dark){"),
+            "the browser's reading of the document is untouched: {html}"
+        );
+        assert!(html.contains(":root[data-theme=\"dark\"]{"), "{html}");
+        assert!(html.contains(":root[data-theme=\"light\"]{"), "{html}");
+    }
+
+    #[test]
+    fn the_attribute_beats_the_machine_in_both_directions() {
+        // A dark app on a light machine is the easy half — the machine says
+        // nothing and the attribute block is the only dark one that applies. The
+        // mirror is what needs two mechanisms: a light app on a dark machine is
+        // told dark by the media query unless something stops it, so the query
+        // is guarded against the attribute *and* the attribute blocks are written
+        // after it, where equal specificity is settled by source order.
+        let html = render(&report(90, None, &[]));
+
+        assert!(
+            html.contains("@media(prefers-color-scheme:dark){:root:not([data-theme=\"light\"]){"),
+            "the machine's answer applies only where the app has not said light: {html}"
+        );
+        let media = html.find("@media(prefers-color-scheme:dark)").expect("the media query");
+        for selector in [":root[data-theme=\"dark\"]{", ":root[data-theme=\"light\"]{"] {
+            let at = html.find(selector).expect(selector);
+            assert!(at > media, "{selector} has to come after the media query, or it loses to it");
+        }
+    }
+
+    #[test]
+    fn no_colour_is_defined_only_where_one_of_the_readers_would_never_look() {
+        // A value whose only definition sits inside a media query or an attribute
+        // block is simply absent for the reader that block does not apply to — a
+        // light machine with no attribute would draw the document with half its
+        // palette missing, and nothing on screen would say so. So the bare root
+        // carries the complete light palette and every dark block only redefines.
+        let html = render(&report(90, None, &[]));
+        let light = names(block(&html, ":root{"));
+        assert!(!light.is_empty(), "the light palette is the one that must be complete");
+
+        // Both dark placements, and the media one is the point: it is itself a
+        // block one reader never looks in — a document opened in a browser on a
+        // light machine — and the two agreeing today is only the consequence of
+        // one constant being interpolated twice. That is the accident this test
+        // is insurance against, so checking the attribute block alone would leave
+        // it insuring nothing.
+        for selector in [":root[data-theme=\"dark\"]{", ":root:not([data-theme=\"light\"]){"] {
+            let dark = names(block(&html, selector));
+            assert!(!dark.is_empty(), "{selector} has to redefine something");
+            for name in dark {
+                assert!(light.contains(&name), "{name} is defined only under {selector}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_palette_is_the_only_thing_the_rules_name_a_colour_through() {
+        // The colours are written in one place, and after this change that place
+        // is the two palette constants: a literal left behind in a rule would be
+        // a colour no attribute and no media query could move, which is exactly
+        // the bug this fixed.
+        let html = render(&report(90, None, &[]));
+        let rules = &html[html.find("body{font:").expect("the body rule")..];
+        let rules = &rules[..rules.find("</style>").expect("the end of the stylesheet")];
+        // A hex is the shape this file has always written, and the other two are
+        // the shapes a later hand would reach for; a rule naming any of them would
+        // hold a colour no attribute and no media query could move.
+        for form in ["#", "rgb(", "hsl("] {
+            assert!(!rules.contains(form), "a colour outside the palette blocks: {rules}");
+        }
     }
 
     #[test]

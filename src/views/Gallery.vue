@@ -146,11 +146,7 @@ const runFixture = (state, extra = {}) => ({
 /* A run's document, shortened. `report.rs` writes the real one and this is the
    same shape — its own `<style>`, its own colours, its own `prefers-color-scheme`
    block — because the point of drawing it here is seeing that the frame hands the
-   document the whole box and paints nothing of its own over it. It deliberately
-   does not follow `data-theme`: the document has to be readable in a browser with
-   nothing of ours loaded, so it follows the reader's own theme instead, and in
-   this gallery that means the operating system rather than the switch at the top
-   of the page.
+   document the whole box and paints nothing of its own over it.
 
    The `<script>` is not filler, and what it does had to be chosen with some
    care. It is the one thing the sandbox exists for — `report.rs` writes no
@@ -168,18 +164,41 @@ const runFixture = (state, extra = {}) => ({
    red across a whole pane, which is the point — the failure cannot be confused
    with a normal render. The two readings are named in the document itself, so
    whoever checks this next does not have to infer them. */
+
+/* Its stylesheet is a copy of the one `src-tauri/src/runs/report.rs` writes, and
+   the copy has to keep that file's *shape*: the palette on a bare `:root`, again
+   under `prefers-color-scheme`, and again under `[data-theme]`. That last block is
+   the only reason this section changes palette at all: `reportTheme.js` names a
+   theme on the root tag and the document's own rules answer it. **Nothing on the
+   page moves it** — there is no theme control in this gallery, only `?theme=dark`
+   and `?theme=light` on the URL, so the two palettes are checked by loading the
+   page twice. A fixture written the old way would sit here light in a dark gallery
+   and look like the bug rather than the fix.
+
+   It is a fixture, and its colours are the document's rather than this system's:
+   that is what a stand-in for a file another language writes costs, and it is the
+   one place in `src/` where such a value is not a token. `report.rs` is still where
+   the real ones live, and this copy is checked by eye alongside the app, never
+   against it. */
 const REPORT_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Run report</title><style>
+:root{color-scheme:light;
+--doc-fg:#1a1a1a;--doc-bg:#fff;--doc-meta:#666;--doc-rule:#eee;--doc-rule-strong:#ddd}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;
+--doc-fg:#e6e6e6;--doc-bg:#141414;--doc-meta:#999;--doc-rule:#2a2a2a;--doc-rule-strong:#2a2a2a}}
+:root[data-theme="dark"]{color-scheme:dark;
+--doc-fg:#e6e6e6;--doc-bg:#141414;--doc-meta:#999;--doc-rule:#2a2a2a;--doc-rule-strong:#2a2a2a}
+:root[data-theme="light"]{color-scheme:light;
+--doc-fg:#1a1a1a;--doc-bg:#fff;--doc-meta:#666;--doc-rule:#eee;--doc-rule-strong:#ddd}
 body{font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;
-max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fff}
+max-width:52rem;margin:2rem auto;padding:0 1rem;color:var(--doc-fg);background:var(--doc-bg)}
 h1{font-size:1.5rem;margin:0 0 .25rem}h2{font-size:1.05rem;margin:2rem 0 .5rem}
-.meta{color:#666;font-size:.85rem}.unknown{color:#666;font-style:italic}
-.total{margin-top:2rem;border-top:1px solid #ddd;padding-top:.75rem;font-weight:600}
+.meta{color:var(--doc-meta);font-size:.85rem}.unknown{color:var(--doc-meta);font-style:italic}
+.total{margin-top:2rem;border-top:1px solid var(--doc-rule-strong);padding-top:.75rem;
+font-weight:600}
 table{border-collapse:collapse;width:100%}
-td{border-top:1px solid #eee;padding:.4rem .5rem;vertical-align:top}
+td{border-top:1px solid var(--doc-rule);padding:.4rem .5rem;vertical-align:top}
 .id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
-@media(prefers-color-scheme:dark){body{color:#e6e6e6;background:#141414}
-.meta,.unknown{color:#999}td{border-color:#2a2a2a}.total{border-color:#2a2a2a}}
 </style></head><body>
 <h1>Run report</h1>
 <p class="meta">/Users/you/dev/smetana &middot; the ready queue &middot; finished 2026-08-12 14:31</p>
@@ -2290,7 +2309,7 @@ const menuTargetStyle = {
           border: 'var(--border-w) solid var(--border)'
         }"
       >
-        <ReportView :html="REPORT_HTML" />
+        <ReportView :html="REPORT_HTML" :theme="theme" />
       </div>
       <div
         :style="{
@@ -2299,7 +2318,7 @@ const menuTargetStyle = {
           border: 'var(--border-w) solid var(--border)'
         }"
       >
-        <ReportView html="" />
+        <ReportView html="" :theme="theme" />
       </div>
     </section>
 
