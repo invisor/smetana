@@ -15,7 +15,10 @@ dist/
 # worktree can correct when the code moves underneath it.
 .claude/*
 !.claude/rules/
-docs
+# Anchored to the repository root on purpose: a bare `docs` matches a
+# directory of that name at any depth, which quietly swallowed
+# `tests/docs/` and with it the test that holds CLAUDE.md to its budget.
+/docs
 .beads
 .smetana
 
