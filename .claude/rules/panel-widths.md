@@ -48,6 +48,13 @@ rule about how much of a window one panel may dominate and a strip of chrome doe
 answer to that. When the column is folded into its own 32px rail the project rail is not drawn at
 all — two rails side by side would say nothing about which button belongs to which.
 
+That split is why the 44 is **not** visible in every `maxWidth` answer, and a test that assumes it is
+will fail. With the right panel at its shipped 340, the board's floor only starts biting below about
+1176px of window; above that the third-of-the-window cap is the smaller of the two and an open rail
+changes nothing at all. The full 44 shows below about 1110px, where both answers are on the floor
+branch. `tests/views/panelWidths.test.js` measures it at a viewport of 1000 for exactly this reason —
+a roomier window was tried first and was silently testing the fraction instead.
+
 `Panel` emits **two** events where it used to emit one, and the split is load-bearing rather than
 tidy. `toggle` is the header button, which in the left column is about the project rail beside the
 panel and not about the panel; `expand` is the button inside the folded rail, which can only ever

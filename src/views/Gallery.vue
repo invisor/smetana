@@ -2243,7 +2243,7 @@ const menuTargetStyle = {
           <div :style="{ width: '236px' }">
             <Panel
               title="smetana"
-              subtitle="develop · 1 agent running"
+              subtitle="develop · 1 running"
               side="left"
               toggle-label="Hide projects"
             >
@@ -2271,6 +2271,14 @@ const menuTargetStyle = {
               </template>
             </Panel>
           </div>
+        </div>
+        <!-- The same panel folded, which is what dragging the separator past the
+             left minimum leaves. The rail is not drawn beside it in the app —
+             two rails would be two rails — and the vertical title follows the
+             header's rule: a subtitle means this is a name, so it is not
+             uppercased down the strip. -->
+        <div :style="{ display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="smetana" subtitle="develop · 1 running" side="left" collapsed />
         </div>
         <!-- A rail longer than it is tall, which is where it starts to scroll,
              and the one with a project that has no bd tracker in it: that mark
@@ -2313,19 +2321,19 @@ const menuTargetStyle = {
           :project="{ path: '/Users/you/dev/smetana', name: 'smetana', tracked: true }"
           active
           state="live"
-          state-label="1 agent running"
+          state-label="1 running"
           branch="develop"
         />
         <ProjectTile
           :project="{ path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true }"
           state="loud"
-          state-label="1 agent waiting on you"
+          state-label="1 waiting on you"
           branch="main"
         />
         <ProjectTile
           :project="{ path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }"
           state="live"
-          state-label="2 agents running"
+          state-label="2 running"
           branch="main"
         />
         <ProjectTile

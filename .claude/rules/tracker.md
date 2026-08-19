@@ -96,6 +96,17 @@ paid for in words rather than left standing: the tooltip reads
 which is also what the panel header's summary line is built from, so the two
 cannot drift.
 
+Those words name **no noun** — "1 waiting on you", not "1 agent waiting on you"
+— and that is a constraint rather than terseness. `SessionMark` carries an id, a
+project and a state and no work kind, so `projectStates` counts a plain shell
+exactly like an agent, and a shell that rings the bell reaches `needs-you` the
+same way one does. The dot claims only that something there wants you, which is
+true of a shell; a sentence naming agents would be a claim this map cannot
+support, and one the app already answers differently a few pixels away —
+`liveAgentCount` filters through `isShellSession`, so the scope bar could read 0
+above a header reading 1. Counting agents apart from shells means a new field on
+the mark, in Rust and in the store, not a rewording in `projectState.js`.
+
 Nothing else fits on a tile. The three verbs a project row used to carry — set
 up for runs, new agent, remove from list — are in the tile's secondary-click
 menu, `projectMenu.js`'s items unchanged, and the menu is now the only door to

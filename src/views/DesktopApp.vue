@@ -2469,7 +2469,7 @@ const toastStackStyle = {
       </div>
 
       <Resizer
-        label="Resize projects panel"
+        label="Resize left panel"
         :step="STEP"
         @dragstart="startDrag('left')"
         @drag="onDrag('left', $event)"

@@ -10,7 +10,7 @@ import { RAIL, RAIL_CONTROL_MAX } from '../../views/panelWidths.js'
 const props = defineProps({
   title: { type: String, required: true },
   /* One line under the title, in muted micro type — what this panel is about
-     right now, e.g. "develop · 1 agent running". Its presence is also what
+     right now, e.g. "develop · 1 running". Its presence is also what
      switches the title from a section header's uppercase micro-caps to a name
      in ordinary mono: a project is *called* something, a section is labelled. */
   subtitle: { type: String, default: '' },
@@ -131,13 +131,21 @@ const toggleIcon = computed(() => {
 })
 const toggleText = computed(() => props.toggleLabel || `Collapse ${props.side} panel`)
 
-const railTitleStyle = {
+/* The folded rail's own copy of the title, and it follows the header's rule
+   rather than keeping its own: a subtitle means the title is a *name*, and a
+   name is not shouted. Uppercasing "smetana" into "SMETANA" would undo in the
+   rail exactly the distinction the header is drawn to make. The size and the
+   muted colour stay the rail's — 32px of folded chrome is quiet whatever is
+   written down it. */
+const railTitleStyle = computed(() => ({
   writingMode: 'vertical-rl',
   fontSize: 'var(--text-2xs)',
-  letterSpacing: 'var(--tracking-caps)',
-  textTransform: 'uppercase',
+  letterSpacing: props.subtitle ? 'var(--tracking-normal)' : 'var(--tracking-caps)',
+  textTransform: props.subtitle ? 'none' : 'uppercase',
+  fontFamily: props.subtitle ? 'var(--font-mono)' : undefined,
+  fontWeight: props.subtitle ? 'var(--weight-medium)' : undefined,
   color: 'var(--text-muted)'
-}
+}))
 </script>
 
 <template>

@@ -30,7 +30,7 @@ const props = defineProps({
   active: { type: Boolean, default: false },
   /* 'live' | 'loud' | 'idle', from `projectStates` in stores/terminals.js. */
   state: { type: String, default: 'idle' },
-  /* How that state reads out loud, e.g. "1 agent waiting on you". Handed in
+  /* How that state reads out loud, e.g. "1 waiting on you". Handed in
      rather than worked out here so the header's summary and this tooltip come
      from the one module — see `projectState.js`. */
   stateLabel: { type: String, default: 'idle' },
