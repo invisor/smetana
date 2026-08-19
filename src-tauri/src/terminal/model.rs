@@ -144,6 +144,21 @@ pub struct Session {
     pub work: SessionWork,
 }
 
+/// What the project rail needs to know about a session, and nothing else: a
+/// tile draws one dot, and the dot is decided by the state alone.
+///
+/// A separate type rather than `Session`, for the reason `Request::Group`
+/// gives about the pid — what crosses the boundary is what gets drawn. Every
+/// project's sessions cross here, and `Session` carries `work`, which for a
+/// filing agent holds the whole of the person's own draft prose.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMark {
+    pub id: SessionId,
+    pub project: String,
+    pub state: SessionState,
+}
+
 /// How a session ended, as far as whoever was waiting on it is concerned.
 ///
 /// Three answers rather than an `Option<i32>`, and the third is the whole
@@ -276,6 +291,17 @@ mod tests {
         })
         .expect("serializes");
         assert_eq!(json, r#"{"kind":"resolveConflict","repo":"/p/backend","theirs":"develop"}"#);
+    }
+
+    #[test]
+    fn session_mark_serializes_camel_case_with_kebab_state() {
+        // The rail reads all three of these names off the wire, and this is a
+        // second type carrying the same facts as `Session` — a rename here goes
+        // quiet on the other side: every tile's dot falls back to idle and the
+        // rail simply looks like an app with nothing running in it.
+        let mark = SessionMark { id: 7, project: "/p".into(), state: SessionState::NeedsYou };
+        let json = serde_json::to_string(&mark).expect("serializes");
+        assert_eq!(json, r#"{"id":7,"project":"/p","state":"needs-you"}"#);
     }
 
     #[test]

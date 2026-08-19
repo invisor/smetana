@@ -20,9 +20,14 @@ const session = (over = {}) => ({
 // below).
 const b64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 
+/* One row of what `terminal_marks` answers: the whole of what the rail is told
+   about a session it has no row for. */
+const mark = (over = {}) => ({ id: 1, project: '/p', state: 'running', ...over })
+
 async function ready() {
   const loaded = await loadStores()
   loaded.ipc.on('terminal_list', [session()])
+  loaded.ipc.on('terminal_marks', [])
   loaded.ipc.on('terminal_attach', { data: b64('hello'), seq: 0 })
   loaded.ipc.on('terminal_detach', null)
   loaded.ipc.on('terminal_write', null)
@@ -1208,5 +1213,95 @@ describe('drops on the window', () => {
     await settle()
 
     expect(seen).toEqual([])
+  })
+})
+
+/* The second structure beside `terminalState.sessions`: the state of every
+   project's sessions, which is what a tile on the project rail draws. The list
+   above is the active project's and stays that way — a row in the agents panel
+   for a project this window is not pointed at would offer a button that kills
+   somebody else's process. */
+describe('project states', () => {
+  it('a project with a running session is live, one with a waiting session is loud', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [
+      mark({ id: 1, project: '/a', state: 'running' }),
+      mark({ id: 2, project: '/b', state: 'needs-you' })
+    ])
+    await loaded.stores.terminals.initTerminals()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('live')
+    expect(loaded.stores.terminals.projectState('/b')).toBe('loud')
+  })
+
+  it('a waiting session outweighs a running one in the same project', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [
+      mark({ id: 1, project: '/a', state: 'running' }),
+      mark({ id: 2, project: '/a', state: 'needs-you' })
+    ])
+    await loaded.stores.terminals.initTerminals()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('loud')
+    expect(loaded.stores.terminals.projectStates.value['/a']).toEqual({ state: 'loud', live: 1, loud: 1 })
+  })
+
+  it('a project whose sessions have all exited, and one nobody has heard of, are both idle', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [mark({ id: 1, project: '/a', state: 'exited' })])
+    await loaded.stores.terminals.initTerminals()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('idle')
+    expect(loaded.stores.terminals.projectState('/nowhere')).toBe('idle')
+  })
+
+  it("an event about another project moves that project's state and adds no row here", async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [])
+    await loaded.stores.terminals.initTerminals()
+    await loaded.stores.terminals.loadSessions('/p')
+
+    await loaded.emit('terminal:state', session({ id: 9, project: '/other', state: 'needs-you' }))
+    await loaded.nextTick()
+
+    expect(loaded.stores.terminals.projectState('/other')).toBe('loud')
+    // and the panel's own list is still only the active project's
+    expect(loaded.stores.terminals.terminalState.sessions).toHaveLength(0)
+  })
+
+  it('a removed session stops counting towards its project', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [mark({ id: 3, project: '/a', state: 'running' })])
+    await loaded.stores.terminals.initTerminals()
+    expect(loaded.stores.terminals.projectState('/a')).toBe('live')
+
+    await loaded.emit('terminal:removed', { id: 3 })
+    await loaded.nextTick()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('idle')
+  })
+
+  /* Nothing else in the window depends on this read, so it is not allowed to
+     take the rest of the store down with it: the agents panel is the whole
+     point of this store and it is fed by other commands entirely. */
+  it('a failing marks read is reported and leaves the rest of the store working', async () => {
+    const loaded = await loadStores()
+    const complained = vi.spyOn(console, 'error').mockImplementation(() => {})
+    loaded.ipc.fail('terminal_marks', new Error('the terminal worker is not running'))
+    loaded.ipc.on('terminal_list', [session()])
+
+    await expect(loaded.stores.terminals.initTerminals()).resolves.toBeUndefined()
+    await loaded.stores.terminals.loadSessions('/p')
+
+    expect(complained).toHaveBeenCalled()
+    expect(loaded.stores.terminals.terminalState.ready).toBe(true)
+    expect(loaded.stores.terminals.terminalState.sessions).toHaveLength(1)
+    expect(loaded.stores.terminals.projectState('/p')).toBe('idle')
+    complained.mockRestore()
   })
 })
