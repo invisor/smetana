@@ -1561,7 +1561,11 @@ const menuTargetStyle = {
           :agents-active="0"
         />
         <!-- Live: muted, no glyph, and beside the agents counter it is a
-             sentence rather than a number. -->
+             sentence rather than a number. It carries a run segment as well,
+             because in the app this sentence is only ever drawn beside one —
+             this is the crowded case, and the one to narrow the window on: the
+             sentence is what gives way, and the counters and the two buttons
+             stay where they are. -->
         <ScopeIndicator
           repo="holiday-curb"
           branch="develop"
@@ -1569,7 +1573,11 @@ const menuTargetStyle = {
           headline-level="live"
           :dirty-count="4"
           :agents-active="2"
-        />
+        >
+          <template #status>
+            <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3 })" @stop="() => {}" />
+          </template>
+        </ScopeIndicator>
         <!-- Loud, which is the case the glyph exists for: this bar is one of
              the one or two on a screen allowed to shout, and the colour is
              never the only thing saying so. -->

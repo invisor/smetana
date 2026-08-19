@@ -1111,6 +1111,78 @@ describe('the live agent count in the scope bar', () => {
   })
 })
 
+/* The same agents split for the scope bar's headline. What these are here to
+   hold is the pair of promises the sentence makes: a shell can never produce
+   either half of it, and the number in "N agents running" is the number in the
+   counter drawn beside it. */
+describe('the agent counts behind the headline', () => {
+  it('counts the agents waiting on the person, and the rest as live', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 3, state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 4, state: 'idle' }))
+    await nextTick()
+
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 2, live: 2 })
+  })
+
+  /* The whole of the blocking defect this computed exists for. A shell rings
+     the bell when a build finishes and the worker reads that as `needs-you`
+     like any other session, so the rail's per-project map — which is told a
+     session's state and never its kind — would have had the bar announce an
+     agent waiting on somebody in a project with no agent in it. */
+  it('a shell is neither waiting nor running, whatever state it reaches', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, work: { kind: 'shell' }, agent: '/bin/zsh', state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 3, work: { kind: 'shell' }, agent: '/bin/zsh', state: 'running' }))
+    await emit('terminal:state', session({ id: 4, work: { kind: 'shell' }, agent: '/bin/zsh', state: 'starting' }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.sessions).toHaveLength(4)
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 0, live: 1 })
+  })
+
+  it('says nothing at all in a project where every agent has finished', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ state: 'exited', exitCode: 0 }))
+    await nextTick()
+
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 0, live: 0 })
+  })
+
+  /* The tie to the counter, asserted as arithmetic rather than as two numbers
+     that happen to match today: the live sentence is only ever drawn when
+     nothing is waiting, and in that case it must read exactly what the `bot`
+     counter one gap away reads, tooltip and all. An idle agent — a `ready` row,
+     one sitting at its prompt between turns — is the case that had them apart. */
+  it('the live half equals the scope bar counter whenever nothing is waiting', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    await emit('terminal:state', session({ id: 2, state: 'idle' }))
+    await emit('terminal:state', session({ id: 3, state: 'idle' }))
+    await emit('terminal:state', session({ id: 4, state: 'exited', exitCode: 0 }))
+    await nextTick()
+    stores.terminals.createSession('/p', { kind: 'bare' })
+
+    expect(stores.terminals.agentCounts.value.loud).toBe(0)
+    expect(stores.terminals.agentCounts.value.live).toBe(stores.terminals.liveAgentCount.value)
+    expect(stores.terminals.liveAgentCount.value).toBe(4)
+  })
+
+  /* And with somebody waiting, the two are allowed to differ — the counter
+     keeps counting the waiting agent, because it is the reason a person is
+     looking at the bar, while the sentence has already moved to the loud one. */
+  it('the waiting agent stays in the counter and leaves the live half', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, state: 'needs-you' }))
+    await nextTick()
+
+    expect(stores.terminals.liveAgentCount.value).toBe(2)
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 1, live: 1 })
+  })
+})
+
 /* A file dropped on the window. Tauri intercepts the gesture before the webview
    sees it, so these arrive as real events through the same transport the state
    deltas do — the store's part is the units and the plumbing, and nothing else:

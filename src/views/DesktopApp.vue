@@ -48,6 +48,7 @@ import IconButton from '../components/core/IconButton.vue'
 import { TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import {
+  agentCounts,
   agentRows,
   createSession,
   createShell,
@@ -56,7 +57,6 @@ import {
   lastRunStart,
   liveAgentCount,
   loadSessions,
-  projectStates,
   removeSession,
   terminalState
 } from '../stores/terminals.js'
@@ -1992,9 +1992,17 @@ const decidedRuns = new Set()
 
 /* The scope bar's one sentence about this project. Derived rather than stored,
    like everything else in this bar: the rule is components/shell/headline.js and
-   both of its inputs are already reactive here. */
+   both of its inputs are already reactive here.
+
+   The agents come from `agentCounts` and not from the rail's `projectStates`,
+   which is the map that knows about every project at once. That map is built
+   from session marks, and a mark carries no work kind — so a shell that rang
+   the bell would have reached it as `needs-you` and had this bar announce an
+   agent waiting on somebody in a project holding no agent at all. The store
+   comment beside `agentCounts` has the whole of it. This is the active
+   project's bar, so the active project's own list is the right source anyway. */
 const scopeHeadline = computed(() =>
-  headline({ row: projectStates.value[activePath.value], runs: runsState.runs })
+  headline({ row: agentCounts.value, runs: runsState.runs })
 )
 
 /* Which runs have stopped, as a value that changes exactly when one does —

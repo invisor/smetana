@@ -29,10 +29,14 @@ const STOPPED = 'stopped'
  * What the scope bar says about this project.
  *
  * @param {object} input
- * @param {{state: string, live: number, loud: number} | undefined} input.row
- *   the project's entry in `projectStates` from stores/terminals.js. Missing is
- *   ordinary and means nobody has a session there — what every project reads as
- *   in a window that has just opened.
+ * @param {{live: number, loud: number} | undefined} input.row
+ *   how many of this project's agents are waiting on the person and how many
+ *   are otherwise alive — `agentCounts` from stores/terminals.js, which is the
+ *   active project's own session list with the person's shells already taken
+ *   out. Missing is ordinary and means nobody has an agent there, which is what
+ *   every project reads as in a window that has just opened. Agents only: a
+ *   shell reaching `needs-you` on a completion beep is not somebody being
+ *   waited on, and this sentence says "agent".
  * @param {Array<{state?: {kind?: string}}>} [input.runs]
  *   every run this window knows of for the project, as `runsState.runs` keeps
  *   them. A list rather than one run because a project holds several at once,
