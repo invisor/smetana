@@ -21,7 +21,15 @@ const props = defineProps({
      start tickets it is already holding, and there is no read behind it that
      could fail. */
   agentsActive: { type: Number, default: 0 },
-  notifications: { type: Number, default: 0 }
+  notifications: { type: Number, default: 0 },
+  /* What this project is doing right now, from components/shell/headline.js.
+     Empty is the ordinary case and draws nothing at all — most of the time
+     nothing is happening, and a bar reserving room for the sentence would be a
+     bar with a hole in it. */
+  headline: { type: String, default: '' },
+  /* The design system's attention vocabulary, so an agent waiting on somebody
+     reads loud here as it does on a badge. `quiet` is the default. */
+  headlineLevel: { type: String, default: 'quiet' }
 })
 
 defineEmits(['notifications', 'settings'])
@@ -50,6 +58,24 @@ const truncate = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'elli
 const counter = (color) => ({ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', color })
 
 const scopeName = computed(() => props.worktree || props.branch)
+
+/* The one segment in this bar that is a sentence rather than a name, which is
+   why it is the one that gives way when the window is narrow: the shrink factor
+   in `flex` is far above the 1 every other item in the row has, so at 900px the
+   repo and the branch keep their letters and this ellipsises instead.
+
+   Loud takes the attention colour and the glyph below with it. Colour alone is
+   what `status/status.js` refuses everywhere else, and a headline saying
+   somebody is waited on is exactly the case that rule is written for. */
+const headlineStyle = computed(() => ({
+  ...truncate,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  flex: '0 100 auto',
+  minWidth: 0,
+  color: props.headlineLevel === 'loud' ? 'var(--attn-loud)' : 'var(--text-muted)'
+}))
 
 /* The counters' tooltips. Both were glued together with a plural noun and
    said "1 uncommitted files" for the commonest case there is, which nobody saw
@@ -100,6 +126,14 @@ const badgeStyle = {
       <span :style="truncate">{{ scopeName }}</span>
     </span>
     <span v-if="branch && worktree" :style="{ color: 'var(--text-muted)' }">@{{ branch }}</span>
+
+    <!-- What is going on in this project, when anything is. No `v-else`, no
+         placeholder and no reserved width: an empty headline is the common
+         case and the bar simply closes up around it. -->
+    <span v-if="headline" :style="headlineStyle">
+      <Icon v-if="headlineLevel === 'loud'" name="triangle-alert" :size="12" />
+      <span :style="truncate">{{ headline }}</span>
+    </span>
 
     <Tooltip v-if="dirtyCount > 0" :label="dirtyLabel">
       <span :style="counter('var(--git-modified)')">

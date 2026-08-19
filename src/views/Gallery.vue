@@ -1500,7 +1500,11 @@ const menuTargetStyle = {
 
            The singulars are hover-only, being tooltips: point at the file and
            agent counters in the third bar for "1 uncommitted file" and "1 agent
-           running", and at its bell for "1 notification". -->
+           running", and at its bell for "1 notification".
+
+           The three below them are the headline, which the five above draw
+           none of — the empty case is the common one and has to be seen as the
+           bar closing up rather than as a gap. -->
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
         <!-- A worktree with a branch checked out in it: `scopeName` draws the
              worktree, and the branch follows it after an @. Both counters
@@ -1544,6 +1548,39 @@ const menuTargetStyle = {
           branch="main"
           :dirty-count="0"
           :agents-active="0"
+        />
+
+        <!-- Nothing to say, said explicitly: the props are there and empty, and
+             the bar between the branch and the counters closes up. This is the
+             one to compare the two below against. -->
+        <ScopeIndicator
+          repo="tracker-notes"
+          branch="main"
+          headline=""
+          :dirty-count="2"
+          :agents-active="0"
+        />
+        <!-- Live: muted, no glyph, and beside the agents counter it is a
+             sentence rather than a number. -->
+        <ScopeIndicator
+          repo="holiday-curb"
+          branch="develop"
+          headline="Run under way"
+          headline-level="live"
+          :dirty-count="4"
+          :agents-active="2"
+        />
+        <!-- Loud, which is the case the glyph exists for: this bar is one of
+             the one or two on a screen allowed to shout, and the colour is
+             never the only thing saying so. -->
+        <ScopeIndicator
+          repo="smetana"
+          branch="feature/smetana-ec9-scope-bar-headline"
+          headline="1 agent needs you"
+          headline-level="loud"
+          :dirty-count="1"
+          :agents-active="3"
+          :notifications="1"
         />
       </div>
     </section>

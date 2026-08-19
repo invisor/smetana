@@ -15,6 +15,7 @@ import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
+import { headline } from '../components/shell/headline.js'
 import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
@@ -55,6 +56,7 @@ import {
   lastRunStart,
   liveAgentCount,
   loadSessions,
+  projectStates,
   removeSession,
   terminalState
 } from '../stores/terminals.js'
@@ -1988,6 +1990,13 @@ const showReport = (report) => {
    have last night's document open itself in front of them. */
 const decidedRuns = new Set()
 
+/* The scope bar's one sentence about this project. Derived rather than stored,
+   like everything else in this bar: the rule is components/shell/headline.js and
+   both of its inputs are already reactive here. */
+const scopeHeadline = computed(() =>
+  headline({ row: projectStates.value[activePath.value], runs: runsState.runs })
+)
+
 /* Which runs have stopped, as a value that changes exactly when one does —
    `configFreshness.js`'s shape, and for the same reason: `upsert` writes a run
    back into the list in place, so a watcher over the array itself would need
@@ -2201,6 +2210,8 @@ const toastStackStyle = {
       :branch="branchLabel"
       :dirty-count="dirtyCount"
       :agents-active="liveAgentCount"
+      :headline="scopeHeadline.text"
+      :headline-level="scopeHeadline.level"
       :notifications="notificationsState.items.length"
       @notifications="toggleNotifications"
       @settings="openSettingsWindow()"
