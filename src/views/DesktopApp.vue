@@ -385,10 +385,13 @@ async function newTerminal() {
 
 /* Which row does what. The rows themselves are `newTabMenu.js`'s — two callers
    and no test can reach a template, the same split every other menu in this app
-   keeps. */
+   keeps. The third row opens no tab: it is a second door onto the new-task
+   dialog already mounted below, the same one the `+` above the `ready` column
+   opens, so it sets that flag and nothing else. */
 const onNewTab = (item) => {
   if (item.kind === 'agent') newAgent()
   else if (item.kind === 'terminal') newTerminal()
+  else if (item.kind === 'task') newTaskOpen.value = true
 }
 
 /* The project whose setup is being offered. Null when the dialog is closed —
@@ -2366,11 +2369,13 @@ const toastStackStyle = {
                drift away from them. The block is what it names and not the board
                within it, since which of the pair the button ends up against is
                the order's to decide. Disabled with no project open, where
-               neither row has anywhere to start anything. -->
+               no row has anywhere to start anything — the two that open a tab
+               have no project root to open it in, and the third would file a
+               task against no tracker. -->
           <template #afterPinned>
             <MenuButton
               icon="plus"
-              label="New agent or terminal"
+              label="New agent, terminal or task"
               :items="NEW_TAB_ITEMS"
               :width="180"
               :disabled="!activePath"
