@@ -142,6 +142,47 @@ pub fn escape(text: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Agent prose on its way into the document: escaped, and then with each pair of
+/// backticks turned into a `<code>` span.
+///
+/// **The two halves happen in this order and cannot be swapped.** `escape` runs
+/// over the raw text; the substitution runs over its output and writes the only
+/// tags in the result. Escaping second would turn these tags into
+/// `&lt;code&gt;` and the document would show its own markup.
+///
+/// Backticks and nothing else. A shape heuristic — paths, dotted symbols, hex
+/// shas — was the alternative, and it was refused because its false positives
+/// land in ordinary prose and cannot be reviewed: a rule nobody can predict is a
+/// rule nobody can check. The lead is asked for the backticks instead, in
+/// `agents/prompt.rs` and in the `running-tasks` skill.
+///
+/// An unpaired trailing backtick stays a backtick. Text somebody wrote is never
+/// rewritten beyond escaping and this one substitution, and guessing where a
+/// half-open span ends would be exactly that.
+pub fn prose(text: &str) -> String {
+    let escaped = escape(text);
+    let mut out = String::with_capacity(escaped.len());
+    let mut rest = escaped.as_str();
+    loop {
+        let Some(open) = rest.find('`') else {
+            out.push_str(rest);
+            return out;
+        };
+        // The closing backtick is searched for past the opening one, so an
+        // adjacent pair (an empty span) still closes rather than reading the
+        // same character twice.
+        let Some(close) = rest[open + 1..].find('`') else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..open]);
+        out.push_str("<code>");
+        out.push_str(&rest[open + 1..open + 1 + close]);
+        out.push_str("</code>");
+        rest = &rest[open + 1 + close + 1..];
+    }
+}
+
 pub fn render(report: &RunReport) -> String {
     // Built with `push_str` rather than one big `format!`, so every escaped
     // value is visibly escaped at its own call site.
@@ -152,8 +193,12 @@ pub fn render(report: &RunReport) -> String {
     out.push_str(&escape(report.title));
     out.push_str("</title><style>");
     out.push_str(&style());
-    out.push_str("</style></head><body>");
-    out.push_str("<h1>");
+    out.push_str("</style></head><body><div class=\"doc\">");
+
+    // Header. The eyebrow is the only place the product names itself, and the
+    // heading's words are `RunMode::report_title`'s — this file places them and
+    // owns none of them.
+    out.push_str("<header><p class=\"eyebrow\">smetana &middot; run report</p><h1>");
     out.push_str(&escape(report.title));
     out.push_str("</h1><p class=\"meta\">");
     out.push_str(&escape(report.project));
@@ -161,86 +206,140 @@ pub fn render(report: &RunReport) -> String {
     out.push_str(&escape(report.scope));
     out.push_str(" &middot; finished ");
     out.push_str(&escape(report.finished));
-    out.push_str("</p>");
+    out.push_str("</p></header>");
+
+    // The strip, and the one place in the document where an unreadable board
+    // could quietly become a zero. It does not: `None` draws a dash.
+    out.push_str("<div class=\"strip\">");
+    match report.tasks {
+        Some(tasks) => {
+            cell(&mut out, "closed", &tasks.closed.len().to_string(), "cell-done");
+            cell(&mut out, "parked", &tasks.parked.len().to_string(), "cell-loud");
+        }
+        None => {
+            cell(&mut out, "closed", "&mdash;", "cell-done");
+            cell(&mut out, "parked", "&mdash;", "cell-loud");
+        }
+    }
+    cell(&mut out, "batches", &report.batches.len().to_string(), "");
+    cell(&mut out, "total", &human(report.seconds), "");
+    out.push_str("</div>");
 
     match report.tasks {
         // Not a zero, and not a silence either: the reason the lists are
         // missing is itself the thing worth saying.
         None => out.push_str(
-            "<p class=\"unknown\">The board could not be read, so what moved on it is unknown. \
+            "<p class=\"notice\">The board could not be read, so what moved on it is unknown. \
              Nothing below is a count of zero.</p>",
         ),
         Some(tasks) => {
-            section(&mut out, "Closed", &tasks.closed, report.batches);
-            section(&mut out, "Parked", &tasks.parked, report.batches);
+            section(&mut out, "closed", "done", "", &tasks.closed, report.batches);
+            section(&mut out, "parked", "needs you", " card-parked", &tasks.parked, report.batches);
         }
     }
 
     if !report.batches.is_empty() {
-        out.push_str("<h2>Batches</h2>");
-        for batch in report.batches {
-            out.push_str("<h3>Batch ");
-            out.push_str(&batch.n.to_string());
-            out.push_str(" <span class=\"meta\">");
-            out.push_str(&human(batch.seconds));
-            out.push_str("</span></h3>");
-            if !batch.reported {
-                out.push_str("<p class=\"unknown\">This batch left no account of itself.</p>");
+        header(&mut out, "batches", report.batches.len());
+        out.push_str("<div class=\"list\">");
+        for b in report.batches {
+            out.push_str("<div class=\"card card-batch\"><div class=\"head\">");
+            out.push_str("<span class=\"batch-label\">batch ");
+            out.push_str(&b.n.to_string());
+            out.push_str("</span><span class=\"right\">");
+            out.push_str(&human(b.seconds));
+            out.push_str("</span></div>");
+            if !b.reported {
+                out.push_str("<p class=\"unknown\">This batch left no account of itself.</p></div>");
                 continue;
             }
-            match &batch.notes {
+            match &b.notes {
                 Some(notes) => {
-                    out.push_str("<p>");
-                    out.push_str(&escape(notes));
+                    out.push_str("<p class=\"body\">");
+                    out.push_str(&prose(notes));
                     out.push_str("</p>");
                 }
-                None => out.push_str("<p class=\"meta\">No notes on the batch as a whole.</p>"),
+                None => out.push_str("<p class=\"unknown\">No notes on the batch as a whole.</p>"),
             }
+            out.push_str("</div>");
         }
+        out.push_str("</div>");
     }
 
-    out.push_str("<p class=\"total\">Total ");
+    out.push_str("<div class=\"total\"><span class=\"total-label\">total</span>");
+    out.push_str("<span class=\"total-n\">");
     out.push_str(&human(report.seconds));
-    out.push_str("</p></body></html>");
+    out.push_str("</span></div></div></body></html>");
     out
+}
+
+/// One cell of the summary strip. `extra` carries the hue that says what the
+/// number is about, and `cell-none` is added for a value that is not a count —
+/// a dash over an unreadable board, or a zero, both of which are muted so that
+/// only a real quantity is drawn in a status colour.
+fn cell(out: &mut String, label: &str, value: &str, extra: &str) {
+    out.push_str("<div class=\"cell\"><span class=\"cell-label\">");
+    out.push_str(label);
+    out.push_str("</span><span class=\"cell-n");
+    if !extra.is_empty() {
+        out.push(' ');
+        out.push_str(extra);
+    }
+    if value == "0" || value == "&mdash;" {
+        out.push_str(" cell-none");
+    }
+    out.push_str("\">");
+    out.push_str(value);
+    out.push_str("</span></div>");
+}
+
+/// A section's rule and its count. A section with no items never reaches this —
+/// the strip is what carries the zero, and an empty heading over nothing is a
+/// line asking to be read for no reason.
+fn header(out: &mut String, label: &str, count: usize) {
+    out.push_str("<div class=\"sec\"><span>");
+    out.push_str(label);
+    out.push_str("</span><span class=\"sec-n\">");
+    out.push_str(&count.to_string());
+    out.push_str("</span></div>");
 }
 
 /// One list of tasks, each with whatever its batch said it did and — where the
 /// batch held it alone — how long that batch took.
-fn section(out: &mut String, title: &str, lines: &[TaskLine], batches: &[BatchLine]) {
-    out.push_str("<h2>");
-    out.push_str(title);
-    out.push_str(" (");
-    out.push_str(&lines.len().to_string());
-    out.push_str(")</h2>");
+///
+/// The badge is decided by the section rather than read off the task, because
+/// the board's own status is not carried this far: `TaskLine` is an id and a
+/// title. Both words here are `RESERVED` statuses with fixed tokens, so nothing
+/// is hashed and nothing needs a two-letter code.
+fn section(
+    out: &mut String,
+    label: &str,
+    badge: &str,
+    card_extra: &str,
+    lines: &[TaskLine],
+    batches: &[BatchLine],
+) {
     if lines.is_empty() {
-        out.push_str("<p class=\"meta\">None.</p>");
         return;
     }
-    out.push_str("<table>");
+    header(out, label, lines.len());
+    out.push_str("<div class=\"list\">");
+    let badge_class = if card_extra.is_empty() { "badge-done" } else { "badge-parked" };
     for line in lines {
-        // One rule answers the whole row — both what was done and how long it
+        // One rule answers the whole card — both what was done and how long it
         // took — because `task_duration` is `last_naming` too. Two *rules* is
         // what let the columns name different batches, and a duration belonging
         // to a different piece of work is the same lie as an account belonging
         // to one.
         let batch = last_naming(batches, &line.id);
-        out.push_str("<tr><td class=\"id\">");
+        out.push_str("<div class=\"card");
+        out.push_str(card_extra);
+        out.push_str("\"><div class=\"head\"><span class=\"chip\">");
         out.push_str(&escape(&line.id));
-        out.push_str("</td><td>");
-        out.push_str(&escape(&line.title));
-        out.push_str("</td><td>");
-        let did = batch
-            .and_then(|b| b.tasks.iter().find(|t| t.id == line.id))
-            .and_then(|t| t.did.as_deref());
-        match did {
-            Some(text) => out.push_str(&escape(text)),
-            // A dash rather than an empty cell: the batch either said nothing
-            // about this task or left no account at all, and both are already
-            // named under Batches.
-            None => out.push_str("&mdash;"),
-        }
-        out.push_str("</td><td class=\"meta\">");
+        out.push_str("</span><span class=\"badge ");
+        out.push_str(badge_class);
+        out.push_str("\">");
+        out.push_str(badge);
+        out.push_str("</span><span class=\"right\">");
         // The public rule rather than `duration_of` on the batch above, so the
         // number drawn here is the one the tests exercise. It resolves to the
         // very same batch — both go through `last_naming` — so this cannot
@@ -249,9 +348,26 @@ fn section(out: &mut String, title: &str, lines: &[TaskLine], batches: &[BatchLi
             Some(seconds) => out.push_str(&human(seconds)),
             None => out.push_str("&mdash;"),
         }
-        out.push_str("</td></tr>");
+        out.push_str("</span></div><h3>");
+        out.push_str(&escape(&line.title));
+        out.push_str("</h3>");
+        let did = batch
+            .and_then(|b| b.tasks.iter().find(|t| t.id == line.id))
+            .and_then(|t| t.did.as_deref());
+        match did {
+            Some(text) => {
+                out.push_str("<p class=\"body\">");
+                out.push_str(&prose(text));
+                out.push_str("</p>");
+            }
+            // A dash rather than nothing: the batch either said nothing about
+            // this task or left no account at all, and both are already named
+            // under Batches.
+            None => out.push_str("<p class=\"unknown\">&mdash;</p>"),
+        }
+        out.push_str("</div>");
     }
-    out.push_str("</table>");
+    out.push_str("</div>");
 }
 
 /// The document's palette, light — and the complete one, because it stands on a
@@ -260,43 +376,143 @@ fn section(out: &mut String, title: &str, lines: &[TaskLine], batches: &[BatchLi
 /// simply be absent for the reader that block does not match, and nothing on
 /// screen would say a colour had gone missing.
 ///
-/// The values are exactly the ones this file has always drawn. The *names* are
-/// the document's own and deliberately not the app's token names: these are not
-/// the values `tokens/color-surfaces.css` holds, so calling this `#fff`
-/// `--canvas` would read as a copy of a token the app paints differently and
-/// drift from it in silence. See the module comment for why literals live here
-/// and nowhere else in this repository.
+/// The names are the app's token names and the values are the app's values,
+/// copied from `src/styles/tokens/`. That is a change: they used to be `--doc-*`
+/// precisely because the values were not the app's, and a shared name over a
+/// different value would have drifted in silence. Now the name is a true
+/// statement. See the module comment for why literals live here and nowhere else
+/// in this repository — there is no stylesheet of ours around this document, so
+/// there is nothing for a `var()` to resolve against.
 ///
-/// `color-scheme` is the one declaration here that is not a colour, and it earns
-/// its place: the frame's scrollbar and every default the user agent paints —
+/// Only the status families this document draws are here. A closed card renders
+/// `done` and a parked one renders `needs-you`; the other four families and
+/// `--attn-live` are absent because nothing draws them, and every generated
+/// document would otherwise carry them.
+///
+/// `color-scheme` is the one declaration that is not a colour, and it earns its
+/// place: the frame's scrollbar and every default the user agent paints —
 /// selection among them — follow it rather than the rules below, so without it a
 /// dark report comes with a light scrollbar down its side.
 const LIGHT: &str = "color-scheme:light;\
---doc-fg:#1a1a1a;--doc-bg:#fff;--doc-meta:#666;--doc-rule:#eee;--doc-rule-strong:#ddd";
+--canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;\
+--border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;\
+--text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#6b777c;\
+--text-link:#1f5d8f;--text-link-hover:#123f63;\
+--focus-ring:#1c6fd0;--selection-bg:#c6dcf0;--scrollbar-thumb:#c2caca;\
+--status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;\
+--status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;\
+--attn-loud:#b96a06;--shadow-raised:0 1px 2px rgba(22,32,31,.08)";
 
-/// The same names again, dark: the values that used to sit under
-/// `prefers-color-scheme:dark` and nowhere else. Written once and placed twice,
-/// because the document has two readers that ask differently — see `style`.
+/// The same names again, dark. Written once and placed twice, because the
+/// document has two readers that ask differently — see `style`. `--shadow-raised`
+/// collapses to `none`: a raised surface in the dark theme is told apart by its
+/// own lightness, and a shadow under it only smears the edge.
 const DARK: &str = "color-scheme:dark;\
---doc-fg:#e6e6e6;--doc-bg:#141414;--doc-meta:#999;--doc-rule:#2a2a2a;--doc-rule-strong:#2a2a2a";
+--canvas:#10151a;--surface-sunken:#0c1116;--surface:#161b21;--surface-raised:#1b2229;\
+--border-subtle:#232b33;--border:#2e3841;--border-strong:#3d4954;\
+--text-primary:#e3e8ed;--text-secondary:#a8b3bd;--text-muted:#7c8b97;\
+--text-link:#8fb6e8;--text-link-hover:#b3cef2;\
+--focus-ring:#5fa8ff;--selection-bg:#2b4560;--scrollbar-thumb:#333e48;\
+--status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;\
+--status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;\
+--attn-loud:#f2b03d;--shadow-raised:none";
 
 /// What the document actually draws, through the names above and no colour of its
-/// own. The type, the spacing and the mono stack are character for character what
-/// this file wrote before: the palette moved into custom properties and nothing
-/// was restyled.
+/// own.
+///
+/// The scale is written out rather than referenced: these are the design system's
+/// space, type and radius steps, and there is nothing here for a `var()` to
+/// resolve them against. `box-sizing:border-box` on everything is the same first
+/// line `tokens/base.css` opens with, and everything below declares a size and
+/// adds padding and a border on top of it.
+///
+/// **The mono stack names no IBM Plex Mono, and that is a deliberate divergence
+/// from `tokens/fonts.css` rather than an omission.** The app's `--font-mono`
+/// opens with it; this document may fetch nothing, and the app's own `@font-face`
+/// does not reach across into an `<iframe sandbox="" srcdoc>`, so naming a face
+/// neither reader can load would only be a line of CSS that never applies. The
+/// handoff contradicts itself here — its first constraint says the stack falls
+/// past Plex, its typography block says to copy `--font-mono` literally — and the
+/// spec and `[merge].hazards` both resolve it as "drop Plex". Do not put it back
+/// on the grounds that the tokens have it.
+///
+/// The stack is repeated in full at every rule that needs it rather than
+/// inherited from one class: a document with no stylesheet of ours around it has
+/// no `--font-mono` to reach for, and a single shared class would have to be put
+/// on every one of these elements by hand in the markup, where forgetting it
+/// shows up as one line of prose set in sans among identifiers.
 const RULES: &str = "\
-body{font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;\
-max-width:52rem;margin:2rem auto;padding:0 1rem;color:var(--doc-fg);background:var(--doc-bg)}\
-h1{font-size:1.5rem;margin:0 0 .25rem}\
-h2{font-size:1.05rem;margin:2rem 0 .5rem}\
-h3{font-size:.95rem;font-weight:600;margin:1.25rem 0 .25rem}\
-.meta{color:var(--doc-meta);font-size:.85rem;font-weight:400}\
-.unknown{color:var(--doc-meta);font-style:italic}\
-.total{margin-top:2rem;border-top:1px solid var(--doc-rule-strong);padding-top:.75rem;\
-font-weight:600}\
-table{border-collapse:collapse;width:100%}\
-td{border-top:1px solid var(--doc-rule);padding:.4rem .5rem;vertical-align:top}\
-.id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}";
+*,*::before,*::after{box-sizing:border-box}\
+::selection{background:var(--selection-bg)}\
+::-webkit-scrollbar{width:10px;height:10px}\
+::-webkit-scrollbar-track{background:transparent}\
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:5px}\
+a{color:var(--text-link);text-decoration:none}\
+a:hover{color:var(--text-link-hover);text-decoration:underline}\
+body{margin:0;padding:32px 16px 40px;background:var(--canvas);color:var(--text-primary);\
+font-family:system-ui,-apple-system,\"Segoe UI\",\"Noto Sans\",Roboto,sans-serif;\
+font-size:13px;line-height:1.5}\
+.doc{max-width:52rem;margin:0 auto;display:flex;flex-direction:column;gap:24px}\
+code{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace}\
+.eyebrow{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
+color:var(--text-muted);margin:0 0 8px}\
+h1{font-size:22px;font-weight:600;letter-spacing:-.006em;line-height:1.2;margin:0}\
+.meta{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:12px;color:var(--text-secondary);\
+word-break:break-all;margin:8px 0 0}\
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}\
+.cell{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;\
+box-shadow:var(--shadow-raised);padding:10px;display:flex;flex-direction:column;gap:4px}\
+.cell-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
+color:var(--text-muted)}\
+.cell-n{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:22px;font-weight:500;line-height:1.2;\
+color:var(--text-primary)}\
+.cell-done{color:var(--status-done-fg)}\
+.cell-loud{color:var(--attn-loud)}\
+.cell-none{color:var(--text-muted)}\
+.sec{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--border);\
+padding-bottom:6px;margin:0 0 -8px;font-family:ui-monospace,\"SF Mono\",Menlo,\
+Consolas,\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;\
+text-transform:uppercase;font-weight:400;color:var(--text-secondary)}\
+.sec-n{color:var(--text-muted);letter-spacing:0}\
+.list{display:flex;flex-direction:column;gap:8px}\
+.card{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;\
+box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;gap:8px}\
+.card-parked{border-color:var(--status-needs-you-border)}\
+.card-batch{background:var(--surface);box-shadow:none}\
+.head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}\
+.chip{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:12px;font-weight:500;background:var(--surface-sunken);\
+border:1px solid var(--border-subtle);border-radius:3px;padding:1px 6px;white-space:nowrap}\
+.badge{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:11px;border-radius:3px;padding:1px 6px;\
+white-space:nowrap;border:1px solid}\
+.badge-done{background:var(--status-done-bg);color:var(--status-done-fg);\
+border-color:var(--status-done-border)}\
+.badge-parked{background:var(--status-needs-you-bg);color:var(--status-needs-you-fg);\
+border-color:var(--status-needs-you-border)}\
+.batch-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
+color:var(--text-secondary)}\
+.right{margin-left:auto;font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:11px;color:var(--text-muted)}\
+h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}\
+.body{margin:0;color:var(--text-secondary)}\
+.body code{font-size:12px;color:var(--text-primary)}\
+.unknown{margin:0;color:var(--text-muted)}\
+.notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;\
+padding:16px;color:var(--text-muted);margin:0}\
+.total{border-top:1px solid var(--border-strong);padding-top:12px;display:flex;\
+align-items:baseline;gap:8px}\
+.total-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
+color:var(--text-secondary)}\
+.total-n{margin-left:auto;font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
+\"DejaVu Sans Mono\",monospace;font-size:18px;font-weight:500;color:var(--text-primary)}";
 
 /// The document's whole appearance.
 ///
@@ -396,8 +612,22 @@ mod tests {
             html.contains("could not be read"),
             "an unreadable board and an empty board are opposite facts"
         );
-        assert!(!html.contains(">0<"), "no confident zero over a number nobody measured");
-        assert!(!html.contains("Closed (0)"), "and no empty section standing in for one");
+        // The strip's closed and parked cells are the two the board would have
+        // filled, and a dash is what stands there instead. The batches cell is
+        // a number the app measured itself and may honestly read zero, which is
+        // why the assertion names the cells rather than the digit — and names
+        // them as `cell` writes them, hue first and then `cell-none`. Forbidding
+        // `cell-done">0<` would forbid a string this file cannot produce, and an
+        // assertion that cannot fail is worse than none.
+        assert!(
+            !html.contains("cell-done cell-none\">0<") && !html.contains("cell-loud cell-none\">0<"),
+            "no confident zero over a number nobody measured: {html}"
+        );
+        assert!(html.contains("cell-none\">&mdash;<"), "a dash stands where the counts would: {html}");
+        assert!(
+            !html.contains("<div class=\"sec\">"),
+            "and no empty section standing in for one: {html}"
+        );
     }
 
     #[test]
@@ -418,6 +648,8 @@ mod tests {
         assert!(!html.contains("http://") && !html.contains("https://"));
         assert!(!html.contains("<script"), "no script, in the document or out of it");
         assert!(!html.contains("<img"), "and no image");
+        assert!(!html.contains("@import"), "and no stylesheet fetched from anywhere");
+        assert!(!html.contains("@font-face"), "and no font file either");
     }
 
     /// Everything between a selector's `{` and the `}` that closes it. No palette
@@ -513,7 +745,7 @@ mod tests {
         // a colour no attribute and no media query could move, which is exactly
         // the bug this fixed.
         let html = render(&report(90, None, &[]));
-        let rules = &html[html.find("body{font:").expect("the body rule")..];
+        let rules = &html[html.find("*,*::before").expect("the first rule")..];
         let rules = &rules[..rules.find("</style>").expect("the end of the stylesheet")];
         // A hex is the shape this file has always written, and the other two are
         // the shapes a later hand would reach for; a rule naming any of them would
@@ -525,13 +757,13 @@ mod tests {
 
     #[test]
     fn the_total_is_the_runs_own_duration_and_stands_at_the_end() {
-        let tasks = Tasks::default();
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
         let html = render(&report(8040, Some(&tasks), &[]));
-        assert!(html.contains("Total 2h 14m"));
+        assert!(html.contains("class=\"total-n\">2h 14m<"), "{html}");
         assert!(html.trim_end().ends_with("</body></html>"));
-        let total = html.find("Total 2h 14m").expect("the total");
+        let total = html.find("class=\"total\"").expect("the footer");
         assert!(
-            html.find("Closed (0)").expect("the closed section") < total,
+            html.find("<div class=\"sec\"><span>closed</span>").expect("the closed section") < total,
             "the total is the last thing said"
         );
     }
@@ -571,10 +803,10 @@ mod tests {
         ];
         let tasks = Tasks { closed: vec![line("a-1"), line("a-2")], parked: vec![] };
         let html = render(&report(11000, Some(&tasks), &[alone, shared]));
-        // The rows themselves, not the whole document: every batch prints its
+        // The cards themselves, not the whole document: every batch prints its
         // own duration under Batches, which says nothing about a task.
-        let start = html.find("<table>").expect("the closed table");
-        let end = html.find("</table>").expect("the closed table");
+        let start = html.find("<div class=\"list\">").expect("the closed list");
+        let end = html.find("<div class=\"sec\"><span>batches</span>").expect("the batches section");
         let rows = &html[start..end];
         assert!(rows.contains("1h 0m"), "the batch that held one task lends it its own number");
         assert!(!rows.contains("2h 1m"), "and the batch that held two lends nothing");
@@ -624,8 +856,8 @@ mod tests {
 
         let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
         let html = render(&report(11000, Some(&tasks), &[alone, shared]));
-        let start = html.find("<table>").expect("the closed table");
-        let end = html.find("</table>").expect("the closed table");
+        let start = html.find("<div class=\"list\">").expect("the closed list");
+        let end = html.find("<div class=\"sec\"><span>batches</span>").expect("the batches section");
         let rows = &html[start..end];
         assert!(!rows.contains("1h 0m"), "an hour measured against other work: {rows}");
         assert!(!rows.contains("2h 1m"), "and the shared batch lends nothing either: {rows}");
@@ -687,5 +919,228 @@ mod tests {
         assert_eq!(human(840), "14m");
         assert_eq!(human(48), "48s");
         assert_eq!(human(0), "0s");
+    }
+
+    #[test]
+    fn the_palette_is_the_design_systems_and_is_placed_four_times() {
+        // The document has two readers that ask differently: a browser with
+        // nothing of ours loaded reads `prefers-color-scheme`, and this app hands
+        // it `data-theme`. The attribute has to win in both directions, so the
+        // guarded media query and both attribute blocks are all three required.
+        let html = render(&report(90, None, &[]));
+
+        assert!(html.contains("--canvas:#eaeeef"), "light canvas is the design system's: {html}");
+        assert!(html.contains("--canvas:#10151a"), "and so is the dark one");
+        assert!(
+            html.contains("@media(prefers-color-scheme:dark){:root:not([data-theme=\"light\"])"),
+            "the media query is guarded, so a light app on a dark machine is not overruled"
+        );
+        assert!(html.contains(":root[data-theme=\"dark\"]"));
+        assert!(html.contains(":root[data-theme=\"light\"]"));
+        assert!(
+            html.contains("color-scheme:light"),
+            "the user agent's own defaults follow the document"
+        );
+        assert!(html.contains("color-scheme:dark"));
+    }
+
+    #[test]
+    fn only_the_status_families_the_document_draws_are_emitted() {
+        // Every generated document carries this stylesheet, so a family nothing
+        // draws is dead weight in every one of them. Closed cards render `done`
+        // and parked cards render `needs-you`; nothing here renders the other four.
+        let html = render(&report(90, None, &[]));
+
+        assert!(html.contains("--status-done-fg"));
+        assert!(html.contains("--status-needs-you-fg"));
+        assert!(html.contains("--attn-loud"));
+        assert!(!html.contains("--status-running-"), "nothing in a finished report is running");
+        assert!(!html.contains("--status-blocked-"));
+        assert!(!html.contains("--status-ready-"));
+        assert!(!html.contains("--status-failed-"));
+        assert!(!html.contains("--attn-live"), "the batch takeaway that would have used it is not built");
+    }
+
+    #[test]
+    fn the_document_carries_no_density_and_no_app_wide_scale() {
+        // `ReportView.vue` refuses to carry density and the app's font size
+        // across, and the reason is in its header: those are about fitting rows
+        // into panels, while a document has a measure of its own. Nothing here
+        // may quietly reintroduce either.
+        let html = render(&report(90, None, &[]));
+
+        assert!(!html.contains("data-density"), "{html}");
+        assert!(!html.contains("--ui-scale"), "{html}");
+    }
+
+    #[test]
+    fn the_document_fetches_no_font_and_names_a_fallback_stack() {
+        let html = render(&report(90, None, &[]));
+
+        assert!(!html.contains("@import"), "no stylesheet is fetched");
+        assert!(!html.contains("@font-face"), "and no font file either");
+        assert!(!html.contains("fonts.googleapis"));
+        assert!(html.contains("ui-monospace"), "the stack opens with what every reader has");
+        assert!(
+            !html.contains("IBM Plex Mono"),
+            "the document may fetch nothing, so it does not name a face it cannot load: {html}"
+        );
+    }
+
+    #[test]
+    fn a_backtick_span_becomes_code_and_the_escape_runs_first() {
+        // The order is load-bearing. `escape` runs over the raw text and the
+        // backtick pass runs over the escaped string; the other way round, `escape`
+        // would turn the tags this pass just wrote into `&lt;code&gt;`.
+        assert_eq!(prose("touched `src/main.rs` twice"), "touched <code>src/main.rs</code> twice");
+        assert_eq!(
+            prose("wrapped `<Foo>` in a guard"),
+            "wrapped <code>&lt;Foo&gt;</code> in a guard",
+            "the identifier is escaped inside its own tags"
+        );
+        assert_eq!(
+            prose("ran `a && b` once"),
+            "ran <code>a &amp;&amp; b</code> once",
+            "the ampersand is escaped once, not twice"
+        );
+    }
+
+    #[test]
+    fn an_unpaired_backtick_is_left_as_it_was_written() {
+        // Text an agent wrote is never rewritten beyond escaping and this one
+        // substitution: a half-open span is prose with a backtick in it, not a
+        // marker to guess the end of.
+        assert_eq!(prose("it uses `serde but stopped"), "it uses `serde but stopped");
+        assert_eq!(
+            prose("`one` and `two` and `three"),
+            "<code>one</code> and <code>two</code> and `three",
+            "the closed pairs still close"
+        );
+    }
+
+    #[test]
+    fn prose_marks_nothing_that_is_not_between_backticks() {
+        // The rule is deterministic and never guesses: a path that arrives without
+        // backticks stays prose, because a heuristic nobody can predict is a rule
+        // nobody can review.
+        assert_eq!(prose("touched src/main.rs twice"), "touched src/main.rs twice");
+        assert_eq!(prose("closed smetana-t9o"), "closed smetana-t9o");
+    }
+
+    #[test]
+    fn agent_prose_with_a_script_in_it_is_still_escaped_inside_a_code_span() {
+        // The whole point of `escape` reaching every call site, restated for the
+        // one function that writes tags of its own.
+        let out = prose("ran `<script>alert(1)</script>` in a page");
+        assert!(!out.contains("<script"), "an agent wrote this and a person opens it");
+        assert!(out.contains("<code>&lt;script&gt;"), "{out}");
+    }
+
+    #[test]
+    fn the_summary_strip_carries_the_four_numbers() {
+        let tasks = Tasks { closed: vec![line("a-1"), line("a-2")], parked: vec![line("a-3")] };
+        let html = render(&report(8040, Some(&tasks), &[batch(1)]));
+
+        assert!(html.contains("<div class=\"strip\">"), "{html}");
+        assert!(html.contains("class=\"cell-n cell-done\">2<"), "closed carries the done hue: {html}");
+        assert!(html.contains("class=\"cell-n cell-loud\">1<"), "parked is the loud one: {html}");
+        assert!(html.contains("class=\"cell-n\">1<"), "batches and total are plain: {html}");
+        assert!(html.contains("2h 14m"), "the total is a duration, not a count");
+    }
+
+    #[test]
+    fn an_unreadable_board_shows_a_dash_in_the_strip_and_never_a_zero() {
+        // The rule `RunSummary.tasks` is an `Option` for, restated at the top of the
+        // document where a person's eye lands first: an unreadable board and an
+        // empty board are opposite facts.
+        let html = render(&report(120, None, &[batch(1)]));
+
+        assert!(html.contains("class=\"cell-n cell-done cell-none\">&mdash;<"), "{html}");
+        assert!(html.contains("class=\"cell-n cell-loud cell-none\">&mdash;<"), "{html}");
+        // Against the class string as `cell` writes it — hue first, then
+        // `cell-none` — or the assertion forbids something unreachable and holds
+        // no matter what the code does.
+        assert!(
+            !html.contains("cell-done cell-none\">0<"),
+            "no confident zero over a number nobody measured"
+        );
+        assert!(!html.contains("cell-loud cell-none\">0<"));
+        assert!(html.contains("could not be read"), "and the reason is still said in words");
+        assert!(html.contains("class=\"notice\""), "drawn as a notice rather than as loose prose");
+    }
+
+    #[test]
+    fn an_empty_section_is_omitted_and_the_strip_carries_its_zero() {
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let html = render(&report(120, Some(&tasks), &[]));
+
+        // The section headers, not the words: the strip labels its cells with
+        // these same four nouns, and it stands above every section.
+        assert!(html.contains("<div class=\"sec\"><span>closed</span>"), "{html}");
+        assert!(
+            !html.contains("<div class=\"sec\"><span>parked</span>"),
+            "an empty section is not drawn at all: {html}"
+        );
+        assert!(html.contains("class=\"cell-n cell-loud cell-none\">0<"), "the strip carries it: {html}");
+        assert!(!html.contains("None."), "and the old placeholder line is gone");
+    }
+
+    #[test]
+    fn a_closed_card_and_a_parked_card_are_told_apart_by_more_than_colour() {
+        // Status is never colour alone in this design system. The section a card
+        // sits in decides its badge, since the board's own status is not carried
+        // this far — `TaskLine` is an id and a title.
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![line("a-2")] };
+        let html = render(&report(120, Some(&tasks), &[]));
+
+        assert!(html.contains("class=\"badge badge-done\">done<"), "{html}");
+        assert!(html.contains("class=\"badge badge-parked\">needs you<"), "{html}");
+        assert!(html.contains("class=\"card card-parked\""), "the parked card's own border: {html}");
+        assert!(
+            html.contains(".card-parked{border-color:var(--status-needs-you-border)}"),
+            "and the class is what draws it: {html}"
+        );
+    }
+
+    #[test]
+    fn a_tasks_own_account_is_marked_up_as_prose_and_its_id_as_a_chip() {
+        let mut b = batch(1);
+        b.tasks = vec![BatchTask { id: "a-1".into(), did: Some("moved `src/main.rs`".into()) }];
+        let tasks = Tasks { closed: vec![line("a-1")], parked: vec![] };
+        let html = render(&report(600, Some(&tasks), &[b]));
+
+        assert!(html.contains("<span class=\"chip\">a-1</span>"), "{html}");
+        assert!(html.contains("<h3>a-1 title</h3>"), "{html}");
+        assert!(
+            html.contains("<p class=\"body\">moved <code>src/main.rs</code></p>"),
+            "the backtick rule reaches the document: {html}"
+        );
+    }
+
+    #[test]
+    fn a_batch_card_is_ranked_below_a_task_card_and_says_when_it_left_no_account() {
+        let mut silent = batch(2);
+        silent.reported = false;
+        let mut spoke = batch(1);
+        spoke.notes = Some("nothing odd, though `bd` was slow".into());
+        let html = render(&report(1200, None, &[spoke, silent]));
+
+        assert!(html.contains("class=\"card card-batch\""), "{html}");
+        assert!(html.contains("batch 1"), "{html}");
+        assert!(
+            html.contains("nothing odd, though <code>bd</code> was slow"),
+            "the notes go through the same rule as a task's account: {html}"
+        );
+        assert!(html.contains("left no account of itself"), "{html}");
+    }
+
+    #[test]
+    fn the_header_and_footer_are_the_documents_only_uppercase_labels() {
+        let html = render(&report(8040, None, &[]));
+
+        assert!(html.contains("class=\"eyebrow\">smetana &middot; run report<"), "{html}");
+        assert!(html.contains("class=\"meta\">"), "the run's own line: {html}");
+        assert!(html.contains("class=\"total-label\">total<"), "{html}");
+        assert!(html.contains("class=\"total-n\">2h 14m<"), "{html}");
     }
 }

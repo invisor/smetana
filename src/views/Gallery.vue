@@ -187,38 +187,142 @@ const runFixture = (state, extra = {}) => ({
 const REPORT_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Run report</title><style>
 :root{color-scheme:light;
---doc-fg:#1a1a1a;--doc-bg:#fff;--doc-meta:#666;--doc-rule:#eee;--doc-rule-strong:#ddd}
+--canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;
+--border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;
+--text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#6b777c;
+--text-link:#1f5d8f;--text-link-hover:#123f63;
+--focus-ring:#1c6fd0;--selection-bg:#c6dcf0;--scrollbar-thumb:#c2caca;
+--status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;
+--status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;
+--attn-loud:#b96a06;--shadow-raised:0 1px 2px rgba(22,32,31,.08)}
 @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;
---doc-fg:#e6e6e6;--doc-bg:#141414;--doc-meta:#999;--doc-rule:#2a2a2a;--doc-rule-strong:#2a2a2a}}
+--canvas:#10151a;--surface-sunken:#0c1116;--surface:#161b21;--surface-raised:#1b2229;
+--border-subtle:#232b33;--border:#2e3841;--border-strong:#3d4954;
+--text-primary:#e3e8ed;--text-secondary:#a8b3bd;--text-muted:#7c8b97;
+--text-link:#8fb6e8;--text-link-hover:#b3cef2;
+--focus-ring:#5fa8ff;--selection-bg:#2b4560;--scrollbar-thumb:#333e48;
+--status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;
+--status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;
+--attn-loud:#f2b03d;--shadow-raised:none}}
 :root[data-theme="dark"]{color-scheme:dark;
---doc-fg:#e6e6e6;--doc-bg:#141414;--doc-meta:#999;--doc-rule:#2a2a2a;--doc-rule-strong:#2a2a2a}
+--canvas:#10151a;--surface-sunken:#0c1116;--surface:#161b21;--surface-raised:#1b2229;
+--border-subtle:#232b33;--border:#2e3841;--border-strong:#3d4954;
+--text-primary:#e3e8ed;--text-secondary:#a8b3bd;--text-muted:#7c8b97;
+--text-link:#8fb6e8;--text-link-hover:#b3cef2;
+--focus-ring:#5fa8ff;--selection-bg:#2b4560;--scrollbar-thumb:#333e48;
+--status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;
+--status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;
+--attn-loud:#f2b03d;--shadow-raised:none}
 :root[data-theme="light"]{color-scheme:light;
---doc-fg:#1a1a1a;--doc-bg:#fff;--doc-meta:#666;--doc-rule:#eee;--doc-rule-strong:#ddd}
-body{font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;
-max-width:52rem;margin:2rem auto;padding:0 1rem;color:var(--doc-fg);background:var(--doc-bg)}
-h1{font-size:1.5rem;margin:0 0 .25rem}h2{font-size:1.05rem;margin:2rem 0 .5rem}
-.meta{color:var(--doc-meta);font-size:.85rem}.unknown{color:var(--doc-meta);font-style:italic}
-.total{margin-top:2rem;border-top:1px solid var(--doc-rule-strong);padding-top:.75rem;
-font-weight:600}
-table{border-collapse:collapse;width:100%}
-td{border-top:1px solid var(--doc-rule);padding:.4rem .5rem;vertical-align:top}
-.id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
-</style></head><body>
-<h1>Run report</h1>
-<p class="meta">/Users/you/dev/smetana &middot; the ready queue &middot; finished 2026-08-12 14:31</p>
-<h2>Closed (2)</h2>
-<table>
-<tr><td class="id">smetana-qca</td><td>The run writes its own report</td><td>Wrote the diff and the document, with tests on both.</td><td class="meta">1h 12m</td></tr>
-<tr><td class="id">smetana-ajr</td><td>The run report tab</td><td>&mdash;</td><td class="meta">&mdash;</td></tr>
-</table>
-<h2>Parked (0)</h2>
-<p class="meta">None.</p>
-<h2>Batches</h2>
-<p class="unknown">This batch left no account of itself.</p>
-<p>This document carries a script that would paint the whole page red and replace
+--canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;
+--border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;
+--text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#6b777c;
+--text-link:#1f5d8f;--text-link-hover:#123f63;
+--focus-ring:#1c6fd0;--selection-bg:#c6dcf0;--scrollbar-thumb:#c2caca;
+--status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;
+--status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;
+--attn-loud:#b96a06;--shadow-raised:0 1px 2px rgba(22,32,31,.08)}
+*,*::before,*::after{box-sizing:border-box}
+::selection{background:var(--selection-bg)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:5px}
+body{margin:0;padding:32px 16px 40px;background:var(--canvas);color:var(--text-primary);
+font-family:system-ui,-apple-system,"Segoe UI","Noto Sans",Roboto,sans-serif;
+font-size:13px;line-height:1.5}
+.doc{max-width:52rem;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
+.eyebrow{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted);margin:0 0 8px}
+h1{font-size:22px;font-weight:600;letter-spacing:-.006em;line-height:1.2;margin:0}
+.meta{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:12px;color:var(--text-secondary);word-break:break-all;margin:8px 0 0}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.cell{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;
+box-shadow:var(--shadow-raised);padding:10px;display:flex;flex-direction:column;gap:4px}
+.cell-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted)}
+.cell-n{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:22px;font-weight:500;line-height:1.2;color:var(--text-primary)}
+.cell-done{color:var(--status-done-fg)}
+.cell-loud{color:var(--attn-loud)}
+.cell-none{color:var(--text-muted)}
+.sec{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--border);
+padding-bottom:6px;margin:0 0 -8px;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:400;color:var(--text-secondary)}
+.sec-n{color:var(--text-muted);letter-spacing:0}
+.list{display:flex;flex-direction:column;gap:8px}
+.card{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;
+box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;gap:8px}
+.card-parked{border-color:var(--status-needs-you-border)}
+.card-batch{background:var(--surface);box-shadow:none}
+.head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.chip{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:12px;font-weight:500;background:var(--surface-sunken);border:1px solid var(--border-subtle);
+border-radius:3px;padding:1px 6px;white-space:nowrap}
+.badge{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:11px;border-radius:3px;padding:1px 6px;white-space:nowrap;border:1px solid}
+.badge-done{background:var(--status-done-bg);color:var(--status-done-fg);border-color:var(--status-done-border)}
+.badge-parked{background:var(--status-needs-you-bg);color:var(--status-needs-you-fg);
+border-color:var(--status-needs-you-border)}
+.batch-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary)}
+.right{margin-left:auto;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:11px;color:var(--text-muted)}
+h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}
+.body{margin:0;color:var(--text-secondary)}
+.body code{font-size:12px;color:var(--text-primary)}
+.unknown{margin:0;color:var(--text-muted)}
+.notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;
+padding:16px;color:var(--text-muted);margin:0}
+.total{border-top:1px solid var(--border-strong);padding-top:12px;display:flex;align-items:baseline;gap:8px}
+.total-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary)}
+.total-n{margin-left:auto;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:18px;font-weight:500;color:var(--text-primary)}
+</style></head><body><div class="doc">
+<header><p class="eyebrow">smetana &middot; run report</p><h1>Run report</h1>
+<p class="meta">/Users/you/dev/smetana &middot; the ready queue &middot; finished 2026-08-12 14:31</p></header>
+<div class="strip">
+<div class="cell"><span class="cell-label">closed</span><span class="cell-n cell-done">2</span></div>
+<div class="cell"><span class="cell-label">parked</span><span class="cell-n cell-loud">1</span></div>
+<div class="cell"><span class="cell-label">batches</span><span class="cell-n">2</span></div>
+<div class="cell"><span class="cell-label">total</span><span class="cell-n">2h 14m</span></div>
+</div>
+<div class="sec"><span>closed</span><span class="sec-n">2</span></div>
+<div class="list">
+<div class="card"><div class="head"><span class="chip">smetana-qca</span>
+<span class="badge badge-done">done</span><span class="right">1h 12m</span></div>
+<h3>The run writes its own report</h3>
+<p class="body">Wrote <code>runs/report.rs</code> and the document it emits, with tests on both.</p></div>
+<div class="card"><div class="head"><span class="chip">smetana-ajr</span>
+<span class="badge badge-done">done</span><span class="right">&mdash;</span></div>
+<h3>The run report tab</h3><p class="unknown">&mdash;</p></div>
+</div>
+<div class="sec"><span>parked</span><span class="sec-n">1</span></div>
+<div class="list">
+<div class="card card-parked"><div class="head"><span class="chip">smetana-rox</span>
+<span class="badge badge-parked">needs you</span><span class="right">28m</span></div>
+<h3>The report on the design system</h3>
+<p class="body">Parked: the handoff asks for a theme switch and <code>sandbox=""</code> forbids one.</p></div>
+</div>
+<div class="sec"><span>batches</span><span class="sec-n">2</span></div>
+<div class="list">
+<div class="card card-batch"><div class="head"><span class="batch-label">batch 1</span>
+<span class="right">1h 12m</span></div>
+<p class="body">Nothing odd, though <code>bd list</code> was slow to answer.</p></div>
+<div class="card card-batch"><div class="head"><span class="batch-label">batch 2</span>
+<span class="right">28m</span></div>
+<p class="unknown">This batch left no account of itself.</p></div>
+</div>
+<p class="notice">This document carries a script that would paint the whole page red and replace
 everything on it with the words THE SANDBOX FAILED. If that is what you are looking at,
 the frame lost its sandbox. If you are reading this report, the script did not run.</p>
-<p class="total">Total 2h 14m</p>
+<div class="total"><span class="total-label">total</span><span class="total-n">2h 14m</span></div>
+</div>
 <script>document.body.style.background='red';document.body.innerHTML='<h1>THE SANDBOX FAILED</h1>'<\/script>
 </body></html>`
 
