@@ -426,7 +426,17 @@ const DARK: &str = "color-scheme:dark;\
 /// line `tokens/base.css` opens with, and everything below declares a size and
 /// adds padding and a border on top of it.
 ///
-/// The mono stack is repeated in full at every rule that needs it rather than
+/// **The mono stack names no IBM Plex Mono, and that is a deliberate divergence
+/// from `tokens/fonts.css` rather than an omission.** The app's `--font-mono`
+/// opens with it; this document may fetch nothing, and the app's own `@font-face`
+/// does not reach across into an `<iframe sandbox="" srcdoc>`, so naming a face
+/// neither reader can load would only be a line of CSS that never applies. The
+/// handoff contradicts itself here — its first constraint says the stack falls
+/// past Plex, its typography block says to copy `--font-mono` literally — and the
+/// spec and `[merge].hazards` both resolve it as "drop Plex". Do not put it back
+/// on the grounds that the tokens have it.
+///
+/// The stack is repeated in full at every rule that needs it rather than
 /// inherited from one class: a document with no stylesheet of ours around it has
 /// no `--font-mono` to reach for, and a single shared class would have to be put
 /// on every one of these elements by hand in the markup, where forgetting it
@@ -443,29 +453,29 @@ body{margin:0;padding:32px 16px 40px;background:var(--canvas);color:var(--text-p
 font-family:system-ui,-apple-system,\"Segoe UI\",\"Noto Sans\",Roboto,sans-serif;\
 font-size:13px;line-height:1.5}\
 .doc{max-width:52rem;margin:0 auto;display:flex;flex-direction:column;gap:24px}\
-code{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+code{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace}\
-.eyebrow{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.eyebrow{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
 color:var(--text-muted);margin:0 0 8px}\
 h1{font-size:22px;font-weight:600;letter-spacing:-.006em;line-height:1.2;margin:0}\
-.meta{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.meta{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:12px;color:var(--text-secondary);\
 word-break:break-all;margin:8px 0 0}\
 .strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}\
 .cell{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;\
 box-shadow:var(--shadow-raised);padding:10px;display:flex;flex-direction:column;gap:4px}\
-.cell-label{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.cell-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
 color:var(--text-muted)}\
-.cell-n{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.cell-n{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:22px;font-weight:500;line-height:1.2;\
 color:var(--text-primary)}\
 .cell-done{color:var(--status-done-fg)}\
 .cell-loud{color:var(--attn-loud)}\
 .cell-none{color:var(--text-muted)}\
 .sec{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--border);\
-padding-bottom:6px;margin:0 0 -8px;font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,\
+padding-bottom:6px;margin:0 0 -8px;font-family:ui-monospace,\"SF Mono\",Menlo,\
 Consolas,\"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;\
 text-transform:uppercase;font-weight:400;color:var(--text-secondary)}\
 .sec-n{color:var(--text-muted);letter-spacing:0}\
@@ -475,20 +485,20 @@ box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;
 .card-parked{border-color:var(--status-needs-you-border)}\
 .card-batch{background:var(--surface);box-shadow:none}\
 .head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}\
-.chip{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.chip{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:12px;font-weight:500;background:var(--surface-sunken);\
 border:1px solid var(--border-subtle);border-radius:3px;padding:1px 6px;white-space:nowrap}\
-.badge{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.badge{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:11px;border-radius:3px;padding:1px 6px;\
 white-space:nowrap;border:1px solid}\
 .badge-done{background:var(--status-done-bg);color:var(--status-done-fg);\
 border-color:var(--status-done-border)}\
 .badge-parked{background:var(--status-needs-you-bg);color:var(--status-needs-you-fg);\
 border-color:var(--status-needs-you-border)}\
-.batch-label{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.batch-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
 color:var(--text-secondary)}\
-.right{margin-left:auto;font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.right{margin-left:auto;font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:11px;color:var(--text-muted)}\
 h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}\
 .body{margin:0;color:var(--text-secondary)}\
@@ -498,10 +508,10 @@ h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}\
 padding:16px;color:var(--text-muted);margin:0}\
 .total{border-top:1px solid var(--border-strong);padding-top:12px;display:flex;\
 align-items:baseline;gap:8px}\
-.total-label{font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.total-label{font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;\
 color:var(--text-secondary)}\
-.total-n{margin-left:auto;font-family:\"IBM Plex Mono\",ui-monospace,\"SF Mono\",Menlo,Consolas,\
+.total-n{margin-left:auto;font-family:ui-monospace,\"SF Mono\",Menlo,Consolas,\
 \"DejaVu Sans Mono\",monospace;font-size:18px;font-weight:500;color:var(--text-primary)}";
 
 /// The document's whole appearance.
@@ -605,9 +615,12 @@ mod tests {
         // The strip's closed and parked cells are the two the board would have
         // filled, and a dash is what stands there instead. The batches cell is
         // a number the app measured itself and may honestly read zero, which is
-        // why the assertion names the cells rather than the digit.
+        // why the assertion names the cells rather than the digit — and names
+        // them as `cell` writes them, hue first and then `cell-none`. Forbidding
+        // `cell-done">0<` would forbid a string this file cannot produce, and an
+        // assertion that cannot fail is worse than none.
         assert!(
-            !html.contains("cell-done\">0<") && !html.contains("cell-loud\">0<"),
+            !html.contains("cell-done cell-none\">0<") && !html.contains("cell-loud cell-none\">0<"),
             "no confident zero over a number nobody measured: {html}"
         );
         assert!(html.contains("cell-none\">&mdash;<"), "a dash stands where the counts would: {html}");
@@ -967,9 +980,10 @@ mod tests {
         assert!(!html.contains("@import"), "no stylesheet is fetched");
         assert!(!html.contains("@font-face"), "and no font file either");
         assert!(!html.contains("fonts.googleapis"));
+        assert!(html.contains("ui-monospace"), "the stack opens with what every reader has");
         assert!(
-            html.contains("ui-monospace"),
-            "IBM Plex Mono is present only inside the app's webview, so the stack falls past it"
+            !html.contains("IBM Plex Mono"),
+            "the document may fetch nothing, so it does not name a face it cannot load: {html}"
         );
     }
 
@@ -1043,8 +1057,14 @@ mod tests {
 
         assert!(html.contains("class=\"cell-n cell-done cell-none\">&mdash;<"), "{html}");
         assert!(html.contains("class=\"cell-n cell-loud cell-none\">&mdash;<"), "{html}");
-        assert!(!html.contains("cell-done\">0<"), "no confident zero over a number nobody measured");
-        assert!(!html.contains("cell-loud\">0<"));
+        // Against the class string as `cell` writes it — hue first, then
+        // `cell-none` — or the assertion forbids something unreachable and holds
+        // no matter what the code does.
+        assert!(
+            !html.contains("cell-done cell-none\">0<"),
+            "no confident zero over a number nobody measured"
+        );
+        assert!(!html.contains("cell-loud cell-none\">0<"));
         assert!(html.contains("could not be read"), "and the reason is still said in words");
         assert!(html.contains("class=\"notice\""), "drawn as a notice rather than as loose prose");
     }

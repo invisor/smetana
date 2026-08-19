@@ -231,25 +231,25 @@ body{margin:0;padding:32px 16px 40px;background:var(--canvas);color:var(--text-p
 font-family:system-ui,-apple-system,"Segoe UI","Noto Sans",Roboto,sans-serif;
 font-size:13px;line-height:1.5}
 .doc{max-width:52rem;margin:0 auto;display:flex;flex-direction:column;gap:24px}
-code{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
-.eyebrow{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
+.eyebrow{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted);margin:0 0 8px}
 h1{font-size:22px;font-weight:600;letter-spacing:-.006em;line-height:1.2;margin:0}
-.meta{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+.meta{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:12px;color:var(--text-secondary);word-break:break-all;margin:8px 0 0}
 .strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
 .cell{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;
 box-shadow:var(--shadow-raised);padding:10px;display:flex;flex-direction:column;gap:4px}
-.cell-label{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+.cell-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted)}
-.cell-n{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+.cell-n{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:22px;font-weight:500;line-height:1.2;color:var(--text-primary)}
 .cell-done{color:var(--status-done-fg)}
 .cell-loud{color:var(--attn-loud)}
 .cell-none{color:var(--text-muted)}
 .sec{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--border);
 padding-bottom:6px;margin:0 0 -8px;
-font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:400;color:var(--text-secondary)}
 .sec-n{color:var(--text-muted);letter-spacing:0}
 .list{display:flex;flex-direction:column;gap:8px}
@@ -258,18 +258,18 @@ box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;
 .card-parked{border-color:var(--status-needs-you-border)}
 .card-batch{background:var(--surface);box-shadow:none}
 .head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.chip{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+.chip{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:12px;font-weight:500;background:var(--surface-sunken);border:1px solid var(--border-subtle);
 border-radius:3px;padding:1px 6px;white-space:nowrap}
-.badge{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+.badge{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:11px;border-radius:3px;padding:1px 6px;white-space:nowrap;border:1px solid}
 .badge-done{background:var(--status-done-bg);color:var(--status-done-fg);border-color:var(--status-done-border)}
 .badge-parked{background:var(--status-needs-you-bg);color:var(--status-needs-you-fg);
 border-color:var(--status-needs-you-border)}
-.batch-label{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+.batch-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary)}
 .right{margin-left:auto;
-font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:11px;color:var(--text-muted)}
 h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}
 .body{margin:0;color:var(--text-secondary)}
@@ -278,10 +278,10 @@ h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}
 .notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;
 padding:16px;color:var(--text-muted);margin:0}
 .total{border-top:1px solid var(--border-strong);padding-top:12px;display:flex;align-items:baseline;gap:8px}
-.total-label{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+.total-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary)}
 .total-n{margin-left:auto;
-font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 font-size:18px;font-weight:500;color:var(--text-primary)}
 </style></head><body><div class="doc">
 <header><p class="eyebrow">smetana &middot; run report</p><h1>Run report</h1>
