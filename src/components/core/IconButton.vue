@@ -10,7 +10,7 @@ import Tooltip from './Tooltip.vue'
 
    Attributes do not fall through to the wrapper: `Tooltip`'s span is the root
    now, and a caller sizing the control — `Tab`'s 16px close, `CodeBlock`'s 18px
-   copy, `ProjectList`'s visibility toggle on the remove button — means the
+   copy, the setup gear in the left panel's header — means the
    button, not the box around it. They are merged with `mergeProps` rather than
    spread into one object, which is what fallthrough itself does and the only
    form that keeps both sides of a collision: object spread would drop this

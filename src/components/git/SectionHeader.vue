@@ -38,7 +38,7 @@
    as the start of a block rather than as one more row of the list above it: the
    sections are all `--row-h`, all quiet, and with nothing between them a panel
    of three ran together into one column of rows. It is the same hairline
-   `Panel` draws under its title and `ProjectList` under its rows, and it is
+   `Panel` draws under its title and under its tab row, and it is
    asked for rather than assumed, because the topmost caption in a panel already
    has one of those above it and two hairlines meeting is a 2px line. */
 import { computed, ref } from 'vue'

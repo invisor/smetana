@@ -61,6 +61,12 @@ const defaults = () => ({
   layout: {
     leftCollapsed: false,
     rightCollapsed: false,
+    /* Whether the project rail is drawn beside the left panel. Per window,
+       beside the two widths, and not per project: it is a preference about this
+       window's chrome, and a rail that appeared and vanished as somebody moved
+       between projects would be a layout that shifted under a click. `Layout`
+       in Rust carries the same default. */
+    railOpen: true,
     leftWidth: LEFT_DEFAULT,
     rightWidth: RIGHT_DEFAULT,
     /* How the Git panel's three sections are folded, and how tall two of them

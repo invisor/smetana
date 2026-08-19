@@ -29,7 +29,7 @@ defineEmits(['select'])
 
 /* The list keeps the hovered id itself rather than asking useInteractive per
    row: it tracks one control at a time. Press is not tracked — a row is not a
-   button, it is a place, the same reasoning ProjectList.vue uses. */
+   button, it is a place, the same reasoning AgentList.vue uses. */
 const hovered = ref(null)
 
 const body = { display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }
@@ -51,7 +51,7 @@ const listStyle = {
 }
 
 /* The row centres its content and the baseline grouping happens one box in,
-   which is the shape AgentList and ProjectList already have. It is not
+   which is the shape AgentList already has. It is not
    interchangeable with putting `baseline` here: a single-line flex container
    whose cross size comes from the row height stretches its line to that height,
    and baseline-aligned items sit at the line's *start* — `align-items:

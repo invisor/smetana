@@ -6,7 +6,8 @@
    entirely or exposes the fact that the window is a browser, and it appears over
    any word on the screen — a branch name, a status, a caption — so the one thing
    it reliably says is that nobody designed this. The menus this app does want
-   are its own, on the rows that have earned one (`ProjectList` is the first),
+   are its own, on the rows that have earned one (a project's tile on the rail
+   and a branch row are the two),
    and those are ordinary components drawn from tokens like everything else.
 
    There is no Tauri setting for this: the webviews have no such switch, so

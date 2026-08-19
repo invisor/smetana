@@ -9,12 +9,28 @@ import { RAIL, RAIL_CONTROL_MAX } from '../../views/panelWidths.js'
 
 const props = defineProps({
   title: { type: String, required: true },
+  /* One line under the title, in muted micro type — what this panel is about
+     right now, e.g. "develop · 1 agent running". Its presence is also what
+     switches the title from a section header's uppercase micro-caps to a name
+     in ordinary mono: a project is *called* something, a section is labelled. */
+  subtitle: { type: String, default: '' },
   side: { type: String, default: 'left' },
   collapsed: { type: Boolean, default: false },
-  collapsible: { type: Boolean, default: true }
+  collapsible: { type: Boolean, default: true },
+  /* What the header button is about, for a panel where it does not mean "fold
+     me away". The left column's button hides the project rail beside it, so it
+     needs the other panel's state and the other panel's words; every other
+     caller leaves both alone and gets exactly what it had. */
+  toggleOpen: { type: Boolean, default: true },
+  toggleLabel: { type: String, default: '' }
 })
 
-defineEmits(['toggle'])
+/* Two events rather than one, and the split is what stops the left column
+   folding itself: `toggle` is the header button, which may be about something
+   other than this panel, and `expand` is the button in the collapsed rail,
+   which can only ever be about this panel coming back. One event for both had
+   the folded column's button toggling the project rail instead of unfolding. */
+defineEmits(['toggle', 'expand'])
 
 const edge = computed(() => ({
   borderRight: props.side === 'left' ? 'var(--border-w) solid var(--border)' : undefined,
@@ -43,22 +59,47 @@ const style = computed(() => ({
   ...edge.value
 }))
 
-const headerStyle = {
+/* The tab row's height is the floor rather than the height: the column headers
+   line up with it, and a couple of pixels' difference reads as a misalignment
+   rather than an accent — but two lines of type do not fit inside one tab, so a
+   header carrying a subtitle grows past it instead of clipping. */
+const headerStyle = computed(() => ({
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-3)',
-  /* The same height as the tab row: the column headers line up with it, and a
-     couple of pixels' difference reads as a misalignment rather than an
-     accent. */
-  height: 'var(--tab-h)',
+  height: props.subtitle ? 'auto' : 'var(--tab-h)',
+  minHeight: 'var(--tab-h)',
   flex: '0 0 auto',
-  padding: '0 var(--space-3) 0 var(--space-5)',
+  padding: props.subtitle
+    ? 'var(--space-3) var(--space-3) var(--space-3) var(--space-5)'
+    : '0 var(--space-3) 0 var(--space-5)',
   borderBottom: 'var(--border-w) solid var(--border-subtle)'
-}
-/* 10px uppercase mono: a label, not a sentence. */
-const titleStyle = {
+}))
+const headingStyle = {
   flex: 1,
   minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-1)'
+}
+/* A name rather than a label: 12px mono medium, not uppercase. */
+const namedStyle = {
+  font: 'var(--weight-medium) var(--text-sm)/1 var(--font-mono)',
+  color: 'var(--text-primary)',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis'
+}
+const subtitleStyle = {
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
+  color: 'var(--text-muted)',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis'
+}
+/* 10px uppercase mono: a label, not a sentence. The width and the ellipsis are
+   the heading box's now, since the subtitle under it needs the same. */
+const titleStyle = {
   fontSize: 'var(--text-2xs)',
   letterSpacing: 'var(--tracking-caps)',
   textTransform: 'uppercase',
@@ -78,6 +119,18 @@ const railButtonStyle = {
   width: `min(var(--control-h-sm), ${RAIL_CONTROL_MAX}px)`,
   height: `min(var(--control-h-sm), ${RAIL_CONTROL_MAX}px)`
 }
+const toggleIcon = computed(() => {
+  const open = props.toggleOpen
+  return props.side === 'left'
+    ? open
+      ? 'panel-left-close'
+      : 'panel-left-open'
+    : open
+      ? 'panel-right-close'
+      : 'panel-right-open'
+})
+const toggleText = computed(() => props.toggleLabel || `Collapse ${props.side} panel`)
+
 const railTitleStyle = {
   writingMode: 'vertical-rl',
   fontSize: 'var(--text-2xs)',
@@ -94,18 +147,24 @@ const railTitleStyle = {
       :label="`Expand ${side} panel`"
       size="sm"
       :style="railButtonStyle"
-      @click="$emit('toggle')"
+      @click="$emit('expand')"
     />
     <div :style="railTitleStyle">{{ title }}</div>
   </div>
   <div v-else :style="style">
     <div :style="headerStyle">
-      <div :style="titleStyle">{{ title }}</div>
+      <div :style="headingStyle">
+        <div :style="subtitle ? namedStyle : titleStyle">{{ title }}</div>
+        <div v-if="subtitle" :style="subtitleStyle">{{ subtitle }}</div>
+      </div>
+      <!-- Before `actions`, so a warning glyph never moves when a button
+           appears beside it or goes. -->
+      <slot name="marks" />
       <slot name="actions" />
       <IconButton
         v-if="collapsible"
-        :icon="side === 'left' ? 'panel-left-close' : 'panel-right-close'"
-        :label="`Collapse ${side} panel`"
+        :icon="toggleIcon"
+        :label="toggleText"
         size="sm"
         @click="$emit('toggle')"
       />

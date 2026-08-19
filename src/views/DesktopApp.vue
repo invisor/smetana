@@ -40,9 +40,11 @@ import EmptyState from '../components/core/EmptyState.vue'
 import Modal from '../components/overlays/Modal.vue'
 import MenuButton from '../components/overlays/MenuButton.vue'
 import Toast from '../components/overlays/Toast.vue'
-import ProjectList from '../components/shell/ProjectList.vue'
+import ProjectRail from '../components/shell/ProjectRail.vue'
+import { projectSummary } from '../components/shell/projectState.js'
 import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
+import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
 import { TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
@@ -55,6 +57,7 @@ import {
   lastRunStart,
   liveAgentCount,
   loadSessions,
+  projectStates,
   removeSession,
   terminalState
 } from '../stores/terminals.js'
@@ -139,7 +142,15 @@ import {
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { scopeBusyReason } from '../components/run/runScopes.js'
-import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
+import {
+  LEFT_DEFAULT,
+  PROJECT_RAIL,
+  RAIL,
+  RIGHT_DEFAULT,
+  STEP,
+  clampWidth,
+  resolveDrag
+} from './panelWidths.js'
 import {
   basenameOf,
   fileErrorText,
@@ -256,6 +267,12 @@ onUnmounted(() => window.removeEventListener('resize', onViewport))
 
 const dragBase = { left: 0, right: 0 }
 
+/* Whether the project rail is drawn beside the left panel: the preference, and
+   the column not being folded, since a folded column draws no rail. It is part
+   of every width sum below rather than only of the left one — the rail comes out
+   of the same window, so the right panel's ceiling is measured against it too. */
+const railOpen = computed(() => layout.railOpen && !layout.leftCollapsed)
+
 /* The neighbour's *stored* width, not its drawn one: the drawn one is itself a
    clamp against this panel, and the two computeds would chase each other. In a
    window narrow enough for the difference to show, the stored number is the
@@ -265,7 +282,8 @@ const geometry = (side) => ({
   side,
   other: side === 'left' ? layout.rightWidth : layout.leftWidth,
   otherCollapsed: side === 'left' ? layout.rightCollapsed : layout.leftCollapsed,
-  viewport: viewport.value
+  viewport: viewport.value,
+  railOpen: railOpen.value
 })
 
 const leftWidth = computed(() => clampWidth(layout.leftWidth, geometry('left')))
@@ -1892,6 +1910,26 @@ const branchLabel = computed(() => {
   return '—'
 })
 
+/* The left panel belongs to the selected project, so its header says what that
+   project is called and, under the name, where it stands. With no project open
+   at all there is no name to say: the panel falls back to the section label it
+   used to carry, which is also what `Panel` draws whenever there is no subtitle
+   beside it.
+
+   The summary's branch is `gitState.branch` rather than `branchLabel` above: a
+   dash stands for "nothing to show" in the scope bar, where it holds a column
+   open, and in a sentence it would be a word that means nothing. An empty
+   branch is dropped by `projectSummary` instead. */
+const activeProjectName = computed(() => (activePath.value ? basename(activePath.value) : 'Projects'))
+const panelSummary = computed(() =>
+  activePath.value ? projectSummary(gitState.branch, projectStates.value[activePath.value]) : ''
+)
+/* The missing-tracker mark, for the selected project. Every other project says
+   it in its tile's tooltip, which is the only room a 28px tile has for it. */
+const activeProjectTracked = computed(
+  () => projectRows.value.find((row) => row.path === activePath.value)?.tracked !== false
+)
+
 /* An explicit refresh of the tree. Files deliberately have no watcher (see the
    spec), and this is the second half of the answer to "what is on disk right
    now" — the first half fires on its own when focus returns to the window. */
@@ -2056,7 +2094,12 @@ const bodyStyle = { flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch
    the window they are in now. */
 const leftStyle = computed(() => ({
   flex: '0 0 auto',
-  width: layout.leftCollapsed ? `${RAIL}px` : `${leftWidth.value}px`,
+  /* The rail sits beside the panel inside this one column, so the column is
+     both of them wide. Folded, there is no rail: a 44px strip of projects
+     beside a 32px strip of nothing is two rails. */
+  width: layout.leftCollapsed
+    ? `${RAIL}px`
+    : `${leftWidth.value + (railOpen.value ? PROJECT_RAIL : 0)}px`,
   display: 'flex',
   minWidth: 0
 }))
@@ -2068,18 +2111,25 @@ const sidebarStyle = {
   height: '100%',
   minHeight: 0
 }
-/* The sidebar's own tab row: same height as the document tabs but micro type,
-   because these are section names and not open files. It sits at the foot of
-   the column, so the accent and the rule are the document tabs' mirrored —
-   both on the outer edge, away from the content they reveal. */
+/* The sidebar's own tab row: micro type, because these are section names and
+   not open files. It sits directly under the panel header now, at the top of
+   what it scopes rather than at the far end of it, and it is drawn as three
+   segments instead of three full-height tabs.
+
+   The inset rule and the raised fill the foot row used are gone with the
+   position: a rule under a tab was that row's answer to sitting against the
+   column's edge, and a segmented row marks its active segment by fill. The
+   focus ring stays — it was kept explicitly at the design review, and these are
+   the one control in the new left column that has one. */
 const sideTabBar = {
   display: 'flex',
   alignItems: 'stretch',
-  height: 'var(--tab-h)',
+  gap: 'var(--space-1)',
   flex: '0 0 auto',
-  borderTop: 'var(--border-w) solid var(--border-subtle)'
+  padding: 'var(--space-2) var(--space-3)',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)'
 }
-const sideTabStyle = (tab, last) => {
+const sideTabStyle = (tab) => {
   const active = project.sideTab === tab.id
   return {
     flex: 1,
@@ -2087,20 +2137,39 @@ const sideTabStyle = (tab, last) => {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    /* The handoff draws a 22px segment; this is `--control-h-sm`, which is 24
+       comfortable and 20 compact. The token rather than the number, because a
+       literal would be the one height in the left column that neither density
+       nor the app-wide font size reaches — and 22 is inside the two anyway. */
+    height: 'var(--control-h-sm)',
+    borderRadius: 'var(--radius-2)',
     font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
     letterSpacing: 'var(--tracking-caps)',
     textTransform: 'uppercase',
     color: active ? 'var(--text-primary)' : 'var(--text-muted)',
     background: active
-      ? 'var(--surface-raised)'
+      ? 'var(--surface-selected)'
       : hoveredSideTab.value === tab.id
         ? 'var(--surface-hover)'
         : 'transparent',
-    boxShadow: active ? 'inset 0 -2px 0 0 var(--text-primary)' : 'none',
-    borderRight: last ? undefined : 'var(--border-w) solid var(--border-subtle)',
     cursor: 'default',
     transition: 'var(--transition-control)'
   }
+}
+/* The mark and the button that clears it are one hover target, tied together by
+   a gap narrower than the header's own: the triangle is what a person sees
+   without touching anything, the gear is what they press. The tooltip wraps the
+   glyph alone rather than the pair — a panel centred over both would hang off to
+   one side of whichever of them the pointer is on, and the button already
+   carries its own label. */
+const setupMarkStyle = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }
+/* The absolute path of the project this panel belongs to. Broken anywhere
+   rather than ellipsised: a path is read from both ends, and a panel 236px wide
+   would otherwise show the first three segments of every one of them. */
+const panelFootStyle = {
+  font: 'var(--weight-regular) var(--text-2xs)/var(--leading-snug) var(--font-mono)',
+  color: 'var(--text-muted)',
+  wordBreak: 'break-all'
 }
 const centerStyle = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }
 
@@ -2233,13 +2302,72 @@ const toastStackStyle = {
     <div :style="bodyStyle">
       <!-- left: worktree files and the agents working in it -->
       <div :style="leftStyle">
+        <!-- One tile per project, and not while the column is folded: a 44px
+             rail of projects beside the 32px rail a folded panel becomes is two
+             rails, and neither would say which of them the button belongs to. -->
+        <ProjectRail
+          v-if="railOpen"
+          :projects="projectRows"
+          :active-path="activePath"
+          :states="projectStates"
+          :branches="activePath ? { [activePath]: gitState.branch } : {}"
+          :can-add-agent="project.sideTab === 'agents'"
+          :configured="configured"
+          :config-broken="configBroken"
+          @select="switchTo"
+          @remove="removeProject"
+          @add-agent="newAgent"
+          @setup="openSetup"
+          @add-project="onAddProject"
+        />
+        <!-- The header button hides the rail rather than folding this panel:
+             that is the person's own decision, recorded in the spec. Folding the
+             whole column into a rail is the separator's job, dragged past the
+             panel's minimum, and the folded rail's own button is what brings it
+             back — which is why `Panel` emits that one as `expand`. -->
         <Panel
-          title="Projects"
+          :title="activeProjectName"
+          :subtitle="panelSummary"
           side="left"
           :collapsed="layout.leftCollapsed"
+          :toggle-open="layout.railOpen"
+          :toggle-label="layout.railOpen ? 'Hide projects' : 'Show projects'"
           :style="{ flex: 1, minWidth: 0 }"
-          @toggle="layout.leftCollapsed = !layout.leftCollapsed"
+          @toggle="layout.railOpen = !layout.railOpen"
+          @expand="layout.leftCollapsed = false"
         >
+          <!-- The three marks the project row used to carry, for the selected
+               project alone, with the glyphs, colours and words they had there.
+               None of them is told from the others by hue: the missing tracker
+               is a lone muted triangle with nothing beside it that fixes it; the
+               missing run configuration is a red triangle bonded to the gear
+               that opens the setup it is asking for; and a configuration that
+               cannot be parsed is a red page-with-a-cross, standing alone. The
+               last needs its own glyph precisely because it stands alone —
+               beside the tracker's lone triangle the two would differ in nothing
+               but colour. It offers no button on purpose: a file that exists and
+               cannot be read must not be answered by a button that starts an
+               agent writing over it, and the way out is the tile's menu, whose
+               setup item is live over a damaged file. -->
+          <template #marks>
+            <Tooltip v-if="activePath && !activeProjectTracked" label="No bd tracker here">
+              <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
+            </Tooltip>
+            <span v-if="needsSetup" :style="setupMarkStyle">
+              <Tooltip label="Not set up for runs">
+                <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+              </Tooltip>
+              <IconButton
+                icon="settings-2"
+                label="Set up for runs"
+                size="sm"
+                @click="openSetup(activePath, false)"
+              />
+            </span>
+            <Tooltip v-if="configBroken" label="Run configuration cannot be read">
+              <Icon name="file-x" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+            </Tooltip>
+          </template>
           <template #actions>
             <!-- There is nothing to refresh on the Agents tab: the sessions
                  announce their own state, and the button would promise work
@@ -2260,21 +2388,26 @@ const toastStackStyle = {
               size="sm"
               @click="refreshGit"
             />
-            <IconButton icon="plus" label="Add project" size="sm" @click="onAddProject" />
           </template>
           <div :style="sidebarStyle">
-            <ProjectList
-              :projects="projectRows"
-              :active-path="activePath"
-              :can-add-agent="project.sideTab === 'agents'"
-              :needs-setup="needsSetup"
-              :config-broken="configBroken"
-              :configured="configured"
-              @select="switchTo"
-              @remove="removeProject"
-              @add-agent="newAgent"
-              @setup="openSetup"
-            />
+            <!-- Above what it scopes rather than at the foot of the column. The
+                 roving tabindex, the roles and the focus ring are the ones the
+                 foot row had; only the position and the fill changed. -->
+            <div role="tablist" :style="sideTabBar">
+              <div
+                v-for="t in SIDE_TABS"
+                :key="t.id"
+                role="tab"
+                :aria-selected="project.sideTab === t.id"
+                :tabindex="project.sideTab === t.id ? 0 : -1"
+                :style="sideTabStyle(t)"
+                @click="project.sideTab = t.id"
+                @mouseenter="hoveredSideTab = t.id"
+                @mouseleave="hoveredSideTab = null"
+              >
+                {{ t.label }}
+              </div>
+            </div>
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
                 v-if="project.sideTab === 'files'"
@@ -2328,22 +2461,10 @@ const toastStackStyle = {
                 @remove="removeSession"
               />
             </div>
-            <div role="tablist" :style="sideTabBar">
-              <div
-                v-for="(t, i) in SIDE_TABS"
-                :key="t.id"
-                role="tab"
-                :aria-selected="project.sideTab === t.id"
-                :tabindex="project.sideTab === t.id ? 0 : -1"
-                :style="sideTabStyle(t, i === SIDE_TABS.length - 1)"
-                @click="project.sideTab = t.id"
-                @mouseenter="hoveredSideTab = t.id"
-                @mouseleave="hoveredSideTab = null"
-              >
-                {{ t.label }}
-              </div>
-            </div>
           </div>
+          <template v-if="activePath" #footer>
+            <div :style="panelFootStyle">{{ activePath }}</div>
+          </template>
         </Panel>
       </div>
 
@@ -2623,6 +2744,7 @@ const toastStackStyle = {
           :collapsed="layout.rightCollapsed"
           :style="{ flex: 1, minWidth: 0 }"
           @toggle="layout.rightCollapsed = !layout.rightCollapsed"
+          @expand="layout.rightCollapsed = false"
         >
           <div :style="inspectorBody">
             <!-- A task still being filed: the person's own words, read-only,
