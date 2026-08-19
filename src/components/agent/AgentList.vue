@@ -175,7 +175,7 @@ const empty = computed(() => props.rows.length === 0)
         />
       </div>
       <div v-if="empty" :style="{ padding: 'var(--space-5)', color: 'var(--text-muted)', font: 'var(--weight-regular) var(--text-xs)/1.5 var(--font-sans)' }">
-        No agents running. Start one with + on the project row.
+        No agents running. Right-click a project to start one.
       </div>
     </div>
   </div>
