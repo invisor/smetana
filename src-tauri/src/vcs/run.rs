@@ -61,19 +61,29 @@ const READ_CEILING: Duration = Duration::from_secs(30);
 
 /// How long a local **write** may run before it is stopped.
 ///
-/// Four times the read, and the difference is hooks. A write runs the
+/// Ten times the read, and the difference is hooks: a write runs the
 /// repository's own `pre-commit`, `commit-msg` or merge driver, which is
-/// somebody else's program and may reasonably lint or compile. The number is
-/// `runs/preflight.rs`'s health-check ceiling, taken from there for its reason
-/// rather than for the digit: that one is also a wait on a command a person
-/// configured and this app knows nothing about the cost of. (Its other number,
-/// 600 s, is for a build *declared* as a build. Nothing here is declared.)
+/// somebody else's program and may reasonably lint, test or compile. The number
+/// is taken from the first repository this ships against — this one configures
+/// `core.hooksPath = .beads/hooks`, and every hook there wraps `bd hooks run`
+/// in `timeout ${BEADS_HOOK_TIMEOUT:-300}` and carries on when it expires. That
+/// is a patience of 300 seconds *declared by the project itself*, and a ceiling
+/// under it stops a commit the project expects to succeed.
 ///
-/// Two minutes of an inert panel is a long time, and it is the cost being paid
-/// rather than an oversight: a hook that would have finished at two and a half
-/// is stopped, and the commit has to be pressed again. What is bought is that
-/// there is something left to press.
-const WRITE_CEILING: Duration = Duration::from_secs(120);
+/// **The two ways of being wrong are not symmetric, which is what sets the
+/// number.** A ceiling too low is a hard failure with no way round it from
+/// inside the app: the commit is killed, the person presses again, it is killed
+/// again, and committing in that repository is simply impossible. A ceiling too
+/// high costs one wait, on a hang that should not have happened, and it ends in
+/// an error somebody can act on. A ceiling is here to turn "forever" into
+/// "eventually" and not to enforce a budget on somebody else's hook, so it is
+/// set by the longest legitimate wait rather than by the shortest annoying one.
+///
+/// The other half is that the work is off the runtime (`commands.rs`), so five
+/// minutes of ceiling costs one inert button and nothing else in the window —
+/// no tokio worker is held, and the file tree, the editor and the terminals
+/// carry on. That is what makes the asymmetry cheap enough to act on.
+const WRITE_CEILING: Duration = Duration::from_secs(300);
 
 /// Every git **read** goes through here.
 ///
@@ -323,6 +333,16 @@ enum Capture {
 /// gone, which is what signalling the whole group guarantees, and a join there
 /// would be this function waiting again on exactly the thing whose wait it just
 /// gave up on.
+///
+/// **That join is unbounded, on purpose, and its premise is thinner than it was
+/// when it was written.** It rests on git being the last writer to the pipe, so
+/// the read ends when git does. A `pre-commit` hook that leaves a background
+/// process behind breaks it — the process inherited the stderr this thread is
+/// reading, git exits, and the join sits there with no ceiling over it, because
+/// the ceiling above applies to the child and not to this. It is named here
+/// rather than fixed: the fix is a channel with a timeout and a leaked thread,
+/// which is more machinery than the case has earned so far. What it must not
+/// cost is somebody's afternoon looking at the poll loop above.
 fn bounded(mut command: Command, timeout: Duration, stdout: Capture) -> Result<Output, VcsError> {
     command.stdin(Stdio::null()).stderr(Stdio::piped()).stdout(match stdout {
         Capture::Discard => Stdio::null(),
@@ -405,8 +425,9 @@ fn group_of_its_own(_command: &mut Command) {}
 
 /// How long a git that has been asked to stop is given before it is killed
 /// outright. It has one thing to do in that time and it is not its work — see
-/// `terminate`. Measured at well under a millisecond; the poll is what makes
-/// the ordinary case cost that rather than the whole two seconds.
+/// `terminate`, which also records why the whole of it is slept rather than cut
+/// short the moment git is gone. Unlinking the lock files measures at well
+/// under a millisecond; the rest is headroom for a machine under load.
 #[cfg(unix)]
 const CLEANUP_GRACE: Duration = Duration::from_secs(2);
 
@@ -423,36 +444,37 @@ const CLEANUP_GRACE: Duration = Duration::from_secs(2);
 /// SIGKILL still follows the grace, because a hook that ignores SIGTERM must
 /// not turn the ceiling back into a wait with no end.
 ///
+/// **`runs/preflight.rs::terminate` deliberately stays on a bare SIGKILL**, and
+/// the difference is what the child is holding rather than an oversight in
+/// either place: a declared command holds no lock file of ours and leaves
+/// nothing on the disk that refuses the next call, while a stop there is a
+/// person pressing stop and must not be held open for two seconds by a program
+/// that has already been asked once.
+///
 /// **The signal goes to the group**, for the reason
 /// `runs/preflight.rs::terminate` records: what is actually blocked is often a
 /// child of git's — `ssh` or `git-remote-https` on a fetch, the hook itself on
 /// a commit — and signalling git alone leaves it holding the connection, or the
 /// tree, and the pipes.
 ///
-/// **The reap comes last.** Naming a group by the child's pid is safe only
-/// while the child has not been reaped: a reaped pid can be reused, and the
-/// signal would then go to somebody else's group. The wait below the grace is
-/// the first reap in this function, and nothing after it names the pid again —
-/// the same ordering, and the same reason, as `runs/preflight.rs::terminate`.
+/// **The grace is slept through whole, and the child is deliberately not
+/// watched during it.** A version that returned as soon as `try_wait` reaped
+/// git was written first and is wrong in exactly the case the SIGKILL exists
+/// for: git dies promptly on SIGTERM, so that version returns while the hook
+/// that *ignored* SIGTERM is still running, and the kill meant for it never
+/// arrives. Waiting for the reap and then signalling is not the fix either —
+/// a reaped pid can be recycled, and the group named would be somebody else's.
+/// So nothing is watched, the group is signalled twice, and the cost is a flat
+/// two seconds on a path that has already spent thirty or three hundred.
+///
+/// **The reap comes last**, for that same reason: the pid must still be the
+/// child's every time this function names it. The same ordering, and the same
+/// reason, as `runs/preflight.rs::terminate`.
 #[cfg(unix)]
 fn terminate(child: &mut Child) {
     let pid = child.id() as libc::pid_t;
     unsafe { libc::killpg(pid, libc::SIGTERM) };
-
-    let deadline = Instant::now() + CLEANUP_GRACE;
-    loop {
-        match child.try_wait() {
-            // Reaped here, by this very call: the pid is free to be reused from
-            // this line on, so nothing below may name it.
-            Ok(Some(_)) => return,
-            Ok(None) if Instant::now() >= deadline => break,
-            // Short, because this is the ordinary path and the whole of what it
-            // waits for is git unlinking a handful of files.
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => break,
-        }
-    }
-
+    std::thread::sleep(CLEANUP_GRACE);
     unsafe { libc::killpg(pid, libc::SIGKILL) };
     let _ = child.kill();
     let _ = child.wait();
@@ -631,6 +653,39 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The half of `terminate` the test above cannot reach: a grandchild that
+    /// **ignores SIGTERM**. A plain `sleep` dies on the first signal, so the
+    /// SIGKILL behind the grace is never needed there and a version that
+    /// skipped it would pass — which is exactly the version that was written
+    /// first. git itself dies promptly on SIGTERM, so watching the child during
+    /// the grace and returning as soon as it is reaped leaves this process
+    /// running with nothing left to signal it.
+    ///
+    /// `trap "" TERM` is inherited across fork and exec, so the `sleep` under
+    /// the inner shell ignores it too and the pair survives on nothing but the
+    /// kill.
+    #[test]
+    fn the_kill_still_reaches_a_grandchild_that_refuses_to_stop() {
+        let dir = scratch("stubborn");
+        let pidfile = dir.join("pid");
+        let command = script(&format!(
+            "sh -c 'trap \"\" TERM; echo $$ > {}; sleep 30' & wait",
+            pidfile.display()
+        ));
+
+        let err = bounded(command, Duration::from_millis(400), Capture::Discard)
+            .expect_err("the deadline fired");
+        assert_eq!(err.kind(), "timeout");
+
+        let grandchild = pid_from(&pidfile);
+        assert!(
+            gone_within(grandchild, Duration::from_secs(5)),
+            "the kill behind the grace reached what the signal could not"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// A repository with one commit in it and one modified file — the state
     /// both tests below need, and the smallest one git will answer questions
     /// about.
@@ -656,6 +711,14 @@ mod tests {
         fs::set_permissions(path, mode).expect("make the helper executable");
     }
 
+    /// The ceiling the two tests below run under. **Headroom, not a
+    /// measurement**: what has to happen inside it is git starting and reaching
+    /// the helper it forks, which is milliseconds when the machine is idle and
+    /// was measured failing at one second on a cold `cargo test` after a
+    /// rebuild — roughly one run in eight, with no pidfile written at all. A
+    /// flaky green gate is worse than a slow one, so do not trim this back.
+    const CEILING: Duration = Duration::from_secs(5);
+
     /// A real read, hung the way a read is actually hung: on a helper somebody
     /// configured. A `textconv` is run once per file to turn a blob into text
     /// and git waits for it with no limit of its own, so without the ceiling
@@ -670,13 +733,8 @@ mod tests {
 
         let setting = format!("diff.slow.textconv={}", helper.display());
         let started = Instant::now();
-        let err = spawn(
-            &repo,
-            &["-c", &setting, "diff", "HEAD"],
-            Duration::from_secs(1),
-            Capture::Keep,
-        )
-        .expect_err("the ceiling fired");
+        let err = spawn(&repo, &["-c", &setting, "diff", "HEAD"], CEILING, Capture::Keep)
+            .expect_err("the ceiling fired");
 
         assert_eq!(err.kind(), "timeout", "this app stopped it, and git said nothing");
         assert!(started.elapsed() < Duration::from_secs(20), "it came back near its ceiling");
@@ -699,8 +757,7 @@ mod tests {
         let hook = repo.join(".git/hooks/pre-commit");
         hangs(&hook, &pidfile);
 
-        let ceiling = Duration::from_secs(1);
-        let err = spawn(&repo, &["commit", "-am", "hangs"], ceiling, Capture::Discard)
+        let err = spawn(&repo, &["commit", "-am", "hangs"], CEILING, Capture::Discard)
             .expect_err("the ceiling fired");
 
         assert_eq!(err.kind(), "timeout");

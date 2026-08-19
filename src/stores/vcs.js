@@ -670,8 +670,17 @@ export function dismissConflict() {
    No state of its own and no guard: nothing here is written into `vcsState`,
    the answer belongs to whoever asked, and the diff tab that asked already
    carries the guard against its own stale response (`tabs.js`). The refusal is
-   raised as it arrives so the tab can say which of them it was — the kinds are
-   `FilesError`'s own, so `fileErrorText` already has the words. */
+   raised as it arrives so the tab can say which of them it was.
+
+   **The kinds are mostly `FilesError`'s own and deliberately not all of them.**
+   The three a file shares with the editor — binary, too large, not UTF-8 — are
+   pinned to it by a test in `vcs/model.rs`, and `fileErrorText` has had the
+   words for those from the start. But this command is git, so it can also
+   refuse in ways no file read can: `timeout`, when a call outstays `run.rs`'s
+   ceiling, is in that table for exactly this caller. Anything added to
+   `VcsError` that this command can produce needs an entry in `ERRORS` beside
+   it, or it draws the fallback — "Could not read this file." — with nothing
+   failing anywhere. */
 export async function fileAtHead(repo, path) {
   return invoke('vcs_file_at_head', { repo, path })
 }

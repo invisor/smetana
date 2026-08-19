@@ -234,7 +234,7 @@ Hence the count on the button, `commitLabel` — a button reading only "Commit" 
 surprising thing about it unsaid. The empty message is refused **before** the add and not left to
 git, whose own refusal is in good words but arrives with the index already rewritten behind it. No
 `--no-verify`: a repository's hooks are part of what committing means there, and the price is
-`run::WRITE_CEILING` — a hook is somebody else's program, so the commit is allowed two minutes and is
+`run::WRITE_CEILING` — a hook is somebody else's program, so the commit is allowed five minutes and is
 then stopped, with git given the chance to take `index.lock` back off the disk on its way out.
 
 **The draft is per repository, in memory, and never in `settings.json`.** A project is often several
@@ -375,20 +375,51 @@ button stays inert, nothing on screen says why, and the way out is restarting th
 standing over a hook can watch it in their own terminal; nobody can press a dead button, and a call
 that comes back can be pressed again. So a call site says which kind of call it is by the function it
 names — **`run::git_read` under `READ_CEILING` (30 s), `run::git_write` and `run::git_attempt` under
-`WRITE_CEILING` (120 s)**, with `git_maybe` and `git_bytes` reads by construction. Thirty seconds is
-two orders of magnitude over the 220 ms a cold `git status` measures on this repository; two minutes
-is `runs/preflight.rs`'s health-check number, taken for its reason rather than its digit — the wait
-on a command a person configured and this app knows nothing about the cost of.
+`WRITE_CEILING` (300 s)**, with `git_maybe` and `git_bytes` reads by construction. Thirty seconds is
+two orders of magnitude over the 220 ms a cold `git status` measures on this repository. Five minutes
+is what the first repository this ships against declares for itself: `core.hooksPath = .beads/hooks`,
+where every hook wraps `bd hooks run` in `timeout ${BEADS_HOOK_TIMEOUT:-300}`. **The two ways of
+being wrong are not symmetric, and that is what sets the number** — a ceiling too low is a hard
+failure with no way round it from inside the app (the commit is killed, pressed again, killed again,
+and committing there is impossible), while a ceiling too high costs one wait on a hang that should
+not have happened and ends in an error somebody can act on. A ceiling turns "forever" into
+"eventually"; it is not a performance budget for somebody else's hook. It is affordable at that
+length only because the work is off the runtime: a stuck button no longer takes a tokio worker with
+it.
+
+**A stopped write is not a clean no-op, and there is no door in the panel to what it leaves.**
+`WRITE_CEILING` governs `checkout`, `merge` and `rebase` as well as the commit, and a merge or a
+rebase killed part-way leaves `MERGE_HEAD` or `rebase-merge` on the disk and a half-updated tree
+behind it. `ConflictModal` does not open on that: it opens on `MergeOutcome::Conflict`, which is a
+tree read *after* an operation that finished. So what a person gets is the timeout sentence and a
+repository mid-operation, and the way back is git in a terminal. That door is deliberately not built
+— naming the state is the whole of what is owed here.
+
+**A held `index.lock` is not one of the hangs this protects against**, and the correction is worth
+keeping: git does not wait on that lock, it refuses immediately (measured on 2.34.1 —
+`fatal: Unable to create '...index.lock': File exists.` at exit 128), which reaches the panel as an
+ordinary refusal in git's own words. The lock matters on the other side of the ceiling, as the thing
+a killed git would have left behind.
 
 **The stop is SIGTERM first, then SIGKILL, and the grace is not politeness.** git removes the
 `*.lock` files it holds from a signal handler and re-raises; SIGKILL cannot be caught, so a write
 killed outright leaves `.git/index.lock` behind and every later git command in that repository
 refuses with "Another git process seems to be running" until somebody deletes the file by hand —
 a worse state than the hang the ceiling exists to end. Measured on git 2.34.1 against a `pre-commit`
-hook that sleeps: SIGTERM to the group leaves no lock, SIGKILL leaves one, and a test in `run.rs`
-drives a real commit through the ceiling and then commits again to prove it. The kill still follows
-the two-second grace, because a hook that ignores SIGTERM must not turn the ceiling back into a wait
-with no end.
+hook that sleeps: SIGTERM to the group leaves no lock, SIGKILL leaves one. **The two-second grace is
+slept through whole and the child is not watched during it**, which reads like waste and is not: git
+dies promptly on SIGTERM, so a version that returned the moment it was reaped would skip the SIGKILL
+in exactly the case it exists for — a hook that ignored the signal and is still running. Waiting for
+the reap and signalling afterwards is not the alternative either, since a reaped pid can be recycled
+and the group named would be somebody else's.
+
+`bounded` and `terminate` are the one part of `run.rs` under test, and the tests are the shape of
+those two rules: a script that floods either pipe, one that outstays its deadline and is then looked
+for in the process table (a zombie still answers `kill(pid, 0)`, a reaped child does not), one whose
+grandchild ignores SIGTERM so the kill behind the grace is the only thing that can reach it, and two
+that drive **real git in a real repository** — a `textconv` helper that hangs a read, and a
+`pre-commit` hook that hangs a commit, after which the test commits again to prove the repository is
+not left refusing.
 
 **How every one of those waits is done is `bounded`, and it is deliberately not the poll-and-kill
 loop in `agents::oneshot::ask` it started as.** That loop reads both pipes only once the child is gone, and
@@ -401,16 +432,15 @@ a thread of its own** while the wait happens, and a caller with nothing to do wi
 says so (`Capture::Discard`) and it is never opened at all — which is why `git_network` and
 `git_write` return `()`. A read asks for it and pays for the second thread.
 
-The kill has two halves for the same reason. `Child` has no reaping `Drop`, so a `kill` with no
-`wait` behind it leaves a defunct process for the lifetime of the app — and this is the call a
-five-minute sweep makes, so a blackholed route is a hundred zombies a day against
+The stop is a kill **and** a reap, and both halves are load-bearing. `Child` has no reaping `Drop`,
+so a `kill` with no `wait` behind it leaves a defunct process for the lifetime of the app — and this
+is the call a five-minute sweep makes, so a blackholed route is a hundred zombies a day against
 `kern.maxprocperuid`, after which the app cannot fork at all and nothing on screen says why. And the
 signal goes to the **process group**, as `runs/preflight.rs::terminate` does and for its reason: the
-process actually blocked on the socket is `ssh` or `git-remote-https`, a child of git's, and killing
-git alone leaves it holding both the connection and the stderr pipe. `bounded` is the one thing in
-`run.rs` with tests under it — a script that floods a pipe, and one that outstays its deadline and
-is then looked for in the process table, since a zombie still answers `kill(pid, 0)` and a reaped
-child does not.
+process actually blocked is often a child of git's — `ssh` or `git-remote-https` on a fetch, the hook
+itself on a commit — and killing git alone leaves it holding both the connection and the stderr pipe.
+That twin stays on a bare SIGKILL deliberately: a declared command holds no lock file of ours, and a
+person pressing stop must not wait two seconds for a program that has already been asked once.
 
 **Every command in `vcs/` runs its work in `spawn_blocking` and none of it in the body of the
 `async fn`** — `off_the_runtime`, or `off_the_runtime_or_empty` for the three that are documented as
@@ -424,7 +454,7 @@ why. `vcs_suggest_message` keeps its own wrapper, since what comes back from it 
 
 An expired ceiling is **`VcsError::Timeout`, its own variant with its own `kind()` of `"timeout"`**,
 and never a `Git { stderr }` with an empty message. git said nothing; this app decided, and the
-sentence says so ("Smetana stopped git after 120 seconds — it had not finished"). One variant for all
+sentence says so ("Smetana stopped git after 300 seconds — it had not finished"). One variant for all
 three ceilings, and the sentence says only what is true of all three: it named the remote while only
 the networked calls could produce it, which would now be a lie about a commit hook, and a second
 variant would have carried this same `kind` — nothing on the front end could have told them apart,

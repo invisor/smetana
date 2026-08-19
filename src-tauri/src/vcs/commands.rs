@@ -24,7 +24,9 @@ use crate::git;
 /// tens of milliseconds. That argument is now the general one instead of the
 /// exception: since `run.rs` gained a ceiling for local reads and writes too,
 /// **every** call here has a length this app has committed to waiting, up to
-/// two minutes for a write sitting on somebody's `pre-commit`. Every IPC call
+/// five minutes for a write sitting on somebody's `pre-commit` — and it is this
+/// wrapper that makes a ceiling that long affordable, since a button stuck for
+/// five minutes now costs one button. Every IPC call
 /// in the app — the file tree, the editor, the tracker, the terminals — shares
 /// the runtime these commands are polled on, so a git that is merely slow would
 /// otherwise take workers out of everything else on screen with nothing saying
@@ -47,12 +49,22 @@ where
 /// that failed answers with what "nothing is known" already looks like here:
 /// the empty list. It is the same answer those commands give for a folder git
 /// cannot read, which is the only other way they come back with nothing.
+///
+/// **The log line is what keeps that from being a quiet lie.** The empty list
+/// says "this folder holds no repository", which is a statement and not a
+/// shrug, and a panicked task would have it made about a folder nobody looked
+/// at — against this module's own rule that anything unobservable reads as
+/// "no", loudly. Nothing on screen can carry it, since the shape of the answer
+/// has no room for a refusal, so it goes where a developer will find it.
 async fn off_the_runtime_or_empty<T, F>(work: F) -> T
 where
     F: FnOnce() -> T + Send + 'static,
     T: Default + Send + 'static,
 {
-    tokio::task::spawn_blocking(work).await.unwrap_or_default()
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|err| {
+        log::error!("vcs: a read gave way and is being reported as nothing at all: {err}");
+        T::default()
+    })
 }
 
 /// The repositories of a project. Never a refusal: a folder that is not a
@@ -354,10 +366,11 @@ pub async fn vcs_abort(repo: String, op: OpKind) -> Result<(), VcsError> {
 /// No `--no-verify`: a repository's hooks are part of what committing means
 /// there, and skipping them silently from a button is not this app's decision
 /// to take. What that costs is `run::WRITE_CEILING`: a hook is somebody else's
-/// program and may reasonably lint or compile, so this call is allowed two
-/// minutes and then stopped — with git given the chance to take `index.lock`
-/// back off the disk on its way out, which is what keeps a stopped commit from
-/// leaving a repository nothing can be committed to.
+/// program and may reasonably lint, test or compile, so this call is allowed
+/// five minutes — the patience this repository's own hooks declare — and then
+/// stopped, with git given the chance to take `index.lock` back off the disk on
+/// its way out, which is what keeps a stopped commit from leaving a repository
+/// nothing can be committed to.
 #[tauri::command]
 pub async fn vcs_commit(repo: String, message: String) -> Result<(), VcsError> {
     off_the_runtime(move || commit_all(Path::new(&repo), &message)).await
