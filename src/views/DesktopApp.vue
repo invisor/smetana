@@ -1816,7 +1816,7 @@ const absoluteEditorPath = (relPath) => (filesState.root ? `${filesState.root}/$
 /* Editor state lives exactly as long as the tab. Cleanup follows the tab
    list, not the close button: the same watcher covers switching projects and
    a path that fell out because the file stopped being readable. Everything that
-   is not a file is filtered out — the pinned tabs (Agent, Kanban), the diffs and
+   is not a file is filtered out — the pinned tabs (Kanban, Agent), the diffs and
    the terminals: none has a file on disk, and there is no reason to build a
    composite path for one — nothing is ever saved under its id.
 
@@ -2356,10 +2356,12 @@ const toastStackStyle = {
           @close="onCloseTab"
           @promote="promote"
         >
-          <!-- Beside the board tab rather than at the far right of the row: it
-               is about these first two tabs, and past the strut it would drift
-               away from them. Disabled with no project open, where neither row
-               has anywhere to start anything. -->
+          <!-- Beside the pinned block rather than at the far right of the row:
+               it is about those first two tabs, and past the strut it would
+               drift away from them. The block is what it names and not the board
+               within it, since which of the pair the button ends up against is
+               the order's to decide. Disabled with no project open, where
+               neither row has anywhere to start anything. -->
           <template #afterPinned>
             <MenuButton
               icon="plus"

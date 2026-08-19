@@ -5,7 +5,7 @@ import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
 
 /* Tab kinds
-   pinned  - Agent and Kanban. Always first, no close affordance. (The Agent tab
+   pinned  - Kanban and Agent. Always first, no close affordance. (The Agent tab
              is only drawn while the project has one, but closing it is taking
              the last agent away, not a cross on the tab — which is what this
              kind means here.)

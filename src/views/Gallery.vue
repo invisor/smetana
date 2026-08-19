@@ -286,8 +286,8 @@ const switched = ref(true)
    token, so flipping the theme has to rebuild it. In the app `tabList` is
    already a computed and gets this for free. */
 const tabs = computed(() => [
-  { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
+  { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', iconUrl: fileIconUrl('tabs.rs', documentTheme.value), dirty: true },
   { id: 'agent.rs', kind: 'preview', label: 'agent.rs', iconUrl: fileIconUrl('agent.rs', documentTheme.value) },
   { id: 'git.rs', kind: 'diff', label: 'git.rs', icon: 'git-compare' },

@@ -1,4 +1,4 @@
-/* What the + button beside the board tab offers.
+/* What the + button beside the pinned tabs offers.
 
    The `projectMenu.js` / `taskMenu.js` family: pure, no Vue and no DOM, which is
    the whole reason it is a file of its own — no test in this repository can
