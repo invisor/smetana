@@ -37,6 +37,50 @@ export const terminalState = reactive({
   lastError: null
 })
 
+/* Every session the worker holds, by id, reduced to the project it belongs to
+   and the state it is in. Beside `terminalState.sessions` rather than inside
+   it, and deliberately: that list is the active project's and must stay that
+   way — the agents panel draws it, and a row for a project this window is not
+   pointed at would offer a remove button that kills somebody else's process.
+   This map is the other question, which only the project rail asks: which
+   projects have something going on.
+
+   Marks rather than a count per project. The events that maintain it deliver
+   one session at a time, so a store holding only totals could not tell whether
+   the session that just left `needs-you` was the last loud one in its project. */
+const marks = reactive(new Map())
+
+/* The one fact a project's tile draws, per project path: `loud` if an agent is
+   waiting on somebody there, `live` if one is working, `idle` otherwise.
+
+   `loud` wins over `live`: a project with an agent waiting on a person is the
+   reason the rail exists, and it must not be hidden by another agent in the
+   same project getting on with its work.
+
+   `starting` counts as live for the reason it counts in `hasAgentSession`: a
+   spawn takes about a second, and a tile that stayed grey through it would
+   leave the button somebody pressed with no visible effect. `idle` counts as
+   neither — it is a live process with nothing to say, which `toUiState` reads
+   as `ready` and the design system reads as quiet. */
+export const projectStates = computed(() => {
+  const out = {}
+  for (const mark of marks.values()) {
+    const row = (out[mark.project] ??= { state: 'idle', live: 0, loud: 0 })
+    if (mark.state === 'needs-you') row.loud += 1
+    else if (mark.state === 'running' || mark.state === 'starting') row.live += 1
+  }
+  for (const row of Object.values(out)) {
+    row.state = row.loud ? 'loud' : row.live ? 'live' : 'idle'
+  }
+  return out
+})
+
+/* A path nobody has a session under is `idle`, and that is an ordinary answer
+   rather than a missing one: it is what every project reads as in a window that
+   has just opened, and what a project the worker has never touched reads as
+   forever. */
+export const projectState = (project) => projectStates.value[project]?.state ?? 'idle'
+
 /* The last start the worker answered for: `{ ticket, session }`, or null until
    one lands.
 
@@ -482,8 +526,27 @@ function upsert(session) {
 
 export async function initTerminals() {
   startClock()
+  /* The first read of the marks, and the only one. Everything after it arrives
+     on the two listeners below, which the worker emits for every session of
+     every project already. */
+  try {
+    for (const mark of await invoke('terminal_marks')) marks.set(mark.id, mark)
+  } catch (err) {
+    /* A rail whose dots are all idle is the cost, and it is the right cost:
+       nothing else in this window depends on this read, and failing the whole
+       of initTerminals over it would take the agents panel down with it. */
+    console.error('[terminals] reading session marks failed:', err)
+  }
   await listen('terminal:state', (event) => {
     const session = event.payload
+    /* Before anything else, because `upsert` returns early for a session of
+       another project and the mark is wanted for exactly those: the rail draws
+       a dot for every project, and this window is pointed at one of them. */
+    marks.set(session.id, {
+      id: session.id,
+      project: session.project,
+      state: session.state
+    })
     /* Asked before the upsert, because the upsert is what makes it false: a
        session nobody has seen before is a start, anything else is one of the
        many state events a live session goes on emitting — a question, an exit —
@@ -515,6 +578,10 @@ export async function initTerminals() {
        removeSession's for the same reason it exists there: a selection left
        naming a vanished row would black the terminal out. */
     const { id } = event.payload
+    /* Beside the filter below, and for every project rather than this one: the
+       worker announces a removal wherever it happened, and a mark left behind
+       would keep a dot lit on a tile whose process is gone. */
+    marks.delete(id)
     terminalState.sessions = terminalState.sessions.filter((s) => s.id !== id)
     if (terminalState.activeId === id) {
       terminalState.activeId = lastAgent()

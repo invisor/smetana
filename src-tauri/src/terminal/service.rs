@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::detect::{detect, DetectInput, Quiet};
-use super::model::{Exit, Session, SessionId, SessionState, TerminalError};
+use super::model::{Exit, Session, SessionId, SessionMark, SessionState, TerminalError};
 use super::pty::{Chunk, Pty};
 use super::ring::Ring;
 use super::screen::Screen;
@@ -75,6 +75,11 @@ pub struct Attached {
 
 pub enum Request {
     List(String, oneshot::Sender<Vec<Session>>),
+    /// Every session the worker holds, whatever project it belongs to, reduced
+    /// to what the project rail draws. `List` answers about one project because
+    /// the agents panel is about one project; the rail is about all of them,
+    /// and asking `List` once per open project would be a command per row.
+    Marks(oneshot::Sender<Vec<SessionMark>>),
     /// Project, agent id and intent. The agent id is what settings asked for,
     /// not necessarily what runs — see the `Create` arm and `agents::pick`.
     Create(String, String, Intent, oneshot::Sender<Result<Session, TerminalError>>),
@@ -512,6 +517,18 @@ fn handle(
                 .map(|l| l.session.clone())
                 .collect();
             list.sort_by_key(|s| s.id);
+            let _ = tx.send(list);
+        }
+        Request::Marks(tx) => {
+            let mut list: Vec<SessionMark> = sessions
+                .values()
+                .map(|l| SessionMark {
+                    id: l.session.id,
+                    project: l.session.project.clone(),
+                    state: l.session.state,
+                })
+                .collect();
+            list.sort_by_key(|m| m.id);
             let _ = tx.send(list);
         }
         Request::Create(project, agent, intent, tx) => {

@@ -415,6 +415,25 @@ call*, and the list could end up showing one project's sessions under another pr
 which the remove button in `AgentList.vue` would kill the wrong project's agent, silently. A test in
 `tests/stores/terminals.test.js` pins this.
 
+Beside that list, and separate from it on purpose, `terminals.js` keeps a second structure about
+**every** project: `marks`, a map of session id → `{id, project, state}`, exported as the computed
+`projectStates` (path → `{state, live, loud}`) and the `projectState(path)` accessor. The project
+rail draws one dot per project and cannot ask `sessions`, which is one project's by design — a row
+for a project this window is not pointed at would offer a button that kills somebody else's process.
+
+Three things feed the map and there is no polling: `terminal_marks`, read once in `initTerminals`,
+and the `terminal:state` / `terminal:removed` listeners, which the worker already emits for every
+session of every project — `upsert` throws the foreign ones away, so the mark is set *before* it
+runs. The first read is wrapped in a `try`: a rail of grey dots is a smaller loss than an
+`initTerminals` that threw and took the agents panel with it. Marks rather than a total per project,
+because the events arrive one session at a time and a store holding only counters could not tell
+whether the session that just left `needs-you` was the last loud one where it lived. `loud` beats
+`live`; `starting` counts as live for the reason it counts in `hasAgentSession`; `idle` counts as
+neither, being a live process with nothing to say. `SessionMark` in `terminal/model.rs` is its own
+type rather than `Session` for the reason `Request::Group` gives about the pid — every project's
+sessions cross here, and `Session` carries `work`, which for a filing agent holds the whole of the
+person's own draft prose.
+
 `TerminalView.vue`'s pane and its host both carry `minWidth: 0`, and that is not decoration next to
 the `minHeight: 0` beside it. A flex item defaults to `min-width: auto` and refuses to shrink below
 its own content — here, xterm.js at whatever width it was last fitted to — so narrowing the centre
