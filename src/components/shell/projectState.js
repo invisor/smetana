@@ -1,4 +1,4 @@
-/* How a project's agent state is said in words. Two call sites — the rail's
+/* How a project's state is said in words. Two call sites — the rail's
    tooltip, which is the one place `live` and `loud` are told apart by something
    other than hue, and the panel header's summary line — so the words are here
    rather than in either of them: two copies of a sentence are two sentences
@@ -21,9 +21,14 @@
    `isShellSession`, so the scope bar could read 0 while a header under it read
    1, on one screen, about one project. The dot beside these words claims only
    that something here wants you, which is true of a shell too; the words are
-   held to the same. This is also the handoff's own phrasing — `main · 1 waiting
-   on you`. Counting agents apart from shells needs a field on the mark, and
-   that is a change to Rust and to the store rather than a rewording here. */
+   held to the same. Counting agents apart from shells needs a field on the mark,
+   and that is a change to Rust and to the store rather than a rewording here.
+
+   Two of the three strings are the handoff's verbatim — `main · 1 waiting on
+   you` and `idle` — and the third deliberately is not: the handoff writes the
+   live case as `1 agent live`, which carries exactly the noun this map cannot
+   support, so it is `1 running` here instead. A fidelity sweep against the
+   handoff will meet that one difference; it is settled, not missed. */
 
 /** "1 waiting on you" | "2 running" | "idle". */
 export function stateLabel(row) {

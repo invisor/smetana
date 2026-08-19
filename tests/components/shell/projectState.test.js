@@ -13,12 +13,17 @@ describe('stateLabel', () => {
   })
 
   /* The count is a count of sessions, and `SessionMark` does not say which of
-     them are agents — a shell is marked exactly like one. Naming a noun here
-     would be a claim the map cannot support, and one `liveAgentCount` answers
-     differently on the same screen; see the module's own note. */
-  it('names no noun, because the map behind it cannot tell an agent from a shell', () => {
-    expect(stateLabel({ state: 'live', live: 1, loud: 0 })).not.toMatch(/agent|shell|session/)
-    expect(stateLabel({ state: 'loud', live: 0, loud: 1 })).not.toMatch(/agent|shell|session/)
+     them are agents — a shell is marked exactly like one. Naming *that* noun
+     here would be a claim the map cannot support, and one `liveAgentCount`
+     answers differently on the same screen; see the module's own note.
+
+     The guard is that one word and no wider. "1 session waiting on you" would
+     be perfectly true and is house vocabulary already (`AgentSettings.vue`,
+     `AboutSettings.vue`), so a guard that tripped on it would be teaching the
+     next person to edit this test instead of reading it. */
+  it('names no agent, because the map behind it cannot tell one from a shell', () => {
+    expect(stateLabel({ state: 'live', live: 1, loud: 0 })).not.toMatch(/\bagents?\b/)
+    expect(stateLabel({ state: 'loud', live: 0, loud: 1 })).not.toMatch(/\bagents?\b/)
   })
 
   it('says idle for a project with nothing going on, and for one nobody measured', () => {
