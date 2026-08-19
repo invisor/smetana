@@ -43,6 +43,7 @@ import {
   KanbanBoard,
   KanbanSettings,
   LogView,
+  Markdown,
   MenuButton,
   NewBranchModal,
   Modal,
@@ -81,6 +82,9 @@ import { gitActions } from '../components/git/gitActions.js'
 import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
+/* The app's one link-opening path, bound to what the inspector raises. In
+   a browser it is a new tab; in the app it is the person's own browser. */
+import { openExternal } from '../stores/app.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
 
@@ -551,6 +555,55 @@ const CONFLICT = {
   ]
 }
 
+/* Every construct the parser supports, in one issue description: a heading at
+   each of the two sizes, a paragraph carrying strong, emphasis, code and both
+   link forms, a task list with a nested list under it, a numbered list, a
+   quote, a fenced block and a rule. The last paragraph is the invariant on
+   screen — a table, a reference link, an HTML tag and a link this app may not
+   open are none of them supported, and every character of them is still drawn.
+
+   One constant for two places: the card below looks at the component on its
+   own, and `FULL_ISSUE` reads the same text through the inspector, where the
+   heading sizes have to hold against the issue title above them. Two fixtures
+   would have drifted the first time either was edited. */
+const MARKDOWN_SAMPLE = [
+  '# Background',
+  '',
+  'The health notice renders only while the columns are empty, so a version',
+  'mismatch is invisible exactly when there are cards — a person is looking at',
+  'stale data with nothing to say so.',
+  '',
+  '## Acceptance criteria',
+  '',
+  '- [ ] The notice is visible over a board with cards on it',
+  '- [x] It never covers the card that needs a human',
+  '  - Checked against `--status-needs-you-fg` at both densities',
+  '',
+  '### What it looks like',
+  '',
+  'A **quiet** strip above the columns rather than a *replacement* of them,',
+  'drawn by `src/components/kanban/KanbanBoard.vue`.',
+  '',
+  '> The board stays usable while it says the data may be stale.',
+  '',
+  '1. Read the health',
+  '2. Draw the strip',
+  '3. Leave the columns alone',
+  '',
+  '```sh',
+  'npm test -- tests/components/kanban/boardView.test.js',
+  '```',
+  '',
+  'See [the design system](https://claude.ai/design) and',
+  '<http://localhost:5173/?view=gallery>. A [local note](file:///tmp/run.log)',
+  'stays text, and so do an | unsupported | table |, a [reference][ref] and an',
+  '<b>HTML tag</b>.',
+  '',
+  '---',
+  '',
+  'Filed under smetana-29j.'
+].join('\n')
+
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking
    at — a panel that reads as a form with blank rows is the defect this section
@@ -559,10 +612,15 @@ const FULL_ISSUE = {
   id: 'smetana-29j.11',
   title: 'Show the tracker state on a non-empty board too',
   status: 'in_progress',
-  description:
-    'The health notice renders only while the columns are empty, so a version mismatch is invisible exactly when there are cards — a person is looking at stale data with nothing to say so.',
-  acceptance_criteria:
-    'The notice is visible over a board with cards on it, and it never covers the card that needs a human.',
+  /* Markdown, because everything bd stores is: the panel is where a task is
+     read before somebody decides to run it, and this is the fixture that shows
+     it rendered at the width it is actually read at. */
+  description: MARKDOWN_SAMPLE,
+  acceptance_criteria: [
+    '- [x] The notice is visible over a board with cards on it',
+    '- [ ] It never covers the card that needs a human',
+    '- [ ] Checked by eye in all four `theme` × `density` combinations'
+  ].join('\n'),
   design:
     'A quiet strip above the columns rather than a replacement of them: the board stays usable while it says the data may be stale.',
   // Two lines on purpose: every `bd note` appends, and the panel owes the
@@ -1284,15 +1342,27 @@ const menuTargetStyle = {
           />
         </div>
       </div>
-      <!-- Two of them: the panel draws only the fields an issue has, so the
-           sparse case is a different component to look at, not the same one
-           with less in it. -->
+      <!-- The renderer on its own, at the width it is read at in the app: the
+           right column is 320px, and a code block that scrolls there rather
+           than widening the panel is the thing to look at. Nothing in it is a
+           control — a task item is a glyph, and clicking one does nothing. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
         <div :style="{ width: '320px' }">
-          <TaskInspector :issue="FULL_ISSUE" ui-status="running" />
+          <Markdown :text="MARKDOWN_SAMPLE" @open="openExternal" />
+        </div>
+      </div>
+      <!-- Two of them: the panel draws only the fields an issue has, so the
+           sparse case is a different component to look at, not the same one
+           with less in it. The full one carries the same markdown as the card
+           above, which is where the heading sizes are checked against the
+           title; the sparse one has no prose at all and must look exactly as it
+           did before markdown reached this panel. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
+        <div :style="{ width: '320px' }">
+          <TaskInspector :issue="FULL_ISSUE" ui-status="running" @open="openExternal" />
         </div>
         <div :style="{ width: '320px' }">
-          <TaskInspector :issue="SPARSE_ISSUE" ui-status="ready" />
+          <TaskInspector :issue="SPARSE_ISSUE" ui-status="ready" @open="openExternal" />
         </div>
       </div>
       <!-- The other thing that stands in the inspector's slot: a task an agent

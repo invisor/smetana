@@ -8,6 +8,7 @@
    the pointer rather than only the selected one. A panel that cannot be typed
    into cannot silently overwrite what an agent wrote while it sat open. */
 import { computed } from 'vue'
+import Markdown from './Markdown.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import TypeBadge from './TypeBadge.vue'
 import { priorityLabel } from './issueType.js'
@@ -18,6 +19,11 @@ const props = defineProps({
   /* Statuses translated to the design system's vocabulary, for the badge. */
   uiStatus: { type: String, required: true }
 })
+
+/* A link inside one of the prose fields, raised rather than opened: no
+   component in `src/components/` knows Tauri exists, so the view binds
+   `openExternal` — the app's one link-opening path — to this. */
+const emit = defineEmits(['open'])
 
 /* bd hands dates over as RFC 3339 in UTC. The panel is narrow, so the year is
    worth the four characters only because an issue can be old — the alternative,
@@ -96,13 +102,6 @@ const titleStyle = {
   textWrap: 'pretty'
 }
 
-const descriptionStyle = {
-  font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)',
-  color: 'var(--text-secondary)',
-  whiteSpace: 'pre-wrap',
-  textWrap: 'pretty'
-}
-
 /* Two columns, the label column sized to its longest word and no wider. */
 const grid = {
   display: 'grid',
@@ -166,7 +165,11 @@ const divider = {
 
     <div :style="titleStyle">{{ issue.title }}</div>
 
-    <div v-if="issue.description" :style="descriptionStyle">{{ issue.description }}</div>
+    <!-- Everything bd stores is markdown, and so is everything an agent writes
+         into it, so all five prose fields below are drawn as markdown rather
+         than as the text of it. Still read-only: nothing here is editable, and
+         a task item's checkbox is a glyph rather than a control. -->
+    <Markdown v-if="issue.description" :text="issue.description" @open="emit('open', $event)" />
 
     <!-- bd's other prose, in a fixed order: the two that are the spec first,
          the log that grows last. Read-only like the description — rewriting
@@ -174,17 +177,17 @@ const divider = {
          an issue without them looks exactly as it did before they existed. -->
     <div v-if="issue.acceptance_criteria" :style="proseSection">
       <span :style="rowLabel">Acceptance criteria</span>
-      <span :style="descriptionStyle">{{ issue.acceptance_criteria }}</span>
+      <Markdown :text="issue.acceptance_criteria" @open="emit('open', $event)" />
     </div>
 
     <div v-if="issue.design" :style="proseSection">
       <span :style="rowLabel">Design</span>
-      <span :style="descriptionStyle">{{ issue.design }}</span>
+      <Markdown :text="issue.design" @open="emit('open', $event)" />
     </div>
 
     <div v-if="issue.notes" :style="proseSection">
       <span :style="rowLabel">Notes</span>
-      <span :style="descriptionStyle">{{ issue.notes }}</span>
+      <Markdown :text="issue.notes" @open="emit('open', $event)" />
     </div>
 
     <!-- Only when there is a record to separate: an issue carrying neither
@@ -201,7 +204,7 @@ const divider = {
 
     <div v-if="issue.close_reason" :style="closeReasonBox">
       <span :style="rowLabel">Close reason</span>
-      <span :style="descriptionStyle">{{ issue.close_reason }}</span>
+      <Markdown :text="issue.close_reason" @open="emit('open', $event)" />
     </div>
   </div>
 </template>
