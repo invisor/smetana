@@ -76,7 +76,12 @@ import {
   notificationsState
 } from '../stores/notifications.js'
 import { initSettingsBridge, settings } from '../stores/settings.js'
-import { announceBoardColumns, openSettingsWindow, watchBoardHello } from '../stores/app.js'
+import {
+  announceBoardColumns,
+  openExternal,
+  openSettingsWindow,
+  watchBoardHello
+} from '../stores/app.js'
 import { paintRoot } from './useAppearance.js'
 import {
   activePath,
@@ -2631,10 +2636,14 @@ const toastStackStyle = {
               @select="project.selectedTask = $event"
             />
 
+            <!-- A link in one of the issue's prose fields goes to the person's
+                 own browser: the panel raises it, and this is where the app's
+                 one link-opening path is bound to it. -->
             <TaskInspector
               v-if="inspectedIssue"
               :issue="inspectedIssue"
               :ui-status="toUiStatus(inspectedIssue.status)"
+              @open="openExternal"
             />
 
             <!-- Nothing picked on the board, which is where a project opens.
