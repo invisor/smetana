@@ -54,6 +54,7 @@ import {
   ProjectList,
   PromoteColumnModal,
   RepoList,
+  ScopeIndicator,
   SectionHeader,
   ReportView,
   Select,
@@ -1287,6 +1288,70 @@ const menuTargetStyle = {
         <div :style="{ width: '320px' }">
           <DraftInspector :draft="AUTO_DRAFT" />
         </div>
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Scope bar</div>
+      <!-- The bar runs across the top of the app window, so each instance takes
+           the whole width of the page rather than sitting in a frame: what it
+           has to survive is the name, the counters and the two buttons meeting
+           in one row, and a box would answer at a width nobody uses.
+
+           The counters are why there are five of them. Each is drawn only above
+           zero, and an unknown number of uncommitted files — `null`, what
+           `stores/vcs.js` hands over when the working tree could not be read —
+           draws nothing at all, exactly as a clean tree does. The two look
+           identical on screen on purpose, so the pair at the bottom is the only
+           place the difference can be seen against its own props.
+
+           The singulars are hover-only, being tooltips: point at the file and
+           agent counters in the third bar for "1 uncommitted file" and "1 agent
+           running", and at its bell for "1 notification". -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+        <!-- A worktree with a branch checked out in it: `scopeName` draws the
+             worktree, and the branch follows it after an @. Both counters
+             plural, and a count on the bell. -->
+        <ScopeIndicator
+          repo="smetana"
+          worktree="smetana-f69-scope-indicator"
+          branch="feature/smetana-f69-scope-indicator"
+          :dirty-count="7"
+          :agents-active="3"
+          :notifications="2"
+        />
+        <!-- No worktree, which is what the app itself passes today: `scopeName`
+             falls back to the branch and there is no @ segment after it. -->
+        <ScopeIndicator
+          repo="holiday-curb"
+          branch="develop"
+          :dirty-count="12"
+          :agents-active="2"
+        />
+        <!-- Ones, in all three places there is a noun to get wrong. -->
+        <ScopeIndicator
+          repo="smetana"
+          branch="main"
+          :dirty-count="1"
+          :agents-active="1"
+          :notifications="1"
+        />
+        <!-- Unknown rather than zero: no file glyph and no number, with the
+             agents counter beside it to show the bar is otherwise alive. -->
+        <ScopeIndicator
+          repo="beads-viewer"
+          branch="develop"
+          :dirty-count="null"
+          :agents-active="2"
+        />
+        <!-- A clean tree with nothing running: the same nothing as above from
+             the opposite fact, and a bell with no badge on it. -->
+        <ScopeIndicator
+          repo="tracker-notes"
+          branch="main"
+          :dirty-count="0"
+          :agents-active="0"
+        />
       </div>
     </section>
 
