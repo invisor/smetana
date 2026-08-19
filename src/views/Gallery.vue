@@ -1452,7 +1452,7 @@ const menuTargetStyle = {
              about those tabs and has to stay beside them however many files are
              open. -->
         <template #afterPinned>
-          <MenuButton icon="plus" label="New agent or terminal" :items="NEW_TAB_ITEMS" :width="180" />
+          <MenuButton icon="plus" label="New agent, terminal or task" :items="NEW_TAB_ITEMS" :width="180" />
         </template>
       </TabBar>
       <!-- Taller than the other boxes on this page, and the file tree is why:
