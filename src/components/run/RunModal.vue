@@ -81,9 +81,12 @@ const emit = defineEmits(['close', 'confirm', 'rescope'])
 /* Nothing here can be answered while the configuration cannot be read: the
    defaults every field is filled from come out of that file, so the values on
    screen would be this component's own fallbacks presented as the project's.
-   The fields are disabled rather than hidden, the same as the parallel field
-   under solo — a dialog that emptied itself would leave the notice floating
-   over nothing and say less, not more, about what is wrong. */
+   The fields are disabled rather than hidden — a dialog that emptied itself
+   would leave the notice floating over nothing and say less, not more, about
+   what is wrong. The parallel row below goes the other way under solo and is
+   not drawn at all, and the difference is what each state is about: there the
+   field has no meaning in that mode, while here every field still means what it
+   says and only its value would be untrustworthy. */
 const broken = computed(() => props.configError !== '')
 const locked = computed(() => props.busy || broken.value)
 
@@ -464,15 +467,18 @@ const errorStyle = {
       </div>
 
       <!-- Kept where the mode is, because it is the mode that decides whether
-           it means anything: solo does the work itself. Disabled rather than
-           hidden, the same as the play buttons on the board — a field that
-           came and went as the mode changed would move everything under it. -->
-      <div :style="row">
+           it means anything: solo does the work itself, so there is nobody to
+           spawn. The whole row goes rather than being disabled, and that
+           reverses what stood here before: the shift it costs was the argument
+           for leaving a dead field on screen, and it lost, because a field that
+           can do nothing still takes its line and then owes a sentence under it
+           saying why it is there — dropping the field drops the sentence too.
+           A dialog that rebuilds itself on the spot is nothing new here either:
+           `rescope` takes the "Part of ..." block away and Solo out of the mode
+           list without closing anything. -->
+      <div v-if="mode !== 'solo'" :style="row">
         <span :style="labelStyle">How many at once</span>
-        <Dropdown v-model="parallel" :options="PARALLEL" :disabled="locked || mode === 'solo'" />
-        <span v-if="mode === 'solo'" :style="noteStyle">
-          Solo does the work itself, so there is nobody to spawn.
-        </span>
+        <Dropdown v-model="parallel" :options="PARALLEL" :disabled="locked" />
       </div>
 
       <!-- The queue's alone: see `hasFloor`. -->

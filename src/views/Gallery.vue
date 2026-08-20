@@ -1377,8 +1377,9 @@ const menuTargetStyle = {
            single task and refused for a queue, and that is the model's rule
            rather than the dialog's to soften. The second also carries a refusal
            and a project that declares no live check; the third opens in solo,
-           where "How many at once" is inactive — a state behind two clicks is a
-           state nobody checks, so it is on the page like every other one.
+           where the "How many at once" row is not drawn at all — a state behind
+           two clicks is a state nobody checks, so it is on the page like every
+           other one.
 
            The frames are 800px tall rather than 640: the whole dialog has to be
            visible, footer included, at comfortable density, which is the taller
