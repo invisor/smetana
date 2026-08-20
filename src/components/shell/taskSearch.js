@@ -28,10 +28,15 @@ const ID_PREFIX = 1
 const TITLE = 2
 const PROSE = 3
 
-/* The prose fields, in the order a tie between them is broken. bd's own names
-   on the left, since that is what the snapshot carries; the camelCase name on
-   the right is what the row draws, because the interface is sentence case
-   English and `acceptance_criteria` is neither. */
+/* The prose fields, in the order one issue's own fields are tried: the first
+   that matches is the field the row names, and the rest are not looked at. It
+   decides nothing between two issues — prose is a single tier, and two issues
+   in it are ordered by where the match sits, whichever fields those matches
+   were found in.
+
+   bd's own names on the left, since that is what the snapshot carries; the
+   camelCase name on the right is what the row draws, because the interface is
+   sentence case English and `acceptance_criteria` is neither. */
 const PROSE_FIELDS = [
   ['description', 'description'],
   ['acceptance_criteria', 'acceptanceCriteria'],

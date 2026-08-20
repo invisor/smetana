@@ -30,6 +30,41 @@ pub const MAX_CORPUS: usize = 48 * 1024;
 /// instruction as well as here — see `prompt` below.
 pub const MAX_HITS: usize = 20;
 
+/// What one described issue costs beyond the description itself: the four
+/// spaces it is indented by, and the widest of the two ways it can end
+/// (`" \u{2026}\n"`, three bytes of ellipsis among them). Charged against the
+/// budget before the descriptions are shared out, because a budget that counts
+/// only the text inside the decoration is a budget the decoration then walks
+/// straight out of — nine bytes an issue, which at four hundred issues was
+/// three and a half kilobytes nobody had accounted for.
+const DECORATION: usize = "    ".len() + " \u{2026}\n".len();
+
+/// Room held back from the base lines for the two sentences written around
+/// them: the "The issues:" heading, and the notice naming how many issues were
+/// left out. Reserved in advance rather than added afterwards, because the
+/// notice exists only when the budget ran out — which is precisely the moment
+/// there would be no room left to write it in.
+const PREAMBLE: usize = 256;
+
+/// The merge lock's label. **The third deliberate copy of this string**,
+/// beside `LOCK_LABEL` in `src/stores/tracker.js` — which records why the
+/// duplication is accepted — and `runs::queue::LOCK_LABEL`, which is
+/// `pub(super)` and belongs to a module that already depends on this one.
+const LOCK_LABEL: &str = "smetana-lock";
+
+/// Whether an issue is the merge lock: two leads serializing their merges,
+/// which is coordination rather than work.
+///
+/// Left out of the question as well as out of the answer. The front end drops
+/// an id it cannot resolve to a card, so a lock could never reach the screen
+/// either way — but describing it to the model spends one of the base lines a
+/// tight prompt is counting, and lets it spend one of the twenty answer slots
+/// on something nobody can be shown. The exclusion then reads the same on both
+/// sides of the wire, which is the other half of why it is here.
+pub fn is_lock(issue: &Issue) -> bool {
+    issue.labels.iter().any(|label| label == LOCK_LABEL)
+}
+
 /// One issue, as the line that is always affordable.
 fn base_line(issue: &Issue) -> String {
     format!(
@@ -41,16 +76,34 @@ fn base_line(issue: &Issue) -> String {
     )
 }
 
-/// The longest prefix of `text` inside `max` characters, cut at a word boundary,
+/// The longest prefix of `text` inside `max` **bytes**, cut at a word boundary,
 /// and whether anything was cut off.
+///
+/// Bytes and not characters, and the difference is the whole of this function's
+/// history. The budget above is a byte budget — it is a ceiling on an argv
+/// argument — and counting the slices out in characters bought up to four times
+/// the prompt it was told it was buying. This tracker's own issues are written
+/// in Russian, two bytes to the letter: one long description came to 60 K
+/// against a 48 K ceiling, and a hundred and fifteen of them to 85 K. Nothing
+/// crashed, because `ARG_MAX` is a megabyte and the drift had two orders of
+/// magnitude to play with — which is exactly why it would have gone on
+/// unnoticed, and why the ceiling is only worth having if it is real.
 fn slice_at(text: &str, max: usize) -> (&str, bool) {
-    match text.char_indices().nth(max) {
-        None => (text, false),
-        Some((at, _)) => {
-            let cut = text[..at].rfind(char::is_whitespace).unwrap_or(at);
-            (&text[..cut], true)
-        }
+    if text.len() <= max {
+        return (text, false);
     }
+    // The last character boundary at or inside `max`, then the last word
+    // boundary at or inside that. `str::floor_char_boundary` is still unstable,
+    // so the walk is by hand; slicing anywhere else would panic.
+    let mut end = 0;
+    for (at, ch) in text.char_indices() {
+        if at + ch.len_utf8() > max {
+            break;
+        }
+        end = at + ch.len_utf8();
+    }
+    let cut = text[..end].rfind(char::is_whitespace).unwrap_or(end);
+    (&text[..cut], true)
 }
 
 /// Every issue the budget can hold, newest first.
@@ -69,9 +122,10 @@ fn corpus(issues: &[Issue], budget: usize) -> String {
 
     let mut base = Vec::new();
     let mut spent = 0usize;
+    let for_base = budget.saturating_sub(PREAMBLE);
     for issue in &ordered {
         let line = base_line(issue);
-        if spent + line.len() > budget {
+        if spent + line.len() > for_base {
             break;
         }
         spent += line.len();
@@ -86,20 +140,25 @@ fn corpus(issues: &[Issue], budget: usize) -> String {
              were left out, so a task you cannot see below may still exist.\n\n",
             dropped
         ));
-        spent += out.len();
     }
+    out.push_str("The issues:\n\n");
 
-    // Whatever room is left, shared evenly. Characters rather than bytes, which
-    // is what `slice_at` counts; the difference only ever leaves room unspent.
+    // Whatever room is left, shared evenly — in bytes, which is the unit the
+    // ceiling is written in and the unit `slice_at` cuts by. Everything already
+    // written counts against it, and so does the decoration each described line
+    // has yet to cost, charged for every issue rather than only for the ones
+    // that turn out to carry a description: over-charging leaves room unspent,
+    // and under-charging is how a ceiling stops being one.
+    spent += out.len() + base.len() * DECORATION;
     let share = budget.saturating_sub(spent) / base.len().max(1);
 
-    out.push_str("The issues:\n\n");
     for (issue, line) in base {
         out.push_str(&line);
         let Some(description) = issue.description.as_deref() else { continue };
         let description = description.trim();
-        // Under forty characters there is no phrase left to read, only the
-        // first two words of one, so the line is left as its base alone.
+        // Under forty bytes there is no phrase left to read, only the first
+        // word or two of one — fewer still where the text is not ASCII — so the
+        // line is left as its base alone.
         if description.is_empty() || share < 40 {
             continue;
         }
@@ -172,6 +231,17 @@ mod tests {
         issue
     }
 
+    /// A word that is not one byte to the letter, which is the only kind that
+    /// can see the difference between a byte budget and a character one.
+    ///
+    /// It stands in for the Russian this project's own tracker is written in —
+    /// two bytes a letter, the same width as the `\u{e9}` below — and the
+    /// three-byte character is here because two bytes alone would leave the
+    /// widest case untested. It is spelled in Latin script because there is no
+    /// Cyrillic anywhere in this tree, deliberately, and a fixture string is
+    /// named in that rule.
+    const WIDE_WORD: &str = "caf\u{e9}\u{2026} ";
+
     #[test]
     fn every_issue_contributes_a_line_when_they_all_fit() {
         let issues = vec![
@@ -200,26 +270,54 @@ mod tests {
 
     #[test]
     fn a_description_is_cut_rather_than_dropped() {
-        let mut one = issue("a-1", "First", "2026-08-01T00:00:00Z");
-        one.description = Some("word ".repeat(20_000));
-        let out = prompt("anything", &[one]);
-        assert!(out.len() <= MAX_CORPUS + 512, "the prompt stays inside its budget: {}", out.len());
-        assert!(out.contains("word"), "some of the description survives the cut");
+        for word in ["word ", WIDE_WORD] {
+            let mut one = issue("a-1", "First", "2026-08-01T00:00:00Z");
+            one.description = Some(word.repeat(20_000));
+            let out = prompt("anything", &[one]);
+            assert!(
+                out.len() <= MAX_CORPUS,
+                "the prompt stays inside its budget on {word:?}: {}",
+                out.len()
+            );
+            assert!(out.contains(word.trim()), "some of the description survives the cut");
+        }
+    }
+
+    /// The ceiling is in bytes, and a corpus that is not ASCII is where a
+    /// budget spent in characters shows: every slice comes back up to four
+    /// times the size it was budgeted at, and the whole prompt with it. An
+    /// ASCII fixture cannot see this at all, which is how it went unnoticed.
+    #[test]
+    fn a_budget_in_bytes_holds_where_the_text_is_not_ascii() {
+        let issues: Vec<Issue> = (0..115)
+            .map(|n| {
+                let mut one =
+                    issue(&format!("a-{n}"), "A title", &format!("2026-08-01T00:00:{:02}Z", n % 60));
+                one.description = Some(WIDE_WORD.repeat(4_000));
+                one
+            })
+            .collect();
+        let out = prompt("anything", &issues);
+        assert!(out.len() <= MAX_CORPUS, "the prompt stays inside its budget: {}", out.len());
+        assert!(out.contains(WIDE_WORD.trim()), "the descriptions are there, cut rather than gone");
     }
 
     #[test]
     fn dropping_issues_is_announced_rather_than_silent() {
-        // Enough title bytes that not even the base lines fit.
-        let issues: Vec<Issue> = (0..4000)
-            .map(|n| issue(&format!("a-{n}"), &"a long title ".repeat(8), "2026-08-01T00:00:00Z"))
-            .collect();
-        let out = prompt("anything", &issues);
-        assert!(out.len() <= MAX_CORPUS + 512);
-        assert!(
-            out.contains("were left out"),
-            "a model told the whole corpus was there when it was not will answer 'no such task' \
-             about a task that exists: {out}"
-        );
+        // Enough title bytes that not even the base lines fit — once in ASCII
+        // and once in text that is not, since a title is budgeted in bytes too.
+        for word in ["a long title ", WIDE_WORD] {
+            let issues: Vec<Issue> = (0..4000)
+                .map(|n| issue(&format!("a-{n}"), &word.repeat(8), "2026-08-01T00:00:00Z"))
+                .collect();
+            let out = prompt("anything", &issues);
+            assert!(out.len() <= MAX_CORPUS, "budget on {word:?}: {}", out.len());
+            assert!(
+                out.contains("were left out"),
+                "a model told the whole corpus was there when it was not will answer 'no such \
+                 task' about a task that exists: {out}"
+            );
+        }
     }
 
     #[test]
@@ -235,6 +333,24 @@ mod tests {
             .collect();
         let out = prompt("anything", &issues);
         assert!(out.contains(":59Z") || out.contains("a-59"), "the freshest survive the cut");
+    }
+
+    #[test]
+    fn the_merge_lock_is_not_an_issue_anybody_meant() {
+        let mut lock = issue("a-9", "merge lock", "2026-08-01T00:00:00Z");
+        lock.labels = vec!["smetana-lock".into()];
+        assert!(is_lock(&lock));
+        assert!(!is_lock(&issue("a-1", "First", "2026-08-01T00:00:00Z")));
+
+        // Neither described to the model nor accepted back from it: the caller
+        // builds both the corpus and the known set from the filtered list.
+        let kept: Vec<Issue> = vec![lock.clone(), issue("a-1", "First", "2026-08-01T00:00:00Z")]
+            .into_iter()
+            .filter(|one| !is_lock(one))
+            .collect();
+        let out = prompt("anything", &kept);
+        assert!(!out.contains("a-9"), "the lock is not in the question: {out}");
+        assert!(out.contains("a-1"));
     }
 
     #[test]

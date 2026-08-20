@@ -126,10 +126,15 @@ pub async fn tracker_search_semantic(
         let agent = crate::settings::agent(&app);
         let profile = crate::agents::pick(&agent, crate::shell_env::path())
             .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
-        let question = search::prompt(&query, &snapshot.issues);
+        // The merge lock is coordination and not work, and it is out of every
+        // list on screen — so it is out of the question too, rather than only
+        // out of the answer. See `search::is_lock`.
+        let issues: Vec<Issue> =
+            snapshot.issues.into_iter().filter(|issue| !search::is_lock(issue)).collect();
+        let question = search::prompt(&query, &issues);
         let raw = agent_oneshot::ask_raw(profile, &question)?;
         let known: std::collections::HashSet<String> =
-            snapshot.issues.iter().map(|issue| issue.id.clone()).collect();
+            issues.iter().map(|issue| issue.id.clone()).collect();
         Ok(search::parse(&raw, &known))
     })
     .await

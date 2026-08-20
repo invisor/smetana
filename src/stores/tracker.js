@@ -394,7 +394,22 @@ export async function deleteIssue(id) {
    it a moment ago. The same shape `vcs.js` gives the commit box's suggest
    button, for the same reason — the field needs to know the question is out,
    and needs the refusal as a sentence when it is refused. */
-export const searchState = reactive({ pending: false, error: null, ids: [] })
+export const searchState = reactive({
+  pending: false,
+  error: null,
+  ids: [],
+  /* Whether an answer has actually come back. Separate from `ids` being empty,
+     because those are two different facts and the list draws them differently:
+     nothing asked yet draws no group at all, while `NONE` — the agent looked and
+     nothing matched — draws the group with nothing in it. Without the
+     distinction a `NONE` is a spinner that stops and a list that does not
+     change, which is the same indistinguishability `oneshot.rs` refuses a
+     zero exit with an empty stdout for. */
+  answered: false,
+  /* The question the request in flight was sent for, and `null` when there is
+     none. This is the stale guard: see `searchSemantic` below. */
+  query: null
+})
 
 /* A rejection as one sentence the list can draw.
 
@@ -414,21 +429,47 @@ function refusal(error) {
 export function clearSemantic() {
   searchState.ids = []
   searchState.error = null
+  searchState.answered = false
+  /* Nulled rather than left where it was, and that is what makes a withdrawn
+     question discard its own answer: an ask still out at this moment is about a
+     query nobody can see any more, and the guard below is a comparison against
+     this very field. */
+  searchState.query = null
 }
 
 /* Ask the agent which tasks were meant.
 
    Two questions never overlap: a second press while one is out is dropped
-   rather than queued, because the answer would arrive under a query nobody can
-   see any more. An empty answer is an answer and not a failure — it is what
-   `NONE` comes back as, the agent having looked and found nothing. */
+   rather than queued. An empty answer is an answer and not a failure — it is
+   what `NONE` comes back as, the agent having looked and found nothing.
+
+   **Guarded on the query, exactly as `vcs.js`'s `suggestMessage` is guarded on
+   its project and repository**, and for a sharper version of the same reason.
+   That call is out for as long as a model takes to write a line; this one can
+   be out for the whole ninety seconds of `oneshot`'s deadline, and typing while
+   waiting is the ordinary thing to do — the field is a search field. Nothing
+   here cancels a request already sent, so an answer that lands under a
+   different question has to be dropped where it lands, or the "By meaning"
+   group would be answering something the person can no longer see. That is the
+   design's own rule, and the acceptance criterion written against it.
+
+   `pending` is cleared in `finally` and not behind the guard: a stale answer
+   still frees the field, and leaving the flag up would mean the one gesture
+   that could fix the situation — asking again — was the one thing dropped. */
 export async function searchSemantic(query) {
-  if (!query?.trim() || searchState.pending) return
+  const asked = query?.trim()
+  if (!asked || searchState.pending) return
   searchState.pending = true
   searchState.error = null
+  searchState.answered = false
+  searchState.query = asked
   try {
-    searchState.ids = await invoke('tracker_search_semantic', { query })
+    const ids = await invoke('tracker_search_semantic', { query })
+    if (searchState.query !== asked) return
+    searchState.ids = ids
+    searchState.answered = true
   } catch (error) {
+    if (searchState.query !== asked) return
     searchState.ids = []
     searchState.error = refusal(error)
   } finally {

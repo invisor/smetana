@@ -1775,11 +1775,30 @@ const onSaveKey = (event) => {
 
    Cancelled in any case, like the save: the webview's own find bar is the
    platform's rather than this product's, and it would search the rendered board
-   instead of the project. */
+   instead of the project.
+
+   **Except inside the editor, where this key is already spoken for.**
+   `@codemirror/search`'s `searchKeymap` binds Mod-f to `openSearchPanel` and
+   cancels the default without stopping propagation, so the event arrives here
+   as well: unguarded, ⌘F in a file opened the editor's find panel and then took
+   the keyboard out of it a tick later, which left find-in-file unreachable from
+   the keyboard altogether — in an editor whose panel `files/editor/extensions.js`
+   installs and `theme.js` themes on purpose. The spec's "from anywhere in the
+   window" was written about the board, not about taking a key from the one
+   thing on screen that already had it. Checked before `preventDefault`, so the
+   editor's own binding is left entirely alone.
+
+   Closing the bell is the same "anything else closes it" rule the panel already
+   follows, applied to the one thing inside the scope bar that now opens a
+   surface of its own: both hang from the same corner at the same width and the
+   same z, and the panel is later in the template, so a list opened under an
+   open bell would be drawn underneath it with nothing on screen saying why. */
 const onFindKey = (event) => {
   if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
   if (event.code !== 'KeyF') return
+  if (event.target?.closest?.('.cm-editor')) return
   event.preventDefault()
+  closeNotifications()
   taskSearch.value?.focus()
 }
 
@@ -2390,6 +2409,8 @@ const toastStackStyle = {
           :pending="searchState.pending"
           :error="searchState.error ?? ''"
           :semantic-ids="searchState.ids"
+          :answered="searchState.answered"
+          @open="closeNotifications"
           @select="selectFromBoard"
           @semantic="searchSemantic"
           @reset="clearSemantic"

@@ -1704,18 +1704,28 @@ const menuTargetStyle = {
           </template>
         </ScopeIndicator>
 
-        <!-- The three states the list has beyond a plain answer, each on its own
-             field: the question is out, the question came back with ids, and the
-             question was refused. Only one list is on screen at a time — they
-             all hang from the same fixed corner — so focus them one after the
-             other, typing `bell` into each.
+        <!-- The four states the list has beyond a plain answer, each on its own
+             field: the question is out, the question came back with ids, the
+             question came back naming nothing, and the question was refused.
+             Only one list is on screen at a time — they all hang from the same
+             fixed corner — so focus them one after the other, typing `bell` into
+             each.
 
-             The middle one is the whole point of the second tier: its two ids
-             are not in the instant hits at all, and they arrive under their own
-             divider with those hits left where they were. -->
+             The second is the whole point of the second tier: its two ids are
+             not in the instant hits at all, and they arrive under their own
+             divider with those hits left where they were. The third is the one
+             worth looking at hardest — `answered` with nothing to show for it is
+             `NONE`, a legitimate answer, and it has to be visible as an empty
+             group rather than as the list not changing, which is what a stopped
+             spinner over an unchanged list would be. -->
         <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)' }">
           <TaskSearch :issues="SEARCH_ISSUES" pending />
-          <TaskSearch :issues="SEARCH_ISSUES" :semantic-ids="['smetana-z9i', 'smetana-24a']" />
+          <TaskSearch
+            :issues="SEARCH_ISSUES"
+            answered
+            :semantic-ids="['smetana-z9i', 'smetana-24a']"
+          />
+          <TaskSearch :issues="SEARCH_ISSUES" answered />
           <TaskSearch
             :issues="SEARCH_ISSUES"
             error="Smetana looked for claude on your PATH and found nothing."

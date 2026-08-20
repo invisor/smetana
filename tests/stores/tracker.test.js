@@ -658,6 +658,68 @@ describe('the semantic tier', () => {
     expect(tracker.searchState.error).toBe(null)
   })
 
+  /* The case the guard exists for, and the one that was broken: the component
+     resets on every keystroke, but a request already sent is neither cancelled
+     nor tagged, so without the guard the old answer lands under the new query
+     and is drawn as an answer to it. */
+  it('drops an answer whose question moved on while it was out', async () => {
+    let release
+    ipc.on('tracker_search_semantic', () => new Promise((resolve) => { release = resolve }))
+
+    const inFlight = tracker.searchSemantic('the bell is silent')
+    // A keystroke: this is what the field emits on every one of them.
+    tracker.clearSemantic()
+    release(['smetana-a1a'])
+    await inFlight
+
+    expect(tracker.searchState.ids).toEqual([])
+    expect(tracker.searchState.answered).toBe(false)
+  })
+
+  it('drops a refusal whose question moved on while it was out', async () => {
+    let reject
+    ipc.on('tracker_search_semantic', () => new Promise((_, no) => { reject = no }))
+
+    const inFlight = tracker.searchSemantic('the bell is silent')
+    tracker.clearSemantic()
+    reject({ kind: 'timeout', message: 'The agent did not answer within 90 seconds.' })
+    await inFlight
+
+    expect(tracker.searchState.error).toBe(null)
+  })
+
+  /* The flag is cleared whether or not the answer was wanted: it is what the
+     ask row spins on, and a stale answer that left it up would leave the person
+     watching a spinner about a question that is over, unable to ask again. */
+  it('a stale answer still frees the field for the next question', async () => {
+    let release
+    ipc.on('tracker_search_semantic', () => new Promise((resolve) => { release = resolve }))
+
+    const inFlight = tracker.searchSemantic('one thing')
+    tracker.clearSemantic()
+    release(['smetana-a1a'])
+    await inFlight
+    expect(tracker.searchState.pending).toBe(false)
+
+    ipc.on('tracker_search_semantic', () => ['smetana-b2b'])
+    await tracker.searchSemantic('another thing')
+
+    expect(tracker.searchState.ids).toEqual(['smetana-b2b'])
+    expect(tracker.searchState.answered).toBe(true)
+  })
+
+  /* `NONE` and "nothing has been asked" are both an empty list, and the list on
+     screen draws them differently, so the store has to tell them apart. */
+  it('says an answer arrived even when it named nothing', async () => {
+    ipc.on('tracker_search_semantic', () => [])
+
+    expect(tracker.searchState.answered).toBe(false)
+    await tracker.searchSemantic('nothing like this exists')
+
+    expect(tracker.searchState.answered).toBe(true)
+    expect(tracker.searchState.error).toBe(null)
+  })
+
   it('clears the last answer, so it cannot be read under a different question', async () => {
     ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
 
@@ -666,6 +728,7 @@ describe('the semantic tier', () => {
 
     expect(tracker.searchState.ids).toEqual([])
     expect(tracker.searchState.error).toBe(null)
+    expect(tracker.searchState.answered).toBe(false)
   })
 
   /* Two questions never overlap: the answer to the second would arrive under a

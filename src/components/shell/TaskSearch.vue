@@ -20,10 +20,14 @@ const props = defineProps({
   error: { type: String, default: '' },
   /* What the agent answered, as ids. Rows are drawn from `issues` rather than
      from anything the agent said, so an id it invented cannot reach the screen. */
-  semanticIds: { type: Array, default: () => [] }
+  semanticIds: { type: Array, default: () => [] },
+  /* Whether an answer has come back at all. `semanticIds` being empty is two
+     different facts — nothing asked, and asked with nothing matching — and the
+     group below is drawn for the second and not for the first. */
+  answered: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'semantic', 'reset'])
+const emit = defineEmits(['open', 'select', 'semantic', 'reset'])
 
 const query = ref('')
 const open = ref(false)
@@ -62,6 +66,14 @@ const rows = computed(() => [
 
 /* Where the divider goes: above the first row of the agent's own group. */
 const firstSemantic = computed(() => hits.value.length)
+
+/* The agent looked and named nothing — `NONE`, or a list of ids none of which
+   this board holds. The group is still drawn, with nothing in it: after a
+   spinner, a list that simply goes back to what it was is indistinguishable
+   from a row that did nothing at all, which is the very confusion
+   `oneshot.rs` refuses a zero exit with an empty stdout for. Not an error, and
+   deliberately not drawn as one — it is a legitimate answer. */
+const nothingMatched = computed(() => props.answered && semanticHits.value.length === 0)
 
 const showList = computed(() => open.value && rows.value.length > 0)
 
@@ -108,6 +120,17 @@ const onKeydown = (event) => {
     return
   }
   choose(rows.value[active.value])
+}
+
+/* Taking the keyboard says so out loud, because something else on screen has
+   to move out of the way: the bell's panel hangs from the same corner of the
+   same bar, at the same width and the same z, and the bar is excluded from the
+   panel's own "anything outside closes it" rule — which is what makes this
+   field, now inside that bar, the one thing that can open a surface underneath
+   an open one. */
+const onFocus = () => {
+  open.value = true
+  emit('open')
 }
 
 /* Leaving the field puts the list away but keeps what was typed. Closing hard,
@@ -240,6 +263,15 @@ const dividerStyle = {
   marginTop: 'var(--space-2)'
 }
 
+/* The empty group's one line. Muted and in the row's own type, not the
+   divider's: it stands where a row would have stood, and reads as an answer
+   rather than as a second heading. */
+const nothingStyle = {
+  padding: 'var(--space-2) var(--space-3)',
+  color: 'var(--text-muted)',
+  font: 'var(--weight-regular) var(--text-xs)/1.4 var(--font-sans)'
+}
+
 const errorStyle = {
   padding: 'var(--space-2) var(--space-3)',
   color: 'var(--status-failed-fg)',
@@ -265,7 +297,7 @@ const spinStyle = {
       type="text"
       placeholder="Search tasks"
       aria-label="Search tasks"
-      @focus="open = true"
+      @focus="onFocus"
       @blur="onBlur"
       @keydown="onKeydown"
     />
@@ -278,6 +310,15 @@ const spinStyle = {
         <p v-if="row.kind === 'semantic' && index === firstSemantic" :style="dividerStyle">
           By meaning
         </p>
+        <!-- The same group, empty, when that is the answer. Drawn immediately
+             above the ask row, which is where the agent's hits would have been.
+             Neither of these is a `rows` entry, so the running index the arrows
+             move through and the index a click opens from stay the same
+             number. -->
+        <template v-if="row.kind === 'ask' && nothingMatched">
+          <p :style="dividerStyle">By meaning</p>
+          <p :style="nothingStyle">Nothing matched</p>
+        </template>
         <button
           :style="rowStyle(index === active)"
           type="button"
