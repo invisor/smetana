@@ -19,6 +19,15 @@ describe('error texts', () => {
     expect(files.fileErrorText(null)).toBe('Could not read this file.')
   })
 
+  /* The kind comes from `vcs/model.rs` rather than from `files/model.rs`, and
+     it reaches this table through the diff — `vcs_file_at_head` is git, and git
+     has a ceiling. Nothing but a test notices a kind that was never added: the
+     fallback answers, and the sentence is about a file rather than about the
+     ceiling that stopped it. */
+  it('a git call stopped on its ceiling says so, rather than falling back', () => {
+    expect(files.fileErrorText({ kind: 'timeout' })).toBe('Git took too long and was stopped.')
+  })
+
   it('a write speaks about writing, not about reading', () => {
     expect(files.saveErrorText({ kind: 'denied' })).toBe('No permission to write this file.')
   })

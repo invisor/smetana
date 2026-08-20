@@ -3,6 +3,7 @@ import {
   CENTER_MIN,
   LEFT_DEFAULT,
   LEFT_MIN,
+  PROJECT_RAIL,
   RAIL,
   RAIL_CONTROL_MAX,
   RIGHT_MIN,
@@ -136,4 +137,54 @@ describe('the rail and what it holds', () => {
      `tests/styles/tokens.test.js`, against the token as parsed out of the
      stylesheet rather than against a copy of its value written out here. This
      file keeps the half that is about these two constants alone. */
+})
+
+describe('the project rail costs the layout its width', () => {
+  /* A window narrow enough that the board's floor is the binding rule rather
+     than the third-of-the-window cap: the rail is drawn out of what is left for
+     the three columns, so it is that sum it comes out of, and a geometry where
+     the fraction binds would be testing the fraction instead. */
+  const tight = { other: 340, otherCollapsed: false, viewport: 1000 }
+
+  it('the rail comes out of what the left panel may take', () => {
+    const withRail = maxWidth({ ...tight, railOpen: true })
+    const without = maxWidth({ ...tight, railOpen: false })
+    expect(without - withRail).toBe(PROJECT_RAIL)
+  })
+
+  it('a hidden rail costs nothing', () => {
+    expect(maxWidth({ ...tight, railOpen: false })).toBe(maxWidth(tight))
+  })
+
+  it('the panel keeps its minimum when the rail squeezes the window past it', () => {
+    const width = clampWidth(400, {
+      side: 'left',
+      other: 340,
+      otherCollapsed: false,
+      viewport: 700,
+      railOpen: true
+    })
+    expect(width).toBe(LEFT_MIN)
+  })
+
+  it('carries the rail through a drag, so a resize measures the window it is in', () => {
+    const dragged = resolveDrag('left', {
+      ...tight,
+      base: 400,
+      delta: 0,
+      collapsed: false,
+      railOpen: true
+    })
+    expect(dragged.width).toBe(maxWidth({ ...tight, railOpen: true }))
+    expect(dragged.width).toBeLessThan(
+      resolveDrag('left', { ...tight, base: 400, delta: 0, collapsed: false }).width
+    )
+  })
+})
+
+describe('the shipped widths', () => {
+  it('are the handoff panel, and the numbers Rust ships beside them', () => {
+    expect(LEFT_DEFAULT).toBe(236)
+    expect(LEFT_MIN).toBe(180)
+  })
 })

@@ -8,6 +8,13 @@ import { computed, reactive } from 'vue'
 import { settings } from './settings.js'
 import { basenameOf, fileErrorText, filesState, readFile, writeFile } from './files.js'
 import { fileAtHead } from './vcs.js'
+/* The centre's tab row is partly derived from the worker's sessions — the Agent
+   tab and the terminal tabs below. Read only inside computeds and functions,
+   never at module scope: `settings.js` imports this file and this file imports
+   `settings.js` through `terminals.js`, so which of the two the bundler emits
+   first is not this file's to assume (the same cycle `notifications.js` carries
+   a note about). */
+import { hasAgentSession, removeSession, shellSessions } from './terminals.js'
 import { relativeTo } from '../paths.js'
 /* The theme is read from the document root rather than from settings.js beside
    this file: a tab's icon is about what is painted, and the gallery paints a
@@ -15,16 +22,29 @@ import { relativeTo } from '../paths.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
 
-/* Pinned tabs are not stored in settings: they always exist, come first and
-   cannot be closed. */
-export const PINNED = [
-  /* The id and the label diverge deliberately: the label says the tab holds an
-     agent, while the id 'terminal' sits in settings.json on people's disks and
-     in ProjectState::validate's closed list, and renaming it would break both
-     sides for the sake of one word. */
-  { id: 'terminal', kind: 'pinned', label: 'Agent' },
-  { id: 'kanban', kind: 'pinned', label: 'Kanban' }
-]
+/* Pinned tabs are not stored in settings: they come first and cannot be closed.
+
+   One of them, now. The board is what a project always has; the Agent tab is
+   drawn from the sessions instead (`AGENT_TAB` below), because a project with
+   nothing running had a tab whose entire content was an empty terminal. */
+export const PINNED = [{ id: 'kanban', kind: 'pinned', label: 'Kanban' }]
+
+/* The Agent tab, present exactly while the project has an agent session — live
+   or still starting. Derived and never stored, which is what makes it right on
+   its own in the two cases a stored flag would have to be told about: a project
+   switch (the session list changes, the tab follows) and a restart (there are
+   no sessions, so there is no tab).
+
+   Its `kind` is `pinned` all the same: what that word means to `Tab.vue` is
+   "sans-serif label, no close button", and both are still true — the way to
+   close this tab is to take the last agent out of the panel, not a cross on the
+   tab. The id and the label diverge deliberately: the label says the tab holds
+   an agent, while the id 'terminal' sits in settings.json on people's disks and
+   in ProjectState::validate's closed list, and renaming it would break both
+   sides for the sake of one word. */
+const AGENT_TAB = { id: 'terminal', kind: 'pinned', label: 'Agent' }
+
+export const hasAgentTab = computed(() => hasAgentSession.value)
 
 /* Path → { text, original, mtime, error, saveError, stale, loading }.
    text/original differ exactly when the tab is dirty.
@@ -85,6 +105,47 @@ export const isDiffTab = (id) => typeof id === 'string' && id.startsWith(DIFF)
 
 export const diffTab = (id) => diffTabs.find((tab) => tab.id === id) ?? null
 
+/* A terminal tab's id, built the same way and for the same reason: it sits in
+   the tab row beside the file paths and can land in `project.activeTab` with
+   them, so it has to be a string no path can be. The session's own id is what
+   it is derived from, so the tab and the shell behind it cannot come apart. */
+const TERM = '\u0000term:'
+const termTabId = (session) => `${TERM}${session}`
+
+export const isTerminalTab = (id) => typeof id === 'string' && id.startsWith(TERM)
+
+/* The terminal tabs themselves — one per shell session, in the worker's own
+   order. Derived and not a list beside `diffTabs`: the shells are already in
+   `terminalState.sessions`, and a second copy would be one to hold in agreement
+   with the first. What that buys is the whole of a project switch: the session
+   list changes, the tabs go with it, and there is nothing to reset.
+
+   The label is numbered by position among the shells rather than by session id,
+   which is what a person counts: two open shells are Terminal 1 and Terminal 2
+   however many agents have come and gone beside them. Closing the first
+   renumbers the second, and that is the honest reading of a position.
+
+   `session` rides on the record and not in the tab row's entry: `tabList`'s
+   entries are handed to `Tab.vue` whole, and a field it has no prop for would
+   land on the DOM node as an attribute. Same split `diffTabs` keeps. */
+const terminalTabs = computed(() =>
+  shellSessions.value.map((session, at) => ({
+    id: termTabId(session.id),
+    session: session.id,
+    label: `Terminal ${at + 1}`
+  }))
+)
+
+export const terminalTab = (id) => terminalTabs.value.find((tab) => tab.id === id) ?? null
+
+/* The same record, found by the session instead of by the tab's own id. Its one
+   caller has just been handed a session by the worker and wants to open the tab
+   that appeared with it — asking this way rather than building the id is what
+   makes "there is no such tab" a possible answer, which is the honest one for a
+   shell that was gone again before anybody could look at it. */
+export const terminalTabFor = (session) =>
+  terminalTabs.value.find((tab) => tab.session === session) ?? null
+
 const project = () => settings.project
 
 export const isDirty = (path) => {
@@ -113,6 +174,14 @@ const readOnlyHint = (buffer) => (buffer?.error ? fileErrorText(buffer.error) : 
 
 export const tabList = computed(() => [
   ...PINNED,
+  /* After the board and before everything else. The board is the one tab every
+     project has, so it is the fixed point of the row and reads best as its
+     first entry; the Agent tab keeps second place because, like the board, a
+     project has at most one of it and neither closes by a cross. Both stay
+     `kind: 'pinned'`, which is what keeps them a single leading run for
+     `TabBar.vue` and keeps the "+ New agent, terminal or task" button (the
+     `afterPinned` slot) beside the pair rather than adrift among the files. */
+  ...(hasAgentTab.value ? [AGENT_TAB] : []),
   ...project().openTabs.map((path) => {
     const hint = readOnlyHint(buffers.get(path))
     return {
@@ -142,6 +211,18 @@ export const tabList = computed(() => [
     kind: 'diff',
     label: basenameOf(tab.path),
     icon: 'git-compare'
+  })),
+  /* After the diffs, for the reason the diffs are after the files, and it
+     applies twice over here: the order of the file tabs is the person's own and
+     lives in settings, and a tab nobody remembers has no place inside it. Its
+     own kind, so `Tab.vue` can tell it apart from a file — the label is prose
+     rather than a path, and the editor-state sweep in DesktopApp.vue must not
+     build a key out of an id with no file behind it. */
+  ...terminalTabs.value.map((tab) => ({
+    id: tab.id,
+    kind: 'terminal',
+    label: tab.label,
+    icon: 'terminal'
   }))
 ])
 
@@ -354,8 +435,12 @@ async function loadDiff(id) {
 
 /* Both stores answer a refusal in Rust's own `{ kind, message }` shape and a
    transport failure as anything at all; one shape here means the view has one
-   thing to draw. The kinds are `FilesError`'s on both sides, so `fileErrorText`
-   already has the words for them. */
+   thing to draw. The kinds overlap on both sides rather than matching: the
+   three a file shares with the editor are pinned to `FilesError` by a test in
+   Rust, but the left-hand side of a diff is `vcs_file_at_head`, which is git
+   and can also refuse as `timeout` — `run.rs` has a ceiling on every call. That
+   kind is in `ERRORS` for this reason, and a kind that is not there draws the
+   generic "Could not read this file." with nothing anywhere saying so. */
 function asError(error) {
   if (error && typeof error === 'object' && typeof error.kind === 'string') return error
   return { kind: 'io', message: String(error?.message ?? error) }
@@ -372,6 +457,53 @@ export function closeDiff(id) {
      the two lists rather than restarted at it. */
   state.activeTab =
     diffTabs[at]?.id ?? diffTabs[at - 1]?.id ?? state.openTabs[state.openTabs.length - 1] ?? 'kanban'
+}
+
+/* Closing a terminal tab, which is the same act as killing the shell in it —
+   one gesture, exactly as closing a terminal window is. A tab that only hid a
+   live shell would leave a process nobody can see and nobody will remember to
+   stop, and the tab is derived from the session anyway: there is nothing to
+   close but the session.
+
+   The kill is `removeSession`'s → `terminal_remove`, which is the one path there
+   is, and what that path does is `Pty::kill`: the process is killed outright and
+   the session leaves the worker's map. It is the same end the remove button in
+   the agents panel gives an agent, and deliberately not the app's own exit path
+   — `kill_all` in `service.rs` hangs up the process group and waits, and that
+   one runs when the window closes. Nothing here signals anything itself, and
+   nothing here is a second way to end a session.
+
+   The neighbour is worked out before the await, against the list as it stands,
+   and the selection is only moved if the removal actually took: a refusal leaves
+   the shell running and its tab in the row, and moving away from a tab that is
+   still there would be a second failure on top of the first. */
+export async function closeTerminalTab(id) {
+  const tab = terminalTab(id)
+  if (!tab) return
+  const before = terminalTabs.value.map((entry) => entry.id)
+  const at = before.indexOf(id)
+  await removeSession(tab.session)
+  const state = project()
+  if (state.activeTab !== id || terminalTab(id)) return
+  /* The neighbour on the right, then the one on the left, then back to the
+     files, then the board — `closeDiff`'s rule, which is `closeTab`'s extended
+     over the seams between the lists rather than restarted at each. */
+  state.activeTab =
+    before[at + 1] ?? before[at - 1] ?? state.openTabs[state.openTabs.length - 1] ?? 'kanban'
+}
+
+/* The last agent has gone, so the Agent tab has gone with it. Nothing else in
+   the centre changes: the tab a person is on is left alone unless it is the one
+   that just disappeared, in which case the board is where they land — the same
+   fallback `closeTab` and `closeDiff` already use.
+
+   A function rather than a watcher in here, and the caller is `DesktopApp.vue`:
+   a module-scope `watch` would read `terminals.js` at evaluation time, and this
+   module is one half of an import cycle where that is not safe (see the note on
+   the import). */
+export function dropAgentTab() {
+  const state = project()
+  if (state.activeTab === 'terminal') state.activeTab = 'kanban'
 }
 
 /* An edit. It also drops the temporary flag — the second of the two ways to
@@ -505,7 +637,12 @@ export function discardTabs(paths) {
    a single frame. The tab list is left alone — it will come from the new
    project's settings. The diffs go with the buffers rather than with the list:
    they name a repository of the project being left, and nothing brings them
-   back. */
+   back.
+
+   The Agent tab and the terminal tabs are not here and need nothing: they are
+   derived from the session list, which `loadSessions` replaces with the new
+   project's on the same move. Deriving them is what makes a project switch free
+   — there is no third list to remember to clear. */
 export function resetTabs() {
   buffers.clear()
   diffTabs.length = 0
@@ -524,7 +661,19 @@ export async function restoreTabs() {
      `settings.json` is not the only way this state is reached (the browser mock
      answers `settings_load` itself), and the cost of the two disagreeing is a
      centre column drawing nothing at all. */
-  if (isDiffTab(state.activeTab)) state.activeTab = state.openTabs[0] ?? 'kanban'
+  if (isDiffTab(state.activeTab) || isTerminalTab(state.activeTab)) {
+    state.activeTab = state.openTabs[0] ?? 'kanban'
+  }
+  /* The same repair, for the tab that is derived rather than remembered.
+     `activeTab: "terminal"` is written whenever somebody was last watching an
+     agent, and sessions deliberately do not survive a restart — so on the next
+     launch that value names a tab which cannot exist yet. Rust leaves it alone
+     on purpose (`ProjectState::validate` does not know how many sessions there
+     are, and it is the only place the `chat` migration can land), so the repair
+     is here, and it is guarded rather than unconditional: on a project *switch*
+     the new project may well have agents running, and taking a person to the
+     board then would be a repair of something that was not broken. */
+  if (state.activeTab === 'terminal' && !hasAgentTab.value) state.activeTab = 'kanban'
   const paths = [...state.openTabs]
   await Promise.all(paths.map(load))
 

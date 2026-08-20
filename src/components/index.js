@@ -36,11 +36,13 @@ export {
 // shell
 export { default as AppShell } from './shell/AppShell.vue'
 export { default as Panel } from './shell/Panel.vue'
-export { default as ProjectList } from './shell/ProjectList.vue'
+export { default as ProjectRail } from './shell/ProjectRail.vue'
+export { default as ProjectTile } from './shell/ProjectTile.vue'
 export { default as Resizer } from './shell/Resizer.vue'
 export { default as ScopeIndicator } from './shell/ScopeIndicator.vue'
 export { default as Tab } from './shell/Tab.vue'
 export { default as TabBar } from './shell/TabBar.vue'
+export { NEW_TAB_ITEMS } from './shell/newTabMenu.js'
 
 // kanban
 export { default as Assignee } from './kanban/Assignee.vue'
@@ -49,6 +51,8 @@ export { default as ColumnHeader } from './kanban/ColumnHeader.vue'
 export { default as DraftInspector } from './kanban/DraftInspector.vue'
 export { default as KanbanBoard } from './kanban/KanbanBoard.vue'
 export { default as KanbanColumn } from './kanban/KanbanColumn.vue'
+export { default as Markdown } from './kanban/Markdown.vue'
+export { default as MarkdownInline } from './kanban/MarkdownInline.vue'
 export { default as NewTaskModal } from './kanban/NewTaskModal.vue'
 export { default as PromoteColumnModal } from './kanban/PromoteColumnModal.vue'
 export { default as TaskCard } from './kanban/TaskCard.vue'

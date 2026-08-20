@@ -39,8 +39,15 @@ const eyebrow = {
   color: 'var(--text-muted)'
 }
 
-/* The person's prose, set as the inspector sets a description: pre-wrap,
-   because they typed the line breaks and those are part of what they said. */
+/* The person's prose, pre-wrap: they typed those line breaks, and the breaks
+   are part of what they said.
+
+   TaskInspector draws its five prose fields as the markdown bd stores, and this
+   deliberately does not — which is now the interesting thing about the pair
+   rather than their sameness. Nothing has been filed yet, so what is on screen
+   is somebody's own words handed back to them a moment after they typed them,
+   and setting those words as markup nobody claimed to be writing would change
+   what they said under them. */
 const textStyle = {
   font: 'var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans)',
   color: 'var(--text-primary)',

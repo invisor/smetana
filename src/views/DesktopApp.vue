@@ -14,6 +14,8 @@ import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
+import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
+import { headline } from '../components/shell/headline.js'
 import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
@@ -37,20 +39,27 @@ import DraftInspector from '../components/kanban/DraftInspector.vue'
 import ClaimedTasks from '../components/agent/ClaimedTasks.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Modal from '../components/overlays/Modal.vue'
+import MenuButton from '../components/overlays/MenuButton.vue'
 import Toast from '../components/overlays/Toast.vue'
-import ProjectList from '../components/shell/ProjectList.vue'
+import ProjectRail from '../components/shell/ProjectRail.vue'
+import { projectSummary } from '../components/shell/projectState.js'
 import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
+import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
 import { TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import {
+  agentCounts,
   agentRows,
   createSession,
+  createShell,
   initTerminals,
   lastHandover,
   lastRunStart,
+  liveAgentCount,
   loadSessions,
+  projectStates,
   removeSession,
   terminalState
 } from '../stores/terminals.js'
@@ -72,7 +81,12 @@ import {
   notificationsState
 } from '../stores/notifications.js'
 import { initSettingsBridge, settings } from '../stores/settings.js'
-import { announceBoardColumns, openSettingsWindow, watchBoardHello } from '../stores/app.js'
+import {
+  announceBoardColumns,
+  openExternal,
+  openSettingsWindow,
+  watchBoardHello
+} from '../stores/app.js'
 import { paintRoot } from './useAppearance.js'
 import {
   activePath,
@@ -94,6 +108,7 @@ import {
   checkout,
   commit,
   createBranch,
+  dirtyCount,
   dismissConflict,
   draftMessage,
   loadRepos,
@@ -129,8 +144,15 @@ import {
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { scopeBusyReason } from '../components/run/runScopes.js'
-import { scope } from './desktopAppData.js'
-import { LEFT_DEFAULT, RAIL, RIGHT_DEFAULT, STEP, clampWidth, resolveDrag } from './panelWidths.js'
+import {
+  LEFT_DEFAULT,
+  PROJECT_RAIL,
+  RAIL,
+  RIGHT_DEFAULT,
+  STEP,
+  clampWidth,
+  resolveDrag
+} from './panelWidths.js'
 import {
   basenameOf,
   fileErrorText,
@@ -148,11 +170,15 @@ import {
   buffers,
   closeDiff,
   closeTab,
+  closeTerminalTab,
   confirmUnsaved,
   diffTab,
   discardTabs,
+  dropAgentTab,
+  hasAgentTab,
   isDiffTab,
   isDirty,
+  isTerminalTab,
   keepMine,
   markGone,
   markStale,
@@ -165,7 +191,9 @@ import {
   saveTab,
   saveTabs,
   setText,
-  tabList
+  tabList,
+  terminalTab,
+  terminalTabFor
 } from '../stores/tabs.js'
 import FileEditor from '../components/files/FileEditor.vue'
 import DiffView from '../components/files/editor/DiffView.vue'
@@ -241,6 +269,12 @@ onUnmounted(() => window.removeEventListener('resize', onViewport))
 
 const dragBase = { left: 0, right: 0 }
 
+/* Whether the project rail is drawn beside the left panel: the preference, and
+   the column not being folded, since a folded column draws no rail. It is part
+   of every width sum below rather than only of the left one — the rail comes out
+   of the same window, so the right panel's ceiling is measured against it too. */
+const railOpen = computed(() => layout.railOpen && !layout.leftCollapsed)
+
 /* The neighbour's *stored* width, not its drawn one: the drawn one is itself a
    clamp against this panel, and the two computeds would chase each other. In a
    window narrow enough for the difference to show, the stored number is the
@@ -250,7 +284,8 @@ const geometry = (side) => ({
   side,
   other: side === 'left' ? layout.rightWidth : layout.leftWidth,
   otherCollapsed: side === 'left' ? layout.rightCollapsed : layout.leftCollapsed,
-  viewport: viewport.value
+  viewport: viewport.value,
+  railOpen: railOpen.value
 })
 
 const leftWidth = computed(() => clampWidth(layout.leftWidth, geometry('left')))
@@ -344,6 +379,39 @@ async function newAgent() {
   } catch {
     // already reported — see comment above
   }
+}
+
+/* A shell of the person's own, in the project's root, in a tab of its own.
+
+   No side tab and no centre tab are set here, unlike `newAgent` above: the tab
+   this opens is derived from the session, so it appears when the worker answers
+   — about a second — and there is nothing to point at before then. What a
+   ticket buys an agent is a panel that would otherwise draw an empty state over
+   a row somebody just asked for, and a tab that is not there yet draws nothing
+   at all.
+
+   It is `activeTab` and not `sideTab` that moves, and only once the session is
+   real: a shell has no row in the Agents panel, so there is nothing there to
+   show anybody. */
+async function newTerminal() {
+  const path = activePath.value
+  if (!path) return
+  const session = await createShell(path)
+  /* Null is a refusal, already on screen as a toast — see `createShell`. */
+  if (!session) return
+  const tab = terminalTabFor(session.id)
+  if (tab) project.activeTab = tab.id
+}
+
+/* Which row does what. The rows themselves are `newTabMenu.js`'s — two callers
+   and no test can reach a template, the same split every other menu in this app
+   keeps. The third row opens no tab: it is a second door onto the new-task
+   dialog already mounted below, the same one the `+` above the `ready` column
+   opens, so it sets that flag and nothing else. */
+const onNewTab = (item) => {
+  if (item.kind === 'agent') newAgent()
+  else if (item.kind === 'terminal') newTerminal()
+  else if (item.kind === 'task') newTaskOpen.value = true
 }
 
 /* The project whose setup is being offered. Null when the dialog is closed —
@@ -660,9 +728,28 @@ const startTheRun = async (chosen) => {
       fileFindings: chosen.file_findings
     }
     /* A run is agent sessions, and watching them is the point — the same move
-       filing a task and "Ask agent to edit" already make. */
+       filing a task and "Ask agent to edit" already make. The side panel only,
+       and the centre deliberately not: `run_start` answers as soon as the worker
+       has noted the request, which is before preflight and well before the first
+       batch has a session, and this window mints no start ticket for a run — the
+       run worker asks the terminal worker itself. So there is no agent yet and
+       therefore no Agent tab, and a centre pointed at one would have named a tab
+       that is not in the row, drawn no tab as active, and shown an empty
+       terminal at the very moment somebody pressed Start run. The centre is
+       moved by the `lastRunStart` watcher below, when the batch's session
+       actually arrives, which is the one place that rule is written.
+
+       What this line does promise is only where the agents will appear, not that
+       there is anything to see yet: for the whole of preflight the panel draws
+       AgentList's own empty state, which says no agent is running and offers the
+       + row — the same untruth the centre tab was just taken off, one panel over
+       and in much quieter type. It is left standing because it is pre-existing,
+       because the panel is genuinely the destination, and because a side panel
+       saying "nothing yet" is a smaller lie than a centre column drawing a pane
+       behind a tab nobody can see. Do not read this line as evidence the empty
+       state was thought through. The press's visible effect meanwhile is the run
+       bar, which is where a run's own progress is reported. */
     project.sideTab = 'agents'
-    project.activeTab = 'terminal'
   } catch (err) {
     runError.value = runFailure(err)
   } finally {
@@ -876,6 +963,29 @@ watch(lastRunStart, (id) => {
   project.sideTab = 'agents'
   selectAgent(id)
 })
+
+/* The Agent tab is derived from the sessions, so it goes on its own when the
+   last agent does — but `project.activeTab` is remembered state and does not,
+   and a person left on a tab that is no longer in the row would be looking at a
+   centre column with nothing in it. The board is where they land, which is the
+   fallback `closeTab` and `closeDiff` already use.
+
+   A watcher here rather than in the store, and that is not a preference:
+   `tabs.js` is one half of an import cycle with `settings.js`, so a module-scope
+   `watch` in it would read `terminals.js` at evaluation time — the failure
+   `notifications.js` carries a note about, which works in the dev server and
+   leaves a white window in the built app. The rule itself is in the store
+   (`dropAgentTab`), where a test can reach it; this is only the thing that
+   notices. */
+watch(hasAgentTab, (has) => {
+  if (!has) dropAgentTab()
+})
+
+/* The shell a terminal tab draws, and `null` for anything else in the centre —
+   including an id left over from a tab whose session is gone, which is why this
+   hangs off the record rather than off `isTerminalTab`. The same shape
+   `activeDiff` has, for the same reason. */
+const activeTerminal = computed(() => terminalTab(project.activeTab))
 
 /* The tree and the tabs open together with the project. By this point settings
    have already read the active project — App.vue awaits loadSettings before it
@@ -1566,7 +1676,13 @@ const fileTabActive = computed(
     project.activeTab !== 'terminal' &&
     project.activeTab !== 'kanban' &&
     !reportTabActive.value &&
-    !isDiffTab(project.activeTab)
+    !isDiffTab(project.activeTab) &&
+    /* And minus the terminals, which are a fifth kind, and for the same reason
+       the diffs are excluded: a shell's tab names no file in `openTabs`, so a
+       `FileEditor` on one would ask the disk for a path built out of a tab id.
+       This computed is what stands between that and the editor, since the
+       editor's branch comes first in the template. */
+    !isTerminalTab(project.activeTab)
 )
 
 /* The text a diff refuses with. `fileErrorText` is the editor's own table and
@@ -1695,6 +1811,11 @@ const onCloseTab = async (id) => {
   /* A diff holds nothing of anybody's, so there is nothing to ask about and
      nothing in `openTabs` to take out. */
   if (isDiffTab(id)) return closeDiff(id)
+  /* A terminal is the other way round: there is nothing unsaved in it either,
+     but closing it kills the shell behind it — the tab is only a view of a
+     session, and one that merely hid a live shell would leave a process nobody
+     can see. The store owns both halves of that. */
+  if (isTerminalTab(id)) return closeTerminalTab(id)
   if (isDirty(id) && !(await confirmUnsaved([id]))) return
   closeTab(id)
 }
@@ -1722,10 +1843,10 @@ const absoluteEditorPath = (relPath) => (filesState.root ? `${filesState.root}/$
 
 /* Editor state lives exactly as long as the tab. Cleanup follows the tab
    list, not the close button: the same watcher covers switching projects and
-   a path that fell out because the file stopped being readable. Pinned tabs
-   (terminal, kanban) are filtered out: they have no file on disk, and there
-   is no reason to build a composite path for them — nothing is ever saved
-   under their id.
+   a path that fell out because the file stopped being readable. Everything that
+   is not a file is filtered out — the pinned tabs (Kanban, Agent), the diffs and
+   the terminals: none has a file on disk, and there is no reason to build a
+   composite path for one — nothing is ever saved under its id.
 
    flush: 'post' is required, not cosmetic. closeTab trims openTabs; this
    watcher at the default (flush: 'pre') would fire before FileEditor gets a
@@ -1740,7 +1861,7 @@ watch(
   (tabs) =>
     keepOnly(
       tabs
-        .filter((tab) => tab.kind !== 'pinned' && tab.kind !== 'diff')
+        .filter((tab) => tab.kind === 'file' || tab.kind === 'preview')
         .map((tab) => absoluteEditorPath(tab.id))
     ),
   { flush: 'post' }
@@ -1790,6 +1911,26 @@ const branchLabel = computed(() => {
   if (gitState.detached) return `${gitState.detached} (detached)`
   return '—'
 })
+
+/* The left panel belongs to the selected project, so its header says what that
+   project is called and, under the name, where it stands. With no project open
+   at all there is no name to say: the panel falls back to the section label it
+   used to carry, which is also what `Panel` draws whenever there is no subtitle
+   beside it.
+
+   The summary's branch is `gitState.branch` rather than `branchLabel` above: a
+   dash stands for "nothing to show" in the scope bar, where it holds a column
+   open, and in a sentence it would be a word that means nothing. An empty
+   branch is dropped by `projectSummary` instead. */
+const activeProjectName = computed(() => (activePath.value ? basename(activePath.value) : 'Projects'))
+const panelSummary = computed(() =>
+  activePath.value ? projectSummary(gitState.branch, projectStates.value[activePath.value]) : ''
+)
+/* The missing-tracker mark, for the selected project. Every other project says
+   it in its tile's tooltip, which is the only room a 28px tile has for it. */
+const activeProjectTracked = computed(
+  () => projectRows.value.find((row) => row.path === activePath.value)?.tracked !== false
+)
 
 /* An explicit refresh of the tree. Files deliberately have no watcher (see the
    spec), and this is the second half of the answer to "what is on disk right
@@ -1887,6 +2028,21 @@ const showReport = (report) => {
    have last night's document open itself in front of them. */
 const decidedRuns = new Set()
 
+/* The scope bar's one sentence about this project. Derived rather than stored,
+   like everything else in this bar: the rule is components/shell/headline.js and
+   both of its inputs are already reactive here.
+
+   The agents come from `agentCounts` and not from the rail's `projectStates`,
+   which is the map that knows about every project at once. That map is built
+   from session marks, and a mark carries no work kind — so a shell that rang
+   the bell would have reached it as `needs-you` and had this bar announce an
+   agent waiting on somebody in a project holding no agent at all. The store
+   comment beside `agentCounts` has the whole of it. This is the active
+   project's bar, so the active project's own list is the right source anyway. */
+const scopeHeadline = computed(() =>
+  headline({ row: agentCounts.value, runs: runsState.runs })
+)
+
 /* Which runs have stopped, as a value that changes exactly when one does —
    `configFreshness.js`'s shape, and for the same reason: `upsert` writes a run
    back into the list in place, so a watcher over the array itself would need
@@ -1955,7 +2111,12 @@ const bodyStyle = { flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch
    the window they are in now. */
 const leftStyle = computed(() => ({
   flex: '0 0 auto',
-  width: layout.leftCollapsed ? `${RAIL}px` : `${leftWidth.value}px`,
+  /* The rail sits beside the panel inside this one column, so the column is
+     both of them wide. Folded, there is no rail: a 44px strip of projects
+     beside a 32px strip of nothing is two rails. */
+  width: layout.leftCollapsed
+    ? `${RAIL}px`
+    : `${leftWidth.value + (railOpen.value ? PROJECT_RAIL : 0)}px`,
   display: 'flex',
   minWidth: 0
 }))
@@ -1967,18 +2128,25 @@ const sidebarStyle = {
   height: '100%',
   minHeight: 0
 }
-/* The sidebar's own tab row: same height as the document tabs but micro type,
-   because these are section names and not open files. It sits at the foot of
-   the column, so the accent and the rule are the document tabs' mirrored —
-   both on the outer edge, away from the content they reveal. */
+/* The sidebar's own tab row: micro type, because these are section names and
+   not open files. It sits directly under the panel header now, at the top of
+   what it scopes rather than at the far end of it, and it is drawn as three
+   segments instead of three full-height tabs.
+
+   The inset rule and the raised fill the foot row used are gone with the
+   position: a rule under a tab was that row's answer to sitting against the
+   column's edge, and a segmented row marks its active segment by fill. The
+   focus ring stays — it was kept explicitly at the design review, and these are
+   the one control in the new left column that has one. */
 const sideTabBar = {
   display: 'flex',
   alignItems: 'stretch',
-  height: 'var(--tab-h)',
+  gap: 'var(--space-1)',
   flex: '0 0 auto',
-  borderTop: 'var(--border-w) solid var(--border-subtle)'
+  padding: 'var(--space-2) var(--space-3)',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)'
 }
-const sideTabStyle = (tab, last) => {
+const sideTabStyle = (tab) => {
   const active = project.sideTab === tab.id
   return {
     flex: 1,
@@ -1986,20 +2154,39 @@ const sideTabStyle = (tab, last) => {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    /* The handoff draws a 22px segment; this is `--control-h-sm`, which is 24
+       comfortable and 20 compact. The token rather than the number, because a
+       literal would be the one height in the left column that neither density
+       nor the app-wide font size reaches — and 22 is inside the two anyway. */
+    height: 'var(--control-h-sm)',
+    borderRadius: 'var(--radius-2)',
     font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
     letterSpacing: 'var(--tracking-caps)',
     textTransform: 'uppercase',
     color: active ? 'var(--text-primary)' : 'var(--text-muted)',
     background: active
-      ? 'var(--surface-raised)'
+      ? 'var(--surface-selected)'
       : hoveredSideTab.value === tab.id
         ? 'var(--surface-hover)'
         : 'transparent',
-    boxShadow: active ? 'inset 0 -2px 0 0 var(--text-primary)' : 'none',
-    borderRight: last ? undefined : 'var(--border-w) solid var(--border-subtle)',
     cursor: 'default',
     transition: 'var(--transition-control)'
   }
+}
+/* The mark and the button that clears it are one hover target, tied together by
+   a gap narrower than the header's own: the triangle is what a person sees
+   without touching anything, the gear is what they press. The tooltip wraps the
+   glyph alone rather than the pair — a panel centred over both would hang off to
+   one side of whichever of them the pointer is on, and the button already
+   carries its own label. */
+const setupMarkStyle = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }
+/* The absolute path of the project this panel belongs to. Broken anywhere
+   rather than ellipsised: a path is read from both ends, and a panel 236px wide
+   would otherwise show the first three segments of every one of them. */
+const panelFootStyle = {
+  font: 'var(--weight-regular) var(--text-2xs)/var(--leading-snug) var(--font-mono)',
+  color: 'var(--text-muted)',
+  wordBreak: 'break-all'
 }
 const centerStyle = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }
 
@@ -2082,15 +2269,26 @@ const toastStackStyle = {
     <!-- The project's name and the branch it is on, both live. `worktree` is
          left empty on purpose: the component shows worktree-or-branch in that
          slot and appends "@branch" only when both are set, so passing the
-         branch alone is what puts it there once, undecorated. The counters
-         are still fixture: the Git tab reads the working tree, and this bar
-         has not been taught to count it. -->
+         branch alone is what puts it there once, undecorated.
+
+         Both counters are the stores' own computeds and neither is counted
+         here: the files are the Git panel's selected repository, so the number
+         is the length of the list that panel draws, and the agents are the
+         left column's rows minus the ones that have finished. The two rules
+         live in vcs.js and terminals.js because a rule in this file is a rule
+         no test can reach. Note that with several repositories in one project
+         the branch beside them is the project root's while the count is the
+         selected repository's — the panel is where a person is looking at that
+         list, and this is the number they can check against it. -->
     <ScopeIndicator
       ref="scopeBar"
-      v-bind="scope"
       :repo="activePath ? basename(activePath) : '—'"
       worktree=""
       :branch="branchLabel"
+      :dirty-count="dirtyCount"
+      :agents-active="liveAgentCount"
+      :headline="scopeHeadline.text"
+      :headline-level="scopeHeadline.level"
       :notifications="notificationsState.items.length"
       @notifications="toggleNotifications"
       @settings="openSettingsWindow()"
@@ -2123,13 +2321,72 @@ const toastStackStyle = {
     <div :style="bodyStyle">
       <!-- left: worktree files and the agents working in it -->
       <div :style="leftStyle">
+        <!-- One tile per project, and not while the column is folded: a 44px
+             rail of projects beside the 32px rail a folded panel becomes is two
+             rails, and neither would say which of them the button belongs to. -->
+        <ProjectRail
+          v-if="railOpen"
+          :projects="projectRows"
+          :active-path="activePath"
+          :states="projectStates"
+          :branches="activePath ? { [activePath]: gitState.branch } : {}"
+          :can-add-agent="project.sideTab === 'agents'"
+          :configured="configured"
+          :config-broken="configBroken"
+          @select="switchTo"
+          @remove="removeProject"
+          @add-agent="newAgent"
+          @setup="openSetup"
+          @add-project="onAddProject"
+        />
+        <!-- The header button hides the rail rather than folding this panel:
+             that is the person's own decision, recorded in the spec. Folding the
+             whole column into a rail is the separator's job, dragged past the
+             panel's minimum, and the folded rail's own button is what brings it
+             back — which is why `Panel` emits that one as `expand`. -->
         <Panel
-          title="Projects"
+          :title="activeProjectName"
+          :subtitle="panelSummary"
           side="left"
           :collapsed="layout.leftCollapsed"
+          :toggle-open="layout.railOpen"
+          :toggle-label="layout.railOpen ? 'Hide projects' : 'Show projects'"
           :style="{ flex: 1, minWidth: 0 }"
-          @toggle="layout.leftCollapsed = !layout.leftCollapsed"
+          @toggle="layout.railOpen = !layout.railOpen"
+          @expand="layout.leftCollapsed = false"
         >
+          <!-- The three marks the project row used to carry, for the selected
+               project alone, with the glyphs, colours and words they had there.
+               None of them is told from the others by hue: the missing tracker
+               is a lone muted triangle with nothing beside it that fixes it; the
+               missing run configuration is a red triangle bonded to the gear
+               that opens the setup it is asking for; and a configuration that
+               cannot be parsed is a red page-with-a-cross, standing alone. The
+               last needs its own glyph precisely because it stands alone —
+               beside the tracker's lone triangle the two would differ in nothing
+               but colour. It offers no button on purpose: a file that exists and
+               cannot be read must not be answered by a button that starts an
+               agent writing over it, and the way out is the tile's menu, whose
+               setup item is live over a damaged file. -->
+          <template #marks>
+            <Tooltip v-if="activePath && !activeProjectTracked" label="No bd tracker here">
+              <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--text-muted)' }" />
+            </Tooltip>
+            <span v-if="needsSetup" :style="setupMarkStyle">
+              <Tooltip label="Not set up for runs">
+                <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+              </Tooltip>
+              <IconButton
+                icon="settings-2"
+                label="Set up for runs"
+                size="sm"
+                @click="openSetup(activePath, false)"
+              />
+            </span>
+            <Tooltip v-if="configBroken" label="Run configuration cannot be read">
+              <Icon name="file-x" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+            </Tooltip>
+          </template>
           <template #actions>
             <!-- There is nothing to refresh on the Agents tab: the sessions
                  announce their own state, and the button would promise work
@@ -2150,21 +2407,26 @@ const toastStackStyle = {
               size="sm"
               @click="refreshGit"
             />
-            <IconButton icon="plus" label="Add project" size="sm" @click="onAddProject" />
           </template>
           <div :style="sidebarStyle">
-            <ProjectList
-              :projects="projectRows"
-              :active-path="activePath"
-              :can-add-agent="project.sideTab === 'agents'"
-              :needs-setup="needsSetup"
-              :config-broken="configBroken"
-              :configured="configured"
-              @select="switchTo"
-              @remove="removeProject"
-              @add-agent="newAgent"
-              @setup="openSetup"
-            />
+            <!-- Above what it scopes rather than at the foot of the column. The
+                 roving tabindex, the roles and the focus ring are the ones the
+                 foot row had; only the position and the fill changed. -->
+            <div role="tablist" :style="sideTabBar">
+              <div
+                v-for="t in SIDE_TABS"
+                :key="t.id"
+                role="tab"
+                :aria-selected="project.sideTab === t.id"
+                :tabindex="project.sideTab === t.id ? 0 : -1"
+                :style="sideTabStyle(t)"
+                @click="project.sideTab = t.id"
+                @mouseenter="hoveredSideTab = t.id"
+                @mouseleave="hoveredSideTab = null"
+              >
+                {{ t.label }}
+              </div>
+            </div>
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <FileTree
                 v-if="project.sideTab === 'files'"
@@ -2218,27 +2480,15 @@ const toastStackStyle = {
                 @remove="removeSession"
               />
             </div>
-            <div role="tablist" :style="sideTabBar">
-              <div
-                v-for="(t, i) in SIDE_TABS"
-                :key="t.id"
-                role="tab"
-                :aria-selected="project.sideTab === t.id"
-                :tabindex="project.sideTab === t.id ? 0 : -1"
-                :style="sideTabStyle(t, i === SIDE_TABS.length - 1)"
-                @click="project.sideTab = t.id"
-                @mouseenter="hoveredSideTab = t.id"
-                @mouseleave="hoveredSideTab = null"
-              >
-                {{ t.label }}
-              </div>
-            </div>
           </div>
+          <template v-if="activePath" #footer>
+            <div :style="panelFootStyle">{{ activePath }}</div>
+          </template>
         </Panel>
       </div>
 
       <Resizer
-        label="Resize projects panel"
+        label="Resize left panel"
         :step="STEP"
         @dragstart="startDrag('left')"
         @drag="onDrag('left', $event)"
@@ -2253,7 +2503,26 @@ const toastStackStyle = {
           @select="project.activeTab = $event"
           @close="onCloseTab"
           @promote="promote"
-        />
+        >
+          <!-- Beside the pinned block rather than at the far right of the row:
+               it is about those first two tabs, and past the strut it would
+               drift away from them. The block is what it names and not the board
+               within it, since which of the pair the button ends up against is
+               the order's to decide. Disabled with no project open, where
+               no row has anywhere to start anything — the two that open a tab
+               have no project root to open it in, and the third would file a
+               task against no tracker. -->
+          <template #afterPinned>
+            <MenuButton
+              icon="plus"
+              label="New agent, terminal or task"
+              :items="NEW_TAB_ITEMS"
+              :width="180"
+              :disabled="!activePath"
+              @select="onNewTab"
+            />
+          </template>
+        </TabBar>
         <NewTaskModal
           :open="newTaskOpen"
           :busy="creating"
@@ -2406,7 +2675,7 @@ const toastStackStyle = {
              and error handling every other tab has. What it does not inherit is
              the field — a report is read, never edited, which is why this is a
              branch of its own rather than a mode of FileEditor. -->
-        <ReportView v-if="reportTabActive" :html="activeBuffer?.text ?? ''" />
+        <ReportView v-if="reportTabActive" :html="activeBuffer?.text ?? ''" :theme="theme" />
         <!-- A changed file, HEAD against the working tree. Before the editor
              branch for the same reason the report is: it is a tab of its own
              kind, with no buffer behind it and nothing to save. -->
@@ -2433,7 +2702,15 @@ const toastStackStyle = {
           @reload="reloadTab(project.activeTab)"
           @keep-mine="keepMine(project.activeTab)"
         />
-        <TerminalView v-else-if="project.activeTab === 'terminal'" />
+        <!-- The Agent tab shows the agent a person picked; a terminal tab shows
+             its own shell. Two branches over one component, and the session is a
+             prop rather than something the pane reads for itself: see the note
+             on `sessionId` in TerminalView.vue. -->
+        <TerminalView
+          v-else-if="project.activeTab === 'terminal'"
+          :session-id="terminalState.activeId"
+        />
+        <TerminalView v-else-if="activeTerminal" :session-id="activeTerminal.session" />
         <!-- bd init is the one wait that keeps its EmptyState: the skeleton
              would replace the very sentence that explains what is happening,
              and the busy button says it better than six grey lines. Every
@@ -2486,6 +2763,7 @@ const toastStackStyle = {
           :collapsed="layout.rightCollapsed"
           :style="{ flex: 1, minWidth: 0 }"
           @toggle="layout.rightCollapsed = !layout.rightCollapsed"
+          @expand="layout.rightCollapsed = false"
         >
           <div :style="inspectorBody">
             <!-- A task still being filed: the person's own words, read-only,
@@ -2504,10 +2782,14 @@ const toastStackStyle = {
               @select="project.selectedTask = $event"
             />
 
+            <!-- A link in one of the issue's prose fields goes to the person's
+                 own browser: the panel raises it, and this is where the app's
+                 one link-opening path is bound to it. -->
             <TaskInspector
               v-if="inspectedIssue"
               :issue="inspectedIssue"
               :ui-status="toUiStatus(inspectedIssue.status)"
+              @open="openExternal"
             />
 
             <!-- Nothing picked on the board, which is where a project opens.

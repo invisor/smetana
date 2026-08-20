@@ -15,7 +15,10 @@ dist/
 # worktree can correct when the code moves underneath it.
 .claude/*
 !.claude/rules/
-docs
+# Anchored to the repository root on purpose: a bare `docs` matches a
+# directory of that name at any depth, which quietly swallowed
+# `tests/docs/` and with it the test that holds CLAUDE.md to its budget.
+/docs
 .beads
 .smetana
 
@@ -27,3 +30,11 @@ src-tauri/binaries/*
 
 # Worktrees cut for tracker tasks
 .worktrees/
+
+# claude.ai/design sync. The generator, its notes and the project pin are
+# tracked; what it downloads, stages and shoots is not — all three are rebuilt
+# from the gallery by one command and none of them is a source.
+.design-sync/node_modules
+.design-sync/.cache/
+.design-sync/upload/
+.trash/

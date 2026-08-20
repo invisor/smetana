@@ -13,8 +13,35 @@ import { FitAddon } from '@xterm/addon-fit'
 // theme.js explains, not an oversight of the "no CSS" rule.
 import '@xterm/xterm/css/xterm.css'
 import EmptyState from '../core/EmptyState.vue'
+import { dropText } from './dropPaths.js'
 import { terminalFont, terminalTheme } from './theme.js'
-import { attach, detach, isStarting, resize, send, subscribeOutput, terminalState } from '../../stores/terminals.js'
+import {
+  attach,
+  detach,
+  isShellSession,
+  isStarting,
+  resize,
+  send,
+  subscribeOutput,
+  terminalState,
+  watchSessionDrops
+} from '../../stores/terminals.js'
+
+/* Which session this pane shows, handed in rather than read from the store.
+
+   `terminalState.activeId` used to be both the answer to this and the answer to
+   "which agent has the person selected", and the two came apart the moment a
+   session could be something other than an agent: a shell drawn in its own
+   centre tab would have moved the highlight in the agents panel onto a row that
+   does not exist there, and taken the Agent tab off whatever it was showing.
+   So the field keeps the one meaning it is named for, the Agent tab passes it
+   in, and a terminal tab passes its own shell.
+
+   `null` is a pane with nothing behind it — the Agent tab with no agent picked
+   — and it draws the empty state rather than nothing at all. */
+const props = defineProps({
+  sessionId: { type: [String, Number], default: null }
+})
 
 const host = ref(null)
 let term = null
@@ -25,6 +52,13 @@ let sizes = null
 /* The session this view is attached to right now — the one it detaches on
    unmount too. Deliberately not reactive: nothing displays it. */
 let attached = null
+
+/* Whether a file is over this pane right now, and how many came with it. The
+   count is read off the enter event, which is the only one carrying the paths;
+   until one arrives it is zero and the caption speaks in the singular. */
+const dropping = ref(false)
+const dropCount = ref(0)
+let stopDrops = null
 
 /* `minWidth: 0` on both, and it is load-bearing in a way `minHeight: 0` next to
    it is not. A flex item defaults to `min-width: auto`, which means it refuses
@@ -63,14 +97,76 @@ const overlayStyle = {
   background: 'var(--editor-bg)'
 }
 
+/* The response while a file is over the pane: a frame around the terminal and
+   one line of caption over it. Without it the gesture is invisible and cannot be
+   told apart from the broken state it replaces, where a drop did nothing and
+   said nothing about it.
+
+   `pointerEvents: 'none'` is load-bearing rather than tidy. The aim is a hit
+   test — `document.elementFromPoint` at the drag's own position, asked whether
+   it landed inside the xterm host — and this element sits over that host as a
+   sibling. Taking pointer events would make it the answer to that question, the
+   next event of the same drag would read the pane as not ours, and the response
+   would switch itself off the moment it appeared. */
+const dropStyle = {
+  position: 'absolute',
+  inset: 'var(--space-3)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: 'var(--border-w) solid var(--border-strong)',
+  borderRadius: 'var(--radius-3)',
+  background: 'var(--overlay-scrim)',
+  pointerEvents: 'none'
+}
+const dropLabelStyle = {
+  padding: 'var(--space-3) var(--space-5)',
+  background: 'var(--surface-overlay)',
+  border: 'var(--border-w) solid var(--border-strong)',
+  borderRadius: 'var(--radius-pill)',
+  boxShadow: 'var(--shadow-overlay)',
+  color: 'var(--text-primary)',
+  fontSize: 'var(--text-ui-size)',
+  lineHeight: 'var(--leading-normal)'
+}
+
 /* The selection names an agent that is still being spawned. It is neither idle
    — somebody has just asked for this and is watching it — nor attachable, so it
    gets its own word rather than either of the two the empty state already has:
    "No agent selected" under a row a person picked themselves reads as the app
    having lost it. */
-const starting = computed(() => isStarting(terminalState.activeId))
-const idle = computed(() => !terminalState.activeId)
-const noSessions = computed(() => terminalState.sessions.length === 0)
+const starting = computed(() => isStarting(props.sessionId))
+const idle = computed(() => !props.sessionId)
+/* Agents, not sessions: this empty state belongs to the Agent tab, which is the
+   only pane that can be handed nothing, and a project whose shells are open is
+   still a project with no agent in it. */
+const noSessions = computed(() => !terminalState.sessions.some((s) => !isShellSession(s)))
+
+/* A pane with a session behind it that the worker has already answered for.
+   Nothing is promised in any other state: `send` drops what is written to a
+   session still coming up, so a frame offering to take a path there would be
+   offering something this app cannot do. */
+const live = computed(() => !!props.sessionId && !isStarting(props.sessionId))
+
+/* Whose drop this is. The point arrives in CSS pixels from the top left of the
+   viewport (`watchSessionDrops` does that conversion), so the browser can be
+   asked outright what is drawn there, and the pane takes only what lands inside
+   its own xterm host.
+
+   The same question settles the argument with the new task dialog for free:
+   with a modal open the point lands on its scrim, which is not inside this
+   host, so the pane refuses of its own accord and the two subscribers on the
+   one window event never need to know about each other. Any overlay added later
+   is separated by the same property rather than by a list of exceptions. */
+function insideHost(x, y) {
+  if (!host.value) return false
+  const el = document.elementFromPoint(x, y)
+  return !!el && host.value.contains(el)
+}
+
+const dropCaption = computed(() =>
+  dropCount.value > 1 ? `Drop to insert ${dropCount.value} file paths` : 'Drop to insert the file path'
+)
 
 /* Fitting the terminal to its pane has nothing to do with whether a session
    is attached — an empty terminal still has to fill the space it is given.
@@ -79,7 +175,7 @@ const noSessions = computed(() => terminalState.sessions.length === 0)
 function applySize() {
   if (!fit || !term) return
   fit.fit()
-  if (terminalState.activeId) resize(terminalState.activeId, term.cols, term.rows)
+  if (props.sessionId) resize(props.sessionId, term.cols, term.rows)
 }
 
 onMounted(() => {
@@ -89,7 +185,7 @@ onMounted(() => {
   term.open(host.value)
 
   term.onData((data) => {
-    if (terminalState.activeId) send(terminalState.activeId, data)
+    if (props.sessionId) send(props.sessionId, data)
   })
 
   unsubscribe = subscribeOutput((bytes, meta) => {
@@ -124,24 +220,46 @@ onMounted(() => {
   sizes = new ResizeObserver(applySize)
   sizes.observe(host.value)
 
-  if (terminalState.activeId && !isStarting(terminalState.activeId)) {
-    attached = terminalState.activeId
+  if (props.sessionId && !isStarting(props.sessionId)) {
+    attached = props.sessionId
     attach(attached).then(applySize)
   }
+
+  /* A drop never reaches the webview — Tauri reports it against the window
+     instead — so the pane cannot listen for one itself and the store hands it
+     over. What goes in is the path and nothing else: pressing Return stays with
+     the person, because a path is nearly always part of a sentence rather than
+     the whole of one, and a message sent on somebody's behalf cannot be taken
+     back out of an agent. */
+  stopDrops = watchSessionDrops({
+    over: ({ x, y, paths }) => {
+      if (paths) dropCount.value = paths.length
+      dropping.value = live.value && insideHost(x, y)
+    },
+    leave: () => {
+      dropping.value = false
+    },
+    drop: ({ x, y, paths }) => {
+      dropping.value = false
+      if (!live.value || !insideHost(x, y)) return
+      const text = dropText(paths)
+      if (text) send(props.sessionId, text)
+    }
+  })
 })
 
 /* Switched to a different agent — the new ring's snapshot arrives with
    meta.reset, and the subscriber above clears the screen before writing it.
 
-   Losing the selection while the view stays mounted (switching to a project
+   Losing the session while the view stays mounted (switching to a project
    with no sessions, removing the last agent) is the same seam and needs the
    same work: without it the previous session's frame keeps sitting on screen
    while the worker still calls it active and encodes its bytes every tick for
    a listener that drops every one — and typing goes nowhere, because onData
-   guards on activeId. Clearing activeId is not this view's to do, though:
-   the selection belongs to the store. */
+   guards on the prop. Clearing the selection is not this view's to do, though:
+   it belongs to the store. */
 watch(
-  () => terminalState.activeId,
+  () => props.sessionId,
   (id) => {
     /* An agent still being spawned goes through this same seam: there is
        nothing to attach to yet, and leaving the previous session attached
@@ -162,6 +280,7 @@ watch(
 
 onBeforeUnmount(() => {
   unsubscribe?.()
+  stopDrops?.()
   observer?.disconnect()
   sizes?.disconnect()
   /* Detach exactly the session this view attached to: the store's pointer
@@ -181,6 +300,9 @@ onBeforeUnmount(() => {
 <template>
   <div :style="wrapStyle">
     <div ref="host" :style="style" />
+    <div v-if="dropping" :style="dropStyle">
+      <span :style="dropLabelStyle">{{ dropCaption }}</span>
+    </div>
     <div v-if="starting" :style="overlayStyle">
       <EmptyState icon="bot" title="Starting the agent" description="Its output appears here in a moment." />
     </div>

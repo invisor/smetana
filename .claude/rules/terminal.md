@@ -5,23 +5,49 @@ paths:
   - "src/components/terminal/**"
   - "src/components/agent/**"
   - "src/stores/terminals.js"
+  # Half of the tab row is derived from the sessions this file is about — the
+  # Agent tab and one tab per shell — so the rule has to load for whoever is
+  # editing that half, not only for whoever is editing the worker.
+  - "src/stores/tabs.js"
+  - "src/components/shell/**"
 ---
 
-# The terminal: agent sessions
+# The terminal: agent sessions, and one shell
 
 The centre's `terminal` tab (`chat` before it grew a terminal — `ProjectState::validate` migrates the
 old name on load, since files on people's disks carry it and without the substitution that tab would
 fail the closed-list check and silently become the board) runs CLI coding agents under real PTYs, one
 per session, listed in the sidebar's Agents view (`components/agent/AgentList.vue`) and started from
-its "+ New agent" row, or from the task inspector's "Ask agent to edit". The reason the subsystem
-exists at all is the second half of that sentence: it notices when an agent is waiting on a human,
-including one in a tab nobody is looking at.
+its "+ New agent" row, from the `+` button beside the pinned tabs, or from the task inspector's "Ask
+agent to edit". The reason the subsystem exists at all is the second half of that sentence: it notices
+when an agent is waiting on a human, including one in a tab nobody is looking at.
+
+**That tab is drawn on demand and is not stored anywhere.** It exists exactly while the project has an
+agent session — live in `terminalState.sessions`, or still coming up in `terminalState.starting` —
+and `hasAgentTab` in `src/stores/tabs.js` is the whole of the rule, over `hasAgentSession` in
+`terminals.js`. Before that it was pinned beside the board, so a project opened on an empty folder
+offered a tab whose entire content was an empty terminal. A *start* counts and not only a session:
+a spawn takes about a second, and a tab that appeared only when the worker answered would leave the
+button somebody pressed with no visible effect for that second — the same reason `starting` exists for
+the panel at all. When the last agent goes the tab goes with it, and a person standing on it lands on
+the board; `dropAgentTab` is that rule and a `watch` in `DesktopApp.vue` is what notices, because
+`tabs.js` is one half of an import cycle with `settings.js` and a module-scope `watch` there would
+read this store at evaluation time — the failure `notifications.js` carries its own note about.
+
+The one seam that costs something: `project.activeTab` **is** remembered, so a project last left
+watching an agent comes back naming a tab that cannot exist yet, sessions deliberately not surviving a
+restart. `ProjectState::validate` passes `terminal` through unchanged on purpose — it does not know
+how many sessions there are, and it is the only place the `chat` migration can land — so the repair
+is `restoreTabs` in `tabs.js`, beside the identical repair for a diff tab, and it is guarded rather
+than unconditional: a project *switch* can arrive at a project whose agents are running, and taking
+somebody to the board then would be repairing what was not broken.
 
 An agent started for a piece of work opens on it. What `terminal_create` takes is not a prompt but an
 `Intent` — file this task, edit that issue, or nothing at all — plus the id of the agent to run; the
 words are the profile's business (see `.claude/rules/agents.md`), and `build_command` in `pty.rs` adds
-only what every agent alike needs: the working directory, `TERM`, and the bundled `bd` on the front
-of `PATH`. Whatever prompt the profile does produce rides as the agent's positional argument. Not as
+only what every session alike needs: the working directory, and then `apply_environment` — `TERM`, the
+locale, and the bundled `bd` on the front of `PATH` — which the shell branch below shares with it.
+Whatever prompt the profile does produce rides as the agent's positional argument. Not as
 bytes written after the spawn — the agent takes a moment to come up, and anything sent into an input
 that is not reading yet is lost with no acknowledgement to wait for and no way to tell that it went.
 
@@ -49,6 +75,146 @@ machine this was written on adds cargo and the rest from `~/.zshrc`, which only 
 failure — no shell, a five-second timeout, unrecognisable output — falls back to the inherited value.
 The bug is invisible in development, which is why it is a module rather than a line: `npm run tauri
 dev` starts the binary from a terminal, so the process already has the full `PATH`.
+
+## Not every session is an agent: the shell
+
+`SessionWork::Shell` is the one entry in that enum with no `Intent` behind it, no profile and nothing
+this app asked the process to do. It is the person's own `$SHELL` (`shell_env::shell`, `/bin/sh` when
+launchd hands the bundle no environment) in the project's root, reached through `Request::CreateShell`
+and the `terminal_shell` command, beside `terminal_create` and deliberately not inside it: that one
+takes an agent id and turns it into a command line through a profile, and none of those words mean
+anything here.
+
+**A shell profile in `src-tauri/src/agents/` was the rejected design, and the reason is `agents::pick`.**
+That module is about intents, prompts and the quirks of named harnesses; a shell has none of them, and
+a profile for one would join the cascade `pick` walks, where the "take whatever is installed" fallback
+could pick it — or, worse, where it could stand in front of a real agent. So the shell is its own
+branch through the same worker instead.
+
+**The environment is one piece of code and not two.** `pty::apply_environment` is what both branches
+call: `TERM`, the locale rules, and `PATH` with the sidecar's directory in front. The reason it is
+shared rather than copied is the third of those, and the cost of drift is silent — a shell built from a
+second copy would sooner or later start without the bundled `bd` in front, and then it runs whatever
+`bd` the machine has against a board whose version this app pins and checks. `build_shell_command`
+passes no flag: a PTY is what makes a shell interactive, and `-l` would be a second reading of somebody's
+profile files that their own terminal application does not do. What is *not* shared is everything above
+that line — no autonomy variables and no `BEADS_ACTOR`, both pinned by their own test in `pty.rs`: a
+person's own bd commands belong in the audit trail under their own name.
+
+`Pty::spawn` and `Pty::spawn_shell` differ in exactly the command they build; the PTY, the reader
+thread, the ring and the kill path are one `Pty::start` below both. In particular **there is no second
+way to end a session**: closing a terminal tab is `removeSession` → `terminal_remove`, the path that
+already exists, and what that path does is `Pty::kill` — the child is killed outright and the session
+leaves the worker's map. It is not the graceful path: that one is `kill_all`, described below, which
+hangs up the whole process group and waits, and which runs when the window closes rather than when a
+row or a tab is closed. Whatever the shell itself started outlives a `terminal_remove` exactly as an
+agent's own children do; that is the existing behaviour of this command and not something a shell
+introduces.
+
+Detection runs over a shell and is welcome to. Layer A is agent-independent and there is nothing about
+it to switch off; a shell that rings the bell has rung it for the person sitting in front of it, and
+nothing in this app acts on a shell's state — it has no row in the agents panel, and notifications are
+raised by a run rather than by a session going `needs-you`. Layer B is skipped, because
+`DetectInput::profile` is `Option` and a shell's is `None`: layer B is one named harness's interface
+being read, and handing a shell's screen to whichever profile happened to be configured would be a
+reading of something that is not there. **Do not close that hole with a stub profile** — see the
+paragraph above for where it would end up.
+
+On the front end `terminals.js` keeps both kinds in one `sessions` list, because the worker does and a
+second list would be one to hold in agreement with it. `isShellSession` is the whole of the
+difference, and where its readers are is the thing to know rather than how many there are — a number
+written here is wrong by the next commit. They are the derivations at the top of `terminals.js` —
+`agentSessions` and `shellSessions` read it, `lastAgent` and `hasAgentSession` read those — which
+between them decide that a shell has no row in the panel, that it has a tab of its own, that the
+selection repair never lands on one, and that a project holding only shells has no Agent tab. The one
+reader outside that file is `noSessions` in `TerminalView.vue`, which asks the same question about an
+empty state; everything else goes through a derivation rather than the predicate. `createShell` mints
+no start ticket, unlike `createSession`: a ticket buys the second before the worker answers, and it
+buys it for a panel that would otherwise draw an empty state over a row somebody just asked for — a
+tab that is not there yet draws nothing at all, so there is nothing to cover.
+
+## A shell's tab
+
+Each shell gets its own centre tab, and those are **derived from the sessions too** — `terminalTabs` in
+`tabs.js`, after the diffs, one per `SessionWork::Shell`. A second array beside `diffTabs` was the
+rejected design for the plain reason that the list already exists in `terminalState.sessions`, and
+deriving it is also what makes a project switch free: `loadSessions` brings the new project's sessions,
+the tabs follow, and there is nothing to reset. The id is a zero byte, `term:` and the session id —
+zero byte for the reason the diff ids have one (these sit in the tab row beside file paths and can land
+in `project.activeTab` with them, and no filesystem allows one in a name), and the session id so the
+tab and the shell behind it cannot come apart. The label is `Terminal` plus the shell's position among
+the shells, which is what a person counts; closing the first renumbers the second, and that is the
+honest reading of a position rather than a bug.
+
+**Closing the tab kills the shell.** They are one act, exactly as closing a terminal window is: a tab
+that only hid a live shell would leave a process nobody can see and nobody will remember to stop, and
+the tab is a view of a session anyway — there is nothing else in it to close. `closeTerminalTab` works
+the neighbour out before the kill and moves the selection only if the removal actually took, so a
+refusal leaves both the shell and its tab where they were.
+
+**The other direction is deliberately not symmetric.** A shell the person exits themselves — `exit`, or
+Ctrl-D — reaches `Exited` and stays in the worker's map, which only `Request::Remove` empties, and the
+tabs are derived by `work.kind` rather than by state: so the tab stands, with a dead PTY behind it and
+its last screen still in the ring, until somebody closes it. That is the intended behaviour and not an
+oversight — it is what a terminal emulator with "close on exit" switched off does, it leaves the last
+words of whatever was running there to be read, and closing it is the same one gesture as before.
+
+What such a tab draws is `TerminalView.vue` with a `sessionId` prop, and the Agent tab is the same
+component with `terminalState.activeId` passed in. The prop is what the pane attaches to, sends
+keystrokes to and resizes; the pane reads no selection of its own. That is the other half of the
+`activeId` split above — and the whole reason two shells do not open on one scrollback, since the pane
+holds one xterm instance per *view* and refills it from the ring of whichever session it was named.
+
+Nothing about a shell reaches `settings.json`: it is not in `openTabs`, which is paths, and a tab id
+that lands in `activeTab` is rejected on the next launch by `validate` (it is neither of the two names
+nor a path) and again by `restoreTabs`.
+
+## Dropping a file on the panel
+
+Dropping a file on the terminal panel types its absolute path into the session's input and stops
+there, the way iTerm and Terminal.app do it. **Return is not sent**: a path is nearly always part of a
+sentence — "look at X and fix it" — rather than the whole of one, and a message sent on somebody's
+behalf cannot be taken back out of an agent. The text ends in one space so the person goes on typing
+around what landed. Both places `TerminalView.vue` is drawn get this at once, the Agent tab and a
+shell's tab, because it is the pane's behaviour rather than the tab's.
+
+Nothing is copied anywhere. That is the difference from a task's attachments, which `attachment_import`
+copies because a path written into a filed issue has to outlive somebody tidying `~/Downloads` next
+week; a live session has no such duty — the agent reads the file within the minute — and a copy would
+cost storage, narrow the gesture to the four image formats `sniff` knows, and leave rubbish nothing
+refers to.
+
+**Three pieces, and the split is the point.** `components/terminal/dropPaths.js` is the whole of the
+text rule, pure and outside the component because a `.vue` file is the one thing no test here can
+reach (`tests/components/terminal/dropPaths.test.js`). A path goes in bare and takes single quotes only
+when it needs them — shlex's own safe set — since the ordinary case is a path with nothing special in
+it and a bare one reads better in the middle of a half-typed sentence; an inner quote is written
+`'\''`. **Quoting is not the whole of the text rule**, because this string is typed into a PTY rather
+than parsed by a shell: a control character is read by the line discipline and the TUI before any
+shell sees a word, and single quotes do not reach it — a line feed or a carriage return in a filename
+*is* a Return, the one keystroke the gesture exists not to press. Such a path is refused outright and
+per path, never stripped or escaped: a repaired path would no longer name the file somebody dropped,
+and the other files of the same drop still go in.
+
+`watchSessionDrops` in `terminals.js` is the subscription, over the webview's `onDragDropEvent`,
+mirroring `watchDrops` in attachments.js down to the browser case — `getCurrentWebview` throws there,
+which is an ordinary mode and gets one debug line. It converts the event's *physical* position with
+`toLogical(devicePixelRatio)` and hands over CSS pixels, and no opinion about whose drop it is.
+
+**Whose drop it is is a hit test, not layout arithmetic.** `TerminalView.vue` asks
+`document.elementFromPoint` at that point and takes the drop only if what is drawn there is inside its
+own xterm host. The same question settles the argument with the new task dialog for free: with that
+modal open the point lands on its scrim, so the panel refuses of its own accord and the two subscribers
+on the one window event never need to know about each other — which is why there is no dispatcher
+between them, and why a future overlay is separated by the same property rather than by a list of
+exceptions. The pane's own drop response is a sibling of the host and carries `pointerEvents: 'none'`
+for exactly this reason: taking pointer events would make the response itself the answer to the hit
+test, and it would switch off the instant it appeared.
+
+The response — a frame and one line of caption over the terminal — is drawn only while a live session
+is behind the panel. `send` already drops what is written to a session still coming up, so there is
+nothing to promise in that state and nothing is promised. Without any response at all the gesture is
+invisible and indistinguishable from the broken state this replaced, which is the reason it exists.
 
 | file | what it does |
 |---|---|
@@ -200,14 +366,32 @@ That register is a `Set` and every subscriber gets every chunk: a single field w
 unsubscribing to who mounted last, exactly the ordering the rest of this subsystem refuses to depend
 on.
 
-`activeId` looks like it names one thing and actually names two, and conflating them was a real
-defect: "which agent the human has selected" has to survive leaving the terminal tab, because
-`AgentList.vue` highlights its row from this same field, while "which session the worker is streaming
-output to" has to end the moment that view unmounts. While a single field served both, leaving the
-tab cleared the selection and the terminal came back permanently blank. `detach(id)` takes the id it
-is leaving: switching agents is two IPC calls with no ordering guarantee at the worker, so a nameless
-detach arriving after the new attach would silence the session the human just switched to, with no
-error anywhere. `detach` never touches `activeId` — selection is not the transport's to forget.
+`liveAgentCount` reads that same session state and is the scope bar's agents counter
+(`.claude/rules/git-head.md`): the agent list minus the rows that have finished, which is every
+session whose state is not `exited`, plus the starts `visibleStarts` says belong to this project.
+`needs-you` counts, which is the whole decision: an agent waiting for an answer is why somebody is
+looking at the bar, and a counter that fell by one the moment attention was demanded would point away
+from the thing it exists to point at. It is a count of its own rather than `agentRows.value.length`
+because those rows carry elapsed times off a thirty-second clock, and this number has no business
+being recomputed by it.
+
+`activeId` used to name two things, and conflating them was a real defect: "which agent the human has
+selected" has to survive leaving the terminal tab, because `AgentList.vue` highlights its row from
+this same field, while "which session the worker is streaming output to" has to end the moment that
+view unmounts. While a single field served both, leaving the tab cleared the selection and the
+terminal came back permanently blank. **They are two fields now**, and what forced the split is the
+shell below: a pane drawing a session that has no row in the agents panel would have moved the
+highlight onto a row that does not exist and taken the Agent tab off the agent it was showing.
+`activeId` keeps the one meaning it is named for — the agent a person picked — and the transport's
+half is `streaming`, a module-scope variable in `terminals.js` beside `seq` and `attaching`, written
+by `attach` and cleared by `detach`, which nothing draws and nothing outside that file can see. The
+output listener filters on it rather than on `activeId`; filtering on the selection would drop every
+byte of a shell on the floor. `detach(id)` takes the id it is leaving: switching sessions is two IPC
+calls with no ordering guarantee at the worker, so a nameless detach arriving after the new attach
+would silence the session the human just switched to, with no error anywhere — and `detach` forgets
+`streaming` only when it still names the session being left, which is the front-end half of that same
+rule. Neither function touches `activeId`: selection is not the transport's to forget, and attaching
+is not the same act as choosing.
 
 A session's row is captioned by the **work** it was started for, never by the process behind it, and
 `SessionWork` in `terminal/model.rs` is what an `Intent` reduces to for that purpose — which of its
@@ -230,6 +414,25 @@ buffer: called twice in flight, without the guard the *last response* would win 
 call*, and the list could end up showing one project's sessions under another project's name — after
 which the remove button in `AgentList.vue` would kill the wrong project's agent, silently. A test in
 `tests/stores/terminals.test.js` pins this.
+
+Beside that list, and separate from it on purpose, `terminals.js` keeps a second structure about
+**every** project: `marks`, a map of session id → `{id, project, state}`, exported as the computed
+`projectStates` (path → `{state, live, loud}`) and the `projectState(path)` accessor. The project
+rail draws one dot per project and cannot ask `sessions`, which is one project's by design — a row
+for a project this window is not pointed at would offer a button that kills somebody else's process.
+
+Three things feed the map and there is no polling: `terminal_marks`, read once in `initTerminals`,
+and the `terminal:state` / `terminal:removed` listeners, which the worker already emits for every
+session of every project — `upsert` throws the foreign ones away, so the mark is set *before* it
+runs. The first read is wrapped in a `try`: a rail of grey dots is a smaller loss than an
+`initTerminals` that threw and took the agents panel with it. Marks rather than a total per project,
+because the events arrive one session at a time and a store holding only counters could not tell
+whether the session that just left `needs-you` was the last loud one where it lived. `loud` beats
+`live`; `starting` counts as live for the reason it counts in `hasAgentSession`; `idle` counts as
+neither, being a live process with nothing to say. `SessionMark` in `terminal/model.rs` is its own
+type rather than `Session` for the reason `Request::Group` gives about the pid — every project's
+sessions cross here, and `Session` carries `work`, which for a filing agent holds the whole of the
+person's own draft prose.
 
 `TerminalView.vue`'s pane and its host both carry `minWidth: 0`, and that is not decoration next to
 the `minHeight: 0` beside it. A flex item defaults to `min-width: auto` and refuses to shrink below
@@ -255,10 +458,14 @@ it, and `answer()` in `terminals.js` went with the block rather than being left 
 nothing calls.
 
 In a browser, `mockBackend.js` answers `terminal_list` with one fixture session already sitting in
-`needs-you` with a real permission question attached — the only way `?view=gallery` and `npm run dev`
+`needs-you` with a real permission question attached (there is no shell in that fixture: nothing in a
+browser could stand behind one) — the only way `?view=gallery` and `npm run dev`
 can show that state with no Rust worker behind them — and `terminal_attach` replays a canned
 transcript. Every write falls through to the same loud rejection the tracker's writes get.
-`terminals.js` translates `NoAgent` into its own message naming what was looked for, rather than the
+Both commands that *start* something — `terminal_create` and `terminal_shell` — are among those
+writes deliberately: a session handed back with no PTY behind it would put a row in the panel or a tab
+in the centre whose terminal could never say a word. `terminals.js` translates `NoAgent` into its own
+message naming what was looked for, rather than the
 generic "nothing was created": it is the one failure in that list a person can act on, and since a
 task is now filed by an agent, it is the difference between a missing convenience and no way to put a
 card on the board. The names in it come from the error's own text, because Rust holds the only copy.

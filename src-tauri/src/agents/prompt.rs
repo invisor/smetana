@@ -512,15 +512,20 @@ fn run(
     // that exists for this run and this batch alone. The app can see the board
     // and its own clock and nothing else — what a session *did* comes back from
     // it as an exit code and nothing more — so the account is asked for here.
+    //
+    // The backticks are asked for rather than inferred: `report.rs::prose`
+    // marks a backtick span and nothing else, because a shape heuristic's
+    // false positives land in ordinary prose and cannot be reviewed.
     let _ = write!(
         out,
         "\n\nWhen this batch is finished, write your own account of it to {} — the directory \
          already exists. Smetana reads that file and nobody else does, so it is JSON in exactly \
          this shape: {{\"tasks\": [{{\"id\": \"<bd id>\", \"did\": \"one or two sentences on what \
-         you actually did\"}}], \"notes\": \"anything about the batch as a whole, or leave it \
-         out\"}}. Put a line in it for every task you touched, the ones you parked included, \
-         saying what stopped them. This is in addition to the report you hand back in this \
-         conversation and replaces no part of it.",
+         you actually did, with every path, symbol, command and sha in backticks\"}}], \
+         \"notes\": \"anything about the batch as a whole, or leave it out\"}}. Put a line in \
+         it for every task you touched, the ones you parked included, saying what stopped \
+         them. This is in addition to the report you hand back in this conversation and \
+         replaces no part of it.",
         reports.join(format!("batch-{batch}.json")).display()
     );
 
@@ -1013,6 +1018,17 @@ mod tests {
                 text.contains("replaces no part of it"),
                 "the JSON is beside the prose report, never instead of it: {text}"
             );
+        }
+    }
+
+    #[test]
+    fn the_batch_file_asks_for_identifiers_in_backticks() {
+        // `report.rs::prose` marks a backtick span and nothing else,
+        // deliberately: a shape heuristic cannot be reviewed. So the backticks
+        // have to be asked for here, or the rule has nothing to act on.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = run_prompt(run_settings(RunMode::Auto, RunScope::Queue), delivery);
+            assert!(text.contains("backticks"), "{delivery:?}: {text}");
         }
     }
 

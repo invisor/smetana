@@ -82,6 +82,16 @@ do not add one**: a third watcher subsystem would fire on every write inside `no
 `target`, and the price of the sweep is named — while an agent works, this list is as stale as the
 file tree beside it.
 
+The list is **read from outside this panel too**: `dirtyCount`, the scope bar's uncommitted-files
+counter (`.claude/rules/git-head.md`). It is deliberately nothing more than
+`tree.changes.length` — every kind, staged and unstaged and untracked and conflicted alike — so that
+the number in the bar is the number of rows here and can be checked by looking rather than by
+counting. It is `null` and never `0`
+for a tree that could not be read, the same opposition `tree` itself keeps, and the bar draws no
+counter at all for it. Its freshness is this store's freshness and there is no second mechanism: the
+counter ages with the list, which is the price named in the paragraph above, and a watcher added for
+the bar's sake would be the watcher this panel refuses.
+
 **The three sections fold and two of them are dragged**, and the rule is `components/git/sectionHeights.js`
 — pure, tested, of the `gitActions.js` family; `SectionHeader.vue` is the caption, which is a real
 `<button>` so the keyboard and `aria-expanded` come for free, and `shell/Resizer.vue` is the strip
@@ -238,9 +248,9 @@ one hunk by hand loses that distinction, and this app has no staging of its own 
 Hence the count on the button, `commitLabel` — a button reading only "Commit" would leave the one
 surprising thing about it unsaid. The empty message is refused **before** the add and not left to
 git, whose own refusal is in good words but arrives with the index already rewritten behind it. No
-`--no-verify`: a repository's hooks are part of what committing means there, and the price is the one
-this module pays everywhere — there is no timeout in `run.rs`, so a hook that hangs hangs the panel,
-exactly as a merge driver that hangs already does.
+`--no-verify`: a repository's hooks are part of what committing means there, and the price is
+`run::WRITE_CEILING` — a hook is somebody else's program, so the commit is allowed five minutes and is
+then stopped, with git given the chance to take `index.lock` back off the disk on its way out.
 
 **The draft is per repository, in memory, and never in `settings.json`.** A project is often several
 repositories and the sentences are about different work, so `vcsState.messages` is keyed by path; the
@@ -363,52 +373,110 @@ which is the one way this fails that looks like success.
 ## The remote: what is behind, and the two verbs that reach it
 
 **Network is the second way this module runs git, and it is a second function rather than a flag.**
-`run.rs` deliberately has no deadline anywhere else, and that is recorded as a decision rather than
-an omission: a commit hook that hangs was started by somebody watching the screen, and killing their
-build at sixty seconds would be this app inventing a policy for a repository it knows nothing about.
-A network call is the opposite case in both halves — nobody pressed it (a window came back into
-focus) and there is nobody for git to ask (there is no terminal on this process, so a prompt for a
-password is at best a dialog from some other program and at worst a wait with no end). So
-`git_network` and `git_network_attempt` add `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS_REQUIRE=never`,
-`GIT_SSH_COMMAND="ssh -o BatchMode=yes"` and a **60 second deadline with a kill behind it**.
+What makes it its own pair of functions is the environment rather than the number: nobody pressed it
+(a window came back into focus) and there is nobody for git to ask (there is no terminal on this
+process, so a prompt for a password is at best a dialog from some other program and at worst a wait
+with no end). So `git_network` and `git_network_attempt` add `GIT_TERMINAL_PROMPT=0`,
+`SSH_ASKPASS_REQUIRE=never`, `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` and a **60 second deadline**.
 `StrictHostKeyChecking` is deliberately left alone: what a machine trusts is not this function's
-business. Everything local — `status`, `merge`, `commit`, the branch reads — goes on running through
-`git`/`git_attempt` with no ceiling at all.
+business.
 
-**How that wait is done is `bounded`, and it is deliberately not the poll-and-kill loop in
-`agents::oneshot::ask` it started as.** That loop reads both pipes only once the child is gone, and
+**Every local call has a ceiling too, and there are two of them.** `run.rs` used to record having
+none as a decision — a commit hook that hangs was started by somebody watching the screen, and
+stopping their build would be this app inventing a policy for a repository it knows nothing about.
+That argument held while the module only read; it lost the day the module started writing. There is
+no worker in `vcs/` and no queue, so a git that never returns is an IPC call that never answers: the
+button stays inert, nothing on screen says why, and the way out is restarting the app. Somebody
+standing over a hook can watch it in their own terminal; nobody can press a dead button, and a call
+that comes back can be pressed again. So a call site says which kind of call it is by the function it
+names — **`run::git_read` under `READ_CEILING` (30 s), `run::git_write` and `run::git_attempt` under
+`WRITE_CEILING` (300 s)**, with `git_maybe` and `git_bytes` reads by construction. Thirty seconds is
+two orders of magnitude over the 220 ms a cold `git status` measures on this repository. Five minutes
+is what the first repository this ships against declares for itself: `core.hooksPath = .beads/hooks`,
+where every hook wraps `bd hooks run` in `timeout ${BEADS_HOOK_TIMEOUT:-300}`. **The two ways of
+being wrong are not symmetric, and that is what sets the number** — a ceiling too low is a hard
+failure with no way round it from inside the app (the commit is killed, pressed again, killed again,
+and committing there is impossible), while a ceiling too high costs one wait on a hang that should
+not have happened and ends in an error somebody can act on. A ceiling turns "forever" into
+"eventually"; it is not a performance budget for somebody else's hook. It is affordable at that
+length only because the work is off the runtime: a stuck button no longer takes a tokio worker with
+it.
+
+**A stopped write is not a clean no-op, and there is no door in the panel to what it leaves.**
+`WRITE_CEILING` governs `checkout`, `merge` and `rebase` as well as the commit, and a merge or a
+rebase killed part-way leaves `MERGE_HEAD`, or `rebase-merge`/`rebase-apply` depending on which
+backend the repository is configured for, on the disk with a half-updated tree behind it. `ConflictModal` does not open on that: it opens on `MergeOutcome::Conflict`, which is a
+tree read *after* an operation that finished. So what a person gets is the timeout sentence and a
+repository mid-operation, and the way back is git in a terminal. That door is deliberately not built
+— naming the state is the whole of what is owed here.
+
+**A held `index.lock` is not one of the hangs this protects against**, and the correction is worth
+keeping: git does not wait on that lock, it refuses immediately (measured on 2.34.1 —
+`fatal: Unable to create '...index.lock': File exists.` at exit 128), which reaches the panel as an
+ordinary refusal in git's own words. The lock matters on the other side of the ceiling, as the thing
+a killed git would have left behind.
+
+**The stop is SIGTERM first, then SIGKILL, and the grace is not politeness.** git removes the
+`*.lock` files it holds from a signal handler and re-raises; SIGKILL cannot be caught, so a write
+killed outright leaves `.git/index.lock` behind and every later git command in that repository
+refuses with "Another git process seems to be running" until somebody deletes the file by hand —
+a worse state than the hang the ceiling exists to end. Measured on git 2.34.1 against a `pre-commit`
+hook that sleeps: SIGTERM to the group leaves no lock, SIGKILL leaves one. **The two-second grace is
+slept through whole and the child is not watched during it**, which reads like waste and is not: git
+dies promptly on SIGTERM, so a version that returned the moment it was reaped would skip the SIGKILL
+in exactly the case it exists for — a hook that ignored the signal and is still running. Waiting for
+the reap and signalling afterwards is not the alternative either, since a reaped pid can be recycled
+and the group named would be somebody else's.
+
+`bounded` and `terminate` are the one part of `run.rs` under test, and the tests are the shape of
+those two rules: a script that floods either pipe, one that outstays its deadline and is then looked
+for in the process table (a zombie still answers `kill(pid, 0)`, a reaped child does not), one whose
+grandchild ignores SIGTERM so the kill behind the grace is the only thing that can reach it, and two
+that drive **real git in a real repository** — a `textconv` helper that hangs a read, and a
+`pre-commit` hook that hangs a commit, after which the test commits again to prove the repository is
+not left refusing.
+
+**How every one of those waits is done is `bounded`, and it is deliberately not the poll-and-kill
+loop in `agents::oneshot::ask` it started as.** That loop reads both pipes only once the child is gone, and
 its own comment names the precondition that makes it safe: the output is bounded, one line asked
 for. Nothing here is. `git pull` writes a merge diffstat of one line per changed file and
 `git fetch --prune` a line per updated ref, so past the 64 KiB a pipe holds git blocks in `write`,
 `try_wait` never answers `Some`, and the deadline kills a git that had **already written the merge
-commit** — under a sentence blaming a remote that answered perfectly. So standard output goes to
-`/dev/null` (no caller has ever read it, which is why `git_network` returns `()`), and standard
-error is drained on a thread of its own while the wait happens.
+commit** — under a sentence saying this app stopped it. So **every pipe that is opened is drained on
+a thread of its own** while the wait happens, and a caller with nothing to do with standard output
+says so (`Capture::Discard`) and it is never opened at all — which is why `git_network` and
+`git_write` return `()`. A read asks for it and pays for the second thread.
 
-The kill has two halves for the same reason. `Child` has no reaping `Drop`, so a `kill` with no
-`wait` behind it leaves a defunct process for the lifetime of the app — and this is the call a
-five-minute sweep makes, so a blackholed route is a hundred zombies a day against
+The stop is a kill **and** a reap, and both halves are load-bearing. `Child` has no reaping `Drop`,
+so a `kill` with no `wait` behind it leaves a defunct process for the lifetime of the app — and this
+is the call a five-minute sweep makes, so a blackholed route is a hundred zombies a day against
 `kern.maxprocperuid`, after which the app cannot fork at all and nothing on screen says why. And the
 signal goes to the **process group**, as `runs/preflight.rs::terminate` does and for its reason: the
-process actually blocked on the socket is `ssh` or `git-remote-https`, a child of git's, and killing
-git alone leaves it holding both the connection and the stderr pipe. `bounded` is the one thing in
-`run.rs` with tests under it — a script that floods a pipe, and one that outstays its deadline and
-is then looked for in the process table, since a zombie still answers `kill(pid, 0)` and a reaped
-child does not.
+process actually blocked is often a child of git's — `ssh` or `git-remote-https` on a fetch, the hook
+itself on a commit — and killing git alone leaves it holding both the connection and the stderr pipe.
+That twin stays on a bare SIGKILL deliberately: a declared command holds no lock file of ours, and a
+person pressing stop must not wait two seconds for a program that has already been asked once.
 
-**The three networked commands are `spawn_blocking`, unlike every other command in `vcs/`.** They
-are the first in the module that can take a minute by design, and every IPC call in the app — the
-file tree, the editor, the tracker, the terminals — shares that runtime: a hung fetch and a hung
-push on a two-core machine is every worker gone and the whole window drawn from stale state, with
-nothing saying why. `vcs_suggest_message` documents the same rule for the same reason one field
-over.
+**Every command in `vcs/` runs its work in `spawn_blocking` and none of it in the body of the
+`async fn`** — `off_the_runtime`, or `off_the_runtime_or_empty` for the three that are documented as
+never refusing and so have no error to hand back a failed join. This started as the three networked
+commands alone, the first that could take a minute by design; it is the general rule now that every
+call has a length this app has committed to waiting. Every IPC call in the app — the file tree, the
+editor, the tracker, the terminals — shares the runtime these commands are polled on, so a git that
+is merely slow would otherwise take workers out of everything else on screen with nothing saying
+why. `vcs_suggest_message` keeps its own wrapper, since what comes back from it is
+`OneshotError`.
 
-An expired deadline is **`VcsError::Timeout`, its own variant with its own `kind()` of `"timeout"`**,
+An expired ceiling is **`VcsError::Timeout`, its own variant with its own `kind()` of `"timeout"`**,
 and never a `Git { stderr }` with an empty message. git said nothing; this app decided, and the
-sentence says so ("Smetana stopped git after 60 seconds"). It cannot reach the editor's own table of
-refusals (`ERRORS` in `stores/files.js`, which falls back silently to "Could not read this file"),
-because the only commands that can produce it are the three networked ones and no file read is among
-them — a diff is `vcs_file_at_head` through the local runner.
+sentence says so ("Smetana stopped git after 300 seconds — it had not finished"). One variant for all
+three ceilings, and the sentence says only what is true of all three: it named the remote while only
+the networked calls could produce it, which would now be a lie about a commit hook, and a second
+variant would have carried this same `kind` — nothing on the front end could have told them apart,
+and the operation is already named by the panel's own heading over the message. It **does** reach the
+editor's table of refusals now (`ERRORS` in `stores/files.js`), since a diff's left-hand side is
+`vcs_file_at_head` and that is three git calls; `timeout` is a key there for that reason, and without
+it the fallback would draw "Could not read this file." over a git this app stopped.
 
 **Where a branch stands against its upstream is `vcs_tracking`, a separate command, and folding it
 into `vcs_branches` would end two documented properties of that one.** `vcs_branches` spawns no

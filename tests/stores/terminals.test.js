@@ -20,9 +20,14 @@ const session = (over = {}) => ({
 // below).
 const b64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 
+/* One row of what `terminal_marks` answers: the whole of what the rail is told
+   about a session it has no row for. */
+const mark = (over = {}) => ({ id: 1, project: '/p', state: 'running', ...over })
+
 async function ready() {
   const loaded = await loadStores()
   loaded.ipc.on('terminal_list', [session()])
+  loaded.ipc.on('terminal_marks', [])
   loaded.ipc.on('terminal_attach', { data: b64('hello'), seq: 0 })
   loaded.ipc.on('terminal_detach', null)
   loaded.ipc.on('terminal_write', null)
@@ -821,6 +826,130 @@ describe('starting a session', () => {
   })
 })
 
+/* The person's own shell. It is a worker session like any other and not an
+   agent, and every assertion here is one half of that sentence: it is in
+   `sessions`, and it is in nothing else. */
+describe('a shell session', () => {
+  const shell = (over = {}) => session({ work: { kind: 'shell' }, agent: '/bin/zsh', ...over })
+
+  it('is asked for by project alone — no agent, no intent', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_shell', shell({ id: 5 }))
+
+    const opened = await stores.terminals.createShell('/p')
+
+    expect(ipc.calls('terminal_shell')).toEqual([{ project: '/p' }])
+    expect(opened.id).toBe(5)
+    expect(stores.terminals.terminalState.sessions.map((s) => s.id)).toEqual([1, 5])
+  })
+
+  /* The agents panel is rows of work, and a shell has none: nothing asked it to
+     do anything, and there would be nothing to caption the row with. */
+  it('is not a row in the agents panel', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), shell({ id: 5 })])
+    await stores.terminals.loadSessions('/p')
+
+    expect(stores.terminals.agentRows.value.map((row) => row.id)).toEqual([1])
+    expect(stores.terminals.shellSessions.value.map((s) => s.id)).toEqual([5])
+    expect(stores.terminals.hasAgentSession.value).toBe(true)
+  })
+
+  it('does not make a project with only shells in it look like one with agents', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [shell({ id: 5 })])
+    await stores.terminals.loadSessions('/p')
+
+    expect(stores.terminals.agentRows.value).toEqual([])
+    expect(stores.terminals.hasAgentSession.value).toBe(false)
+  })
+
+  /* `activeId` is the row a person picked in the agents panel, and a shell has
+     no row there. One that landed in this field would highlight nothing in the
+     panel while the Agent tab drew somebody else's shell — the two meanings this
+     field used to carry, back again. */
+  it('is never what the selection falls back to when an agent goes', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), shell({ id: 5 })])
+    ipc.on('terminal_remove', null)
+    await stores.terminals.loadSessions('/p')
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+
+    await stores.terminals.removeSession(1)
+
+    expect(stores.terminals.terminalState.activeId).toBeNull()
+  })
+
+  /* Attaching is the transport's half; selecting is the person's. The pane for a
+     shell attaches without picking anything, which is what lets a terminal tab
+     be open while the Agent tab still shows the agent it was showing. */
+  it('can be attached to without moving the selected agent', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), shell({ id: 5 })])
+    await stores.terminals.loadSessions('/p')
+
+    await stores.terminals.attach(5)
+
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+  })
+
+  /* The other half of that split: output follows what the window is attached to
+     and not what the panel has selected, or a shell's tab would sit blank while
+     the worker streamed to it. */
+  it('its output reaches the subscriber while another session is selected', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), shell({ id: 5 })])
+    await stores.terminals.loadSessions('/p')
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+
+    await stores.terminals.attach(5)
+    await emit('terminal:output', { id: 5, seq: 1, data: b64('$ ') })
+    await nextTick()
+
+    expect(stores.terminals.terminalState.activeId).toBe(1)
+    expect(seen.at(-1)).toBe('$ ')
+  })
+
+  /* The condition that makes the split correct, and the one no other test
+     reaches. A detach and an attach travel as two IPC calls with no ordering
+     guarantee, so the old view's detach can arrive *after* the new one has
+     attached — a `streaming = null` written unconditionally would then drop
+     every byte of the session the person is now looking at, with no error and
+     no event to say why. Two sessions and a late detach is exactly that
+     sequence. */
+  it('a detach that arrives after the next attach does not silence it', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_list', [session({ id: 1 }), session({ id: 2 })])
+    await stores.terminals.loadSessions('/p')
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+
+    await stores.terminals.attach(2)
+    // The view being left detaches last, naming the session it is leaving.
+    await stores.terminals.detach(1)
+    await emit('terminal:output', { id: 2, seq: 1, data: b64('still here') })
+    await nextTick()
+
+    expect(seen.at(-1)).toBe('still here')
+  })
+
+  /* And the same rule the other way: the session that was left goes quiet, or
+     the tab just opened would be written into by the one just closed. */
+  it('what the window has left stops reaching the subscriber', async () => {
+    const { stores, emit, nextTick } = await ready()
+    const seen = []
+    stores.terminals.subscribeOutput((bytes) => seen.push(new TextDecoder().decode(bytes)))
+
+    await stores.terminals.attach(1)
+    await stores.terminals.detach(1)
+    await emit('terminal:output', { id: 1, seq: 1, data: b64('too late') })
+    await nextTick()
+
+    expect(seen).not.toContain('too late')
+  })
+})
+
 describe('back-end errors', () => {
   it('a terminal_attach refusal does not throw but settles into lastError', async () => {
     const { ipc, stores } = await ready()
@@ -881,5 +1010,370 @@ describe('elapsed time', () => {
     const { stores } = await loadStores()
     expect(stores.terminals.formatElapsed(-1_000)).toBe('0m')
     expect(stores.terminals.formatElapsed(-90 * 60_000)).toBe('0m')
+  })
+})
+
+/* The scope bar's second counter, which is this list minus the rows that have
+   finished. Three cases carry the whole rule: what stops counting, what keeps
+   counting when it would be easiest to drop, and whose starts count. */
+describe('the live agent count in the scope bar', () => {
+  it('an agent that has exited is a row to read, not one that is running', async () => {
+    const { stores, emit, nextTick } = await ready()
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+
+    await emit('terminal:state', session({ state: 'exited', exitCode: 0 }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.sessions).toHaveLength(1)
+    expect(stores.terminals.liveAgentCount.value).toBe(0)
+  })
+
+  /* The one state it would be tempting to drop, and the reason the rule is "not
+     exited" rather than "running": an agent waiting for an answer is why
+     somebody is looking at this bar at all, and a counter that fell by one on a
+     demand for attention would point away from it. */
+  it('an agent waiting for a person still counts', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 2, state: 'idle' }))
+    await nextTick()
+
+    expect(stores.terminals.liveAgentCount.value).toBe(2)
+  })
+
+  /* Starts count from the moment their row is drawn — a spawn takes about a
+     second and the counter must not disagree with the list beside it for that
+     second — but only the ones that belong to the project on screen, which is
+     the same filter `agentRows` applies and not a second copy of it. */
+  it('a start counts before the worker answers, and only in its own project', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    stores.terminals.createSession('/other', { kind: 'bare' })
+    expect(stores.terminals.terminalState.starting).toHaveLength(1)
+    expect(stores.terminals.agentRows.value).toHaveLength(1)
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+
+    stores.terminals.createSession('/p', { kind: 'bare' })
+    expect(stores.terminals.agentRows.value).toHaveLength(2)
+    expect(stores.terminals.liveAgentCount.value).toBe(2)
+  })
+
+  /* A shell is a session of the worker's and not an agent: it has no row in the
+     panel this number is read against, so counting one would put the bar one
+     ahead of the list with nothing on screen to say why. The two rules meet in
+     `agentSessions`, which is what both this counter and `agentRows` filter
+     through — this is the test that would have caught them coming apart. */
+  it('a shell is not a running agent', async () => {
+    const { stores, emit, nextTick } = await ready()
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+
+    await emit('terminal:state', session({ id: 2, work: { kind: 'shell' }, agent: '/bin/zsh' }))
+    await emit('terminal:state', session({ id: 3, work: { kind: 'shell' }, agent: '/bin/zsh' }))
+    await nextTick()
+
+    // Both shells are in the worker's list, and in neither of the two things a
+    // person compares: the count and the rows.
+    expect(stores.terminals.terminalState.sessions).toHaveLength(3)
+    expect(stores.terminals.liveAgentCount.value).toBe(1)
+    expect(stores.terminals.agentRows.value).toHaveLength(1)
+  })
+
+  /* The counter and the list, tied together in one assertion, because what the
+     bar promises is the list minus the rows that have finished and the two are
+     only equal through `toUiState`: `exited` is the one session state it maps
+     onto `done` and `failed`, and the counter skips exactly that state. A
+     seventh state mapped onto a finished-looking row tomorrow would move the
+     list and leave the counter behind, silently, and the arithmetic here is the
+     only thing that would notice. */
+  it('the count is the list minus the rows that have finished', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    await emit('terminal:state', session({ id: 2, state: 'exited', exitCode: 0 }))
+    await emit('terminal:state', session({ id: 3, state: 'exited', exitCode: 1 }))
+    await emit('terminal:state', session({ id: 4, state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 5, state: 'idle' }))
+    /* A shell among them, because the equality is what the criterion is worded
+       as and a shell is the one session that must not disturb either side of
+       it: it is in the list the worker keeps and in neither of these two. */
+    await emit('terminal:state', session({ id: 6, work: { kind: 'shell' }, agent: '/bin/zsh' }))
+    await nextTick()
+    stores.terminals.createSession('/p', { kind: 'bare' })
+
+    const rows = stores.terminals.agentRows.value
+    expect(stores.terminals.terminalState.sessions).toHaveLength(6)
+    expect(rows.map((r) => r.state)).toEqual(['running', 'done', 'failed', 'needs-you', 'ready', 'running'])
+    expect(stores.terminals.liveAgentCount.value).toBe(
+      rows.filter((r) => r.state !== 'done' && r.state !== 'failed').length
+    )
+    expect(stores.terminals.liveAgentCount.value).toBe(4)
+  })
+})
+
+/* The same agents split for the scope bar's headline. What these are here to
+   hold is the pair of promises the sentence makes: a shell can never produce
+   either half of it, and the number in "N agents running" is the number in the
+   counter drawn beside it. */
+describe('the agent counts behind the headline', () => {
+  it('counts the agents waiting on the person, and the rest as live', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 3, state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 4, state: 'idle' }))
+    await nextTick()
+
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 2, live: 2 })
+  })
+
+  /* The whole of the blocking defect this computed exists for. A shell rings
+     the bell when a build finishes and the worker reads that as `needs-you`
+     like any other session, so the rail's per-project map — which is told a
+     session's state and never its kind — would have had the bar announce an
+     agent waiting on somebody in a project with no agent in it. */
+  it('a shell is neither waiting nor running, whatever state it reaches', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, work: { kind: 'shell' }, agent: '/bin/zsh', state: 'needs-you' }))
+    await emit('terminal:state', session({ id: 3, work: { kind: 'shell' }, agent: '/bin/zsh', state: 'running' }))
+    await emit('terminal:state', session({ id: 4, work: { kind: 'shell' }, agent: '/bin/zsh', state: 'starting' }))
+    await nextTick()
+
+    expect(stores.terminals.terminalState.sessions).toHaveLength(4)
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 0, live: 1 })
+  })
+
+  it('says nothing at all in a project where every agent has finished', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ state: 'exited', exitCode: 0 }))
+    await nextTick()
+
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 0, live: 0 })
+  })
+
+  /* The tie to the counter, asserted as arithmetic rather than as two numbers
+     that happen to match today: the live sentence is only ever drawn when
+     nothing is waiting, and in that case it must read exactly what the `bot`
+     counter one gap away reads, tooltip and all. An idle agent — a `ready` row,
+     one sitting at its prompt between turns — is the case that had them apart. */
+  it('the live half equals the scope bar counter whenever nothing is waiting', async () => {
+    const { ipc, stores, emit, nextTick } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    await emit('terminal:state', session({ id: 2, state: 'idle' }))
+    await emit('terminal:state', session({ id: 3, state: 'idle' }))
+    await emit('terminal:state', session({ id: 4, state: 'exited', exitCode: 0 }))
+    await nextTick()
+    stores.terminals.createSession('/p', { kind: 'bare' })
+
+    expect(stores.terminals.agentCounts.value.loud).toBe(0)
+    expect(stores.terminals.agentCounts.value.live).toBe(stores.terminals.liveAgentCount.value)
+    expect(stores.terminals.liveAgentCount.value).toBe(4)
+  })
+
+  /* And with somebody waiting, the two are allowed to differ — the counter
+     keeps counting the waiting agent, because it is the reason a person is
+     looking at the bar, while the sentence has already moved to the loud one. */
+  it('the waiting agent stays in the counter and leaves the live half', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, state: 'needs-you' }))
+    await nextTick()
+
+    expect(stores.terminals.liveAgentCount.value).toBe(2)
+    expect(stores.terminals.agentCounts.value).toEqual({ loud: 1, live: 1 })
+  })
+})
+
+/* A file dropped on the window. Tauri intercepts the gesture before the webview
+   sees it, so these arrive as real events through the same transport the state
+   deltas do — the store's part is the units and the plumbing, and nothing else:
+   whose drop it is belongs to the pane that can ask what is drawn at the point.
+
+   `onDragDropEvent` is four `listen` calls deep, each one a round trip through
+   the mocked transport, so the subscription is not in place on the next
+   microtask. */
+describe('drops on the window', () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  const watch = async (stores) => {
+    const seen = []
+    const stop = stores.terminals.watchSessionDrops({
+      over: (at) => seen.push({ type: 'over', ...at }),
+      leave: () => seen.push({ type: 'leave' }),
+      drop: (at) => seen.push({ type: 'drop', ...at })
+    })
+    await settle()
+    return { seen, stop }
+  }
+
+  it('hands over the paths and the point they were let go at', async () => {
+    const { stores, emit } = await ready()
+    const { seen } = await watch(stores)
+
+    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 40, y: 60 } })
+    await settle()
+
+    expect(seen).toEqual([{ type: 'drop', x: 40, y: 60, paths: ['/tmp/a.png'] }])
+  })
+
+  /* The event's position is physical and `document.elementFromPoint` reads CSS
+     pixels, so the conversion happens here — the one place that knows which
+     units arrived. On a retina screen an unconverted point lands at twice the
+     distance from the corner, which on a three-column window is a different
+     panel altogether. */
+  it('turns the physical point into CSS pixels', async () => {
+    const { stores, emit } = await ready()
+    vi.stubGlobal('devicePixelRatio', 2)
+    const { seen } = await watch(stores)
+
+    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 40, y: 60 } })
+    await settle()
+    vi.unstubAllGlobals()
+
+    expect(seen).toEqual([{ type: 'drop', x: 20, y: 30, paths: ['/tmp/a.png'] }])
+  })
+
+  /* Entering carries the paths and the events in the middle of the drag do not,
+     which is the whole reason `over` is handed them at all: a caller saying how
+     many files are coming has nowhere else to read the number. */
+  it('carries the paths on entering and null while moving', async () => {
+    const { stores, emit } = await ready()
+    const { seen } = await watch(stores)
+
+    await emit('tauri://drag-enter', { paths: ['/tmp/a.png', '/tmp/b.png'], position: { x: 1, y: 2 } })
+    await emit('tauri://drag-over', { position: { x: 3, y: 4 } })
+    await settle()
+
+    expect(seen).toEqual([
+      { type: 'over', x: 1, y: 2, paths: ['/tmp/a.png', '/tmp/b.png'] },
+      { type: 'over', x: 3, y: 4, paths: null }
+    ])
+  })
+
+  it('the drag leaving the window ends the response', async () => {
+    const { stores, emit } = await ready()
+    const { seen } = await watch(stores)
+
+    await emit('tauri://drag-leave', {})
+    await settle()
+
+    expect(seen).toEqual([{ type: 'leave' }])
+  })
+
+  it('after unsubscribing a drop reaches nothing', async () => {
+    const { stores, emit } = await ready()
+    const { seen, stop } = await watch(stores)
+
+    stop()
+    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 1, y: 2 } })
+    await settle()
+
+    expect(seen).toEqual([])
+  })
+
+  /* Unmounting before the subscription has finished being set up: the pane goes
+     as soon as the person switches tab, and the promise behind
+     `onDragDropEvent` may still be in flight — without the flag the listener
+     would be installed after its owner was gone and would never come off. */
+  it('unsubscribing before the subscription lands still leaves nothing listening', async () => {
+    const { stores, emit } = await ready()
+    const seen = []
+    const stop = stores.terminals.watchSessionDrops({ drop: (at) => seen.push(at) })
+    stop()
+    await settle()
+
+    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 1, y: 2 } })
+    await settle()
+
+    expect(seen).toEqual([])
+  })
+})
+
+/* The second structure beside `terminalState.sessions`: the state of every
+   project's sessions, which is what a tile on the project rail draws. The list
+   above is the active project's and stays that way — a row in the agents panel
+   for a project this window is not pointed at would offer a button that kills
+   somebody else's process. */
+describe('project states', () => {
+  it('a project with a running session is live, one with a waiting session is loud', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [
+      mark({ id: 1, project: '/a', state: 'running' }),
+      mark({ id: 2, project: '/b', state: 'needs-you' })
+    ])
+    await loaded.stores.terminals.initTerminals()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('live')
+    expect(loaded.stores.terminals.projectState('/b')).toBe('loud')
+  })
+
+  it('a waiting session outweighs a running one in the same project', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [
+      mark({ id: 1, project: '/a', state: 'running' }),
+      mark({ id: 2, project: '/a', state: 'needs-you' })
+    ])
+    await loaded.stores.terminals.initTerminals()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('loud')
+    expect(loaded.stores.terminals.projectStates.value['/a']).toEqual({ state: 'loud', live: 1, loud: 1 })
+  })
+
+  it('a project whose sessions have all exited, and one nobody has heard of, are both idle', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [mark({ id: 1, project: '/a', state: 'exited' })])
+    await loaded.stores.terminals.initTerminals()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('idle')
+    expect(loaded.stores.terminals.projectState('/nowhere')).toBe('idle')
+  })
+
+  it("an event about another project moves that project's state and adds no row here", async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [])
+    await loaded.stores.terminals.initTerminals()
+    await loaded.stores.terminals.loadSessions('/p')
+
+    await loaded.emit('terminal:state', session({ id: 9, project: '/other', state: 'needs-you' }))
+    await loaded.nextTick()
+
+    expect(loaded.stores.terminals.projectState('/other')).toBe('loud')
+    // and the panel's own list is still only the active project's
+    expect(loaded.stores.terminals.terminalState.sessions).toHaveLength(0)
+  })
+
+  it('a removed session stops counting towards its project', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [mark({ id: 3, project: '/a', state: 'running' })])
+    await loaded.stores.terminals.initTerminals()
+    expect(loaded.stores.terminals.projectState('/a')).toBe('live')
+
+    await loaded.emit('terminal:removed', { id: 3 })
+    await loaded.nextTick()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('idle')
+  })
+
+  /* Nothing else in the window depends on this read, so it is not allowed to
+     take the rest of the store down with it: the agents panel is the whole
+     point of this store and it is fed by other commands entirely. */
+  it('a failing marks read is reported and leaves the rest of the store working', async () => {
+    const loaded = await loadStores()
+    const complained = vi.spyOn(console, 'error').mockImplementation(() => {})
+    loaded.ipc.fail('terminal_marks', new Error('the terminal worker is not running'))
+    loaded.ipc.on('terminal_list', [session()])
+
+    await expect(loaded.stores.terminals.initTerminals()).resolves.toBeUndefined()
+    await loaded.stores.terminals.loadSessions('/p')
+
+    expect(complained).toHaveBeenCalled()
+    expect(loaded.stores.terminals.terminalState.ready).toBe(true)
+    expect(loaded.stores.terminals.terminalState.sessions).toHaveLength(1)
+    expect(loaded.stores.terminals.projectState('/p')).toBe('idle')
+    complained.mockRestore()
   })
 })

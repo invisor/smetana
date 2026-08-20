@@ -660,12 +660,38 @@ export function installMockBackend() {
         }
       ]
     }
+    /* Every session the worker holds, of every project, as the project rail
+       reads them. A read, and answered here for the reason every other read is:
+       a browser has no worker, and a command that threw would have the store
+       log an error on every start of `npm run dev`.
+
+       Deliberately not derived from `terminal_list` above: that stub answers
+       with the same three sessions whatever project it is asked about, which is
+       fine for a panel that only ever draws one, and would make every tile on
+       the rail identical. These are three states across three projects instead —
+       one project waiting on a person, one working, one with nothing going on —
+       so the rail's three dots can all be seen at once. The three ids on the
+       first project are `terminal_list`'s own, with its states. */
+    if (command === 'terminal_marks') {
+      return [
+        { id: 1, project: MOCK_PROJECTS[0], state: 'running' },
+        { id: 2, project: MOCK_PROJECTS[0], state: 'needs-you' },
+        { id: 7, project: MOCK_PROJECTS[0], state: 'running' },
+        { id: 11, project: MOCK_PROJECTS[2], state: 'running' }
+      ]
+    }
     if (command === 'terminal_attach') {
       return { data: toBase64(MOCK_SESSION_OUTPUT), seq: 0 }
     }
     /* Detach and resize change nothing on disk and have nothing to lie
        about. */
     if (command === 'terminal_detach' || command === 'terminal_resize') return null
+    /* Everything that *starts* something — `terminal_create` and
+       `terminal_shell` — is deliberately not answered here and falls through to
+       the rejection below. There is no PTY in a browser, and a session handed
+       back with nothing behind it would put a row in the agents panel or a tab
+       in the centre whose terminal could never say a word. The loud refusal is
+       the honest answer, and it is the same one every write gets. */
     // Any write command (tracker_update/close/reopen, files_write, and
     // whatever appears later) has to reject explicitly rather than silently
     // return a plausible but foreign issue — otherwise a "write" in the browser

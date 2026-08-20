@@ -6,6 +6,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
 import { taskMenuItems } from '../components/kanban/taskMenu.js'
+import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import {
   AboutSettings,
   AgentList,
@@ -42,6 +43,7 @@ import {
   KanbanBoard,
   KanbanSettings,
   LogView,
+  Markdown,
   MenuButton,
   NewBranchModal,
   Modal,
@@ -50,9 +52,11 @@ import {
   NotificationCard,
   NotificationPanel,
   Panel,
-  ProjectList,
+  ProjectRail,
+  ProjectTile,
   PromoteColumnModal,
   RepoList,
+  ScopeIndicator,
   SectionHeader,
   ReportView,
   Select,
@@ -79,9 +83,11 @@ import { gitActions } from '../components/git/gitActions.js'
 import { runNotification, storageNotification } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
+/* The app's one link-opening path, bound to what the inspector raises. In
+   a browser it is a new tab; in the app it is the person's own browser. */
+import { openExternal } from '../stores/app.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
-import { terminalState } from '../stores/terminals.js'
 
 /* Two attachments for the strip and for the dialog above it. Eight-pixel PNGs
    written out as data URLs, which is exactly the shape `attachments.js` builds
@@ -145,11 +151,7 @@ const runFixture = (state, extra = {}) => ({
 /* A run's document, shortened. `report.rs` writes the real one and this is the
    same shape — its own `<style>`, its own colours, its own `prefers-color-scheme`
    block — because the point of drawing it here is seeing that the frame hands the
-   document the whole box and paints nothing of its own over it. It deliberately
-   does not follow `data-theme`: the document has to be readable in a browser with
-   nothing of ours loaded, so it follows the reader's own theme instead, and in
-   this gallery that means the operating system rather than the switch at the top
-   of the page.
+   document the whole box and paints nothing of its own over it.
 
    The `<script>` is not filler, and what it does had to be chosen with some
    care. It is the one thing the sandbox exists for — `report.rs` writes no
@@ -167,34 +169,161 @@ const runFixture = (state, extra = {}) => ({
    red across a whole pane, which is the point — the failure cannot be confused
    with a normal render. The two readings are named in the document itself, so
    whoever checks this next does not have to infer them. */
+
+/* Its stylesheet is a copy of the one `src-tauri/src/runs/report.rs` writes, and
+   the copy has to keep that file's *shape*: the palette on a bare `:root`, again
+   under `prefers-color-scheme`, and again under `[data-theme]`. That last block is
+   the only reason this section changes palette at all: `reportTheme.js` names a
+   theme on the root tag and the document's own rules answer it. **Nothing on the
+   page moves it** — there is no theme control in this gallery, only `?theme=dark`
+   and `?theme=light` on the URL, so the two palettes are checked by loading the
+   page twice. A fixture written the old way would sit here light in a dark gallery
+   and look like the bug rather than the fix.
+
+   It is a fixture, and its colours are the document's rather than this system's:
+   that is what a stand-in for a file another language writes costs, and it is the
+   one place in `src/` where such a value is not a token. `report.rs` is still where
+   the real ones live, and this copy is checked by eye alongside the app, never
+   against it. */
 const REPORT_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Run report</title><style>
-body{font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;
-max-width:52rem;margin:2rem auto;padding:0 1rem;color:#1a1a1a;background:#fff}
-h1{font-size:1.5rem;margin:0 0 .25rem}h2{font-size:1.05rem;margin:2rem 0 .5rem}
-.meta{color:#666;font-size:.85rem}.unknown{color:#666;font-style:italic}
-.total{margin-top:2rem;border-top:1px solid #ddd;padding-top:.75rem;font-weight:600}
-table{border-collapse:collapse;width:100%}
-td{border-top:1px solid #eee;padding:.4rem .5rem;vertical-align:top}
-.id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
-@media(prefers-color-scheme:dark){body{color:#e6e6e6;background:#141414}
-.meta,.unknown{color:#999}td{border-color:#2a2a2a}.total{border-color:#2a2a2a}}
-</style></head><body>
-<h1>Run report</h1>
-<p class="meta">/Users/you/dev/smetana &middot; the ready queue &middot; finished 2026-08-12 14:31</p>
-<h2>Closed (2)</h2>
-<table>
-<tr><td class="id">smetana-qca</td><td>The run writes its own report</td><td>Wrote the diff and the document, with tests on both.</td><td class="meta">1h 12m</td></tr>
-<tr><td class="id">smetana-ajr</td><td>The run report tab</td><td>&mdash;</td><td class="meta">&mdash;</td></tr>
-</table>
-<h2>Parked (0)</h2>
-<p class="meta">None.</p>
-<h2>Batches</h2>
-<p class="unknown">This batch left no account of itself.</p>
-<p>This document carries a script that would paint the whole page red and replace
+:root{color-scheme:light;
+--canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;
+--border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;
+--text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#6b777c;
+--text-link:#1f5d8f;--text-link-hover:#123f63;
+--focus-ring:#1c6fd0;--selection-bg:#c6dcf0;--scrollbar-thumb:#c2caca;
+--status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;
+--status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;
+--attn-loud:#b96a06;--shadow-raised:0 1px 2px rgba(22,32,31,.08)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;
+--canvas:#10151a;--surface-sunken:#0c1116;--surface:#161b21;--surface-raised:#1b2229;
+--border-subtle:#232b33;--border:#2e3841;--border-strong:#3d4954;
+--text-primary:#e3e8ed;--text-secondary:#a8b3bd;--text-muted:#7c8b97;
+--text-link:#8fb6e8;--text-link-hover:#b3cef2;
+--focus-ring:#5fa8ff;--selection-bg:#2b4560;--scrollbar-thumb:#333e48;
+--status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;
+--status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;
+--attn-loud:#f2b03d;--shadow-raised:none}}
+:root[data-theme="dark"]{color-scheme:dark;
+--canvas:#10151a;--surface-sunken:#0c1116;--surface:#161b21;--surface-raised:#1b2229;
+--border-subtle:#232b33;--border:#2e3841;--border-strong:#3d4954;
+--text-primary:#e3e8ed;--text-secondary:#a8b3bd;--text-muted:#7c8b97;
+--text-link:#8fb6e8;--text-link-hover:#b3cef2;
+--focus-ring:#5fa8ff;--selection-bg:#2b4560;--scrollbar-thumb:#333e48;
+--status-done-fg:#7fa792;--status-done-bg:#16211c;--status-done-border:#2c4136;
+--status-needs-you-fg:#f2b03d;--status-needs-you-bg:#2b2010;--status-needs-you-border:#6a4e1b;
+--attn-loud:#f2b03d;--shadow-raised:none}
+:root[data-theme="light"]{color-scheme:light;
+--canvas:#eaeeef;--surface-sunken:#e1e6e7;--surface:#f4f7f7;--surface-raised:#ffffff;
+--border-subtle:#dde3e3;--border:#c9d1d2;--border-strong:#a9b4b6;
+--text-primary:#16201f;--text-secondary:#4a565a;--text-muted:#6b777c;
+--text-link:#1f5d8f;--text-link-hover:#123f63;
+--focus-ring:#1c6fd0;--selection-bg:#c6dcf0;--scrollbar-thumb:#c2caca;
+--status-done-fg:#3f6b54;--status-done-bg:#e6eee9;--status-done-border:#c0d3c8;
+--status-needs-you-fg:#8a5405;--status-needs-you-bg:#fbf0da;--status-needs-you-border:#e8ce94;
+--attn-loud:#b96a06;--shadow-raised:0 1px 2px rgba(22,32,31,.08)}
+*,*::before,*::after{box-sizing:border-box}
+::selection{background:var(--selection-bg)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:5px}
+body{margin:0;padding:32px 16px 40px;background:var(--canvas);color:var(--text-primary);
+font-family:system-ui,-apple-system,"Segoe UI","Noto Sans",Roboto,sans-serif;
+font-size:13px;line-height:1.5}
+.doc{max-width:52rem;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
+.eyebrow{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted);margin:0 0 8px}
+h1{font-size:22px;font-weight:600;letter-spacing:-.006em;line-height:1.2;margin:0}
+.meta{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:12px;color:var(--text-secondary);word-break:break-all;margin:8px 0 0}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.cell{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;
+box-shadow:var(--shadow-raised);padding:10px;display:flex;flex-direction:column;gap:4px}
+.cell-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted)}
+.cell-n{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:22px;font-weight:500;line-height:1.2;color:var(--text-primary)}
+.cell-done{color:var(--status-done-fg)}
+.cell-loud{color:var(--attn-loud)}
+.cell-none{color:var(--text-muted)}
+.sec{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--border);
+padding-bottom:6px;margin:0 0 -8px;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:400;color:var(--text-secondary)}
+.sec-n{color:var(--text-muted);letter-spacing:0}
+.list{display:flex;flex-direction:column;gap:8px}
+.card{background:var(--surface-raised);border:1px solid var(--border-subtle);border-radius:4px;
+box-shadow:var(--shadow-raised);padding:16px;display:flex;flex-direction:column;gap:8px}
+.card-parked{border-color:var(--status-needs-you-border)}
+.card-batch{background:var(--surface);box-shadow:none}
+.head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.chip{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:12px;font-weight:500;background:var(--surface-sunken);border:1px solid var(--border-subtle);
+border-radius:3px;padding:1px 6px;white-space:nowrap}
+.badge{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:11px;border-radius:3px;padding:1px 6px;white-space:nowrap;border:1px solid}
+.badge-done{background:var(--status-done-bg);color:var(--status-done-fg);border-color:var(--status-done-border)}
+.badge-parked{background:var(--status-needs-you-bg);color:var(--status-needs-you-fg);
+border-color:var(--status-needs-you-border)}
+.batch-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary)}
+.right{margin-left:auto;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:11px;color:var(--text-muted)}
+h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}
+.body{margin:0;color:var(--text-secondary)}
+.body code{font-size:12px;color:var(--text-primary)}
+.unknown{margin:0;color:var(--text-muted)}
+.notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;
+padding:16px;color:var(--text-muted);margin:0}
+.total{border-top:1px solid var(--border-strong);padding-top:12px;display:flex;align-items:baseline;gap:8px}
+.total-label{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary)}
+.total-n{margin-left:auto;
+font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+font-size:18px;font-weight:500;color:var(--text-primary)}
+</style></head><body><div class="doc">
+<header><p class="eyebrow">smetana &middot; run report</p><h1>Run report</h1>
+<p class="meta">/Users/you/dev/smetana &middot; the ready queue &middot; finished 2026-08-12 14:31</p></header>
+<div class="strip">
+<div class="cell"><span class="cell-label">closed</span><span class="cell-n cell-done">2</span></div>
+<div class="cell"><span class="cell-label">parked</span><span class="cell-n cell-loud">1</span></div>
+<div class="cell"><span class="cell-label">batches</span><span class="cell-n">2</span></div>
+<div class="cell"><span class="cell-label">total</span><span class="cell-n">2h 14m</span></div>
+</div>
+<div class="sec"><span>closed</span><span class="sec-n">2</span></div>
+<div class="list">
+<div class="card"><div class="head"><span class="chip">smetana-qca</span>
+<span class="badge badge-done">done</span><span class="right">1h 12m</span></div>
+<h3>The run writes its own report</h3>
+<p class="body">Wrote <code>runs/report.rs</code> and the document it emits, with tests on both.</p></div>
+<div class="card"><div class="head"><span class="chip">smetana-ajr</span>
+<span class="badge badge-done">done</span><span class="right">&mdash;</span></div>
+<h3>The run report tab</h3><p class="unknown">&mdash;</p></div>
+</div>
+<div class="sec"><span>parked</span><span class="sec-n">1</span></div>
+<div class="list">
+<div class="card card-parked"><div class="head"><span class="chip">smetana-rox</span>
+<span class="badge badge-parked">needs you</span><span class="right">28m</span></div>
+<h3>The report on the design system</h3>
+<p class="body">Parked: the handoff asks for a theme switch and <code>sandbox=""</code> forbids one.</p></div>
+</div>
+<div class="sec"><span>batches</span><span class="sec-n">2</span></div>
+<div class="list">
+<div class="card card-batch"><div class="head"><span class="batch-label">batch 1</span>
+<span class="right">1h 12m</span></div>
+<p class="body">Nothing odd, though <code>bd list</code> was slow to answer.</p></div>
+<div class="card card-batch"><div class="head"><span class="batch-label">batch 2</span>
+<span class="right">28m</span></div>
+<p class="unknown">This batch left no account of itself.</p></div>
+</div>
+<p class="notice">This document carries a script that would paint the whole page red and replace
 everything on it with the words THE SANDBOX FAILED. If that is what you are looking at,
 the frame lost its sandbox. If you are reading this report, the script did not run.</p>
-<p class="total">Total 2h 14m</p>
+<div class="total"><span class="total-label">total</span><span class="total-n">2h 14m</span></div>
+</div>
 <script>document.body.style.background='red';document.body.innerHTML='<h1>THE SANDBOX FAILED</h1>'<\/script>
 </body></html>`
 
@@ -266,8 +395,8 @@ const switched = ref(true)
    token, so flipping the theme has to rebuild it. In the app `tabList` is
    already a computed and gets this for free. */
 const tabs = computed(() => [
-  { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
+  { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', iconUrl: fileIconUrl('tabs.rs', documentTheme.value), dirty: true },
   { id: 'agent.rs', kind: 'preview', label: 'agent.rs', iconUrl: fileIconUrl('agent.rs', documentTheme.value) },
   { id: 'git.rs', kind: 'diff', label: 'git.rs', icon: 'git-compare' },
@@ -278,7 +407,14 @@ const tabs = computed(() => [
     iconUrl: fileIconUrl('logo.png', documentTheme.value),
     readOnly: true,
     readOnlyHint: 'Binary file — not shown.'
-  }
+  },
+  /* Last, which is where `tabList` puts it — after the files and after the
+     diffs, because the order of the file tabs is the person's own and a tab
+     nobody remembers has no place inside it. Closable like a file's, captioned
+     in words like a pinned one. In the app its id is a zero byte and a session
+     number, which nothing here draws: the shape that matters on screen is the
+     kind. */
+  { id: 'term:1', kind: 'terminal', label: 'Terminal 1', icon: 'terminal' }
 ])
 
 /* `FileTree` walks a nested `children` array and draws a folder's contents only
@@ -293,8 +429,27 @@ const galleryTree = MOCK_TREE[''].map((node) =>
 )
 const galleryTreeExpanded = { src: true }
 
-/* AgentList reads rows and activeId as props, unlike TerminalView below,
-   which reads the store directly — so a plain local fixture is enough here. */
+/* Four projects for the rail, one of them without a bd tracker and one whose
+   name has no separator in it — `smetana` is the case `monogram` answers by
+   taking the first two characters rather than the first letter of two
+   segments, and a rail of nothing but hyphenated names would never show it.
+   The states are `projectStates`' shape from stores/terminals.js: one waiting,
+   one working, and two with nothing going on. */
+const galleryProjects = [
+  { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
+  { path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true },
+  { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true },
+  { path: '/Users/you/notes', name: 'notes', tracked: false }
+]
+const galleryProjectStates = {
+  '/Users/you/dev/smetana': { state: 'live', live: 1, loud: 0 },
+  '/Users/you/dev/holiday-curb': { state: 'loud', live: 0, loud: 1 },
+  '/Users/you/dev/beads-viewer': { state: 'live', live: 2, loud: 0 }
+}
+
+/* AgentList reads rows and activeId as props, so a plain local fixture is
+   enough here — as it is for TerminalView below, which takes the session it
+   draws as a prop too and reaches the store only for the output behind it. */
 /* Every caption the store can produce, once each: a run that has taken work
    and one that has not, an edit, a filing, a setup, and a bare agent. That is
    the whole of what `captionOf` in `src/stores/terminals.js` answers, and this
@@ -523,6 +678,55 @@ const CONFLICT = {
   ]
 }
 
+/* Every construct the parser supports, in one issue description: a heading at
+   each of the two sizes, a paragraph carrying strong, emphasis, code and both
+   link forms, a task list with a nested list under it, a numbered list, a
+   quote, a fenced block and a rule. The last paragraph is the invariant on
+   screen — a table, a reference link, an HTML tag and a link this app may not
+   open are none of them supported, and every character of them is still drawn.
+
+   One constant for two places: the card below looks at the component on its
+   own, and `FULL_ISSUE` reads the same text through the inspector, where the
+   heading sizes have to hold against the issue title above them. Two fixtures
+   would have drifted the first time either was edited. */
+const MARKDOWN_SAMPLE = [
+  '# Background',
+  '',
+  'The health notice renders only while the columns are empty, so a version',
+  'mismatch is invisible exactly when there are cards — a person is looking at',
+  'stale data with nothing to say so.',
+  '',
+  '## Acceptance criteria',
+  '',
+  '- [ ] The notice is visible over a board with cards on it',
+  '- [x] It never covers the card that needs a human',
+  '  - Checked against `--status-needs-you-fg` at both densities',
+  '',
+  '### What it looks like',
+  '',
+  'A **quiet** strip above the columns rather than a *replacement* of them,',
+  'drawn by `src/components/kanban/KanbanBoard.vue`.',
+  '',
+  '> The board stays usable while it says the data may be stale.',
+  '',
+  '1. Read the health',
+  '2. Draw the strip',
+  '3. Leave the columns alone',
+  '',
+  '```sh',
+  'npm test -- tests/components/kanban/boardView.test.js',
+  '```',
+  '',
+  'See [the design system](https://claude.ai/design) and',
+  '<http://localhost:5173/?view=gallery>. A [local note](file:///tmp/run.log)',
+  'stays text, and so do an | unsupported | table |, a [reference][ref] and an',
+  '<b>HTML tag</b>.',
+  '',
+  '---',
+  '',
+  'Filed under smetana-29j.'
+].join('\n')
+
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking
    at — a panel that reads as a form with blank rows is the defect this section
@@ -531,10 +735,15 @@ const FULL_ISSUE = {
   id: 'smetana-29j.11',
   title: 'Show the tracker state on a non-empty board too',
   status: 'in_progress',
-  description:
-    'The health notice renders only while the columns are empty, so a version mismatch is invisible exactly when there are cards — a person is looking at stale data with nothing to say so.',
-  acceptance_criteria:
-    'The notice is visible over a board with cards on it, and it never covers the card that needs a human.',
+  /* Markdown, because everything bd stores is: the panel is where a task is
+     read before somebody decides to run it, and this is the fixture that shows
+     it rendered at the width it is actually read at. */
+  description: MARKDOWN_SAMPLE,
+  acceptance_criteria: [
+    '- [x] The notice is visible over a board with cards on it',
+    '- [ ] It never covers the card that needs a human',
+    '- [ ] Checked by eye in all four `theme` × `density` combinations'
+  ].join('\n'),
   design:
     'A quiet strip above the columns rather than a replacement of them: the board stays usable while it says the data may be stale.',
   // Two lines on purpose: every `bd note` appends, and the panel owes the
@@ -721,11 +930,15 @@ const PARKED_CARD_MENU = taskMenuItems({
   busy: false
 })
 
-/* TerminalView has no props of its own to feed a fixture through, unlike
-   FileTree above — it reads the active session straight from the store.
-   Pointing terminalState at session 1 makes it attach on mount, which the
-   mock backend answers with terminalFixture.js's captured output. */
-terminalState.activeId = 1
+/* The + button's own two rows, from the same module the app reads them from —
+   the gallery draws what ships, never a second copy of the words. */
+
+/* TerminalView is handed the session it draws, the way the app's two tab
+   branches hand it one: the prop is what it attaches to, and the mock backend
+   answers that attach with terminalFixture.js's captured output. Nothing in
+   this file touches the terminal store — the panel below it takes its rows and
+   its selection as props too. */
+const GALLERY_SESSION = 1
 
 /* The settings window's own state lives in that window and reaches it as
    events from the app window; here the tabs are simply driven by local refs, so
@@ -1252,15 +1465,27 @@ const menuTargetStyle = {
           />
         </div>
       </div>
-      <!-- Two of them: the panel draws only the fields an issue has, so the
-           sparse case is a different component to look at, not the same one
-           with less in it. -->
+      <!-- The renderer on its own, at the width it is read at in the app: the
+           right column is 320px, and a code block that scrolls there rather
+           than widening the panel is the thing to look at. Nothing in it is a
+           control — a task item is a glyph, and clicking one does nothing. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
         <div :style="{ width: '320px' }">
-          <TaskInspector :issue="FULL_ISSUE" ui-status="running" />
+          <Markdown :text="MARKDOWN_SAMPLE" @open="openExternal" />
+        </div>
+      </div>
+      <!-- Two of them: the panel draws only the fields an issue has, so the
+           sparse case is a different component to look at, not the same one
+           with less in it. The full one carries the same markdown as the card
+           above, which is where the heading sizes are checked against the
+           title; the sparse one has no prose at all and must look exactly as it
+           did before markdown reached this panel. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
+        <div :style="{ width: '320px' }">
+          <TaskInspector :issue="FULL_ISSUE" ui-status="running" @open="openExternal" />
         </div>
         <div :style="{ width: '320px' }">
-          <TaskInspector :issue="SPARSE_ISSUE" ui-status="ready" />
+          <TaskInspector :issue="SPARSE_ISSUE" ui-status="ready" @open="openExternal" />
         </div>
       </div>
       <!-- The other thing that stands in the inspector's slot: a task an agent
@@ -1279,8 +1504,125 @@ const menuTargetStyle = {
     </section>
 
     <section :style="sectionStyle">
+      <div :style="headStyle">Scope bar</div>
+      <!-- The bar runs across the top of the app window, so each instance takes
+           the whole width of the page rather than sitting in a frame: what it
+           has to survive is the name, the counters and the two buttons meeting
+           in one row, and a box would answer at a width nobody uses.
+
+           The counters are why there are five of them. Each is drawn only above
+           zero, and an unknown number of uncommitted files — `null`, what
+           `stores/vcs.js` hands over when the working tree could not be read —
+           draws nothing at all, exactly as a clean tree does. The two look
+           identical on screen on purpose, so the pair at the bottom is the only
+           place the difference can be seen against its own props.
+
+           The singulars are hover-only, being tooltips: point at the file and
+           agent counters in the third bar for "1 uncommitted file" and "1 agent
+           running", and at its bell for "1 notification".
+
+           The three below them are the headline, which the five above draw
+           none of — the empty case is the common one and has to be seen as the
+           bar closing up rather than as a gap. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+        <!-- A worktree with a branch checked out in it: `scopeName` draws the
+             worktree, and the branch follows it after an @. Both counters
+             plural, and a count on the bell. -->
+        <ScopeIndicator
+          repo="smetana"
+          worktree="smetana-f69-scope-indicator"
+          branch="feature/smetana-f69-scope-indicator"
+          :dirty-count="7"
+          :agents-active="3"
+          :notifications="2"
+        />
+        <!-- No worktree, which is what the app itself passes today: `scopeName`
+             falls back to the branch and there is no @ segment after it. -->
+        <ScopeIndicator
+          repo="holiday-curb"
+          branch="develop"
+          :dirty-count="12"
+          :agents-active="2"
+        />
+        <!-- Ones, in all three places there is a noun to get wrong. -->
+        <ScopeIndicator
+          repo="smetana"
+          branch="main"
+          :dirty-count="1"
+          :agents-active="1"
+          :notifications="1"
+        />
+        <!-- Unknown rather than zero: no file glyph and no number, with the
+             agents counter beside it to show the bar is otherwise alive. -->
+        <ScopeIndicator
+          repo="beads-viewer"
+          branch="develop"
+          :dirty-count="null"
+          :agents-active="2"
+        />
+        <!-- A clean tree with nothing running: the same nothing as above from
+             the opposite fact, and a bell with no badge on it. -->
+        <ScopeIndicator
+          repo="tracker-notes"
+          branch="main"
+          :dirty-count="0"
+          :agents-active="0"
+        />
+
+        <!-- Nothing to say, said explicitly: the props are there and empty, and
+             the bar between the branch and the counters closes up. This is the
+             one to compare the two below against. -->
+        <ScopeIndicator
+          repo="tracker-notes"
+          branch="main"
+          headline=""
+          :dirty-count="2"
+          :agents-active="0"
+        />
+        <!-- Live: muted, no glyph, and beside the agents counter it is a
+             sentence rather than a number. It carries a run segment as well,
+             because in the app this sentence is only ever drawn beside one —
+             this is the crowded case, and the one to narrow the window on: the
+             sentence is what gives way, and the counters and the two buttons
+             stay where they are. -->
+        <ScopeIndicator
+          repo="holiday-curb"
+          branch="develop"
+          headline="Run under way"
+          headline-level="live"
+          :dirty-count="4"
+          :agents-active="2"
+        >
+          <template #status>
+            <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3 })" @stop="() => {}" />
+          </template>
+        </ScopeIndicator>
+        <!-- Loud, which is the case the glyph exists for: this bar is one of
+             the one or two on a screen allowed to shout, and the colour is
+             never the only thing saying so. -->
+        <ScopeIndicator
+          repo="smetana"
+          branch="feature/smetana-ec9-scope-bar-headline"
+          headline="1 agent needs you"
+          headline-level="loud"
+          :dirty-count="1"
+          :agents-active="3"
+          :notifications="1"
+        />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
       <div :style="headStyle">Shell</div>
-      <TabBar :tabs="tabs" active-id="kanban" />
+      <TabBar :tabs="tabs" active-id="kanban">
+        <!-- The row's second slot, inside the scrolling strip and right after
+             the pinned tabs, which is where the app puts it: the control is
+             about those tabs and has to stay beside them however many files are
+             open. -->
+        <template #afterPinned>
+          <MenuButton icon="plus" label="New agent, terminal or task" :items="NEW_TAB_ITEMS" :width="180" />
+        </template>
+      </TabBar>
       <!-- Taller than the other boxes on this page, and the file tree is why:
            at 160px the shell showed five rows of it, so half the tree's glyph
            vocabulary sat below a fold in the one place it can be checked. -->
@@ -1360,11 +1702,10 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Terminal</div>
-      <!-- TerminalView takes no props — it reads the active session from
-           terminals.js itself, so the fixture has to go in through the
-           store, the way terminalFixture.js already does for the app's own
-           terminal tab. Height is a token multiple, not a pixel number:
-           the terminal fills whatever height it is given. -->
+      <!-- The session arrives as a prop; its output comes from the store, which
+           the mock backend answers out of terminalFixture.js. Height is a token
+           multiple, not a pixel number: the terminal fills whatever height it
+           is given. -->
       <div
         :style="{
           display: 'flex',
@@ -1372,7 +1713,7 @@ const menuTargetStyle = {
           border: 'var(--border-w) solid var(--border)'
         }"
       >
-        <TerminalView />
+        <TerminalView :session-id="GALLERY_SESSION" />
       </div>
     </section>
 
@@ -1939,125 +2280,132 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Projects</div>
-      <!-- ProjectList carries no header of its own — the surrounding Panel owns
-           "Projects" and the "+" in its actions slot, so the demo wraps it the
-           same way DesktopApp.vue does, to catch the pairing breaking too.
+      <!-- The rail is what the left column opens with: one 28×28 tile per
+           project, the state dot in the corner, and the dashed tile that adds
+           one. Nothing else on this page draws two hues on an 8px circle, which
+           is the exception the tooltip's words are the price of — hover a tile
+           and read the third segment.
 
-           Right-click the rows: every one of them opens the row's three actions
-           at the pointer, and the two that are only meaningful for the project
-           the window is pointed at are greyed with the reason in the row on
-           every other. The setup item is the frames' second job here — it reads
-           "Set up" where there is no configuration and "Set up again" where
-           there is one, damaged or not — and the last frame is where the
-           placement can be checked, since nothing else on this page opens a
-           panel from a point rather than from a control. -->
+           Right-click a tile: every one of them opens the project's three
+           actions at the pointer, and the two that only mean anything for the
+           project the window is pointed at are greyed with the reason in the
+           row on every other. The setup item is the frames' second job — it
+           reads "Set up" where there is no configuration and "Set up again"
+           where there is one, damaged or not. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList
-              :projects="[
-                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
-                { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }
-              ]"
-              active-path="/Users/you/dev/smetana"
-              can-add-agent
-              needs-setup
-            />
-          </Panel>
+        <div :style="{ display: 'flex', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectRail
+            :projects="galleryProjects"
+            active-path="/Users/you/dev/smetana"
+            :states="galleryProjectStates"
+            :branches="{ '/Users/you/dev/smetana': 'develop' }"
+            can-add-agent
+            configured
+          />
+          <!-- The panel beside it, so the header, the segmented tab row and the
+               footer are checked against the rail they sit next to and at the
+               236px the column ships at. -->
+          <div :style="{ width: '236px' }">
+            <Panel
+              title="smetana"
+              subtitle="develop · 1 running"
+              side="left"
+              toggle-label="Hide projects"
+            >
+              <template #marks>
+                <Tooltip label="Not set up for runs">
+                  <Icon name="triangle-alert" :size="12" :style="{ color: 'var(--status-failed-fg)' }" />
+                </Tooltip>
+              </template>
+              <template #actions>
+                <IconButton icon="refresh-cw" label="Refresh files" size="sm" />
+              </template>
+              <div :style="{ padding: 'var(--panel-pad)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }">
+                The tab row and its content are DesktopApp.vue&apos;s, not the panel&apos;s.
+              </div>
+              <template #footer>
+                <div
+                  :style="{
+                    font: 'var(--weight-regular) var(--text-2xs)/var(--leading-snug) var(--font-mono)',
+                    color: 'var(--text-muted)',
+                    wordBreak: 'break-all'
+                  }"
+                >
+                  /Users/you/dev/smetana
+                </div>
+              </template>
+            </Panel>
+          </div>
         </div>
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <!-- The one frame with a run configuration that reads. Nothing on
-                 the row says so — a project that is set up has nothing to
-                 report — so it is only visible in the right-click menu, where
-                 this active row is the one that reads "Set up again". -->
-            <ProjectList
-              :projects="[
-                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
-                { path: '/Users/you/notes', name: 'notes', tracked: false }
-              ]"
-              active-path="/Users/you/notes"
-              configured
-            />
-          </Panel>
+        <!-- The same panel folded, which is what dragging the separator past the
+             left minimum leaves. The rail is not drawn beside it in the app —
+             two rails would be two rails — and the vertical title follows the
+             header's rule: a subtitle means this is a name, so it is not
+             uppercased down the strip. -->
+        <div :style="{ display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="smetana" subtitle="develop · 1 running" side="left" collapsed />
         </div>
-        <!-- Both marks on one row — a folder just added, with neither a tracker
-             nor a run configuration. The two triangles are the same glyph in
-             two colours, so this is the frame that shows whether position and
-             pairing carry the difference on their own. -->
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList
-              :projects="[{ path: '/Users/you/dev/scratch', name: 'scratch', tracked: false }]"
-              active-path="/Users/you/dev/scratch"
-              needs-setup
-            />
-          </Panel>
+        <!-- A rail longer than it is tall, which is where it starts to scroll,
+             and the one with a project that has no bd tracker in it: that mark
+             has nowhere to go on a tile, so it is the fourth segment of the
+             tooltip and nothing else. -->
+        <div :style="{ display: 'flex', height: '200px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectRail
+            :projects="[
+              ...galleryProjects,
+              { path: '/Users/you/dev/tracker-notes', name: 'tracker-notes', tracked: false },
+              { path: '/Users/you/dev/archive', name: 'archive', tracked: true },
+              { path: '/Users/you/dev/scratch', name: 'scratch', tracked: true }
+            ]"
+            active-path="/Users/you/notes"
+            :states="galleryProjectStates"
+          />
         </div>
-        <!-- The damaged configuration, deliberately on an untracked folder so
-             that its mark stands next to the tracker's. The two are the only
-             pair on this row that both stand alone, so this is the frame that
-             says whether the silhouettes carry the difference — a triangle and
-             a page — or whether it was resting on hue after all. There is no
-             gear beside the red one on purpose, and it must not read as a
-             button that failed to render. -->
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList
-              :projects="[{ path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: false }]"
-              active-path="/Users/you/dev/holiday-curb"
-              can-add-agent
-              config-broken
-            />
-          </Panel>
+        <!-- An empty rail: no projects yet, only the place for one. -->
+        <div :style="{ display: 'flex', height: '120px', border: 'var(--border-w) solid var(--border)' }">
+          <ProjectRail :projects="[]" />
         </div>
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList :projects="[]" />
-          </Panel>
-        </div>
-        <!-- A list past the fifth row, which is where it starts to scroll, and
-             the frame the menu's placement is checked in. Right-click the last
-             row a person can see: the panel is teleported to the body and fixed
-             in window coordinates, so neither the list's own scroll container
-             nor this frame may clip it, and it flips above the pointer when the
-             window has no room below. Scroll the list under an open menu and it
-             closes — the point it was opened at no longer names a row. -->
-        <div :style="{ width: '252px', height: '220px', border: 'var(--border-w) solid var(--border)' }">
-          <Panel title="Projects" side="left" :collapsible="false">
-            <template #actions>
-              <IconButton icon="plus" label="Add project" size="sm" />
-            </template>
-            <ProjectList
-              :projects="[
-                { path: '/Users/you/dev/smetana', name: 'smetana', tracked: true },
-                { path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true },
-                { path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true },
-                { path: '/Users/you/dev/tracker-notes', name: 'tracker-notes', tracked: false },
-                { path: '/Users/you/dev/scratch', name: 'scratch', tracked: true },
-                { path: '/Users/you/dev/archive', name: 'archive', tracked: true }
-              ]"
-              active-path="/Users/you/dev/holiday-curb"
-              can-add-agent
-              configured
-            />
-          </Panel>
-        </div>
+      </div>
+
+      <div :style="headStyle">Project tile</div>
+      <!-- The four states side by side, out of the rail, on the rail's own
+           ground: selected, and the three the dot can be in. The dot is cut out
+           of `--surface-sunken`, so a tile drawn on any other surface would
+           show the ring as a colour rather than as a gap. -->
+      <div
+        :style="{
+          display: 'flex',
+          gap: 'var(--space-5)',
+          alignItems: 'center',
+          padding: 'var(--space-5)',
+          background: 'var(--surface-sunken)',
+          border: 'var(--border-w) solid var(--border)'
+        }"
+      >
+        <ProjectTile
+          :project="{ path: '/Users/you/dev/smetana', name: 'smetana', tracked: true }"
+          active
+          state="live"
+          state-label="1 running"
+          branch="develop"
+        />
+        <ProjectTile
+          :project="{ path: '/Users/you/dev/holiday-curb', name: 'holiday-curb', tracked: true }"
+          state="loud"
+          state-label="1 waiting on you"
+          branch="main"
+        />
+        <ProjectTile
+          :project="{ path: '/Users/you/dev/beads-viewer', name: 'beads-viewer', tracked: true }"
+          state="live"
+          state-label="2 running"
+          branch="main"
+        />
+        <ProjectTile
+          :project="{ path: '/Users/you/notes', name: 'notes', tracked: false }"
+          state="idle"
+          state-label="idle"
+        />
       </div>
     </section>
 
@@ -2226,7 +2574,7 @@ const menuTargetStyle = {
           border: 'var(--border-w) solid var(--border)'
         }"
       >
-        <ReportView :html="REPORT_HTML" />
+        <ReportView :html="REPORT_HTML" :theme="theme" />
       </div>
       <div
         :style="{
@@ -2235,7 +2583,7 @@ const menuTargetStyle = {
           border: 'var(--border-w) solid var(--border)'
         }"
       >
-        <ReportView html="" />
+        <ReportView html="" :theme="theme" />
       </div>
     </section>
 

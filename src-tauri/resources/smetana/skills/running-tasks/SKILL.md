@@ -501,7 +501,7 @@ So, after the report above and before you hand back, write the file the prompt n
 ```json
 {
   "tasks": [
-    { "id": "smetana-t9o", "did": "one or two sentences on what you actually did" }
+    { "id": "smetana-t9o", "did": "one or two sentences on what you actually did, with every path, symbol, command and sha in backticks" }
   ],
   "notes": "anything about the batch as a whole, or leave it out"
 }
@@ -511,6 +511,9 @@ So, after the report above and before you hand back, write the file the prompt n
   for the person reading this terminal; this file is for one program that renders it into a
   document. Neither is a summary of the other.
 - **One line per task you touched**, the ones you parked included, saying what stopped them.
+- **Every path, symbol, command and sha in backticks.** The document renders a backtick span as
+  code, so an identifier written bare sits in the prose looking like a word. It marks backticks and
+  nothing else, deliberately — a rule that guessed from shape would guess wrong in ordinary prose.
 - **Nothing is timed here.** A number you reported could not be checked against anything;
   the app times its own batches and says so only where a batch held one task.
 - **It is a record, not a gate.** If it cannot be written, carry on — a batch that leaves

@@ -6,7 +6,7 @@
 use tauri::State;
 use tokio::sync::oneshot;
 
-use super::model::{Session, SessionId, TerminalError};
+use super::model::{Session, SessionId, SessionMark, TerminalError};
 use super::service::{Attached, Request, TerminalHandle};
 use crate::agents::Intent;
 
@@ -42,6 +42,19 @@ pub async fn terminal_list(
     ask(&handle, |tx| Request::List(project, tx)).await
 }
 
+/// Every session the worker holds, of every project, as the project rail draws
+/// them. Read once when a window opens. There is no second read and no polling:
+/// the `terminal:state` and `terminal:removed` events are emitted for every
+/// session of every project already, so the front end maintains this from
+/// them — this command exists because a window that has just opened has been
+/// told about nothing.
+#[tauri::command]
+pub async fn terminal_marks(
+    handle: State<'_, TerminalHandle>,
+) -> Result<Vec<SessionMark>, TerminalError> {
+    ask(&handle, Request::Marks).await
+}
+
 /// `intent` is why the session is being started; the profile turns it into a
 /// command line. `agent` is the id from settings — an unknown or uninstalled
 /// one falls back to whatever is installed rather than failing.
@@ -53,6 +66,18 @@ pub async fn terminal_create(
     intent: Intent,
 ) -> Result<Session, TerminalError> {
     ask(&handle, |tx| Request::Create(project, agent, intent, tx)).await?
+}
+
+/// A shell in the project's root, with no agent and no intent behind it. Its own
+/// command rather than an `Intent` variant on the one above: `terminal_create`
+/// takes an agent id and turns it into a command line through a profile, and a
+/// shell has none of that — the request it puts on the queue is a different one.
+#[tauri::command]
+pub async fn terminal_shell(
+    handle: State<'_, TerminalHandle>,
+    project: String,
+) -> Result<Session, TerminalError> {
+    ask(&handle, |tx| Request::CreateShell(project, tx)).await?
 }
 
 #[tauri::command]

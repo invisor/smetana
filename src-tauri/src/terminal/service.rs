@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::detect::{detect, DetectInput, Quiet};
-use super::model::{Exit, Session, SessionId, SessionState, TerminalError};
+use super::model::{Exit, Session, SessionId, SessionMark, SessionState, TerminalError};
 use super::pty::{Chunk, Pty};
 use super::ring::Ring;
 use super::screen::Screen;
@@ -75,9 +75,17 @@ pub struct Attached {
 
 pub enum Request {
     List(String, oneshot::Sender<Vec<Session>>),
+    /// Every session the worker holds, whatever project it belongs to, reduced
+    /// to what the project rail draws. `List` answers about one project because
+    /// the agents panel is about one project; the rail is about all of them,
+    /// and asking `List` once per open project would be a command per row.
+    Marks(oneshot::Sender<Vec<SessionMark>>),
     /// Project, agent id and intent. The agent id is what settings asked for,
     /// not necessarily what runs — see the `Create` arm and `agents::pick`.
     Create(String, String, Intent, oneshot::Sender<Result<Session, TerminalError>>),
+    /// The project to open a shell in, and nothing else: a shell takes no agent
+    /// and no intent, because there is nothing this app is asking it to do.
+    CreateShell(String, oneshot::Sender<Result<Session, TerminalError>>),
     Remove(SessionId, oneshot::Sender<()>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// Carries the id it is leaving, and not for symmetry: see the handler.
@@ -108,8 +116,10 @@ pub struct TerminalHandle(pub mpsc::Sender<Request>);
 struct Live {
     session: Session,
     /// Which agent this session runs — layer B's own dialog reader comes
-    /// from here, not from a name hardcoded in `detect.rs`.
-    profile: &'static dyn agents::Profile,
+    /// from here, not from a name hardcoded in `detect.rs`. `None` for a
+    /// session that runs no agent, which is the person's own shell: it has no
+    /// profile to be read by, deliberately (see `Request::CreateShell`).
+    profile: Option<&'static dyn agents::Profile>,
     pty: Pty,
     ring: Ring,
     screen: Screen,
@@ -509,6 +519,18 @@ fn handle(
             list.sort_by_key(|s| s.id);
             let _ = tx.send(list);
         }
+        Request::Marks(tx) => {
+            let mut list: Vec<SessionMark> = sessions
+                .values()
+                .map(|l| SessionMark {
+                    id: l.session.id,
+                    project: l.session.project.clone(),
+                    state: l.session.state,
+                })
+                .collect();
+            list.sort_by_key(|m| m.id);
+            let _ = tx.send(list);
+        }
         Request::Create(project, agent, intent, tx) => {
             // The login shell's PATH, not this process's: a bundled app started
             // from Finder inherits launchd's, where nothing a person installed
@@ -575,7 +597,7 @@ fn handle(
                     let session = Session::new(id, profile.id(), &project, &project, work);
                     let live = Live {
                         session: session.clone(),
-                        profile,
+                        profile: Some(profile),
                         pty,
                         ring: Ring::new(RING_CAP),
                         screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),
@@ -597,6 +619,56 @@ fn handle(
                 // panic. Nothing is inserted and the failure goes back as the
                 // command's error: an id was spent, but no half-built session
                 // is left behind for the list to carry.
+                Err(err) => Err(err),
+            });
+        }
+        Request::CreateShell(project, tx) => {
+            // Everything the agent branch above does about *which* agent — the
+            // pick, the profile, the skills, the languages, the facts — has no
+            // counterpart here, and that absence is the whole of what a shell
+            // is. What the two do share is the environment, and they share it as
+            // one piece of code rather than as two copies: see
+            // `pty::apply_environment`.
+            let id = *next_id;
+            *next_id += 1;
+            let spawned =
+                Pty::spawn_shell(id, Path::new(&project), DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
+            let _ = tx.send(match spawned {
+                Ok(pty) => {
+                    // `agent` is the field a session's row would have been
+                    // captioned by before rows were captioned by their work, and
+                    // nothing draws it now. The shell's own program is the honest
+                    // answer for anything reading a session dump.
+                    let session = Session::new(
+                        id,
+                        &crate::shell_env::shell(),
+                        &project,
+                        &project,
+                        crate::terminal::model::SessionWork::Shell,
+                    );
+                    let live = Live {
+                        session: session.clone(),
+                        // No agent, so no layer B — see `DetectInput::profile`.
+                        profile: None,
+                        pty,
+                        ring: Ring::new(RING_CAP),
+                        screen: Screen::new(DEFAULT_COLS, DEFAULT_ROWS),
+                        // A shell prints for the person in front of it and for
+                        // nobody else; there is no machine format to translate.
+                        transcript: None,
+                        bell_pending: false,
+                        quiet: Quiet::new(),
+                        last_output: Instant::now(),
+                        pending: Vec::new(),
+                        seq: 0,
+                    };
+                    sessions.insert(id, live);
+                    emit_state(app, &session);
+                    Ok(session)
+                }
+                // A shell that would not start is the same kind of outcome an
+                // agent that is not installed is: an id was spent and nothing
+                // is left in the map.
                 Err(err) => Err(err),
             });
         }
