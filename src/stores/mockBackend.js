@@ -109,6 +109,23 @@ const MOCK_UNTRACKED = 'notes/todo.txt'
    only exists here because the fixture starts life as text. */
 const toBase64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 
+/* A distinct closing time per closed fixture, and deliberately out of step with
+   the order the fixtures are written in: the done column is ordered on this
+   field (`components/kanban/cardOrder.js`), so the one date every closed issue
+   used to share left the rule with nothing to do and nothing to see. Computed
+   rather than tabulated, because a table would have to be extended by whoever
+   adds a task to `views/desktopAppData.js` and would not be; 5 and 12 are
+   coprime with the hours, 17 with the minutes, so no two indices land on the
+   same stamp anywhere near this many fixtures. It stays inside the afternoon
+   and evening of the 30th, between the `started_at` and the `updated_at` every
+   fixture carries, so the inspector never shows one closed before it was picked
+   up. */
+const fixtureClosedAt = (i) => {
+  const hour = String(12 + ((i * 5) % 12)).padStart(2, '0')
+  const minute = String((i * 17) % 60).padStart(2, '0')
+  return `2026-07-30T${hour}:${minute}:00Z`
+}
+
 /* The task inspector draws only the fields an issue actually has, so a fixture
    that fills every one of them would hide the case it is meant to catch — a
    panel that reads as a form with empty rows. The index decides: every third
@@ -166,7 +183,7 @@ function fixtureIssues() {
          else shows the row absent. */
       assignee: status === 'in_progress' ? 'smetana-run-7' : null,
       started_at: closed || status === 'in_progress' ? '2026-07-30T11:02:00Z' : null,
-      closed_at: closed ? '2026-07-31T00:00:00Z' : null,
+      closed_at: closed ? fixtureClosedAt(i) : null,
       close_reason: closed ? 'Delivered and merged into main' : null,
       comment_count: i % 5,
       dependency_count: (DEPENDENCY_EDGES[task.id] ?? []).length,
