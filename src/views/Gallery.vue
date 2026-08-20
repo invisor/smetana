@@ -1326,6 +1326,24 @@ const menuTargetStyle = {
           @remove="() => {}"
         />
       </div>
+      <!-- The same dialog opened from a card's own menu. The parent's title is
+           deliberately a long one: the note is the only line here that can be
+           handed arbitrary prose from the board, and a two-line wrap is the
+           state to check rather than the tidy one-line case. The subtitle is
+           the other half — it names the parent and says nothing about ready,
+           which is the parent's to decide and not this dialog's. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <NewTaskModal
+          :open="true"
+          status="ready"
+          :parent="{ id: 'smetana-3uv', title: 'done column: cards ordered by the date they were closed, freshest first' }"
+          @close="() => {}"
+          @submit="() => {}"
+          @attach="() => {}"
+          @files="() => {}"
+          @remove="() => {}"
+        />
+      </div>
       <!-- The three things the whole-column confirm can be saying. The middle
            one is the state nobody sees for long in the app and the longest one
            in wall-clock time: twenty issues at two seconds each. The last is
