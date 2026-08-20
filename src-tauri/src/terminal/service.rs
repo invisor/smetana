@@ -526,6 +526,10 @@ fn handle(
                     id: l.session.id,
                     project: l.session.project.clone(),
                     state: l.session.state,
+                    // The variant of the work and none of its payload: this is
+                    // every session of every project, and a filing agent's
+                    // `work` holds the whole of a person's draft prose.
+                    kind: l.session.work.kind(),
                 })
                 .collect();
             list.sort_by_key(|m| m.id);
