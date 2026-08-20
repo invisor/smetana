@@ -388,3 +388,50 @@ export async function deleteIssue(id) {
     throw error
   }
 }
+
+/* The semantic tier's state. Separate from `trackerState` deliberately: that
+   one is the board as bd left it, and this is a question somebody asked about
+   it a moment ago. The same shape `vcs.js` gives the commit box's suggest
+   button, for the same reason — the field needs to know the question is out,
+   and needs the refusal as a sentence when it is refused. */
+export const searchState = reactive({ pending: false, error: null, ids: [] })
+
+/* A rejection as one sentence the list can draw.
+
+   `OneshotError` serializes to the `{ kind, message }` shape every command in
+   this app refuses with, and unlike a bd diagnostic that message is already
+   written for a person — six named ways to fail, each one something they can
+   act on — so it is passed through rather than translated. That is why this is
+   not `report()` above: that one replaces bd's language with a short caption
+   and raises the board's own error banner, and neither is right for a question
+   about a search nobody else on screen is waiting on. */
+function refusal(error) {
+  console.error('[tracker] semantic search failed:', error)
+  if (error && typeof error === 'object' && typeof error.message === 'string') return error.message
+  return String(error)
+}
+
+export function clearSemantic() {
+  searchState.ids = []
+  searchState.error = null
+}
+
+/* Ask the agent which tasks were meant.
+
+   Two questions never overlap: a second press while one is out is dropped
+   rather than queued, because the answer would arrive under a query nobody can
+   see any more. An empty answer is an answer and not a failure — it is what
+   `NONE` comes back as, the agent having looked and found nothing. */
+export async function searchSemantic(query) {
+  if (!query?.trim() || searchState.pending) return
+  searchState.pending = true
+  searchState.error = null
+  try {
+    searchState.ids = await invoke('tracker_search_semantic', { query })
+  } catch (error) {
+    searchState.ids = []
+    searchState.error = refusal(error)
+  } finally {
+    searchState.pending = false
+  }
+}

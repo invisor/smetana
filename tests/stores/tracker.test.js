@@ -618,3 +618,77 @@ describe('health and probing folders', () => {
     ])
   })
 })
+
+describe('the semantic tier', () => {
+  it('hands the agent a query and keeps the ids it answered with', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a', 'smetana-b2b'])
+
+    await tracker.searchSemantic('the bell is silent')
+
+    expect(ipc.calls('tracker_search_semantic')).toEqual([{ query: 'the bell is silent' }])
+    expect(tracker.searchState.ids).toEqual(['smetana-a1a', 'smetana-b2b'])
+    expect(tracker.searchState.pending).toBe(false)
+    expect(tracker.searchState.error).toBe(null)
+  })
+
+  it('keeps the refusal as a sentence and stops spinning', async () => {
+    ipc.fail('tracker_search_semantic', {
+      kind: 'noAgent',
+      message: 'Smetana looked for claude on your PATH and found nothing.'
+    })
+
+    await tracker.searchSemantic('anything')
+
+    expect(tracker.searchState.error).toBe(
+      'Smetana looked for claude on your PATH and found nothing.'
+    )
+    expect(tracker.searchState.pending).toBe(false)
+    expect(tracker.searchState.ids).toEqual([])
+  })
+
+  /* An empty answer is what NONE comes back as, and it is not a failure: the
+     agent looked and nothing matched. Drawing it as one would put a red
+     sentence under a question that was answered properly. */
+  it('an empty answer is an answer, not a refusal', async () => {
+    ipc.on('tracker_search_semantic', () => [])
+
+    await tracker.searchSemantic('nothing like this exists')
+
+    expect(tracker.searchState.ids).toEqual([])
+    expect(tracker.searchState.error).toBe(null)
+  })
+
+  it('clears the last answer, so it cannot be read under a different question', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
+
+    await tracker.searchSemantic('one thing')
+    tracker.clearSemantic()
+
+    expect(tracker.searchState.ids).toEqual([])
+    expect(tracker.searchState.error).toBe(null)
+  })
+
+  /* Two questions never overlap: the answer to the second would arrive under a
+     query nobody can see any more, and the first is already on its way. */
+  it('drops a second question while one is still out', async () => {
+    let release
+    ipc.on('tracker_search_semantic', () => new Promise((resolve) => { release = resolve }))
+
+    const first = tracker.searchSemantic('one thing')
+    await tracker.searchSemantic('another thing')
+
+    expect(ipc.calls('tracker_search_semantic')).toEqual([{ query: 'one thing' }])
+
+    release(['smetana-a1a'])
+    await first
+    expect(tracker.searchState.ids).toEqual(['smetana-a1a'])
+  })
+
+  it('an empty query asks nothing at all', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
+
+    await tracker.searchSemantic('   ')
+
+    expect(ipc.calls('tracker_search_semantic')).toEqual([])
+  })
+})
