@@ -32,17 +32,17 @@ describe('what a list of branch names becomes', () => {
      recent branch under it. */
   it('puts a folder where its most recent branch was', () => {
     const rows = branchRows(
-      branches('feature/one', '*main', 'fix/two', 'develop', 'feature/three'),
+      branches('feature/one', 'main', 'fix/two', '*develop', 'feature/three'),
       ['feature', 'fix']
     )
     expect(labels(rows)).toEqual([
+      'develop',
       '/feature',
       'one',
       'three',
       'main',
       '/fix',
-      'two',
-      'develop'
+      'two'
     ])
   })
 
@@ -81,22 +81,70 @@ describe('what a list of branch names becomes', () => {
      also the whole of the height the feature buys back. */
   it('leaves the branches out of a folded folder altogether', () => {
     const rows = branchRows(branches('feature/one', 'feature/two', '*main'), [])
-    expect(labels(rows)).toEqual(['/feature', 'main'])
-    expect(rows[0]).toMatchObject({ count: 2, expanded: false })
+    expect(labels(rows)).toEqual(['main', '/feature'])
+    expect(rows[1]).toMatchObject({ count: 2, expanded: false })
   })
 
   /* The leaf is what is drawn and the whole name is what git is given. Losing
      the second would offer a checkout of a branch that does not exist, so both
      travel on the row. Everything else the branch arrived with travels too —
-     `current` today, whatever `vcs_branches` grows next. */
+     whatever `vcs_branches` grows next, stood in for here by a field it does
+     not have. */
   it('carries the whole name beside the leaf it draws', () => {
     const [row] = branchRows(
-      [{ name: 'feature/holiday-curb-y5bt.8-drop-depot-columns', current: true }],
+      [
+        { name: 'main', current: true },
+        { name: 'feature/holiday-curb-y5bt.8-drop-depot-columns', tracked: true }
+      ],
       ['feature']
-    ).slice(1)
+    ).slice(2)
     expect(row.name).toBe('feature/holiday-curb-y5bt.8-drop-depot-columns')
     expect(row.label).toBe('holiday-curb-y5bt.8-drop-depot-columns')
-    expect(row.current).toBe(true)
+    expect(row.tracked).toBe(true)
+  })
+
+  /* The whole point of the exercise: the branch the repository is on is the
+     first row whatever the reflog said and whatever fold its name would put it
+     behind. Its label is the whole name, because there is no heading above it
+     carrying the prefix. */
+  it('draws the current branch first, whole name and all', () => {
+    const rows = branchRows(branches('fix/two', 'develop', '*feature/one', 'main'), [])
+    expect(labels(rows)).toEqual(['feature/one', '/fix', 'develop', 'main'])
+    expect(rows[0]).toMatchObject({
+      name: 'feature/one',
+      label: 'feature/one',
+      depth: 0,
+      pinned: true,
+      current: true
+    })
+  })
+
+  /* Lifted out rather than copied out: an unfolded heading holding the row
+     that is already at the top would be the same branch on screen twice, and a
+     checkout pressed on either of them the same act. */
+  it('leaves the current branch out of the tree it was lifted from', () => {
+    const rows = branchRows(branches('*feature/one', 'feature/two'), ['feature'])
+    expect(labels(rows)).toEqual(['feature/one', '/feature', 'two'])
+    expect(rows[1].count).toBe(1)
+  })
+
+  /* And a heading with nothing left under it is not drawn at all, rather than
+     drawn empty: the count is what a heading is for. */
+  it('drops a folder the current branch was the whole of', () => {
+    expect(labels(branchRows(branches('*feature/one', 'main'), ['feature']))).toEqual([
+      'feature/one',
+      'main'
+    ])
+  })
+
+  /* A repository nobody is standing in — a detached HEAD, or a list that
+     arrived before HEAD did — pins nothing and draws the tree it always drew. */
+  it('pins nothing when no branch is current', () => {
+    expect(labels(branchRows(branches('feature/one', 'main'), ['feature']))).toEqual([
+      '/feature',
+      'one',
+      'main'
+    ])
   })
 
   /* A folder that is open somewhere else in the tree does not open this one:
