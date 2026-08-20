@@ -42,6 +42,7 @@ export { default as Resizer } from './shell/Resizer.vue'
 export { default as ScopeIndicator } from './shell/ScopeIndicator.vue'
 export { default as Tab } from './shell/Tab.vue'
 export { default as TabBar } from './shell/TabBar.vue'
+export { default as TaskSearch } from './shell/TaskSearch.vue'
 export { NEW_TAB_ITEMS } from './shell/newTabMenu.js'
 
 // kanban

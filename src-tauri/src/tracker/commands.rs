@@ -2,7 +2,9 @@ use tauri::State;
 use tokio::sync::oneshot;
 
 use super::model::{Health, Issue, IssuePatch, Snapshot, TrackerError};
+use super::search;
 use super::service::{Request, TrackerHandle};
+use crate::agents::oneshot::{self as agent_oneshot, OneshotError};
 
 /// The commands are deliberately thin: all they do is put a request on the
 /// worker's queue and await the answer. The outer Result is about delivery to
@@ -93,6 +95,50 @@ pub async fn tracker_set_project(
 #[tauri::command]
 pub async fn tracker_init(handle: State<'_, TrackerHandle>) -> Result<Snapshot, TrackerError> {
     ask(&handle, Request::InitTracker).await?
+}
+
+/// Which issues a person meant, asked of the agent rather than of a substring.
+///
+/// The instant search in the front end runs over this very snapshot and answers
+/// before a keystroke lands; this is the other tier and it is opt-in, because it
+/// costs a model call and several seconds. Nothing is claimed and nothing is
+/// written — the answer is a list of ids, and the rows on screen are still drawn
+/// from the store's own issues, so an id the model invented cannot reach it.
+///
+/// `spawn_blocking` around the whole body, the same rule `vcs_suggest_message`
+/// records: reading the settings file, probing the login shell for a `PATH` and
+/// then waiting on a model are every one of them blocking.
+///
+/// The snapshot is read **before** the blocking half rather than inside it: the
+/// worker is a tokio task and asking it from a blocking thread would be a
+/// second runtime entry for no gain.
+#[tauri::command]
+pub async fn tracker_search_semantic(
+    app: tauri::AppHandle,
+    handle: State<'_, TrackerHandle>,
+    query: String,
+) -> Result<Vec<String>, OneshotError> {
+    let snapshot = ask(&handle, Request::Snapshot)
+        .await
+        .map_err(|err| OneshotError::Io(err.to_string()))?;
+
+    tokio::task::spawn_blocking(move || {
+        let agent = crate::settings::agent(&app);
+        let profile = crate::agents::pick(&agent, crate::shell_env::path())
+            .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
+        // The merge lock is coordination and not work, and it is out of every
+        // list on screen — so it is out of the question too, rather than only
+        // out of the answer. See `search::is_lock`.
+        let issues: Vec<Issue> =
+            snapshot.issues.into_iter().filter(|issue| !search::is_lock(issue)).collect();
+        let question = search::prompt(&query, &issues);
+        let raw = agent_oneshot::ask_raw(profile, &question)?;
+        let known: std::collections::HashSet<String> =
+            issues.iter().map(|issue| issue.id.clone()).collect();
+        Ok(search::parse(&raw, &known))
+    })
+    .await
+    .map_err(|err| OneshotError::Io(err.to_string()))?
 }
 
 /// Whether these folders have a tracker. A question about the filesystem, not

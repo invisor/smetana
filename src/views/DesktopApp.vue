@@ -47,7 +47,7 @@ import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
-import { TerminalView } from '../components/index.js'
+import { TaskSearch, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import {
   agentCounts,
@@ -65,10 +65,13 @@ import {
 } from '../stores/terminals.js'
 import {
   boardColumns,
+  clearSemantic,
   deleteIssue,
   initTracker,
   isLockIssue,
   issueById,
+  searchSemantic,
+  searchState,
   toUiStatus,
   trackerState,
   updateIssue
@@ -1249,6 +1252,18 @@ const confirmPromote = async () => {
   }
 }
 
+/* What the search may find: every issue in the project, less the merge lock —
+   the same exclusion `boardColumns` makes, and made here rather than inside the
+   rule because `isLockIssue` is the store's and the rule is deliberately free
+   of both Vue and Tauri. Closed issues stay in, and so do the ones the board is
+   not drawing today: reaching past the board is the point of searching. */
+const searchableIssues = computed(() =>
+  [...trackerState.issues.values()].filter((issue) => !isLockIssue(issue))
+)
+
+/* The field itself, so ⌘F below can put the keyboard in it. */
+const taskSearch = ref(null)
+
 /* A click on a card is an explicit request to see that card, and it takes the
    right column back from whatever an agent's row put in it. Without this,
    picking a filing agent would leave the draft standing over every card clicked
@@ -1753,8 +1768,44 @@ const onSaveKey = (event) => {
   if (fileTabActive.value) saveTab(project.activeTab)
 }
 
+/* Cmd+F / Ctrl+F puts the keyboard in the search field. `event.code` and not
+   `event.key`, the same discipline `onSaveKey` above records: `event.key` is a
+   non-Latin character under a non-Latin layout and 'F' under Caps Lock, and the
+   shortcut would simply not fire in either case.
+
+   Cancelled in any case, like the save: the webview's own find bar is the
+   platform's rather than this product's, and it would search the rendered board
+   instead of the project.
+
+   **Except inside the editor, where this key is already spoken for.**
+   `@codemirror/search`'s `searchKeymap` binds Mod-f to `openSearchPanel` and
+   cancels the default without stopping propagation, so the event arrives here
+   as well: unguarded, ⌘F in a file opened the editor's find panel and then took
+   the keyboard out of it a tick later, which left find-in-file unreachable from
+   the keyboard altogether — in an editor whose panel `files/editor/extensions.js`
+   installs and `theme.js` themes on purpose. The spec's "from anywhere in the
+   window" was written about the board, not about taking a key from the one
+   thing on screen that already had it. Checked before `preventDefault`, so the
+   editor's own binding is left entirely alone.
+
+   Closing the bell is the same "anything else closes it" rule the panel already
+   follows, applied to the one thing inside the scope bar that now opens a
+   surface of its own: both hang from the same corner at the same width and the
+   same z, and the panel is later in the template, so a list opened under an
+   open bell would be drawn underneath it with nothing on screen saying why. */
+const onFindKey = (event) => {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+  if (event.code !== 'KeyF') return
+  if (event.target?.closest?.('.cm-editor')) return
+  event.preventDefault()
+  closeNotifications()
+  taskSearch.value?.focus()
+}
+
 onMounted(() => window.addEventListener('keydown', onSaveKey))
 onUnmounted(() => window.removeEventListener('keydown', onSaveKey))
+onMounted(() => window.addEventListener('keydown', onFindKey))
+onUnmounted(() => window.removeEventListener('keydown', onFindKey))
 
 /* The order of the branches runs from "the file does not exist as text" to
    "the file is there but something happened to it": `error` locks the field and
@@ -2345,6 +2396,25 @@ const toastStackStyle = {
              of these, and passing it disabled the other live runs' stop
              buttons over a start that never touches them. -->
         <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
+      </template>
+
+      <!-- Every task in the project, searchable from the top of the window.
+           The list it drops is the one place on screen that reaches past the
+           board: a closed task, and one in a column the board is not drawing
+           today, are both findable here and nowhere else. -->
+      <template #search>
+        <TaskSearch
+          ref="taskSearch"
+          :issues="searchableIssues"
+          :pending="searchState.pending"
+          :error="searchState.error ?? ''"
+          :semantic-ids="searchState.ids"
+          :answered="searchState.answered"
+          @open="closeNotifications"
+          @select="selectFromBoard"
+          @semantic="searchSemantic"
+          @reset="clearSemantic"
+        />
       </template>
     </ScopeIndicator>
 

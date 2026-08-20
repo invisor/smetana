@@ -72,6 +72,7 @@ import {
   TabBar,
   TaskCard,
   TaskInspector,
+  TaskSearch,
   TerminalView,
   Textarea,
   TypeBadge,
@@ -147,6 +148,51 @@ const runFixture = (state, extra = {}) => ({
   reduced: null,
   ...extra
 })
+
+/* A handful of issues in the shape `stores/tracker.js` holds them, so the
+   search field below has something to find. Deliberately awkward: one whose
+   only match is deep in its notes, so the row has to name the field and carry a
+   slice of text around the hit; one whose title is long enough to ellipsise;
+   and one whose id is the whole query. Type `bell` at the field to see the
+   first two, and `smetana-` to see all of them ranked by id prefix. */
+const SEARCH_ISSUES = [
+  {
+    id: 'smetana-ec9',
+    title: 'Scope bar headline',
+    status: 'closed',
+    issue_type: 'feature',
+    updated_at: '2026-08-19T09:00:00Z',
+    labels: []
+  },
+  {
+    id: 'smetana-24a',
+    title: 'Task search in the scope bar',
+    status: 'in_progress',
+    issue_type: 'feature',
+    updated_at: '2026-08-21T08:00:00Z',
+    description: 'A search field left of the bell that searches every task in the active project.',
+    labels: ['frontend']
+  },
+  {
+    id: 'smetana-agh',
+    title: 'A title long enough that the row has to cut it off somewhere before the snippet begins',
+    status: 'open',
+    issue_type: 'bug',
+    updated_at: '2026-08-18T12:00:00Z',
+    notes:
+      'The run parked this one because the bell went quiet halfway through the night and nobody ' +
+      'could say whether the delivery had happened at all.',
+    labels: []
+  },
+  {
+    id: 'smetana-z9i',
+    title: 'Hide the parallel switch while a solo run is out',
+    status: 'closed',
+    issue_type: 'task',
+    updated_at: '2026-08-20T17:30:00Z',
+    labels: []
+  }
+]
 
 /* A run's document, shortened. `report.rs` writes the real one and this is the
    same shape — its own `<style>`, its own colours, its own `prefers-color-scheme`
@@ -1631,6 +1677,60 @@ const menuTargetStyle = {
           :agents-active="3"
           :notifications="1"
         />
+      </div>
+
+      <!-- The search field, in the place it actually occupies: the bar's own
+           slot, immediately left of the bell. Narrow at rest; click into it and
+           it widens, and the list drops out of the top right corner of the
+           page rather than out of the bar, because it is `position: fixed` for
+           the reason the bell's panel is.
+
+           Type `bell` to see a title hit above a prose hit that names its field
+           and carries a slice of the notes around the match; type `smetana-` to
+           see four rows ranked by id prefix. ↑ and ↓ move the highlight, ⏎
+           opens, Esc closes and empties the field. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+        <ScopeIndicator
+          repo="smetana"
+          branch="feature/smetana-24a-task-search-scope-bar"
+          headline="Run under way"
+          headline-level="live"
+          :dirty-count="4"
+          :agents-active="2"
+          :notifications="1"
+        >
+          <template #search>
+            <TaskSearch :issues="SEARCH_ISSUES" />
+          </template>
+        </ScopeIndicator>
+
+        <!-- The four states the list has beyond a plain answer, each on its own
+             field: the question is out, the question came back with ids, the
+             question came back naming nothing, and the question was refused.
+             Only one list is on screen at a time — they all hang from the same
+             fixed corner — so focus them one after the other, typing `bell` into
+             each.
+
+             The second is the whole point of the second tier: its two ids are
+             not in the instant hits at all, and they arrive under their own
+             divider with those hits left where they were. The third is the one
+             worth looking at hardest — `answered` with nothing to show for it is
+             `NONE`, a legitimate answer, and it has to be visible as an empty
+             group rather than as the list not changing, which is what a stopped
+             spinner over an unchanged list would be. -->
+        <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)' }">
+          <TaskSearch :issues="SEARCH_ISSUES" pending />
+          <TaskSearch
+            :issues="SEARCH_ISSUES"
+            answered
+            :semantic-ids="['smetana-z9i', 'smetana-24a']"
+          />
+          <TaskSearch :issues="SEARCH_ISSUES" answered />
+          <TaskSearch
+            :issues="SEARCH_ISSUES"
+            error="Smetana looked for claude on your PATH and found nothing."
+          />
+        </div>
       </div>
     </section>
 

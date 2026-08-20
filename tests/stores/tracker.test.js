@@ -618,3 +618,168 @@ describe('health and probing folders', () => {
     ])
   })
 })
+
+describe('the semantic tier', () => {
+  it('hands the agent a query and keeps the ids it answered with', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a', 'smetana-b2b'])
+
+    await tracker.searchSemantic('the bell is silent')
+
+    expect(ipc.calls('tracker_search_semantic')).toEqual([{ query: 'the bell is silent' }])
+    expect(tracker.searchState.ids).toEqual(['smetana-a1a', 'smetana-b2b'])
+    expect(tracker.searchState.pending).toBe(false)
+    expect(tracker.searchState.error).toBe(null)
+  })
+
+  it('keeps the refusal as a sentence and stops spinning', async () => {
+    ipc.fail('tracker_search_semantic', {
+      kind: 'noAgent',
+      message: 'Smetana looked for claude on your PATH and found nothing.'
+    })
+
+    await tracker.searchSemantic('anything')
+
+    expect(tracker.searchState.error).toBe(
+      'Smetana looked for claude on your PATH and found nothing.'
+    )
+    expect(tracker.searchState.pending).toBe(false)
+    expect(tracker.searchState.ids).toEqual([])
+  })
+
+  /* An empty answer is what NONE comes back as, and it is not a failure: the
+     agent looked and nothing matched. Drawing it as one would put a red
+     sentence under a question that was answered properly. */
+  it('an empty answer is an answer, not a refusal', async () => {
+    ipc.on('tracker_search_semantic', () => [])
+
+    await tracker.searchSemantic('nothing like this exists')
+
+    expect(tracker.searchState.ids).toEqual([])
+    expect(tracker.searchState.error).toBe(null)
+  })
+
+  /* The case the guard exists for, and the one that was broken: the component
+     resets on every keystroke, but a request already sent is neither cancelled
+     nor tagged, so without the guard the old answer lands under the new query
+     and is drawn as an answer to it. */
+  it('drops an answer whose question moved on while it was out', async () => {
+    let release
+    ipc.on('tracker_search_semantic', () => new Promise((resolve) => { release = resolve }))
+
+    const inFlight = tracker.searchSemantic('the bell is silent')
+    // A keystroke: this is what the field emits on every one of them.
+    tracker.clearSemantic()
+    release(['smetana-a1a'])
+    await inFlight
+
+    expect(tracker.searchState.ids).toEqual([])
+    expect(tracker.searchState.answered).toBe(false)
+  })
+
+  it('drops a refusal whose question moved on while it was out', async () => {
+    let reject
+    ipc.on('tracker_search_semantic', () => new Promise((_, no) => { reject = no }))
+
+    const inFlight = tracker.searchSemantic('the bell is silent')
+    tracker.clearSemantic()
+    reject({ kind: 'timeout', message: 'The agent did not answer within 90 seconds.' })
+    await inFlight
+
+    expect(tracker.searchState.error).toBe(null)
+  })
+
+  /* The flag is cleared whether or not the answer was wanted: it is what the
+     ask row spins on, and a stale answer that left it up would leave the person
+     watching a spinner about a question that is over, unable to ask again. */
+  it('a stale answer still frees the field for the next question', async () => {
+    let release
+    ipc.on('tracker_search_semantic', () => new Promise((resolve) => { release = resolve }))
+
+    const inFlight = tracker.searchSemantic('one thing')
+    tracker.clearSemantic()
+    release(['smetana-a1a'])
+    await inFlight
+    expect(tracker.searchState.pending).toBe(false)
+
+    ipc.on('tracker_search_semantic', () => ['smetana-b2b'])
+    await tracker.searchSemantic('another thing')
+
+    expect(tracker.searchState.ids).toEqual(['smetana-b2b'])
+    expect(tracker.searchState.answered).toBe(true)
+  })
+
+  /* `NONE` and "nothing has been asked" are both an empty list, and the list on
+     screen draws them differently, so the store has to tell them apart. */
+  it('says an answer arrived even when it named nothing', async () => {
+    ipc.on('tracker_search_semantic', () => [])
+
+    expect(tracker.searchState.answered).toBe(false)
+    await tracker.searchSemantic('nothing like this exists')
+
+    expect(tracker.searchState.answered).toBe(true)
+    expect(tracker.searchState.error).toBe(null)
+  })
+
+  /* The one thing in this store that speaks for the agent, so it must never say
+     something the agent did not say. An answer that outlived its project leaves
+     the list drawing "Nothing matched" about a folder nobody asked about. */
+  it('forgets the answer when the project underneath it changes', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
+    ipc.on('tracker_set_project', snapshot())
+
+    await tracker.searchSemantic('the bell is silent')
+    expect(tracker.searchState.answered).toBe(true)
+
+    await tracker.setProject('/Users/you/dev/notes')
+
+    expect(tracker.searchState.ids).toEqual([])
+    expect(tracker.searchState.answered).toBe(false)
+  })
+
+  /* Cleared before the switch is attempted rather than after it succeeds: the
+     question is over whatever the tracker goes on to answer. */
+  it('forgets it even when the switch itself fails', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
+    ipc.fail('tracker_set_project', new Error('bd failed'))
+
+    await tracker.searchSemantic('the bell is silent')
+    await tracker.setProject('/Users/you/dev/notes')
+
+    expect(tracker.searchState.answered).toBe(false)
+  })
+
+  it('clears the last answer, so it cannot be read under a different question', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
+
+    await tracker.searchSemantic('one thing')
+    tracker.clearSemantic()
+
+    expect(tracker.searchState.ids).toEqual([])
+    expect(tracker.searchState.error).toBe(null)
+    expect(tracker.searchState.answered).toBe(false)
+  })
+
+  /* Two questions never overlap: the answer to the second would arrive under a
+     query nobody can see any more, and the first is already on its way. */
+  it('drops a second question while one is still out', async () => {
+    let release
+    ipc.on('tracker_search_semantic', () => new Promise((resolve) => { release = resolve }))
+
+    const first = tracker.searchSemantic('one thing')
+    await tracker.searchSemantic('another thing')
+
+    expect(ipc.calls('tracker_search_semantic')).toEqual([{ query: 'one thing' }])
+
+    release(['smetana-a1a'])
+    await first
+    expect(tracker.searchState.ids).toEqual(['smetana-a1a'])
+  })
+
+  it('an empty query asks nothing at all', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
+
+    await tracker.searchSemantic('   ')
+
+    expect(ipc.calls('tracker_search_semantic')).toEqual([])
+  })
+})

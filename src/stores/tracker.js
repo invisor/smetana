@@ -209,6 +209,20 @@ export async function resync() {
    so we roll it out the way resync() does: with a clear, otherwise the previous
    project's issues would stay on the board. */
 export async function setProject(path) {
+  /* And the same clear for the semantic answer, which is about the folder being
+     left rather than the one being opened. It is the one thing in this store
+     that speaks for the agent, so it must never say something the agent did not
+     say: `answered` outliving its project leaves the list drawing "Nothing
+     matched" about a project nobody asked about — a false statement where the
+     old behaviour was merely a group that quietly vanished.
+
+     Before the await and outside the try, so a switch that then fails leaves
+     nothing stale behind either: whatever the tracker answers, the question
+     this was the answer to is over. Deliberately not in `applySnapshot`, which
+     a resync also goes through — that one is the same project's board arriving
+     again, and dropping an answer under an unchanged question would be a
+     different fault of the same shape. */
+  clearSemantic()
   trackerState.switching = true
   try {
     applySnapshot(await invoke('tracker_set_project', { path }))
@@ -386,5 +400,97 @@ export async function deleteIssue(id) {
     if (before && !trackerState.issues.has(id)) trackerState.issues.set(id, before)
     report('write', error)
     throw error
+  }
+}
+
+/* The semantic tier's state. Separate from `trackerState` deliberately: that
+   one is the board as bd left it, and this is a question somebody asked about
+   it a moment ago. The same shape `vcs.js` gives the commit box's suggest
+   button, for the same reason — the field needs to know the question is out,
+   and needs the refusal as a sentence when it is refused. */
+export const searchState = reactive({
+  pending: false,
+  error: null,
+  ids: [],
+  /* Whether an answer has actually come back. Separate from `ids` being empty,
+     because those are two different facts and the list draws them differently:
+     nothing asked yet draws no group at all, while `NONE` — the agent looked and
+     nothing matched — draws the group with nothing in it. Without the
+     distinction a `NONE` is a spinner that stops and a list that does not
+     change, which is the same indistinguishability `oneshot.rs` refuses a
+     zero exit with an empty stdout for. */
+  answered: false,
+  /* The question the request in flight was sent for, and `null` when there is
+     none. This is the stale guard: see `searchSemantic` below. */
+  query: null
+})
+
+/* A rejection as one sentence the list can draw.
+
+   `OneshotError` serializes to the `{ kind, message }` shape every command in
+   this app refuses with, and unlike a bd diagnostic that message is already
+   written for a person — six named ways to fail, each one something they can
+   act on — so it is passed through rather than translated. That is why this is
+   not `report()` above: that one replaces bd's language with a short caption
+   and raises the board's own error banner, and neither is right for a question
+   about a search nobody else on screen is waiting on. */
+function refusal(error) {
+  if (error && typeof error === 'object' && typeof error.message === 'string') return error.message
+  return String(error)
+}
+
+export function clearSemantic() {
+  searchState.ids = []
+  searchState.error = null
+  searchState.answered = false
+  /* Nulled rather than left where it was, and that is what makes a withdrawn
+     question discard its own answer: an ask still out at this moment is about a
+     query nobody can see any more, and the guard below is a comparison against
+     this very field. */
+  searchState.query = null
+}
+
+/* Ask the agent which tasks were meant.
+
+   Two questions never overlap: a second press while one is out is dropped
+   rather than queued. An empty answer is an answer and not a failure — it is
+   what `NONE` comes back as, the agent having looked and found nothing.
+
+   **Guarded on the query, exactly as `vcs.js`'s `suggestMessage` is guarded on
+   its project and repository**, and for a sharper version of the same reason.
+   That call is out for as long as a model takes to write a line; this one can
+   be out for the whole ninety seconds of `oneshot`'s deadline, and typing while
+   waiting is the ordinary thing to do — the field is a search field. Nothing
+   here cancels a request already sent, so an answer that lands under a
+   different question has to be dropped where it lands, or the "By meaning"
+   group would be answering something the person can no longer see. That is the
+   design's own rule, and the acceptance criterion written against it.
+
+   `pending` is cleared in `finally` and not behind the guard: a stale answer
+   still frees the field, and leaving the flag up would mean the one gesture
+   that could fix the situation — asking again — was the one thing dropped. */
+export async function searchSemantic(query) {
+  const asked = query?.trim()
+  if (!asked || searchState.pending) return
+  searchState.pending = true
+  searchState.error = null
+  searchState.answered = false
+  searchState.query = asked
+  try {
+    const ids = await invoke('tracker_search_semantic', { query })
+    if (searchState.query !== asked) return
+    searchState.ids = ids
+    searchState.answered = true
+  } catch (error) {
+    /* Logged above the guard rather than inside `refusal`, and that order is
+       the point: a request that failed while its query moved on is still a
+       failure, and the console line is the only trace it will ever leave —
+       the sentence itself is deliberately not drawn. */
+    console.error('[tracker] semantic search failed:', error)
+    if (searchState.query !== asked) return
+    searchState.ids = []
+    searchState.error = refusal(error)
+  } finally {
+    searchState.pending = false
   }
 }

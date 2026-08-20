@@ -153,6 +153,13 @@ const badgeStyle = {
 
     <span :style="{ flex: 1 }" />
 
+    <!-- The search field. A slot rather than props for the same reason
+         `#status` above is one: this bar knows about a repository, a branch and
+         two counters, and giving it the tracker as well would make the one
+         component on screen that is deliberately ignorant of what it is
+         describing know the most of anything. -->
+    <slot name="search" />
+
     <span :style="{ position: 'relative', display: 'inline-flex' }">
       <IconButton
         icon="bell"
