@@ -62,7 +62,7 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
        agent could not settle on its own, so answering is the thing to do with
        it and running it is the thing not to — which is why this row is here and
        the play below is dead. Absent rather than greyed everywhere else: the
-       menu is four verbs, and a fifth that is dead on all but a handful of
+       menu is five verbs, and a sixth that is dead on all but a handful of
        cards is a row a person learns to read past. */
     ...(isParked(bdStatus)
       ? [{
