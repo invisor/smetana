@@ -2033,12 +2033,14 @@ const decidedRuns = new Set()
    both of its inputs are already reactive here.
 
    The agents come from `agentCounts` and not from the rail's `projectStates`,
-   which is the map that knows about every project at once. That map is built
-   from session marks, and a mark carries no work kind — so a shell that rang
-   the bell would have reached it as `needs-you` and had this bar announce an
-   agent waiting on somebody in a project holding no agent at all. The store
-   comment beside `agentCounts` has the whole of it. This is the active
-   project's bar, so the active project's own list is the right source anyway. */
+   which is the map that knows about every project at once. That map counted a
+   person's own shells when this was written, so a shell that rang the bell
+   would have had this bar announce an agent waiting on somebody in a project
+   holding no agent at all; the mark carries a work kind now and the map drops
+   them, but the source is unchanged — the counter beside this sentence is built
+   from the sessions and the two have to agree. The store comment beside
+   `agentCounts` has the whole of it. This is the active project's bar, so the
+   active project's own list is the right source anyway. */
 const scopeHeadline = computed(() =>
   headline({ row: agentCounts.value, runs: runsState.runs })
 )

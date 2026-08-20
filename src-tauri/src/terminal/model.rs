@@ -120,8 +120,55 @@ pub enum SessionWork {
     /// kinds of session apart: `agentRows` in `src/stores/terminals.js` filters
     /// it out of the agents panel, the presence of the centre's Agent tab is
     /// counted on everything that is not this, and each of these gets a centre
-    /// tab of its own instead.
+    /// tab of its own instead. The project rail asks the same question of a
+    /// `SessionMark`, which carries `WorkKind` rather than this enum.
     Shell,
+}
+
+/// Which variant of `SessionWork` a session was started for, and nothing of
+/// what that variant carries.
+///
+/// A second enum rather than a flag, and rather than `SessionWork` itself: what
+/// the project rail needs is "is this an agent", but a boolean answering only
+/// that would be a second vocabulary for a question the front end already
+/// spells one way — `kind === 'shell'`. Mirroring the variants keeps the one
+/// wire word, and keeps the door open for a reader that cares which agent.
+///
+/// The duplication is held two ways and neither covers the other. *Whether* a
+/// variant is mapped is the compiler's: `kind()`'s match is exhaustive, and so
+/// is `sample` in the tests, so a variant added to either enum does not build.
+/// *Which word* a mapped variant gets is
+/// `every_work_variant_reports_its_own_kind`'s, against the `kind` tag serde
+/// writes for the work itself — but only for the variants in that test's own
+/// list, so one added and not appended there has its word asserted by nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkKind {
+    Bare,
+    NewTask,
+    EditTask,
+    ResolveTask,
+    ResolveConflict,
+    Setup,
+    Run,
+    Shell,
+}
+
+impl SessionWork {
+    /// The variant alone, for the types that cross the boundary carrying what
+    /// gets drawn and nothing else.
+    pub fn kind(&self) -> WorkKind {
+        match self {
+            SessionWork::Bare => WorkKind::Bare,
+            SessionWork::NewTask { .. } => WorkKind::NewTask,
+            SessionWork::EditTask { .. } => WorkKind::EditTask,
+            SessionWork::ResolveTask { .. } => WorkKind::ResolveTask,
+            SessionWork::ResolveConflict { .. } => WorkKind::ResolveConflict,
+            SessionWork::Setup => WorkKind::Setup,
+            SessionWork::Run => WorkKind::Run,
+            SessionWork::Shell => WorkKind::Shell,
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -145,18 +192,25 @@ pub struct Session {
 }
 
 /// What the project rail needs to know about a session, and nothing else: a
-/// tile draws one dot, and the dot is decided by the state alone.
+/// tile draws one dot, decided by the state — of the sessions the rail counts.
 ///
 /// A separate type rather than `Session`, for the reason `Request::Group`
 /// gives about the pid — what crosses the boundary is what gets drawn. Every
 /// project's sessions cross here, and `Session` carries `work`, which for a
 /// filing agent holds the whole of the person's own draft prose.
+///
+/// `kind` is why the rail can say *which* sessions it counts: it is the
+/// variant of that `work` and none of its payload, so a person's own shell is
+/// told from an agent here without the draft prose crossing with it. Without
+/// it, a shell that rang the bell lit its project's tile loud while the scope
+/// bar's agent counter, which filters, read zero.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMark {
     pub id: SessionId,
     pub project: String,
     pub state: SessionState,
+    pub kind: WorkKind,
 }
 
 /// How a session ended, as far as whoever was waiting on it is concerned.
@@ -299,9 +353,87 @@ mod tests {
         // second type carrying the same facts as `Session` — a rename here goes
         // quiet on the other side: every tile's dot falls back to idle and the
         // rail simply looks like an app with nothing running in it.
-        let mark = SessionMark { id: 7, project: "/p".into(), state: SessionState::NeedsYou };
+        let mark = SessionMark {
+            id: 7,
+            project: "/p".into(),
+            state: SessionState::NeedsYou,
+            kind: WorkKind::Run,
+        };
         let json = serde_json::to_string(&mark).expect("serializes");
-        assert_eq!(json, r#"{"id":7,"project":"/p","state":"needs-you"}"#);
+        assert_eq!(json, r#"{"id":7,"project":"/p","state":"needs-you","kind":"run"}"#);
+    }
+
+    #[test]
+    fn a_shell_reports_the_shell_kind_and_an_agent_does_not() {
+        // The whole of what lets the rail leave a person's own shell out of a
+        // project's dots. Both directions, because a field that answered
+        // "shell" for everything would pass a one-sided assertion and turn
+        // every tile grey.
+        let shell = SessionWork::Shell.kind();
+        assert_eq!(shell, WorkKind::Shell);
+        for agent in
+            [SessionWork::Bare, SessionWork::Run, SessionWork::Setup, SessionWork::EditTask { id: "x".into() }]
+        {
+            assert_ne!(agent.kind(), WorkKind::Shell, "an agent's work is not a shell: {agent:?}");
+        }
+    }
+
+    /// One work per kind, and the match is exhaustive on purpose: with `kind()`
+    /// exhaustive over `SessionWork` and this over `WorkKind`, a variant added
+    /// to either enum stops the test file compiling, which is what gets the
+    /// next person to the list below rather than past it.
+    fn sample(kind: WorkKind) -> SessionWork {
+        match kind {
+            WorkKind::Bare => SessionWork::Bare,
+            WorkKind::NewTask => {
+                SessionWork::NewTask { text: "x".into(), issue_type: None, priority: None }
+            }
+            WorkKind::EditTask => SessionWork::EditTask { id: "smetana-42".into() },
+            WorkKind::ResolveTask => SessionWork::ResolveTask { id: "smetana-42".into() },
+            WorkKind::ResolveConflict => {
+                SessionWork::ResolveConflict { repo: "/p".into(), theirs: "develop".into() }
+            }
+            WorkKind::Setup => SessionWork::Setup,
+            WorkKind::Run => SessionWork::Run,
+            WorkKind::Shell => SessionWork::Shell,
+        }
+    }
+
+    #[test]
+    fn every_work_variant_reports_its_own_kind() {
+        // `WorkKind` duplicates `SessionWork`'s variants, and this is what
+        // holds the words together: the `kind` tag serde writes for a work has
+        // to be what `kind()` serializes to, or a shell reaches the rail as
+        // somebody else's kind.
+        //
+        // What this cannot see is a variant nobody added to the list below.
+        // The two exhaustive matches make an *unmapped* variant a compile
+        // error, which is what brings the next person to this file; appending
+        // it here is still theirs to do. A wrong arm in a listed variant is
+        // what fails here.
+        let all = [
+            WorkKind::Bare,
+            WorkKind::NewTask,
+            WorkKind::EditTask,
+            WorkKind::ResolveTask,
+            WorkKind::ResolveConflict,
+            WorkKind::Setup,
+            WorkKind::Run,
+            WorkKind::Shell,
+        ];
+        for kind in all {
+            let work = sample(kind);
+            let tagged = serde_json::to_value(&work).expect("serializes");
+            let tag = tagged.get("kind").expect("the work carries its variant as `kind`");
+            let narrow = serde_json::to_value(work.kind()).expect("serializes");
+            // The words first, so that each fault is reported by the message
+            // that names it. A wrong arm in `kind()` shows up here as two
+            // different words; a wrong arm in `sample` cannot be seen here at
+            // all — both words are then taken from the same substituted work —
+            // and falls through to the line below.
+            assert_eq!(tag, &narrow, "the narrow kind disagrees with the work's own tag: {work:?}");
+            assert_eq!(work.kind(), kind, "the sample for {kind:?} is another variant's work");
+        }
     }
 
     #[test]

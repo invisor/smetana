@@ -21,8 +21,10 @@ const session = (over = {}) => ({
 const b64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 
 /* One row of what `terminal_marks` answers: the whole of what the rail is told
-   about a session it has no row for. */
-const mark = (over = {}) => ({ id: 1, project: '/p', state: 'running', ...over })
+   about a session it has no row for. The default kind is an agent's, matching
+   `session()` above — every test here that does not say otherwise is about an
+   agent, and the rail counts those. */
+const mark = (over = {}) => ({ id: 1, project: '/p', state: 'running', kind: 'bare', ...over })
 
 async function ready() {
   const loaded = await loadStores()
@@ -1318,6 +1320,57 @@ describe('project states', () => {
 
     expect(loaded.stores.terminals.projectState('/a')).toBe('loud')
     expect(loaded.stores.terminals.projectStates.value['/a']).toEqual({ state: 'loud', live: 1, loud: 1 })
+  })
+
+  /* The rail counts agents and not the person's own shells, and the pair below
+     is one fixture read twice. The kind is the only thing that differs between
+     them, so the second test cannot pass on an empty map: the first proves the
+     very same rows reach it and are counted. */
+  const busy = [
+    mark({ id: 1, project: '/a', state: 'needs-you' }),
+    mark({ id: 2, project: '/a', state: 'running' }),
+    mark({ id: 3, project: '/a', state: 'starting' })
+  ]
+
+  it('sessions waiting, working and starting all count towards their project', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', busy.map((m) => ({ ...m, kind: 'run' })))
+    await loaded.stores.terminals.initTerminals()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('loud')
+    expect(loaded.stores.terminals.projectStates.value['/a']).toEqual({ state: 'loud', live: 2, loud: 1 })
+  })
+
+  it("the same sessions as the person's own shells leave the project idle", async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', busy.map((m) => ({ ...m, kind: 'shell' })))
+    await loaded.stores.terminals.initTerminals()
+
+    expect(loaded.stores.terminals.projectState('/a')).toBe('idle')
+    expect(loaded.stores.terminals.projectStates.value['/a']).toBeUndefined()
+  })
+
+  /* The path the reproduction actually takes: the first read is one snapshot,
+     and a shell opened after it arrives as an event. */
+  it('a shell that arrives by event does not light its project either', async () => {
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [])
+    await loaded.stores.terminals.initTerminals()
+    await loaded.stores.terminals.loadSessions('/p')
+
+    const shell = { project: '/other', work: { kind: 'shell' }, agent: '/bin/zsh' }
+    await loaded.emit('terminal:state', session({ id: 9, ...shell, state: 'running' }))
+    await loaded.emit('terminal:state', session({ id: 10, ...shell, state: 'needs-you' }))
+    await loaded.nextTick()
+    expect(loaded.stores.terminals.projectState('/other')).toBe('idle')
+
+    // and an agent in the same project, by the same path, still does
+    await loaded.emit('terminal:state', session({ id: 11, project: '/other', state: 'needs-you' }))
+    await loaded.nextTick()
+    expect(loaded.stores.terminals.projectState('/other')).toBe('loud')
   })
 
   it('a project whose sessions have all exited, and one nobody has heard of, are both idle', async () => {

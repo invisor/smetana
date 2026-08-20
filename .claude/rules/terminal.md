@@ -113,8 +113,12 @@ introduces.
 
 Detection runs over a shell and is welcome to. Layer A is agent-independent and there is nothing about
 it to switch off; a shell that rings the bell has rung it for the person sitting in front of it, and
-nothing in this app acts on a shell's state — it has no row in the agents panel, and notifications are
-raised by a run rather than by a session going `needs-you`. Layer B is skipped, because
+nothing in this app acts on a shell's state — it has no row in the agents panel, it is not counted by
+the scope bar or by the project rail, and notifications are raised by a run rather than by a session
+going `needs-you`. **That sentence is a property to keep true rather than an observation**: it was
+false for as long as `SessionMark` carried no work kind, since a shell ringing the bell lit its
+project's tile loud (smetana-low), and anything new that reads a session's state owes the same
+filter — `isShellSession` over a session, `mark.kind` over a mark. Layer B is skipped, because
 `DetectInput::profile` is `Option` and a shell's is `None`: layer B is one named harness's interface
 being read, and handing a shell's screen to whichever profile happened to be configured would be a
 reading of something that is not there. **Do not close that hole with a stub profile** — see the
@@ -416,7 +420,7 @@ which the remove button in `AgentList.vue` would kill the wrong project's agent,
 `tests/stores/terminals.test.js` pins this.
 
 Beside that list, and separate from it on purpose, `terminals.js` keeps a second structure about
-**every** project: `marks`, a map of session id → `{id, project, state}`, exported as the computed
+**every** project: `marks`, a map of session id → `{id, project, state, kind}`, exported as the computed
 `projectStates` (path → `{state, live, loud}`) and the `projectState(path)` accessor. The project
 rail draws one dot per project and cannot ask `sessions`, which is one project's by design — a row
 for a project this window is not pointed at would offer a button that kills somebody else's process.
@@ -429,10 +433,15 @@ runs. The first read is wrapped in a `try`: a rail of grey dots is a smaller los
 because the events arrive one session at a time and a store holding only counters could not tell
 whether the session that just left `needs-you` was the last loud one where it lived. `loud` beats
 `live`; `starting` counts as live for the reason it counts in `hasAgentSession`; `idle` counts as
-neither, being a live process with nothing to say. `SessionMark` in `terminal/model.rs` is its own
-type rather than `Session` for the reason `Request::Group` gives about the pid — every project's
-sessions cross here, and `Session` carries `work`, which for a filing agent holds the whole of the
-person's own draft prose.
+neither, being a live process with nothing to say. **A shell counts as nothing at all**, dropped by
+`kind`, which is the one field of the mark that is not simply `Session`'s: `SessionMark` in
+`terminal/model.rs` is its own type rather than `Session` for the reason `Request::Group` gives about
+the pid — every project's sessions cross here, and `Session` carries `work`, which for a filing agent
+holds the whole of the person's own draft prose. So the mark takes the variant of that work and none
+of its payload, as `WorkKind` beside it, whose words are `SessionWork`'s own tags and are held to
+them by a test. Both paths that build a mark fill it in — `Request::Marks` for the first read, and the
+`terminal:state` listener for every session opened after it; a mark built without the kind is an
+agent as far as the rail is concerned.
 
 `TerminalView.vue`'s pane and its host both carry `minWidth: 0`, and that is not decoration next to
 the `minHeight: 0` beside it. A flex item defaults to `min-width: auto` and refuses to shrink below

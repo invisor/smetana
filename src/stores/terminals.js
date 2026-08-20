@@ -21,6 +21,16 @@ import { runsState } from './runs.js'
 import { settings } from './settings.js'
 import { isLockIssue, trackerState } from './tracker.js'
 
+/* The one word that tells a person's own shell from an agent, as `SessionWork`
+   and `WorkKind` in `src-tauri/src/terminal/model.rs` spell it on the wire.
+
+   A constant rather than the literal at each site, because two shapes carry it
+   now and both have to read it the same: a session, whose `work` is the whole
+   variant, and a `SessionMark`, which carries the variant alone. Two literals
+   would be two things to rename, and the failure is silent in both directions —
+   the rail counting shells, or the panel drawing them. */
+const SHELL_WORK = 'shell'
+
 export const terminalState = reactive({
   sessions: [],
   /* Starts the worker has not answered yet. A session takes about a second to
@@ -57,16 +67,15 @@ const marks = reactive(new Map())
    reason the rail exists, and it must not be hidden by another session in the
    same project getting on with its work.
 
-   **Something**, not an agent, and the imprecision is the honest word rather
-   than a loose one: a `SessionMark` carries an id, a project and a state and no
-   work kind at all, so a plain shell is counted here exactly like an agent, and
-   a shell that rings the bell reaches `needs-you` the same way one does. The
-   tile's dot claims only that something there wants you, which is true of a
-   shell; `components/shell/projectState.js` holds the words beside it to the
-   same, and its header carries the whole of the reasoning. Telling the two
-   apart needs a work kind on the mark, in Rust and here — it is not a rewording
-   anywhere downstream. `liveAgentCount` below is the one that may say "agent",
-   because it filters through `isShellSession` and this map cannot.
+   **A person's own shells are not counted**, and that is what `mark.kind` is
+   on the mark for: a shell that rings the bell reaches `needs-you` exactly as
+   an agent does, and while the mark carried only an id, a project and a state,
+   such a shell lit its project's tile loud while the scope bar's counter — which
+   filters through `isShellSession` — read zero, two numbers about one project
+   on one screen. This map now drops the same population that one does, by the
+   same word. What the tile still does not say is *which* agent or how many of
+   which kind; `components/shell/projectState.js` holds the words beside it to
+   what it can support, and its header carries that reasoning.
 
    `starting` counts as live for the reason it counts in `hasAgentSession`: a
    spawn takes about a second, and a tile that stayed grey through it would
@@ -76,6 +85,7 @@ const marks = reactive(new Map())
 export const projectStates = computed(() => {
   const out = {}
   for (const mark of marks.values()) {
+    if (mark.kind === SHELL_WORK) continue
     const row = (out[mark.project] ??= { state: 'idle', live: 0, loud: 0 })
     if (mark.state === 'needs-you') row.loud += 1
     else if (mark.state === 'running' || mark.state === 'starting') row.live += 1
@@ -86,10 +96,11 @@ export const projectStates = computed(() => {
   return out
 })
 
-/* A path nobody has a session under is `idle`, and that is an ordinary answer
-   rather than a missing one: it is what every project reads as in a window that
-   has just opened, and what a project the worker has never touched reads as
-   forever. */
+/* A path with no session the rail counts under it is `idle`, and that is an
+   ordinary answer rather than a missing one: it is what every project reads as
+   in a window that has just opened, what a project the worker has never touched
+   reads as forever, and what a project holding nothing but the person's own
+   shells reads as while they work in them. */
 export const projectState = (project) => projectStates.value[project]?.state ?? 'idle'
 
 /* The last start the worker answered for: `{ ticket, session }`, or null until
@@ -158,8 +169,9 @@ const visibleStarts = () =>
 
    Written as "is a shell" and not "is an agent" on purpose: work this front end
    has never heard of is an agent, which is the reading that keeps a session
-   visible. */
-export const isShellSession = (session) => session?.work?.kind === 'shell'
+   visible. `projectStates` above asks the same question of a mark, which
+   carries the kind without the work around it, and reads the same constant. */
+export const isShellSession = (session) => session?.work?.kind === SHELL_WORK
 
 /* The agent sessions, and the shells, out of the one list the worker keeps.
    Both are derived rather than stored for the reason the tab row is: a second
@@ -447,14 +459,17 @@ export const liveAgentCount = computed(
    Through `agentSessions` and `liveAgentCount`, deliberately, and this is the
    whole reason the computed lives here rather than in the view. The obvious
    source was `projectStates` above — the rail's map, which already answers
-   `loud`/`live` per project — and it is the wrong one: `SessionMark` carries
-   `id`, `project` and `state` and no work kind, so nothing on this side can
-   apply `isShellSession` to it. A shell that finished a build and rang the bell
-   reaches `needs-you` like any other session, and the headline would have said
-   "1 agent needs you", loudly and with a triangle, about a project with no
-   agent in it — beside an agents counter correctly showing nothing, since that
-   one does filter shells out. The rail can afford the coarser map: it draws a
-   dot, not a sentence naming agents.
+   `loud`/`live` per project — and it stays the wrong one. When this was
+   written the reason was that the map counted a person's own shells: a shell
+   that finished a build and rang the bell reached `needs-you` like any other
+   session, and the headline would have said "1 agent needs you", loudly and
+   with a triangle, about a project with no agent in it, beside an agents
+   counter correctly showing nothing. The mark carries a kind now and the map
+   drops shells by it, so that half is gone; what is left is the half below —
+   the sentence and the counter beside it have to agree by construction, and the
+   map is not what the counter is built from. It also holds no start tickets, so
+   a project's first second would read as empty in the sentence and as one agent
+   in the counter.
 
    `live` is the counter minus the waiting ones rather than a filter of its own,
    which is what keeps the sentence and the counter beside it in agreement by
@@ -587,7 +602,12 @@ export async function initTerminals() {
     marks.set(session.id, {
       id: session.id,
       project: session.project,
-      state: session.state
+      state: session.state,
+      /* The path that matters most for the kind: the first read is one
+         snapshot, and every shell opened after it arrives here. Left off, such
+         a shell is an agent as far as `projectStates` is concerned and goes on
+         lighting the tile for good. */
+      kind: session.work?.kind
     })
     /* Asked before the upsert, because the upsert is what makes it false: a
        session nobody has seen before is a start, anything else is one of the

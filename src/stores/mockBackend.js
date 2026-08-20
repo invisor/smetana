@@ -673,11 +673,25 @@ export function installMockBackend() {
        so the rail's three dots can all be seen at once. The three ids on the
        first project are `terminal_list`'s own, with its states. */
     if (command === 'terminal_marks') {
+      /* Each row carries its work kind as the worker's `SessionMark` does: the
+         rail leaves a person's own shells out of a project's dots, so a row
+         without one would be a shape the app never sees behind Tauri.
+
+         The last row is a shell, and it is deliberately alone in the quiet
+         project rather than beside a loud one: nothing in `tests/` exercises
+         this stub, so a browser is the whole of the rail's verification, and
+         the check worth having is one that is silent while the filter works and
+         loud the moment it breaks. Here that tile stays grey exactly as it was
+         before the field existed, and a filter that stopped dropping shells
+         turns it loud on its own. Beside a project already `loud` the same
+         break would have shown as a 2 where a 1 belongs, in a tooltip, if
+         anybody happened to read it. */
       return [
-        { id: 1, project: MOCK_PROJECTS[0], state: 'running' },
-        { id: 2, project: MOCK_PROJECTS[0], state: 'needs-you' },
-        { id: 7, project: MOCK_PROJECTS[0], state: 'running' },
-        { id: 11, project: MOCK_PROJECTS[2], state: 'running' }
+        { id: 1, project: MOCK_PROJECTS[0], state: 'running', kind: 'newTask' },
+        { id: 2, project: MOCK_PROJECTS[0], state: 'needs-you', kind: 'editTask' },
+        { id: 7, project: MOCK_PROJECTS[0], state: 'running', kind: 'run' },
+        { id: 11, project: MOCK_PROJECTS[2], state: 'running', kind: 'run' },
+        { id: 12, project: MOCK_PROJECTS[1], state: 'needs-you', kind: 'shell' }
       ]
     }
     if (command === 'terminal_attach') {
