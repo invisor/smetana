@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/views/panelWidths.js"
+  - "src/views/leftChrome.js"
   - "src/components/shell/Panel.vue"
   - "src/components/shell/Resizer.vue"
 ---
@@ -23,8 +24,22 @@ move the new origin and the panel would drift away from the pointer.
 
 Dragging a panel past `COLLAPSE_SLACK` below its minimum folds it into a 32px rail, keeping the
 stored width so it comes back where it left; pulling out of the rail past `EXPAND_PULL` reopens it,
-and so does the button inside the folded rail. The left panel's header button is no longer one of the
-ways: it hides the project rail beside the panel and leaves the panel alone. Double click resets to the shipped 236/340.
+and so does the button inside the folded rail. Double click resets to the shipped 236/340.
+
+**The left panel's header button is a third way in, and it closes the column in steps rather than in
+one.** The first press hides the project rail beside the panel and leaves the panel where it is; the
+second folds the whole column into its 32px rail; the button inside that rail brings both back, and
+the cycle is where it started. The steps live in `src/views/leftChrome.js` — pure, no Vue and no DOM,
+for the reason `panelWidths.js` is pure — and so do the three labels, beside the steps they name, so
+a button cannot say one thing and do another. Two flags carry it, `layout.railOpen` and
+`layout.leftCollapsed`, both already in `settings.json`: there is no step number anywhere and nothing
+new in the file. The header button writes no width, so a column folded from the header comes back the
+width a drag would have given it. **The rail's button always returns both parts**, whatever folded the
+column — a drag with the rail already hidden opens to the same place as the second step of the cycle.
+The price is deliberate and was weighed: somebody keeping the rail hidden on purpose loses that
+preference every time the column folds and comes back, and the alternative — remembering the rail's
+state across a fold — adds stored state and a "reopened it and the projects are gone" case the cycle
+is not supposed to have.
 
 `RAIL` is the one width in the app that does **not** grow with the app-wide font size, and it cannot:
 these pure functions do arithmetic with it — a collapsed neighbour's cost, both drag thresholds, the
@@ -56,10 +71,14 @@ branch. `tests/views/panelWidths.test.js` measures it at a viewport of 1000 for 
 a roomier window was tried first and was silently testing the fraction instead.
 
 `Panel` emits **two** events where it used to emit one, and the split is load-bearing rather than
-tidy. `toggle` is the header button, which in the left column is about the project rail beside the
-panel and not about the panel; `expand` is the button inside the folded rail, which can only ever
-mean this panel coming back. One event for both had the folded column's button hiding the projects
-instead of unfolding. `subtitle` is the other addition: its presence switches the title from a
+tidy. `toggle` is the header button, drawn only while the panel is open and meaning one step further
+closed; `expand` is the button inside the folded rail, drawn only while it is folded and meaning
+everything comes back. One event for both had the folded column's button hiding the projects instead
+of unfolding. The header button's icon does not change with the step — `panel-left-close` on both
+open stops, since it reads as one direction and the label is what says how far the next press goes —
+and the two labels are props (`toggleLabel`, `expandLabel`) so the words stay beside the steps in
+`leftChrome.js`. A caller that passes neither gets "Collapse <side> panel" and "Expand <side> panel",
+which is what the right column and the gallery use. `subtitle` is the other addition: its presence switches the title from a
 section header's uppercase micro-caps to a name in ordinary mono, and lets the header grow past
 `--tab-h`, which two lines of type do not fit inside.
 

@@ -153,6 +153,7 @@ import {
   clampWidth,
   resolveDrag
 } from './panelWidths.js'
+import { RAIL_EXPAND, headerLabel, nextFromHeader, nextFromRail } from './leftChrome.js'
 import {
   basenameOf,
   fileErrorText,
@@ -274,6 +275,15 @@ const dragBase = { left: 0, right: 0 }
    of every width sum below rather than only of the left one — the rail comes out
    of the same window, so the right panel's ceiling is measured against it too. */
 const railOpen = computed(() => layout.railOpen && !layout.leftCollapsed)
+
+/* The left column's two buttons walk a cycle of three states, and which state
+   follows which is `leftChrome.js`'s — a `.vue` file is the one thing no test
+   here can reach. All that is left on this side is writing the answer back into
+   the two flags settings.json already keeps. */
+const applyLeftChrome = (next) => {
+  layout.railOpen = next.railOpen
+  layout.leftCollapsed = next.leftCollapsed
+}
 
 /* The neighbour's *stored* width, not its drawn one: the drawn one is itself a
    clamp against this panel, and the two computeds would chase each other. In a
@@ -2341,21 +2351,24 @@ const toastStackStyle = {
           @setup="openSetup"
           @add-project="onAddProject"
         />
-        <!-- The header button hides the rail rather than folding this panel:
-             that is the person's own decision, recorded in the spec. Folding the
-             whole column into a rail is the separator's job, dragged past the
-             panel's minimum, and the folded rail's own button is what brings it
-             back — which is why `Panel` emits that one as `expand`. -->
+        <!-- The header button closes the column one step at a time: it hides the
+             project rail first and folds the whole column on the next press,
+             and the button inside the folded rail brings both back. The steps
+             are `leftChrome.js`'s, including the words, so a button cannot end
+             up saying one thing and doing another. Dragging the separator past
+             the panel's minimum still folds the column on its own, and the same
+             rail button opens that too — which is why `Panel` keeps the two
+             events apart. -->
         <Panel
           :title="activeProjectName"
           :subtitle="panelSummary"
           side="left"
           :collapsed="layout.leftCollapsed"
-          :toggle-open="layout.railOpen"
-          :toggle-label="layout.railOpen ? 'Hide projects' : 'Show projects'"
+          :toggle-label="headerLabel(layout)"
+          :expand-label="RAIL_EXPAND"
           :style="{ flex: 1, minWidth: 0 }"
-          @toggle="layout.railOpen = !layout.railOpen"
-          @expand="layout.leftCollapsed = false"
+          @toggle="applyLeftChrome(nextFromHeader(layout))"
+          @expand="applyLeftChrome(nextFromRail())"
         >
           <!-- The three marks the project row used to carry, for the selected
                project alone, with the glyphs, colours and words they had there.
