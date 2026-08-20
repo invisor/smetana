@@ -17,8 +17,9 @@ import TypeBadge from './TypeBadge.vue'
 import { priorityLabel } from './issueType.js'
 
 const props = defineProps({
-  /* `SessionWork::NewTask` as it arrives: { text, issueType, priority }. Auto
-     is null in both of the last two. */
+  /* `SessionWork::NewTask` as it arrives: { text, issueType, priority, parent }.
+     Auto is null in the middle two, and `parent` is null for every task filed
+     from "+ New task" rather than from a card's own menu. */
   draft: { type: Object, required: true }
 })
 
@@ -93,6 +94,16 @@ const rowValue = {
   overflowWrap: 'anywhere'
 }
 
+/* An identifier, so mono — the same way TaskInspector draws an issue's id. The
+   panel has no title to put beside it and deliberately does not fetch one: the
+   parent is a card on the board a click away, and a copy here would be one more
+   thing to keep in step. */
+const parentValue = {
+  font: 'var(--weight-regular) var(--text-sm)/var(--leading-snug) var(--font-mono)',
+  color: 'var(--text-primary)',
+  overflowWrap: 'anywhere'
+}
+
 const divider = { height: 'var(--border-w)', background: 'var(--border-subtle)' }
 </script>
 
@@ -110,6 +121,16 @@ const divider = { height: 'var(--border-w)', background: 'var(--border-subtle)' 
     <div :style="divider" />
 
     <div :style="grid">
+      <!-- First in the grid, because it is the only row that is about another
+           task rather than about this draft, and a person scanning the panel
+           wants that before the type and the priority. Drawn only when there is
+           one: an ordinary filing has no parent, and an empty row would say
+           there was something to know. -->
+      <template v-if="draft.parent">
+        <span :style="eyebrow">Follow-up to</span>
+        <span :style="parentValue">{{ draft.parent }}</span>
+      </template>
+
       <span :style="eyebrow">Type</span>
       <!-- A badge when a type was chosen and the word when it was not: the same
            field in the same place either way, rather than a badge that

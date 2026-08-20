@@ -784,17 +784,21 @@ const SPARSE_ISSUE = {
 
 /* Two drafts, because the pair of Auto fields is the whole of what can go wrong
    here: Auto arrives as null and has to be drawn as the word rather than as a
-   type nobody chose. One has both fields set, the other neither. */
+   type nobody chose. One has both fields set, the other neither. The parent
+   rides along the same split — the first was filed from a card's own menu and
+   draws a Follow-up to row, the second from "+ New task" and has none. */
 const FULL_DRAFT = {
   text:
     'The log view drops lines once it is past about ten thousand of them, and nothing says so — it just stops scrolling back. It should either keep them or say plainly that it stopped.',
   issueType: 'bug',
-  priority: 1
+  priority: 1,
+  parent: 'smetana-3uv'
 }
 const AUTO_DRAFT = {
   text: 'Vendor the latin subset of IBM Plex Mono so an offline build has a face to set identifiers in.',
   issueType: null,
-  priority: null
+  priority: null,
+  parent: null
 }
 
 /* What a run has taken. Three of them, one without a title — the tracker may
