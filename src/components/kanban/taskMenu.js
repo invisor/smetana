@@ -62,7 +62,7 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
        agent could not settle on its own, so answering is the thing to do with
        it and running it is the thing not to — which is why this row is here and
        the play below is dead. Absent rather than greyed everywhere else: the
-       menu is four verbs, and a fifth that is dead on all but a handful of
+       menu is five verbs, and a sixth that is dead on all but a handful of
        cards is a row a person learns to read past. */
     ...(isParked(bdStatus)
       ? [{
@@ -96,6 +96,27 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
       kind: 'ask-agent',
       label: 'Edit',
       icon: 'square-pen',
+      disabled: frozen
+    },
+    {
+      /* A new task that comes off this one: the case is a task already done
+         over which clarifications have since arrived. The dialog it opens is
+         the ordinary New task dialog carrying this issue as a parent, and the
+         agent files the new issue as depending on it — so it waits in Blocked
+         until this one closes and lands in Ready the moment it does, with
+         nothing stored anywhere.
+
+         Live on every card and not only on a done one. A follow-up to work
+         still in progress is an ordinary thing to want, and it simply waits;
+         a row dead on all but a handful of cards is the thing this menu's
+         resolve row is careful not to be.
+
+         `git-branch-plus` rather than a plain plus: the row makes a new thing
+         that comes off an existing one, and the plus alone is already the tab
+         bar's "new agent, terminal or task". */
+      kind: 'follow-up',
+      label: 'Follow-up task',
+      icon: 'git-branch-plus',
       disabled: frozen
     },
     {

@@ -260,7 +260,12 @@ const workOf = (intent) => {
       kind: 'newTask',
       text: intent.draft.text,
       issueType: intent.draft.issue_type ?? null,
-      priority: intent.draft.priority ?? null
+      priority: intent.draft.priority ?? null,
+      /* Spelled the same on both sides of the wire, unlike `issue_type`: the
+         draft panel draws it as a row of its own, and a placeholder without it
+         would drop that row for the second the start lasts and then grow it
+         back when the session lands. */
+      parent: intent.draft.parent ?? null
     }
   }
   return { kind: intent.kind }

@@ -1158,6 +1158,15 @@ const initHere = async () => {
    other column would promise a placement the tracker cannot make. */
 const ADD_TO = 'ready'
 const newTaskOpen = ref(false)
+/* The issue the New task dialog was opened from, or null when it was opened
+   from "+ New task". `{ id, title }` rather than the issue, and taken from the
+   store at the moment the menu was used: the dialog draws the title, and the id
+   is what rides to the agent.
+
+   A ref of its own rather than a field on some dialog-state object, because
+   `newTaskOpen` is already a bare ref and two halves of one dialog kept in two
+   shapes is the drift this file has elsewhere paid for. */
+const followUpParent = ref(null)
 const creating = ref(false)
 
 /* Where the whole-column press stands. bd's own word, untranslated, because
@@ -1343,6 +1352,9 @@ const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
     /* The three stages ride beside the draft rather than in it: they are the
        agent's briefing about how to work, and nothing on screen draws them —
        the same place `brainstorm` has always had. */
+    /* `parent` rides inside `draft` by the rest spread above, the way `images`
+       does — only the three stages are named here, because only they are a
+       briefing about how to work rather than part of the task. */
     const started = createSession(path, { kind: 'newTask', brainstorm, spec, plan, draft })
     /* Filing a task opens its draft on the right, the same as picking the row
        would: it is the same selection arriving by another route, and the action
@@ -1380,6 +1392,11 @@ const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
 const closeNewTask = () => {
   newTaskOpen.value = false
   clearAttachments()
+  /* The same event that clears the attachments clears this, and for the same
+     reason: it covers cancelling and a session that actually started, and a
+     failed create never reaches here — so the next "+ New task" is never
+     silently a follow-up to whatever a menu was last opened on. */
+  followUpParent.value = null
 }
 
 /* A drop is a window event, not the dialog's — Tauri intercepts file drops
@@ -1501,6 +1518,19 @@ const onTaskAction = ({ kind, id, value }) => {
   if (kind === 'ask-agent') {
     const issue = issueById(id)
     if (issue) askAgentToEdit(issue)
+    return
+  }
+  if (kind === 'follow-up') {
+    /* From the store and not from the menu's payload, for the reason the status
+       branch above spells out: a card's copy may be a delta behind, and the
+       dialog is about to put this title in front of somebody.
+
+       Nothing else is prefilled from the parent. The person is filing a
+       different task, and the agent reads the parent itself. */
+    const issue = issueById(id)
+    if (!issue) return
+    followUpParent.value = { id: issue.id, title: issue.title }
+    newTaskOpen.value = true
   }
 }
 
@@ -2542,6 +2572,7 @@ const toastStackStyle = {
           :open="newTaskOpen"
           :busy="creating"
           :status="ADD_TO"
+          :parent="followUpParent"
           :attachments="attachmentsState.items"
           :dragging="attachmentsState.dragging"
           :error="attachmentsState.lastError ?? ''"

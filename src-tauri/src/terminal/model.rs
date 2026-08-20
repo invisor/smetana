@@ -75,7 +75,7 @@ pub enum SessionWork {
     ///
     /// The `rename_all` on the enum above renames the *variants*; a struct
     /// variant's fields need their own, which is what this one is for. The
-    /// front end reads `text`, `issueType` and `priority`.
+    /// front end reads `text`, `issueType`, `priority` and `parent`.
     #[serde(rename_all = "camelCase")]
     NewTask {
         text: String,
@@ -84,6 +84,11 @@ pub enum SessionWork {
         /// as Auto rather than inventing a type bd would reject.
         issue_type: Option<String>,
         priority: Option<u8>,
+        /// The issue this is a follow-up to, or `None` for an ordinary filing.
+        /// The panel draws it as an identifier, the way `EditTask` draws its
+        /// own id: a filing agent's draft would otherwise be silent about the
+        /// one thing that makes this task different from any other.
+        parent: Option<String>,
     },
     /// The issue being edited, by id rather than by title: the panel draws it
     /// as an identifier, and a title would not fit a row anyway. The right
@@ -314,11 +319,12 @@ mod tests {
             text: "The log drops lines above 10k".into(),
             issue_type: Some("bug".into()),
             priority: Some(1),
+            parent: None,
         })
         .expect("serializes");
         assert_eq!(
             json,
-            r#"{"kind":"newTask","text":"The log drops lines above 10k","issueType":"bug","priority":1}"#
+            r#"{"kind":"newTask","text":"The log drops lines above 10k","issueType":"bug","priority":1,"parent":null}"#
         );
     }
 
@@ -328,9 +334,34 @@ mod tests {
         // the word from the absence. A default substituted anywhere along the
         // way would have the panel claim a choice nobody made.
         let json =
-            serde_json::to_string(&SessionWork::NewTask { text: "x".into(), issue_type: None, priority: None })
-                .expect("serializes");
-        assert_eq!(json, r#"{"kind":"newTask","text":"x","issueType":null,"priority":null}"#);
+            serde_json::to_string(&SessionWork::NewTask {
+                text: "x".into(),
+                issue_type: None,
+                priority: None,
+                parent: None,
+            })
+            .expect("serializes");
+        assert_eq!(
+            json,
+            r#"{"kind":"newTask","text":"x","issueType":null,"priority":null,"parent":null}"#
+        );
+    }
+
+    #[test]
+    fn a_follow_up_draft_names_its_parent_on_the_front_end() {
+        // The right panel draws this as a row of its own, so a rename here goes
+        // quiet rather than loud: the row simply stops being drawn.
+        let json = serde_json::to_string(&SessionWork::NewTask {
+            text: "the tooltip clips".into(),
+            issue_type: None,
+            priority: None,
+            parent: Some("smetana-3uv".into()),
+        })
+        .expect("serializes");
+        assert_eq!(
+            json,
+            r#"{"kind":"newTask","text":"the tooltip clips","issueType":null,"priority":null,"parent":"smetana-3uv"}"#
+        );
     }
 
     #[test]
@@ -386,7 +417,12 @@ mod tests {
         match kind {
             WorkKind::Bare => SessionWork::Bare,
             WorkKind::NewTask => {
-                SessionWork::NewTask { text: "x".into(), issue_type: None, priority: None }
+                SessionWork::NewTask {
+                    text: "x".into(),
+                    issue_type: None,
+                    priority: None,
+                    parent: None,
+                }
             }
             WorkKind::EditTask => SessionWork::EditTask { id: "smetana-42".into() },
             WorkKind::ResolveTask => SessionWork::ResolveTask { id: "smetana-42".into() },

@@ -115,6 +115,20 @@ pub struct TaskDraft {
     /// fail to deserialize.
     #[serde(default)]
     pub images: Vec<String>,
+    /// The issue this task is a follow-up to, when the dialog was opened from a
+    /// card's own menu rather than from "+ New task".
+    ///
+    /// The id and not the title: the agent runs `bd show` on it anyway, and a
+    /// title copied here would be the board as it stood when a menu opened
+    /// rather than as it stands when the session starts — the same reason
+    /// `Intent::ResolveTask` deliberately carries almost nothing. The dialog
+    /// does draw the title, and reads it from the store without crossing this
+    /// boundary at all.
+    ///
+    /// `default` for the reason `images` above carries: a payload written
+    /// before this field existed must still start a session.
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 /// Why a session is being started. The front end sends this; every profile
@@ -213,8 +227,9 @@ impl Intent {
     /// `Intent` — which of its payload is drawn and which is only a briefing
     /// for the agent — and the answer moves whenever a variant does.
     ///
-    /// A draft's three fields come along and its `images` do not: the right
-    /// panel draws the prose, the type and the priority, and the paths of the
+    /// A draft's four fields come along and its `images` do not: the right
+    /// panel draws the prose, the type, the priority and the parent a follow-up
+    /// was filed against, and the paths of the
     /// attachments are for the agent to open and to copy into the issue. So
     /// are `brainstorm`, `spec` and `plan`: they are instructions about how to
     /// work rather than anything about the task, and nothing on screen would
@@ -227,6 +242,10 @@ impl Intent {
                 text: draft.text.clone(),
                 issue_type: draft.issue_type.clone(),
                 priority: draft.priority,
+                // The parent comes along, unlike the images: the panel draws it
+                // as a row, and it is the one thing that makes this draft
+                // different from any other.
+                parent: draft.parent.clone(),
             },
             Intent::EditTask { id, .. } => W::EditTask { id: id.clone() },
             Intent::ResolveTask { id, .. } => W::ResolveTask { id: id.clone() },
@@ -752,6 +771,7 @@ mod tests {
                 issue_type: Some("bug".into()),
                 priority: Some(1),
                 images: vec!["/data/attachments/20260806-121314-mock.png".into()],
+                parent: None,
             },
         };
         // The prose, the type and the priority are what the right panel draws
@@ -763,6 +783,7 @@ mod tests {
                 text: "The log drops lines above 10k".into(),
                 issue_type: Some("bug".into()),
                 priority: Some(1),
+                parent: None,
             }
         );
     }
@@ -779,12 +800,58 @@ mod tests {
                 issue_type: None,
                 priority: None,
                 images: vec![],
+                parent: None,
             },
         };
         assert_eq!(
             intent.work(),
-            W::NewTask { text: "Something".into(), issue_type: None, priority: None }
+            W::NewTask {
+                text: "Something".into(),
+                issue_type: None,
+                priority: None,
+                parent: None,
+            }
         );
+    }
+
+    #[test]
+    fn a_new_task_intent_without_a_parent_still_deserializes() {
+        // A payload written before this field existed must still start a
+        // session. Absence is the ordinary case: every task filed from
+        // "+ New task" has no parent at all.
+        let intent: Intent = serde_json::from_value(serde_json::json!({
+            "kind": "newTask",
+            "brainstorm": "auto",
+            "spec": "auto",
+            "plan": "auto",
+            "draft": { "text": "x", "issue_type": null, "priority": null }
+        }))
+        .expect("deserializes");
+        match intent {
+            Intent::NewTask { draft, .. } => assert_eq!(draft.parent, None),
+            other => panic!("expected NewTask, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_follow_up_carries_the_parents_id_through_to_the_panel() {
+        // The id is what the draft panel draws, and the only confirmation the
+        // person who pressed the menu row gets that the parent was carried at
+        // all — the dialog has closed by then.
+        let intent: Intent = serde_json::from_value(serde_json::json!({
+            "kind": "newTask",
+            "brainstorm": "off",
+            "spec": "off",
+            "plan": "off",
+            "draft": { "text": "x", "issue_type": null, "priority": null, "parent": "smetana-3uv" }
+        }))
+        .expect("deserializes");
+        match intent.work() {
+            crate::terminal::model::SessionWork::NewTask { parent, .. } => {
+                assert_eq!(parent.as_deref(), Some("smetana-3uv"));
+            }
+            other => panic!("expected NewTask work, got {other:?}"),
+        }
     }
 
     #[test]

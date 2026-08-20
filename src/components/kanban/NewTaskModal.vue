@@ -4,6 +4,7 @@ import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
 import Textarea from '../core/Textarea.vue'
+import Icon from '../core/Icon.vue'
 import AttachmentStrip from './AttachmentStrip.vue'
 import { cascade, DEFAULT_STAGE, STAGES } from './taskStages.js'
 
@@ -18,7 +19,15 @@ const props = defineProps({
   /* True while something is being dragged over the window. */
   dragging: { type: Boolean, default: false },
   /* What attaching was refused with, if it was. */
-  error: { type: String, default: '' }
+  error: { type: String, default: '' },
+  /* The issue this task is a follow-up to, or null for an ordinary filing:
+     `{ id, title }`, read from the store by the caller rather than copied off
+     the card that opened the menu — a card's copy may be a delta behind.
+
+     The title is here and does not cross to Rust. The agent reads the issue
+     itself; this is for the person, who may well have opened the menu on the
+     wrong card and has no other way to find out. */
+  parent: { type: Object, default: null }
 })
 
 const emit = defineEmits(['close', 'submit', 'attach', 'files', 'remove'])
@@ -79,11 +88,16 @@ watch(spec, () => {
 
 const valid = computed(() => text.value.trim().length > 0)
 
-const intro = computed(() =>
-  props.status
+/* Under a parent the column is not the person's to know: a follow-up lands in
+   Blocked or in Ready depending on what the parent is doing, so promising
+   `in ready` would be a promise the dialog cannot keep. It names the parent
+   instead, which is the more useful half anyway. */
+const intro = computed(() => {
+  if (props.parent) return `A follow-up to ${props.parent.id}. An agent files it.`
+  return props.status
     ? `An agent files it, in ${String(props.status).replace(/-/g, ' ')}.`
     : 'An agent files it.'
-)
+})
 
 const submit = () => {
   if (!valid.value || props.busy) return
@@ -99,7 +113,10 @@ const submit = () => {
        choice instead would ask for a spec nobody can see asked for. */
     brainstorm: brainstorm.value,
     spec: stages.value.spec.value,
-    plan: stages.value.plan.value
+    plan: stages.value.plan.value,
+    /* The id only. The agent runs `bd show` for everything else, and the title
+       drawn under the field never crosses to Rust. */
+    parent: props.parent?.id ?? null
   })
 }
 
@@ -213,6 +230,45 @@ const errorStyle = {
   lineHeight: 'var(--leading-normal)',
   color: 'var(--status-failed-fg)'
 }
+
+/* The note under the TASK field. Two lines: what the relationship is, and what
+   follows from it. The first carries the id in mono, because it is an
+   identifier and this system draws those in `--font-mono`; the title beside it
+   is prose and is drawn as prose. */
+const parentNote = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 'var(--space-3)',
+  marginTop: 'var(--space-3)',
+  /* Said here rather than left to whatever the modal's body inherits: the glyph
+     draws in `currentColor`, so the colour of the first line is the colour of
+     the glyph, and the two have to be decided in one place. */
+  color: 'var(--text-primary)'
+}
+/* The glyph belongs to the first line and not to the top of the block, so it is
+   nudged down by the difference between its own 14px and the line box that
+   `--text-xs` at `--leading-normal` makes. */
+const parentGlyph = { marginTop: 'var(--space-1)' }
+const parentLines = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-2)',
+  minWidth: 0
+}
+const parentHead = {
+  fontSize: 'var(--text-xs)',
+  lineHeight: 'var(--leading-normal)',
+  color: 'var(--text-primary)',
+  overflowWrap: 'anywhere'
+}
+const parentId = {
+  font: 'var(--weight-medium) var(--text-xs)/var(--leading-normal) var(--font-mono)'
+}
+const parentWhy = {
+  fontSize: 'var(--text-xs)',
+  lineHeight: 'var(--leading-normal)',
+  color: 'var(--text-muted)'
+}
 </script>
 
 <template>
@@ -226,6 +282,21 @@ const errorStyle = {
           :rows="5"
           placeholder="What needs doing, and anything the agent should know"
         />
+        <!-- Under the field rather than above it: the person came here to
+             type, and the relationship is context for what they type, not a
+             heading over it. It is not removable — Cancel and "+ New task" are
+             two clicks and cost no state. -->
+        <div v-if="parent" :style="parentNote">
+          <Icon name="git-branch-plus" :size="14" :style="parentGlyph" />
+          <div :style="parentLines">
+            <span :style="parentHead">
+              Blocked by <span :style="parentId">{{ parent.id }}</span> · {{ parent.title }}
+            </span>
+            <span :style="parentWhy">
+              It waits in Blocked until that one is done, and merges where its work already is.
+            </span>
+          </div>
+        </div>
       </div>
       <div :style="images">
         <div :style="attachRow">
