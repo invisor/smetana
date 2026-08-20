@@ -181,14 +181,20 @@ fn strip_pair(line: &str, mark: char) -> &str {
     }
 }
 
-/// Ask, and wait.
+/// Ask, and wait, and hand back what the harness printed, untouched.
 ///
 /// Blocking, and called from `spawn_blocking` for the same reason `usage::read`
-/// is. Both pipes are read only after the child is gone, which is safe here for
-/// the reason it is safe there and no other: the output is bounded — one line
-/// asked for, a few lines of stderr at worst — so neither pipe can fill and
-/// stall the child while we wait for it.
-pub fn ask(profile: &'static dyn Profile, prompt: &str) -> Result<String, OneshotError> {
+/// is.
+///
+/// One invariant travels with this function and has to be preserved by every
+/// caller: **both pipes are read only after the child is gone**, which is safe
+/// for one reason and no other — the output is bounded, so neither pipe can
+/// fill and stall the child while we wait for it. `ask` below bounds it by
+/// asking for a single line; `tracker::search` bounds it by asking for at most
+/// twenty ids, in the instruction itself rather than only in the parser. A
+/// caller that lets a model answer at length would fill a pipe and stall the
+/// child until the deadline kills it.
+pub fn ask_raw(profile: &'static dyn Profile, prompt: &str) -> Result<String, OneshotError> {
     let args =
         profile.oneshot_args().ok_or_else(|| OneshotError::Unsupported(profile.binary().into()))?;
     let mut command = Command::new(profile.binary());
@@ -233,11 +239,26 @@ pub fn ask(profile: &'static dyn Profile, prompt: &str) -> Result<String, Onesho
         }));
     }
 
-    let message = clean(&String::from_utf8_lossy(&out.stdout));
-    if message.is_empty() {
+    let answer = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if answer.is_empty() {
         // A zero exit and nothing to show for it. Silence is the one outcome
         // that must not reach the field, since an empty field after a spinner
         // is indistinguishable from a button that did nothing.
+        return Err(OneshotError::Failed(format!("{} answered with nothing.", profile.binary())));
+    }
+    Ok(answer)
+}
+
+/// Ask for one line, and take one line: the shape a commit message wants.
+///
+/// The refusal is repeated rather than left to `ask_raw` alone, because the two
+/// emptinesses are different facts: that one is a harness that printed nothing,
+/// this one is a harness that printed something `clean` found no line in — a
+/// bare code fence, say. Both reach the field as the same sentence, since from
+/// where a person is sitting they are the same nothing.
+pub fn ask(profile: &'static dyn Profile, prompt: &str) -> Result<String, OneshotError> {
+    let message = clean(&ask_raw(profile, prompt)?);
+    if message.is_empty() {
         return Err(OneshotError::Failed(format!("{} answered with nothing.", profile.binary())));
     }
     Ok(message)
@@ -246,6 +267,15 @@ pub fn ask(profile: &'static dyn Profile, prompt: &str) -> Result<String, Onesho
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ask_still_cleans_what_ask_raw_returns() {
+        // The split must leave the commit box exactly where it was: `clean` is
+        // what turns a fenced, quoted, prefaced answer into one line, and it now
+        // lives in the wrapper rather than in the body.
+        assert_eq!(clean("```\n\"fix: a thing\"\n```"), "fix: a thing");
+        assert_eq!(clean("\n\nfix: a thing\nand a body\n"), "fix: a thing");
+    }
 
     #[test]
     fn a_fence_and_a_preamble_leave_the_message_behind() {
