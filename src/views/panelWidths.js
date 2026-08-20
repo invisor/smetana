@@ -110,9 +110,11 @@ export function clampWidth(want, { side, other, otherCollapsed, viewport, railOp
  *
  * Collapsing keeps the stored width untouched: the panel folds to a rail and
  * comes back the width it left at, whether it is reopened by this gesture or by
- * the button inside the folded rail. The left panel's *header* button is not one
- * of the two: it hides the project rail beside the panel and leaves the panel
- * where it is.
+ * the button inside the folded rail. The left panel's *header* button is a third
+ * way in and out, and the steps it walks are `leftChrome.js`'s rather than this
+ * file's — it hides the project rail on the first press and folds the column on
+ * the second, and it writes no width either, so a column folded from the header
+ * comes back the same width as one folded by a drag.
  */
 export function resolveDrag(
   side,

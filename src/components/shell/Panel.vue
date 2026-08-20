@@ -17,19 +17,25 @@ const props = defineProps({
   side: { type: String, default: 'left' },
   collapsed: { type: Boolean, default: false },
   collapsible: { type: Boolean, default: true },
-  /* What the header button is about, for a panel where it does not mean "fold
-     me away". The left column's button hides the project rail beside it, so it
-     needs the other panel's state and the other panel's words; every other
-     caller leaves both alone and gets exactly what it had. */
-  toggleOpen: { type: Boolean, default: true },
-  toggleLabel: { type: String, default: '' }
+  /* What the header button says. It always means "close one step further" — the
+     icon says so and does not change — but how far the next press goes is a
+     caller's business: the left column walks a cycle and hides the project rail
+     before it folds itself, so it words the two steps differently. A caller
+     that says nothing gets "Collapse <side> panel". */
+  toggleLabel: { type: String, default: '' },
+  /* The same, for the button inside the folded rail. It exists because that
+     button can bring back more than this panel: in the left column it returns
+     the project rail with it, and a label saying only "Expand" would understate
+     what pressing it does. */
+  expandLabel: { type: String, default: '' }
 })
 
-/* Two events rather than one, and the split is what stops the left column
-   folding itself: `toggle` is the header button, which may be about something
-   other than this panel, and `expand` is the button in the collapsed rail,
-   which can only ever be about this panel coming back. One event for both had
-   the folded column's button toggling the project rail instead of unfolding. */
+/* Two events rather than one, and the split is load-bearing: `toggle` is the
+   header button, drawn only while the panel is open, and `expand` is the button
+   in the collapsed rail, drawn only while it is folded. They mean different
+   steps of the left column's cycle — one closes further, the other opens
+   everything — and one event for both had the folded column's button hiding the
+   projects instead of unfolding. */
 defineEmits(['toggle', 'expand'])
 
 const edge = computed(() => ({
@@ -119,17 +125,15 @@ const railButtonStyle = {
   width: `min(var(--control-h-sm), ${RAIL_CONTROL_MAX}px)`,
   height: `min(var(--control-h-sm), ${RAIL_CONTROL_MAX}px)`
 }
-const toggleIcon = computed(() => {
-  const open = props.toggleOpen
-  return props.side === 'left'
-    ? open
-      ? 'panel-left-close'
-      : 'panel-left-open'
-    : open
-      ? 'panel-right-close'
-      : 'panel-right-open'
-})
+/* One direction, one icon. The header button is only ever drawn on an open
+   panel and only ever closes it further, so it points at its own edge whatever
+   step the caller is on; the opening glyph belongs to the rail's button below,
+   which is the only one that ever opens anything. */
+const toggleIcon = computed(() =>
+  props.side === 'left' ? 'panel-left-close' : 'panel-right-close'
+)
 const toggleText = computed(() => props.toggleLabel || `Collapse ${props.side} panel`)
+const expandText = computed(() => props.expandLabel || `Expand ${props.side} panel`)
 
 /* The folded rail's own copy of the title, and it follows the header's rule
    rather than keeping its own: a subtitle means the title is a *name*, and a
@@ -152,7 +156,7 @@ const railTitleStyle = computed(() => ({
   <div v-if="collapsed" :style="collapsedStyle">
     <IconButton
       :icon="side === 'left' ? 'panel-left-open' : 'panel-right-open'"
-      :label="`Expand ${side} panel`"
+      :label="expandText"
       size="sm"
       :style="railButtonStyle"
       @click="$emit('expand')"
