@@ -65,10 +65,13 @@ import {
 } from '../stores/terminals.js'
 import {
   boardColumns,
+  clearSemantic,
   deleteIssue,
   initTracker,
   isLockIssue,
   issueById,
+  searchSemantic,
+  searchState,
   toUiStatus,
   trackerState,
   updateIssue
@@ -2384,7 +2387,12 @@ const toastStackStyle = {
         <TaskSearch
           ref="taskSearch"
           :issues="searchableIssues"
+          :pending="searchState.pending"
+          :error="searchState.error ?? ''"
+          :semantic-ids="searchState.ids"
           @select="selectFromBoard"
+          @semantic="searchSemantic"
+          @reset="clearSemantic"
         />
       </template>
     </ScopeIndicator>
