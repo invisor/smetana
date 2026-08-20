@@ -212,12 +212,27 @@ above it, and is deliberately **not dimmed while a run blocks the three writes**
 reading, and a heading greyed out beside rows greyed out because they cannot be pressed would be
 saying something untrue about itself.
 
+**The branch the repository is on is the first row, always.** `branchTree.js` lifts it out of the
+tree before the tree is built, so it is on screen whatever the reflog said and whatever fold its name
+would otherwise put it behind — the row Pull and Push in the caption are about, and the one fact
+somebody opens this section to read, was reachable only by unfolding a `feature/` heading before this.
+It draws its **whole** name, since there is no heading above it carrying the prefix, and it carries
+`SectionHeader`'s own hairline under it so the list proper reads as starting below. That rule sits
+inside the row's `--row-h` and adds no height to it — `box-sizing: border-box` — so the arithmetic
+over `BRANCH_ROWS` is untouched. It is lifted rather than copied: the tree below never holds it, a
+heading it was the whole of is not drawn at all, and `folderBehind` passes over it for the same
+reason, since a fold cannot be hiding a row that is at the top. It scrolls with everything else — what
+was asked for is an order, and a row pinned against the top of a box capped at a handful of rows would
+spend one of them on every scroll.
+
 Which folders are unfolded is per project — `settings.project.branchFolders`, beside the file tree's
 `expanded` — because a `feature/…` convention belongs to a repository where the section heights above
 belong to a person. **`null` and `[]` are different states and the field is an `Option` in Rust for
-exactly that**: `null` is "nobody has chosen here" and unfolds the folder the current branch is in, so
-the tick saying where you are is on screen the first time; `[]` is somebody having folded them all,
-and stays. With a plain list there would be no way to fold the last folder away — the empty list would
+exactly that**: `null` is "nobody has chosen here" and unfolds the folder the current branch is in;
+`[]` is somebody having folded them all, and stays. That seed was about the tick, back when a fold
+could take the current branch off the screen; what is left of the argument now that it cannot is the
+rest of that folder — the branches beside the one being worked on are the ones most likely to be
+wanted next. With a plain list there would be no way to fold the last folder away — the empty list would
 read as the first case and come back unfolded on the next start. `branchTree.js` resolves a press
 against that seed and hands the panel a whole new list, which is what writes the seed out on the
 first press. Nothing reopens a folder afterwards, and it does not need to: the only way to press a

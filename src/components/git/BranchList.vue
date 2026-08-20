@@ -47,6 +47,19 @@
    still `git::by_recency`'s — a folder stands where its most recent branch
    stood — so the promise above survives the grouping.
 
+   ## The current branch is the first row, always
+
+   `branchTree.js` lifts it out of the tree, so it is on screen whatever the
+   reflog says and whatever fold its name would otherwise put it behind. It
+   draws its **whole** name rather than the leaf every other row draws — there
+   is no heading above it to carry the prefix — and it carries the hairline
+   `SectionHeader` uses under it, saying the list proper starts below. The
+   hairline sits inside the row's own `--row-h` and adds no height to it, which
+   `box-sizing: border-box` is what makes true, so `GitPanel`'s arithmetic over
+   `BRANCH_ROWS` is untouched. It scrolls with the rest: what was asked for is
+   an order, and a row pinned against the top of a box capped at a handful of
+   rows would spend one of them on every scroll.
+
    A heading can be pressed while a run holds the three writes, and it is
    deliberately not dimmed with the rows: unfolding is reading, not writing, and
    a heading greyed out beside branches that are greyed out for a real reason
@@ -224,6 +237,11 @@ const rowStyle = (branch) => ({
         ? 'var(--surface-hover)'
         : 'transparent',
   cursor: blocked.value && !branch.current ? 'not-allowed' : 'default',
+  /* The rule under the pinned row, the same hairline `SectionHeader` draws
+     above a caption and for the same reason: without it the row reads as one
+     more row of the list rather than as the thing the list is being read
+     against. */
+  borderBottom: branch.pinned ? 'var(--border-w) solid var(--border-subtle)' : 'none',
   transition: 'var(--transition-control)'
 })
 
@@ -270,10 +288,14 @@ const folderStyle = (row) => {
    and not a second name. */
 const countStyle = { flex: 'none', color: 'var(--text-muted)' }
 
-/* The whole name, where it is not what the row draws. Left off while the list
-   carries the blocked tooltip: a native title would open under a panel of prose
-   already saying something else about the same row. */
-const fullName = (row) => (!hint.value && row.name !== row.label ? row.name : undefined)
+/* The whole name, where the row cannot be relied on to show it. That is a row
+   drawing its leaf under a heading, and it is also the pinned row, which draws
+   the whole name and is the one row most likely to run out of width for it —
+   the prefix a heading would have carried is on the row itself there. Left off
+   while the list carries the blocked tooltip: a native title would open under a
+   panel of prose already saying something else about the same row. */
+const fullName = (row) =>
+  !hint.value && (row.pinned || row.name !== row.label) ? row.name : undefined
 
 const nameStyle = {
   flex: '0 1 auto',
