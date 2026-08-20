@@ -47,7 +47,7 @@ import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
-import { TerminalView } from '../components/index.js'
+import { TaskSearch, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import {
   agentCounts,
@@ -1249,6 +1249,18 @@ const confirmPromote = async () => {
   }
 }
 
+/* What the search may find: every issue in the project, less the merge lock —
+   the same exclusion `boardColumns` makes, and made here rather than inside the
+   rule because `isLockIssue` is the store's and the rule is deliberately free
+   of both Vue and Tauri. Closed issues stay in, and so do the ones the board is
+   not drawing today: reaching past the board is the point of searching. */
+const searchableIssues = computed(() =>
+  [...trackerState.issues.values()].filter((issue) => !isLockIssue(issue))
+)
+
+/* The field itself, so ⌘F below can put the keyboard in it. */
+const taskSearch = ref(null)
+
 /* A click on a card is an explicit request to see that card, and it takes the
    right column back from whatever an agent's row put in it. Without this,
    picking a filing agent would leave the draft standing over every card clicked
@@ -1753,8 +1765,25 @@ const onSaveKey = (event) => {
   if (fileTabActive.value) saveTab(project.activeTab)
 }
 
+/* Cmd+F / Ctrl+F puts the keyboard in the search field. `event.code` and not
+   `event.key`, the same discipline `onSaveKey` above records: `event.key` is a
+   non-Latin character under a non-Latin layout and 'F' under Caps Lock, and the
+   shortcut would simply not fire in either case.
+
+   Cancelled in any case, like the save: the webview's own find bar is the
+   platform's rather than this product's, and it would search the rendered board
+   instead of the project. */
+const onFindKey = (event) => {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+  if (event.code !== 'KeyF') return
+  event.preventDefault()
+  taskSearch.value?.focus()
+}
+
 onMounted(() => window.addEventListener('keydown', onSaveKey))
 onUnmounted(() => window.removeEventListener('keydown', onSaveKey))
+onMounted(() => window.addEventListener('keydown', onFindKey))
+onUnmounted(() => window.removeEventListener('keydown', onFindKey))
 
 /* The order of the branches runs from "the file does not exist as text" to
    "the file is there but something happened to it": `error` locks the field and
@@ -2345,6 +2374,18 @@ const toastStackStyle = {
              of these, and passing it disabled the other live runs' stop
              buttons over a start that never touches them. -->
         <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
+      </template>
+
+      <!-- Every task in the project, searchable from the top of the window.
+           The list it drops is the one place on screen that reaches past the
+           board: a closed task, and one in a column the board is not drawing
+           today, are both findable here and nowhere else. -->
+      <template #search>
+        <TaskSearch
+          ref="taskSearch"
+          :issues="searchableIssues"
+          @select="selectFromBoard"
+        />
       </template>
     </ScopeIndicator>
 
