@@ -824,7 +824,7 @@ mod tests {
             "brainstorm": "auto",
             "spec": "auto",
             "plan": "auto",
-            "draft": { "text": "x", "issueType": null, "priority": null }
+            "draft": { "text": "x", "issue_type": null, "priority": null }
         }))
         .expect("deserializes");
         match intent {
@@ -843,7 +843,7 @@ mod tests {
             "brainstorm": "off",
             "spec": "off",
             "plan": "off",
-            "draft": { "text": "x", "issueType": null, "priority": null, "parent": "smetana-3uv" }
+            "draft": { "text": "x", "issue_type": null, "priority": null, "parent": "smetana-3uv" }
         }))
         .expect("deserializes");
         match intent.work() {
