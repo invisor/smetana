@@ -919,10 +919,9 @@ const BUSY_CARD_MENU = taskMenuItems({
   runBlockedReason: 'a run over task smetana-hth is already going',
   busy: true
 })
-/* The parked card, which is the only shape of this menu with five rows: the
-   answer row on top and the play under it dead, since `runnableTask` in
-   DesktopApp refuses a parked task for the same reason the Ready dialog asks
-   about one. */
+/* The parked card, which is the only shape of this menu with the answer row on
+   top and the play under it dead, since `runnableTask` in DesktopApp refuses a
+   parked task for the same reason the Ready dialog asks about one. */
 const PARKED_CARD_MENU = taskMenuItems({
   bdStatus: 'parked',
   runnable: false,

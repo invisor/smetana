@@ -99,6 +99,27 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
       disabled: frozen
     },
     {
+      /* A new task that comes off this one: the case is a task already done
+         over which clarifications have since arrived. The dialog it opens is
+         the ordinary New task dialog carrying this issue as a parent, and the
+         agent files the new issue as depending on it — so it waits in Blocked
+         until this one closes and lands in Ready the moment it does, with
+         nothing stored anywhere.
+
+         Live on every card and not only on a done one. A follow-up to work
+         still in progress is an ordinary thing to want, and it simply waits;
+         a row dead on all but a handful of cards is the thing this menu's
+         resolve row is careful not to be.
+
+         `git-branch-plus` rather than a plain plus: the row makes a new thing
+         that comes off an existing one, and the plus alone is already the tab
+         bar's "new agent, terminal or task". */
+      kind: 'follow-up',
+      label: 'Follow-up task',
+      icon: 'git-branch-plus',
+      disabled: frozen
+    },
+    {
       kind: 'move',
       label: 'Move to…',
       icon: 'corner-down-right',

@@ -29,9 +29,9 @@ describe('statusOptions', () => {
 })
 
 describe('taskMenuItems', () => {
-  it('offers the four actions, with delete last and behind a separator', () => {
+  it('offers the five actions, with delete last and behind a separator', () => {
     const items = taskMenuItems(base)
-    expect(kinds(items)).toEqual(['run', 'ask-agent', 'move', 'delete'])
+    expect(kinds(items)).toEqual(['run', 'ask-agent', 'follow-up', 'move', 'delete'])
     expect(items.at(-2)).toEqual({ type: 'separator' })
     expect(find(items, 'delete').tone).toBe('danger')
   })
@@ -52,11 +52,35 @@ describe('taskMenuItems', () => {
     })
   })
 
-  it('still offers the other three on a card that cannot be run', () => {
+  it('still offers the other four on a card that cannot be run', () => {
     const items = taskMenuItems({ ...base, runnable: false })
-    for (const kind of ['ask-agent', 'move', 'delete']) {
+    for (const kind of ['ask-agent', 'follow-up', 'move', 'delete']) {
       expect(find(items, kind).disabled).toBeFalsy()
     }
+  })
+
+  it('offers a follow-up between editing the task and moving it', () => {
+    // Between the two rows that are also about what an agent does with a task's
+    // text, and above the move — which is about the board rather than the work.
+    const items = taskMenuItems(base)
+    expect(kinds(items)).toEqual(['run', 'ask-agent', 'follow-up', 'move', 'delete'])
+    expect(find(items, 'follow-up')).toMatchObject({
+      label: 'Follow-up task',
+      icon: 'git-branch-plus',
+      disabled: false
+    })
+  })
+
+  it('offers the follow-up on a card whose task is done', () => {
+    // The case the row was asked for: a task is closed and clarifications
+    // arrive. Nothing about it is conditional on the status.
+    const items = taskMenuItems({ ...base, bdStatus: 'closed', runnable: false })
+    expect(find(items, 'follow-up').disabled).toBe(false)
+  })
+
+  it('greys the follow-up while a write is in flight', () => {
+    const items = taskMenuItems({ ...base, busy: true })
+    expect(find(items, 'follow-up').disabled).toBe(true)
   })
 
   it('marks the status the issue holds and refuses to write it again', () => {
@@ -87,7 +111,7 @@ describe('taskMenuItems', () => {
 
   it('greys every row while a write is in flight', () => {
     const items = taskMenuItems({ ...base, busy: true })
-    for (const kind of ['run', 'ask-agent', 'move', 'delete']) {
+    for (const kind of ['run', 'ask-agent', 'follow-up', 'move', 'delete']) {
       expect(find(items, kind).disabled).toBe(true)
     }
     expect(find(items, 'move').children.every((c) => c.disabled)).toBe(true)
@@ -98,7 +122,7 @@ describe('taskMenuItems', () => {
     // the thing not to: the caller greys the run for exactly this card, so the
     // live row has to be the one a person reaches first.
     const items = taskMenuItems({ ...base, bdStatus: 'parked', runnable: false })
-    expect(kinds(items)).toEqual(['resolve', 'run', 'ask-agent', 'move', 'delete'])
+    expect(kinds(items)).toEqual(['resolve', 'run', 'ask-agent', 'follow-up', 'move', 'delete'])
     expect(find(items, 'resolve').disabled).toBeFalsy()
   })
 
