@@ -720,6 +720,34 @@ describe('the semantic tier', () => {
     expect(tracker.searchState.error).toBe(null)
   })
 
+  /* The one thing in this store that speaks for the agent, so it must never say
+     something the agent did not say. An answer that outlived its project leaves
+     the list drawing "Nothing matched" about a folder nobody asked about. */
+  it('forgets the answer when the project underneath it changes', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
+    ipc.on('tracker_set_project', snapshot())
+
+    await tracker.searchSemantic('the bell is silent')
+    expect(tracker.searchState.answered).toBe(true)
+
+    await tracker.setProject('/Users/you/dev/notes')
+
+    expect(tracker.searchState.ids).toEqual([])
+    expect(tracker.searchState.answered).toBe(false)
+  })
+
+  /* Cleared before the switch is attempted rather than after it succeeds: the
+     question is over whatever the tracker goes on to answer. */
+  it('forgets it even when the switch itself fails', async () => {
+    ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
+    ipc.fail('tracker_set_project', new Error('bd failed'))
+
+    await tracker.searchSemantic('the bell is silent')
+    await tracker.setProject('/Users/you/dev/notes')
+
+    expect(tracker.searchState.answered).toBe(false)
+  })
+
   it('clears the last answer, so it cannot be read under a different question', async () => {
     ipc.on('tracker_search_semantic', () => ['smetana-a1a'])
 

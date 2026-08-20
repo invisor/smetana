@@ -209,6 +209,20 @@ export async function resync() {
    so we roll it out the way resync() does: with a clear, otherwise the previous
    project's issues would stay on the board. */
 export async function setProject(path) {
+  /* And the same clear for the semantic answer, which is about the folder being
+     left rather than the one being opened. It is the one thing in this store
+     that speaks for the agent, so it must never say something the agent did not
+     say: `answered` outliving its project leaves the list drawing "Nothing
+     matched" about a project nobody asked about — a false statement where the
+     old behaviour was merely a group that quietly vanished.
+
+     Before the await and outside the try, so a switch that then fails leaves
+     nothing stale behind either: whatever the tracker answers, the question
+     this was the answer to is over. Deliberately not in `applySnapshot`, which
+     a resync also goes through — that one is the same project's board arriving
+     again, and dropping an answer under an unchanged question would be a
+     different fault of the same shape. */
+  clearSemantic()
   trackerState.switching = true
   try {
     applySnapshot(await invoke('tracker_set_project', { path }))
@@ -421,7 +435,6 @@ export const searchState = reactive({
    and raises the board's own error banner, and neither is right for a question
    about a search nobody else on screen is waiting on. */
 function refusal(error) {
-  console.error('[tracker] semantic search failed:', error)
   if (error && typeof error === 'object' && typeof error.message === 'string') return error.message
   return String(error)
 }
@@ -469,6 +482,11 @@ export async function searchSemantic(query) {
     searchState.ids = ids
     searchState.answered = true
   } catch (error) {
+    /* Logged above the guard rather than inside `refusal`, and that order is
+       the point: a request that failed while its query moved on is still a
+       failure, and the console line is the only trace it will ever leave —
+       the sentence itself is deliberately not drawn. */
+    console.error('[tracker] semantic search failed:', error)
     if (searchState.query !== asked) return
     searchState.ids = []
     searchState.error = refusal(error)

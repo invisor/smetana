@@ -72,8 +72,15 @@ const firstSemantic = computed(() => hits.value.length)
    spinner, a list that simply goes back to what it was is indistinguishable
    from a row that did nothing at all, which is the very confusion
    `oneshot.rs` refuses a zero exit with an empty stdout for. Not an error, and
-   deliberately not drawn as one — it is a legitimate answer. */
-const nothingMatched = computed(() => props.answered && semanticHits.value.length === 0)
+   deliberately not drawn as one — it is a legitimate answer.
+
+   It asks what the **agent said**, not what still resolves: `semanticIds` is
+   the answer, and `semanticHits` is what is left of it after the board moved
+   under it. A delta that removes every answered issue empties the second while
+   the first stands, and reading that as "nothing matched" would put words in
+   the agent's mouth. It draws no group at all instead — a silence about a board
+   that changed, rather than a statement about an answer nobody gave. */
+const nothingMatched = computed(() => props.answered && props.semanticIds.length === 0)
 
 const showList = computed(() => open.value && rows.value.length > 0)
 

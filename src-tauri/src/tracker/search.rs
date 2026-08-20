@@ -24,6 +24,18 @@ use super::model::Issue;
 /// prose never does, which is the shape `corpus` below is written around.
 pub const MAX_CORPUS: usize = 48 * 1024;
 
+/// How much of the question itself is worth sending.
+///
+/// A search phrase is a line or two; this is a hundredfold of that, so nothing
+/// anybody types meets it. What it is here for is what nobody types: the field
+/// takes a paste, and `prompt` below subtracts the head from `MAX_CORPUS` to
+/// get the corpus's budget — so a query larger than the ceiling collapsed that
+/// budget to zero and shipped an argument bigger than the ceiling anyway. It
+/// degraded to an `E2BIG` drawn as a refusal rather than to anything unsafe,
+/// but `MAX_CORPUS` is the one number this module is written around, and it is
+/// worth having only if it holds whatever goes in.
+const MAX_QUERY: usize = 1024;
+
 /// How many ids the agent may answer with. This is not presentation: it is what
 /// keeps `oneshot::ask_raw`'s bounded-output invariant true, since both pipes
 /// are read only after the child has gone. So the number belongs in the
@@ -176,6 +188,14 @@ fn corpus(issues: &[Issue], budget: usize) -> String {
 /// head, so a model that reads no further than the top of a long prompt still
 /// has the whole task, and the corpus below it where a cut costs the least.
 pub fn prompt(query: &str, issues: &[Issue]) -> String {
+    // Cut like any other text this module sends: on a character boundary, at a
+    // word, and **said out loud**. A model told this is the whole question when
+    // it is not will answer the half it was given as though it were the whole.
+    let (query, was_cut) = slice_at(query.trim(), MAX_QUERY);
+    let query = match was_cut {
+        true => format!("{query} … (the search was longer than this)"),
+        false => query.to_string(),
+    };
     let head = format!(
         "Below is every issue in a project: its id, type, status, title, and the start of its \
          description. Find the ones that match this search — by meaning, not by wording:\n\
@@ -266,6 +286,28 @@ mod tests {
     #[test]
     fn the_query_reaches_the_prompt() {
         assert!(prompt("the bell is silent", &[]).contains("the bell is silent"));
+    }
+
+    /// The ceiling has to hold whatever goes into it, and the question is an
+    /// input like any other: the field takes a paste, and a query past
+    /// `MAX_CORPUS` used to collapse the corpus's budget to nothing while
+    /// shipping an argument over the ceiling regardless.
+    #[test]
+    fn a_query_nobody_typed_cannot_take_the_budget_with_it() {
+        for word in ["paste ", WIDE_WORD] {
+            let issues = vec![issue("a-1", "First", "2026-08-01T00:00:00Z")];
+            let out = prompt(&word.repeat(20_000), &issues);
+            assert!(out.len() <= MAX_CORPUS, "budget on {word:?}: {}", out.len());
+            assert!(out.contains("a-1"), "the corpus still gets a budget to spend: {out}");
+            assert!(out.contains("the search was longer than this"), "the cut is announced");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_query_reaches_the_prompt_whole() {
+        let out = prompt("the bell is silent", &[]);
+        assert!(out.contains("the bell is silent"));
+        assert!(!out.contains("the search was longer than this"));
     }
 
     #[test]
