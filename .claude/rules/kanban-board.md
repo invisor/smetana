@@ -31,6 +31,40 @@ column would come back from a hidden spell somewhere it never was. Both settings
 behaviour exactly, and its two closed lists are the doubling against `settings/model.rs` that
 `.claude/rules/settings.md` names.
 
+**What order the cards inside a column sit in is the third question, and `cardOrder.js` is where it
+lives** — pure and outside the component for the same reason as its two neighbours. It answers for
+exactly one column: done goes newest-finished first, and every other column keeps the order the
+store's `Map` yields, which is to say the order bd's snapshot arrived in. That is a decision rather
+than an unfinished job — "what was closed last" has no counterpart in ready or running, where a
+person's own priorities decide the sequence and the tracker holds no date standing for them.
+
+The key is `closed_at` and deliberately not `updated_at`. The second is always there, which is what
+makes it right for the board's period setting in `boardView.js` — that rule asks whether a task
+*moved* and must have no holes — and wrong here: every write by an agent freshens it, so a task
+closed last week and edited this morning would surface as the most recently finished thing on the
+board. So the card carries `closedAt` beside `updatedAt` (`stores/tracker.js`, `boardColumns`), as bd
+wrote it; sorting off the issue instead would mean keeping cards in the bucket and fetching the sort
+key from another structure, which nothing else on this board does.
+
+Three edges, each of them cheap and each covered by a test. **Equal times break on the id, ascending**
+— a batch merge closes several tasks inside one second, and `Array.prototype.sort`'s stability is no
+help when the incoming order is the `Map`'s, which is the snapshot's order after a `tracker_resync`
+and the upsert order during a session; two cards would trade places by themselves between the two.
+**An unreadable or absent `closed_at` falls back to `updated_at`**, since the field is optional in
+`tracker/model.rs` and a rule with a hole in it leaves a card wherever insertion put it. **Neither
+readable sends the card to the bottom** and never off the board: out of place costs a glance, missing
+costs somebody's work.
+
+It is applied in `boardColumns` rather than in `DesktopApp.vue`'s composition, which is why the order
+is one fact for the whole app instead of one per reader — that computed is already a projection for
+the interface, translating statuses through `toUiStatus` and working out the Blocked column, and a
+store importing a pure module out of `components/` is settled practice here (`runs.js`,
+`notifications.js`, `settings.js`, `vcs.js`). The rule matches on the design system's `done`, the
+column, and not on bd's `done` *category*: this repository puts exactly one status in that category —
+`closed` — while its own `ready_to_merge`, `parked` and `human_check` come through as `unspecified`,
+so there would be nothing to tell apart, and `boardColumns` would have to carry a column's category
+through when today it drops it on purpose.
+
 `columnHelp.js` is the third of that family and holds what a column *means* — the sentence a person
 gets after holding a column head for two seconds. It is deliberately not a line beside the glyphs in
 `status/status.js`: that file is the design-system layer and answers what a status *looks* like,

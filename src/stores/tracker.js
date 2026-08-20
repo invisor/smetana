@@ -3,6 +3,7 @@
 import { computed, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { orderCards } from '../components/kanban/cardOrder.js'
 
 /* bd and the design system call the same thing by different names. RESERVED in
    status.js is ready/running/done, in bd it is open/in_progress/closed. The only
@@ -134,6 +135,14 @@ export const boardColumns = computed(() => {
          as bd wrote it: the rule parses it, and a string this front end cannot
          read means show the card rather than hide it. */
       updatedAt: issue.updated_at,
+      /* When bd closed the issue, passed through as bd wrote it — `null` and
+         all, the same way `updatedAt` above is. It is the key the done column
+         is ordered on (`components/kanban/cardOrder.js`), and the field is
+         optional in the model, so the rule parses it and falls back rather
+         than assuming it is there. Carried on the card and not looked up on
+         the issue: the bucket holds cards, and reaching back into another
+         structure for the sort key would be the one place here that does. */
+      closedAt: issue.closed_at,
       blockedBy: blockedByIds.length,
       blockedByIds,
       blocks: blockingIds.length,
@@ -142,7 +151,10 @@ export const boardColumns = computed(() => {
     })
   }
 
-  return [...buckets].map(([name, tasks]) => ({ status: toUiStatus(name), tasks }))
+  return [...buckets].map(([name, tasks]) => {
+    const status = toUiStatus(name)
+    return { status, tasks: orderCards(status, tasks) }
+  })
 })
 
 function applyDelta(delta) {

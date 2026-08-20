@@ -83,6 +83,40 @@ describe('boardColumns', () => {
     )
   })
 
+  /* The done column is ordered on this date, so the card has to carry it —
+     ordering off the issue instead would mean holding cards in the bucket and
+     looking the key up somewhere else. */
+  it("carries bd's closed_at through to the card", async () => {
+    await start(
+      snapshot({
+        issues: [
+          issue({ id: 'bd-1', status: 'closed', closed_at: '2026-08-01T10:00:00Z' }),
+          issue({ id: 'bd-2' })
+        ]
+      })
+    )
+
+    const tasks = tracker.boardColumns.value.flatMap((c) => c.tasks)
+    expect(tasks.find((t) => t.id === 'bd-1').closedAt).toBe('2026-08-01T10:00:00Z')
+    expect(tasks.find((t) => t.id === 'bd-2').closedAt).toBeNull()
+  })
+
+  it('orders the done column by closing time, newest first', async () => {
+    await start(
+      snapshot({
+        issues: [
+          issue({ id: 'bd-1', status: 'closed', closed_at: '2026-08-01T11:10:00Z' }),
+          issue({ id: 'bd-2', status: 'closed', closed_at: '2026-08-01T15:06:00Z' }),
+          issue({ id: 'bd-3', status: 'closed', closed_at: '2026-07-28T09:00:00Z' })
+        ]
+      })
+    )
+
+    expect(
+      tracker.boardColumns.value.find((c) => c.status === 'done').tasks.map((t) => t.id)
+    ).toEqual(['bd-2', 'bd-1', 'bd-3'])
+  })
+
   it('an issue bd never typed leaves the card with nothing to draw', async () => {
     await start(snapshot({ issues: [issue({ id: 'bd-1', issue_type: null })] }))
 
@@ -292,6 +326,32 @@ describe('deltas', () => {
     expect(tracker.trackerState.issues.has('bd-1')).toBe(false)
     expect(tracker.trackerState.issues.has('bd-2')).toBe(true)
     expect(tracker.trackerState.generation).toBe(6)
+  })
+
+  /* `Map.set` on a key it already has leaves the entry where it stood, so a
+     task closed during a session used to keep the slot it held while it was
+     open — the one card on the board a person is most likely to be looking
+     for, anywhere but the top. */
+  it('a task closed by a delta becomes the first card in done', async () => {
+    await start(
+      snapshot({
+        generation: 5,
+        issues: [
+          issue({ id: 'bd-1', status: 'closed', closed_at: '2026-08-01T10:00:00Z' }),
+          issue({ id: 'bd-2' })
+        ]
+      })
+    )
+
+    const done = () => tracker.boardColumns.value.find((c) => c.status === 'done').tasks.map((t) => t.id)
+    expect(done()).toEqual(['bd-1'])
+
+    await emit('tracker:delta', delta({
+      generation: 6,
+      upserted: [issue({ id: 'bd-2', status: 'closed', closed_at: '2026-08-05T09:30:00Z' })]
+    }))
+
+    expect(done()).toEqual(['bd-2', 'bd-1'])
   })
 
   it('a gap in the generation means a lost event — the board is taken in full through resync', async () => {
