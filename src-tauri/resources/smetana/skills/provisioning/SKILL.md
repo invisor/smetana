@@ -99,6 +99,38 @@ answer back so the next reader does not repeat the guess —
 the choice. A single-repository project is `repos = ["."]` and there is nothing to
 decide.
 
+## If the task depends on a closed one, check its work is in the target branch
+
+A task filed as a follow-up to another carries a `blocks` dependency on it, and reached you
+because that blocker is closed — `bd ready` hides it otherwise. **Closed does not mean the work
+is in the branch this run is aimed at.** The target branch is chosen by hand when a run is
+started, and a follow-up merged into a branch without the original work in it is a merge nobody
+can make sense of afterwards.
+
+Check it before a single worktree exists. The cost is one `git log`; the cost of finding out
+later is a batch of work merged into the wrong place.
+
+```bash
+bd dep list <id>    # any line "via blocks" names a blocker
+```
+
+For each blocker that is closed, in each repository the task touches:
+
+```bash
+git -C <repo> log <target-branch> --oneline --grep="<blocker-id>" | head
+```
+
+That finds it because `merging` Step 5 commits `merge: <branch> into <target>` and a branch name
+is required to contain its issue id — so the blocker's id is in the merge commit's subject on the
+target branch. It keeps working when the branch was deleted afterwards, and through a chain of
+merges, because `git log` walks the whole ancestry.
+
+**Nothing found is not automatically wrong**, and it is not yours to overrule. A task closed by
+hand never had a merge commit, and neither did work merged before this convention. Apply the caller's
+policy — ask, or park — and say which repository, which target branch and which blocker, so that
+whoever answers can answer in one line. Do not cut the worktree first and do not pick a different
+branch yourself.
+
 ## Names, computed once per task
 
 - **Branch prefix** by type: a `bug` gets `fix/`, everything else `feature/`.

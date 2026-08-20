@@ -649,6 +649,7 @@ mod tests {
                     issue_type: None,
                     priority: None,
                     images: vec![],
+                    parent: None,
                 },
             },
             Intent::EditTask { id: "smetana-7".into(), title: "x y".into() },

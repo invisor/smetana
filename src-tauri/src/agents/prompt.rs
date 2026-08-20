@@ -58,6 +58,54 @@ const STANDARD: &str =
      it refuses a description missing the sections the type requires, and it is the only \
      check standing between a thin task and a run stuck on it at night.";
 
+/// What a follow-up owes beyond an ordinary filing, and every sentence of it is
+/// load-bearing.
+///
+/// The flag is stated exactly because the obvious spelling is wrong. bd's
+/// `--deps` takes `type:id` pairs meaning "this issue *is* that type towards
+/// that id", so a `blocks:<parent>` pair creates the edge backwards — the new
+/// task blocks the parent, and bd hands the new task out as ready immediately.
+/// The bare id is the correct form and was verified on the pinned sidecar.
+///
+/// The wrong form is named as a `type:id` pair rather than written out after
+/// the flag, and a test pins that: a prompt is prose an agent skims, and the
+/// exact wrong command line spelled out in it is a line that can be copied by
+/// eye out of the sentence forbidding it.
+///
+/// The status is deliberately forbidden rather than left unsaid: the dependency
+/// is the whole mechanism. bd hides a blocked issue from `bd ready` on its own
+/// and releases it when the blocker closes, with nothing stored — and this
+/// repository's board derives its Blocked column the same computed way. An
+/// agent that "helpfully" set bd's stored `blocked` status would strand the
+/// task for good, since bd never clears that itself.
+///
+/// The branch sentence is the one thing an implementer cannot work out from the
+/// board. A parent is closed only after its work is fast-forwarded into a
+/// target branch, so the work is somewhere — but a run is started by a person
+/// who picks the branch by hand, and picking the wrong one is the failure this
+/// whole feature was asked for.
+const FOLLOW_UP: &str =
+    "This is a follow-up to bd issue {id}: somebody has asked for further work on what that \
+     task already did. Read it first — `bd show {id}` — and say in the new issue's own prose \
+     what it refines and what is already done, so that whoever picks it up does not re-read \
+     the argument from scratch.\n\n\
+     File it as depending on that issue: pass `--deps {id}` to bd create — the bare id, and \
+     **never** a `type:id` pair such as `blocks:{id}`, which creates the edge the other way \
+     round and would hand the new task out as ready at once. Do not set any status on it: \
+     the dependency is the \
+     whole mechanism — bd keeps the issue out of `bd ready` while {id} is open and releases \
+     it the moment {id} closes, with nothing stored and nothing to go stale.\n\n\
+     Say in the acceptance criteria that the work must be cut from, and merged into, a branch \
+     that already carries {id}'s changes. A run's target branch is chosen by hand when it is \
+     started, and a follow-up merged into a branch without the original work in it is the \
+     failure this task exists to avoid.";
+
+/// `FOLLOW_UP` with the parent's id in it. The id appears seven times, which is
+/// why this is a substitution rather than seven `write!` arguments.
+fn follow_up(parent: &str) -> String {
+    FOLLOW_UP.replace("{id}", parent)
+}
+
 /// The design document, when the person asked for one outright.
 ///
 /// The path is superpowers' own layout moved under `.smetana/`, and that move
@@ -837,6 +885,12 @@ fn new_task(
     out.push_str("\n\n");
     out.push_str(&images(&draft.images, image_delivery));
     out.push_str(&fields(draft));
+    // After the type and the priority, which are the other two things this task
+    // *is*, and before STANDARD, which is about how any task is filed.
+    if let Some(parent) = &draft.parent {
+        out.push_str("\n\n");
+        out.push_str(&follow_up(parent));
+    }
     out.push_str("\n\n");
     out.push_str(STANDARD);
     out.push_str("\n\n");
@@ -908,6 +962,7 @@ mod tests {
             issue_type: Some("bug".into()),
             priority: Some(2),
             images: Vec::new(),
+            parent: None,
         }
     }
 
@@ -1577,6 +1632,43 @@ mod tests {
         let prioritised = drafted(TaskDraft { issue_type: None, ..draft() });
         assert!(prioritised.contains("File it with priority P2."), "{prioritised}");
         assert!(prioritised.contains("Decide the type yourself"), "{prioritised}");
+    }
+
+    #[test]
+    fn a_follow_up_names_its_parent_and_the_exact_dependency_flag() {
+        // The bare id and not `blocks:<id>`. Verified on the pinned sidecar: the
+        // `type:id` form reads as "this issue IS that type towards that id", so
+        // `blocks:<parent>` says the new task blocks the parent — the edge
+        // backwards, and it reads like the right thing.
+        let text = drafted(TaskDraft { parent: Some("smetana-3uv".into()), ..draft() });
+        assert!(text.contains("smetana-3uv"), "{text}");
+        assert!(text.contains("--deps smetana-3uv"), "{text}");
+        assert!(!text.contains("--deps blocks:"), "{text}");
+    }
+
+    #[test]
+    fn a_follow_up_is_told_which_branch_its_work_belongs_on() {
+        // The one thing an implementer cannot work out from the board: a run's
+        // target branch is picked by hand when it is started.
+        let text = drafted(TaskDraft { parent: Some("smetana-3uv".into()), ..draft() });
+        assert!(text.contains("branch that already carries smetana-3uv's changes"), "{text}");
+    }
+
+    #[test]
+    fn a_follow_up_is_told_not_to_set_a_status() {
+        // bd never clears its stored `blocked` status itself, so an agent being
+        // helpful there would strand the task out of `bd ready` for good.
+        let text = drafted(TaskDraft { parent: Some("smetana-3uv".into()), ..draft() });
+        assert!(text.contains("Do not set any status on it"), "{text}");
+    }
+
+    #[test]
+    fn an_ordinary_filing_says_nothing_about_a_parent() {
+        // Absence is the common case and must leave the prompt exactly as it
+        // was: prose about a relationship nobody asked for is worse than none.
+        let text = drafted(draft());
+        assert!(!text.contains("follow-up"), "{text}");
+        assert!(!text.contains("--deps"), "{text}");
     }
 
     fn with_images(image_delivery: ImageDelivery) -> String {

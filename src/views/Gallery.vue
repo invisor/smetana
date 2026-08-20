@@ -784,17 +784,21 @@ const SPARSE_ISSUE = {
 
 /* Two drafts, because the pair of Auto fields is the whole of what can go wrong
    here: Auto arrives as null and has to be drawn as the word rather than as a
-   type nobody chose. One has both fields set, the other neither. */
+   type nobody chose. One has both fields set, the other neither. The parent
+   rides along the same split — the first was filed from a card's own menu and
+   draws a Follow-up to row, the second from "+ New task" and has none. */
 const FULL_DRAFT = {
   text:
     'The log view drops lines once it is past about ten thousand of them, and nothing says so — it just stops scrolling back. It should either keep them or say plainly that it stopped.',
   issueType: 'bug',
-  priority: 1
+  priority: 1,
+  parent: 'smetana-3uv'
 }
 const AUTO_DRAFT = {
   text: 'Vendor the latin subset of IBM Plex Mono so an offline build has a face to set identifiers in.',
   issueType: null,
-  priority: null
+  priority: null,
+  parent: null
 }
 
 /* What a run has taken. Three of them, one without a title — the tracker may
@@ -919,10 +923,9 @@ const BUSY_CARD_MENU = taskMenuItems({
   runBlockedReason: 'a run over task smetana-hth is already going',
   busy: true
 })
-/* The parked card, which is the only shape of this menu with five rows: the
-   answer row on top and the play under it dead, since `runnableTask` in
-   DesktopApp refuses a parked task for the same reason the Ready dialog asks
-   about one. */
+/* The parked card, which is the only shape of this menu with the answer row on
+   top and the play under it dead, since `runnableTask` in DesktopApp refuses a
+   parked task for the same reason the Ready dialog asks about one. */
 const PARKED_CARD_MENU = taskMenuItems({
   bdStatus: 'parked',
   runnable: false,
@@ -1320,6 +1323,24 @@ const menuTargetStyle = {
           :open="true"
           :dragging="true"
           error="cat.gif is 12582912 bytes; the ceiling is 8388608 bytes"
+          @close="() => {}"
+          @submit="() => {}"
+          @attach="() => {}"
+          @files="() => {}"
+          @remove="() => {}"
+        />
+      </div>
+      <!-- The same dialog opened from a card's own menu. The parent's title is
+           deliberately a long one: the note is the only line here that can be
+           handed arbitrary prose from the board, and a two-line wrap is the
+           state to check rather than the tidy one-line case. The subtitle is
+           the other half — it names the parent and says nothing about ready,
+           which is the parent's to decide and not this dialog's. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <NewTaskModal
+          :open="true"
+          status="ready"
+          :parent="{ id: 'smetana-3uv', title: 'done column: cards ordered by the date they were closed, freshest first' }"
           @close="() => {}"
           @submit="() => {}"
           @attach="() => {}"
