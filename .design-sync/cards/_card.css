@@ -1,0 +1,7 @@
+html,body{margin:0;background:var(--border-subtle);font-family:var(--font-sans)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);min-height:100vh}
+.half{color:var(--text-primary);background:var(--canvas);padding:10px 12px;min-width:0;overflow:hidden}
+.full{color:var(--text-primary);background:var(--canvas);padding:10px 12px;min-height:100vh;min-width:0;overflow:hidden}
+.lbl{font:500 9px/1 var(--font-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px}
+.stack{display:flex;flex-direction:column;gap:10px;min-width:0}
+.stack>div{min-width:0}

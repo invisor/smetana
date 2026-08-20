@@ -30,3 +30,11 @@ src-tauri/binaries/*
 
 # Worktrees cut for tracker tasks
 .worktrees/
+
+# claude.ai/design sync. The generator, its notes and the project pin are
+# tracked; what it downloads, stages and shoots is not — all three are rebuilt
+# from the gallery by one command and none of them is a source.
+.design-sync/node_modules
+.design-sync/.cache/
+.design-sync/upload/
+.trash/
