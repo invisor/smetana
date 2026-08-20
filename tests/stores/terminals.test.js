@@ -502,7 +502,8 @@ describe('what a row says about the work behind it', () => {
       kind: 'newTask',
       text: 'The log drops lines above 10k',
       issueType: 'bug',
-      priority: 1
+      priority: 1,
+      parent: null
     })
 
     answer(
@@ -512,7 +513,9 @@ describe('what a row says about the work behind it', () => {
           kind: 'newTask',
           text: 'The log drops lines above 10k',
           issueType: 'bug',
-          priority: 1
+          priority: 1,
+          // `SessionWork::NewTask` always serializes the key, null or not.
+          parent: null
         }
       })
     )
@@ -522,7 +525,8 @@ describe('what a row says about the work behind it', () => {
       kind: 'newTask',
       text: 'The log drops lines above 10k',
       issueType: 'bug',
-      priority: 1
+      priority: 1,
+      parent: null
     })
   })
 
@@ -544,7 +548,33 @@ describe('what a row says about the work behind it', () => {
       kind: 'newTask',
       text: 'Something',
       issueType: null,
-      priority: null
+      priority: null,
+      parent: null
+    })
+  })
+})
+
+/* The one field a placeholder could drop without anything failing: the panel
+   would simply stop drawing the Follow-up to row, then start drawing it a
+   second later when the session lands. A flicker is the loudest this can get
+   on its own, so it is pinned here instead. */
+describe('a follow-up being filed', () => {
+  it('carries the parent it was opened from into the placeholder row', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () => new Promise(() => {}))
+
+    stores.terminals.createSession('/p', {
+      kind: 'newTask',
+      brainstorm: 'off',
+      draft: { text: 'The tooltip clips', issue_type: null, priority: null, images: [], parent: 'smetana-3uv' }
+    })
+
+    expect(stores.terminals.agentRows.value.at(-1).work).toEqual({
+      kind: 'newTask',
+      text: 'The tooltip clips',
+      issueType: null,
+      priority: null,
+      parent: 'smetana-3uv'
     })
   })
 })
