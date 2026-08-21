@@ -1962,12 +1962,15 @@ const menuTargetStyle = {
 
     <!-- The tree's own context menu, which nothing else on this page can show:
          `PointerMenu` draws nothing until a secondary click gives it a point,
-         and the rows here are the tree's rather than a fixture. Two copies,
-         because the one row that changes between them is Attach to agent —
-         live on the left, greyed on the right with the reason written into the
-         label, since a row in this panel has no tooltip and no title.
+         and the rows here are the tree's rather than a fixture. Three copies,
+         because the one row that changes between them is Attach to agent, and
+         it has three states: live, and greyed with either of the two reasons
+         written into the label — a row in this panel has no tooltip and no
+         title, so the label is the only place a reason can be. The middle box
+         is the one that is easy to miss and is the ordinary case: an agent is
+         running, it is simply not the one selected.
 
-         Both boxes are taller than their trees on purpose: the space below the
+         All three are taller than their trees on purpose: the space below the
          last row opens the root's menu, which is the one without Attach to
          agent or Delete on it, and the only way to reach the second half of
          this menu in a project whose first screen is nothing but folders. -->
@@ -1980,6 +1983,16 @@ const menuTargetStyle = {
             :expanded="galleryTreeExpanded"
             selected-path="Cargo.toml"
             can-attach
+            has-live-agent
+            @action="() => {}"
+          />
+        </div>
+        <div :style="fileMenuBoxStyle">
+          <FileTree
+            :nodes="galleryTree"
+            :expanded="galleryTreeExpanded"
+            selected-path="Cargo.toml"
+            has-live-agent
             @action="() => {}"
           />
         </div>

@@ -31,7 +31,11 @@ const props = defineProps({
      Not `hasAgentSession`, which `stores/terminals.js` exports and means
      something wider — see `fileMenu.js` for why the two must not be wired to
      each other. */
-  canAttach: { type: Boolean, default: false }
+  canAttach: { type: Boolean, default: false },
+  /* Whether there is a live agent here *at all*, selected or not. It changes no
+     row's state, only which of the two reasons the greyed one gives: something
+     to pick, or nothing to pick. */
+  hasLiveAgent: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['toggle', 'select', 'open', 'action'])
@@ -84,6 +88,7 @@ const items = computed(() =>
   fileMenuItems({
     target: menuTarget.value,
     canAttach: props.canAttach,
+    hasLiveAgent: props.hasLiveAgent,
     /* Read here rather than in the pure module, which is what keeps the choice
        of noun testable: `fileManagerName` is a function of this string. */
     userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent

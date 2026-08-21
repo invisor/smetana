@@ -519,11 +519,11 @@ function decode(base64) {
 
    The third and fourth entries are keyed on the kind the Rust error itself
    carries rather than on ours, and they earn the exception by being the two
-   failures in this list a person can act on. "Nothing was created" is true of a machine with
-   no agent installed and tells them nothing — and since filing a task is now
-   an agent session rather than a write into the tracker, that is no longer a
-   missing convenience but the only way to put a card on the board. It is a
-   function because the names of the agents looked for belong to Rust:
+   failures in this list a person can act on. "Nothing was created" is true of a
+   machine with no agent installed and tells them nothing — and since filing a
+   task is now an agent session rather than a write into the tracker, that is no
+   longer a missing convenience but the only way to put a card on the board. It
+   is a function because the names of the agents looked for belong to Rust:
    agents::IDS is the only copy of that list and the error carries it in its
    message, so nothing here has to hold a second one. */
 const ERRORS = {

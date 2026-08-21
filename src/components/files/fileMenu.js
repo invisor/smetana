@@ -46,10 +46,22 @@ export function fileManagerName(userAgent = '') {
    trade `projectMenu.js` and `taskMenu.js` make, and the reason a caller buys
    the width.
 
-   It covers three states and is true of all three: no agent in this project at
-   all, one that has exited, and one still being spawned — where it reads as
-   "none yet", which is what it means for the second it lasts. */
-const NO_AGENT = 'no agent to type into'
+   Two sentences, because there are two reasons and only one of them is "there
+   is no agent". The verb types into the agent the centre is *showing*, which is
+   the selected one and never whichever happens to be newest — `DesktopApp.vue`
+   records why a path delivered into a session nobody is looking at is the one
+   failure this gesture cannot afford. So the row can be refused with a live
+   agent on screen one column over, and that case is ordinary rather than exotic:
+   an agent finishing while another still runs leaves the selection on the one
+   that finished, and nothing moves it back.
+
+   Between them the two cover every state the item can be off in — no agent in
+   this project at all, one that has exited, one still being spawned (which reads
+   as "none yet", true for the second it lasts), and a live agent that simply is
+   not the one selected. The second sentence is the house form `projectMenu.js`
+   uses for the same shape: say the way out, not just the fact. */
+const NOTHING_TO_ATTACH_TO = 'no agent to type into'
+const NOTHING_SELECTED = 'select an agent first'
 
 /* The eight rows, in the order and the grouping the design was drawn in:
    two about opening, two about making, two about copying, then the one that
@@ -65,11 +77,20 @@ const NO_AGENT = 'no agent to type into'
    `canAttach` is deliberately not called `hasAgentSession`, which is a different
    question and a live export of `stores/terminals.js`: that one counts a start
    ticket and an exited session, because what hangs off it is whether the centre
-   has an Agent tab at all. This one is whether there is an agent that can be
-   *typed into* right now, which excludes both. Two names, because a prop wired
-   to the store's answer by somebody reading the name rather than the comment
-   would light this row over a session that would swallow the path. */
-export function fileMenuItems({ target = 'file', canAttach = false, userAgent = '' } = {}) {
+   has an Agent tab at all. This one is whether the *selected* agent can be typed
+   into right now, which excludes both. Two names, because a prop wired to the
+   store's answer by somebody reading the name rather than the comment would
+   light this row over a session that would swallow the path.
+
+   `hasLiveAgent` decides nothing about whether the row is off — it only chooses
+   which of the two sentences says so. It is the same population `canAttach` is
+   narrowed out of, before the selection narrows it. */
+export function fileMenuItems({
+  target = 'file',
+  canAttach = false,
+  hasLiveAgent = false,
+  userAgent = ''
+} = {}) {
   const root = target === 'root'
   const items = [
     { kind: 'open-terminal', label: 'Open in terminal', icon: 'terminal' },
@@ -89,7 +110,9 @@ export function fileMenuItems({ target = 'file', canAttach = false, userAgent = 
     { type: 'separator' },
     {
       kind: 'attach',
-      label: canAttach ? 'Attach to agent' : `Attach to agent — ${NO_AGENT}`,
+      label: canAttach
+        ? 'Attach to agent'
+        : `Attach to agent — ${hasLiveAgent ? NOTHING_SELECTED : NOTHING_TO_ATTACH_TO}`,
       icon: 'paperclip',
       disabled: !canAttach
     },

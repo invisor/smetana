@@ -67,11 +67,16 @@ agent", because the safety of the gesture is that a person watches the text land
 and a path delivered to a session they are not looking at sits in somebody
 else's half-written prompt with nothing on screen to say it went there. That is
 also why the item's flag is `canAttach` and not the store's wider
-`hasAgentSession`, which counts a start ticket and an exited session. And the clipboard branch is
-chosen *before* the call the way `openExternal` chooses its own: `mockBackend.js`
-refuses every unknown command loudly, so a plugin call in `npm run dev` does not
-fail in a way worth falling back from — it fails always, and both copy items
-would be uncheckable there.
+`hasAgentSession`, which counts a start ticket and an exited session — and why
+the greyed row has two sentences rather than one. Narrowing to the selection
+buys a state where the refusal is true and "no agent to type into" is not: an
+agent finishing while another runs leaves the selection on the finished one, and
+nothing moves it back, so the row says "select an agent first" whenever there is
+one to pick. `hasLiveAgent` carries only that difference and never the greying.
+And the clipboard branch is chosen *before* the call the way `openExternal`
+chooses its own: `mockBackend.js` refuses every unknown command loudly, so a
+plugin call in `npm run dev` does not fail in a way worth falling back from — it
+fails always, and both copy items would be uncheckable there.
 
 The "…N more" stub row is deliberately not one of the rows that opens it. Every
 verb on the menu is about something on disk and a stub names nothing, so

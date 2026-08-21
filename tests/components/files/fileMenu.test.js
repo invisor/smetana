@@ -59,8 +59,8 @@ describe('fileMenuItems', () => {
   })
 
   it('offers a folder exactly what it offers a file', () => {
-    const file = fileMenuItems({ target: 'file', canAttach: true })
-    const dir = fileMenuItems({ target: 'dir', canAttach: true })
+    const file = fileMenuItems({ target: 'file', canAttach: true, hasLiveAgent: true })
+    const dir = fileMenuItems({ target: 'dir', canAttach: true, hasLiveAgent: true })
     expect(dir).toEqual(file)
   })
 
@@ -76,19 +76,46 @@ describe('fileMenuItems', () => {
     expect(items.at(-1)).toMatchObject({ kind: 'delete', tone: 'danger' })
   })
 
-  it('greys Attach to agent with the reason in the row', () => {
+  it('says the bare verb when the selected agent can take the path', () => {
+    const items = fileMenuItems({ target: 'file', canAttach: true, hasLiveAgent: true })
+    expect(find(items, 'attach')).toMatchObject({ label: 'Attach to agent', disabled: false })
+  })
+
+  it('greys Attach to agent with the reason in the row when there is no agent', () => {
     // A row here has no tooltip and no title, so a reason kept anywhere but the
     // label is a reason nobody can read.
-    const items = fileMenuItems({ target: 'file', canAttach: false })
+    const items = fileMenuItems({ target: 'file', canAttach: false, hasLiveAgent: false })
     expect(find(items, 'attach')).toMatchObject({
       label: 'Attach to agent — no agent to type into',
       disabled: true
     })
   })
 
-  it('says the bare verb when there is an agent', () => {
-    const items = fileMenuItems({ target: 'file', canAttach: true })
-    expect(find(items, 'attach')).toMatchObject({ label: 'Attach to agent', disabled: false })
+  it('says the way out instead when there is an agent but it is not the selected one', () => {
+    // The verb types into the agent the centre is showing, so the row can be
+    // refused with one running a column over — and "no agent to type into"
+    // would be plainly false while a person is looking at one.
+    const items = fileMenuItems({ target: 'file', canAttach: false, hasLiveAgent: true })
+    expect(find(items, 'attach')).toMatchObject({
+      label: 'Attach to agent — select an agent first',
+      disabled: true
+    })
+  })
+
+  it('lets the live agent decide the words and never the state', () => {
+    const off = [
+      find(fileMenuItems({ target: 'file', canAttach: false, hasLiveAgent: false }), 'attach'),
+      find(fileMenuItems({ target: 'file', canAttach: false, hasLiveAgent: true }), 'attach')
+    ]
+    expect(off.map((item) => item.disabled)).toEqual([true, true])
+    expect(new Set(off.map((item) => item.label)).size).toBe(2)
+
+    const on = [
+      find(fileMenuItems({ target: 'file', canAttach: true, hasLiveAgent: false }), 'attach'),
+      find(fileMenuItems({ target: 'file', canAttach: true, hasLiveAgent: true }), 'attach')
+    ]
+    expect(on.map((item) => item.label)).toEqual(['Attach to agent', 'Attach to agent'])
+    expect(on.map((item) => item.disabled)).toEqual([false, false])
   })
 
   it('leaves the two row-only verbs out of the root menu rather than greying them', () => {

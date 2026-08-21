@@ -2040,16 +2040,26 @@ onUnmounted(() => clearTimeout(fileMenuToastTimer))
 
    Exited rows are excluded because there is nothing behind them to write to, and
    start tickets because a ticket is not a session and has no id the worker would
-   accept. Both then read as "no agent to type into" in the greyed label, which
-   during a spawn means "none yet" — true, and true for about a second. This is
-   the same value the greying is decided by, so what the row says and what the
-   verb does cannot disagree. */
-const attachTarget = computed(() => {
-  const live = agentRows.value.filter(
+   accept. */
+const liveAgentRows = computed(() =>
+  agentRows.value.filter(
     (row) => !row.starting && row.state !== 'done' && row.state !== 'failed'
   )
-  return live.find((row) => row.id === terminalState.activeId)?.id ?? null
-})
+)
+
+const attachTarget = computed(
+  () => liveAgentRows.value.find((row) => row.id === terminalState.activeId)?.id ?? null
+)
+
+/* Whether there is an agent here to pick at all — the same population, before
+   the selection narrows it. It decides nothing about whether the item is off:
+   it decides which reason the off row gives, because "no agent to type into" is
+   plainly false with one running one column over, and that is the ordinary
+   state rather than a corner. Nothing moves `activeId` when a session ends —
+   `finish` leaves it alone and the repair in `loadSessions` treats an exited row
+   as a live selection — so an agent finishing while another runs leaves the
+   selection on the finished one until somebody moves it. */
+const hasLiveAgent = computed(() => liveAgentRows.value.length > 0)
 
 /* A file handed to an agent is the drag-and-drop gesture by another route, so
    it is the same bytes through the same function: `dropText` quotes the path,
@@ -2064,9 +2074,13 @@ async function attachToAgent(path) {
     sayFileMenu({
       tone: 'error',
       title: 'Nothing was attached',
+      /* The second branch is a race and nothing else: the row was drawn live,
+         so there was an agent selected when the menu opened, and it stopped
+         being one before the pick. The label's own two sentences are about the
+         menu; this is about the moment after it. */
       description: !text
         ? 'That name carries a character that would press Return in an agent.'
-        : 'There is no agent session in this project to type into.'
+        : 'The selected agent went away before the path could reach it.'
     })
     return
   }
@@ -2827,6 +2841,7 @@ const toastStackStyle = {
                 :expanded="expanded"
                 :selected-path="project.selectedPath ?? undefined"
                 :can-attach="attachTarget !== null"
+                :has-live-agent="hasLiveAgent"
                 @toggle="toggleDir"
                 @select="onSelectFile"
                 @open="onOpenFile"
