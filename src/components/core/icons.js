@@ -32,10 +32,12 @@ import {
   File,
   FileCode,
   FilePen,
+  FilePlus,
   FileX,
   Folder,
   FolderGit2,
   FolderOpen,
+  FolderPlus,
   Gauge,
   GitBranch,
   GitBranchPlus,
@@ -123,6 +125,13 @@ export const iconNodes = {
   'file-code': FileCode,
   folder: Folder,
   'folder-open': FolderOpen,
+  /* The file tree's menu, where the pair is the two things that can be made.
+     The plain page and folder with a plus and nothing else: what is about to be
+     made has no name yet, so there is no file type to draw — and the moment it
+     has one, the row that appears in the tree is drawn by the other icon source
+     entirely. */
+  'file-plus': FilePlus,
+  'folder-plus': FolderPlus,
 
   // status
   'triangle-alert': TriangleAlert,

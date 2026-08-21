@@ -9,13 +9,18 @@
    `newTabMenu.js` and `onNewTab` make, where a row renamed on one side draws
    perfectly and does nothing at all when pressed. The test pins this side.
 
-   Three of the eight items are drawn and greyed. New file, New folder and
-   Delete are the second half of this work — everything on this menu that writes
-   to disk — and they are here rather than added later because the shape of a
-   menu is one of the things a person learns once: a panel that grows two rows
-   in the middle a week from now is a panel whose muscle memory was worth
-   nothing. They carry no icon either, and that is the same decision as their
-   labels: the glyphs are chosen by whoever makes them do something. */
+   All eight items are live now. The three that write to disk — New file, New
+   folder and Delete — were drawn greyed by the first half of this work and are
+   given their behaviour by the second, which is why the shape of the panel has
+   not moved: a menu that grows two rows in the middle a week after somebody
+   learned it is a menu whose muscle memory was worth nothing.
+
+   Delete is the one row in this app that asks a second time in place. The first
+   pick redraws it as "Click again to confirm" and leaves the panel open — that
+   is the `keepOpen` flag, which `PointerMenu.pick` reads — and the second one
+   deletes. Which of the two labels a caller gets is `confirmingDelete`, held by
+   `FileTree.vue` beside the path the menu is open on and cleared by the panel's
+   `close`, the one event that arrives however the menu leaves. */
 
 /* The path separator to write an absolute path with. Everything relative in
    `stores/files.js` uses `/` whatever the platform, and the project's own root
@@ -89,6 +94,7 @@ export function fileMenuItems({
   target = 'file',
   canAttach = false,
   hasLiveAgent = false,
+  confirmingDelete = false,
   userAgent = ''
 } = {}) {
   const root = target === 'root'
@@ -96,10 +102,13 @@ export function fileMenuItems({
     { kind: 'open-terminal', label: 'Open in terminal', icon: 'terminal' },
     { kind: 'reveal', label: `Reveal in ${fileManagerName(userAgent)}`, icon: 'folder-open' },
     { type: 'separator' },
-    /* Disabled here, and doing nothing is the whole of what they do — see the
-       note at the top of this file. */
-    { kind: 'new-file', label: 'New file', disabled: true },
-    { kind: 'new-folder', label: 'New folder', disabled: true },
+    /* The two that make something. Neither opens a dialog: the row for what is
+       about to exist appears in the tree where it will be, and the name is
+       typed there — so these two verbs put a field on screen and nothing more.
+       The glyphs are the plain page and folder with a plus, which is the whole
+       of what the pair says. */
+    { kind: 'new-file', label: 'New file', icon: 'file-plus' },
+    { kind: 'new-folder', label: 'New folder', icon: 'folder-plus' },
     { type: 'separator' },
     { kind: 'copy-path', label: 'Copy path', icon: 'copy' },
     { kind: 'copy-relative-path', label: 'Copy relative path', icon: 'copy' }
@@ -117,22 +126,48 @@ export function fileMenuItems({
       disabled: !canAttach
     },
     { type: 'separator' },
-    { kind: 'delete', label: 'Delete', icon: 'trash-2', tone: 'danger', disabled: true }
+    {
+      kind: 'delete',
+      /* The question and the answer are the same row, which is the whole of the
+         design: a modal for this would take the panel away, and with it the
+         name of the thing being deleted. `keepOpen` is what makes the first
+         pick a question — the panel stays up and redraws — and it is off on the
+         armed row, so the second pick closes the way every other row does. */
+      label: confirmingDelete ? 'Click again to confirm' : 'Delete',
+      icon: 'trash-2',
+      tone: 'danger',
+      keepOpen: !confirmingDelete
+    }
   ]
 }
 
-/* Where a shell opened from this row starts, as a path relative to the project
-   root — `''` being the root itself, which is what `files_list` already calls
-   it and what `resolve_within` reads as "no further".
+/* Which folder a row's verb acts in, as a path relative to the project root —
+   `''` being the root itself, which is what `files_list` already calls it and
+   what `resolve_within` reads as "no further".
 
-   A folder opens in itself and a file in the folder holding it, which is the
-   only reading that makes the verb mean the same thing on both: "put me where
-   this is". Opening a file's own path would be asking the PTY to `cd` into a
-   file, and the failure would surface a second later as a shell that would not
-   start. */
-export function shellFolder({ path = '', target = 'file' } = {}) {
+   A folder answers with itself and a file with the folder holding it, which is
+   the only reading that makes a verb mean the same thing on both: "where this
+   is". Two verbs ask it and they are one function rather than two copies. Open
+   in terminal: a shell started at a file's own path would be asking the PTY to
+   `cd` into a file, and the failure would surface a second later as a shell that
+   would not start. And the draft row: New file on a folder puts the field
+   inside it, and on a file beside it — which is the same sentence.
+
+   It was `shellFolder` while only one verb asked; the name moved when the
+   second one did, since a shared rule under one caller's name is how a second
+   copy gets written by somebody who read the name and not the body. */
+export function folderOf({ path = '', target = 'file' } = {}) {
   if (target === 'root') return ''
   if (target === 'dir') return path
+  return parentOf(path)
+}
+
+/* The folder a path is *in*, whatever the path is — which is a different
+   question from the one above and has one caller: after something is deleted,
+   the folder to re-read is the one it was in, and a folder deleted answers
+   `folderOf` with itself. A top-level path answers `''`, the root, the way it
+   does everywhere else here. */
+export function parentOf(path = '') {
   const cut = path.lastIndexOf('/')
   return cut === -1 ? '' : path.slice(0, cut)
 }
