@@ -59,6 +59,19 @@ vt100 = "0.16.2"
 portable-pty = "0.9.0"
 base64 = "0.23.0"
 toml = "1.0.7"
+# Delete in the file tree's menu, which puts an entry in the system trash rather
+# than removing it. A deletion somebody can undo from their own file manager is
+# a smaller promise than a permanent one, and this is a tree of somebody's
+# sources — `std::fs::remove_dir_all` would be the whole of a folder gone with
+# nothing anywhere to get it back from.
+#
+# The price, counted the way the clipboard plugin's is above: seven entries in
+# `Cargo.lock`, and only two of them build on any one machine. `trash` itself
+# and `urlencoding`; the other five are the `windows` 0.56 family, which the
+# Recycle Bin is reached through and which no other target compiles. On macOS it
+# takes `objc2` and `objc2-foundation`, and on Linux `zbus` — all three are
+# already here for Tauri's own sake, so the added weight is the crate itself.
+trash = "5"
 
 # Only to signal a process group, in the two places a killed process would
 # otherwise leave what it started behind: a PTY session on the exit path

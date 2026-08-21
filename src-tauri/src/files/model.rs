@@ -3,6 +3,8 @@
 //! No I/O here: everything that depends on the disk lives in `fs.rs`.
 //! That is why this file is the one carrying the tests — same as `settings/model.rs`.
 
+use std::path::{Component, Path};
+
 use serde::Serialize;
 
 /// How many entries of one directory we hand over. `FileTree` is not
@@ -82,6 +84,10 @@ pub enum FilesError {
     Outside(String),
     #[error("the file changed on disk: {0}")]
     Stale(String),
+    #[error("something is already there: {0}")]
+    AlreadyExists(String),
+    #[error("a name that cannot be used: {0:?}")]
+    BadName(String),
     #[error("{0}")]
     Io(String),
 }
@@ -100,6 +106,8 @@ impl FilesError {
             Self::NotUtf8(_) => "notUtf8",
             Self::Outside(_) => "outside",
             Self::Stale(_) => "stale",
+            Self::AlreadyExists(_) => "alreadyExists",
+            Self::BadName(_) => "badName",
             Self::Io(_) => "io",
         }
     }
@@ -155,6 +163,67 @@ pub fn reject_traversal(rel: &str) -> Result<(), FilesError> {
     let climbs = rel.split(['/', '\\']).any(|part| part == "..");
     if looks_absolute || climbs {
         return Err(FilesError::Outside(rel.to_owned()));
+    }
+    Ok(())
+}
+
+/// The name of an entry about to be made or deleted, judged before anything
+/// reaches the disk. Everything downstream of it joins this string onto a
+/// directory that has already been checked, so the one thing it has to
+/// guarantee is that the result is a **child of that directory** — which makes
+/// it a containment check and not a matter of taste.
+///
+/// The whole of the *containment* half is the last clause: `Path::components`
+/// must yield exactly one `Normal`. That refuses `.` and `..`, which name
+/// directories that already exist; it refuses a root; and on Windows it refuses
+/// a drive prefix, which is the shape that costs something — `Path::join`
+/// follows `PathBuf::push`, where a prefixed path *replaces* the receiver, so
+/// `C:evil.txt` joined to a folder inside the project is `C:evil.txt` and
+/// nothing about the project is left in it.
+///
+/// Four clauses stand in front of it and none is spare. Two are the cases
+/// `components` cannot see: a backslash is not a separator on unix and would
+/// pass as part of a name, and a drive prefix is not a prefix on unix either —
+/// both are cut by hand, on every platform, the way `reject_traversal` a few
+/// lines above cuts the same two shapes for the same reason. The third is the
+/// trim, and it is the only thing here that refuses a name of nothing but
+/// spaces: `Path::new("   ")` is one perfectly ordinary `Normal` component, so
+/// the last clause takes `""` — which has no components at all — and never
+/// `"   "`. The fourth, the `/`, the last clause would catch on its own; it
+/// stays as the plainest statement of the rule this function exists for.
+///
+/// A name is also not a path in the plainer sense: `a/b.js` typed into the
+/// draft row is two levels of intent, and making the intermediate directory is
+/// deliberately not offered.
+///
+/// The front end checks a name of its own before it calls at all
+/// (`components/files/newEntry.js`), and the two sets **overlap rather than
+/// nest** — neither is the other's subset, and the pair is not a rule written
+/// twice. The field trims first, so ` .. ` never leaves it, where this one
+/// takes the string as it was sent and would accept that as an ordinary name;
+/// and this one refuses `C:evil.txt`, which the field passes without a word.
+/// The safety is not in either being stricter, then: it is in this one being
+/// **last**. The field's job is to save a hopeless name a trip across the IPC
+/// and to say so in words the person can act on; the guarantee that nothing
+/// lands outside the folder it was asked for is here and only here.
+///
+/// One thing deliberately left to the platform: Windows reserves `con`, `nul`,
+/// `aux`, `prn` and `com1`, which pass here and are left to fail at the call
+/// that makes the thing — `create_new` for a file, `fs::create_dir` for a
+/// folder — with whatever the OS says. That is a refusal either way and not a
+/// way out of the directory, so it is not this function's to answer.
+pub fn reject_bad_name(name: &str) -> Result<(), FilesError> {
+    let one_plain_component = {
+        let mut parts = Path::new(name).components();
+        matches!(parts.next(), Some(Component::Normal(_))) && parts.next().is_none()
+    };
+    let bad = name.trim().is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.chars().nth(1) == Some(':')
+        || !one_plain_component;
+    if bad {
+        return Err(FilesError::BadName(name.to_owned()));
     }
     Ok(())
 }
@@ -240,7 +309,51 @@ mod tests {
         assert_eq!(FilesError::NotUtf8("a".into()).kind(), "notUtf8");
         assert_eq!(FilesError::Outside("a".into()).kind(), "outside");
         assert_eq!(FilesError::Stale("a".into()).kind(), "stale");
+        assert_eq!(FilesError::AlreadyExists("a".into()).kind(), "alreadyExists");
+        assert_eq!(FilesError::BadName("a".into()).kind(), "badName");
         assert_eq!(FilesError::Io("a".into()).kind(), "io");
+    }
+
+    #[test]
+    fn a_name_is_a_name_and_never_a_path() {
+        assert!(reject_bad_name("main.rs").is_ok());
+        assert!(reject_bad_name(".gitignore").is_ok(), "a dotfile is an ordinary name");
+        assert!(reject_bad_name("..hidden").is_ok(), "two dots inside a name are not the parent");
+        assert!(matches!(reject_bad_name("a/b.js"), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name("a\\b.js"), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name("."), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name(".."), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name(""), Err(FilesError::BadName(_))));
+        assert!(
+            matches!(reject_bad_name("   "), Err(FilesError::BadName(_))),
+            "spaces alone are an empty name with nothing on screen to say so"
+        );
+    }
+
+    /// Checked on every platform and not under a `cfg`, because the machine
+    /// this runs on is not the machine the app ships to. `Path::join` follows
+    /// `PathBuf::push`, where a path carrying a prefix replaces the receiver
+    /// outright — so on Windows a name spelled like this would put the new file
+    /// outside the project altogether, and a test that only runs on unix is a
+    /// test that never sees it.
+    #[test]
+    fn a_name_that_is_a_windows_drive_is_refused_wherever_this_is_compiled() {
+        assert!(matches!(reject_bad_name("C:evil.txt"), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name("C:\\Windows\\evil.txt"), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name("C:/Windows/evil.txt"), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name("\\\\server\\share"), Err(FilesError::BadName(_))));
+    }
+
+    /// The clause the other three lean on: whatever the platform makes of the
+    /// string, it has to come out as one ordinary component. `.` and `..` are
+    /// covered here rather than by name, which is what makes the check hold for
+    /// spellings nobody thought to write down.
+    #[test]
+    fn a_name_has_to_be_exactly_one_ordinary_component() {
+        assert!(reject_bad_name("main.rs").is_ok());
+        assert!(matches!(reject_bad_name("/"), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name("./a.txt"), Err(FilesError::BadName(_))));
+        assert!(matches!(reject_bad_name("a/."), Err(FilesError::BadName(_))));
     }
 
     #[test]

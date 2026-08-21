@@ -39,6 +39,39 @@ describe('error texts', () => {
   it('a directory speaks about a directory', () => {
     expect(files.dirErrorText({ kind: 'notFound' })).toBe('This folder is gone from disk.')
   })
+
+  /* The two kinds `files/model.rs` grew for the making verbs. Nothing but a
+     test notices a kind that never reached this table: the fallback answers,
+     and a person typing a name that is already taken would be told the app
+     could not create it — true, and not the reason. */
+  it('a name already taken says so, rather than falling back', () => {
+    expect(files.makeErrorText({ kind: 'alreadyExists' })).toBe(
+      'Something with that name is already there.'
+    )
+  })
+
+  it('a name that cannot be used says so, rather than falling back', () => {
+    expect(files.makeErrorText({ kind: 'badName' })).toBe('That name cannot be used.')
+  })
+
+  it('every refusal to make something says nothing was made', () => {
+    for (const kind of ['notFound', 'denied', 'notAFile', 'outside', 'io', 'something-new']) {
+      expect(files.makeErrorText({ kind })).not.toMatch(/read|write this file/)
+    }
+    expect(files.makeErrorText({ kind: 'something-new' })).toBe('Could not create it.')
+  })
+
+  it('deleting speaks about deleting, in words of its own', () => {
+    // `badName` reaches this table for two reasons and neither is a name
+    // somebody typed: the project's own root, and a last segment Rust will not
+    // take as a name.
+    expect(files.trashErrorText({ kind: 'badName' })).toBe('That name cannot be deleted.')
+    expect(files.trashErrorText({ kind: 'badName' })).not.toBe(
+      files.makeErrorText({ kind: 'badName' })
+    )
+    expect(files.trashErrorText({ kind: 'denied' })).toBe('No permission to delete this.')
+    expect(files.trashErrorText(null)).toBe('Could not move it to the trash.')
+  })
 })
 
 describe('small things', () => {
@@ -154,6 +187,59 @@ describe('readFile and writeFile', () => {
     expect(ipc.calls('files_write')).toEqual([
       { root: '/project', path: 'a.txt', text: 'new text', expectedMtime: 10 }
     ])
+  })
+})
+
+describe('createFile, createDir and trashPath', () => {
+  it('sends the folder and the name apart, which is what the check in Rust is made of', async () => {
+    ipc.on('files_create', 'src/main.rs')
+
+    await expect(files.createFile('src', 'main.rs')).resolves.toBe('src/main.rs')
+    expect(ipc.calls('files_create')).toEqual([{ root: '/project', dir: 'src', name: 'main.rs' }])
+  })
+
+  it('makes a folder through its own command and answers with the new path', async () => {
+    ipc.on('files_mkdir', 'docs')
+
+    await expect(files.createDir('', 'docs')).resolves.toBe('docs')
+    expect(ipc.calls('files_mkdir')).toEqual([{ root: '/project', dir: '', name: 'docs' }])
+  })
+
+  it('a refusal to make something is thrown rather than parked in lastError', async () => {
+    // A refused directory *read* is the tree's own state and shows as a strip;
+    // this one is an answer to something somebody asked for a moment ago, and
+    // it is owed a toast — which is the caller's to raise.
+    ipc.fail('files_create', { kind: 'alreadyExists', message: 'src/main.rs' })
+
+    await expect(files.createFile('src', 'main.rs')).rejects.toEqual({
+      kind: 'alreadyExists',
+      message: 'src/main.rs'
+    })
+    expect(files.filesState.lastError).toBe(null)
+  })
+
+  it('a delivery error while making something is reduced to the io kind', async () => {
+    // This is what `npm run dev` answers: mockBackend refuses every write
+    // loudly, and the refusal arrives as an Error rather than as a kind.
+    ipc.fail('files_mkdir', new Error('mockBackend: "files_mkdir" is not implemented'))
+
+    await expect(files.createDir('', 'docs')).rejects.toMatchObject({ kind: 'io' })
+  })
+
+  it('deletes by whole path, since the thing being deleted exists', async () => {
+    ipc.on('files_trash', null)
+
+    await expect(files.trashPath('src/main.rs')).resolves.toBeUndefined()
+    expect(ipc.calls('files_trash')).toEqual([{ root: '/project', path: 'src/main.rs' }])
+  })
+
+  it('a refusal to delete is thrown, so nothing is closed on the strength of it', async () => {
+    ipc.fail('files_trash', { kind: 'denied', message: 'src/main.rs' })
+
+    await expect(files.trashPath('src/main.rs')).rejects.toEqual({
+      kind: 'denied',
+      message: 'src/main.rs'
+    })
   })
 })
 

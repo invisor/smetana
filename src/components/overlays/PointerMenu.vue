@@ -27,7 +27,16 @@
    and that is not a convenience: closing is what clears the caller's own copy,
    the pick closes first (a handler that opens a dialog must not have the menu
    take the keyboard back out of it afterwards), so a handler reading the
-   caller's ref would find it already empty. */
+   caller's ref would find it already empty.
+
+   One kind of item narrows that order rather than lifting it: an item carrying
+   `keepOpen` emits **without** closing. The flag is on the item and not on this
+   component because a single menu holds rows of both sorts — the file tree's
+   Delete asks a second time in the row itself, redrawn in place with the panel
+   still up, while every row above it closes on the pick as before. Nothing else
+   moves: `owner` stays set, since the menu is still about that row, and the
+   handler is what decides whether this pick was the answer. The two callers
+   that came first, `ProjectRail` and `BranchList`, set the flag nowhere. */
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import ContextMenu from './ContextMenu.vue'
 
@@ -163,6 +172,10 @@ const step = (list, current, delta) => {
 const pick = (item) => {
   if (!item || item.disabled || item.type) return
   const key = owner.value
+  /* The narrowing the header describes. Read before `close`, which would clear
+     nothing of the item's but would take the panel away — and this row's whole
+     point is that it stays. */
+  if (item.keepOpen) return emit('select', item, key)
   close()
   emit('select', item, key)
 }
