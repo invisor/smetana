@@ -28,6 +28,7 @@ other caller.
 | `queue.rs` | what is left to do and whether to run another batch — pure, and where the tests are |
 | `summary.rs` | what the run did, as a diff of the board between its first read and its last — pure, and where those tests are |
 | `report.rs` | that summary and the batches' own accounts, rendered into a self-contained HTML document — pure, and where those tests are |
+| `awake.rs` | one power assertion for as long as any run is live anywhere — the counting rule, pure, and where those tests are |
 | `service.rs` | the worker: the loop, one run per scope per project |
 | `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
 
@@ -105,6 +106,29 @@ contradictory things on screen at once — a bar saying the run is stopped and a
 going — which a person reads as the stop not having taken. The gap is not always brief: the loop may
 be inside a board read or a 60s usage probe, and it holds its scope for the whole of it — only its
 scope, since the rest of the project's runs were never this one's to hold.
+
+**The machine does not fall asleep by itself while a run is going**, and the count of runs that
+decides it is *derived from the size of the worker's map* rather than stored anywhere (`awake.rs`).
+A run is the app driving itself for hours, at night, with nobody touching the keyboard, which is
+exactly what an idle timer reads as an empty room; the paused run waiting out a spent allowance is
+the longest such silence in the subsystem and therefore the night most likely to be lost. The worker
+calls `sync(active.len())` at the end of every pass, and that inherits the map's own guarantee
+whole: the entry leaves for *every* ending because the `Ending` drop guard sends it, so no stop
+reason has to be enumerated here, nothing new has to remember to release, and a panic unwinding
+through a loop task releases too. A flag on a `Run` instead would be two halves of one fact, drifting
+silently in both directions — a machine held awake for a week by a flag nobody cleared, or a run that
+quietly lost its hold and stopped at three in the morning. One assertion for the whole app, taken on
+the rise above zero and released on the fall back to it; several projects and several runs per
+project share it (smetana-5hf). The system is held and the display is not, so the screen still goes
+dark. A failure to take it is a line in the log and never a refusal to run, and it is not retried
+until the count returns to zero, or eight hours of log would say the same thing. Nothing about it is
+on screen: `RunBar` already says a run is going, and that is the reason the machine is awake.
+
+The promise is worth stating precisely, because the gap between the two sentences is the shape of the
+bug report that arrives otherwise. It is **"the machine does not fall asleep by itself"**, not "the
+machine cannot sleep": on macOS a closed laptop lid suspends the machine whatever assertions are held
+— only mains power with an external display changes that — and sleep chosen from a menu, or forced by
+a critically low battery, goes straight through.
 
 Every declared command and every health probe the preflight starts is given the **login shell's**
 `PATH`, from the same `shell_env` the terminal uses and for the same reason: a bundled app inherits

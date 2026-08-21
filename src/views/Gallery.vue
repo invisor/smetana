@@ -5,6 +5,7 @@
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
+import { fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import {
@@ -36,6 +37,8 @@ import {
   EmptyState,
   FileEditor,
   FileTree,
+  FileTreeDraftRow,
+  FileTreeRow,
   GeneralSettings,
   GitPanel,
   Icon,
@@ -1258,6 +1261,21 @@ const fileMenuBoxStyle = {
   border: 'var(--border-w) solid var(--border)',
   borderRadius: 'var(--radius-3)'
 }
+/* The armed Delete, which is the one row in the app that asks a second time in
+   place. It cannot be reached in the gallery the way it is reached in the app —
+   that takes a secondary click, a first pick, and a panel that stays up — so
+   the rows are drawn straight into a `ContextMenu`, which is what `PointerMenu`
+   puts inside itself anyway. The unarmed list is beside it, because what has to
+   be read here is the difference between the two: one row's words, in the same
+   place, in the same tone. */
+const FILE_MENU = fileMenuItems({ target: 'file', canAttach: true, hasLiveAgent: true })
+const ARMED_FILE_MENU = fileMenuItems({
+  target: 'file',
+  canAttach: true,
+  hasLiveAgent: true,
+  confirmingDelete: true
+})
+
 const menuTargetStyle = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   width: '200px', height: 'calc(3 * var(--row-h))',
@@ -2036,6 +2054,33 @@ const menuTargetStyle = {
             @action="() => {}"
           />
         </div>
+      </div>
+    </section>
+
+    <!-- The two halves of the menu that write to disk, in the states they are
+         hard to reach in a browser: the draft row, which in the app appears
+         only after a pick, and Delete asking a second time, which needs a panel
+         that has stayed open through one.
+
+         The draft rows are drawn between ordinary tree rows on purpose — this
+         section exists to check one thing, that the row is a place in the tree
+         and not something floating over it. Height, indent per level and type
+         have to match the rows above and below exactly, in both densities and
+         both themes; a field built out of `Input` would be `--control-h` tall
+         and would say so by pushing everything under it down. -->
+    <section :style="sectionStyle">
+      <div :style="headStyle">File tree: making and deleting</div>
+      <div :style="rowStyle">
+        <div :style="{ width: '240px', border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
+          <FileTreeRow name="src" kind="dir" :depth="0" expanded />
+          <FileTreeDraftRow kind="file" :depth="1" :focus-on-mount="false" />
+          <FileTreeRow name="App.vue" kind="file" :depth="1" />
+          <FileTreeRow name="main.js" kind="file" :depth="1" />
+          <FileTreeDraftRow kind="dir" :depth="0" :focus-on-mount="false" />
+          <FileTreeRow name="Cargo.toml" kind="file" :depth="0" selected />
+        </div>
+        <ContextMenu :items="FILE_MENU" :width="300" />
+        <ContextMenu :items="ARMED_FILE_MENU" :width="300" />
       </div>
     </section>
 

@@ -31,6 +31,12 @@ export const filesState = reactive({
    now: src/paths.js, where the trade it makes is written down. */
 export { basename as basenameOf } from '../paths.js'
 
+/* The two sentences the making verbs are refused with, written once because
+   they are read from two tables. A name a person typed is the subject of both,
+   which is what makes them the same words wherever the refusal surfaces. */
+const NAME_TAKEN = 'Something with that name is already there.'
+const NAME_REFUSED = 'That name cannot be used.'
+
 /* Back-end errors are diagnostics: their text speaks the filesystem's language
    and is addressed to whoever fixes things. The person is shown a short phrase
    chosen by the error's machine-readable kind, and the full text stays in the
@@ -50,6 +56,13 @@ const ERRORS = {
      this line a git stopped on its ceiling would draw "Could not read this
      file." — silently, since the fallback is what an unknown kind gets. */
   timeout: 'Git took too long and was stopped.',
+  /* The other two kinds no read produces, and they are here for the reason
+     `timeout` is: this table is the fallback every kind that crosses the IPC
+     lands in, and one that is missing from it falls back silently to a sentence
+     about reading a file. They are made by `files_create` and `files_mkdir` —
+     see MAKE_ERRORS, which is where a person actually meets them. */
+  alreadyExists: NAME_TAKEN,
+  badName: NAME_REFUSED,
   io: 'Could not read this file.'
 }
 
@@ -87,6 +100,48 @@ const DIR_ERRORS = {
 
 export function dirErrorText(error) {
   return DIR_ERRORS[error?.kind] ?? DIR_ERRORS.io
+}
+
+/* A fourth, for making a file or a folder. The two kinds above it are the whole
+   reason it exists — nothing else in this store can be refused because a name
+   is taken — and the rest of it says "nothing was created", which is true of
+   every refusal here: `resolve_new_within` decides before anything is opened,
+   and `create_new` is the one call that could have raced, so there is no
+   half-made state to describe. */
+const MAKE_ERRORS = {
+  alreadyExists: NAME_TAKEN,
+  badName: NAME_REFUSED,
+  notFound: 'That folder is gone from disk — nothing was created.',
+  denied: 'No permission to write into that folder.',
+  notAFile: 'That is not a folder — nothing was created.',
+  outside: 'That path is outside the project — nothing was created.',
+  io: 'Could not create it.'
+}
+
+export function makeErrorText(error) {
+  return MAKE_ERRORS[error?.kind] ?? MAKE_ERRORS.io
+}
+
+/* And a fifth, for the one verb that destroys. `badName` covers two things here
+   and neither is a name somebody typed, which is why it does not borrow the
+   making table's sentence: the project's own root, by whichever spelling
+   reached the command, and a last segment Rust will not take as a name. The
+   second is rarer than it sounds and reachable all the same — a file whose own
+   name holds a backslash, or one spelled like a drive (`C:notes.txt`), both
+   perfectly legal on macOS and Linux and both listed by `files_list`. Neither
+   is split or repaired: splitting the first would delete a different file, so
+   the row is refused instead, and the toast over an ordinary-looking row is
+   this. */
+const TRASH_ERRORS = {
+  badName: 'That name cannot be deleted.',
+  notFound: 'It is already gone from disk.',
+  denied: 'No permission to delete this.',
+  outside: 'That path is outside the project — nothing was deleted.',
+  io: 'Could not move it to the trash.'
+}
+
+export function trashErrorText(error) {
+  return TRASH_ERRORS[error?.kind] ?? TRASH_ERRORS.io
 }
 
 /* The marker for the "…N more" stub row in tree paths, and the test for one.
@@ -175,6 +230,49 @@ export async function writeFile(path, text, expectedMtime) {
   } catch (err) {
     const error = normalize(err)
     console.error(`[files] could not write ${path}:`, error)
+    throw error
+  }
+}
+
+/* The three verbs that change what is on disk outside a file's own text. Each
+   throws its normalized error rather than reporting it into `lastError`: a
+   refused write is not the tree's own state the way a refused directory read
+   is — somebody asked for it just now and is owed a toast, which is
+   `DesktopApp.vue`'s to raise. None of them touches `filesState`; re-reading
+   the parent directory afterwards is the caller's, because only the caller
+   knows what else has to happen in the same breath (a tab to open, a folder to
+   expand, tabs to close).
+
+   `dir` and `name` rather than a path, in both makers, because that split is
+   what the check in `resolve_new_within` is made of — see `files/fs.rs`. */
+export async function createFile(dir, name) {
+  try {
+    return await invoke('files_create', { root: filesState.root, dir, name })
+  } catch (err) {
+    const error = normalize(err)
+    console.error(`[files] could not create ${dir || '(root)'}/${name}:`, error)
+    throw error
+  }
+}
+
+export async function createDir(dir, name) {
+  try {
+    return await invoke('files_mkdir', { root: filesState.root, dir, name })
+  } catch (err) {
+    const error = normalize(err)
+    console.error(`[files] could not create the folder ${dir || '(root)'}/${name}:`, error)
+    throw error
+  }
+}
+
+/* Into the system trash, where it can be got back from. The name says so: a
+   `deleteFile` here would read as gone for good at every call site. */
+export async function trashPath(path) {
+  try {
+    await invoke('files_trash', { root: filesState.root, path })
+  } catch (err) {
+    const error = normalize(err)
+    console.error(`[files] could not move ${path} to the trash:`, error)
     throw error
   }
 }

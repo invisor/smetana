@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
 
+use super::awake;
 use super::config::{self, ConfigState};
 use super::model::{
     Asked, OnQuestion, RepeatedQuestion, Run, RunError, RunScope, RunSettings, RunState, StopReason,
@@ -205,6 +206,10 @@ pub fn start(
         // settings and the front end name a project by.
         let mut active: HashMap<u64, Active> = HashMap::new();
         let mut next_token: u64 = 1;
+        // The machine is not to fall asleep under a live run. Owned here and
+        // nowhere else: the count it works from is the size of the map below,
+        // which is why no ending has to remember to release — see `awake.rs`.
+        let mut keeper = awake::system();
 
         loop {
             tokio::select! {
@@ -221,7 +226,16 @@ pub fn start(
                     handle_report(&app, &mut active, report);
                 }
             }
+            // The end of the pass, whichever arm was taken: a start has just
+            // put an entry in the map, or a `Report::Ended` has just taken one
+            // out. Derived from the map rather than from either event, so that
+            // every ending — an empty queue, the stop button, a crash, a panic
+            // unwinding through the loop task — releases without being
+            // enumerated here.
+            keeper.sync(active.len());
         }
+        // Both arms break when their channel closes, which is the app on its
+        // way out; the hold goes with the task.
     });
 
     RunHandle(tx)

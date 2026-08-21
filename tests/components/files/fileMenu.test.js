@@ -4,8 +4,9 @@ import {
   absolutePath,
   fileManagerName,
   fileMenuItems,
-  relativePath,
-  shellFolder
+  folderOf,
+  parentOf,
+  relativePath
 } from '../../../src/components/files/fileMenu.js'
 
 const kinds = (items) => items.filter((i) => i.type !== 'separator').map((i) => i.kind)
@@ -64,16 +65,53 @@ describe('fileMenuItems', () => {
     expect(dir).toEqual(file)
   })
 
-  it('greys the three rows the second half of this work makes live', () => {
+  it('leaves nothing on the menu greyed, now that the three writing rows write', () => {
     const items = fileMenuItems({ target: 'file', canAttach: true })
-    for (const kind of ['new-file', 'new-folder', 'delete']) {
-      expect(find(items, kind).disabled).toBe(true)
-    }
+    const off = items.filter((item) => item.disabled).map((item) => item.kind)
+    expect(off).toEqual([])
   })
 
   it('draws deletion last and in the danger tone', () => {
     const items = fileMenuItems({ target: 'file' })
     expect(items.at(-1)).toMatchObject({ kind: 'delete', tone: 'danger' })
+  })
+
+  it('asks a second time in the row itself rather than closing on the first pick', () => {
+    // The panel stays up on the first pick and that is what `keepOpen` says.
+    // Without it PointerMenu closes before it emits, and the question would be
+    // asked by a panel that is already gone.
+    const armed = find(fileMenuItems({ target: 'file', confirmingDelete: true }), 'delete')
+    const idle = find(fileMenuItems({ target: 'file' }), 'delete')
+
+    expect(idle).toMatchObject({ label: 'Delete', keepOpen: true })
+    expect(armed).toMatchObject({ label: 'Click again to confirm', keepOpen: false })
+    expect(armed.tone).toBe('danger')
+  })
+
+  it('arms nothing else on the menu, whatever Delete is doing', () => {
+    const idle = fileMenuItems({ target: 'file', canAttach: true })
+    const armed = fileMenuItems({ target: 'file', canAttach: true, confirmingDelete: true })
+    const others = (items) => items.filter((item) => item.kind !== 'delete')
+    expect(others(armed)).toEqual(others(idle))
+    expect(others(armed).some((item) => item.keepOpen)).toBe(false)
+  })
+
+  it('leaves the root menu closing on every pick, since it has no Delete at all', () => {
+    // The two menus that existed before this one — a project row and a branch
+    // row — set the flag nowhere either, and this is the one list here that can
+    // be checked for it in the same way.
+    const items = fileMenuItems({ target: 'root', confirmingDelete: true })
+    expect(items.some((item) => item.keepOpen)).toBe(false)
+  })
+
+  it('gives the two making verbs a glyph now that they do something', () => {
+    const items = fileMenuItems({ target: 'root' })
+    expect(find(items, 'new-file')).toEqual({ kind: 'new-file', label: 'New file', icon: 'file-plus' })
+    expect(find(items, 'new-folder')).toEqual({
+      kind: 'new-folder',
+      label: 'New folder',
+      icon: 'folder-plus'
+    })
   })
 
   it('says the bare verb when the selected agent can take the path', () => {
@@ -153,21 +191,33 @@ describe('fileMenuItems', () => {
   })
 })
 
-describe('shellFolder', () => {
-  it('opens a folder in itself', () => {
-    expect(shellFolder({ path: 'src/components', target: 'dir' })).toBe('src/components')
+describe('folderOf', () => {
+  it('answers a folder with itself', () => {
+    expect(folderOf({ path: 'src/components', target: 'dir' })).toBe('src/components')
   })
 
-  it('opens a file in the folder holding it', () => {
-    expect(shellFolder({ path: 'src/components/Icon.vue', target: 'file' })).toBe('src/components')
+  it('answers a file with the folder holding it', () => {
+    expect(folderOf({ path: 'src/components/Icon.vue', target: 'file' })).toBe('src/components')
   })
 
-  it('opens a file at the top level in the project root', () => {
-    expect(shellFolder({ path: 'Cargo.toml', target: 'file' })).toBe('')
+  it('answers a file at the top level with the project root', () => {
+    expect(folderOf({ path: 'Cargo.toml', target: 'file' })).toBe('')
   })
 
-  it('opens the root menu in the root', () => {
-    expect(shellFolder({ path: '', target: 'root' })).toBe('')
+  it('answers the root menu with the root', () => {
+    expect(folderOf({ path: '', target: 'root' })).toBe('')
+  })
+})
+
+describe('parentOf', () => {
+  it('is where a path lives, whatever the path is', () => {
+    // The difference from folderOf, and the reason both exist: a folder that has
+    // just been deleted answers that one with itself, and the folder to re-read
+    // is the one it was in.
+    expect(parentOf('src/components/Icon.vue')).toBe('src/components')
+    expect(parentOf('src/components')).toBe('src')
+    expect(parentOf('Cargo.toml')).toBe('')
+    expect(parentOf('')).toBe('')
   })
 })
 

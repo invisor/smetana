@@ -150,7 +150,13 @@ import {
   stopRun
 } from '../stores/runs.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
-import { absolutePath, relativePath, shellFolder } from '../components/files/fileMenu.js'
+import { absolutePath, folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
+import { checkNewName } from '../components/files/newEntry.js'
+/* One import straight from `src/paths.js` rather than through a store: the
+   conversion below is between two path spaces and belongs to neither of the
+   stores that hold them. `tabs.js` reaches for the same function for the same
+   join. */
+import { relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { scopeBusyReason } from '../components/run/runScopes.js'
@@ -166,14 +172,19 @@ import {
 import { RAIL_EXPAND, headerLabel, nextFromHeader, nextFromRail } from './leftChrome.js'
 import {
   basenameOf,
+  createDir,
+  createFile,
   fileErrorText,
   filesState,
   isStubPath,
   listDir,
+  makeErrorText,
   refreshDirs,
   saveErrorText,
   setRoot,
   statFiles,
+  trashErrorText,
+  trashPath,
   treeNodes
 } from '../stores/files.js'
 import {
@@ -184,6 +195,7 @@ import {
   closeTerminalTab,
   confirmUnsaved,
   diffTab,
+  diffTabs,
   discardTabs,
   dropAgentTab,
   hasAgentTab,
@@ -2103,10 +2115,123 @@ async function copyPath(text, what) {
   )
 }
 
-const onFileAction = async ({ kind, path, target }) => {
+/* Making the entry the draft row was typed into, and the whole of what happens
+   on screen after it exists.
+
+   The rule about the name is `newEntry.js`'s and is applied here rather than in
+   the tree, because two of its three answers are a toast's business: an empty
+   field is somebody who changed their mind and is answered with silence, and a
+   name no entry can carry is answered with the sentence the back end would have
+   used for it — one wording for the refusal, wherever it is decided. Neither
+   goes near Rust.
+
+   A file opens as a permanent tab and not a preview: it was asked for by name a
+   moment ago, and a tab the next click would replace is not what somebody who
+   just made a file wants. A folder is expanded instead, which is the same
+   answer in the tree's own terms — the thing you made, open, with its contents
+   (none yet) under it. */
+async function makeEntry(kind, dir, typed) {
+  const { verdict, name } = checkNewName(typed)
+  if (verdict === 'nothing') return
+  if (verdict === 'refused') {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Nothing was created',
+      description: makeErrorText({ kind: 'badName' })
+    })
+    return
+  }
+  try {
+    const path = kind === 'dir' ? await createDir(dir, name) : await createFile(dir, name)
+    /* The tree has no watcher — freshness is the focus sweep — so the folder
+       that just gained an entry is re-read here, by the one who knows it
+       changed. */
+    await listDir(dir)
+    if (kind === 'dir') {
+      if (!project.expanded.includes(path)) project.expanded.push(path)
+      await listDir(path)
+    } else {
+      project.selectedPath = path
+      openFile(path, { permanent: true })
+    }
+  } catch (error) {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Nothing was created',
+      description: makeErrorText(error)
+    })
+  }
+}
+
+/* Into the system trash, and then the tidying no one else will do.
+
+   Every tab over what is gone is closed rather than left: `stale` in the editor
+   is about a file that changed, not one that stopped existing, and a buffer
+   over nothing has nowhere to save itself — a dirty tab kept open would be an
+   offer this app cannot honour. A folder takes everything under it, which is
+   what a trash means. The list is filtered by `kind` and never by the shape of
+   an id: the Agent tab and the shell tabs come from `terminals.js`, they are
+   not paths, and a `startsWith` over the whole row would be closing sessions.
+
+   A diff tab is one of the tabs over that path and closes too, but it has to be
+   found through `diffTabs`, and in the tree's own space rather than its record's
+   two fields. Its id is a repository and a path with a zero byte between them,
+   so no test against the id could ever match; and `repo` is a repository's
+   **absolute** path with `path` relative to *it*, which is only the same string
+   as the tree's in a project that is one repository. `vcs/repos.rs` finds the
+   root and one level down, so in a project of several, matching the bare
+   `tab.path` would leave `sub`'s diff of `src/a.js` open when `sub/src/a.js`
+   went, and close it when the root's own `src/a.js` went — a tab about a file
+   that is still there. `relativeTo` over the joined pair is the conversion
+   `loadDiff` already makes for the same reason, and it answers `null` for a
+   repository outside this project, which `under` then never matches.
+
+   The expanded list and the selection are settings, and both would otherwise
+   keep naming a folder that is not there — harmless on screen and permanent in
+   `settings.json`. */
+async function deleteEntry(path) {
+  try {
+    await trashPath(path)
+  } catch (error) {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Nothing was deleted',
+      description: trashErrorText(error)
+    })
+    return
+  }
+  const under = (other) => other === path || other.startsWith(`${path}/`)
+  const closing = tabList.value
+    .filter((tab) => (tab.kind === 'file' || tab.kind === 'preview') && under(tab.id))
+    .map((tab) => tab.id)
+  /* The ids are taken before anything closes: `tabList` is computed off the
+     very list `closeTab` splices, and `diffTabs` is the list `closeDiff`
+     splices. */
+  const closingDiffs = diffTabs
+    .filter((tab) => {
+      const rel = relativeTo(filesState.root, `${tab.repo}/${tab.path}`)
+      return rel !== null && under(rel)
+    })
+    .map((tab) => tab.id)
+  for (const id of closing) closeTab(id)
+  for (const id of closingDiffs) closeDiff(id)
+  for (let i = project.expanded.length - 1; i >= 0; i -= 1) {
+    if (under(project.expanded[i])) project.expanded.splice(i, 1)
+  }
+  if (project.selectedPath && under(project.selectedPath)) project.selectedPath = null
+  await listDir(parentOf(path))
+}
+
+const onFileAction = async ({ kind, path, target, name }) => {
   const root = filesState.root
-  if (kind === 'open-terminal') {
-    await newTerminal(shellFolder({ path, target }))
+  if (kind === 'create-file' || kind === 'create-dir') {
+    /* `path` is the folder the draft row sat in — the tree worked that out when
+       it opened the field, since that is where the row was drawn. */
+    await makeEntry(kind === 'create-dir' ? 'dir' : 'file', path, name)
+  } else if (kind === 'delete') {
+    await deleteEntry(path)
+  } else if (kind === 'open-terminal') {
+    await newTerminal(folderOf({ path, target }))
   } else if (kind === 'reveal') {
     const ok = await revealInFileManager(absolutePath(root, path))
     if (!ok) {
@@ -2123,9 +2248,8 @@ const onFileAction = async ({ kind, path, target }) => {
   } else if (kind === 'attach') {
     await attachToAgent(absolutePath(root, path))
   }
-  /* new-file, new-folder and delete are drawn greyed and reach nothing: they
-     are the half of this menu that writes to disk, and they are the second task
-     rather than a hole here. */
+  /* `new-file` and `new-folder` never arrive here: they put a field in the tree
+     and come back later as `create-file` or `create-dir` with a name. */
 }
 
 /* One question for all unsaved tabs. It comes up in three places and the

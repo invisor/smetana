@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use super::model::{
-    looks_binary, reject_traversal, sort_entries, Entry, EntryKind, FileText, FilesError, Listing,
-    Stat, BINARY_SNIFF_BYTES, MAX_ENTRIES, MAX_FILE_BYTES,
+    looks_binary, reject_bad_name, reject_traversal, sort_entries, Entry, EntryKind, FileText,
+    FilesError, Listing, Stat, BINARY_SNIFF_BYTES, MAX_ENTRIES, MAX_FILE_BYTES,
 };
 
 /// An I/O error in terms the front end understands.
@@ -55,6 +55,175 @@ pub fn resolve_within(root: &Path, rel: &str) -> Result<PathBuf, FilesError> {
         return Err(FilesError::Outside(rel.to_owned()));
     }
     Ok(full)
+}
+
+/// The same guarantee as `resolve_within`, for a path that does not exist yet.
+///
+/// It cannot simply call that one: `canonicalize` fails on anything that is not
+/// on disk, so the trip would end in `NotFound` *before* the check the whole
+/// call is there for ever ran, and every refusal would arrive under the wrong
+/// name. So the parent — which does exist — is the thing canonicalized, and
+/// what is joined to it is a name rather than a path: `reject_bad_name` is what
+/// makes that join safe, since a `..` or a separator in the name would walk out
+/// of the directory the check was just made about.
+///
+/// The last refusal is the one that keeps this honest about what it is for.
+/// Something already sitting at the resulting path is an ordinary outcome —
+/// somebody typed a name that is taken — and not a reason to overwrite it.
+/// `symlink_metadata` rather than `exists`: a symlink pointing nowhere answers
+/// "no" to the second and still takes the name.
+pub fn resolve_new_within(root: &Path, dir: &str, name: &str) -> Result<PathBuf, FilesError> {
+    reject_bad_name(name)?;
+    let parent = resolve_within(root, dir)?;
+    if !parent.is_dir() {
+        return Err(FilesError::NotAFile(dir.to_owned()));
+    }
+    let full = parent.join(name);
+    if full.symlink_metadata().is_ok() {
+        return Err(FilesError::AlreadyExists(child_path(dir, name)));
+    }
+    Ok(full)
+}
+
+/// A new empty file. `create_new` rather than `create`: the existence check in
+/// `resolve_new_within` and this call are two moments, and between them somebody
+/// else's agent may write the same name — at which point truncating their file
+/// to nothing is the one outcome this verb must never have.
+pub fn create_file(root: &Path, dir: &str, name: &str) -> Result<String, FilesError> {
+    let full = resolve_new_within(root, dir, name)?;
+    let rel = child_path(dir, name);
+    match fs::File::options().write(true).create_new(true).open(&full) {
+        Ok(_) => Ok(rel),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(FilesError::AlreadyExists(rel))
+        }
+        Err(err) => Err(io_error(&rel, &err)),
+    }
+}
+
+/// A new directory, one level deep — `create_dir` and not `create_dir_all`, for
+/// the reason a name is not a path: nothing here can ask for two levels, so a
+/// call that would silently make the intermediate ones is answering a question
+/// nobody asked.
+pub fn create_dir(root: &Path, dir: &str, name: &str) -> Result<String, FilesError> {
+    let full = resolve_new_within(root, dir, name)?;
+    let rel = child_path(dir, name);
+    match fs::create_dir(&full) {
+        Ok(()) => Ok(rel),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(FilesError::AlreadyExists(rel))
+        }
+        Err(err) => Err(io_error(&rel, &err)),
+    }
+}
+
+/// The system trash, and deliberately not `remove_file`. A deletion somebody
+/// can undo from their own file manager is a smaller promise than a permanent
+/// one, and this is a tree of somebody's sources. A directory goes with
+/// everything under it — that is what a trash is.
+///
+/// It takes `resolve_new_within`'s shape rather than `resolve_within`'s, and
+/// the reason is the whole of this function. `resolve_within` canonicalizes
+/// every component, the last one included, which is right for reading a file
+/// and wrong for destroying one:
+///
+///   - a link is drawn in the tree as an ordinary row (`list_dir` asks
+///     `file_type`, which does not follow one), so deleting
+///     `node_modules/.bin/vite` would take the package's real script — a file
+///     nobody named and a loss nobody can connect to what they clicked;
+///   - and a link pointing at the project's own root resolves to the root,
+///     passing every string guard there is, at which point the app throws away
+///     the folder it is looking at. So does the literal `.`, which is the same
+///     directory by another spelling.
+///
+/// So the **parent** is what gets canonicalized and checked for containment,
+/// the last component is checked as a name — `reject_bad_name` refuses `.`,
+/// `..`, a separator, a drive prefix and the empty string, which is every
+/// spelling of "not a child of that folder" — and what is joined back on is
+/// handed over as it stands. A link goes as a link, and the root cannot be
+/// named at all.
+pub fn move_to_trash(root: &Path, rel: &str) -> Result<(), FilesError> {
+    move_to_trash_with(root, rel, platform_trash)
+}
+
+/// The platform's own trash. On macOS this is **not** the crate's default, and
+/// the difference is worth the `cfg`.
+///
+/// `trash::delete` there is `DeleteMethod::Finder`: an `osascript` subprocess
+/// driving Finder over Apple Events. Three costs, and none of them is
+/// theoretical. It cannot delete a symbolic link at all — Finder exits 0,
+/// prints nothing and leaves the link where it was, which in this very
+/// repository is every row under `node_modules/.bin`. It needs an Apple Events
+/// grant, which a signed and hardened bundle may only ask for with an
+/// `NSAppleEventsUsageDescription` in its Info.plist — `tauri.conf.json`
+/// declares no macOS bundle block at all, so the first delete in a shipped
+/// build is a prompt nobody wrote the words for, or a denial. And it is slow
+/// enough to measure in seconds against milliseconds.
+///
+/// `NsFileManager` is `trashItemAtURL`: no subprocess, no permission, removes a
+/// link as a link. What it costs is Finder's "Put Back" on some systems (a
+/// macOS bug the crate documents) — the entry is still in the Trash and still
+/// comes out of it by dragging, which is what "restored by the platform's
+/// ordinary means" means here.
+///
+/// Everywhere else the default is the only method there is.
+#[cfg(target_os = "macos")]
+fn platform_trash(full: &Path) -> Result<(), String> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+    let mut context = trash::TrashContext::default();
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context.delete(full).map_err(|err| err.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_trash(full: &Path) -> Result<(), String> {
+    trash::delete(full).map_err(|err| err.to_string())
+}
+
+/// The body of `move_to_trash` with the deletion itself swappable, the same
+/// seam and for the same reason as `read_text_reading_with`: what has to be
+/// tested here is *which path* is handed over, and the real answer to that
+/// question would be an entry in whoever runs the tests' own Recycle Bin.
+fn move_to_trash_with(
+    root: &Path,
+    rel: &str,
+    delete: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), FilesError> {
+    // `/` alone, and that is not an oversight about Windows. Every path the
+    // tree produces is `child_path`'s, which uses `/` on every platform and
+    // says why; a backslash in one of these strings is therefore part of a
+    // **file name**, and `reject_traversal` lets such a name through, so
+    // `files_list` lists it and `files_read` opens it. Splitting on it would
+    // read `a\b.txt` as a folder and a file and delete something nobody named.
+    // Left in the tail, it is what `reject_bad_name` refuses — a refusal
+    // instead of the wrong file.
+    let (dir, name) = match rel.rfind('/') {
+        Some(at) => (&rel[..at], &rel[at + 1..]),
+        None => ("", rel),
+    };
+    reject_bad_name(name)?;
+    let parent = resolve_within(root, dir)?;
+    let full = parent.join(name);
+    // `symlink_metadata` and not `exists`, which answers "no" for a link
+    // pointing nowhere — and a broken link is a thing somebody wants gone.
+    if full.symlink_metadata().is_err() {
+        return Err(FilesError::NotFound(rel.to_owned()));
+    }
+    delete(&full).map_err(|err| FilesError::Io(format!("{rel}: {err}")))?;
+    // And then it is checked, which is not belt and braces. A platform trash
+    // that answers `Ok` and leaves the entry where it was is a thing that
+    // happens — `DeleteMethod::Finder` does exactly that for a symbolic link,
+    // which is why `platform_trash` above does not use it — and the folder is
+    // re-read the moment this returns, so the row would simply still be there
+    // with nothing on screen to say why. A silent no-op is the one outcome
+    // worse than a toast, and this is the net under every platform, including
+    // whichever one grows the behaviour next.
+    if full.symlink_metadata().is_ok() {
+        return Err(FilesError::Io(format!(
+            "{rel}: the system trash reported success and the entry is still there"
+        )));
+    }
+    Ok(())
 }
 
 /// An entry's path relative to the root, always with `/`. On Windows `read_dir`
@@ -527,6 +696,352 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "temp files were left behind: {leftovers:?}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_path_that_does_not_exist_yet_still_resolves_inside_the_root() {
+        let root = scratch("new-within");
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        let full = resolve_new_within(&root, "src", "main.rs").unwrap();
+
+        assert_eq!(full, root.join("src").join("main.rs"));
+        assert!(!full.exists(), "resolving must not create anything");
+        assert_eq!(
+            resolve_new_within(&root, "", "notes.md").unwrap(),
+            root.join("notes.md"),
+            "the empty directory is the root itself, as it is everywhere else here"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_name_carrying_a_separator_is_refused_rather_than_split() {
+        let root = scratch("new-separator");
+
+        // Making `a/b.js` in one keystroke is what VS Code does and is
+        // deliberately out of scope: a name is one level of intent.
+        assert!(matches!(
+            resolve_new_within(&root, "", "a/b.js"),
+            Err(FilesError::BadName(_))
+        ));
+        assert!(matches!(
+            resolve_new_within(&root, "", "..\\escape.txt"),
+            Err(FilesError::BadName(_))
+        ));
+        assert!(
+            !root.join("a").exists(),
+            "a refused name must leave nothing behind, not even the directory it named"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_two_dot_names_and_the_empty_one_are_refused() {
+        let root = scratch("new-dots");
+
+        for name in [".", "..", "", "   "] {
+            assert!(
+                matches!(resolve_new_within(&root, "", name), Err(FilesError::BadName(_))),
+                "{name:?} names nothing that can be made"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_name_already_taken_is_an_ordinary_refusal_and_not_an_overwrite() {
+        let root = scratch("new-taken");
+        fs::write(root.join("a.txt"), "somebody's work\n").unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        assert!(matches!(
+            resolve_new_within(&root, "", "a.txt"),
+            Err(FilesError::AlreadyExists(_))
+        ));
+        assert!(
+            matches!(resolve_new_within(&root, "", "src"), Err(FilesError::AlreadyExists(_))),
+            "a directory takes the name as surely as a file does"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "somebody's work\n",
+            "the file that was already there must not be touched"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_parent_outside_the_root_is_refused_before_the_name_is_ever_joined() {
+        let root = scratch("new-outside");
+
+        assert!(matches!(
+            resolve_new_within(&root, "../elsewhere", "a.txt"),
+            Err(FilesError::Outside(_))
+        ));
+        assert!(
+            matches!(resolve_new_within(&root, "nope", "a.txt"), Err(FilesError::NotFound(_))),
+            "a parent that is not there is missing, not outside"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_parent_reached_through_a_symlink_out_of_the_root_is_refused_too() {
+        let root = scratch("new-escape");
+        let outside = scratch("new-escape-target");
+        // `reject_traversal` is powerless here: the path holds neither ".." nor
+        // a root, and the target exists — so only `canonicalize` can see it.
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+
+        assert!(matches!(
+            resolve_new_within(&root, "link", "planted.txt"),
+            Err(FilesError::Outside(_))
+        ));
+        assert!(!outside.join("planted.txt").exists());
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn a_new_file_is_empty_and_answers_with_its_path_from_the_root() {
+        let root = scratch("create-file");
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        let rel = create_file(&root, "src", "main.rs").unwrap();
+
+        assert_eq!(rel, "src/main.rs", "the front end opens a tab on exactly this string");
+        assert_eq!(fs::read_to_string(root.join("src/main.rs")).unwrap(), "");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_new_file_never_truncates_one_that_is_already_there() {
+        let root = scratch("create-file-taken");
+        fs::write(root.join("a.txt"), "somebody's work\n").unwrap();
+
+        let err = create_file(&root, "", "a.txt");
+
+        assert!(matches!(err, Err(FilesError::AlreadyExists(_))), "{err:?}");
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "somebody's work\n");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_new_directory_is_one_level_deep_and_no_more() {
+        let root = scratch("create-dir");
+
+        let rel = create_dir(&root, "", "docs").unwrap();
+
+        assert_eq!(rel, "docs");
+        assert!(root.join("docs").is_dir());
+        assert!(
+            matches!(create_dir(&root, "", "a/b"), Err(FilesError::BadName(_))),
+            "create_dir_all would have made two of them for a question nobody asked"
+        );
+        assert!(!root.join("a").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The project's own root, by every spelling of it there is. The empty
+    /// string is the one the tree uses; `.` is the one any caller of
+    /// `files_trash` can type and the one `resolve_within` resolves to exactly
+    /// the same directory; and a link inside the project pointing at the
+    /// project is the one no string test could catch at all.
+    ///
+    /// Checked through the seam rather than against a real trash, which is what
+    /// makes "nothing was handed over" an assertion instead of a hope.
+    #[test]
+    fn the_project_root_is_not_something_this_offers_to_throw_away() {
+        let root = scratch("trash-root");
+        fs::write(root.join("a.txt"), "x").unwrap();
+
+        for spelling in ["", ".", "./", "a/.."] {
+            let mut asked: Vec<PathBuf> = Vec::new();
+            let err = move_to_trash_with(&root, spelling, |path| {
+                asked.push(path.to_owned());
+                Ok(())
+            });
+            assert!(err.is_err(), "{spelling:?} names the project itself");
+            assert!(asked.is_empty(), "{spelling:?} reached the trash: {asked:?}");
+        }
+        assert!(root.join("a.txt").exists(), "nothing may have been touched");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The defect this shape exists for. `resolve_within` canonicalizes the
+    /// whole path, the last component included, so the link is already unwound
+    /// by the time anything is deleted — and `list_dir` draws a link as an
+    /// ordinary row, so the row somebody right-clicks says nothing about it.
+    /// Deleting `node_modules/.bin/vite` would take the package's real script,
+    /// which is a file nobody named and a loss nobody can connect to the click.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_deleted_as_a_link_and_never_as_what_it_points_at() {
+        let root = scratch("trash-link");
+        let outside = scratch("trash-link-target");
+        fs::write(outside.join("real.txt"), "somebody's file").unwrap();
+        std::os::unix::fs::symlink(outside.join("real.txt"), root.join("link.txt")).unwrap();
+
+        let mut asked: Vec<PathBuf> = Vec::new();
+        move_to_trash_with(&root, "link.txt", |path| {
+            asked.push(path.to_owned());
+            // What a working trash does, so the check that the entry really
+            // went is satisfied and this test is about the path alone.
+            assert!(
+                path.symlink_metadata().unwrap().file_type().is_symlink(),
+                "an unwound path would have been the target's, and nothing here would say so"
+            );
+            fs::remove_file(path).map_err(|err| err.to_string())
+        })
+        .unwrap();
+
+        assert_eq!(asked, vec![root.join("link.txt")], "the path named is the path handed over");
+        assert_eq!(
+            fs::read_to_string(outside.join("real.txt")).unwrap(),
+            "somebody's file",
+            "what the link pointed at is a file nobody named and must not have moved"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    /// A link pointing at the project's own root. Every string guard passes this
+    /// one — no `..`, not absolute, not empty — and a resolver that
+    /// canonicalizes the last component answers with the root itself, so before
+    /// this shape the whole project went into the trash from inside the app
+    /// looking at it.
+    ///
+    /// Through the seam, like its neighbours: what this is about is which path
+    /// is handed over, and the real answer to that question is an entry in
+    /// whoever runs the suite's own Trash.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_pointing_at_the_project_hands_over_the_link_and_not_the_project() {
+        let root = scratch("trash-selflink");
+        fs::write(root.join("keep.txt"), "somebody's work").unwrap();
+        std::os::unix::fs::symlink(&root, root.join("selflink")).unwrap();
+
+        let mut asked: Vec<PathBuf> = Vec::new();
+        move_to_trash_with(&root, "selflink", |path| {
+            asked.push(path.to_owned());
+            fs::remove_file(path).map_err(|err| err.to_string())
+        })
+        .unwrap();
+
+        assert_eq!(asked, vec![root.join("selflink")]);
+        assert!(root.is_dir(), "the project itself must still be there");
+        assert_eq!(fs::read_to_string(root.join("keep.txt")).unwrap(), "somebody's work");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A name carrying a backslash, which on unix is a name and not a path.
+    /// `reject_traversal` lets one through, so `files_list` lists such a row and
+    /// `files_read` opens it — and a delete that split on the backslash would
+    /// read it as a folder and a file, and take `a/b.txt`, which is a file
+    /// nobody named and which is plainly still on screen.
+    ///
+    /// Splitting on `/` alone leaves the backslash in the tail, where
+    /// `reject_bad_name` refuses it. So the row cannot be deleted from this
+    /// menu at all, and that is the trade: a refusal a person can see beats a
+    /// deletion they cannot. Nothing else in the app can make such a name, and
+    /// on Windows it could not be one.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_in_a_name_is_a_name_and_never_a_second_folder() {
+        let root = scratch("trash-backslash");
+        fs::create_dir_all(root.join("a")).unwrap();
+        fs::write(root.join("a/b.txt"), "somebody else's file").unwrap();
+        fs::write(root.join("a\\b.txt"), "the row that was clicked").unwrap();
+
+        let mut asked: Vec<PathBuf> = Vec::new();
+        let outcome = move_to_trash_with(&root, "a\\b.txt", |path| {
+            asked.push(path.to_owned());
+            fs::remove_file(path).map_err(|err| err.to_string())
+        });
+
+        assert!(matches!(outcome, Err(FilesError::BadName(_))), "{outcome:?}");
+        assert!(asked.is_empty(), "nothing may have been handed over: {asked:?}");
+        assert_eq!(
+            fs::read_to_string(root.join("a/b.txt")).unwrap(),
+            "somebody else's file",
+            "the file in the folder of that name must not have been touched"
+        );
+        assert!(root.join("a\\b.txt").exists(), "and neither may the row that was clicked");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The one test that goes to the real trash, and it does not run: an entry
+    /// in the Trash of whoever ran `cargo test` is not something a test may
+    /// leave behind, and on macOS the answer also depends on which delete
+    /// method is set, which is the thing worth checking by hand after touching
+    /// `platform_trash`.
+    ///
+    ///     cargo test --manifest-path src-tauri/Cargo.toml -- --ignored a_link_really_goes
+    ///
+    /// It should pass, take milliseconds, and spawn nothing. Under the crate's
+    /// macOS default it fails on the last assertion, having run `osascript`.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "goes to the real system trash; run it by hand after changing platform_trash"]
+    fn a_link_really_goes_and_what_it_pointed_at_really_stays() {
+        let root = scratch("trash-real-link");
+        fs::write(root.join("real.txt"), "somebody's file").unwrap();
+        std::os::unix::fs::symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
+
+        move_to_trash(&root, "link.txt").expect("a link is an ordinary thing to delete");
+
+        assert_eq!(
+            fs::read_to_string(root.join("real.txt")).unwrap(),
+            "somebody's file",
+            "what the link pointed at is a file nobody named"
+        );
+        assert!(
+            root.join("link.txt").symlink_metadata().is_err(),
+            "the link itself is what was asked for and what should have gone"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The check behind that promise, without waiting on a real trash. A
+    /// platform that reports success and leaves the entry where it was must not
+    /// reach the front end as a deletion — the folder is re-read straight
+    /// afterwards and the row would simply still be there, with nothing on
+    /// screen to say why.
+    #[test]
+    fn a_deletion_that_did_not_happen_is_not_reported_as_one() {
+        let root = scratch("trash-lied");
+        fs::write(root.join("a.txt"), "x").unwrap();
+
+        let outcome = move_to_trash_with(&root, "a.txt", |_| Ok(()));
+
+        assert!(matches!(outcome, Err(FilesError::Io(_))), "{outcome:?}");
+        assert!(root.join("a.txt").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_path_that_is_not_there_is_missing_rather_than_a_trash_failure() {
+        let root = scratch("trash-missing");
+
+        let outcome = move_to_trash_with(&root, "gone.txt", |_| Ok(()));
+
+        assert!(matches!(outcome, Err(FilesError::NotFound(_))), "{outcome:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_path_outside_the_root_is_not_trashed() {
+        let root = scratch("trash-outside");
+        let outside = scratch("trash-outside-target");
+        fs::write(outside.join("secret.txt"), "not yours to delete").unwrap();
+
+        assert!(matches!(move_to_trash(&root, "../secret.txt"), Err(FilesError::Outside(_))));
+        assert!(matches!(move_to_trash(&root, "/etc/hosts"), Err(FilesError::Outside(_))));
+        assert!(outside.join("secret.txt").exists());
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
     }
 
     #[cfg(unix)]

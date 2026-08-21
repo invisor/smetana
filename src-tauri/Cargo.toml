@@ -59,6 +59,59 @@ vt100 = "0.16.2"
 portable-pty = "0.9.0"
 base64 = "0.23.0"
 toml = "1.0.7"
+# Delete in the file tree's menu, which puts an entry in the system trash rather
+# than removing it. A deletion somebody can undo from their own file manager is
+# a smaller promise than a permanent one, and this is a tree of somebody's
+# sources — `std::fs::remove_dir_all` would be the whole of a folder gone with
+# nothing anywhere to get it back from.
+#
+# The price, counted the way the clipboard plugin's is above: seven entries in
+# `Cargo.lock`, and only two of them build on any one machine. `trash` itself
+# and `urlencoding`; the other five are the `windows` 0.56 family, which the
+# Recycle Bin is reached through and which no other target compiles. On macOS it
+# takes `objc2` and `objc2-foundation`, and on Linux `zbus` — all three are
+# already here for Tauri's own sake, so the added weight is the crate itself.
+trash = "5"
+
+# What stops the machine falling asleep under a run. A run is the app driving
+# itself for hours, usually at night, with nobody touching the keyboard or the
+# mouse — which is precisely what an idle timer reads as "nobody is here", and
+# the pause that waits out a spent allowance (`runs/usage.rs`) is the longest
+# such silence in the whole app. `runs/awake.rs` holds one assertion for as long
+# as any run is live anywhere.
+#
+# A crate rather than the child process this repository's habit would suggest
+# — `caffeinate -i -w <pid>` on macOS, `systemd-inhibit … sleep infinity` on
+# Linux, killed to release — which costs no dependency at all and sits beside
+# the bd, PTY and preflight processes already spawned here. It breaks on
+# Windows, which has no equivalent utility: `SetThreadExecutionState` is an API
+# call, and a thread-affine one, so that third of the feature would have been
+# raw FFI whatever else was done, and hand-written FFI for a platform nobody
+# builds this project for is code no one is in a position to notice is wrong.
+#
+# `default-features = false` is about what sits behind the crate's `bin`
+# feature: `clap`, `clap_complete`, `anyhow`, `ctrlc`, `sysinfo`, `shadow-rs`
+# and `winresource`, every one of them for its own command-line tool. Checked
+# rather than assumed, the way the clipboard plugin's features were: 0.6.1
+# carries no `default` key at all and `bin` is opt-in, so the flag changes
+# nothing today — it is written so that a release making `bin` a default cannot
+# quietly put those seven in the lock file.
+#
+# The price, counted against `Cargo.lock` rather than guessed at: one power
+# assertion costs 13 `[[package]]` entries, and only one of them is the crate
+# itself. `zbus` is **not** among them, contrary to the obvious guess — this
+# tree already carries 5.19.0 behind `tauri-plugin-opener`'s own Linux gate, so
+# the D-Bus implementation arrives with nothing new under it. What does arrive
+# lands on *every* platform, this macOS build included: `derive_builder` with
+# its `_core` and `_macro` halves, whose 0.20.2 wants `darling ^0.20` and so
+# puts a **second** `darling`, `darling_core` and `darling_macro` at 0.20.11
+# beside the 0.23.0 already here — six crates of build-time proc macro for a
+# builder over a struct of six fields. macOS then adds `objc2-io-kit`, and
+# Windows a second `windows` major, 0.62.2 against the 0.61.3 in the tree, with
+# `windows-collections`, `windows-future`, `windows-numerics` and
+# `windows-threading` to match, none of which anything here ever compiles.
+# Nothing is removed and no other crate moves version.
+keepawake = { version = "0.6", default-features = false }
 
 # Only to signal a process group, in the two places a killed process would
 # otherwise leave what it started behind: a PTY session on the exit path

@@ -12,13 +12,55 @@ The left panel's tree and the file tabs in the centre read the active project's 
 `src-tauri/src/files/`, and it is deliberately the opposite of the tracker: no worker, no queue, no
 watcher. `read_dir` costs milliseconds and holds no state, so there is nothing for a queue to guard —
 the same reasoning that keeps settings out of a worker. `model.rs` is the vocabulary and the pure
-logic (entry sorting, the `..` check, the binary sniff, the ceilings: 1000 entries per directory,
-2 MB per file) and carries most of the tests; `fs.rs` is the disk; `commands.rs` is four thin
-commands — `files_list`, `files_read`, `files_write`, `files_stat`.
+logic (entry sorting, the `..` check, the name check, the binary sniff, the ceilings: 1000 entries
+per directory, 2 MB per file) and carries most of the tests; `fs.rs` is the disk; `commands.rs` is
+thin commands over it — the reads (`files_list`, `files_read`, `files_stat`) and the writes
+(`files_write`, `files_create`, `files_mkdir`, `files_trash`).
 
-Two rules in `fs.rs` are load-bearing. Every path is resolved with `resolve_within`, which
+Three rules in `fs.rs` are load-bearing. Every path is resolved with `resolve_within`, which
 canonicalizes and refuses anything that lands outside the root — without it a symlink inside the
-project would open the whole disk. And a write only happens when the file's `mtime` still equals the
+project would open the whole disk. A path that does not exist yet cannot be canonicalized at all, so
+making something goes through `resolve_new_within` instead: it canonicalizes the **parent**, which
+does exist, checks the name separately (`reject_bad_name` — empty, `.`, `..`, a separator) and
+refuses a name already taken. Splitting the argument into a folder and a name is not a convenience,
+it is the check: a path joined whole could carry a `..` past the directory the guarantee was just
+made about, and `reject_bad_name` is what makes the join safe. Its last clause demands exactly one
+ordinary `Path` component, which is what refuses `.`, `..`, a root, and — on Windows — a drive
+prefix: `Path::join` follows `PathBuf::push`, where a prefixed path *replaces* the receiver, so
+`C:evil.txt` would land outside the project entirely. Four clauses stand in front of that one and
+none is spare. Two are the cases it cannot see: on unix a backslash is an ordinary character and
+`C:` is an ordinary name, so `Path::new("a\b.js")` and `Path::new("C:evil.txt")` are each one
+`Normal` component, and both are cut by hand on every platform, the way `reject_traversal` cuts the
+same two shapes for the same reason — delete either and the guard is gone from every unix build
+while every test still passes on Windows. A third is the trim, which is the only thing that refuses
+a name of nothing but spaces: `Path::new("   ")` is one ordinary `Normal` component, so the last
+clause takes `""` and never `"   "`. The fourth, the `/`, the last clause would catch on its own.
+
+**Deleting takes that same shape, and not `resolve_within`.** Canonicalizing the last component is
+right for reading and wrong for destroying: a symlink is drawn in the tree as an ordinary row
+(`list_dir` asks `file_type`, which does not follow one), so deleting `node_modules/.bin/vite` would
+take the package's real script; and a link pointing at the project's own root resolves to the root,
+as does the literal `.`, at which point the app throws away the folder it is looking at. So the
+parent is resolved, the last component is checked as a name, and what is joined back on goes to the
+trash **un-canonicalized**. There is no list of root spellings anywhere — a name that is one
+ordinary component cannot be the folder it sits in, whatever it is spelled like.
+
+**On macOS the trash is asked for by a method the crate does not default to.** `trash::delete` there
+is `DeleteMethod::Finder`, an `osascript` subprocess driving Finder over Apple Events, and it cannot
+delete a symbolic link at all: it exits 0, prints nothing, and leaves the link where it was — which
+in this repository is every row under `node_modules/.bin`. It also needs an Apple Events grant, and
+`tauri.conf.json` declares no macOS bundle block, so a signed and hardened build has no
+`NSAppleEventsUsageDescription` to ask with. `platform_trash` in `fs.rs` sets `NsFileManager`
+instead, which is `trashItemAtURL`: no subprocess, no permission, a link removed as a link. The cost
+is Finder's "Put Back" on some systems, and dragging an entry out of the Trash is still the
+platform's ordinary means.
+
+Whatever the platform, the entry is checked once more **after** the call, and a deletion that did
+not happen comes back as a refusal. A row that says it went and is still in the tree when the folder
+is re-read a moment later is worse than a toast, and this is the net under whichever platform grows
+that behaviour next.
+
+And a write only happens when the file's `mtime` still equals the
 one the front end was given; otherwise it is refused as `stale` and nothing is touched, because
 Cmd+S on a tab opened an hour ago would otherwise erase an agent's work. That is also why
 `read_text` takes the `mtime` **before** it reads the bytes: content and time cannot be read
@@ -37,6 +79,19 @@ change list resolve from the same table, so one file looks the same wherever it 
 (`src/documentTheme.js`) and hands it down: a palette applied in JS is the only way these icons
 follow `data-theme` at all, since nothing inside a `data:` URL is reachable by the stylesheet.
 
+**Delete goes to the system trash** (the `trash` crate), never `remove_dir_all`: a deletion somebody
+can undo from their own file manager is a smaller promise than a permanent one, and this is a tree
+of somebody's sources. A folder goes with everything under it, which is what a trash means. After
+it, `DesktopApp.vue` closes every tab over what is gone — `stale` in the editor is about a file that
+changed, not one that stopped existing, and a buffer over nothing has nowhere to save — and it
+filters `tabList` by `kind`, because the Agent tab and the shell tabs are not paths. A diff tab is
+found through `diffTabs` instead — its id is a repository and a path with a zero byte between them
+and would never match — and matched in the **tree's** path space rather than on the bare `tab.path`,
+which is relative to a repository and not to the project. The record's pair is joined and put
+through `relativeTo`, the conversion `loadDiff` already makes for the same reason; `null`, a
+repository outside this project, matches nothing. In a project of several repositories the bare
+field would leave a diff open over a file that is gone and close one over a file that is not.
+
 A row answers a secondary click with a menu of its own, and the space below the
 last row answers with the same menu about the project's root — without that
 second half, a project whose first screen is nothing but unopened folders has no
@@ -50,7 +105,27 @@ exception to a rule with exactly one. The two halves are joined by hand — a
 same seam `newTabMenu.js` and `onNewTab` have — so the test pins the producing
 side.
 
-Four decisions in it are worth knowing before changing any of them. The menu
+Two of its verbs make something, and neither opens a dialog: `FileTree.vue` puts a **draft row**
+where the entry will be — `FileTreeDraftRow.vue`, a field at the depth of the folder it is going
+into — and Enter commits, Esc and losing the focus cancel. The row's position is the answer to
+"where is this going", which a modal in the middle of the screen cannot give. The draft is that
+component's own state and deliberately never a node in `nodes`: the tree is rebuilt from
+`files_list` whenever `catchUp` re-reads a folder, and a draft mixed into that list would vanish
+mid-word. What the typed name comes to is `files/newEntry.js`, three outcomes rather than two —
+an empty field is a cancel and says nothing, a name no entry can carry is a refusal with a sentence,
+and neither goes near Rust.
+
+Delete asks a second time **in the row itself**: the first pick redraws it as "Click again to
+confirm" and leaves the panel up, the second deletes, and anything else — Esc, a click outside, a
+scroll, another row — leaves nothing done. That is the one change this work made to the shared
+machinery: an item may carry `keepOpen`, and `PointerMenu.pick` emits without closing for it alone,
+which narrows the close-before-emit order that file's header explains rather than lifting it. The
+flag is on the item and not on the component because one menu holds rows of both sorts, and it is
+also what the handler branches on — closing clears the caller's armed flag before the pick is
+emitted, so the item is the only copy of "which pick is this" that cannot be stale by the time it
+is read.
+
+Four more decisions in it are worth knowing before changing any of them. The menu
 never moves the selection: a right click is a question about a row, not a visit
 to it, so the row under the panel takes the *hover* surface rather than the
 selected one, which would claim the selection had moved. Open in terminal is a
