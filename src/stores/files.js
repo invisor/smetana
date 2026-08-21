@@ -9,6 +9,7 @@
    button. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { STUB_MARK } from '../paths.js'
 
 export const filesState = reactive({
   /* The active project's absolute path. Every other path in this store is
@@ -88,12 +89,11 @@ export function dirErrorText(error) {
   return DIR_ERRORS[error?.kind] ?? DIR_ERRORS.io
 }
 
-/* The marker for the "…N more" stub row in tree paths. A zero byte never
-   appears in a file name on any filesystem, so a real path will not collide
-   with it. */
-const STUB_MARK = '\u0000'
-
-export const isStubPath = (path) => typeof path === 'string' && path.includes(STUB_MARK)
+/* The marker for the "…N more" stub row in tree paths, and the test for one.
+   Both live in src/paths.js — the file tree's context menu has to recognise a
+   stub as well, and a component cannot import a store. Re-exported under the
+   name it has always had here, so no importer of this store moved. */
+export { isStubPath } from '../paths.js'
 
 /* An error from Tauri arrives as a { kind, message } object; a delivery error
    (the mock threw an Error, the IPC did not come up) arrives as anything at

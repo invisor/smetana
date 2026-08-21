@@ -21,10 +21,14 @@ const props = defineProps({
   expanded: { type: Boolean, default: false },
   selected: { type: Boolean, default: false },
   git: { type: String, default: undefined },
-  readOnly: { type: Boolean, default: false }
+  readOnly: { type: Boolean, default: false },
+  /* Whether the tree's one context menu is currently open on this row. The row
+     does not decide it: `PointerMenu` hands the panel's key back with the pick
+     and clears it on close, so the highlight and the panel cannot come apart. */
+  menuOpen: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['toggle', 'select', 'open'])
+const emit = defineEmits(['toggle', 'select', 'open', 'menu'])
 
 const hover = ref(false)
 const g = computed(() => (props.git ? GIT[props.git] : null))
@@ -46,7 +50,15 @@ const style = computed(() => ({
   height: 'var(--row-h)',
   paddingLeft: `calc(var(--space-4) + ${props.depth} * var(--tree-indent))`,
   paddingRight: 'var(--space-4)',
-  background: props.selected ? 'var(--surface-selected)' : hover.value ? 'var(--surface-hover)' : 'transparent',
+  /* The menu's own highlight sits between the two, and is the hover surface
+     rather than the selected one on purpose: a right click deliberately does
+     not move the selection, and painting the row as selected would say it had.
+     A row that *is* selected keeps its own surface underneath. */
+  background: props.selected
+    ? 'var(--surface-selected)'
+    : hover.value || props.menuOpen
+      ? 'var(--surface-hover)'
+      : 'transparent',
   color: props.git === 'ignored' ? 'var(--text-muted)' : 'var(--text-primary)',
   opacity: props.git === 'ignored' ? 0.7 : 1,
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
@@ -72,6 +84,23 @@ const onClick = () => emit(props.kind === 'dir' ? 'toggle' : 'select')
 const onDoubleClick = () => {
   if (props.kind !== 'dir') emit('open')
 }
+
+/* The secondary click, handed up with the point it happened at — where the
+   panel goes is the tree's business, since there is one panel for the whole of
+   it rather than one per row.
+
+   `prevent` is not what stops the platform's own menu: `src/nativeMenu.js`
+   already refuses every `contextmenu` in the document, in capture, so this is
+   the second refusal of an event that is already refused — kept because a row
+   that opens a menu of its own should say so where the handler is. `stop` does
+   carry weight: the tree's own listener sits on the container below the rows
+   and opens the root's menu, and without this every row would open two.
+   Neither touches the capture listener, which has already run. */
+const onContextMenu = (event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  emit('menu', event)
+}
 </script>
 
 <template>
@@ -85,6 +114,7 @@ const onDoubleClick = () => {
     @mouseleave="hover = false"
     @click="onClick"
     @dblclick="onDoubleClick"
+    @contextmenu="onContextMenu"
   >
     <span :style="{ width: '12px', display: 'flex', color: 'var(--text-muted)' }">
       <Icon v-if="kind === 'dir'" :name="expanded ? 'chevron-down' : 'chevron-right'" :size="12" />

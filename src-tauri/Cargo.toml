@@ -24,10 +24,31 @@ log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
-# The one thing the app hands to the operating system rather than doing itself:
-# the About tab's link has to open in the person's browser, not inside the
-# webview, where it would replace the app with a web page and leave no way back.
+# The first of the two things the app hands to the operating system rather than
+# doing itself. The About tab's link has to open in the person's browser, not
+# inside the webview, where it would replace the app with a web page and leave
+# no way back; and the file tree's menu asks the platform's own file manager to
+# show an entry, which is a window this app has no business drawing.
 tauri-plugin-opener = "2"
+# The second: the file tree's menu puts a path on the system clipboard. A plugin
+# rather than `navigator.clipboard`, which wants a secure context and a gesture
+# the webview does not always agree it had.
+#
+# The price, because an exception in this tree is bought and not overlooked (see
+# `src/catppuccinIcon.js`, which carries its own measurements): one `writeText`
+# costs 34 crates in `Cargo.lock`. The plugin takes `arboard`, whose default
+# `image-data` feature pulls a whole image codec stack — `image`, `tiff`,
+# `zune-jpeg`, `zune-core`, `fax`, `moxcms`, `weezl` — for clipboard *pictures*,
+# which nothing in this app reads or writes, plus `wl-clipboard-rs`, five
+# `wayland-*` crates and `x11rb` for the Linux target.
+#
+# It cannot be turned off from here, and that was checked rather than assumed:
+# `tauri-plugin-clipboard-manager` 2.3.2 declares no `[features]` of its own and
+# depends on `arboard` with default features on, so there is no switch to pass
+# through. Dropping it would mean forking the plugin or a `[patch]` on arboard,
+# and neither is worth the maintenance for a binary budget this does not
+# threaten. Revisit if the plugin ever grows a feature for it.
+tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-shell = "2"
 tauri-plugin-window-state = "2"
 thiserror = "2"

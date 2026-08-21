@@ -62,6 +62,7 @@ import {
   loadSessions,
   projectStates,
   removeSession,
+  send,
   terminalState
 } from '../stores/terminals.js'
 import {
@@ -88,8 +89,10 @@ import {
 import { initSettingsBridge, settings } from '../stores/settings.js'
 import {
   announceBoardColumns,
+  copyText,
   openExternal,
   openSettingsWindow,
+  revealInFileManager,
   watchBoardHello
 } from '../stores/app.js'
 import { paintRoot } from './useAppearance.js'
@@ -147,6 +150,8 @@ import {
   stopRun
 } from '../stores/runs.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
+import { absolutePath, relativePath, shellFolder } from '../components/files/fileMenu.js'
+import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { scopeBusyReason } from '../components/run/runScopes.js'
 import {
@@ -407,11 +412,18 @@ async function newAgent() {
 
    It is `activeTab` and not `sideTab` that moves, and only once the session is
    real: a shell has no row in the Agents panel, so there is nothing there to
-   show anybody. */
-async function newTerminal() {
+   show anybody.
+
+   `cwd` is a folder inside the project, as the file tree's menu names one: a
+   path relative to the root, `null` for the root itself. The `+` menu's own row
+   passes nothing, which is what it has always meant. Whether that folder may be
+   a working directory is Rust's answer and not this function's — a refusal
+   comes back as a null session and a toast, exactly like a shell that would not
+   start. */
+async function newTerminal(cwd = null) {
   const path = activePath.value
   if (!path) return
-  const session = await createShell(path)
+  const session = await createShell(path, cwd)
   /* Null is a refusal, already on screen as a toast — see `createShell`. */
   if (!session) return
   const tab = terminalTabFor(session.id)
@@ -1974,6 +1986,148 @@ const onOpenFile = (path) => {
   openFile(path, { permanent: true })
 }
 
+/* The file tree's context menu: which verb does what. The rows themselves are
+   `components/files/fileMenu.js`'s, and the pair is joined by hand — a `kind`
+   renamed on one side draws perfectly and does nothing at all when pressed, the
+   same seam `newTabMenu.js` and `onNewTab` above have. The tree emits rather
+   than acting because the stores live here: a component that imported one would
+   be the second exception to a rule with exactly one.
+
+   Nothing in here moves the selection or opens a preview. A secondary click is
+   a question about a row, not a visit to it, and the row under the panel says
+   so with a highlight of its own. */
+const fileMenuToast = ref(null)
+let fileMenuToastTimer = null
+
+/* Success goes away on its own and a refusal does not, which is the split the
+   rest of the app already keeps: every other toast in this corner is an error
+   held in a store until somebody dismisses it. A copy has nothing on screen to
+   show for itself — an empty clipboard and one holding the path look exactly
+   alike until somebody pastes — so it says so, briefly, and then stops
+   occupying the corner. */
+const SAID_TOAST_MS = 3000
+
+function sayFileMenu(toast) {
+  clearTimeout(fileMenuToastTimer)
+  fileMenuToast.value = toast
+  if (toast?.tone === 'success') {
+    fileMenuToastTimer = setTimeout(() => {
+      fileMenuToast.value = null
+    }, SAID_TOAST_MS)
+  }
+}
+
+onUnmounted(() => clearTimeout(fileMenuToastTimer))
+
+/* Which agent a path lands in: the selected one, and only ever the selected
+   one, when it is an agent that can be typed into.
+
+   The whole safety of this gesture is that the text is *typed* rather than sent,
+   so the person sees it land and writes around it. That only holds if it lands
+   where they are looking, and the centre draws `terminalState.activeId` — so
+   this is that id or nothing. There used to be a fall-back to the newest live
+   row, and it broke exactly that: a finished agent stays in the list and stays
+   selectable, and `createSession` parks a *string* ticket in `activeId` for the
+   second a spawn takes, so in both cases the path went into a session the tab
+   was not showing and sat there in somebody else's half-written prompt, with
+   nothing on screen to say it had.
+
+   Narrowing rather than moving the selection is the other half of the choice.
+   `selectAgent` sets `activeId` and the tab together and is welcome to; this
+   menu is built on not moving anything — a secondary click is a question about
+   a row, not a visit to it — and an item that quietly repointed the agents panel
+   would be the same surprise one panel over.
+
+   Exited rows are excluded because there is nothing behind them to write to, and
+   start tickets because a ticket is not a session and has no id the worker would
+   accept. */
+const liveAgentRows = computed(() =>
+  agentRows.value.filter(
+    (row) => !row.starting && row.state !== 'done' && row.state !== 'failed'
+  )
+)
+
+const attachTarget = computed(
+  () => liveAgentRows.value.find((row) => row.id === terminalState.activeId)?.id ?? null
+)
+
+/* Whether there is an agent here to pick at all — the same population, before
+   the selection narrows it. It decides nothing about whether the item is off:
+   it decides which reason the off row gives, because "no agent to type into" is
+   plainly false with one running one column over, and that is the ordinary
+   state rather than a corner. Nothing moves `activeId` when a session ends —
+   `finish` leaves it alone and the repair in `loadSessions` treats an exited row
+   as a live selection — so an agent finishing while another runs leaves the
+   selection on the finished one until somebody moves it. */
+const hasLiveAgent = computed(() => liveAgentRows.value.length > 0)
+
+/* A file handed to an agent is the drag-and-drop gesture by another route, so
+   it is the same bytes through the same function: `dropText` quotes the path,
+   ends it in one space and refuses outright a name carrying a control character
+   — see `terminal/dropPaths.js` for why that last one is a refusal rather than
+   a repair. A second way to write a path into a prompt would be a second quoting
+   rule to keep correct. Return stays with the person either way. */
+async function attachToAgent(path) {
+  const id = attachTarget.value
+  const text = dropText([path])
+  if (!id || !text) {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Nothing was attached',
+      /* The second branch is a race and nothing else: the row was drawn live,
+         so there was an agent selected when the menu opened, and it stopped
+         being one before the pick. The label's own two sentences are about the
+         menu; this is about the moment after it. */
+      description: !text
+        ? 'That name carries a character that would press Return in an agent.'
+        : 'The selected agent went away before the path could reach it.'
+    })
+    return
+  }
+  /* The tab and nothing else: `id` is already `terminalState.activeId`, which is
+     what this tab draws, so the path lands in the session that comes up. */
+  project.activeTab = 'terminal'
+  await send(id, text)
+}
+
+async function copyPath(text, what) {
+  const ok = await copyText(text)
+  sayFileMenu(
+    ok
+      ? { tone: 'success', title: `Copied the ${what}`, description: text }
+      : {
+          tone: 'error',
+          title: `Could not copy the ${what}`,
+          description: 'The clipboard refused it. The path is in the console.'
+        }
+  )
+}
+
+const onFileAction = async ({ kind, path, target }) => {
+  const root = filesState.root
+  if (kind === 'open-terminal') {
+    await newTerminal(shellFolder({ path, target }))
+  } else if (kind === 'reveal') {
+    const ok = await revealInFileManager(absolutePath(root, path))
+    if (!ok) {
+      sayFileMenu({
+        tone: 'error',
+        title: 'Could not show it',
+        description: 'This one needs the desktop app — a browser has no file manager to ask.'
+      })
+    }
+  } else if (kind === 'copy-path') {
+    await copyPath(absolutePath(root, path), 'path')
+  } else if (kind === 'copy-relative-path') {
+    await copyPath(relativePath(path), 'relative path')
+  } else if (kind === 'attach') {
+    await attachToAgent(absolutePath(root, path))
+  }
+  /* new-file, new-folder and delete are drawn greyed and reach nothing: they
+     are the half of this menu that writes to disk, and they are the second task
+     rather than a hole here. */
+}
+
 /* One question for all unsaved tabs. It comes up in three places and the
    answer is the same in all three, hence a single modal. */
 const unsaved = ref(null)
@@ -2675,14 +2829,23 @@ const toastStackStyle = {
               </div>
             </div>
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
+              <!-- `filesState.root` and not `activePath`: every path this
+                   panel produces is relative to that root and its menu's verbs
+                   join the two, and `moveTo` sets the active project one await
+                   before it sets the root. With nothing to hang a path off,
+                   there is no tree to draw and — the point of the guard — no
+                   menu to open over the empty panel offering to copy `''`. -->
               <FileTree
-                v-if="project.sideTab === 'files'"
+                v-if="project.sideTab === 'files' && filesState.root"
                 :nodes="tree"
                 :expanded="expanded"
                 :selected-path="project.selectedPath ?? undefined"
+                :can-attach="attachTarget !== null"
+                :has-live-agent="hasLiveAgent"
                 @toggle="toggleDir"
                 @select="onSelectFile"
                 @open="onOpenFile"
+                @action="onFileAction"
               />
               <GitPanel
                 v-else-if="project.sideTab === 'git'"
@@ -3108,6 +3271,15 @@ const toastStackStyle = {
         :title="terminalState.lastError.title"
         :description="terminalState.lastError.description"
         @close="terminalState.lastError = null"
+      />
+      <!-- The file tree's menu, which is the one thing in this column that has
+           a success to report: a copy leaves nothing on screen behind it. -->
+      <Toast
+        v-if="fileMenuToast"
+        :tone="fileMenuToast.tone"
+        :title="fileMenuToast.title"
+        :description="fileMenuToast.description"
+        @close="fileMenuToast = null"
       />
     </div>
   </div>

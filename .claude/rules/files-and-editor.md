@@ -37,6 +37,52 @@ change list resolve from the same table, so one file looks the same wherever it 
 (`src/documentTheme.js`) and hands it down: a palette applied in JS is the only way these icons
 follow `data-theme` at all, since nothing inside a `data:` URL is reachable by the stylesheet.
 
+A row answers a secondary click with a menu of its own, and the space below the
+last row answers with the same menu about the project's root — without that
+second half, a project whose first screen is nothing but unopened folders has no
+way to reach the verbs that make a file. The items are `files/fileMenu.js`'s, a
+pure module for the reason the whole of that family is one; the panel is a single
+`PointerMenu` held by `FileTree.vue`, the way `ProjectRail` and `BranchList` each
+hold one for their list; and what a verb *does* is `DesktopApp.vue`'s, because
+the stores live there and a component that imported one would be the second
+exception to a rule with exactly one. The two halves are joined by hand — a
+`kind` renamed on one side draws perfectly and does nothing when pressed, the
+same seam `newTabMenu.js` and `onNewTab` have — so the test pins the producing
+side.
+
+Four decisions in it are worth knowing before changing any of them. The menu
+never moves the selection: a right click is a question about a row, not a visit
+to it, so the row under the panel takes the *hover* surface rather than the
+selected one, which would claim the selection had moved. Open in terminal is a
+shell tab of this app's own rather than Terminal.app — the app already has shell
+sessions, and a second emulator would put the person in a window outside every
+notion of a session there is here — which is what the optional `cwd` on
+`terminal_shell` is for; it is checked with `resolve_within` beside the spawn
+(`shell_cwd` in `terminal/service.rs`) and nowhere else, so there is one copy of
+that rule. Attach to agent is the drag-and-drop gesture by another route and goes
+through the same `dropText`, because a second way to write a path into a prompt
+would be a second quoting rule to keep correct — and it types into
+`terminalState.activeId` or into nothing at all, never into "the newest live
+agent", because the safety of the gesture is that a person watches the text land
+and a path delivered to a session they are not looking at sits in somebody
+else's half-written prompt with nothing on screen to say it went there. That is
+also why the item's flag is `canAttach` and not the store's wider
+`hasAgentSession`, which counts a start ticket and an exited session — and why
+the greyed row has two sentences rather than one. Narrowing to the selection
+buys a state where the refusal is true and "no agent to type into" is not: an
+agent finishing while another runs leaves the selection on the finished one, and
+nothing moves it back, so the row says "select an agent first" whenever there is
+one to pick. `hasLiveAgent` carries only that difference and never the greying.
+And the clipboard branch is chosen *before* the call the way `openExternal`
+chooses its own: `mockBackend.js` refuses every unknown command loudly, so a
+plugin call in `npm run dev` does not fail in a way worth falling back from — it
+fails always, and both copy items would be uncheckable there.
+
+The "…N more" stub row is deliberately not one of the rows that opens it. Every
+verb on the menu is about something on disk and a stub names nothing, so
+`isStubPath` moved out of `stores/files.js` and up to `src/paths.js`, where a
+component can reach it; the store re-exports it under the name it always had.
+
 `src/stores/tabs.js` owns the centre's tabs — order, which one is temporary, which is active, the
 buffers and their dirtiness — and knows nothing about Tauri; the disk is `files.js`. Not all of that
 row is files, and two of its kinds are **derived rather than remembered**: the Agent tab, which exists
