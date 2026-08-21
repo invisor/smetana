@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { iconNodes } from '../../../src/components/core/icons.js'
 import {
   absolutePath,
   fileManagerName,
@@ -38,7 +39,7 @@ describe('fileManagerName', () => {
 
 describe('fileMenuItems', () => {
   it('offers eight rows in five groups', () => {
-    const items = fileMenuItems({ target: 'file', hasAgentSession: true, userAgent: MAC })
+    const items = fileMenuItems({ target: 'file', canAttach: true, userAgent: MAC })
     expect(kinds(items)).toEqual([
       'open-terminal',
       'reveal',
@@ -58,13 +59,13 @@ describe('fileMenuItems', () => {
   })
 
   it('offers a folder exactly what it offers a file', () => {
-    const file = fileMenuItems({ target: 'file', hasAgentSession: true })
-    const dir = fileMenuItems({ target: 'dir', hasAgentSession: true })
+    const file = fileMenuItems({ target: 'file', canAttach: true })
+    const dir = fileMenuItems({ target: 'dir', canAttach: true })
     expect(dir).toEqual(file)
   })
 
   it('greys the three rows the second half of this work makes live', () => {
-    const items = fileMenuItems({ target: 'file', hasAgentSession: true })
+    const items = fileMenuItems({ target: 'file', canAttach: true })
     for (const kind of ['new-file', 'new-folder', 'delete']) {
       expect(find(items, kind).disabled).toBe(true)
     }
@@ -78,7 +79,7 @@ describe('fileMenuItems', () => {
   it('greys Attach to agent with the reason in the row', () => {
     // A row here has no tooltip and no title, so a reason kept anywhere but the
     // label is a reason nobody can read.
-    const items = fileMenuItems({ target: 'file', hasAgentSession: false })
+    const items = fileMenuItems({ target: 'file', canAttach: false })
     expect(find(items, 'attach')).toMatchObject({
       label: 'Attach to agent — no agent to type into',
       disabled: true
@@ -86,12 +87,12 @@ describe('fileMenuItems', () => {
   })
 
   it('says the bare verb when there is an agent', () => {
-    const items = fileMenuItems({ target: 'file', hasAgentSession: true })
+    const items = fileMenuItems({ target: 'file', canAttach: true })
     expect(find(items, 'attach')).toMatchObject({ label: 'Attach to agent', disabled: false })
   })
 
   it('leaves the two row-only verbs out of the root menu rather than greying them', () => {
-    const items = fileMenuItems({ target: 'root', hasAgentSession: true })
+    const items = fileMenuItems({ target: 'root', canAttach: true })
     expect(kinds(items)).toEqual([
       'open-terminal',
       'reveal',
@@ -109,10 +110,19 @@ describe('fileMenuItems', () => {
     expect(find(items, 'copy-relative-path').disabled).toBeFalsy()
   })
 
-  it('draws every live row with a glyph registered in core/icons.js', () => {
-    const items = fileMenuItems({ target: 'file', hasAgentSession: true })
-    const icons = items.filter((i) => i.icon).map((i) => i.icon)
-    expect(icons).toEqual(['terminal', 'folder-open', 'copy', 'copy', 'paperclip', 'trash-2'])
+  it('names only glyphs the registry actually holds', () => {
+    // Against `iconNodes` itself rather than against a list written out here:
+    // a copy of the names would restate this module instead of checking the one
+    // thing that can go wrong, which is `Icon` warning in dev and drawing
+    // nothing at all for a name nobody registered.
+    const named = [
+      ...fileMenuItems({ target: 'file', canAttach: true }),
+      ...fileMenuItems({ target: 'root' })
+    ]
+      .filter((item) => item.icon)
+      .map((item) => item.icon)
+    expect(named.length).toBeGreaterThan(0)
+    for (const name of named) expect(iconNodes).toHaveProperty(name)
   })
 })
 

@@ -1979,7 +1979,7 @@ const menuTargetStyle = {
             :nodes="galleryTree"
             :expanded="galleryTreeExpanded"
             selected-path="Cargo.toml"
-            has-agent-session
+            can-attach
             @action="() => {}"
           />
         </div>

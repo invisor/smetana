@@ -61,7 +61,13 @@ notion of a session there is here — which is what the optional `cwd` on
 (`shell_cwd` in `terminal/service.rs`) and nowhere else, so there is one copy of
 that rule. Attach to agent is the drag-and-drop gesture by another route and goes
 through the same `dropText`, because a second way to write a path into a prompt
-would be a second quoting rule to keep correct. And the clipboard branch is
+would be a second quoting rule to keep correct — and it types into
+`terminalState.activeId` or into nothing at all, never into "the newest live
+agent", because the safety of the gesture is that a person watches the text land
+and a path delivered to a session they are not looking at sits in somebody
+else's half-written prompt with nothing on screen to say it went there. That is
+also why the item's flag is `canAttach` and not the store's wider
+`hasAgentSession`, which counts a start ticket and an exited session. And the clipboard branch is
 chosen *before* the call the way `openExternal` chooses its own: `mockBackend.js`
 refuses every unknown command loudly, so a plugin call in `npm run dev` does not
 fail in a way worth falling back from — it fails always, and both copy items

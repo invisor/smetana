@@ -24,10 +24,14 @@ const props = defineProps({
   nodes: { type: Array, default: () => [] },
   selectedPath: { type: String, default: undefined },
   expanded: { type: Object, default: () => ({}) },
-  /* Whether there is an agent in this project a path could be typed into. The
-     one thing the menu needs that the tree cannot see; everything else on it is
-     about a row. */
-  hasAgentSession: { type: Boolean, default: false }
+  /* Whether there is an agent in this project a path could be typed into right
+     now. The one thing the menu needs that the tree cannot see; everything else
+     on it is about a row.
+
+     Not `hasAgentSession`, which `stores/terminals.js` exports and means
+     something wider — see `fileMenu.js` for why the two must not be wired to
+     each other. */
+  canAttach: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['toggle', 'select', 'open', 'action'])
@@ -79,7 +83,7 @@ const menuTarget = ref('root')
 const items = computed(() =>
   fileMenuItems({
     target: menuTarget.value,
-    hasAgentSession: props.hasAgentSession,
+    canAttach: props.canAttach,
     /* Read here rather than in the pure module, which is what keeps the choice
        of noun testable: `fileManagerName` is a function of this string. */
     userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent

@@ -44,7 +44,11 @@ export function fileManagerName(userAgent = '') {
    clips a row rather than wrapping it and gives a row no tooltip and no
    `title`, so a reason kept anywhere else is a reason nobody reads — the same
    trade `projectMenu.js` and `taskMenu.js` make, and the reason a caller buys
-   the width. */
+   the width.
+
+   It covers three states and is true of all three: no agent in this project at
+   all, one that has exited, and one still being spawned — where it reads as
+   "none yet", which is what it means for the second it lasts. */
 const NO_AGENT = 'no agent to type into'
 
 /* The eight rows, in the order and the grouping the design was drawn in:
@@ -56,8 +60,16 @@ const NO_AGENT = 'no agent to type into'
    lists. Attach to agent and Delete are *absent* there rather than greyed: a
    greyed row says "not now", and neither verb has any meaning about a project's
    own root — there is no file to hand an agent and nothing anybody should be
-   offered a way to delete. */
-export function fileMenuItems({ target = 'file', hasAgentSession = false, userAgent = '' } = {}) {
+   offered a way to delete.
+
+   `canAttach` is deliberately not called `hasAgentSession`, which is a different
+   question and a live export of `stores/terminals.js`: that one counts a start
+   ticket and an exited session, because what hangs off it is whether the centre
+   has an Agent tab at all. This one is whether there is an agent that can be
+   *typed into* right now, which excludes both. Two names, because a prop wired
+   to the store's answer by somebody reading the name rather than the comment
+   would light this row over a session that would swallow the path. */
+export function fileMenuItems({ target = 'file', canAttach = false, userAgent = '' } = {}) {
   const root = target === 'root'
   const items = [
     { kind: 'open-terminal', label: 'Open in terminal', icon: 'terminal' },
@@ -77,9 +89,9 @@ export function fileMenuItems({ target = 'file', hasAgentSession = false, userAg
     { type: 'separator' },
     {
       kind: 'attach',
-      label: hasAgentSession ? 'Attach to agent' : `Attach to agent — ${NO_AGENT}`,
+      label: canAttach ? 'Attach to agent' : `Attach to agent — ${NO_AGENT}`,
       icon: 'paperclip',
-      disabled: !hasAgentSession
+      disabled: !canAttach
     },
     { type: 'separator' },
     { kind: 'delete', label: 'Delete', icon: 'trash-2', tone: 'danger', disabled: true }

@@ -517,9 +517,9 @@ function decode(base64) {
    and write errors. Two kinds cover most of it here too: reading (list,
    attach, detach, resize) and writing (create, remove, write).
 
-   The third entry is keyed on the kind the Rust error itself carries rather
-   than on ours, and it earns the exception by being the one failure in this
-   list a person can act on. "Nothing was created" is true of a machine with
+   The third and fourth entries are keyed on the kind the Rust error itself
+   carries rather than on ours, and they earn the exception by being the two
+   failures in this list a person can act on. "Nothing was created" is true of a machine with
    no agent installed and tells them nothing — and since filing a task is now
    an agent session rather than a write into the tracker, that is no longer a
    missing convenience but the only way to put a card on the board. It is a
@@ -538,6 +538,18 @@ const ERRORS = {
   noAgent: (looked) => ({
     title: 'No coding agent is installed',
     description: `Smetana looked for ${looked} on your PATH. It starts one to file a task and to edit an issue, so install one and try again.`
+  }),
+  /* `TerminalError::BadCwd` — a folder the file tree's menu asked for a shell
+     in that is not a folder inside the project any more. Reachable without
+     anybody doing anything odd: the tree is refreshed on window focus and not
+     by a watcher, so a folder an agent deleted or renamed since the last listing
+     is still a row somebody can right-click. The generic write error would say
+     "Nothing was created, removed, or sent", which is true and tells them
+     nothing about which of their two windows is out of date. */
+  badCwd: () => ({
+    title: 'That folder is gone',
+    description:
+      'Smetana could not start a shell there. The tree may be out of date — refresh it.'
   })
 }
 

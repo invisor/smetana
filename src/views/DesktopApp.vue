@@ -2019,22 +2019,36 @@ function sayFileMenu(toast) {
 
 onUnmounted(() => clearTimeout(fileMenuToastTimer))
 
-/* Which agent a path lands in: the one the panel and the Agent tab are pointed
-   at, and the newest that can still be typed into when the selection names one
-   that cannot.
+/* Which agent a path lands in: the selected one, and only ever the selected
+   one, when it is an agent that can be typed into.
 
-   The rows a start has not come back for are excluded, and so are the ones that
-   have exited. `send` drops bytes for a session that is still starting and there
-   is nothing at all to write into one that has finished, so an item drawn live
-   over either would swallow the path with no word about it — and this is the
-   same value the menu's own greying is decided by, so what the row says and what
-   the verb can do cannot disagree. */
+   The whole safety of this gesture is that the text is *typed* rather than sent,
+   so the person sees it land and writes around it. That only holds if it lands
+   where they are looking, and the centre draws `terminalState.activeId` — so
+   this is that id or nothing. There used to be a fall-back to the newest live
+   row, and it broke exactly that: a finished agent stays in the list and stays
+   selectable, and `createSession` parks a *string* ticket in `activeId` for the
+   second a spawn takes, so in both cases the path went into a session the tab
+   was not showing and sat there in somebody else's half-written prompt, with
+   nothing on screen to say it had.
+
+   Narrowing rather than moving the selection is the other half of the choice.
+   `selectAgent` sets `activeId` and the tab together and is welcome to; this
+   menu is built on not moving anything — a secondary click is a question about
+   a row, not a visit to it — and an item that quietly repointed the agents panel
+   would be the same surprise one panel over.
+
+   Exited rows are excluded because there is nothing behind them to write to, and
+   start tickets because a ticket is not a session and has no id the worker would
+   accept. Both then read as "no agent to type into" in the greyed label, which
+   during a spawn means "none yet" — true, and true for about a second. This is
+   the same value the greying is decided by, so what the row says and what the
+   verb does cannot disagree. */
 const attachTarget = computed(() => {
   const live = agentRows.value.filter(
     (row) => !row.starting && row.state !== 'done' && row.state !== 'failed'
   )
-  const current = live.find((row) => row.id === terminalState.activeId)
-  return current?.id ?? live.at(-1)?.id ?? null
+  return live.find((row) => row.id === terminalState.activeId)?.id ?? null
 })
 
 /* A file handed to an agent is the drag-and-drop gesture by another route, so
@@ -2056,6 +2070,8 @@ async function attachToAgent(path) {
     })
     return
   }
+  /* The tab and nothing else: `id` is already `terminalState.activeId`, which is
+     what this tab draws, so the path lands in the session that comes up. */
   project.activeTab = 'terminal'
   await send(id, text)
 }
@@ -2799,12 +2815,18 @@ const toastStackStyle = {
               </div>
             </div>
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
+              <!-- `filesState.root` and not `activePath`: every path this
+                   panel produces is relative to that root and its menu's verbs
+                   join the two, and `moveTo` sets the active project one await
+                   before it sets the root. With nothing to hang a path off,
+                   there is no tree to draw and — the point of the guard — no
+                   menu to open over the empty panel offering to copy `''`. -->
               <FileTree
-                v-if="project.sideTab === 'files'"
+                v-if="project.sideTab === 'files' && filesState.root"
                 :nodes="tree"
                 :expanded="expanded"
                 :selected-path="project.selectedPath ?? undefined"
-                :has-agent-session="attachTarget !== null"
+                :can-attach="attachTarget !== null"
                 @toggle="toggleDir"
                 @select="onSelectFile"
                 @open="onOpenFile"

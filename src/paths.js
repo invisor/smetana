@@ -1,17 +1,24 @@
-/* The one copy of "what is this path called".
+/* The rules about a path that belong to no one part of this front end: what a
+   path is called, what it is called from inside a folder, and whether a row in
+   the tree is a path at all.
 
-   It was three copies before, and they disagreed where it showed: `basename` in
-   stores/projects.js split on both separators, `basenameOf` in stores/files.js
-   split on `/` alone, and a third in the run dialog's tooltip answered '' for a
-   root path where the other two answer the path itself. All three name a folder
-   or a file on screen, so the disagreement was visible — a project at a root
-   path rendered as an empty gap in a sentence.
+   What they have in common is the test for belonging here, and it is the test to
+   apply before adding a fourth: each is pure — no Vue, no Tauri, no DOM — and
+   each is wanted by more than one part of the interface at once, so there is no
+   "under" to file it beneath. A rule with a single consumer belongs next to that
+   consumer instead.
 
-   Not in a store, and not next to any one consumer: the consumers are two
-   stores and a pure component module, and the family that module belongs to
-   (branchChoice.js, columnOrder.js, panelWidths.js) is defined by having no Vue
-   and no Tauri in it. Importing a store to borrow one regex would have taken
-   both into it. */
+   `basename` was three copies before, and they disagreed where it showed: the
+   one in stores/projects.js split on both separators, `basenameOf` in
+   stores/files.js split on `/` alone, and a third in the run dialog's tooltip
+   answered '' for a root path where the other two answer the path itself. All
+   three name a folder or a file on screen, so the disagreement was visible — a
+   project at a root path rendered as an empty gap in a sentence.
+
+   Not in a store, then, and not next to any one consumer: they are wanted by two
+   stores, by a pure component module of the branchChoice.js family, and by a
+   `.vue` file — and a component importing a store to borrow one regex would have
+   taken Vue's one import rule with it. */
 
 /* The path separator differs per system, and WebView2 is among the target
    webviews: we split on both, otherwise on Windows the whole path would become
