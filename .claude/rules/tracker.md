@@ -44,15 +44,17 @@ three are back, drawn as prose under the description in spec-then-log order. The
 deliberately dropped is on the edges: `Dependency` keeps only the ids and the kind, because the panel
 draws an edge as a "Blocked by" id and bookkeeping about the edge has nothing to be drawn as.
 
-That panel is read-only apart from the status — rewriting a title or a description is an agent's job,
-and "Ask agent to edit" starts one on the issue. The status picker offers three of bd's eleven
-statuses (Ready, Pinned, Done); the rest belong to agents, so the one the issue actually holds is
-appended as a fourth option when it falls outside those three, because a picker with no matching
-option would render its first entry and claim the issue was Ready. That rule and its `STATUSES` live
-in `components/kanban/taskMenu.js`, not in the inspector: the card's overflow menu offers the same
-three, and two copies would have drifted the first time bd grew a status. Delete is `bd delete -f` —
-irreversible, and `-f` is not about skipping a prompt: without it bd prints a preview, deletes
-nothing and exits zero.
+That panel's body is read-only — rewriting a title or a description is an agent's job, and "Ask agent
+to edit" starts one on the issue. What acts on an issue is one menu, `components/kanban/taskMenu.js`,
+and it has two triggers: the card's own on the board, and a three-dot button in the header of the
+Task & details panel itself (`views/DesktopApp.vue`), built from the same card so that the two cannot
+come to offer different things. Its "Move to…" submenu offers three of bd's eleven statuses (Ready,
+Pinned, Done); the rest belong to agents, so the one the issue actually holds is appended as a fourth
+option when it falls outside those three — a list with nothing checked in it reads as an issue
+holding no status at all. That rule and its `STATUSES` live in `taskMenu.js` rather than in either
+trigger, because two copies would have drifted the first time bd grew a status. Delete is
+`bd delete -f` — irreversible, and `-f` is not about skipping a prompt: without it bd prints a
+preview, deletes nothing and exits zero.
 
 Which directory that is comes from `src-tauri/src/project.rs` — the vocabulary the tracker and the
 settings share: `has_tracker`, `nearest_tracked_ancestor` (a folder inside a tracked repository

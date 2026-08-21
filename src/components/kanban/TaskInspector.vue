@@ -1,12 +1,21 @@
 <script setup>
 /* Everything the tracker knows about one issue.
 
-   Nothing in this panel is editable, and nothing in it acts. Rewriting a title
-   or a description is an agent's job, and the four things a person can do to an
-   issue — run it, hand it to an agent, move it between columns, delete it —
-   live in the card's own menu on the board, so that they reach the card under
-   the pointer rather than only the selected one. A panel that cannot be typed
-   into cannot silently overwrite what an agent wrote while it sat open. */
+   Nothing in this component is editable and nothing in it acts, and that is
+   still the rule: rewriting a title or a description is an agent's job, and a
+   panel that cannot be typed into cannot silently overwrite what an agent wrote
+   while it sat open.
+
+   What has changed is where the verbs are reached from. Running an issue,
+   handing it to an agent, moving it between columns and deleting it live in one
+   menu — `taskMenu.js` — and that menu now has two triggers: the card's own, so
+   it reaches the card under the pointer rather than only the selected one, and
+   a second one in the header of the panel this component is drawn inside.
+
+   The second trigger is not this component's, deliberately. It sits in the
+   `actions` slot of the surrounding `Panel` in `views/DesktopApp.vue`, where it
+   stays put while this scrolls, and where the run state and the writes it needs
+   already are — none of which this file knows or needs to learn. */
 import { computed } from 'vue'
 import Markdown from './Markdown.vue'
 import StatusBadge from '../status/StatusBadge.vue'

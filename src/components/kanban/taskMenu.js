@@ -41,13 +41,65 @@ export const statusOptions = (bdStatus) => {
     : [...STATUSES, { value: bdStatus, label: statusLabel(bdStatus) }]
 }
 
+/* How wide the menu may get, and it is a measurement rather than a taste.
+
+   It lives with the rule rather than with either caller, because the number is
+   a property of the menu: `TaskCard` opens it from a card's header and
+   `DesktopApp` from the header of the Task & details panel, over the very same
+   items. A second copy of the measurement would have drifted from the first the
+   day somebody re-measured one of them.
+
+   `ContextMenu` draws itself as wide as its widest row and clips at this
+   ceiling with an ellipsis; a menu row has no tooltip and no `title`, so
+   whatever does not fit is gone with no way back. The ordinary menu is four
+   short verbs and is nowhere near this number — what buys it is the one row
+   that can carry a sentence. The longest label the menu can produce is the
+   greyed Run row, which carries `scopeBusyReason`'s whole sentence — the reason
+   moved out of the card's play tooltip, where it used to grow to fit, and into
+   the row itself.
+
+   Measured through CoreText at `--text-sm` (12px) in the system sans, which is
+   what `--font-sans` resolves to in the webview: "Run this — a run over task
+   smetana-hth is already going" is 315px, and 337px for a 14-character issue
+   id. `ContextMenu` spends 70px of its width on chrome before the label —
+   2×`--border-w`, 2×`--space-2` of panel padding, 2×`--space-4` of row padding,
+   the 14px icon column, the 14px gutter mirroring it and the two `--space-4`
+   gaps around the label — so 424 leaves the label 354px. That covers every id
+   up to about 14 characters with room to spare for the other two webviews'
+   fonts, where Segoe UI and Noto Sans have their own metrics and none of this
+   could be measured from here.
+
+   Compact needs no number of its own: density shrinks the space scale and
+   leaves `--text-sm` alone, so the chrome costs 60px there instead of 70 and
+   the label is 10px wider than it is here. Comfortable is the binding case.
+
+   The app-wide font size is the one thing this does not follow — it is a number
+   in px and the type grows past it. The long reason fits to a `uiFontSize` of
+   14 and is ellipsised above that, which is the same failure the old tooltip
+   never had. Now that the ceiling only binds the row that reaches it, raising
+   it would cost the ordinary four-verb menu nothing at all; what it would cost
+   is the busy card at the top of the font range, whose one long row would hang
+   further over the board than a 212px card has any business doing. So the
+   number stays where the measurement put it.
+
+   Costing nothing on a narrow board: the panel is fixed-position, right-aligned
+   to the trigger and clamped to the window by `EDGE`, so it opens leftwards
+   over the card and only a window under ~440px could not hold it — and only
+   with the long row on it, since anything shorter never reaches the ceiling.
+   That clamp is also what lets the copy in the Task & details header open at
+   all: the right column's minimum is 240px (`RIGHT_MIN` in
+   `views/panelWidths.js`), so the menu is wider than the panel it hangs in and
+   simply opens leftwards over the board, the same as a card in the last
+   column. */
+export const MENU_W = 424
+
 /* The card's play used to interpolate its reason into a tooltip, which grows to
    whatever it holds. A menu row grows too — `ContextMenu` sizes itself by its
    widest row — but only up to the caller's ceiling, past which the label is
    clipped with an ellipsis and a row has no tooltip and no `title` to recover
    the rest from. So the ceiling is measured rather than guessed against the
-   longest sentence `runScopes.js` composes, and `TaskCard`'s `MENU_W` is where
-   that measurement is written down. The fragment is lowercase, which is why it
+   longest sentence `runScopes.js` composes, and `MENU_W` above is where that
+   measurement is written down. The fragment is lowercase, which is why it
    joins with a dash rather than as a second sentence. */
 const runLabel = (reason) => (reason ? `Run this — ${reason}` : 'Run this')
 
