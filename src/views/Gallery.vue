@@ -40,6 +40,7 @@ import {
   GitPanel,
   Icon,
   IconButton,
+  ImageViewer,
   Input,
   KanbanBoard,
   KanbanSettings,
@@ -117,6 +118,29 @@ const MANY_ATTACHMENTS = Array.from({ length: 14 }, (_, i) => ({
   path: `${ATTACHMENTS[i % 2].path}.${i}`,
   name: `2026080-12131${i}-shot.png`
 }))
+
+/* A picture larger than any frame it is shown in, for the viewer: everything
+   that component does — fitting the whole of it, cropping nothing, scrolling
+   nowhere — is only visible on one that does not fit. It is written out as an
+   SVG rather than as a third base64 PNG because what is wanted from it is a
+   size, and 1200 by 420 pixels written out as pixels would be a kilobyte of
+   base64 sitting in this file. What the store actually holds is PNG and JPEG —
+   the Rust side sniffs the bytes and names the file after what they are — so
+   this one's name says svg rather than pretending otherwise. The greys inside
+   it are the picture, not styling: nothing inside a `data:` URL can reach a
+   token, which is the same limit `catppuccinIcon.js` carries. */
+const WIDE_SVG = `<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='420'>
+  <rect width='1200' height='420' fill='#c9d1d2'/>
+  <rect x='40' y='40' width='1120' height='60' fill='#6b777c'/>
+  <rect x='40' y='140' width='700' height='240' fill='#f4f7f7'/>
+  <rect x='780' y='140' width='380' height='240' fill='#a9b4b6'/>
+</svg>`
+const WIDE_ATTACHMENT = {
+  path: '/Users/you/Library/Application Support/com.invisor.smetana/attachments/20260806-121316-wide.svg',
+  name: '20260806-121316-wide.svg',
+  bytes: WIDE_SVG.length,
+  url: `data:image/svg+xml,${encodeURIComponent(WIDE_SVG)}`
+}
 
 /* What the toml crate actually produces for a misspelled key, caret line and
    all. Copied from a real failure rather than paraphrased: the run dialog shows
@@ -1546,11 +1570,19 @@ const menuTargetStyle = {
       <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <PromoteColumnModal :open="true" :count="12" :moved="9" :failed="3" @close="() => {}" @confirm="() => {}" />
       </div>
-      <AttachmentStrip :items="ATTACHMENTS" @remove="() => {}" />
+      <!-- Both strips stand in a frame, and the frame is not decoration here.
+           A thumbnail opens the image viewer, which covers the nearest
+           positioned ancestor — the dialog's own scrim in the app. With nothing
+           positioned around the strip there is no such ancestor short of the
+           page, so a click in these two cells would put the viewer over the
+           whole gallery. The box is what the dialog stands in for. -->
+      <div :style="{ position: 'relative', width: '340px', height: '260px', padding: 'var(--space-5)', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <AttachmentStrip :items="ATTACHMENTS" @remove="() => {}" />
+      </div>
       <!-- Past two rows the strip scrolls instead of growing: nothing bounds
            how many images are attached, and the dialog has no scrolling of its
            own to absorb them. -->
-      <div :style="{ width: '400px' }">
+      <div :style="{ position: 'relative', width: '400px', height: '260px', padding: 'var(--space-5)', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <AttachmentStrip :items="MANY_ATTACHMENTS" @remove="() => {}" />
       </div>
       <!-- Both wordings: the first run, which promises a file will appear, and
@@ -3128,6 +3160,21 @@ const menuTargetStyle = {
             <Button variant="danger">Discard</Button>
           </template>
         </Modal>
+      </div>
+      <!-- What a thumbnail in the new-task dialog's images strip opens. Framed
+           the way the dialogs above it are, and for the same reason: the viewer
+           covers the nearest positioned ancestor, so the frame is what stands in
+           for the modal it sits over in the app. A picture larger than the frame
+           is the state worth looking at — fitted whole, nothing cropped off it,
+           and no scrollbar anywhere. -->
+      <div :style="{ position: 'relative', height: '320px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ImageViewer :url="WIDE_ATTACHMENT.url" :name="WIDE_ATTACHMENT.name" @close="() => {}" />
+      </div>
+      <!-- The other end of the same rule, on the eight-pixel fixture the strip
+           draws: a picture smaller than the frame is left at its own size
+           rather than blown up to fill it. -->
+      <div :style="{ position: 'relative', height: '220px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ImageViewer :url="ATTACHMENTS[0].url" :name="ATTACHMENTS[0].name" @close="() => {}" />
       </div>
     </section>
   </div>
