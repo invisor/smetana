@@ -223,10 +223,25 @@ pub fn detect(input: DetectInput) -> Detected {
     // standing right in front of them went unread on those ticks, layer A
     // answered `Running`, and the agent row, both counters and the project tile
     // flickered between yellow and blue at the speed of typing (smetana-4a6).
-    // A session that is already `NeedsYou` has read this very frame once on a
-    // settled screen, so there is nothing left for the threshold to protect —
-    // layer B is asked anyway, and a dialog it can still see keeps the state
-    // where it is.
+    // So a session that is already `NeedsYou` is asked whatever the screen is
+    // doing, and what makes that safe is **the match itself, not an earlier
+    // settled reading**: layer B answering at all is the evidence that the
+    // dialog is still standing there, and a session already this loud cannot
+    // be made louder by reading one.
+    //
+    // Often no settled reading came first, and the difference matters to
+    // anyone reasoning about this. `NeedsYou` is reachable from `bell_pending`
+    // alone, with layer B never consulted, and Claude Code rings the bell as it
+    // *starts* drawing its dialog — so the ordinary sequence is: the bell
+    // arrives; layer A answers `NeedsYou` on a screen still being painted; the
+    // next tick finds `was == NeedsYou` and hands that half-drawn frame
+    // straight to layer B, which is exactly what `SETTLE` exists to refuse,
+    // reached by the front door. The cost is bounded and paid knowingly: the
+    // state is `NeedsYou` either way, so what a partial frame can get wrong is
+    // the question's text and its option list in the right-hand panel, for a
+    // tick or two, corrected the moment the screen settles. `claude.rs`'s own
+    // guards make even that unlikely — a question mark is required, the dialog
+    // is the last numbered block, and exactly one option must carry the cursor.
     //
     // What releases it is layer B itself rather than a timer: the moment the
     // person presses Return and the agent wipes the dialog, nothing matches and
@@ -730,20 +745,22 @@ mod tests {
     /// the split worth knowing before trusting the tests below. The fixture is
     /// `claude-2.1-permission-edit.txt`, captured under a PTY from a live
     /// session; reaching the frame these tests want live would mean driving a
-    /// real agent into a permission prompt, choosing the option that opens a
-    /// free-text field and photographing the screen between two keystrokes.
-    /// That costs model quota for a row whose only load-bearing property is
-    /// that it differs from the one sampled before it — the dialog above it,
-    /// which is what layer B actually reads, is the real capture and is
-    /// untouched.
+    /// real agent into a permission prompt, pressing **Tab to amend** — the
+    /// path the fixture's own last line offers (`Esc to cancel · Tab to
+    /// amend`), and the one that draws an editable row while the numbered
+    /// block above it stays exactly where it was — and then photographing the
+    /// screen between two keystrokes. That costs model quota for a row whose
+    /// only load-bearing property is that it differs from the one sampled
+    /// before it; the dialog above it, which is what layer B actually reads,
+    /// is the real capture and is untouched.
     fn dialog_being_answered(typed: &str) -> Vec<String> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/claude-2.1-permission-edit.txt");
         let mut screen: Vec<String> =
             std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect();
-        // Under the options, where the free-text field is drawn: the question
-        // and the numbered block a profile reads both sit above it, which is
-        // why typing cannot change what layer B sees.
+        // Under the options, where the amended text is drawn: the question and
+        // the numbered block a profile reads both sit above it, which is why
+        // typing cannot change what layer B sees.
         screen.push(format!("> {typed}"));
         screen
     }

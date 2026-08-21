@@ -286,8 +286,17 @@ leaves layer A in place, which is how the rest of that file already fails.
 in it**, and that asymmetry is load-bearing rather than an optimisation. A dialog is not drawn
 instantly, and a half-drawn frame would match a truncated question — so a session that has not been
 loud is read by layer B only once its screen has held still. A session that *is* already `needs-you`
-read this very frame once on a settled screen, so there is nothing left for the threshold to protect,
-and layer B is asked whatever the screen is doing. What forced the split is the person: typing an
+is asked whatever the screen is doing, and **what makes that safe is the match itself rather than any
+earlier reading**: layer B answering at all is the evidence that the dialog is still standing there,
+and a session already this loud cannot be made louder by reading one. Often no settled reading came
+first — `needs-you` is reachable from the bell alone, with layer B never consulted, and Claude Code
+rings as it *starts* drawing its dialog, so the ordinary sequence is bell, then layer A's `needs-you`
+on a half-painted screen, then that very frame handed to layer B on the next tick because `was` is
+already `needs-you`. That is where the threshold really is bypassed, and the cost is bounded: the
+state is `needs-you` either way, so what a partial frame can get wrong is the question's text and its
+option list in the right-hand panel, for a tick or two, corrected as soon as the screen settles —
+and `claude.rs`'s own guards (a question mark required, the last numbered block, exactly one option
+carrying the cursor) make even that unlikely. What forced the split is the person: typing an
 answer redraws the screen on every keystroke, so it never settles while they type, layer B went
 unasked on those ticks, layer A answered `running` — and the agent row, the scope bar's counter, the
 project header and the project tile all flickered yellow to blue and back at the speed of typing
