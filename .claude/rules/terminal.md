@@ -267,10 +267,9 @@ the agent's own output. Today it is fenced by horizontal rules with bare lines, 
 properties carry that weight — the options number themselves 1, 2, 3 … and the **last** such block on
 the screen is the dialog, since anything merely printed sits above it; and exactly one option carries
 the cursor, which prose never does. The question is the run of text directly above the options,
-ending at a blank line or at the rule under a diff preview, and must end in a question mark. Layer B
-is trusted only once the screen has held still for `SETTLE` (150 ms). And `idle` is deliberately
-quiet: a finished agent and a waiting agent both simply stop producing output, so loudness comes only
-from the bell or from a layer B match, never from silence alone.
+ending at a blank line or at the rule under a diff preview, and must end in a question mark. And
+`idle` is deliberately quiet: a finished agent and a waiting agent both simply stop producing output,
+so loudness comes only from the bell or from a layer B match, never from silence alone.
 
 That last rule is a rule **plus one named exception**: Claude Code's one-off folder-trust dialog,
 whose question is not the paragraph above the options — a link caption is (smetana-xh7). The second,
@@ -282,6 +281,25 @@ in the agent's own prose turn a session `needs-you` against a budget of one or t
 screen. `claude.rs` carries the rules and the refusals it was measured against, over fixtures
 captured under a PTY off claude 2.1.226. A wording change on Claude Code's side loses the reading and
 leaves layer A in place, which is how the rest of that file already fails.
+
+**`SETTLE` (150 ms of a still screen) is a condition for *entering* `needs-you` and never for staying
+in it**, and that asymmetry is load-bearing rather than an optimisation. A dialog is not drawn
+instantly, and a half-drawn frame would match a truncated question — so a session that has not been
+loud is read by layer B only once its screen has held still. A session that *is* already `needs-you`
+read this very frame once on a settled screen, so there is nothing left for the threshold to protect,
+and layer B is asked whatever the screen is doing. What forced the split is the person: typing an
+answer redraws the screen on every keystroke, so it never settles while they type, layer B went
+unasked on those ticks, layer A answered `running` — and the agent row, the scope bar's counter, the
+project header and the project tile all flickered yellow to blue and back at the speed of typing
+(smetana-4a6). The dialog had not moved; only the input row under it had. What releases the hold is
+layer B failing to match rather than any clock: the moment somebody presses Return and the agent
+wipes the dialog, layer A has the very next tick, with no ceiling to wait out. Holding it
+unconditionally while the screen is unsettled was the rejected version — a working agent repaints its
+spinner oftener than every 150 ms, so yellow would stick for the whole of a run. The named price is
+one tick: a half-drawn frame the profile cannot read mid-typing dips the state to `running` for ~64
+ms, which is why the current state reaches `detect` as `DetectInput::was`, filled by `reassess` from
+`live.session.state` before this tick's `apply`, and why `detect` is still a pure function with no
+clock and no memory in it.
 
 **Quiet is measured on the screen, not on the byte stream**, and that is what `Quiet` in `detect.rs`
 exists for. An agent that is waiting can still be talking: Claude Code 2.1 repaints an open
