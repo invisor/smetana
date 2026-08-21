@@ -48,6 +48,11 @@ pub const MAX_OPEN_TABS: usize = 50;
 /// adds custom ones; the cap is generous by that measure and only there to stop
 /// a garbage list from growing without bound.
 const MAX_COLUMNS: usize = 60;
+/// How many recently opened tasks a project remembers. The palette draws them
+/// under `Recent` with an empty query, and `RECENT_LIMIT` in `DesktopApp.vue` is
+/// the same number on the other side — three rows is a reminder, and a longer
+/// list would be a second search nobody asked for.
+const MAX_RECENT_TASKS: usize = 3;
 
 /// Appearance is about the person and their screen, hence shared by all projects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -290,6 +295,12 @@ pub struct ProjectState {
     pub side_tab: String,
     pub active_tab: String,
     pub selected_task: Option<String>,
+    /// The last three tasks somebody looked at in this project, newest first.
+    /// The front end maintains it — a watch on the selection, so the word means
+    /// "looked at" and not "found by searching" — and Rust only has to know the
+    /// field exists and what it defaults to, since the two default sets have to
+    /// agree or the defaults layer over there cannot clear it on a switch.
+    pub recent_tasks: Vec<String>,
     pub selected_path: Option<String>,
     /// Which repository the Git panel is showing, as an absolute path — the
     /// argument every command in `vcs/` takes anyway.
@@ -364,6 +375,7 @@ impl Default for ProjectState {
             side_tab: "files".into(),
             active_tab: "kanban".into(),
             selected_task: None,
+            recent_tasks: Vec::new(),
             selected_path: None,
             selected_repo: None,
             expanded: Vec::new(),
@@ -863,6 +875,12 @@ impl ProjectState {
     fn validate(&mut self) {
         one_of(&mut self.side_tab, &SIDE_TABS, "files");
         forget_if_junk(&mut self.selected_task, MAX_ID_LEN);
+        // Ids, so the identifier ceiling — and the same cleaning every other
+        // list here gets: empty and duplicate entries out, the length capped at
+        // what the front end itself keeps. A hand-edited file with thirty of
+        // them is trimmed rather than refused; the list is a convenience and no
+        // entry in it is load-bearing.
+        sane_list(&mut self.recent_tasks, MAX_RECENT_TASKS, MAX_ID_LEN);
         forget_if_junk(&mut self.selected_path, MAX_PATH_LEN);
         // A path, so the same ceiling. Membership is deliberately not checked:
         // which repositories a project has is not known here, and a name that
@@ -1820,6 +1838,30 @@ mod tests {
     fn a_file_written_before_the_column_order_reads_without_it() {
         let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"agents"}}}"#);
         assert!(settings.projects["/p"].column_order.is_empty(), "no order is bd's own order");
+    }
+
+    #[test]
+    fn a_file_written_before_the_recent_tasks_reads_without_them() {
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"agents"}}}"#);
+        assert!(
+            settings.projects["/p"].recent_tasks.is_empty(),
+            "nothing opened here yet, and the palette draws no Recent section"
+        );
+    }
+
+    #[test]
+    fn the_recent_tasks_keep_the_newest_and_lose_the_duplicates() {
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {
+            "recentTasks": ["bd-9", "bd-9", "", "bd-8", "bd-7", "bd-6"]
+        }}});
+
+        let stored = &settings_of(&text.to_string()).projects["/p"].recent_tasks;
+
+        assert_eq!(
+            stored,
+            &["bd-9", "bd-8", "bd-7"],
+            "newest first, the repeat and the empty entry gone, and the tail cut at the limit"
+        );
     }
 
     #[test]

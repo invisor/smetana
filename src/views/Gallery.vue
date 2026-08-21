@@ -24,6 +24,7 @@ import {
   ClaimedTasks,
   CodeBlock,
   ColumnHeader,
+  CommandPalette,
   ConflictModal,
   ContextMenu,
   DependencyMark,
@@ -72,7 +73,7 @@ import {
   TabBar,
   TaskCard,
   TaskInspector,
-  TaskSearch,
+  TaskSearchButton,
   TerminalView,
   Textarea,
   TypeBadge,
@@ -149,50 +150,176 @@ const runFixture = (state, extra = {}) => ({
   ...extra
 })
 
-/* A handful of issues in the shape `stores/tracker.js` holds them, so the
-   search field below has something to find. Deliberately awkward: one whose
-   only match is deep in its notes, so the row has to name the field and carry a
-   slice of text around the hit; one whose title is long enough to ellipsise;
-   and one whose id is the whole query. Type `bell` at the field to see the
-   first two, and `smetana-` to see all of them ranked by id prefix. */
-const SEARCH_ISSUES = [
+/* A handful of tasks in the shape `DesktopApp.vue` hands the palette them:
+   every issue in the project, the merge lock already gone and the status already
+   translated into this system's vocabulary. Chosen so that one of each row shape
+   is on screen at once — a blocked task, one with a parent, one with work
+   waiting on it, one with none of the three, a closed one, and one wearing a
+   status long enough to have to ellipsise inside its column. */
+const PALETTE_ISSUES = [
   {
-    id: 'smetana-ec9',
-    title: 'Scope bar headline',
-    status: 'closed',
-    issue_type: 'feature',
-    updated_at: '2026-08-19T09:00:00Z',
-    labels: []
+    id: 'holiday-curb-bhyv',
+    title: 'Remove the date of birth field from the account profile',
+    status: 'running',
+    parent: null,
+    updated_at: '2026-08-21T09:20:00Z'
   },
   {
-    id: 'smetana-24a',
-    title: 'Task search in the scope bar',
-    status: 'in_progress',
-    issue_type: 'feature',
-    updated_at: '2026-08-21T08:00:00Z',
-    description: 'A search field left of the bell that searches every task in the active project.',
-    labels: ['frontend']
+    id: 'holiday-curb-24db',
+    title: 'Drop dateOfBirth from the API contract and from the migration',
+    status: 'ready',
+    parent: 'holiday-curb-bhyv',
+    updated_at: '2026-08-21T08:00:00Z'
   },
   {
-    id: 'smetana-agh',
-    title: 'A title long enough that the row has to cut it off somewhere before the snippet begins',
-    status: 'open',
-    issue_type: 'bug',
-    updated_at: '2026-08-18T12:00:00Z',
-    notes:
-      'The run parked this one because the bell went quiet halfway through the night and nobody ' +
-      'could say whether the delivery had happened at all.',
-    labels: []
+    id: 'holiday-curb-3c9d',
+    title: 'Hide the age on the public profile',
+    status: 'blocked',
+    parent: null,
+    updated_at: '2026-08-20T19:00:00Z'
   },
   {
-    id: 'smetana-z9i',
-    title: 'Hide the parallel switch while a solo run is out',
-    status: 'closed',
-    issue_type: 'task',
-    updated_at: '2026-08-20T17:30:00Z',
-    labels: []
+    id: 'holiday-curb-b120',
+    title: 'Export an agent session to a file',
+    status: 'needs-you',
+    parent: null,
+    updated_at: '2026-08-20T18:10:00Z'
+  },
+  {
+    id: 'holiday-curb-91aa',
+    title: 'Retry the payment provider webhooks',
+    status: 'ready',
+    parent: null,
+    updated_at: '2026-08-20T11:00:00Z'
+  },
+  {
+    id: 'holiday-curb-0f31',
+    title: 'Clear the personal data out of the analytics exports',
+    status: 'done',
+    parent: null,
+    updated_at: '2026-08-19T15:30:00Z'
+  },
+  {
+    id: 'holiday-curb-77e1',
+    title: 'Worktree name collision when one is cut a second time',
+    status: 'ready-to-merge',
+    parent: 'holiday-curb-epic',
+    updated_at: '2026-08-19T09:00:00Z'
+  },
+  /* The six shapes above are the ones that have to be here. These are here for
+     a different reason and it is just as mechanical: the scroll area stops at
+     320px, so a list that fits inside it cannot show what the keyboard does when
+     it does not — and walking ↑ and ↓ through a list longer than the panel is
+     the one interaction in this component with nowhere else to be checked. The
+     count is sixteen because compact rows are 22px: twelve overflows the
+     comfortable panel and sits inside the compact one, which would have left
+     half the check unavailable in half the densities. */
+  {
+    id: 'holiday-curb-6b04',
+    title: 'Name the worktree after the task rather than after the branch',
+    status: 'running',
+    parent: null,
+    updated_at: '2026-08-18T16:40:00Z'
+  },
+  {
+    id: 'holiday-curb-a882',
+    title: 'Stop the retry loop doubling the webhook body',
+    status: 'failed',
+    parent: null,
+    updated_at: '2026-08-18T14:05:00Z'
+  },
+  {
+    id: 'holiday-curb-e31f',
+    title: 'Split the settings window into tabs',
+    status: 'human-check',
+    parent: 'holiday-curb-epic',
+    updated_at: '2026-08-18T10:30:00Z'
+  },
+  {
+    id: 'holiday-curb-c410',
+    title: 'Backfill the consent flag for accounts made before June',
+    status: 'ready',
+    parent: null,
+    updated_at: '2026-08-17T13:15:00Z'
+  },
+  {
+    id: 'holiday-curb-9d77',
+    title: 'Cache the provider status page lookups',
+    status: 'done',
+    parent: null,
+    updated_at: '2026-08-17T09:45:00Z'
+  },
+  {
+    id: 'holiday-curb-5e2a',
+    title: 'Rotate the analytics export credentials',
+    status: 'ready',
+    parent: null,
+    updated_at: '2026-08-16T18:00:00Z'
+  },
+  {
+    id: 'holiday-curb-42fa',
+    title: 'Drop the unused columns from the sessions table',
+    status: 'deferred',
+    parent: null,
+    updated_at: '2026-08-16T11:20:00Z'
+  },
+  {
+    id: 'holiday-curb-8ab3',
+    title: 'Report which webhook the retry belonged to',
+    status: 'ready',
+    parent: null,
+    updated_at: '2026-08-15T17:35:00Z'
+  },
+  {
+    id: 'holiday-curb-1c60',
+    title: 'Keep the export job from running twice on a restart',
+    status: 'awaiting-review',
+    parent: null,
+    updated_at: '2026-08-15T09:10:00Z'
   }
 ]
+
+/* The store's dependency maps, in the shape `dependencyEdges` gives them. Two
+   tasks wait on `bhyv`, which is what puts `git-fork 2` on its row and a `lock`
+   on theirs — and the palette reads these rather than an issue's own counters,
+   so a blocker that closes stops blocking here and on the board at the same
+   moment. */
+const PALETTE_EDGES = {
+  blockedBy: new Map([
+    ['holiday-curb-3c9d', ['holiday-curb-bhyv']],
+    ['holiday-curb-b120', ['holiday-curb-bhyv']]
+  ]),
+  blocking: new Map([['holiday-curb-bhyv', ['holiday-curb-3c9d', 'holiday-curb-b120']]])
+}
+
+/* What an empty query draws. The app keeps three — a watch on the selected task
+   writes them — and every fixture is listed here for the one reason the gallery
+   exists: every row shape has to be on screen at once to be checkable, and the
+   list has to be longer than the panel for the keyboard's scrolling to be
+   checkable at all. */
+const PALETTE_RECENT = PALETTE_ISSUES.map((issue) => issue.id)
+
+const PALETTE_SOME_RECENT = PALETTE_RECENT.slice(0, 3)
+
+/* The palette is `position: absolute`, the same as every other overlay here, so
+   the gallery hands it a box to be absolute inside — exactly what the modals
+   above get, and for the same reason.
+
+   Two heights, and the first is deliberately shorter than its own list: sixteen
+   fixtures do not fit the 320px the rows are drawn in, and not fitting is the
+   whole point of there being sixteen. The frame is tall enough for the panel —
+   the input row, the capped scroll area and the legend — and no taller, since a
+   frame sized to the list would hide the one behaviour the list was lengthened
+   to expose. The state frames below hold three rows each and need no room to
+   scroll. */
+const paletteFrameStyle = {
+  position: 'relative',
+  height: '560px',
+  border: 'var(--border-w) solid var(--border)',
+  overflow: 'hidden'
+}
+
+const paletteStateFrameStyle = { ...paletteFrameStyle, height: '340px' }
 
 /* A run's document, shortened. `report.rs` writes the real one and this is the
    same shape — its own `<style>`, its own colours, its own `prefers-color-scheme`
@@ -1679,20 +1806,14 @@ const menuTargetStyle = {
         />
       </div>
 
-      <!-- The search field, in the place it actually occupies: the bar's own
-           slot, immediately left of the bell. Narrow at rest; click into it and
-           it widens, and the list drops out of the top right corner of the
-           page rather than out of the bar, because it is `position: fixed` for
-           the reason the bell's panel is.
-
-           Type `bell` to see a title hit above a prose hit that names its field
-           and carries a slice of the notes around the match; type `smetana-` to
-           see four rows ranked by id prefix. ↑ and ↓ move the highlight, ⏎
-           opens, Esc closes and empties the field. -->
+      <!-- What the bar keeps of the search: a button saying the search exists
+           and which key opens it, in the slot it actually occupies — immediately
+           left of the bell. Hovering steps the surface up and changes neither
+           the colour nor the position, so a bar this dense cannot twitch. -->
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
         <ScopeIndicator
           repo="smetana"
-          branch="feature/smetana-24a-task-search-scope-bar"
+          branch="feature/smetana-mht-command-palette"
           headline="Run under way"
           headline-level="live"
           :dirty-count="4"
@@ -1700,34 +1821,95 @@ const menuTargetStyle = {
           :notifications="1"
         >
           <template #search>
-            <TaskSearch :issues="SEARCH_ISSUES" />
+            <TaskSearchButton />
           </template>
         </ScopeIndicator>
+      </div>
 
-        <!-- The four states the list has beyond a plain answer, each on its own
-             field: the question is out, the question came back with ids, the
-             question came back naming nothing, and the question was refused.
-             Only one list is on screen at a time — they all hang from the same
-             fixed corner — so focus them one after the other, typing `bell` into
-             each.
+      <!-- The palette, open, with an empty query — which is the `Recent`
+           screen. Every row shape is here at once and each is worth looking at:
+           `bhyv` carries `git-fork 2` for the two tasks waiting on it, `3c9d`
+           and `b120` carry the `lock` naming it, `24db` carries its parent,
+           `91aa` carries nothing, `0f31` is dimmed for being closed, and `77e1`
+           wears a status too long for its column and ellipsises inside it
+           instead of pushing the dot off the row.
 
-             The second is the whole point of the second tier: its two ids are
-             not in the instant hits at all, and they arrive under their own
-             divider with those hits left where they were. The third is the one
-             worth looking at hardest — `answered` with nothing to show for it is
-             `NONE`, a legitimate answer, and it has to be visible as an empty
-             group rather than as the list not changing, which is what a stopped
-             spinner over an unchanged list would be. -->
-        <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)' }">
-          <TaskSearch :issues="SEARCH_ISSUES" pending />
-          <TaskSearch
-            :issues="SEARCH_ISSUES"
-            answered
-            :semantic-ids="['smetana-z9i', 'smetana-24a']"
+           The list is deliberately longer than the 320px it is drawn in, which
+           is what makes the keyboard checkable: hold ↓ to the bottom and the
+           selected row stays in view, ↑ from the first row wraps to the last and
+           scrolls there, and the heading above the list never covers the row
+           that was just scrolled to — it is outside the scroll area for exactly
+           that reason.
+
+           It is live, and typing is how the rest of it is checked: type `date`
+           for the text matches under `Matching text` and the counter beside the
+           field; type `zzz` for the empty state, which is a block that appears
+           where the heading was rather than under it — there is never more than
+           one heading on this panel. `⌘⏎` puts the `meaning` chip in the field
+           and the mode row at the bottom into its second wording; nothing
+           answers here, since the agent is the app's and not the gallery's. ↑
+           and ↓ wrap at both ends, the mouse moves the same one highlight, and
+           `esc` closes. -->
+      <div :style="paletteFrameStyle">
+        <CommandPalette
+          open
+          :issues="PALETTE_ISSUES"
+          :edges="PALETTE_EDGES"
+          :recent="PALETTE_RECENT"
+        />
+      </div>
+
+      <!-- The three screens the meaning tier has, and the reason the heading
+           follows the answer rather than the mode.
+
+           The first is the wait: type `date` and the counter is a spinner while
+           the heading stays `Matching text` and the rows stay the text ones —
+           the agent has ninety seconds, and a heading that moved first would
+           spend them lying. The second is an answer: type `date` and the heading
+           becomes `By meaning` with the agent's own two ids in its own order.
+           The third is a refusal, standing where the empty state would, in the
+           failed colour and in the words `OneshotError` wrote — the handoff
+           draws no error state at all, which is a hole rather than a decision.
+
+           `answered` with no ids at all is the fourth, and it is the one worth
+           looking at hardest: the agent looked and named nothing, which is a
+           legitimate answer and gets a sentence of its own rather than the text
+           mode's, because nobody checked any substrings. Type `date` into it. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+        <div :style="paletteStateFrameStyle">
+          <CommandPalette
+            open
+            pending
+            :issues="PALETTE_ISSUES"
+            :edges="PALETTE_EDGES"
+            :recent="PALETTE_SOME_RECENT"
           />
-          <TaskSearch :issues="SEARCH_ISSUES" answered />
-          <TaskSearch
-            :issues="SEARCH_ISSUES"
+        </div>
+        <div :style="paletteStateFrameStyle">
+          <CommandPalette
+            open
+            answered
+            :issues="PALETTE_ISSUES"
+            :edges="PALETTE_EDGES"
+            :recent="PALETTE_SOME_RECENT"
+            :semantic-ids="['holiday-curb-0f31', 'holiday-curb-bhyv']"
+          />
+        </div>
+        <div :style="paletteStateFrameStyle">
+          <CommandPalette
+            open
+            answered
+            :issues="PALETTE_ISSUES"
+            :edges="PALETTE_EDGES"
+            :recent="PALETTE_SOME_RECENT"
+          />
+        </div>
+        <div :style="paletteStateFrameStyle">
+          <CommandPalette
+            open
+            :issues="PALETTE_ISSUES"
+            :edges="PALETTE_EDGES"
+            :recent="PALETTE_SOME_RECENT"
             error="Smetana looked for claude on your PATH and found nothing."
           />
         </div>

@@ -24,8 +24,8 @@ panel, and `gitSections` beside them), `editor` with its own `fontSize`, `agent`
 start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, `kanban`, how
 the board is drawn, and `git`, the one thing the app does on its own initiative. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
-absolute path to its content state (side tab, active tab, selected task, selected path,
-`selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`, `columnOrder`,
+absolute path to its content state (side tab, active tab, selected task, `recentTasks`, selected
+path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`, `columnOrder`,
 `runSettings`, `storageWarnedMib`, `usedAt`).
 
 `layout.gitSections` is the other thing at the root that could plausibly have gone under a project and
