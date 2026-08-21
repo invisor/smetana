@@ -24,10 +24,16 @@ log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
-# The one thing the app hands to the operating system rather than doing itself:
-# the About tab's link has to open in the person's browser, not inside the
-# webview, where it would replace the app with a web page and leave no way back.
+# The first of the two things the app hands to the operating system rather than
+# doing itself. The About tab's link has to open in the person's browser, not
+# inside the webview, where it would replace the app with a web page and leave
+# no way back; and the file tree's menu asks the platform's own file manager to
+# show an entry, which is a window this app has no business drawing.
 tauri-plugin-opener = "2"
+# The second: the file tree's menu puts a path on the system clipboard. A plugin
+# rather than `navigator.clipboard`, which wants a secure context and a gesture
+# the webview does not always agree it had.
+tauri-plugin-clipboard-manager = "2.3.2"
 tauri-plugin-shell = "2"
 tauri-plugin-window-state = "2"
 thiserror = "2"

@@ -51,3 +51,19 @@ export function relativeTo(root, path) {
   if (full === base) return ''
   return full.startsWith(`${base}/`) ? full.slice(base.length + 1) : null
 }
+
+/* The mark on the "…N more" stub row a truncated directory listing ends with,
+   and the test for one. A zero byte, because no filesystem lets one into a
+   name, so a real path cannot collide with a stub's.
+
+   Here rather than in `stores/files.js`, which invents the row, for the reason
+   at the top of this file: `FileTree.vue` has to recognise a stub too now. Its
+   context menu offers verbs about a path on disk — open a shell there, copy it,
+   show it in the file manager — and a stub names nothing at all, so the menu
+   must not open on one. A component importing the store to borrow the test
+   would have pulled Tauri into a `.vue` file, which is the one import rule this
+   front end has. The store re-exports it under the name it has always had, so
+   nothing that used it there moved. */
+export const STUB_MARK = '\u0000'
+
+export const isStubPath = (path) => typeof path === 'string' && path.includes(STUB_MARK)

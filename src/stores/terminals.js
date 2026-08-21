@@ -789,9 +789,9 @@ export async function createSession(project, intent = { kind: 'bare' }) {
   }
 }
 
-/* A shell of the person's own, in the project's root. A worker session like any
-   other and not an agent: no intent, no agent id, no profile — see
-   `terminal_shell` in `src-tauri/src/terminal/commands.rs`.
+/* A shell of the person's own. A worker session like any other and not an
+   agent: no intent, no agent id, no profile — see `terminal_shell` in
+   `src-tauri/src/terminal/commands.rs`.
 
    Nothing here touches `activeId`: a shell has no row in the agents panel to
    select, and the tab it opens comes from the session appearing in the list.
@@ -803,10 +803,19 @@ export async function createSession(project, intent = { kind: 'bare' }) {
 
    The refusal is reported and not rethrown, the way `removeSession`'s is: there
    is no dialog to keep open and nothing on screen to take back — the toast is
-   the whole of what a caller could do with it. */
-export async function createShell(project) {
+   the whole of what a caller could do with it.
+
+   `cwd` is where inside the project the shell starts, as a path relative to the
+   root. The file tree's menu is the only caller that names one, and `null` is
+   what this function meant before there was one: the project's own root. It is
+   checked on the Rust side with `resolve_within`, like every other path this app
+   takes from the front end, so a path leading outside the project is refused and
+   no session is made — see `shell_cwd` in `src-tauri/src/terminal/service.rs`.
+   Not checked here as well: two copies of that rule is one to keep true, and the
+   one that matters is the one standing next to the spawn. */
+export async function createShell(project, cwd = null) {
   try {
-    const session = await invoke('terminal_shell', { project })
+    const session = await invoke('terminal_shell', { project, cwd })
     upsert(session)
     terminalState.lastError = null
     return session

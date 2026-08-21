@@ -1223,6 +1223,17 @@ const branchMenu = ref(null)
 const refusedBranchMenu = ref(null)
 const BRANCH_MENU = branchMenuItems()
 const REFUSED_BRANCH_MENU = branchMenuItems({ allowed: false })
+/* Room for the tree and room under it. The empty space below the last row is
+   what opens the root's menu, and a box the height of its rows has none — at
+   320px this fixture overflowed in comfortable density and the second half of
+   the gesture could be checked in exactly one of the four combinations. */
+const fileMenuBoxStyle = {
+  width: '240px',
+  height: '420px',
+  overflow: 'auto',
+  border: 'var(--border-w) solid var(--border)',
+  borderRadius: 'var(--radius-3)'
+}
 const menuTargetStyle = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   width: '200px', height: 'calc(3 * var(--row-h))',
@@ -1946,6 +1957,40 @@ const menuTargetStyle = {
           </template>
           <template #right><Panel title="Task" side="right" collapsed /></template>
         </AppShell>
+      </div>
+    </section>
+
+    <!-- The tree's own context menu, which nothing else on this page can show:
+         `PointerMenu` draws nothing until a secondary click gives it a point,
+         and the rows here are the tree's rather than a fixture. Two copies,
+         because the one row that changes between them is Attach to agent —
+         live on the left, greyed on the right with the reason written into the
+         label, since a row in this panel has no tooltip and no title.
+
+         Both boxes are taller than their trees on purpose: the space below the
+         last row opens the root's menu, which is the one without Attach to
+         agent or Delete on it, and the only way to reach the second half of
+         this menu in a project whose first screen is nothing but folders. -->
+    <section :style="sectionStyle">
+      <div :style="headStyle">File tree menu</div>
+      <div :style="rowStyle">
+        <div :style="fileMenuBoxStyle">
+          <FileTree
+            :nodes="galleryTree"
+            :expanded="galleryTreeExpanded"
+            selected-path="Cargo.toml"
+            has-agent-session
+            @action="() => {}"
+          />
+        </div>
+        <div :style="fileMenuBoxStyle">
+          <FileTree
+            :nodes="galleryTree"
+            :expanded="galleryTreeExpanded"
+            selected-path="Cargo.toml"
+            @action="() => {}"
+          />
+        </div>
       </div>
     </section>
 
