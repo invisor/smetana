@@ -65,6 +65,9 @@ pub const IDLE_AFTER: Duration = Duration::from_secs(3);
 /// How long the screen must hold still before a profile trusts it: a dialog
 /// is not drawn instantly, and a half-drawn frame would match a truncated
 /// question.
+///
+/// **It guards entering `NeedsYou` and not staying there** — the asymmetry is
+/// `detect`'s and is explained there.
 pub const SETTLE: Duration = Duration::from_millis(150);
 
 /// How long the screen has looked exactly as it does now — layer A's clock,
@@ -193,6 +196,15 @@ pub struct DetectInput<'a> {
     /// interface being read; a shell has no harness, so the reading is skipped
     /// rather than handed to whichever profile happened to be configured.
     pub profile: Option<&'static dyn Profile>,
+    /// The state this session was in when this tick started — `Session::state`
+    /// as `reassess` read it, before the `apply` this answer feeds.
+    ///
+    /// It is the one thing layer B's threshold is asymmetric about, and
+    /// `detect` is where that rule is written down. It arrives as a field
+    /// rather than being looked up from the session here, which is what keeps
+    /// this function pure: the tests below drive it with a state of their own
+    /// and no session and no clock anywhere near them.
+    pub was: SessionState,
 }
 
 pub struct Detected {
@@ -202,8 +214,45 @@ pub struct Detected {
 
 pub fn detect(input: DetectInput) -> Detected {
     // Layer B: the profile knows exactly what is being asked, so it takes
-    // precedence. Trusted only once the screen has settled — see SETTLE.
-    if input.still_for >= SETTLE {
+    // precedence.
+    //
+    // **`SETTLE` is a condition for entering `NeedsYou`, never for staying in
+    // it**, and that asymmetry is the whole of this rule. A person typing an
+    // answer redraws the screen on every keystroke, so it never settles while
+    // they type: asking layer B only on a settled screen meant the dialog
+    // standing right in front of them went unread on those ticks, layer A
+    // answered `Running`, and the agent row, both counters and the project tile
+    // flickered between yellow and blue at the speed of typing (smetana-4a6).
+    // So a session that is already `NeedsYou` is asked whatever the screen is
+    // doing, and what makes that safe is **the match itself, not an earlier
+    // settled reading**: layer B answering at all is the evidence that the
+    // dialog is still standing there, and a session already this loud cannot
+    // be made louder by reading one.
+    //
+    // Often no settled reading came first, and the difference matters to
+    // anyone reasoning about this. `NeedsYou` is reachable from `bell_pending`
+    // alone, with layer B never consulted, and Claude Code rings the bell as it
+    // *starts* drawing its dialog — so the ordinary sequence is: the bell
+    // arrives; layer A answers `NeedsYou` on a screen still being painted; the
+    // next tick finds `was == NeedsYou` and hands that half-drawn frame
+    // straight to layer B, which is exactly what `SETTLE` exists to refuse,
+    // reached by the front door. The cost is bounded and paid knowingly: the
+    // state is `NeedsYou` either way, so what a partial frame can get wrong is
+    // the question's text and its option list in the right-hand panel, for a
+    // tick or two, corrected the moment the screen settles. `claude.rs`'s own
+    // guards make even that unlikely — a question mark is required, the dialog
+    // is the last numbered block, and exactly one option must carry the cursor.
+    //
+    // What releases it is layer B itself rather than a timer: the moment the
+    // person presses Return and the agent wipes the dialog, nothing matches and
+    // layer A has the very next tick, with no ceiling to wait out. The price,
+    // named in advance: if the profile fails to read one half-drawn frame in
+    // the middle of typing, the state dips to `Running` for a single tick
+    // (~64 ms). That is an order of magnitude shorter than the flicker it
+    // replaces, and deliberately not smoothed away by counting consecutive
+    // misses — a counter would be state, and this function has none.
+    let holding = input.was == SessionState::NeedsYou;
+    if input.still_for >= SETTLE || holding {
         if let Some(question) = input.profile.and_then(|p| p.question(input.screen)) {
             return Detected { state: SessionState::NeedsYou, question: Some(question) };
         }
@@ -243,6 +292,10 @@ mod tests {
             screen: Box::leak(lines(screen).into_boxed_slice()),
             transcript: false,
             profile: Some(crate::agents::resolve("claude").unwrap()),
+            // A session that has not been loud before this tick. The tests
+            // about holding `NeedsYou` say so for themselves rather than
+            // borrowing this default.
+            was: SessionState::Running,
         }
     }
 
@@ -295,6 +348,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             profile: Some(crate::agents::resolve("claude").unwrap()),
+            was: SessionState::Running,
         });
         assert_eq!(out.state, SessionState::NeedsYou);
         assert!(out.question.expect("there is no question").text.ends_with('?'));
@@ -302,12 +356,16 @@ mod tests {
 
     #[test]
     fn a_dialog_still_being_drawn_is_not_trusted_to_the_profile() {
+        // Entering `NeedsYou`, which is the half `SETTLE` still guards: this
+        // session has never been loud, so there is no earlier settled reading
+        // of this screen behind it and a half-drawn frame is all there is.
         let out = detect(DetectInput {
             bell_pending: false,
             still_for: Duration::from_millis(20),
             screen: dialog(),
             transcript: false,
             profile: Some(crate::agents::resolve("claude").unwrap()),
+            was: SessionState::Running,
         });
         assert!(out.question.is_none(), "the profile believed a half-drawn screen");
         assert_eq!(out.state, SessionState::Running);
@@ -321,6 +379,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             profile: Some(crate::agents::resolve("claude").unwrap()),
+            was: SessionState::Running,
         });
         assert_eq!(out.state, SessionState::NeedsYou);
     }
@@ -335,6 +394,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             profile: None,
+            was: SessionState::Running,
         });
         // A dialog a profile would have read, on a screen that has no profile
         // to read it: the shell is simply quiet, which is what it looks like.
@@ -347,6 +407,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             profile: None,
+            was: SessionState::Running,
         });
         // The bell is the person's own `\a`, and it costs nothing to believe.
         assert_eq!(rang.state, SessionState::NeedsYou);
@@ -363,6 +424,7 @@ mod tests {
             screen: dialog(),
             transcript: false,
             profile: Some(no_layer_b()),
+            was: SessionState::Running,
         });
         assert!(out.question.is_none(), "a profile with no layer B was given one");
     }
@@ -420,8 +482,12 @@ mod tests {
     fn tick_as(quiet: &mut Quiet, at: Instant, screen: &[String], batch: bool) -> SessionState {
         let still_for = quiet.still_for(screen, at);
         let profile = Some(no_layer_b());
+        // A profile with no layer B is asked either way and answers `None`
+        // either way, so what this tick was in before it does not reach the
+        // answer: these simulations are about layer A alone.
+        let was = SessionState::Running;
         let input =
-            DetectInput { bell_pending: false, still_for, screen, transcript: batch, profile };
+            DetectInput { bell_pending: false, still_for, screen, transcript: batch, profile, was };
         detect(input).state
     }
 
@@ -603,6 +669,7 @@ mod tests {
             screen: &screen,
             transcript: true,
             profile: Some(no_layer_b()),
+            was: SessionState::Running,
         });
         assert_eq!(out.state, SessionState::NeedsYou);
     }
@@ -618,6 +685,7 @@ mod tests {
             screen: dialog(),
             transcript: true,
             profile: Some(crate::agents::resolve("claude").unwrap()),
+            was: SessionState::Running,
         });
         assert_eq!(out.state, SessionState::NeedsYou);
         assert!(out.question.is_some(), "a batch's dialog was read as no question");
@@ -668,5 +736,119 @@ mod tests {
             Duration::from_secs(1),
             "the restart threw away the screen as well as the clock"
         );
+    }
+
+    /// A real permission dialog off claude 2.1, with one row of a half-typed
+    /// answer under the options.
+    ///
+    /// **That row is synthetic and the rest of the screen is not**, which is
+    /// the split worth knowing before trusting the tests below. The fixture is
+    /// `claude-2.1-permission-edit.txt`, captured under a PTY from a live
+    /// session; reaching the frame these tests want live would mean driving a
+    /// real agent into a permission prompt, pressing **Tab to amend** — the
+    /// path the fixture's own last line offers (`Esc to cancel · Tab to
+    /// amend`), and the one that draws an editable row while the numbered
+    /// block above it stays exactly where it was — and then photographing the
+    /// screen between two keystrokes. That costs model quota for a row whose
+    /// only load-bearing property is that it differs from the one sampled
+    /// before it; the dialog above it, which is what layer B actually reads,
+    /// is the real capture and is untouched.
+    fn dialog_being_answered(typed: &str) -> Vec<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/claude-2.1-permission-edit.txt");
+        let mut screen: Vec<String> =
+            std::fs::read_to_string(path).unwrap().lines().map(str::to_owned).collect();
+        // Under the options, where the amended text is drawn: the question and
+        // the numbered block a profile reads both sit above it, which is why
+        // typing cannot change what layer B sees.
+        screen.push(format!("> {typed}"));
+        screen
+    }
+
+    /// One detection tick with a profile that does read dialogs, told what the
+    /// session was in before it. `tick_as` above cannot serve: it is fixed to
+    /// `no_layer_b`, and layer B is the whole subject here.
+    fn tick_watched(
+        quiet: &mut Quiet,
+        at: Instant,
+        screen: &[String],
+        was: SessionState,
+    ) -> Detected {
+        let still_for = quiet.still_for(screen, at);
+        detect(DetectInput {
+            bell_pending: false,
+            still_for,
+            screen,
+            transcript: false,
+            profile: Some(crate::agents::resolve("claude").unwrap()),
+            was,
+        })
+    }
+
+    #[test]
+    fn typing_an_answer_never_takes_the_session_out_of_needs_you() {
+        // The defect (smetana-4a6). Every keystroke changed the picture, so the
+        // screen never held still for `SETTLE` and layer B was not asked at
+        // all; layer A saw a rung-and-cleared bell well short of `IDLE_AFTER`
+        // and answered `Running`. The dialog had not moved — only the input row
+        // under it — so the row, the counters and the project tile flickered
+        // yellow to blue and back at the speed of somebody typing.
+        let mut quiet = Quiet::new();
+        let start = Instant::now();
+        let mut state = SessionState::Starting;
+        let mut at = start;
+
+        // The dialog stands untouched until it settles: this is the entry,
+        // which is what `SETTLE` still guards.
+        let waiting = dialog_being_answered("");
+        while at < start + Duration::from_secs(1) {
+            state = tick_watched(&mut quiet, at, &waiting, state).state;
+            at += SAMPLE;
+        }
+        assert_eq!(state, SessionState::NeedsYou, "a settled dialog was not read at all");
+
+        // And now somebody answers it, one character per sample — nothing else
+        // about the screen moves.
+        let answer = "use the Write tool instead";
+        for taken in 1..=answer.len() {
+            let screen = dialog_being_answered(&answer[..taken]);
+            let out = tick_watched(&mut quiet, at, &screen, state);
+            state = out.state;
+            assert_eq!(
+                state,
+                SessionState::NeedsYou,
+                "typing {taken} characters of an answer moved the session off needs-you"
+            );
+            // The question travels with the state on every one of those ticks:
+            // `Session::apply` drops it on any other state, so a dip would
+            // blank the panel's phrase as well as its colour.
+            assert!(out.question.is_some(), "the question was lost while it was being answered");
+            at += SAMPLE;
+        }
+    }
+
+    #[test]
+    fn the_dialog_leaving_the_screen_ends_needs_you_on_the_next_tick() {
+        // The other half of the rule, and what makes holding safe: the release
+        // is layer B failing to match, not a clock. The person presses Return,
+        // the agent wipes the dialog and goes back to work, and the very first
+        // sample of that screen is `Running` — 64 ms after the change, with
+        // `SETTLE` nowhere in it.
+        let mut quiet = Quiet::new();
+        let start = Instant::now();
+        let mut state = SessionState::Starting;
+        let mut at = start;
+        let waiting = dialog_being_answered("");
+        while at < start + Duration::from_secs(1) {
+            state = tick_watched(&mut quiet, at, &waiting, state).state;
+            at += SAMPLE;
+        }
+        assert_eq!(state, SessionState::NeedsYou);
+
+        // No numbered block and no cursor on one: an agent working again.
+        let working = lines(&["⏺ Update(tabs.js)", "  Updated tabs.js", "✻ Thinking…"]);
+        let out = tick_watched(&mut quiet, at, &working, state);
+        assert_eq!(out.state, SessionState::Running, "yellow stuck after the dialog had gone");
+        assert!(out.question.is_none());
     }
 }

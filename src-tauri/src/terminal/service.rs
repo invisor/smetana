@@ -434,6 +434,11 @@ fn reassess(app: &AppHandle, sessions: &mut HashMap<SessionId, Live>) {
             // agent having stopped. See `DetectInput::transcript`.
             transcript: live.transcript.is_some(),
             profile: live.profile,
+            // The state as it stands *before* this tick's `apply`, which is
+            // the whole of what layer B's threshold is asymmetric about: a
+            // session already waiting on a person keeps that reading while
+            // they type an answer into it. See `detect`.
+            was: live.session.state,
         });
         let before = (live.session.state, live.session.question.clone());
         live.session.apply(out.state, out.question);
