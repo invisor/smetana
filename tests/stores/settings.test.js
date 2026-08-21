@@ -160,6 +160,21 @@ describe('a project\'s layout', () => {
     expect(ipc.calls('settings_load')).toHaveLength(before)
   })
 
+  it("clears one project's recent tasks when another project is opened", async () => {
+    /* The defaults layer can only clear a key that is in the defaults object,
+       and this one has to be cleared: the palette draws these under `Recent`,
+       and a previous project's three tasks standing under the next project's
+       board would be three rows nobody there has ever opened. */
+    ipc.on('settings_load', { project: { recentTasks: ['a', 'b', 'c'] } })
+    await settings.loadSettings()
+    expect(settings.settings.project.recentTasks).toEqual(['a', 'b', 'c'])
+
+    ipc.on('settings_load', { project: {} })
+    await settings.loadProjectLayout('/new')
+
+    expect(settings.settings.project.recentTasks).toEqual([])
+  })
+
   it('a section is merged in place: the reference to the object stays the same', async () => {
     ipc.on('settings_load', {})
     await settings.loadSettings()

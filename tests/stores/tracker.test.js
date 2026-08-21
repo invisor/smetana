@@ -173,6 +173,26 @@ describe('boardColumns', () => {
     expect(blocked.blockingIds).toEqual([])
   })
 
+  it('exposes the dependency maps, so the palette reads one rule and not two', async () => {
+    // The command palette draws a row's one relation from these maps rather
+    // than from the issue's own counters, and the maps carry a rule the raw
+    // fields do not: a closed blocker no longer blocks. Exported so there is
+    // one implementation of that rule rather than two that drift.
+    await start(
+      snapshot({
+        issues: [
+          issue({ id: 'bd-1' }),
+          issue({ id: 'bd-2', dependencies: [edge({ issue_id: 'bd-2', depends_on_id: 'bd-1' })] })
+        ]
+      })
+    )
+
+    const { blockedBy, blocking } = tracker.dependencyEdges.value
+
+    expect(blockedBy.get('bd-2')).toEqual(['bd-1'])
+    expect(blocking.get('bd-1')).toEqual(['bd-2'])
+  })
+
   it('an open task with an unfinished blocker sits in the blocked column, and closing the blocker releases it', async () => {
     // The whole of the unblocking mechanism: it is worked out here on every
     // snapshot, the way `bd ready` does it, so there is no stored status and

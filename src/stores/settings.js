@@ -103,6 +103,17 @@ const defaults = () => ({
     sideTab: 'files',
     activeTab: 'kanban',
     selectedTask: null,
+    /* The last three tasks somebody looked at here, newest first. Listed rather
+       than left out, for the reason `runSettings` below spells out: applySection
+       is Object.assign(target, defaults, stored), so a key missing from this
+       object is a key the defaults layer cannot clear, and switching projects
+       would leave one project's recents standing under another project's board.
+
+       Written by a watch on `selectedTask` in `DesktopApp.vue` rather than by
+       the command palette, so "recent" means every task somebody opened — from
+       the board, from a run's claimed list, from anywhere — and not only the
+       ones they found by searching. */
+    recentTasks: [],
     selectedPath: null,
     /* Which repository the Git panel is showing, by absolute path — null until
        somebody has opened that tab in this project. Listed here for the reason

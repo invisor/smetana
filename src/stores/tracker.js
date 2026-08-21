@@ -69,8 +69,13 @@ export const issueById = (id) => trackerState.issues.get(id)
    The ids and not merely how many: a card's tooltip names the tasks that block
    it, and "1 task blocks this one" is the one thing a person looking at a
    blocked card already knows. The counts below are `.length` of these, so the
-   number and the names cannot disagree — they are one fact projected twice. */
-const dependencyEdges = computed(() => {
+   number and the names cannot disagree — they are one fact projected twice.
+
+   Exported because the command palette needs the same answer:
+   `components/shell/commandPalette.js` draws a row's one relation from these
+   maps rather than from the issue's own `dependencies` and `dependent_count`, so
+   a closed blocker stops blocking in both places at once. */
+export const dependencyEdges = computed(() => {
   /* A blocker only blocks while it is unfinished, so a closed one is dropped
      here and the card stops being blocked the moment it closes. One absent from
      the board counts as satisfied too — the same rule `runs/queue.rs` applies,

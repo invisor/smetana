@@ -9,7 +9,7 @@
    The core moment this screen is built for: you come back after two hours and
    read, in three seconds, what finished, what stalled, and what is waiting for
    you. Hence the loud budget — exactly one card and one callout shout here. */
-import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
@@ -47,7 +47,7 @@ import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
-import { TaskSearch, TerminalView } from '../components/index.js'
+import { CommandPalette, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import {
   agentCounts,
@@ -67,6 +67,7 @@ import {
   boardColumns,
   clearSemantic,
   deleteIssue,
+  dependencyEdges,
   initTracker,
   isLockIssue,
   issueById,
@@ -1256,13 +1257,63 @@ const confirmPromote = async () => {
    the same exclusion `boardColumns` makes, and made here rather than inside the
    rule because `isLockIssue` is the store's and the rule is deliberately free
    of both Vue and Tauri. Closed issues stay in, and so do the ones the board is
-   not drawing today: reaching past the board is the point of searching. */
+   not drawing today: reaching past the board is the point of searching.
+
+   Cut down to the five fields the palette draws, and the status translated on
+   the way through, for the same reason the lock is dropped here: `toUiStatus`
+   is the store's vocabulary and the palette is a component, which sees this
+   system's statuses and never bd's. */
 const searchableIssues = computed(() =>
-  [...trackerState.issues.values()].filter((issue) => !isLockIssue(issue))
+  [...trackerState.issues.values()]
+    .filter((issue) => !isLockIssue(issue))
+    .map((issue) => ({
+      id: issue.id,
+      title: issue.title,
+      status: toUiStatus(issue.status),
+      parent: issue.parent ?? null,
+      updated_at: issue.updated_at
+    }))
 )
 
-/* The field itself, so ⌘F below can put the keyboard in it. */
-const taskSearch = ref(null)
+/* The bar's button, so the palette can hand the keyboard back to the thing it
+   was opened from. */
+const searchButton = ref(null)
+
+const paletteOpen = ref(false)
+
+/* Opening says so out loud, because the bell hangs from the same bar and its
+   panel is excluded from its own "anything outside closes it" rule — see
+   `onFindKey` below, which has recorded that since the field lived here. */
+const openPalette = () => {
+  closeNotifications()
+  paletteOpen.value = true
+}
+
+/* Focus goes back where it came from, which is the one thing a modal owes the
+   keyboard: closing with Esc must not drop the person at the top of the
+   document. */
+const closePalette = () => {
+  paletteOpen.value = false
+  nextTick(() => searchButton.value?.focus())
+}
+
+/* The last three tasks somebody looked at, newest first, without repeats.
+
+   Written from the selection rather than from the palette, and that is what
+   makes the word on screen mean what it reads as: five places assign
+   `selectedTask` and two of them null it, so a list maintained at each call site
+   would be five chances to forget one — and it would also make "recent" mean
+   "found by searching" rather than "looked at". */
+const RECENT_LIMIT = 3
+
+watch(
+  () => project.selectedTask,
+  (id) => {
+    if (!id) return
+    const kept = project.recentTasks.filter((seen) => seen !== id)
+    project.recentTasks = [id, ...kept].slice(0, RECENT_LIMIT)
+  }
+)
 
 /* A click on a card is an explicit request to see that card, and it takes the
    right column back from whatever an agent's row put in it. Without this,
@@ -1768,10 +1819,10 @@ const onSaveKey = (event) => {
   if (fileTabActive.value) saveTab(project.activeTab)
 }
 
-/* Cmd+F / Ctrl+F puts the keyboard in the search field. `event.code` and not
-   `event.key`, the same discipline `onSaveKey` above records: `event.key` is a
-   non-Latin character under a non-Latin layout and 'F' under Caps Lock, and the
-   shortcut would simply not fire in either case.
+/* Cmd+F / Ctrl+F opens the command palette. `event.code` and not `event.key`,
+   the same discipline `onSaveKey` above records: `event.key` is a non-Latin
+   character under a non-Latin layout and 'F' under Caps Lock, and the shortcut
+   would simply not fire in either case.
 
    Cancelled in any case, like the save: the webview's own find bar is the
    platform's rather than this product's, and it would search the rendered board
@@ -1791,21 +1842,51 @@ const onSaveKey = (event) => {
    Closing the bell is the same "anything else closes it" rule the panel already
    follows, applied to the one thing inside the scope bar that now opens a
    surface of its own: both hang from the same corner at the same width and the
-   same z, and the panel is later in the template, so a list opened under an
-   open bell would be drawn underneath it with nothing on screen saying why. */
+   same z, and the panel is later in the template, so a surface opened under an
+   open bell would be drawn underneath it with nothing on screen saying why.
+
+   It keeps this key even though ⌘K below is the palette's own: cancelling is
+   mandatory here whatever happens next, since the webview's find bar would
+   search the rendered board, and a key that is intercepted, cancelled and then
+   does nothing is worse than a second door to the same room. */
 const onFindKey = (event) => {
   if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
   if (event.code !== 'KeyF') return
   if (event.target?.closest?.('.cm-editor')) return
   event.preventDefault()
-  closeNotifications()
-  taskSearch.value?.focus()
+  openPalette()
+}
+
+/* Cmd+K / Ctrl+K opens the same palette, and is the key the panel itself
+   advertises on the bar's button. `event.code` again, for the reason the two
+   above give.
+
+   **Except where this key is already spoken for, which is two places and not
+   one.** `Ctrl+K` in a shell is kill-to-end-of-line, and taking it would cost
+   somebody a readline binding they use every day in exchange for a second door
+   to a palette ⌘F already opens. The editor is the same case and was missed at
+   first: CodeMirror's `defaultKeymap` folds in `emacsStyleKeymap` on macOS, so
+   `Ctrl-k` is `deleteToLineEnd` inside `.cm-editor` — and it cancels the default
+   without stopping propagation, exactly as its Mod-f binding does, so this
+   listener ran anyway and killed to end of line *and* opened a modal over the
+   file. Both checks come before `preventDefault`, so both keys are left entirely
+   alone; the classes are the ones xterm.js and CodeMirror put on the elements
+   they render into, which are the only marks those hosts carry. */
+const onPaletteKey = (event) => {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+  if (event.code !== 'KeyK') return
+  if (event.target?.closest?.('.xterm')) return
+  if (event.target?.closest?.('.cm-editor')) return
+  event.preventDefault()
+  openPalette()
 }
 
 onMounted(() => window.addEventListener('keydown', onSaveKey))
 onUnmounted(() => window.removeEventListener('keydown', onSaveKey))
 onMounted(() => window.addEventListener('keydown', onFindKey))
 onUnmounted(() => window.removeEventListener('keydown', onFindKey))
+onMounted(() => window.addEventListener('keydown', onPaletteKey))
+onUnmounted(() => window.removeEventListener('keydown', onPaletteKey))
 
 /* The order of the branches runs from "the file does not exist as text" to
    "the file is there but something happened to it": `error` locks the field and
@@ -2398,25 +2479,35 @@ const toastStackStyle = {
         <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
       </template>
 
-      <!-- Every task in the project, searchable from the top of the window.
-           The list it drops is the one place on screen that reaches past the
-           board: a closed task, and one in a column the board is not drawing
-           today, are both findable here and nowhere else. -->
+      <!-- All the bar keeps of the search: the door, and the key that opens it.
+           The palette itself is below, outside this bar. -->
       <template #search>
-        <TaskSearch
-          ref="taskSearch"
-          :issues="searchableIssues"
-          :pending="searchState.pending"
-          :error="searchState.error ?? ''"
-          :semantic-ids="searchState.ids"
-          :answered="searchState.answered"
-          @open="closeNotifications"
-          @select="selectFromBoard"
-          @semantic="searchSemantic"
-          @reset="clearSemantic"
-        />
+        <TaskSearchButton ref="searchButton" @open="openPalette" />
       </template>
     </ScopeIndicator>
+
+    <!-- Every task in the project, searchable from the middle of the window.
+         What it finds is the one thing on screen that reaches past the board: a
+         closed task, and one in a column the board is not drawing today, are
+         both findable here and nowhere else.
+
+         Outside `ScopeIndicator` for the reason the bell's panel below is: the
+         bar is a flex item in a column that clips, and an overlay positioned
+         inside it would be cut off at its own first row. -->
+    <CommandPalette
+      :open="paletteOpen"
+      :issues="searchableIssues"
+      :edges="dependencyEdges"
+      :recent="project.recentTasks"
+      :pending="searchState.pending"
+      :error="searchState.error ?? ''"
+      :semantic-ids="searchState.ids"
+      :answered="searchState.answered"
+      @close="closePalette"
+      @select="selectFromBoard"
+      @semantic="searchSemantic"
+      @reset="clearSemantic"
+    />
 
     <!-- The bell's panel, hung under the corner it was opened from. Fixed
          rather than absolute: the bar is a flex item in a column that clips,
