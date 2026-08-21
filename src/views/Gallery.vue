@@ -5,7 +5,7 @@
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
-import { taskMenuItems } from '../components/kanban/taskMenu.js'
+import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import {
   AboutSettings,
@@ -3008,15 +3008,16 @@ const menuTargetStyle = {
              keyboard walk and the flipping can be looked at without a board
              behind them.
 
-             At the card's own width, not the component's default. The second
-             one is the case that width exists for — the greyed Run row carries
+             At the menu's own width — `MENU_W`, imported rather than written
+             out, since the measurement has one home. The second one is the
+             case that width exists for — the greyed Run row carries
              the whole of `scopeBusyReason`'s sentence, and at 200 it is
              ellipsised with no tooltip to recover it. Checking the fix means
              seeing it at the size the board actually draws. -->
         <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', alignItems: 'flex-start' }">
-          <MenuButton :items="CARD_MENU" :width="424" label="Actions for bd-a1b2" @select="() => {}" />
-          <MenuButton :items="BUSY_CARD_MENU" :width="424" label="Actions for bd-77e0" @select="() => {}" />
-          <MenuButton :items="PARKED_CARD_MENU" :width="424" label="Actions for bd-29j1" @select="() => {}" />
+          <MenuButton :items="CARD_MENU" :width="MENU_W" label="Actions for bd-a1b2" @select="() => {}" />
+          <MenuButton :items="BUSY_CARD_MENU" :width="MENU_W" label="Actions for bd-77e0" @select="() => {}" />
+          <MenuButton :items="PARKED_CARD_MENU" :width="MENU_W" label="Actions for bd-29j1" @select="() => {}" />
         </div>
         <!-- And one at the component's own default, which is what a caller with
              short verbs gets: the width is the caller's business, so both ends

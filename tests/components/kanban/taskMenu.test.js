@@ -1,9 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { STATUSES, statusOptions, taskMenuItems } from '../../../src/components/kanban/taskMenu.js'
+import {
+  MENU_W,
+  STATUSES,
+  statusOptions,
+  taskMenuItems
+} from '../../../src/components/kanban/taskMenu.js'
 
 const base = { bdStatus: 'open', runnable: true, runBlockedReason: '', busy: false }
 const kinds = (items) => items.filter((i) => i.type !== 'separator').map((i) => i.kind)
 const find = (items, kind) => items.find((i) => i.kind === kind)
+
+describe('MENU_W', () => {
+  it('is one number, and a number rather than a length', () => {
+    /* Three callers hand it to `MenuButton`'s `width`, which is a Number prop
+       it does arithmetic against: a string of px would be handed straight to
+       the placement maths and clip every long row silently. The measurement
+       behind the value is in the module's own comment. */
+    expect(typeof MENU_W).toBe('number')
+    expect(MENU_W).toBe(424)
+  })
+})
 
 describe('statusOptions', () => {
   it('offers the three a person is given, and no more', () => {

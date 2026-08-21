@@ -35,9 +35,10 @@ const props = defineProps({
   /* Both of these are ceilings rather than widths — `ContextMenu` draws itself
      as wide as its widest row and no wider. They stay two numbers rather than
      one because the two panels hold different kinds of text: a menu row can
-     carry a whole sentence (see `TaskCard`'s `MENU_W`) where a submenu holds
-     one-word answers, and a submenu allowed to grow to the menu's ceiling would
-     start `placeSub`'s flip firing over room it was never going to use. */
+     carry a whole sentence (see `MENU_W` in `kanban/taskMenu.js`) where a
+     submenu holds one-word answers, and a submenu allowed to grow to the
+     menu's ceiling would start `placeSub`'s flip firing over room it was never
+     going to use. */
   width: { type: Number, default: 200 },
   subWidth: { type: Number, default: 200 }
 })

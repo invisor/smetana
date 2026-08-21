@@ -25,6 +25,7 @@ import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
+import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
@@ -1507,10 +1508,12 @@ watch(
 )
 
 /* The status write, tracked by the id it was asked for rather than by a bare
-   boolean — the reason `deletingId` below already is one. The menu acts on
-   whichever card it was opened from rather than on the selected one, a bd call
-   takes about two seconds, and a flag shared between issues would grey the
-   wrong card's menu for those two seconds. */
+   boolean — the reason `deletingId` below already is one. There are two
+   triggers for the same menu now and they disagree about which issue they are
+   over: the card's acts on whichever card it was opened from, the Task &
+   details header's on the selected one. A bd call takes about two seconds, and
+   a flag shared between issues would grey the wrong one of the two for those
+   two seconds — which is what makes the id load-bearing rather than tidy. */
 const writingId = ref(null)
 const setTaskStatus = async (id, status) => {
   writingId.value = id
@@ -1530,9 +1533,9 @@ const deletingId = ref(null)
 
 /* Which issue's deletion is being confirmed, or null. An id rather than a
    boolean for the same reason: the dialog names the issue, and the board can
-   change under it. The dialog itself lives here rather than in the panel now —
-   the panel does nothing to an issue any more, and at view level there is no
-   `overflow` box to be clipped by, so it needs no `Teleport` either. */
+   change under it. The dialog itself lives here rather than in the panel: at
+   view level there is no `overflow` box to be clipped by, so it needs no
+   `Teleport` either. */
 const confirmingDelete = ref(null)
 const confirmedIssue = computed(() =>
   confirmingDelete.value ? issueById(confirmingDelete.value) : null
@@ -1552,9 +1555,11 @@ const deleteTask = async (id) => {
   }
 }
 
-/* The card's menu asked for something; this is where it is carried out. The
-   issue is resolved from the store rather than carried in the payload — the
-   store holds the current title and a card's copy may be a delta behind. */
+/* A task menu asked for something; this is where it is carried out, for both
+   of the menu's triggers — the card's own and the Task & details header's,
+   which send the same payload. The issue is resolved from the store rather than
+   carried in the payload — the store holds the current title and a card's copy
+   may be a delta behind. */
 const onTaskAction = ({ kind, id, value }) => {
   if (kind === 'run') return runTask(id)
   if (kind === 'status') {
@@ -1716,6 +1721,42 @@ const orderedColumns = computed(() =>
       }
     })
   }))
+)
+
+/* The card behind whatever the Task & details panel is drawing, or null. The
+   panel's own menu button is built from it, which is the whole of "the same
+   menu the card has": the very values the card is drawn from, worked out once
+   in `orderedColumns` above and read here rather than worked out again.
+
+   Recomputing them from `issueById` was considered and refused, because it
+   would have drifted from the board in silence. Blocked is worked out from
+   unfinished blockers while bd keeps such an issue at `open`
+   (`stores/tracker.js`), so `runnableTask` on the issue would say a run is
+   available where the card on the board says it is not, and the panel would
+   offer a run the board refuses.
+
+   Every issue is in here bar the merge lock, and a lock issue can be selected
+   neither from the board nor from a run's claimed list — so `null` here means
+   there is nothing to act on. */
+const inspectedCard = computed(() => {
+  const id = highlightedTask.value
+  if (!id) return null
+  for (const column of orderedColumns.value) {
+    const task = column.tasks.find((t) => t.id === id)
+    if (task) return task
+  }
+  return null
+})
+
+const inspectedMenu = computed(() =>
+  inspectedCard.value
+    ? taskMenuItems({
+        bdStatus: inspectedCard.value.bdStatus,
+        runnable: inspectedCard.value.runnable,
+        runBlockedReason: inspectedCard.value.runBlockedReason,
+        busy: inspectedCard.value.busy
+      })
+    : []
 )
 
 /* What is actually drawn: the whole ordered board put through the two view
@@ -2972,6 +3013,31 @@ const toastStackStyle = {
           @toggle="layout.rightCollapsed = !layout.rightCollapsed"
           @expand="layout.rightCollapsed = false"
         >
+          <!-- The second way to the card's menu, and the same menu: the items
+               come from the card this panel is drawing, so the two cannot say
+               different things. In the panel's header rather than inside
+               `TaskInspector`, so it stays in the corner while the issue
+               scrolls under it, and so the component that draws an issue keeps
+               knowing nothing about runs or writes.
+
+               Drawn whenever there is an issue in the panel — from the board or
+               from a run's claimed list — and absent over a draft and over the
+               empty state, where there is no issue and nothing to act on. The
+               menu is wider than this column ever gets, which costs nothing:
+               `MenuButton` is fixed-position, right-aligned to the trigger and
+               clamped to the window, so it opens leftwards over the board. -->
+          <template #actions>
+            <MenuButton
+              v-if="inspectedIssue"
+              :items="inspectedMenu"
+              :label="`Actions for ${inspectedIssue.id}`"
+              :width="MENU_W"
+              icon="ellipsis"
+              size="sm"
+              @select="onTaskAction({ kind: $event.kind, id: inspectedIssue.id, value: $event.value })"
+            />
+          </template>
+
           <div :style="inspectorBody">
             <!-- A task still being filed: the person's own words, read-only,
                  with no issue behind them. Alone in the column — there is no
