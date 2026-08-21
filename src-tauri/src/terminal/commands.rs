@@ -68,16 +68,23 @@ pub async fn terminal_create(
     ask(&handle, |tx| Request::Create(project, agent, intent, tx)).await?
 }
 
-/// A shell in the project's root, with no agent and no intent behind it. Its own
+/// A shell in the project, with no agent and no intent behind it. Its own
 /// command rather than an `Intent` variant on the one above: `terminal_create`
 /// takes an agent id and turns it into a command line through a profile, and a
 /// shell has none of that — the request it puts on the queue is a different one.
+///
+/// `cwd` is a path relative to the project's root, or absent for the root
+/// itself. Absent is what the `+` menu's "New terminal" means and what this
+/// command meant before the file tree's own menu could name a folder; a path
+/// that is not a folder inside the root is refused and no session is made, in
+/// `shell_cwd`.
 #[tauri::command]
 pub async fn terminal_shell(
     handle: State<'_, TerminalHandle>,
     project: String,
+    cwd: Option<String>,
 ) -> Result<Session, TerminalError> {
-    ask(&handle, |tx| Request::CreateShell(project, tx)).await?
+    ask(&handle, |tx| Request::CreateShell(project, cwd, tx)).await?
 }
 
 #[tauri::command]

@@ -10,7 +10,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
-import { openUrl } from '@tauri-apps/plugin-opener'
+import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
+import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { usingMockBackend } from './mockBackend.js'
 
 /* Which section the settings window should be showing. Not a setting and not
@@ -146,5 +147,58 @@ export async function openExternal(url) {
     await openUrl(url)
   } catch (err) {
     console.error('[app] the system refused to open the link:', err)
+  }
+}
+
+/* A path onto the system clipboard, for the file tree's two copy verbs.
+
+   The branch is chosen the way `openExternal` above chooses its own — before
+   the call, not by catching its failure — and here the reason is sharper than a
+   scope refusal. `mockBackend.js` rejects loudly on every command it has never
+   heard of, by design, so a plugin call in the dev server does not fail in a way
+   worth falling back from: it fails always. Without the second half these two
+   items could not be checked in `npm run dev` at all.
+
+   `navigator.clipboard` is the browser half rather than the whole of it because
+   it wants a secure context and a gesture the webview does not always agree it
+   had, which is a failure with no visible cause; the plugin has neither
+   condition.
+
+   Answered with whether it worked, and not left to a thrown error: both callers
+   put a toast on the screen either way, and a copy is the one action whose
+   success has nothing on screen to show for it — an empty clipboard and a
+   clipboard holding the path look exactly alike until somebody pastes. */
+export async function copyText(text) {
+  try {
+    if (hasBackEnd()) await writeText(text)
+    else await navigator.clipboard.writeText(text)
+    return true
+  } catch (err) {
+    console.error('[app] the text did not reach the clipboard:', err)
+    return false
+  }
+}
+
+/* Show a file or a folder in the platform's own file manager — Finder, Explorer
+   or whatever the desktop runs. The path is absolute: `revealItemInDir` is given
+   to the operating system as it stands, and a relative one would name whatever
+   happens to sit under the process's working directory.
+
+   There is no browser half, and inventing one would be a lie: a web page cannot
+   open a file manager, and `window.open` on a `file:` URL is refused by every
+   engine this could run in. It answers `false` there, which the caller turns
+   into the same toast a refusal in the app produces — a person in the dev server
+   learns that this verb is the app's, which is true. */
+export async function revealInFileManager(path) {
+  if (!hasBackEnd()) {
+    console.debug('[app] nothing to reveal in (a browser, there is no file manager to ask)')
+    return false
+  }
+  try {
+    await revealItemInDir(path)
+    return true
+  } catch (err) {
+    console.error('[app] the file manager did not open:', err)
+    return false
   }
 }

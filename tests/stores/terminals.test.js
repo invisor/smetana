@@ -870,9 +870,24 @@ describe('a shell session', () => {
 
     const opened = await stores.terminals.createShell('/p')
 
-    expect(ipc.calls('terminal_shell')).toEqual([{ project: '/p' }])
+    // `cwd` null is the project's root, which is what every caller but the file
+    // tree's menu means and what this command meant before that menu existed.
+    expect(ipc.calls('terminal_shell')).toEqual([{ project: '/p', cwd: null }])
     expect(opened.id).toBe(5)
     expect(stores.terminals.terminalState.sessions.map((s) => s.id)).toEqual([1, 5])
+  })
+
+  /* The file tree's menu, which is the one caller that names a folder. The path
+     is relative to the project root and travels as it stands: what may be a
+     working directory is decided in Rust, beside the spawn, and a second rule
+     here would be a second thing to keep true. */
+  it('carries the folder it was opened from, untouched', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_shell', shell({ id: 5 }))
+
+    await stores.terminals.createShell('/p', 'src/components')
+
+    expect(ipc.calls('terminal_shell')).toEqual([{ project: '/p', cwd: 'src/components' }])
   })
 
   /* The agents panel is rows of work, and a shell has none: nothing asked it to

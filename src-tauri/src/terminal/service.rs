@@ -83,9 +83,13 @@ pub enum Request {
     /// Project, agent id and intent. The agent id is what settings asked for,
     /// not necessarily what runs — see the `Create` arm and `agents::pick`.
     Create(String, String, Intent, oneshot::Sender<Result<Session, TerminalError>>),
-    /// The project to open a shell in, and nothing else: a shell takes no agent
-    /// and no intent, because there is nothing this app is asking it to do.
-    CreateShell(String, oneshot::Sender<Result<Session, TerminalError>>),
+    /// The project to open a shell in, and where inside it to start — a shell
+    /// takes no agent and no intent, because there is nothing this app is asking
+    /// it to do. The second field is a path relative to the project's root, or
+    /// `None` for the root itself, which is what every caller but the file
+    /// tree's menu means. It is checked with `resolve_within` like every other
+    /// path this app takes from the front end; see `shell_cwd`.
+    CreateShell(String, Option<String>, oneshot::Sender<Result<Session, TerminalError>>),
     Remove(SessionId, oneshot::Sender<()>),
     Attach(SessionId, oneshot::Sender<Result<Attached, TerminalError>>),
     /// Carries the id it is leaving, and not for symmetry: see the handler.
@@ -502,6 +506,31 @@ fn close_exit_waiters(waiters: &mut Vec<ExitWaiter>, sessions: &HashMap<SessionI
     *waiters = keep;
 }
 
+/// Where a shell is to start: the project's own root when nobody said, and
+/// otherwise the folder named by a path relative to it.
+///
+/// The check is `files::fs::resolve_within`, the same one every other command
+/// taking a path from the front end goes through — it refuses `..` and an
+/// absolute path outright, and canonicalizes, so a symlink inside the project
+/// pointing outward cannot open a shell on the rest of the disk. The extra
+/// `is_dir` is not redundant with it: `resolve_within` answers about a path, and
+/// a PTY handed a file for a working directory fails inside the child, where the
+/// only thing left to show a person is a spawn error about a shell.
+///
+/// The root itself is deliberately not resolved when there is nothing to check
+/// against it. Every other caller passes `None`, and canonicalizing on their
+/// behalf would silently change what `Session::cwd` reads as — the project's
+/// path as the front end knows it — for the sake of a check they do not need.
+fn shell_cwd(root: &Path, rel: Option<&str>) -> Result<PathBuf, TerminalError> {
+    let Some(rel) = rel else { return Ok(root.to_path_buf()) };
+    let full = crate::files::fs::resolve_within(root, rel)
+        .map_err(|err| TerminalError::BadCwd(err.to_string()))?;
+    if !full.is_dir() {
+        return Err(TerminalError::BadCwd(rel.to_owned()));
+    }
+    Ok(full)
+}
+
 /// Everything the worker does synchronously. `ShutDown` is handled by the
 /// loop instead — see there.
 fn handle(
@@ -631,27 +660,38 @@ fn handle(
                 Err(err) => Err(err),
             });
         }
-        Request::CreateShell(project, tx) => {
+        Request::CreateShell(project, cwd, tx) => {
             // Everything the agent branch above does about *which* agent — the
             // pick, the profile, the skills, the languages, the facts — has no
             // counterpart here, and that absence is the whole of what a shell
             // is. What the two do share is the environment, and they share it as
             // one piece of code rather than as two copies: see
             // `pty::apply_environment`.
+            let root = PathBuf::from(&project);
+            let dir = shell_cwd(&root, cwd.as_deref());
             let id = *next_id;
             *next_id += 1;
-            let spawned =
-                Pty::spawn_shell(id, Path::new(&project), DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
+            // The id is spent whether or not the directory was usable, exactly
+            // as it is for a shell that would not start: ids are a counter, not
+            // a resource, and reusing one is how two sessions come to share it.
+            let spawned = dir.and_then(|dir| {
+                Pty::spawn_shell(id, &dir, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone())
+                    .map(|pty| (pty, dir))
+            });
             let _ = tx.send(match spawned {
-                Ok(pty) => {
+                Ok((pty, dir)) => {
                     // `agent` is the field a session's row would have been
                     // captioned by before rows were captioned by their work, and
                     // nothing draws it now. The shell's own program is the honest
                     // answer for anything reading a session dump.
+                    // `cwd` and `project` differ here for the first time: a
+                    // shell opened from a folder in the tree runs in that folder
+                    // and still belongs to the project it was opened from, which
+                    // is what the tab row, the rail and `List` all read.
                     let session = Session::new(
                         id,
                         &crate::shell_env::shell(),
-                        &project,
+                        &dir.to_string_lossy(),
                         &project,
                         crate::terminal::model::SessionWork::Shell,
                     );
@@ -836,5 +876,67 @@ fn handle(
         // Handled by the loop, which is the only place that can await the
         // grace period; it never reaches here.
         Request::ShutDown(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A directory of its own per test, with the pid in the name so parallel
+    /// runs do not collide — the same trick `files/fs.rs` uses, canonical for
+    /// the same reason: on macOS /var is a symlink to /private/var.
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("smetana-shell-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the temp directory");
+        dir.canonicalize().expect("canonicalize the temp directory")
+    }
+
+    #[test]
+    fn no_cwd_is_the_project_root() {
+        let root = scratch("root");
+        assert_eq!(shell_cwd(&root, None).unwrap(), root);
+    }
+
+    #[test]
+    fn a_folder_in_the_project_is_where_the_shell_starts() {
+        let root = scratch("folder");
+        std::fs::create_dir_all(root.join("src/components")).unwrap();
+        assert_eq!(shell_cwd(&root, Some("src/components")).unwrap(), root.join("src/components"));
+    }
+
+    #[test]
+    fn a_path_outside_the_project_is_refused() {
+        let root = scratch("outside");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        for rel in ["../..", "..", "src/../..", "/etc"] {
+            assert!(
+                matches!(shell_cwd(&root, Some(rel)), Err(TerminalError::BadCwd(_))),
+                "{rel} should not be a working directory"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_is_refused_rather_than_handed_to_the_pty() {
+        let root = scratch("file");
+        std::fs::write(root.join("app.js"), "x").unwrap();
+        assert!(matches!(shell_cwd(&root, Some("app.js")), Err(TerminalError::BadCwd(_))));
+    }
+
+    #[test]
+    fn a_folder_that_is_not_there_is_refused() {
+        let root = scratch("missing");
+        assert!(matches!(shell_cwd(&root, Some("nowhere")), Err(TerminalError::BadCwd(_))));
+    }
+
+    /// The empty string is the tree's own name for the root, and it arrives as
+    /// a `Some` from a menu opened on the root row rather than on empty space.
+    #[test]
+    fn the_empty_path_is_the_root() {
+        let root = scratch("empty");
+        assert_eq!(shell_cwd(&root, Some("")).unwrap(), root);
     }
 }

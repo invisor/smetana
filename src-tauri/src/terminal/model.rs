@@ -251,6 +251,12 @@ pub enum TerminalError {
     Timeout,
     #[error("no agent is installed: looked for {0}")]
     NoAgent(String),
+    /// A working directory a session was asked to start in that is not a folder
+    /// inside the project: outside the root, gone from disk, or a file. Its own
+    /// variant rather than a `Spawn`, because nothing was spawned and nothing
+    /// tried to be — the request was refused before any process existed.
+    #[error("that folder cannot be a working directory: {0}")]
+    BadCwd(String),
 }
 
 impl Session {

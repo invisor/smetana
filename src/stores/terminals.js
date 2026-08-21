@@ -517,13 +517,13 @@ function decode(base64) {
    and write errors. Two kinds cover most of it here too: reading (list,
    attach, detach, resize) and writing (create, remove, write).
 
-   The third entry is keyed on the kind the Rust error itself carries rather
-   than on ours, and it earns the exception by being the one failure in this
-   list a person can act on. "Nothing was created" is true of a machine with
-   no agent installed and tells them nothing — and since filing a task is now
-   an agent session rather than a write into the tracker, that is no longer a
-   missing convenience but the only way to put a card on the board. It is a
-   function because the names of the agents looked for belong to Rust:
+   The third and fourth entries are keyed on the kind the Rust error itself
+   carries rather than on ours, and they earn the exception by being the two
+   failures in this list a person can act on. "Nothing was created" is true of a
+   machine with no agent installed and tells them nothing — and since filing a
+   task is now an agent session rather than a write into the tracker, that is no
+   longer a missing convenience but the only way to put a card on the board. It
+   is a function because the names of the agents looked for belong to Rust:
    agents::IDS is the only copy of that list and the error carries it in its
    message, so nothing here has to hold a second one. */
 const ERRORS = {
@@ -538,6 +538,18 @@ const ERRORS = {
   noAgent: (looked) => ({
     title: 'No coding agent is installed',
     description: `Smetana looked for ${looked} on your PATH. It starts one to file a task and to edit an issue, so install one and try again.`
+  }),
+  /* `TerminalError::BadCwd` — a folder the file tree's menu asked for a shell
+     in that is not a folder inside the project any more. Reachable without
+     anybody doing anything odd: the tree is refreshed on window focus and not
+     by a watcher, so a folder an agent deleted or renamed since the last listing
+     is still a row somebody can right-click. The generic write error would say
+     "Nothing was created, removed, or sent", which is true and tells them
+     nothing about which of their two windows is out of date. */
+  badCwd: () => ({
+    title: 'That folder is gone',
+    description:
+      'Smetana could not start a shell there. The tree may be out of date — refresh it.'
   })
 }
 
@@ -789,9 +801,9 @@ export async function createSession(project, intent = { kind: 'bare' }) {
   }
 }
 
-/* A shell of the person's own, in the project's root. A worker session like any
-   other and not an agent: no intent, no agent id, no profile — see
-   `terminal_shell` in `src-tauri/src/terminal/commands.rs`.
+/* A shell of the person's own. A worker session like any other and not an
+   agent: no intent, no agent id, no profile — see `terminal_shell` in
+   `src-tauri/src/terminal/commands.rs`.
 
    Nothing here touches `activeId`: a shell has no row in the agents panel to
    select, and the tab it opens comes from the session appearing in the list.
@@ -803,10 +815,19 @@ export async function createSession(project, intent = { kind: 'bare' }) {
 
    The refusal is reported and not rethrown, the way `removeSession`'s is: there
    is no dialog to keep open and nothing on screen to take back — the toast is
-   the whole of what a caller could do with it. */
-export async function createShell(project) {
+   the whole of what a caller could do with it.
+
+   `cwd` is where inside the project the shell starts, as a path relative to the
+   root. The file tree's menu is the only caller that names one, and `null` is
+   what this function meant before there was one: the project's own root. It is
+   checked on the Rust side with `resolve_within`, like every other path this app
+   takes from the front end, so a path leading outside the project is refused and
+   no session is made — see `shell_cwd` in `src-tauri/src/terminal/service.rs`.
+   Not checked here as well: two copies of that rule is one to keep true, and the
+   one that matters is the one standing next to the spawn. */
+export async function createShell(project, cwd = null) {
   try {
-    const session = await invoke('terminal_shell', { project })
+    const session = await invoke('terminal_shell', { project, cwd })
     upsert(session)
     terminalState.lastError = null
     return session

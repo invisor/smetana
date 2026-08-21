@@ -271,7 +271,7 @@ describe('a shell is not an agent', () => {
     await terminals.createShell('/p')
 
     expect(terminals.terminalState.activeId).toBe(4)
-    expect(ipc.calls('terminal_shell')).toEqual([{ project: '/p' }])
+    expect(ipc.calls('terminal_shell')).toEqual([{ project: '/p', cwd: null }])
     expect(tabs.tabList.value.map((tab) => tab.label)).toEqual(['Kanban', 'Agent', 'Terminal 1'])
   })
 })
