@@ -34,6 +34,11 @@ import {
   KANBAN_DEFAULTS,
   columnNames
 } from '../components/kanban/boardView.js'
+/* Pure, no Vue and no DOM: the closed list of notification sounds and the two
+   shipped ones. Imported for the reason `boardView.js` above it is — so this
+   store and the settings tab cannot disagree about which values are legal, and
+   so what the tab offers stays a subset of what Rust accepts. */
+import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
@@ -58,6 +63,13 @@ const defaults = () => ({
      every column, every task. The rule these four feed is
      `components/kanban/boardView.js`. */
   kanban: { ...KANBAN_DEFAULTS, alwaysShow: [], unlimited: [] },
+  /* Which sound each of the two announcements makes, or `off` for none. Global
+     rather than per project for the reason `NotificationSettings` in Rust
+     records — a noise is a fact about a person and a room — and shipped on,
+     with two different sounds, for the reason `sounds.js` records. Rust holds
+     the same two defaults, and a section missing here is a section the settings
+     window cannot draw. */
+  notifications: { ...NOTIFICATION_DEFAULTS },
   layout: {
     leftCollapsed: false,
     rightCollapsed: false,
@@ -318,6 +330,7 @@ export async function loadSettings() {
     applySection(settings.editor, base.editor, stored.editor)
     applySection(settings.git, base.git, stored.git)
     applySection(settings.kanban, base.kanban, stored.kanban)
+    applySection(settings.notifications, base.notifications, stored.notifications)
     applySection(settings.layout, base.layout, stored.layout)
     applySection(settings.project, base.project, stored.project)
     settings.openProjects = stored.openProjects ?? []
@@ -375,6 +388,7 @@ function toShared(source) {
   const editor = { ...base.editor, ...source.editor }
   const kanban = { ...base.kanban, ...source.kanban }
   const git = { ...base.git, ...source.git }
+  const notifications = { ...base.notifications, ...source.notifications }
   return {
     theme: appearance.theme,
     density: appearance.density,
@@ -390,6 +404,11 @@ function toShared(source) {
     kanbanUnlimited: kanban.unlimited,
     /* Flat for the same reason the four above it are. */
     gitAutoFetch: git.autoFetch,
+    /* Flat for the same reason, and named for the event rather than for the
+       section: a `notifications` object in this message would invite somebody
+       to send it whole and quietly blank the choice they left out. */
+    notificationRunFinished: notifications.runFinished,
+    notificationNeedsAttention: notifications.needsAttention,
     agent: source.agent ?? base.agent,
     agentLanguage: source.agentLanguage ?? base.agentLanguage,
     taskLanguage: source.taskLanguage ?? base.taskLanguage
@@ -459,6 +478,17 @@ export function applyPatch(patch) {
      malformed event into a deliberate-looking "off". */
   if (typeof patch.gitAutoFetch === 'boolean') {
     settings.git.autoFetch = patch.gitAutoFetch
+  }
+  /* The two sounds. Checked against the closed list `sounds.js` holds — the
+     same relationship the board's two scalars have with `boardView.js`: the
+     vocabulary is the front end's own rule and Rust merely validates the file
+     against its copy of it. A value that fails is skipped rather than
+     normalised, so a malformed event leaves the previous choice standing. */
+  if (isSound(patch.notificationRunFinished)) {
+    settings.notifications.runFinished = patch.notificationRunFinished
+  }
+  if (isSound(patch.notificationNeedsAttention)) {
+    settings.notifications.needsAttention = patch.notificationNeedsAttention
   }
 }
 
