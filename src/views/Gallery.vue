@@ -40,6 +40,7 @@ import {
   FileTreeDraftRow,
   FileTreeRow,
   GeneralSettings,
+  GitSettings,
   GitPanel,
   Icon,
   IconButton,
@@ -577,6 +578,14 @@ const pickedBranch = ref('staging')
 const branchIsNew = ref(false)
 const groupedBranch = ref('develop')
 const narrowBranch = ref('spike/auth')
+/* Two lists holding a row that is known and cannot be picked. The settings
+   window's agent picker is the one in the app, and a `.vue` file is reachable
+   by no test here, so this section is where that row is looked at. The second
+   one opens *on* an unavailable value, which is not a fixture whim: the block
+   is drawn only in the front end, so a `settings.json` that already holds one
+   comes back exactly like this. */
+const pickedAgent = ref('claude')
+const pickedMode = ref('done')
 /* Records for the branch fields below — the shape `target_branches` actually
    answers with, now that git.js passes it straight through. */
 const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
@@ -1150,12 +1159,15 @@ const GALLERY_SESSION = 1
 const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
-/* Local like the two above, and for the same reason: in the app this value
-   comes from the main window and goes back to it as an event, and neither end
-   exists here. Bound rather than left to its default so the switch actually
-   moves when it is pressed — a control that does not respond is the one thing
-   this page cannot be used to check. */
+/* The Git tab's two switches, local like the refs above and for the same
+   reason: in the app these values come from the main window and go back to it
+   as events, and neither end exists here. Bound rather than left to their
+   defaults so the switches actually move when pressed — a control that does not
+   respond is the one thing this page cannot be used to check. Deliberately not
+   both on: the page is where the pair of rows is looked at, and one of each
+   shows both positions of a switch side by side. */
 const galleryGitAutoFetch = ref(true)
+const galleryRemoveWorktrees = ref(false)
 /* The two notification sounds, local for the same reason. Deliberately not
    both on a sound: this page is where the pair of rows is looked at, and one of
    each shows the chosen state and the silent one side by side rather than the
@@ -2882,6 +2894,41 @@ const menuTargetStyle = {
             ]"
           />
         </div>
+        <!-- A row the list names and cannot pick, drawn as the agent picker in
+             the settings window draws it: muted, a note beside it, the same
+             height as the row above so the list keeps its rhythm, and
+             `not-allowed` under the pointer. The arrows step straight over it
+             and Enter takes Claude Code from either direction. -->
+        <div :style="{ width: '220px' }">
+          <Dropdown
+            v-model="pickedAgent"
+            :options="[
+              { value: 'claude', label: 'Claude Code' },
+              { value: 'codex', label: 'Codex', disabled: true, note: 'Not supported yet' }
+            ]"
+          />
+        </div>
+        <!-- The same flag against captions and a filter, and two things worth
+             looking at. The field opens on Solo, which cannot be picked: no row
+             carries the check, since what is held is said by the field and the
+             list says what can be set. And "Later" is drawn nowhere at all — a
+             caption whose whole group is unavailable is a heading over nothing,
+             exactly as one filtered down to nothing is. Type in the filter and
+             the same rule prunes "Available". -->
+        <div :style="{ width: '220px' }">
+          <Dropdown
+            v-model="pickedMode"
+            searchable
+            search-label="Search modes"
+            :options="[
+              { header: true, label: 'Available' },
+              { value: 'ready', label: 'Autopilot' },
+              { value: 'running', label: 'Crew', disabled: true, note: 'Not supported yet' },
+              { header: true, label: 'Later' },
+              { value: 'done', label: 'Solo', disabled: true, note: 'Not supported yet' }
+            ]"
+          />
+        </div>
         <div :style="{ width: '320px' }">
           <BranchSelect
             v-model="pickedBranch"
@@ -3079,9 +3126,9 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Settings window</div>
-      <!-- The four tabs of the settings window, side by side rather than behind
-           a tab bar: this harness is for seeing every component at once, and a
-           tab strip here would hide three of the four behind a click. The values
+      <!-- Every tab of the settings window, side by side rather than behind a
+           tab bar: this harness is for seeing every component at once, and a
+           tab strip here would hide all but one behind a click. The values
            are local refs — in the app they arrive from the main window and go
            back to it as events, and neither end exists here. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', flexWrap: 'wrap', alignItems: 'flex-start' }">
@@ -3089,7 +3136,6 @@ const menuTargetStyle = {
           <GeneralSettings
             :theme="galleryTheme"
             :ui-font-size="galleryUiFont"
-            :git-auto-fetch="galleryGitAutoFetch"
             :autostart-supported="galleryAutostartSupported"
             :autostart-enabled="galleryAutostartEnabled"
             :restore-geometry="galleryRestoreGeometry"
@@ -3097,11 +3143,18 @@ const menuTargetStyle = {
             :notification-needs-attention="galleryNeedsSound"
             @update:theme="galleryTheme = $event"
             @update:ui-font-size="galleryUiFont = $event"
-            @update:git-auto-fetch="galleryGitAutoFetch = $event"
             @update:autostart-enabled="galleryAutostartEnabled = $event"
             @update:restore-geometry="galleryRestoreGeometry = $event"
             @update:notification-run-finished="galleryRunSound = $event"
             @update:notification-needs-attention="galleryNeedsSound = $event"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <GitSettings
+            :auto-fetch="galleryGitAutoFetch"
+            :remove-worktrees="galleryRemoveWorktrees"
+            @update:auto-fetch="galleryGitAutoFetch = $event"
+            @update:remove-worktrees="galleryRemoveWorktrees = $event"
           />
         </div>
         <div :style="{ width: '380px' }">

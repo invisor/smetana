@@ -1,13 +1,11 @@
 <script setup>
-/* The General tab: how the app looks everywhere, the two things it does on its
-   own — go to a remote, and make a noise — and how it starts. None of them is
-   about any single part of the app, which is what makes this the tab they are
-   on. The background fetch is here for that reason rather than under a Git tab
-   there is none of: what it settles is whether this machine opens a socket by
-   itself, which is a fact about a connection and a person and not about a
-   repository. The two sounds are here on the same argument — a noise is a fact
-   about a person and a room — and the Startup pair is about the app as a whole
-   rather than about anything inside it.
+/* The General tab: how the app looks everywhere, the noise it makes, and how
+   the app starts. None of it is about any single part of the app, which is what
+   makes this the tab these rows are on — the two sounds included, since a noise
+   is a fact about a person and a room rather than about anything on the screen,
+   and the Startup pair because it is about the app as a whole rather than about
+   anything inside it. What the app does to a person's repositories on its own
+   is the Git tab, next door.
 
    Startup goes last on purpose. The top of this tab is the theme and the type
    size, which is what somebody opens this window for; a pair of switches set
@@ -18,7 +16,6 @@
    file, so this renders in `?view=gallery` with nothing behind it. */
 import { computed } from 'vue'
 import Dropdown from '../core/Dropdown.vue'
-import Switch from '../core/Switch.vue'
 import SettingsRow from './SettingsRow.vue'
 import { FONT_SIZES, THEME_CHOICES } from '../../appearance.js'
 import { SOUND_CHOICES } from '../../sounds.js'
@@ -27,7 +24,6 @@ import { chime } from '../../chime.js'
 const props = defineProps({
   theme: { type: String, default: 'dark' },
   uiFontSize: { type: Number, default: 13 },
-  gitAutoFetch: { type: Boolean, default: true },
   /* Whether this build may register a login item at all. False in a
      development build and in a browser, where the row is drawn disabled with a
      sentence saying so rather than hidden — a row that is not there reads as
@@ -53,7 +49,6 @@ const props = defineProps({
 const emit = defineEmits([
   'update:theme',
   'update:uiFontSize',
-  'update:gitAutoFetch',
   'update:autostartEnabled',
   'update:restoreGeometry',
   'update:notificationRunFinished',
@@ -118,18 +113,6 @@ const autostartDescription = computed(() =>
         :model-value="props.uiFontSize"
         :options="sizeOptions"
         @update:model-value="emit('update:uiFontSize', $event)"
-      />
-    </SettingsRow>
-    <!-- Off is for a metered connection, a VPN that is not always up, or a key
-         with a passphrase that would fail on every sweep. The sentence says
-         what it does not do as well: nothing about this changes a file. -->
-    <SettingsRow
-      label="Fetch from remotes automatically"
-      description="Checks the Git panel's branches for new commits when the window comes back into focus, at most every few minutes. Nothing is merged."
-    >
-      <Switch
-        :model-value="props.gitAutoFetch"
-        @update:model-value="emit('update:gitAutoFetch', $event)"
       />
     </SettingsRow>
     <!-- The two things worth hearing rather than seeing, and both happen while

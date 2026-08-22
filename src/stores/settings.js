@@ -49,14 +49,18 @@ const defaults = () => ({
      `UI_FONT_DEFAULT` / `EDITOR_FONT_DEFAULT`. */
   appearance: { theme: 'dark', density: 'comfortable', uiFontSize: UI_FONT_DEFAULT },
   editor: { fontSize: EDITOR_FONT_DEFAULT },
-  /* What the Git panel may do on its own: `autoFetch` is whether this app opens
-     a socket by itself — on window focus, throttled, and silently — to find out
-     whether a branch has commits waiting for it. Global rather than per project
-     for the reason `GitSettings` in Rust records: it is a fact about a
-     connection and a person, not about a repository, and that file carries the
-     same default. A section missing there is a section this window cannot
-     draw. */
-  git: { autoFetch: true },
+  /* What the app may do to a person's repositories without asking each time.
+     `autoFetch` is whether this app opens a socket by itself — on window focus,
+     throttled, and silently — to find out whether a branch has commits waiting
+     for it. `removeWorktrees` is whether a run sweeps up each task's checkout
+     once it is merged and closed; nothing in this app runs `git worktree` at
+     all, so what that one reaches is a line of the run prompt the lead reads.
+     Both global rather than per project for the reason `GitSettings` in Rust
+     records: they are facts about a connection and a person, not about a
+     repository, and that file carries the same two defaults. `removeWorktrees`
+     ships on because that is today's behaviour exactly. A section missing there
+     is a section this window cannot draw. */
+  git: { autoFetch: true, removeWorktrees: true },
   /* What the main window does with the size and position it was left at.
      `restoreGeometry` off stops it being put back and never stops it being
      saved — `src-tauri/src/window.rs` holds that half — so switching it back on
@@ -418,6 +422,7 @@ function toShared(source) {
     kanbanUnlimited: kanban.unlimited,
     /* Flat for the same reason the four above it are. */
     gitAutoFetch: git.autoFetch,
+    gitRemoveWorktrees: git.removeWorktrees,
     /* Flat for the same reason, and the whole of what this window may change
        about the main window's geometry — where it is now is not a setting and
        never crosses this contract. */
@@ -497,7 +502,13 @@ export function applyPatch(patch) {
   if (typeof patch.gitAutoFetch === 'boolean') {
     settings.git.autoFetch = patch.gitAutoFetch
   }
-  /* A switch too, checked exactly the way the one above it is and for the same
+  /* The second switch on that tab, checked exactly the same way and for the
+     same reason: `false` is the whole point of it, so coercion would turn a
+     malformed event into a deliberate-looking answer either way. */
+  if (typeof patch.gitRemoveWorktrees === 'boolean') {
+    settings.git.removeWorktrees = patch.gitRemoveWorktrees
+  }
+  /* A switch too, checked exactly the way the two above it are and for the same
      reason: `false` is the whole point of this field, so anything that is not a
      boolean is skipped rather than coerced into a deliberate-looking "off". */
   if (typeof patch.restoreGeometry === 'boolean') {

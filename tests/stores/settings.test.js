@@ -32,10 +32,12 @@ describe('loading', () => {
       uiFontSize: 13
     })
     expect(settings.settings.editor).toEqual({ fontSize: 12 })
-    /* On, because the marks the Git panel draws are worthless when nothing goes
-       and asks. The switch is for the machines where background network is not
-       free, and `settings/model.rs` carries this same default. */
-    expect(settings.settings.git).toEqual({ autoFetch: true })
+    /* Both on. The fetch, because the marks the Git panel draws are worthless
+       when nothing goes and asks, and the switch is for the machines where
+       background network is not free. The removal, because that is today's
+       behaviour exactly — the running-tasks skill has always swept a merged
+       task's worktree up. `settings/model.rs` carries the same pair. */
+    expect(settings.settings.git).toEqual({ autoFetch: true, removeWorktrees: true })
     /* On, because it is what the app has always done: the window has opened
        where it was left since before there was a switch over it, and
        `settings/model.rs` carries this same default. */
@@ -444,11 +446,36 @@ describe('the settings window', () => {
     expect(settings.settings.git.autoFetch).toBe(true)
   })
 
-  /* The other switch on the General tab, and the one whose `false` the app acts
-     on by leaving a window where the configuration puts it. Skipped rather than
-     coerced for `gitAutoFetch`'s reason: coercion would turn a malformed event
-     into a deliberate-looking "off", and off here is a visible change to where
-     the app opens. */
+  /* The Git tab's second switch, checked exactly as the first is. `false` is
+     the whole point of this one — it is the position that changes what a run
+     does — so it has to reach the store intact, and anything that is not a
+     boolean has to leave the previous choice standing. */
+  it('takes the worktree switch, and only a boolean one', async () => {
+    await emit(settings.SETTINGS_APPLY, { gitRemoveWorktrees: false })
+    await nextTick()
+    expect(settings.settings.git.removeWorktrees).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { gitRemoveWorktrees: 'no' })
+    await nextTick()
+    expect(settings.settings.git.removeWorktrees).toBe(
+      false,
+      'a value that is not a boolean is skipped'
+    )
+
+    /* Its neighbour is untouched by any of it: the two ride one message as
+       separate flat fields, and an edit to one must not carry the other. */
+    expect(settings.settings.git.autoFetch).toBe(true)
+
+    await emit(settings.SETTINGS_APPLY, { gitRemoveWorktrees: true })
+    await nextTick()
+    expect(settings.settings.git.removeWorktrees).toBe(true)
+  })
+
+  /* The switch that is not on that tab at all, and the one whose `false` the
+     app acts on by leaving a window where the configuration puts it. Skipped
+     rather than coerced for `gitAutoFetch`'s reason: coercion would turn a
+     malformed event into a deliberate-looking "off", and off here is a visible
+     change to where the app opens. */
   it('takes the window-geometry switch, and only a boolean one', async () => {
     await emit(settings.SETTINGS_APPLY, { restoreGeometry: false })
     await nextTick()
@@ -522,6 +549,7 @@ describe('the settings window', () => {
       kanbanInterval: 'all',
       kanbanUnlimited: [],
       gitAutoFetch: true,
+      gitRemoveWorktrees: true,
       restoreGeometry: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
@@ -554,6 +582,7 @@ describe('the settings window', () => {
       kanbanInterval: 'all',
       kanbanUnlimited: [],
       gitAutoFetch: true,
+      gitRemoveWorktrees: true,
       restoreGeometry: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',

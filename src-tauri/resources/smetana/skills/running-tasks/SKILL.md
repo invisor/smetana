@@ -23,8 +23,12 @@ the next section is the decision.
 ## The run's settings, and the one that changes everything
 
 You were given: a **scope** (the whole ready queue, one epic, or one task), a **mode**, a
-**target branch**, a **priority floor**, whether the live check runs, and whether
-findings may be filed. The mode is the one that changes the shape of the run:
+**target branch**, a **priority floor**, whether the live check runs, whether
+findings may be filed, and whether a task's worktree is removed once it is merged and
+closed. Everywhere below that says to remove worktrees, **remove them only if this run's
+instructions did not tell you to leave them** — where they did, leave every one of them
+where it is and say so in your report, since nothing but your report can tell a person
+what is still on their disk. The mode is the one that changes the shape of the run:
 
 | mode | what happens where the mechanics say "the caller decides" |
 |---|---|

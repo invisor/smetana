@@ -79,6 +79,17 @@ pub fn languages(path: &Path) -> crate::agents::Languages {
     }
 }
 
+/// Whether a run may remove a task's worktree once it is merged and closed, and
+/// nothing else out of the file. The shape of `agent` above, one field over.
+///
+/// A missing or unreadable file answers `true`, the shipped state, which is what
+/// the running-tasks skill has always done: this switch exists to *stop* the
+/// removal, so a file nobody could read must not silently start keeping every
+/// worktree on a person's disk.
+pub fn git_remove_worktrees(path: &Path) -> bool {
+    load(path).0.git.remove_worktrees
+}
+
 /// The write is atomic: a neighbouring file first, then a rename. Otherwise a
 /// break halfway through would leave half a JSON and the next launch would lose
 /// everything. The content is flushed to disk before the rename — without that
@@ -236,6 +247,34 @@ mod tests {
         let broken = dir.join("broken.json");
         fs::write(&broken, "{not json").expect("setup");
         assert_eq!(agent(&broken), default_agent);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn whether_worktrees_are_removed_is_read_off_the_disk_and_defaults_to_removing() {
+        // The path a run takes to find out what its prompt should say about
+        // worktrees, and it is not the path `settings_load` takes, so the round
+        // trip `model.rs` pins says nothing about this one.
+        let dir = temp_dir();
+
+        let stored = dir.join("stored.json");
+        fs::write(&stored, r#"{"version":1,"git":{"removeWorktrees":false}}"#).expect("setup");
+        assert!(!git_remove_worktrees(&stored));
+
+        // Three ways to have no answer, and every one of them has to say
+        // "remove": that is what the skill did before this switch existed, so a
+        // file nobody can read must not quietly start filling a disk.
+        let missing = dir.join("settings.json");
+        assert!(git_remove_worktrees(&missing), "a missing file is the first run");
+
+        let broken = dir.join("broken.json");
+        fs::write(&broken, "{not json").expect("setup");
+        assert!(git_remove_worktrees(&broken));
+
+        let unreadable = dir.join("a-directory-in-its-place");
+        fs::create_dir_all(&unreadable).expect("setup");
+        assert!(git_remove_worktrees(&unreadable));
+
         let _ = fs::remove_dir_all(&dir);
     }
 

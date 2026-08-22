@@ -435,8 +435,8 @@ fn body(
             ))
         }
         Intent::Setup => Some(setup(delivery, skills, facts)),
-        Intent::Run { settings, reports, batch } => {
-            Some(run(settings, reports, *batch, delivery, skills))
+        Intent::Run { settings, reports, batch, remove_worktrees } => {
+            Some(run(settings, reports, *batch, *remove_worktrees, delivery, skills))
         }
     }
 }
@@ -454,6 +454,7 @@ fn run(
     settings: &RunSettings,
     reports: &Path,
     batch: u32,
+    remove_worktrees: bool,
     delivery: SkillDelivery,
     skills: &Skills,
 ) -> String {
@@ -538,6 +539,24 @@ fn run(
             "findings that are out of scope may be filed as `deferred`, within the budget"
         } else {
             "file nothing new: every out-of-scope finding goes to the digest and nowhere else"
+        }
+    );
+    // Both branches written out, as the two switches above are, and for the
+    // same reason: silence would be read as the default, and the default is not
+    // what somebody who has just been to the settings window chose.
+    //
+    // The Off branch asks to be told about it in the report, which is not
+    // decoration. Nothing in this app runs `git worktree` or counts one, so a
+    // person who left the switch off and forgot hears about the disk from the
+    // disk rather than from the app.
+    let _ = writeln!(
+        out,
+        "- {}",
+        if remove_worktrees {
+            "remove each task's worktree once it is merged and closed"
+        } else {
+            "leave every worktree where it is — never remove one — and say in your report that \
+             they were kept"
         }
     );
 
@@ -1043,15 +1062,27 @@ mod tests {
     /// batch number are the run's own and are not in any file, so a fixture
     /// names them the way `runs::service` builds them.
     fn run_intent(settings: RunSettings) -> Intent {
+        run_intent_with(settings, true)
+    }
+
+    /// `remove_worktrees` is not part of `RunSettings` and never will be — see
+    /// the field's own doc on `Intent::Run` — so it is the one thing a fixture
+    /// here has to vary by hand. `run_intent` above is the shipped position.
+    fn run_intent_with(settings: RunSettings, remove_worktrees: bool) -> Intent {
         Intent::Run {
             settings,
             reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
             batch: 2,
+            remove_worktrees,
         }
     }
 
     fn run_prompt(settings: RunSettings, delivery: SkillDelivery) -> String {
-        build(&run_intent(settings), delivery, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
+        prompt_of(run_intent(settings), delivery)
+    }
+
+    fn prompt_of(intent: Intent, delivery: SkillDelivery) -> String {
+        build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
             .unwrap()
     }
 
@@ -1307,6 +1338,27 @@ mod tests {
         );
         assert!(off.contains("no live check this run"), "{off}");
         assert!(off.contains("file nothing new"), "{off}");
+    }
+
+    #[test]
+    fn the_worktree_switch_is_stated_in_both_positions_and_neither_carries_the_other() {
+        // The third switch in that list, and the one that is not a
+        // `RunSettings` field. Silence would be read as the default here too —
+        // and the default is "remove", so a run told nothing would sweep up
+        // worktrees somebody had just asked it to keep.
+        let settings = run_settings(RunMode::Auto, RunScope::Queue);
+
+        let on = prompt_of(run_intent_with(settings.clone(), true), SkillDelivery::PluginDir);
+        assert!(on.contains("remove each task's worktree once it is merged and closed"), "{on}");
+        assert!(!on.contains("never remove one"), "no trace of the other branch: {on}");
+
+        let off = prompt_of(run_intent_with(settings, false), SkillDelivery::PluginDir);
+        assert!(off.contains("never remove one"), "{off}");
+        // The report half is the point of the Off branch: this app cannot see a
+        // worktree, so nothing but the lead's own account can tell a person
+        // what is still on their disk.
+        assert!(off.contains("say in your report that they were kept"), "{off}");
+        assert!(!off.contains("remove each task's worktree"), "no trace of the other branch: {off}");
     }
 
     #[test]
