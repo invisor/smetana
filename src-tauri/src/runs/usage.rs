@@ -52,32 +52,49 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What the harness said is left. Percentages used, not remaining.
 ///
+/// **A percentage is optional, and that is the whole point of the type.** The
+/// harness prints two limit lines and either of them can go missing — a
+/// reworded line, a build that prints one of them and not the other — and the
+/// half that was not read has no number at all. A zero standing in for it is a
+/// claim about an allowance nobody measured, which for a run is merely the
+/// benign direction to be wrong in and on the settings window is a sentence
+/// the app has no grounds for (smetana-7rp). So the absent half is `None`
+/// here and `null` on the wire, and a real `0%` — which the harness does
+/// print, on a fresh week — stays `Some(0)` and is drawn.
+///
 /// `Serialize` because this rides out to the settings window as well as into
 /// the run gate, and `camelCase` because that is what every other type crossing
 /// that boundary uses — `settings/model.rs` and `git.rs` among them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
-    pub session_pct: u8,
+    pub session_pct: Option<u8>,
     /// When it resets, in the harness's own words. Deliberately a string and
     /// never a moment in time: "Aug 11 at 5:59pm (Europe/Moscow)" is written
     /// for a person to read, and turning it into an instant would add a second
     /// parse of the same prose — one whose failure would be a run that woke at
     /// the wrong hour rather than one that showed a line it could not use.
     pub session_reset: Option<String>,
-    pub week_pct: u8,
+    pub week_pct: Option<u8>,
     pub week_reset: Option<String>,
 }
 
 impl Usage {
-    /// The limit that is actually in the way. Both are reported, and the run
-    /// stops for whichever is nearer its ceiling.
-    pub fn pct(&self) -> u8 {
+    /// The limit that is actually in the way, out of the halves that were read.
+    /// Both are reported when both are there, and the run stops for whichever
+    /// is nearer its ceiling; one half alone is the answer on its own, and
+    /// neither is no answer at all.
+    ///
+    /// `Ord` on `Option` puts `None` below every `Some`, so the missing half
+    /// can never win the comparison and can never be read as a zero either.
+    pub fn pct(&self) -> Option<u8> {
         self.session_pct.max(self.week_pct)
     }
 
     /// When *that* one resets. A tie goes to the session, which is the sooner
-    /// of the two and therefore the more useful thing to put on screen.
+    /// of the two and therefore the more useful thing to put on screen — and
+    /// by the same ordering, a session that was not read loses to a week that
+    /// was.
     fn reset(&self) -> Option<&str> {
         if self.session_pct >= self.week_pct {
             self.session_reset.as_deref()
@@ -100,13 +117,16 @@ pub enum Decision {
     Pause { pct: u8, resets: Option<String> },
 }
 
-/// Three bands, and `None` — an unreadable answer — is deliberately the most
-/// permissive of the four. Refusing to work because a probe failed would turn
-/// every hiccup in somebody else's CLI into a stopped run, and the failure this
-/// module exists to prevent is not that one.
+/// Three bands, and `None` — an unreadable answer, or one with neither half of
+/// it read — is deliberately the most permissive of the four. Refusing to work
+/// because a probe failed would turn every hiccup in somebody else's CLI into a
+/// stopped run, and the failure this module exists to prevent is not that one.
 pub fn decide(usage: Option<&Usage>) -> Decision {
     let Some(usage) = usage else { return Decision::Normal };
-    let pct = usage.pct();
+    // A reading with neither half in it says nothing about the allowance, so it
+    // takes the same answer as no reading at all — the rule this module is
+    // built on is that nothing which failed to be read may hold a run up.
+    let Some(pct) = usage.pct() else { return Decision::Normal };
     if pct >= PAUSE_THRESHOLD {
         return Decision::Pause { pct, resets: usage.reset().map(str::to_owned) };
     }
@@ -252,11 +272,17 @@ mod tests {
 
     fn usage(session: u8, week: u8) -> Usage {
         Usage {
-            session_pct: session,
+            session_pct: Some(session),
             session_reset: Some("Aug 7 at 8pm".into()),
-            week_pct: week,
+            week_pct: Some(week),
             week_reset: Some("Aug 11 at 5:59pm".into()),
         }
+    }
+
+    /// A reading with only the session in it: the shape `agents/claude.rs`
+    /// hands over when one of the two lines it looks for has been reworded.
+    fn session_only(session: u8) -> Usage {
+        Usage { week_pct: None, week_reset: None, ..usage(session, 0) }
     }
 
     #[test]
@@ -265,6 +291,35 @@ mod tests {
         // prose: when the parse fails, things are exactly where they were
         // before it existed.
         assert_eq!(decide(None), Decision::Normal);
+    }
+
+    #[test]
+    fn a_reading_with_neither_half_in_it_is_no_reading_either() {
+        // `claude.rs` does not produce this one — it answers `None` rather than
+        // an empty reading — but `decide` is the place the rule is written, and
+        // a second caller must not be able to stop a run by handing over an
+        // allowance nobody read.
+        assert_eq!(decide(Some(&Usage::default())), Decision::Normal);
+        assert_eq!(Usage::default().pct(), None);
+    }
+
+    #[test]
+    fn one_half_of_a_reading_is_the_whole_of_the_decision() {
+        // The bug this shape exists for: with the week unread, a `0` standing
+        // in for it used to be compared against the session and lose, which is
+        // harmless here and a lie on the settings window. The half that
+        // arrived is the number, not its maximum with an invented zero.
+        assert_eq!(session_only(80).pct(), Some(80));
+        assert_eq!(decide(Some(&session_only(80))), Decision::Reduced { pct: 80 });
+        assert_eq!(session_only(0).pct(), Some(0), "a real zero is a reading");
+
+        let week_only = Usage { session_pct: None, session_reset: None, ..usage(0, 95) };
+        assert_eq!(week_only.pct(), Some(95));
+        assert_eq!(
+            decide(Some(&week_only)),
+            Decision::Pause { pct: 95, resets: Some("Aug 11 at 5:59pm".into()) },
+            "the reset named is the one of the half that is in the way"
+        );
     }
 
     #[test]
@@ -369,6 +424,19 @@ mod tests {
         assert_eq!(json["usage"]["sessionReset"], "Aug 7 at 8pm");
         assert_eq!(json["usage"]["weekPct"], 20);
         assert_eq!(json["usage"]["weekReset"], "Aug 11 at 5:59pm");
+
+        // A half that was not read travels as an explicit `null` under the key
+        // it would have had, rather than by the key going missing: the front
+        // end reads it with `Number.isFinite`, which refuses both, but the two
+        // are not the same promise and only one of them is testable from here.
+        let json = serde_json::to_value(report(
+            Some(&crate::agents::claude::Claude),
+            Some(session_only(10)),
+        ))
+        .expect("the answer serializes");
+        assert_eq!(json["usage"]["sessionPct"], 10);
+        assert!(json["usage"]["weekPct"].is_null(), "an unread half is null and never a zero");
+        assert!(json["usage"].as_object().expect("a reading is an object").contains_key("weekPct"));
 
         let json = serde_json::to_value(report(Some(&crate::agents::codex::Codex), None))
             .expect("the answer serializes");
