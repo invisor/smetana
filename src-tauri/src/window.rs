@@ -33,13 +33,36 @@
 //!
 //! # The main window's geometry
 //!
-//! `tauri-plugin-window-state` keeps them, and there is no point rewriting it
-//! here: multi-monitor setups, minimization and full screen are already handled.
-//! There is one problem — it writes to disk in exactly one place,
-//! `RunEvent::Exit`, and holds everything in memory until then. So any run that
-//! does not reach a clean exit — a crash, a force quit, and in development every
-//! rebuild that kills the process — leaves the run-before-last's geometry on
-//! disk, and the window opens somewhere other than where it was left.
+//! `tauri-plugin-window-state` *keeps* them, and there is no point rewriting
+//! that: multi-monitor setups, minimization and full screen are already handled.
+//! **What it no longer does by itself is put them back.** The plugin is built
+//! with `skip_initial_state("main")` (`lib.rs`), so the geometry it holds is
+//! saved exactly as before and applied to no window on its own, and
+//! `open_main_window` below is the one thing that ever applies it — because
+//! whether it should be applied is a setting now (`settings.json`'s `window`
+//! section, `settings/model.rs`).
+//!
+//! `skip_initial_state` rather than `with_denylist`, and the difference is the
+//! whole design: the denylist takes the window out of the plugin altogether, so
+//! the switch would mean "forget where it was" and turning it back on a week
+//! later would open the window at the configured size. Skipping only the restore
+//! keeps the saving unconditional, in both positions of the switch, which is
+//! what makes it reversible the way a person expects.
+//!
+//! The main window is therefore created **hidden** (`"visible": false` in
+//! `tauri.conf.json`) and shown here. Windows declared in the configuration are
+//! built before the `setup` hook runs, so by the time this code decides
+//! anything the window would already be on screen at the configured size, and
+//! restoring from there is a visible jump. `open_main_window` shows it in both
+//! branches: a restore that failed must not be able to leave the app with no
+//! window at all.
+//!
+//! Saving is the other half, and it is untouched by any of the above. The plugin
+//! writes to disk in exactly one place, `RunEvent::Exit`, and holds everything in
+//! memory until then. So any run that does not reach a clean exit — a crash, a
+//! force quit, and in development every rebuild that kills the process — would
+//! leave the run-before-last's geometry on disk, and the window would open
+//! somewhere other than where it was left.
 //!
 //! Hence the write also happens along the way. The debounce is mandatory:
 //! dragging a window's corner sends hundreds of events, and writing the file on
@@ -55,7 +78,7 @@ use std::sync::{
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
 /// The settings window's label. It is also the name the capability in
 /// `capabilities/default.json` lists beside `main`: a window not named there
@@ -129,6 +152,8 @@ const SETTLE: Duration = Duration::from_millis(500);
 
 /// The same flags as `Builder::default()`: the plugin does not expose them, and
 /// saving less than it restores means losing fields on every write of ours.
+/// Both directions go through this one constant — `open_main_window` restores
+/// with it and `persist_geometry` saves with it — so the pair cannot come apart.
 const FLAGS: StateFlags = StateFlags::all();
 
 /// Takes the settings window down with the main one.
@@ -156,6 +181,35 @@ pub fn close_settings_with_main(app: &AppHandle) {
             let _ = settings.close();
         }
     });
+}
+
+/// Puts the main window where it was left, if that is what the person wants,
+/// and shows it either way.
+///
+/// The window is hidden until this runs — see the header — so this is also the
+/// only thing that ever puts it on screen. Hence the `show()` outside the
+/// branch: a refused or failed restore costs a window in the wrong place, and
+/// showing it only on the way out of the restoring branch would cost the app
+/// its window altogether.
+///
+/// Neither failure is worth crashing over and neither is worth a dialog: the
+/// worst of them is a window at the size the configuration names, which is
+/// exactly what the app did before there was a setting.
+///
+/// There may be no window — a configuration without `main`, a headless run;
+/// that is not an error, there is simply nothing to show.
+pub fn open_main_window(app: &AppHandle, restore: bool) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if restore {
+        if let Err(err) = window.restore_state(FLAGS) {
+            log::warn!("could not restore the window geometry: {err}");
+        }
+    }
+    if let Err(err) = window.show() {
+        log::warn!("could not show the main window: {err}");
+    }
 }
 
 /// Subscribes the main window to writing its own geometry.
