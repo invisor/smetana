@@ -100,6 +100,30 @@ rather than under the project: how tall somebody likes their branch list is a ha
 same argument `kanban` is global on. A folded caption **keeps its count** — folding the branches away
 says "do not draw me the list", not "stop telling me there are nine".
 
+**One of those three folds is overruled on the way in.** Arriving on the Git tab with anything
+uncommitted in the selected repository draws Changes open whatever is stored, because that list is
+what somebody came back for; inside the visit it folds on a press and stays folded until they leave
+the tab and return. The rule is `components/git/changesFold.js` — pure, tested, of the
+`sectionHeights.js` family. **What it deliberately does not do is write `changesOpen: true` on the
+way in**: a stored `false` would then survive only a clean tree, and folding this section away would
+stop meaning anything as a preference. So the visit is two fields held in `DesktopApp.vue` — an
+override and an arm — and neither reaches `settings.json` at all, which is the one place the global
+fold above is not the whole story.
+
+A visit is any move of `project.sideTab` onto `'git'` — a click or a line of code, and the way out of
+a conflict is the second kind and leads to exactly this list — plus the app starting and the project
+changing with Git already the open tab. One predicate with no exceptions: a rule that told the
+conflict's own switch apart from a click would be visible nowhere on screen. The arm is what makes
+any of it work against a `loadRepos` nobody awaits, and it is the **first known answer of the visit**
+that settles it — the moment `dirtyCount` stops being `null`. Everything follows from that. A refresh
+under somebody already sitting on the tab, by focus or by the panel's own button, unfolds nothing,
+because the visit was spent long before it; a clean tree that goes dirty mid-visit is the same case
+and also draws nothing new; and a read that failed leaves the visit still waiting rather than reading
+as a clean tree, the `null`-and-never-`0` opposition again. The press on the caption stores the
+inverse of what is **drawn** rather than of what is stored, or the first press under a forced-open
+section would write `true` and fold nothing, and it spends the visit in both directions — a
+`vcs_status` still in flight must not reopen what was just folded.
+
 A caption carries `divided`, the hairline above it, and the repositories deliberately do not: every
 section here is `--row-h` and quiet, so with nothing between them the three ran together into one
 column of rows and neither the captions nor the blocks under them read as blocks at all. It is the

@@ -21,6 +21,13 @@ import ConflictModal from '../components/git/ConflictModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
+import {
+  NO_VISIT,
+  changesVisible,
+  enterGitTab,
+  gitAnswered,
+  toggleChanges
+} from '../components/git/changesFold.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
@@ -574,10 +581,58 @@ const cutBranch = (ask) => {
    section given back to its content by a double click. */
 const gitSections = computed(() => settings.layout.gitSections)
 
-const FOLD_KEY = { repos: 'reposOpen', changes: 'changesOpen', branches: 'branchesOpen' }
+/* The two sections whose press is a plain inversion of what is stored. The
+   changes are deliberately not in here any more — they are the one section a
+   visit can be holding open, so the press is resolved against what is drawn
+   rather than against the stored flag, in `toggleGitSection` below. */
+const FOLD_KEY = { repos: 'reposOpen', branches: 'branchesOpen' }
 const ROWS_KEY = { repos: 'reposRows', branches: 'branchRows' }
 
+/* The one fold a visit to the tab is allowed to overrule, and the two fields
+   that hold it — `changesFold.js` is the rule, this is the half of it that
+   needs a tab and a store. Neither field reaches `settings.json`, and that is
+   the point rather than an omission: the reason is in the module's own header.
+
+   A visit starts on any move onto the Git tab and on the app starting or the
+   project changing with Git already open, which is exactly what this pair of
+   sources says with `immediate`. Both are watched rather than the tab alone,
+   because moving to another project leaves `sideTab` reading `'git'` before and
+   after, and the tree it is about is a different tree. */
+const changesVisit = ref(NO_VISIT)
+watch(
+  [activePath, () => project.sideTab],
+  ([, tab]) => {
+    if (tab === 'git') changesVisit.value = enterGitTab(dirtyCount.value)
+  },
+  { immediate: true }
+)
+/* And the other half, for the ordinary case where the tab is on screen before
+   git has answered. `dirtyCount` and not `vcsState.tree`: it is the count this
+   rule is about, already spelled once in the store, and it is `null` for an
+   unread tree exactly as the tree is — so a failed read leaves the visit still
+   waiting rather than reading as a clean tree. */
+watch(dirtyCount, (dirty) => {
+  changesVisit.value = gitAnswered(changesVisit.value, dirty)
+})
+
+/* What the panel is handed: the stored folds with the one the visit may have
+   overruled resolved first, so `GitPanel` goes on reading a single
+   `changesOpen` and neither its prop nor its events change shape. */
+const resolvedGitSections = computed(() => ({
+  ...gitSections.value,
+  changesOpen: changesVisible(gitSections.value.changesOpen, changesVisit.value)
+}))
+
 const toggleGitSection = (section) => {
+  /* The changes are the one section whose press is not an inversion of what is
+     stored — under a forced-open fold that would write `true` and fold nothing.
+     What a person folds is what they can see; the module says why. */
+  if (section === 'changes') {
+    const pressed = toggleChanges(gitSections.value.changesOpen, changesVisit.value)
+    gitSections.value.changesOpen = pressed.changesOpen
+    changesVisit.value = pressed.visit
+    return
+  }
   const key = FOLD_KEY[section]
   if (key) gitSections.value[key] = !gitSections.value[key]
 }
@@ -2993,7 +3048,7 @@ const toastStackStyle = {
                 :error="vcsState.error"
                 :loading="vcsState.loading"
                 :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
-                :sections="gitSections"
+                :sections="resolvedGitSections"
                 :branch-folders="project.branchFolders"
                 :message="draftMessage()"
                 :suggesting="vcsState.suggesting"
