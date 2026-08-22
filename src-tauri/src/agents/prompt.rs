@@ -366,12 +366,29 @@ fn writes_to_the_tracker(intent: &Intent) -> bool {
 ///
 /// The caveat is the same watershed `task_language` holds one field over, and
 /// it is why this is prose rather than one clause. What the setting moves is
-/// the sentence a person reads; what it must not move is the literal another
-/// reader matches on — and in a commit message that literal is the form
-/// itself. `type: subject` with `feat`, `fix`, `docs`, `refactor`, `test` and
-/// `chore` in front of the colon is grepped, filtered on and read at a glance
-/// by whoever comes to the log next, so a translated type is not a difference
-/// of style: it is a history that no longer answers `git log --grep`.
+/// the sentence a person reads; what it must not move is anything another
+/// reader matches on — and in a commit message that is what sits in front of
+/// the colon, whatever a given project happens to write there.
+///
+/// **It names no form, and that is the whole of the fix this paragraph got.**
+/// It said `type: subject` with the six Conventional Commits types, which is a
+/// convention this app has no business imposing on somebody's repository — the
+/// session prompt said nothing at all about commit form before this setting
+/// existed, and two things paid for it. `smetana:merging` hands the agent a
+/// literal `git merge --no-ff … -m "merge: <branch> into <target>"`, and
+/// `merge` is not one of the six, so an agent reconciling the two would rewrite
+/// a subject that `smetana:provisioning` then greps for by branch name. And
+/// this repository's own history is `настройки:`, `квота:`, `документация:` —
+/// a convention the paragraph would have quietly pushed into English. So the
+/// sentence protects whatever is there rather than saying what should be:
+/// exactly the shape `task_language` holds for the `##` headings and the
+/// `parked:` and `resolved:` markers. `oneshot::commit_prompt` still names the
+/// six, and the difference is who is writing — there the app composes the whole
+/// message itself, so the form is its own to choose.
+///
+/// An identifier inside the message is exempted for the same reason one clause
+/// later, since a branch name or an issue id after the colon is a name rather
+/// than prose, and the greps that find a merge look for exactly those.
 ///
 /// The messages git writes by itself — a `--no-ff` merge, a revert — are named
 /// as outside this, because they are git's own text and an agent that took the
@@ -379,11 +396,12 @@ fn writes_to_the_tracker(intent: &Intent) -> bool {
 fn commit_language(language: &str) -> String {
     format!(
         "Write the message of any git commit you make in {language}: the subject, and the body \
-         under it where you write one. The form stays English whatever this says, because it is \
-         matched and read rather than translated — a message is still `type: subject` in the \
-         Conventional Commits form, with the type one of feat, fix, docs, refactor, test or \
-         chore. Only what follows the colon is written in {language}. A message git writes for \
-         you, such as a merge or a revert, is git's own and is left as it stands."
+         under it where you write one. Whatever form this project's commit subjects already \
+         take, what sits in front of the colon stays as it is — it is matched and read rather \
+         than translated, and a history people grep has to go on answering. An identifier in the \
+         message, such as a branch name or an issue id, is a name and travels unchanged for the \
+         same reason. Only the prose is written in {language}. A message git writes for you, \
+         such as a merge or a revert, is git's own and is left alone."
     )
 }
 
@@ -2271,24 +2289,39 @@ mod tests {
     }
 
     #[test]
-    fn the_conventional_commits_form_stays_english_whatever_the_commit_language_is() {
-        // The same watershed the section headings hold one field over: the type
-        // in front of the colon is grepped and read rather than translated, so
-        // the setting moves the subject and leaves the form where it is. The
-        // literals are asserted rather than the caveat's presence, because the
-        // caveat is only worth having if the form itself travels intact.
+    fn the_commit_paragraph_protects_a_form_without_legislating_one() {
+        // The watershed the section headings hold one field over: what sits in
+        // front of the colon is matched and read rather than translated, so the
+        // setting moves the prose and leaves that alone.
+        //
+        // **The absence is the assertion here**, and it is what the earlier
+        // version of this paragraph got wrong. Naming `type: subject` and the
+        // six Conventional Commits types imposes a convention on somebody
+        // else's repository: `smetana:merging` commits `merge: <branch> into
+        // <target>`, which is not one of the six, and `smetana:provisioning`
+        // greps that subject for the branch name afterwards. A prompt telling
+        // the agent the form is something else is a merge subject rewritten and
+        // a blocker no longer found.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
             for intent in [Intent::Bare, conflict(crate::vcs::model::OpKind::Merge), run_intent(run_settings(RunMode::Auto, RunScope::Queue))] {
                 let text = in_language(&intent, delivery, &russian());
-                assert!(text.contains("`type: subject`"), "{intent:?}/{delivery:?}: {text}");
                 assert!(
-                    text.contains("feat, fix, docs, refactor, test or chore"),
+                    text.contains("what sits in front of the colon stays as it is"),
                     "{intent:?}/{delivery:?}: {text}"
                 );
                 assert!(
-                    text.contains("form stays English"),
-                    "{intent:?}/{delivery:?}: {text}"
+                    text.contains("is a name and travels unchanged"),
+                    "{intent:?}/{delivery:?} lets an identifier be translated: {text}"
                 );
+                assert!(
+                    !text.contains("Conventional Commits"),
+                    "{intent:?}/{delivery:?} legislates a commit convention: {text}"
+                );
+                assert!(
+                    !text.contains("feat, fix, docs"),
+                    "{intent:?}/{delivery:?} names a type set the project may not use: {text}"
+                );
+                assert!(text.contains("in Russian"), "{intent:?}/{delivery:?}: {text}");
             }
         }
     }

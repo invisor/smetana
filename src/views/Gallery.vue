@@ -1203,12 +1203,16 @@ const galleryAutostartSupported = ref(true)
 const galleryAutostartEnabled = ref(false)
 const galleryRestoreGeometry = ref(true)
 const galleryAgent = ref('claude')
-/* The Agents tab's two language pickers. Not both on English: the longest label
-   either list holds is the one worth looking at, and a tab showing "English"
-   twice would never draw it. */
+/* The Agents tab's three language pickers, and **no two of them alike**. Not
+   all on English, because the longest label any of the lists holds is the one
+   worth looking at and a tab showing "English" three times would never draw it
+   — and not two of them on the same language either, since a row bound to the
+   wrong prop would then read as correct here. That is not hypothetical: a
+   shared ref in this file has hidden exactly that defect before (38e300a), and
+   these four cells are the only verification a `.vue` file gets. */
 const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
-const galleryCommitLanguage = ref('ru')
+const galleryCommitLanguage = ref('ja')
 /* The subscription block. A reading rather than one of the two empty states:
    those are a sentence each, while this is the shape with a layout to check —
    two rows, the line about what a run would do, and a live Refresh beside the

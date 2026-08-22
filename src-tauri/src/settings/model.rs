@@ -612,8 +612,8 @@ pub struct Settings {
     /// the same as `agent` above.
     pub agent_language: String,
     pub task_language: String,
-    /// What `commit_language` moves is the prose of a message; the Conventional
-    /// Commits form in front of the colon stays English whatever it says.
+    /// What `commit_language` moves is the prose of a message; whatever sits in
+    /// front of the colon stays as it is, whatever it says.
     pub commit_language: String,
     pub last_project: Option<String>,
     /// The contents and order of the on-screen list — the order things were

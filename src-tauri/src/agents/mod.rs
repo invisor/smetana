@@ -297,10 +297,12 @@ pub struct Languages {
     pub task: String,
     /// What a git commit message is written in — both the one the Git panel's
     /// button asks for and the ones an agent writes with its own hands during a
-    /// run. The Conventional Commits form in front of the colon is the
-    /// exception and stays English whatever this says, for the reason
-    /// `prompt.rs` and `oneshot::commit_prompt` both record: it is grepped and
-    /// read rather than translated.
+    /// run. Whatever sits in front of the colon is the exception and does not
+    /// move, for the reason `prompt.rs` and `oneshot::commit_prompt` both
+    /// record: it is grepped and read rather than translated. Which form that
+    /// is differs by caller — the button's prompt names Conventional Commits
+    /// because the app composes that message itself, while a session is told to
+    /// leave its project's own convention where it found it.
     pub commit: String,
 }
 

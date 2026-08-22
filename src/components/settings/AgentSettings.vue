@@ -109,10 +109,9 @@ const LANGUAGES = [
 
 /* Every row on this tab shares one control column, wider than the shipped
    default: "Chinese (Simplified)" is the longest label any of the lists holds,
-   and
-   `Dropdown` ellipsises a label that does not fit its field rather than growing
-   it. In `ch` like the rest of this window, so the column grows with the
-   app-wide font size instead of clipping at the top of the range. */
+   and `Dropdown` ellipsises a label that does not fit its field rather than
+   growing it. In `ch` like the rest of this window, so the column grows with
+   the app-wide font size instead of clipping at the top of the range. */
 const CONTROL_WIDTH = '30ch'
 
 /* What the block below is headed, and it names **whoever answered the probe**
@@ -227,7 +226,7 @@ const errorStyle = {
 
       <SettingsRow
         label="Commit language"
-        description="What an agent writes in a git commit message is written in this — both the suggested message in the Git panel and the commits it makes during a run. The Conventional Commits type in front of the colon stays English."
+        description="What an agent writes in a git commit message is written in this — both the suggested message in the Git panel and the commits it makes during a run. What sits in front of the colon is left as it is."
         :control-width="CONTROL_WIDTH"
       >
         <Dropdown

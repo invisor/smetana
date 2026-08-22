@@ -142,10 +142,18 @@ road into a session, which is what reading them in one place exists to prevent.
 
 What each moves is not the same, and `prompt.rs` carries one predicate per language for it. The
 conversation language goes into **every** intent. The commit language goes where the agent's own
-hands reach git — `commits_to_git`, which is `Run`, `ResolveConflict` and `Bare` — and it leaves the
-Conventional Commits form alone: `type: subject` with `feat`, `fix`, `docs`, `refactor`, `test` and
-`chore` in front of the colon is grepped and read rather than translated, so only what follows the
-colon moves, and a message git writes for itself is git's own. `Bare` is in for the reason the
+hands reach git — `commits_to_git`, which is `Run`, `ResolveConflict` and `Bare` — and it leaves
+whatever sits in front of the colon exactly as the project already writes it, along with any
+identifier in the message and anything git wrote itself. **It names no form**, and the paragraph
+saying `type: subject` with the six Conventional Commits types is the version that was thrown away:
+the session prompt said nothing about commit form before this setting existed, `smetana:merging`
+commits `merge: <branch> into <target>` with a word that is not one of the six, and
+`smetana:provisioning` greps that subject for the branch name afterwards — so a prompt asserting a
+convention costs a rewritten merge subject and a blocker nobody can find. This repository's own
+history (`настройки:`, `квота:`) is the second reason: a language field has no business moving a
+project's conventions into English. `oneshot::commit_prompt` still names the six, and the difference
+is who writes the message — there the app composes the whole of it, so the form is its own to
+choose. `Bare` is in for the reason the
 conversation sentence is in every intent — the ordinary session is exactly where somebody says
 "commit this" — while `NewTask`, `EditTask`, `ResolveTask` and `Setup` are out because they commit
 nothing: what `NewTask` writes goes under `.smetana/`, which is not in the repository at all. The task
