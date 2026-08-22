@@ -1,18 +1,14 @@
 <script setup>
-/* The General tab: how the app looks everywhere, and the two things it does on
-   its own — go to a remote, and make a noise. None of them is about any single
-   part of the app, which is what makes this the tab they are on. The background
-   fetch is here for that reason rather than under a Git tab there is none of:
-   what it settles is whether this machine opens a socket by itself, which is a
-   fact about a connection and a person and not about a repository. The two
-   sounds are here on the same argument — a noise is a fact about a person and a
-   room.
+/* The General tab: how the app looks everywhere, and the noise it makes. None
+   of it is about any single part of the app, which is what makes this the tab
+   these rows are on — the two sounds included, since a noise is a fact about a
+   person and a room rather than about anything on the screen. What the app does
+   to a person's repositories on its own is the Git tab, next door.
 
    Presentational, like every component here: it is handed the values and emits
    what a person picked. The window is what talks to the main window and to the
    file, so this renders in `?view=gallery` with nothing behind it. */
 import Dropdown from '../core/Dropdown.vue'
-import Switch from '../core/Switch.vue'
 import SettingsRow from './SettingsRow.vue'
 import { FONT_SIZES, THEME_CHOICES } from '../../appearance.js'
 import { SOUND_CHOICES } from '../../sounds.js'
@@ -21,7 +17,6 @@ import { chime } from '../../chime.js'
 const props = defineProps({
   theme: { type: String, default: 'dark' },
   uiFontSize: { type: Number, default: 13 },
-  gitAutoFetch: { type: Boolean, default: true },
   /* A sound id or `off`. The two shipped ones, mirroring `sounds.js` and Rust:
      a component that defaulted to silence would draw the opposite of what the
      app is doing for the moment before the first value arrives. */
@@ -32,7 +27,6 @@ const props = defineProps({
 const emit = defineEmits([
   'update:theme',
   'update:uiFontSize',
-  'update:gitAutoFetch',
   'update:notificationRunFinished',
   'update:notificationNeedsAttention'
 ])
@@ -85,18 +79,6 @@ function pick(event, value) {
         :model-value="props.uiFontSize"
         :options="sizeOptions"
         @update:model-value="emit('update:uiFontSize', $event)"
-      />
-    </SettingsRow>
-    <!-- Off is for a metered connection, a VPN that is not always up, or a key
-         with a passphrase that would fail on every sweep. The sentence says
-         what it does not do as well: nothing about this changes a file. -->
-    <SettingsRow
-      label="Fetch from remotes automatically"
-      description="Checks the Git panel's branches for new commits when the window comes back into focus, at most every few minutes. Nothing is merged."
-    >
-      <Switch
-        :model-value="props.gitAutoFetch"
-        @update:model-value="emit('update:gitAutoFetch', $event)"
       />
     </SettingsRow>
     <!-- The two things worth hearing rather than seeing, and both happen while

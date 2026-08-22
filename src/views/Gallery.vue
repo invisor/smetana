@@ -40,6 +40,7 @@ import {
   FileTreeDraftRow,
   FileTreeRow,
   GeneralSettings,
+  GitSettings,
   GitPanel,
   Icon,
   IconButton,
@@ -1158,12 +1159,15 @@ const GALLERY_SESSION = 1
 const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
-/* Local like the two above, and for the same reason: in the app this value
-   comes from the main window and goes back to it as an event, and neither end
-   exists here. Bound rather than left to its default so the switch actually
-   moves when it is pressed — a control that does not respond is the one thing
-   this page cannot be used to check. */
+/* The Git tab's two switches, local like the refs above and for the same
+   reason: in the app these values come from the main window and go back to it
+   as events, and neither end exists here. Bound rather than left to their
+   defaults so the switches actually move when pressed — a control that does not
+   respond is the one thing this page cannot be used to check. Deliberately not
+   both on: the page is where the pair of rows is looked at, and one of each
+   shows both positions of a switch side by side. */
 const galleryGitAutoFetch = ref(true)
+const galleryRemoveWorktrees = ref(false)
 /* The two notification sounds, local for the same reason. Deliberately not
    both on a sound: this page is where the pair of rows is looked at, and one of
    each shows the chosen state and the silent one side by side rather than the
@@ -3113,9 +3117,9 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Settings window</div>
-      <!-- The four tabs of the settings window, side by side rather than behind
-           a tab bar: this harness is for seeing every component at once, and a
-           tab strip here would hide three of the four behind a click. The values
+      <!-- Every tab of the settings window, side by side rather than behind a
+           tab bar: this harness is for seeing every component at once, and a
+           tab strip here would hide all but one behind a click. The values
            are local refs — in the app they arrive from the main window and go
            back to it as events, and neither end exists here. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', flexWrap: 'wrap', alignItems: 'flex-start' }">
@@ -3123,14 +3127,20 @@ const menuTargetStyle = {
           <GeneralSettings
             :theme="galleryTheme"
             :ui-font-size="galleryUiFont"
-            :git-auto-fetch="galleryGitAutoFetch"
             :notification-run-finished="galleryRunSound"
             :notification-needs-attention="galleryNeedsSound"
             @update:theme="galleryTheme = $event"
             @update:ui-font-size="galleryUiFont = $event"
-            @update:git-auto-fetch="galleryGitAutoFetch = $event"
             @update:notification-run-finished="galleryRunSound = $event"
             @update:notification-needs-attention="galleryNeedsSound = $event"
+          />
+        </div>
+        <div :style="{ width: '380px' }">
+          <GitSettings
+            :auto-fetch="galleryGitAutoFetch"
+            :remove-worktrees="galleryRemoveWorktrees"
+            @update:auto-fetch="galleryGitAutoFetch = $event"
+            @update:remove-worktrees="galleryRemoveWorktrees = $event"
           />
         </div>
         <div :style="{ width: '380px' }">

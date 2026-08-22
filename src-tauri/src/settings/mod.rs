@@ -44,3 +44,19 @@ pub fn agent(app: &AppHandle) -> String {
 pub fn languages(app: &AppHandle) -> crate::agents::Languages {
     path(app).map(|path| file::languages(&path)).unwrap_or_default()
 }
+
+/// Whether a run may remove each task's worktree after it is merged and closed.
+///
+/// Beside `agent` above and read the same way, and by the same caller for the
+/// same reason: `runs::service` reads it once when a run starts and carries it
+/// for the whole of the run, so a night's batches all work to one answer rather
+/// than to whatever the file said when each of them happened to spawn.
+///
+/// A platform that will not name a config directory answers `true`, the shipped
+/// state — the same fallback `file::git_remove_worktrees` makes, and for the
+/// reason written there.
+pub fn git_remove_worktrees(app: &AppHandle) -> bool {
+    path(app)
+        .map(|path| file::git_remove_worktrees(&path))
+        .unwrap_or_else(|| model::Settings::default().git.remove_worktrees)
+}

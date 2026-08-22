@@ -23,6 +23,7 @@ import GeneralSettings from '../components/settings/GeneralSettings.vue'
 import EditorSettings from '../components/settings/EditorSettings.vue'
 import AgentSettings from '../components/settings/AgentSettings.vue'
 import KanbanSettings from '../components/settings/KanbanSettings.vue'
+import GitSettings from '../components/settings/GitSettings.vue'
 import StorageSettings from '../components/settings/StorageSettings.vue'
 import AboutSettings from '../components/settings/AboutSettings.vue'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
@@ -74,11 +75,14 @@ const view = reactive({
   kanbanAlwaysShow: [],
   kanbanInterval: 'all',
   kanbanUnlimited: [],
-  /* Whether the Git panel goes to a remote by itself. Shipped on, the same as
-     `settings/model.rs` and `stores/settings.js` — the three copies of this
-     default have to agree, or the switch draws the opposite of what the app is
-     doing for the moment before the first answer arrives. */
+  /* The Git tab's two: whether the Git panel goes to a remote by itself, and
+     whether a run removes each task's worktree once it is merged and closed.
+     Both shipped on, the same as `settings/model.rs`, `stores/settings.js` and
+     the component's own prop defaults — the copies of each have to agree, or a
+     switch draws the opposite of what the app is doing for the moment before
+     the first answer arrives. */
   gitAutoFetch: true,
+  gitRemoveWorktrees: true,
   /* Which sound each announcement makes. Shipped as `settings/model.rs` and
      `stores/settings.js` ship them — the three copies of these defaults have to
      agree, or this window draws a sound the app is not playing for the moment
@@ -183,6 +187,10 @@ const TABS = [
   { id: 'editor', label: 'Editor', kind: 'pinned' },
   { id: 'agents', label: 'Agents', kind: 'pinned' },
   { id: 'kanban', label: 'Kanban', kind: 'pinned' },
+  /* Between Kanban and Storage rather than at the end: the five before it are
+     settings and Storage is the one tab that is not, so a sixth section of
+     settings belongs on this side of that line. */
+  { id: 'git', label: 'Git', kind: 'pinned' },
   { id: 'storage', label: 'Storage', kind: 'pinned' },
   { id: 'about', label: 'About', kind: 'pinned' }
 ]
@@ -299,12 +307,10 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           v-if="tab === 'general'"
           :theme="view.theme"
           :ui-font-size="view.uiFontSize"
-          :git-auto-fetch="view.gitAutoFetch"
           :notification-run-finished="view.notificationRunFinished"
           :notification-needs-attention="view.notificationNeedsAttention"
           @update:theme="change({ theme: $event })"
           @update:ui-font-size="change({ uiFontSize: $event })"
-          @update:git-auto-fetch="change({ gitAutoFetch: $event })"
           @update:notification-run-finished="change({ notificationRunFinished: $event })"
           @update:notification-needs-attention="change({ notificationNeedsAttention: $event })"
         />
@@ -333,6 +339,13 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:always-show="change({ kanbanAlwaysShow: $event })"
           @update:interval="change({ kanbanInterval: $event })"
           @update:unlimited="change({ kanbanUnlimited: $event })"
+        />
+        <GitSettings
+          v-else-if="tab === 'git'"
+          :auto-fetch="view.gitAutoFetch"
+          :remove-worktrees="view.gitRemoveWorktrees"
+          @update:auto-fetch="change({ gitAutoFetch: $event })"
+          @update:remove-worktrees="change({ gitRemoveWorktrees: $event })"
         />
         <StorageSettings
           v-else-if="tab === 'storage'"
