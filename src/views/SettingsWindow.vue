@@ -110,9 +110,18 @@ const FIELDS = Object.keys(view)
    window's copy can be up to a debounce ahead of the file. */
 const heard = ref(false)
 
+/* Whether anything at all has landed in `view` — an announcement, the disk
+   read, or an edit made here — as opposed to `heard`, which is about the app
+   window alone and stays false for the disk. The difference matters to exactly
+   one reader, the subscription probe below: until this is true, every field in
+   `view` is the shipped painting default rather than an answer, and a question
+   asked out of one names a guess. */
+const adopted = ref(false)
+
 const adopt = (state, fromApp) => {
   if (!state) return
   if (fromApp) heard.value = true
+  adopted.value = true
   for (const field of FIELDS) {
     if (field in state && state[field] != null) view[field] = state[field]
   }
@@ -299,6 +308,16 @@ const clear = async () => {
    answers about the agent somebody has just switched away from, every time
    rather than occasionally.
 
+   **Until this window has adopted anything, it names nobody**, and that is the
+   same defect one door over. `view.agent` starts as the shipped `claude`, a
+   painting default so the window does not flash the wrong picker for a frame,
+   and it is replaced inside `onMounted` after an awaited call — while the
+   `watch` below runs synchronously during setup. So a window built on
+   `?tab=agents` would ask about `claude` whatever the file says, and nothing
+   would ask again once the real value arrived. Passing `null` there is not a
+   gap: nothing has been edited yet, so the file genuinely is the authority, and
+   `wanted`'s `None` branch is exactly that case.
+
    The guard is a sequence number and not the `busy` flag alone: a change of
    agent has to supersede a probe already out, so two can be in flight at once
    and only the newest may be drawn. Without it, an answer about the agent
@@ -306,7 +325,7 @@ const clear = async () => {
 const usage = reactive({ reading: null, busy: false, error: null })
 let asked = 0
 
-const readUsage = async (agent = view.agent) => {
+const readUsage = async (agent = adopted.value ? view.agent : null) => {
   const mine = (asked += 1)
   usage.busy = true
   usage.reading = null

@@ -101,6 +101,32 @@ describe('the sentence under the rows', () => {
     expect(usageNote(null)).toBe('The allowance has not been read yet.')
   })
 
+  it('says nothing when the channel itself refused, since that line is drawn instead', () => {
+    // The refusal is `invoke` failing, not an answer: the command cannot fail
+    // in Rust. The block draws it as a line of its own, and the sentence that
+    // would sit above it — the reading is cleared before every read, so it
+    // would be "not read yet" — is the one thing the refusal contradicts.
+    expect(usageNote(null, false, 'the settings window could not reach the app')).toBe('')
+    expect(usageNote(unreadable, false, 'nobody answered')).toBe('')
+    expect(usageNote(read(), false, 'nobody answered')).toBe('')
+  })
+
+  it('does not describe one attempt twice when a refusal and a probe are both set', () => {
+    // The window makes these two exclusive — it clears the error before it sets
+    // busy — but which wins is worth pinning rather than leaving to whichever
+    // condition a later edit happens to write first.
+    expect(usageNote(null, true, 'nobody answered')).toBe('')
+    expect(usageNote(read(), true, 'nobody answered')).toBe('')
+  })
+
+  it('is the ordinary sentence again once there is no refusal to draw', () => {
+    // The absence of an error is `null` from the window and `''` from a prop
+    // default, and neither may swallow the sentence.
+    expect(usageNote(read(), false, null)).toBe('A run would take a full batch at this level.')
+    expect(usageNote(read(), false, '')).toBe('A run would take a full batch at this level.')
+    expect(usageNote(null, true, null)).toBe('Reading what is left of the allowance…')
+  })
+
   it('reads an answer from a newer build as unreadable, which promises nothing', () => {
     expect(usageNote({ state: 'throttled', agent: 'claude' })).toContain('could not be read')
     expect(usageNote(read({ usage: { sessionPct: null } }))).toContain('could not be read')

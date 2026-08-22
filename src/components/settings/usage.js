@@ -89,13 +89,25 @@ const BAND_NOTE = {
 }
 
 /* The one sentence under the rows. Every state has one, and none of them is
-   silent about why there is nothing to show.
+   silent about why there is nothing to show — which is also why the choice
+   among them is here rather than in the component: this file exists so that the
+   sentence telling somebody their allowance could not be read is the one drawn
+   when it could not.
 
-   `busy` comes first and beats whatever is on screen: a probe is somebody
-   else's CLI with a minute's ceiling over it, and a block that sat there
-   showing the previous answer would be claiming a reading that is being
-   replaced as it is read. */
-export function usageNote(answer, busy = false) {
+   `error` is the channel rather than the answer — the command is infallible in
+   Rust, so a refusal is `invoke` itself failing — and it comes first because
+   the caller draws it as a line of its own. There is nothing to add under it:
+   the reading is cleared before every read, so the honest sentence for that
+   moment would be "not read yet", which the refusal directly contradicts. Not
+   even the busy line, on the same ground — a caller showing both is describing
+   one attempt twice, and the refusal is the account of it.
+
+   `busy` comes next and beats whatever is on screen: a probe is somebody else's
+   CLI with a minute's ceiling over it, and a block that sat there showing the
+   previous answer would be claiming a reading that is being replaced as it is
+   read. */
+export function usageNote(answer, busy = false, error = null) {
+  if (error) return ''
   if (busy) return 'Reading what is left of the allowance…'
   if (!answer) return 'The allowance has not been read yet.'
   if (answer.state === UNSUPPORTED) {
