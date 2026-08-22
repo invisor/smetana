@@ -173,10 +173,13 @@ export async function measureStorage(project) {
    nothing. The token is issued once per app process and never reused, so this
    set cannot silence a later run — not even one in another project.
 
-   Two ways in, and they are the same fact rather than two: a card somebody took
-   away, and a report the app put in a tab in front of them. Both mean this
-   ending has been delivered, and the bell's whole job is to ask for a visit
-   that has not happened yet. */
+   Three ways in, and they are the same fact rather than three: a card somebody
+   took away, a report the app put in a tab in front of them, and a run whose
+   report the person has asked not to be shown at all
+   (`components/run/reportDelivery.js`, `notifications.showReport`). All three
+   mean this ending has been dealt with, and the bell's whole job is to ask for
+   a visit that has not happened yet — which the third case has declined in
+   advance. */
 const deliveredRuns = new Set()
 
 /* The run cards, rebuilt from `runsState.runs`.
@@ -224,8 +227,15 @@ export function dismiss(id) {
   notificationsState.items = notificationsState.items.filter((item) => item.id !== id)
 }
 
-/* This run's account has been opened in a tab in front of the person, so the
-   bell has nothing left to ask for.
+/* This run's ending has reached the person as far as it ever will — opened in a
+   tab in front of them, or deliberately not shown at all — so the bell has
+   nothing left to ask for.
+
+   Named for the outcome rather than for the tab, because there are now two ways
+   to arrive here and only one of them is a document on screen: with
+   `notifications.showReport` off, nothing is opened and the card still has to
+   go, since a card is a delivery of the same report and the person has declined
+   it.
 
    Called by `DesktopApp.vue`, which is the only place that can open a tab, and
    called *after* the card exists: `syncRunCards` runs inside `upsert`, so the
@@ -233,7 +243,7 @@ export function dismiss(id) {
    ordering is why the view's watcher is synchronous — see the reason written
    beside it there — and why this rebuilds the list rather than merely
    remembering the token. */
-export function deliveredInTab(token) {
+export function markRunDelivered(token) {
   deliveredRuns.add(token)
   syncRunCards()
 }

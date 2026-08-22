@@ -297,9 +297,10 @@ describe('the bell and a run that is over', () => {
     await stores.runs.loadRun(PROJECT)
     expect(stores.notifications.notificationsState.items).toHaveLength(1)
 
-    // Delivery is one or the other: a tab already open in front of somebody is
-    // the visit the card would have been asking for.
-    stores.notifications.deliveredInTab(1)
+    // Delivery is one of the three, never two: a tab already open in front of
+    // somebody is the visit the card would have been asking for, and a person
+    // who switched reports off has declined that visit in advance.
+    stores.notifications.markRunDelivered(1)
     expect(stores.notifications.notificationsState.items).toEqual([])
 
     // And it stays gone, for the reason a dismissed one does: the list it is

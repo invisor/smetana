@@ -173,34 +173,56 @@ impl Default for WindowSettings {
 /// with nothing on screen to say so.
 const SOUNDS: [&str; 5] = ["off", "sound-1", "sound-2", "sound-3", "sound-4"];
 
-/// What the app says out loud, and with which sound.
+/// What the app says when a run ends or an agent stops to ask: with which
+/// sound, and whether the run's own account is put in front of the person at
+/// all.
 ///
 /// Global rather than under a project, on `GitSettings`' argument exactly:
 /// whether this machine makes a noise, and which one, is a fact about a person
-/// and a room rather than about one repository.
+/// and a room rather than about one repository. `show_report` is global on the
+/// same argument one step over — the General tab is global by contract, and
+/// wanting the document or not is a habit of reading rather than a fact about
+/// one repository.
 ///
-/// Both ship as a sound rather than as `off`, and as two *different* sounds:
-/// the events they announce — a run that has ended, an agent that has stopped
-/// to ask something — call for different reactions, and a feature nobody
-/// switches on is a feature nobody finds. `NOTIFICATION_DEFAULTS` in
-/// `src/sounds.js` is the other copy of these two values.
+/// Both sounds ship as a sound rather than as `off`, and as two *different*
+/// sounds: the events they announce — a run that has ended, an agent that has
+/// stopped to ask something — call for different reactions, and a feature
+/// nobody switches on is a feature nobody finds. `NOTIFICATION_DEFAULTS` in
+/// `src/sounds.js` is the other copy of those two values; `show_report` is
+/// deliberately not in that file, which is about sounds and has no business
+/// holding a boolean.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct NotificationSettings {
     /// Played when a run reaches its ending, whichever way its report was
-    /// delivered.
+    /// delivered — and whether or not it was delivered at all: the sound is a
+    /// separate answer from `show_report` and stays whatever that one says.
     pub run_finished: String,
     /// Played when an agent session enters `needs-you`, in any project.
     pub needs_attention: String,
+    /// Whether a run that has ended puts its report in front of the person.
+    /// The whole of the delivery policy — `src/components/run/reportDelivery.js`
+    /// asks this and nothing else — and shipped **on**, because that is today's
+    /// behaviour and somebody updating the app must not find their reports have
+    /// silently stopped arriving.
+    pub show_report: bool,
 }
 
 impl Default for NotificationSettings {
     fn default() -> Self {
-        Self { run_finished: "sound-1".into(), needs_attention: "sound-2".into() }
+        Self {
+            run_finished: "sound-1".into(),
+            needs_attention: "sound-2".into(),
+            show_report: true,
+        }
     }
 }
 
 impl NotificationSettings {
+    /// Nothing is checked for `show_report`, deliberately: a boolean has no
+    /// values outside its own set, and a hand-edited file carrying something
+    /// else there loses the whole `notifications` section through serde and
+    /// takes the defaults — exactly what `editor.wordWrap` does one struct over.
     fn validate(&mut self) {
         one_of(&mut self.run_finished, &SOUNDS, "sound-1");
         one_of(&mut self.needs_attention, &SOUNDS, "sound-2");
@@ -1346,6 +1368,38 @@ mod tests {
         assert_eq!(written.notifications.needs_attention, "sound-4");
     }
 
+    /// Shipped on, and the same walk the sounds beside it make: the field
+    /// shares their section, so a section wired for two values and read for
+    /// three would answer `true` for ever and no struct-alone test would see it.
+    #[test]
+    fn showing_the_report_defaults_on_and_survives_the_round_trip() {
+        let shipped = Settings::default();
+        assert!(shipped.notifications.show_report, "the shipped answer is today's behaviour");
+
+        let file = settings_of(r#"{"version":1,"notifications":{"showReport":false}}"#);
+        assert!(!file.notifications.show_report, "parse must read it off the disk");
+        assert_eq!(
+            file.notifications.run_finished, "sound-1",
+            "and must leave the sounds beside it at their defaults"
+        );
+
+        let resolved = resolve(&file, None);
+        assert!(!resolved.notifications.show_report, "resolve must carry it to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-22T10:00:00Z".into());
+        assert!(!written.notifications.show_report, "merge must carry it back into the file");
+    }
+
+    #[test]
+    fn a_file_written_before_the_switch_existed_opens_with_the_report_showing() {
+        // Every settings file on a person's disk right now is this file, and
+        // the whole reason the default is `true`.
+        let settings = settings_of(r#"{"version":1,"notifications":{"runFinished":"off"}}"#);
+        assert!(settings.notifications.show_report);
+        assert_eq!(settings.notifications.run_finished, "off");
+    }
+
     #[test]
     fn a_sound_nobody_ships_loses_its_field_and_leaves_the_other_alone() {
         // The rule the whole schema follows: the field is damaged, not the
@@ -1364,6 +1418,10 @@ mod tests {
         let settings = settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#);
         assert_eq!(settings.notifications.run_finished, "sound-1");
         assert_eq!(settings.notifications.needs_attention, "sound-2");
+        assert!(
+            settings.notifications.show_report,
+            "and with its report showing, which is what the app did before the switch existed"
+        );
     }
 
     #[test]

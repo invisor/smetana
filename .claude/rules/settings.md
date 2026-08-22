@@ -26,7 +26,7 @@ panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wor
 start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, `kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
 `window`, whether the main window opens where it was left, and `notifications`,
-which sound each of the two announcements makes. Below that, `openProjects` is the list of projects the window has open,
+which sound each of the two announcements makes and whether a finished run shows its report. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, active tab, selected task, `recentTasks`, selected
 path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`, `columnOrder`,
@@ -125,9 +125,10 @@ worktree because somebody is coming to look, a task waiting on a live check keep
 not closed yet, and a worktree that refuses to go — dirty, locked — is a line in the report and never
 a stop.
 
-`notifications` is the third global section, and it holds the two sounds — `runFinished` and
-`needsAttention`, each one of `off`, `sound-1` … `sound-4`. Global on `git`'s argument exactly: a
-noise is a fact about a person and a room rather than about one repository. Both ship as a sound
+`notifications` is the third global section, and it holds three fields: the two sounds —
+`runFinished` and `needsAttention`, each one of `off`, `sound-1` … `sound-4` — and `showReport`, a
+boolean beside them. Global on `git`'s argument exactly: a
+noise is a fact about a person and a room rather than about one repository. Both sounds ship as a sound
 rather than as `off`, and as two *different* sounds, for the reason `src/sounds.js` records — a
 feature nobody switches on is a feature nobody finds, and a run that ended can be read in the
 morning while an agent that is waiting is a night that has stopped moving. The ids are a closed list
@@ -138,6 +139,23 @@ defaults are written out three times over — Rust, `defaults()` in `stores/sett
 are edited, and **choosing one plays it**: the choice is the preview, so there is no play button
 beside the list, and that press is also the one gesture a webview's autoplay policy is certain to
 allow. Where each sound actually fires is `.claude/rules/notifications.md`.
+
+`showReport` is the third field of that section and the one that is not a sound, which is why it is
+written out in `defaults()` by hand rather than taken from `NOTIFICATION_DEFAULTS`: that constant
+lives in `src/sounds.js`, which is the closed list of sounds and the two shipped ones, and a boolean
+about a document has no business in it. It is **shipped on**, on `window.restoreGeometry`'s argument
+exactly — today's behaviour to the letter, since a finished run has put its report in front of
+somebody since before there was a switch over it, and an update that quietly stopped reports arriving
+would be a feature taken away rather than added. **Four** copies of that default, the same four
+`git.autoFetch` has and for the same reason — Rust, `defaults()`, `view` in `SettingsWindow.vue`, and
+the prop default in `components/settings/GeneralSettings.vue`. It rides the flat message as
+`notificationShowReport`, named for what it decides rather than for its section, and `applyPatch`
+checks the type and nothing else, for `restoreGeometry`'s reason: `false` is the whole point of the
+field. Rust validates nothing about it, deliberately — a boolean has no values outside its own set,
+and a hand-edited file carrying something else there loses the whole `notifications` section through
+serde and takes the defaults, exactly as `editor.wordWrap` does. What the switch actually decides —
+that it is the **whole** of the delivery policy rather than one condition of two — is
+`.claude/rules/notifications.md`.
 
 `window` is the fourth global section and holds one field, `restoreGeometry`, **shipped on** —
 today's behaviour to the letter, since the main window has opened where it was left since before
@@ -185,8 +203,8 @@ last edit rather than the app.
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
 `appearance.theme`, `appearance.uiFontSize`, both `editor` fields, `agent`, the two languages beside it,
-the four `kanban` fields, both `git` fields, `window.restoreGeometry` and the two `notifications`
-sounds. Density is not among them, deliberately: nothing has asked for it yet,
+the four `kanban` fields, both `git` fields, `window.restoreGeometry` and all three `notifications`
+fields. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
 still override the first two for one run and are deliberately **not** written back — one visit to the
 dev server must not repaint the app forever. `?view=gallery` neither reads nor writes.
