@@ -49,11 +49,46 @@ describe('the two lines of a reading', () => {
     expect(usageLines(null)).toEqual([])
   })
 
-  it('refuses half a reading rather than drawing the half that arrived', () => {
-    // A percentage this build cannot read is not a zero, and a row beside a
-    // dash would claim the other one is a complete answer.
-    expect(usageLines(read({ usage: { weekPct: null } }))).toEqual([])
-    expect(usageLines(read({ usage: { sessionPct: 'lots' } }))).toEqual([])
+  it('draws the half that arrived and never invents the half that did not', () => {
+    // The unread half travels as an explicit `null` under its own key. Drawing
+    // it as "0% used" would be a quota the app never read, and refusing the
+    // pair over it would throw away the half it did read.
+    // 42 rather than the fixture's 10, so that "no 0% anywhere on screen" can
+    // be asked of the whole row rather than of a substring of the reading.
+    const lines = usageLines(read({ usage: { sessionPct: 42, weekPct: null, weekReset: null } }))
+    expect(lines).toEqual([
+      { name: 'Session', value: '42% used · resets Aug 7 at 8pm (Europe/Moscow)' }
+    ])
+    const drawn = lines.map((line) => line.value).join(' ')
+    expect(drawn).not.toContain('0%')
+    expect(drawn.toLowerCase()).not.toContain('week')
+  })
+
+  it('draws the other half alone just as readily', () => {
+    // Either of the two lines the harness prints can be the one that goes
+    // missing, and the row order is what is left of the pair rather than a slot
+    // the session always occupies.
+    expect(usageLines(read({ usage: { sessionPct: null, sessionReset: null } }))).toEqual([
+      { name: 'This week', value: '20% used · resets Aug 11 at 5:59pm (Europe/Moscow)' }
+    ])
+  })
+
+  it('draws a real zero, which is a reading like any other', () => {
+    // The distinction cuts both ways: a fresh week prints 0% and hiding it
+    // would be the same class of mistake as inventing it.
+    expect(usageLines(read({ usage: { weekPct: 0, weekReset: null } }))[1]).toEqual({
+      name: 'This week',
+      value: '0% used'
+    })
+  })
+
+  it('drops a percentage this build cannot read at all', () => {
+    // A newer build could put anything under the key. It is not a zero, and it
+    // is not a row either — but the half beside it is still drawn.
+    expect(usageLines(read({ usage: { sessionPct: 'lots' } }))).toEqual([
+      { name: 'This week', value: '20% used · resets Aug 11 at 5:59pm (Europe/Moscow)' }
+    ])
+    expect(usageLines(read({ usage: { sessionPct: null, weekPct: null } }))).toEqual([])
   })
 
   it('never turns the absence of a reading into a percentage', () => {
@@ -129,7 +164,20 @@ describe('the sentence under the rows', () => {
 
   it('reads an answer from a newer build as unreadable, which promises nothing', () => {
     expect(usageNote({ state: 'throttled', agent: 'claude' })).toContain('could not be read')
-    expect(usageNote(read({ usage: { sessionPct: null } }))).toContain('could not be read')
+    // A reading with neither half in it is the same: nothing was drawn above,
+    // so the sentence must not promise anything about the allowance. Rust does
+    // not send one — `usage()` answers `None` instead — and a build that did
+    // would be one this cannot draw.
+    expect(usageNote(read({ usage: { sessionPct: null, weekPct: null } }))).toContain(
+      'could not be read'
+    )
+  })
+
+  it('says what a run would do under half a reading, which is a reading', () => {
+    // The band is Rust's word about the halves it has, so the sentence under
+    // one row is as true as the one under two — and the unreadable sentence
+    // here would send somebody to check a login that is fine.
+    expect(usageNote(read({ band: 'reduced', usage: { weekPct: null } }))).toContain('fewer tasks')
   })
 })
 

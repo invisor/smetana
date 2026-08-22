@@ -32,10 +32,12 @@ const UNSUPPORTED = 'unsupported'
    is an ordinary reading rather than a gap: a fresh allowance prints no reset
    at all, and inventing one would be worse than the missing half of a sentence.
 
-   `null` when the percentage is not a number, which is not a reading this build
-   knows how to draw. It never becomes a zero: "0% used" is a fact about an
-   allowance, and drawing it over the absence of one is the mistake the
-   placeholder block was replaced for. */
+   `null` when the percentage is not a number — a half Rust could not read
+   travels as an explicit `null` under its own key, and a build newer than this
+   one could put anything there. It never becomes a zero: "0% used" is a fact
+   about an allowance, and drawing it over the absence of one is the mistake the
+   placeholder block was replaced for. The reverse is as carefully not done:
+   `0` is a number, a fresh week really does print it, and it draws. */
 function limitLine(pct, resets) {
   if (!Number.isFinite(pct)) return null
   const used = `${pct}% used`
@@ -43,15 +45,25 @@ function limitLine(pct, resets) {
   return when ? `${used} · resets ${when}` : used
 }
 
-/* Both halves of a reading, or `null` for anything that is not one. A `read`
-   answer missing either percentage is not half a reading — it is an answer this
-   build cannot draw, and it takes the unreadable sentence rather than showing
-   the half that survived beside a dash. */
-function bothLimits(answer) {
-  if (answer?.state !== READ) return null
-  const session = limitLine(answer.usage?.sessionPct, answer.usage?.sessionReset)
-  const week = limitLine(answer.usage?.weekPct, answer.usage?.weekReset)
-  return session && week ? { session, week } : null
+/* The rows of a reading: the halves that arrived, in the order they are drawn,
+   and none at all for anything that is not a reading. Session first — it is the
+   sooner of the two limits and therefore the more useful one to read.
+
+   **Half a reading is a reading.** Either of the two lines the harness prints
+   can go missing — one of them reworded, a build that prints the other alone —
+   and what comes across then is one percentage and no second one. The half
+   that was read is shown; the half that was not is not drawn at all, and never
+   as a zero. Both directions of that are mistakes with a person on the other
+   end: an invented "This week: 0% used" is a quota the app never read, and
+   refusing the pair over it would have thrown away the half it did read and
+   said the allowance could not be read, which sends somebody off to check a
+   login that is fine (smetana-7rp). */
+export function usageLines(answer) {
+  if (answer?.state !== READ) return []
+  return [
+    { name: 'Session', value: limitLine(answer.usage?.sessionPct, answer.usage?.sessionReset) },
+    { name: 'This week', value: limitLine(answer.usage?.weekPct, answer.usage?.weekReset) }
+  ].filter((row) => row.value)
 }
 
 /* Which agent the answer is about — whoever actually answered the probe, which
@@ -65,17 +77,6 @@ function bothLimits(answer) {
 export function agentOf(answer) {
   const agent = answer?.agent
   return typeof agent === 'string' && agent ? agent : null
-}
-
-/* The two rows, or none at all. Session first: it is the sooner of the two
-   limits and therefore the more useful one to read. */
-export function usageLines(answer) {
-  const limits = bothLimits(answer)
-  if (!limits) return []
-  return [
-    { name: 'Session', value: limits.session },
-    { name: 'This week', value: limits.week }
-  ]
 }
 
 /* What a run would do at this reading, in the run's own terms rather than in
@@ -115,12 +116,20 @@ export function usageNote(answer, busy = false, error = null) {
       ? 'This agent does not report what is left of its subscription, so there is nothing to read here.'
       : 'No agent is installed on this machine, so there is nothing to ask.'
   }
-  if (bothLimits(answer)) {
+  if (usageLines(answer).length) {
     /* A band this build has never heard of says nothing about a run rather
        than guessing which of the three it meant — the block still shows the
-       percentages, which are the part that does not depend on knowing. */
+       percentages, which are the part that does not depend on knowing.
+
+       The band is Rust's word about the whole reading, half of one included:
+       `decide` there works off the halves it has, so the sentence under one row
+       is as true as the one under two. */
     return BAND_NOTE[answer.band] ?? ''
   }
+  /* Nothing was drawn above, which is a `read` answer with neither half in it
+     — Rust does not send one, and a build that did would be one this cannot
+     draw — or a state this build has never heard of. Both take the sentence
+     that promises nothing about the allowance. */
   return 'The allowance could not be read. The agent may not be installed on this machine, or not signed in.'
 }
 
