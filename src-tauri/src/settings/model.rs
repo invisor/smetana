@@ -78,19 +78,27 @@ impl Default for Appearance {
     }
 }
 
-/// The code editor's own type size, deliberately its own section rather than a
-/// third field under `appearance`: it answers a different question — how big
-/// code should be — and it is pinned rather than scaled, so the app-wide size
-/// does not move it.
+/// The code editor's own preferences, deliberately their own section rather
+/// than more fields under `appearance`: the size answers a different question —
+/// how big code should be — and it is pinned rather than scaled, so the
+/// app-wide size does not move it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct EditorSettings {
     pub font_size: u32,
+    /// Whether a line longer than the pane wraps instead of scrolling sideways.
+    /// Off by default, because off is today's behaviour to the letter — the
+    /// argument `kanban`'s defaults carry, and deliberately not `git.auto_fetch`'s
+    /// ("a switch nobody finds"): wrapping is visible on the first file opened,
+    /// so shipping it on would re-lay somebody's editor out without being asked.
+    /// A bool has no value outside its set, so `validate` has nothing to say
+    /// about it; a missing field takes this default through `serde(default)`.
+    pub word_wrap: bool,
 }
 
 impl Default for EditorSettings {
     fn default() -> Self {
-        Self { font_size: EDITOR_FONT_DEFAULT }
+        Self { font_size: EDITOR_FONT_DEFAULT, word_wrap: false }
     }
 }
 
@@ -1363,6 +1371,33 @@ mod tests {
         let settings = settings_of(r#"{"version":1,"editor":"large","appearance":{"theme":"light"}}"#);
         assert_eq!(settings.editor, EditorSettings::default());
         assert_eq!(settings.appearance.theme, "light");
+    }
+
+    #[test]
+    fn a_file_written_before_word_wrap_keeps_the_editor_it_always_had() {
+        // Every settings file on a person's disk right now is this file: an
+        // `editor` section with a size in it and no `wordWrap`. The field takes
+        // its default rather than the section losing itself, and the default is
+        // today's behaviour — long lines scroll sideways.
+        let settings = settings_of(r#"{"version":1,"editor":{"fontSize":18}}"#);
+        assert_eq!(settings.editor.font_size, 18, "the section survives the missing field");
+        assert!(!settings.editor.word_wrap, "a missing wordWrap is off, not a lost section");
+    }
+
+    /// The walk `the_font_sizes_survive_disk_to_front_end_and_back` makes, for
+    /// the reason written over it: a field added to the struct but not carried
+    /// by `parse`, `resolve` and `merge` reads as its default for ever.
+    #[test]
+    fn word_wrap_survives_disk_to_front_end_and_back() {
+        let file = settings_of(r#"{"version":1,"editor":{"fontSize":14,"wordWrap":true}}"#);
+        assert!(file.editor.word_wrap, "parse must read it off the disk");
+
+        let resolved = resolve(&file, None);
+        assert!(resolved.editor.word_wrap, "resolve must carry it to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert!(written.editor.word_wrap, "merge must carry it back into the file");
     }
 
     #[test]

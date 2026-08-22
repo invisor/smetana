@@ -7,6 +7,14 @@ import { Compartment } from '@codemirror/state'
 export const readOnlyState = new Compartment()
 export const languageState = new Compartment()
 
+/* Whether long lines wrap. A compartment for `readOnlyState`'s reason rather
+   than an entry in `editorExtensions()`: the setting changes while tabs are
+   open, and a state cached by path outlives the component, so the switch has to
+   reach a live editor without rebuilding one. Its value is
+   `EditorView.lineWrapping` when on and nothing at all when off — the absence of
+   the extension is the horizontal scrolling CodeMirror does by default. */
+export const wrapState = new Compartment()
+
 /* The update listener closes over its own instance's props and emit, while
    the state outlives the instance: after a return from the board the component
    is new and the state is the old one. So the listener is a compartment too:

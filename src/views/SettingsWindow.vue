@@ -70,6 +70,12 @@ const view = reactive({
   density: 'comfortable',
   uiFontSize: UI_FONT_DEFAULT,
   editorFontSize: EDITOR_FONT_DEFAULT,
+  /* The editor's other field: whether a line longer than the pane wraps. Off,
+     the same as `EditorSettings::default()` in Rust and `defaults()` in
+     `stores/settings.js` — the three copies have to agree, or this window draws
+     the switch in the opposite position for the moment before the first answer
+     arrives. Off is also today's behaviour exactly. */
+  editorWordWrap: false,
   agent: 'claude',
   /* Both BCP-47 ids, mirroring Rust's `en` — the same shipped-defaults
      reasoning the four above carry. */
@@ -443,7 +449,9 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
         <EditorSettings
           v-else-if="tab === 'editor'"
           :font-size="view.editorFontSize"
+          :word-wrap="view.editorWordWrap"
           @update:font-size="change({ editorFontSize: $event })"
+          @update:word-wrap="change({ editorWordWrap: $event })"
         />
         <AgentSettings
           v-else-if="tab === 'agents'"

@@ -22,7 +22,7 @@ thin commands.
 
 At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
 state and width for each side, `railOpen` for whether the project rail is drawn beside the left
-panel, and `gitSections` beside them), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
+panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wordWrap`, `agent`, the id of the CLI agent to
 start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, `kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
 `window`, whether the main window opens where it was left, and `notifications`,
@@ -61,6 +61,25 @@ behaviour exactly — every column, every task. The rule it feeds is `components
 whose two closed lists are written out there and again in `model.rs`: the doubling `SIDE_TABS` and
 the storage ladder carry, with the same obligation — what the front end offers must be a subset of
 what Rust accepts, or the value loses itself on the next save with nothing on screen to say so.
+
+`editor` holds the two the code editor in the centre column reads, and the second of them is the
+one whose default argument runs the other way from `git.autoFetch`'s. `wordWrap` says whether a line
+longer than the pane wraps instead of scrolling sideways, and it **ships off**, because off is
+today's behaviour to the letter — the argument `kanban`'s defaults carry. `autoFetch`'s reason below
+("a switch nobody finds is a feature nobody has") is deliberately declined here: wrapping shows
+itself on the first file opened and on every file after it, so shipping it on would re-lay somebody's
+editor out without being asked, where a background fetch shipped on is invisible until it helps.
+**Four** copies of that default, the same four `git.autoFetch` has and under the same obligation —
+`EditorSettings::default()` in Rust, `defaults()` in `stores/settings.js`, `view` in
+`SettingsWindow.vue`, and the prop default in `components/settings/EditorSettings.vue`: a
+disagreement draws the switch in the opposite position for exactly as long as it takes the first
+answer to arrive. Rust validates nothing about it,
+and deliberately: a bool has no value outside its set, so a damaged one is a damaged *type*, which
+loses the whole `editor` section to its defaults through `serde` — the case
+`a_broken_editor_section_does_not_take_the_rest_of_the_file` already pins. What makes the switch
+reach an editor somebody already has open is a CodeMirror compartment rather than a rebuilt state
+(`components/files/editor/compartments.js`, `.claude/rules/files-and-editor.md`), so the caret, the
+selection and the undo history survive the flip.
 
 `git` is the second global section and holds two fields, both **shipped on**, and what they have in
 common is the question: what may this app do to a person's repositories without asking each time.
@@ -165,7 +184,7 @@ last edit rather than the app.
 
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
-`appearance.theme`, `appearance.uiFontSize`, `editor.fontSize`, `agent`, the two languages beside it,
+`appearance.theme`, `appearance.uiFontSize`, both `editor` fields, `agent`, the two languages beside it,
 the four `kanban` fields, both `git` fields, `window.restoreGeometry` and the two `notifications`
 sounds. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`

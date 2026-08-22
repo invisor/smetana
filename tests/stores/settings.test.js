@@ -31,7 +31,9 @@ describe('loading', () => {
       density: 'comfortable',
       uiFontSize: 13
     })
-    expect(settings.settings.editor).toEqual({ fontSize: 12 })
+    /* Word wrap off is today's behaviour to the letter — a long line scrolls
+       sideways — which is why the shipped value is the one it is. */
+    expect(settings.settings.editor).toEqual({ fontSize: 12, wordWrap: false })
     /* Both on. The fetch, because the marks the Git panel draws are worthless
        when nothing goes and asks, and the switch is for the machines where
        background network is not free. The removal, because that is today's
@@ -428,6 +430,35 @@ describe('the settings window', () => {
     expect(settings.settings.kanban.unlimited).toEqual([], 'a list that is not one is skipped')
   })
 
+  /* The Editor tab's switch. A malformed event has to leave the previous value
+     standing rather than fall back to the shipped default: an event is not a
+     response to a request, so a broken one must cost nothing — and coercion
+     would turn it into a deliberate-looking answer either way. */
+  it('takes the word-wrap switch, and a bad value leaves the previous one', async () => {
+    await emit(settings.SETTINGS_APPLY, { editorWordWrap: true })
+    await nextTick()
+    expect(settings.settings.editor.wordWrap).toBe(true)
+
+    await emit(settings.SETTINGS_APPLY, { editorWordWrap: 'yes' })
+    await nextTick()
+    expect(settings.settings.editor.wordWrap).toBe(
+      true,
+      'a value that is not a boolean leaves the previous one, not the shipped default'
+    )
+
+    await emit(settings.SETTINGS_APPLY, { editorWordWrap: null })
+    await nextTick()
+    expect(settings.settings.editor.wordWrap).toBe(true)
+
+    /* The size beside it rides the same message as a separate flat field and is
+       untouched by any of this. */
+    expect(settings.settings.editor.fontSize).toBe(12)
+
+    await emit(settings.SETTINGS_APPLY, { editorWordWrap: false })
+    await nextTick()
+    expect(settings.settings.editor.wordWrap).toBe(false)
+  })
+
   /* The one setting whose value the app acts on by opening a socket, so `false`
      has to reach the store from the settings window intact — and anything that
      is not a boolean has to be skipped rather than coerced, since coercion
@@ -544,6 +575,7 @@ describe('the settings window', () => {
       density: 'comfortable',
       uiFontSize: 20,
       editorFontSize: 12,
+      editorWordWrap: false,
       kanbanColumns: 'all',
       kanbanAlwaysShow: [],
       kanbanInterval: 'all',
@@ -577,6 +609,7 @@ describe('the settings window', () => {
       density: 'comfortable',
       uiFontSize: 15,
       editorFontSize: 12,
+      editorWordWrap: false,
       kanbanColumns: 'all',
       kanbanAlwaysShow: [],
       kanbanInterval: 'all',

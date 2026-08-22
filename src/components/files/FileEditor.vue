@@ -6,7 +6,12 @@ import Button from '../core/Button.vue'
 import { editorExtensions } from './editor/extensions.js'
 import { languageFor } from './editor/languages.js'
 import { peekState, putState } from './editor/states.js'
-import { languageState, readOnlyState, updateListenerState } from './editor/compartments.js'
+import {
+  languageState,
+  readOnlyState,
+  updateListenerState,
+  wrapState
+} from './editor/compartments.js'
 
 /* A code editor on CodeMirror 6. All the visible mechanics — highlighting,
    line numbers, search, history, multiple carets — live in
@@ -27,6 +32,11 @@ const props = defineProps({
   modelValue: { type: String, default: '' },
   notice: { type: Object, default: null },
   readOnly: { type: Boolean, default: false },
+  /* Whether a line longer than the pane wraps. It comes down as a prop rather
+     than being read from the settings store, because components here do not
+     import stores — DesktopApp.vue does. Off is the shipped default and today's
+     behaviour: the line scrolls sideways. */
+  wordWrap: { type: Boolean, default: false },
   /* The path does two jobs at once: the tail after the last "/" picks the
      highlighting language, while the whole path (already joined with the
      project root in DesktopApp.vue) is the key under which editor/states.js
@@ -81,9 +91,13 @@ let pendingScrollTop = null
    not-yet-read file is allowed, changing it is not. The language lives in a
    compartment for a similar reason — import() is asynchronous, and by the time
    it arrives the editor is already rendered. All three compartments —
-   readOnlyState, languageState and updateListenerState — are declared in
-   editor/compartments.js rather than here: see the comments there on why they
-   are shared by every instance. */
+   readOnlyState, languageState, updateListenerState and wrapState — are
+   declared in editor/compartments.js rather than here: see the comments there
+   on why they are shared by every instance. */
+
+/* Nothing when off: the absence of the extension is CodeMirror's own horizontal
+   scrolling, so there is no "unwrap" extension to reach for. */
+const wrapping = (on) => (on ? EditorView.lineWrapping : [])
 
 /* Only a real edit travels outwards. The comparison with modelValue kills the
    echo: without it a value arriving from above goes straight back and knocks
@@ -105,6 +119,7 @@ const createState = (doc) =>
     extensions: [
       ...editorExtensions(),
       readOnlyState.of(EditorState.readOnly.of(props.readOnly)),
+      wrapState.of(wrapping(props.wordWrap)),
       languageState.of([]),
       updateListenerState.of(changeListener())
     ]
@@ -165,13 +180,16 @@ const replaceDoc = (text) => {
 const adoptState = (saved, text) => {
   view.setState(saved.state)
   /* readOnly may have changed since the state was saved — the file finished
-     reading, say — so it is set anew rather than inherited. updateListenerState
-     is re-pointed for a more serious reason: an inherited listener may belong to
-     an already destroyed instance and emit into nowhere — and then edits would
-     silently never reach the buffer. */
+     reading, say — so it is set anew rather than inherited; word wrap is set
+     anew for exactly that reason, since the setting can have been switched
+     while this tab was away. updateListenerState is re-pointed for a more
+     serious reason: an inherited listener may belong to an already destroyed
+     instance and emit into nowhere — and then edits would silently never reach
+     the buffer. */
   view.dispatch({
     effects: [
       readOnlyState.reconfigure(EditorState.readOnly.of(props.readOnly)),
+      wrapState.reconfigure(wrapping(props.wordWrap)),
       updateListenerState.reconfigure(changeListener())
     ]
   })
@@ -218,6 +236,16 @@ watch(
   () => props.readOnly,
   (next) => {
     view?.dispatch({ effects: readOnlyState.reconfigure(EditorState.readOnly.of(next)) })
+  }
+)
+
+/* A reconfigure rather than a new state, which is the whole point of the
+   compartment: the caret, the selection and the undo history stay where they
+   are while the lines reflow. */
+watch(
+  () => props.wordWrap,
+  (next) => {
+    view?.dispatch({ effects: wrapState.reconfigure(wrapping(next)) })
   }
 )
 </script>
