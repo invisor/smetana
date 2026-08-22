@@ -114,6 +114,47 @@ impl Default for GitSettings {
     }
 }
 
+/// The closed list of sound ids `settings.json` may hold, `off` among them.
+/// Written out again as `SOUND_IDS` in `src/sounds.js`, with the obligation
+/// `SIDE_TABS` and the storage ladder carry: what the front end offers must be
+/// a subset of what this accepts, or a choice loses itself on the next save
+/// with nothing on screen to say so.
+const SOUNDS: [&str; 5] = ["off", "sound-1", "sound-2", "sound-3", "sound-4"];
+
+/// What the app says out loud, and with which sound.
+///
+/// Global rather than under a project, on `GitSettings`' argument exactly:
+/// whether this machine makes a noise, and which one, is a fact about a person
+/// and a room rather than about one repository.
+///
+/// Both ship as a sound rather than as `off`, and as two *different* sounds:
+/// the events they announce — a run that has ended, an agent that has stopped
+/// to ask something — call for different reactions, and a feature nobody
+/// switches on is a feature nobody finds. `NOTIFICATION_DEFAULTS` in
+/// `src/sounds.js` is the other copy of these two values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NotificationSettings {
+    /// Played when a run reaches its ending, whichever way its report was
+    /// delivered.
+    pub run_finished: String,
+    /// Played when an agent session enters `needs-you`, in any project.
+    pub needs_attention: String,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self { run_finished: "sound-1".into(), needs_attention: "sound-2".into() }
+    }
+}
+
+impl NotificationSettings {
+    fn validate(&mut self) {
+        one_of(&mut self.run_finished, &SOUNDS, "sound-1");
+        one_of(&mut self.needs_attention, &SOUNDS, "sound-2");
+    }
+}
+
 /// The shipped sizes, in pixels: today's `--text-md` for the app and today's
 /// `--text-code-size` for the editor. Repeated in the front end
 /// (`src/appearance.js`), for the same reason the panel widths are: with no back
@@ -473,6 +514,9 @@ pub struct Settings {
     /// What the Git panel may do on its own. At the root for the reason
     /// `GitSettings` records.
     pub git: GitSettings,
+    /// What the app says out loud. At the root for the reason
+    /// `NotificationSettings` records.
+    pub notifications: NotificationSettings,
     /// Which CLI agent the app starts. A habit of the person's, not a property
     /// of the repository, so it sits at the root rather than under a project.
     ///
@@ -507,6 +551,7 @@ impl Default for Settings {
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
             git: GitSettings::default(),
+            notifications: NotificationSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -535,6 +580,8 @@ pub struct ResolvedSettings {
     pub kanban: KanbanSettings,
     /// What the Git panel may do on its own. See `Settings::git`.
     pub git: GitSettings,
+    /// What the app says out loud. See `Settings::notifications`.
+    pub notifications: NotificationSettings,
     /// Which CLI agent the app starts. See `Settings::agent`.
     pub agent: String,
     /// The two languages. See `Settings::agent_language`.
@@ -559,6 +606,7 @@ impl Default for ResolvedSettings {
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
             git: GitSettings::default(),
+            notifications: NotificationSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -601,6 +649,7 @@ pub fn parse(text: &str) -> Outcome {
         editor: section(&object, "editor"),
         kanban: section(&object, "kanban"),
         git: section(&object, "git"),
+        notifications: section(&object, "notifications"),
         agent: object.get("agent").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| "claude".into()),
         agent_language: language_field(&object, "agentLanguage"),
         task_language: language_field(&object, "taskLanguage"),
@@ -642,6 +691,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         editor: file.editor.clone(),
         kanban: file.kanban.clone(),
         git: file.git.clone(),
+        notifications: file.notifications.clone(),
         agent: file.agent.clone(),
         agent_language: file.agent_language.clone(),
         task_language: file.task_language.clone(),
@@ -665,6 +715,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.editor = resolved.editor;
     file.kanban = resolved.kanban;
     file.git = resolved.git;
+    file.notifications = resolved.notifications;
     file.agent = resolved.agent;
     file.agent_language = resolved.agent_language;
     file.task_language = resolved.task_language;
@@ -773,6 +824,7 @@ impl Settings {
         self.layout.validate();
         self.editor.validate();
         self.kanban.validate();
+        self.notifications.validate();
         for state in self.projects.values_mut() {
             state.validate();
         }
@@ -790,6 +842,7 @@ impl ResolvedSettings {
         self.layout.validate();
         self.editor.validate();
         self.kanban.validate();
+        self.notifications.validate();
         self.project.validate();
         sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
         active_in(&mut self.active_project, &self.open_projects);
@@ -1128,6 +1181,57 @@ mod tests {
         let mut written = Settings::default();
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert!(!written.git.auto_fetch, "merge must carry it back into the file");
+    }
+
+    /// Shipped on rather than off, and as two different sounds, for the reason
+    /// `NotificationSettings` records. The walk is the one the font sizes make:
+    /// a section added to the structs but not wired into `parse`, `resolve` and
+    /// `merge` reads as the default for ever, and no struct-alone test sees it.
+    #[test]
+    fn notification_sounds_default_on_and_survive_the_round_trip() {
+        let shipped = Settings::default();
+        assert_eq!(shipped.notifications.run_finished, "sound-1");
+        assert_eq!(shipped.notifications.needs_attention, "sound-2");
+
+        let file = settings_of(
+            r#"{"version":1,"notifications":{"runFinished":"off","needsAttention":"sound-4"}}"#,
+        );
+        assert_eq!(file.notifications.run_finished, "off", "parse must read it off the disk");
+        assert_eq!(file.notifications.needs_attention, "sound-4");
+
+        let resolved = resolve(&file, None);
+        assert_eq!(
+            resolved.notifications.run_finished, "off",
+            "resolve must carry it to the front end"
+        );
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-22T10:00:00Z".into());
+        assert_eq!(
+            written.notifications.run_finished, "off",
+            "merge must carry it back into the file"
+        );
+        assert_eq!(written.notifications.needs_attention, "sound-4");
+    }
+
+    #[test]
+    fn a_sound_nobody_ships_loses_its_field_and_leaves_the_other_alone() {
+        // The rule the whole schema follows: the field is damaged, not the
+        // section around it. A hand-edited file naming a fifth sound gets the
+        // shipped one back for that event and keeps its choice for the other.
+        let settings = settings_of(
+            r#"{"version":1,"notifications":{"runFinished":"sound-9","needsAttention":"off"}}"#,
+        );
+        assert_eq!(settings.notifications.run_finished, "sound-1");
+        assert_eq!(settings.notifications.needs_attention, "off");
+    }
+
+    #[test]
+    fn a_file_written_before_the_section_existed_opens_with_both_sounds() {
+        // Every settings file on a person's disk right now is this file.
+        let settings = settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.notifications.run_finished, "sound-1");
+        assert_eq!(settings.notifications.needs_attention, "sound-2");
     }
 
     #[test]
