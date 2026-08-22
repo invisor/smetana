@@ -1156,6 +1156,11 @@ const galleryEditorFont = ref(12)
    moves when it is pressed — a control that does not respond is the one thing
    this page cannot be used to check. */
 const galleryGitAutoFetch = ref(true)
+/* The two notification sounds, local for the same reason. Not both on the
+   shipped value: the second row is the one whose label is longest, and a page
+   drawing `Sound 1` twice would never show the list somewhere else. */
+const galleryRunSound = ref('sound-1')
+const galleryNeedsSound = ref('off')
 const galleryAgent = ref('claude')
 /* The Agents tab's two language pickers. Not both on English: the longest label
    either list holds is the one worth looking at, and a tab showing "English"
@@ -3075,9 +3080,13 @@ const menuTargetStyle = {
             :theme="galleryTheme"
             :ui-font-size="galleryUiFont"
             :git-auto-fetch="galleryGitAutoFetch"
+            :notification-run-finished="galleryRunSound"
+            :notification-needs-attention="galleryNeedsSound"
             @update:theme="galleryTheme = $event"
             @update:ui-font-size="galleryUiFont = $event"
             @update:git-auto-fetch="galleryGitAutoFetch = $event"
+            @update:notification-run-finished="galleryRunSound = $event"
+            @update:notification-needs-attention="galleryNeedsSound = $event"
           />
         </div>
         <div :style="{ width: '380px' }">

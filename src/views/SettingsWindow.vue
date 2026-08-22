@@ -78,7 +78,13 @@ const view = reactive({
      `settings/model.rs` and `stores/settings.js` — the three copies of this
      default have to agree, or the switch draws the opposite of what the app is
      doing for the moment before the first answer arrives. */
-  gitAutoFetch: true
+  gitAutoFetch: true,
+  /* Which sound each announcement makes. Shipped as `settings/model.rs` and
+     `stores/settings.js` ship them — the three copies of these defaults have to
+     agree, or this window draws a sound the app is not playing for the moment
+     before the first answer arrives. */
+  notificationRunFinished: 'sound-1',
+  notificationNeedsAttention: 'sound-2'
 })
 const FIELDS = Object.keys(view)
 
@@ -294,9 +300,13 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :theme="view.theme"
           :ui-font-size="view.uiFontSize"
           :git-auto-fetch="view.gitAutoFetch"
+          :notification-run-finished="view.notificationRunFinished"
+          :notification-needs-attention="view.notificationNeedsAttention"
           @update:theme="change({ theme: $event })"
           @update:ui-font-size="change({ uiFontSize: $event })"
           @update:git-auto-fetch="change({ gitAutoFetch: $event })"
+          @update:notification-run-finished="change({ notificationRunFinished: $event })"
+          @update:notification-needs-attention="change({ notificationNeedsAttention: $event })"
         />
         <EditorSettings
           v-else-if="tab === 'editor'"
