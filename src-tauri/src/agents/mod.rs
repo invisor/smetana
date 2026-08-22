@@ -218,6 +218,19 @@ pub enum Intent {
         /// the folder, because a number the agent had to work out for itself
         /// is a number the app could not then match to the batch it timed.
         batch: u32,
+        /// Whether this run removes each task's worktree once it is merged and
+        /// closed — `settings.json`'s `git.removeWorktrees`, read once when the
+        /// run started.
+        ///
+        /// A field of its own rather than a member of `RunSettings`, which is
+        /// where its two neighbours in the prompt (`live_check`,
+        /// `file_findings`) live. `settings.json` keeps a per-project mirror of
+        /// `RunSettings` — what the run dialog opens on — so anything added
+        /// there acquires a second, per-project memory of itself, and that
+        /// stale copy would ride in from the dialog and silently beat the one
+        /// global answer a person set in the settings window. This slot exists
+        /// for exactly that: a fact about the run the dialog never asked about.
+        remove_worktrees: bool,
     },
 }
 
@@ -899,6 +912,7 @@ mod tests {
             },
             reports: std::path::PathBuf::from("/p/.smetana/runs/7"),
             batch: 1,
+            remove_worktrees: true,
         }
     }
 

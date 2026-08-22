@@ -23,7 +23,8 @@ At the root the file keeps appearance — theme, density and `uiFontSize` — pa
 state and width for each side, `railOpen` for whether the project rail is drawn beside the left
 panel, and `gitSections` beside them), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
 start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, `kanban`, how
-the board is drawn, `git`, the one thing the app does on its own initiative, and `notifications`,
+the board is drawn, `git`, what the app does to a person's repositories without asking each time, and
+`notifications`,
 which sound each of the two announcements makes. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, active tab, selected task, `recentTasks`, selected
@@ -60,8 +61,11 @@ whose two closed lists are written out there and again in `model.rs`: the doubli
 the storage ladder carry, with the same obligation — what the front end offers must be a subset of
 what Rust accepts, or the value loses itself on the next save with nothing on screen to say so.
 
-`git` is the second global section and holds one field, `autoFetch`, **shipped on**. It is the
-answer to a question no other setting here asks: whether this app may open a socket by itself. The
+`git` is the second global section and holds two fields, both **shipped on**, and what they have in
+common is the question: what may this app do to a person's repositories without asking each time.
+
+`autoFetch` is the first, and it is the answer to a question no other setting here asks: whether this
+app may open a socket by itself. The
 Git panel fetches from the selected repository's remote when the window comes back into focus, when
 the project changes and on a one-minute tick under that same throttle — once every five minutes per
 repository — and this switch is whether any of that happens at all. What it does **not** reach is
@@ -74,10 +78,32 @@ that would fail on every sweep — and none of those is a fact about one reposit
 beside it is deliberately **not** a field: a person can reasonably decide whether their machine
 reaches the network on its own, and cannot reasonably decide whether four minutes is better than
 five, so a number here would be a question with no way to answer it. Default on, because a feature
-that does nothing until somebody finds a switch is a feature nobody finds — and the two other copies
-of that default, `defaults()` in `stores/settings.js` and `view` in `SettingsWindow.vue`, have to
-agree with `GitSettings::default()` or the switch draws the opposite of what the app is doing for as
-long as it takes the first answer to arrive.
+that does nothing until somebody finds a switch is a feature nobody finds — and the three other
+copies of that default, `defaults()` in `stores/settings.js`, `view` in `SettingsWindow.vue` and the
+prop default in `settings/GitSettings.vue`, have to agree with `GitSettings::default()` or the switch
+draws the opposite of what the app is doing for as long as it takes the first answer to arrive.
+
+`removeWorktrees` is the second, and it is the one field here **the app itself never acts on**: there
+is no call to `git worktree` anywhere in `src-tauri/`. The lead agent of a run cuts the worktrees
+(`smetana:provisioning`) and removes them (`smetana:merging`, "when the caller's policy says to"), so
+the only lever the app has is a line of the run prompt — `agents/prompt.rs`'s run policy, beside
+`live_check` and `file_findings`, with both branches written out for the reason those two are: a
+silence is read as the default, and the default is not what somebody who has just been to this window
+chose. Off says to leave them and **to say so in the report**, which is not decoration, since nothing
+in this app can see a worktree or count one: without that sentence a person who forgot the switch
+hears about their disk from their disk. It is affirmative rather than `keepWorktrees` so that `true`
+is the shipped state and the label names what is done, and it ships on because that is today's
+behaviour exactly. The road from the file to the prompt is `agent`'s: `settings::git_remove_worktrees`
+→ `runs/service.rs`, read once when a run starts and carried for the whole of it, then a parameter
+through `drive` and `spawn_batch` into `Intent::Run`. It rides there as **a field of its own beside
+`reports` and `batch`, deliberately not inside `RunSettings`**, which is where its two neighbours in
+the prompt live: `settings.json` keeps a per-project mirror of `RunSettings` — what the run dialog
+opens on — so anything added there acquires a second, per-project memory of itself, and that stale
+copy would ride in from the dialog and silently beat the one global answer set here. Three cases keep
+today's behaviour whatever the switch says, and all three are the skills': a parked task keeps its
+worktree because somebody is coming to look, a task waiting on a live check keeps one because it is
+not closed yet, and a worktree that refuses to go — dirty, locked — is a line in the report and never
+a stop.
 
 `notifications` is the third global section, and it holds the two sounds — `runFinished` and
 `needsAttention`, each one of `off`, `sound-1` … `sound-4`. Global on `git`'s argument exactly: a
@@ -120,7 +146,7 @@ last edit rather than the app.
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
 `appearance.theme`, `appearance.uiFontSize`, `editor.fontSize`, `agent`, the two languages beside it,
-the four `kanban` fields, `git.autoFetch` and the two `notifications` sounds. Density is not among them, deliberately: nothing has asked for it yet,
+the four `kanban` fields, both `git` fields and the two `notifications` sounds. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
 still override the first two for one run and are deliberately **not** written back — one visit to the
 dev server must not repaint the app forever. `?view=gallery` neither reads nor writes.
@@ -188,9 +214,10 @@ and the `Icon` call sites pass numeric literals, so glyphs stay put while their 
 The tabs are `components/settings/` — the directory is the list, for the reason the note under
 Commands gives — and each is presentational, handed values and emitting what was picked, so the whole
 window renders in `?view=gallery` too. The sections themselves are a closed list in
-`SettingsWindow.vue` alone (General, Editor, Agents, Kanban, Storage, About); Rust guards the *shape*
-of a `?tab=` name so nothing can smuggle a second parameter into the URL, never its vocabulary, and
-an unknown section opens on General.
+`SettingsWindow.vue` alone (General, Editor, Agents, Kanban, Git, Storage, About); Rust guards the
+*shape* of a `?tab=` name so nothing can smuggle a second parameter into the URL, never its
+vocabulary, and an unknown section opens on General. Git sits between Kanban and Storage rather than
+at the end, because the tabs before Storage are settings and Storage is the one that is not.
 
 Every list on them is `Dropdown`, and with that **`Select` is drawn nowhere outside the gallery any
 more.** Its bargain — one element, accessible for free — buys a menu the operating system paints, in

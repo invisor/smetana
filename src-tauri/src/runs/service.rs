@@ -326,6 +326,11 @@ fn handle(
             // allowance of a subscription it then stopped spending
             // (smetana-3fi). Re-reading it per batch would buy nothing but that.
             let agent = crate::settings::agent(app);
+            // Beside it and read the same way, for the same reason: a run that
+            // silently changed its mind about worktrees between batches would
+            // leave half a night's checkouts on the disk and sweep the other
+            // half away, with nothing in either report saying which.
+            let remove_worktrees = crate::settings::git_remove_worktrees(app);
 
             let token = *next_token;
             *next_token += 1;
@@ -346,6 +351,7 @@ fn handle(
                 config.preflight.clone(),
                 PathBuf::from(&project),
                 agent,
+                remove_worktrees,
                 tracker.clone(),
                 terminal.clone(),
                 report.clone(),
@@ -582,6 +588,10 @@ async fn drive(
     preflight_config: Option<config::Preflight>,
     root: PathBuf,
     agent: String,
+    // `settings.json`'s `git.removeWorktrees`, read once when the run started
+    // and carried for the whole of it — the same snapshot `agent` above is,
+    // and it reaches the lead as a line of `Intent::Run`'s prompt.
+    remove_worktrees: bool,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
     report: mpsc::UnboundedSender<Report>,
@@ -744,8 +754,16 @@ async fn drive(
         // very name already. See `clear_account`.
         clear_account(&account.reports, batch_no);
 
-        let session = match spawn_batch(&terminal, &run, tasks, &agent, &account.reports, batch_no)
-            .await
+        let session = match spawn_batch(
+            &terminal,
+            &run,
+            tasks,
+            &agent,
+            &account.reports,
+            batch_no,
+            remove_worktrees,
+        )
+        .await
         {
             Ok(id) => id,
             Err(err) => {
@@ -1357,6 +1375,7 @@ async fn may_spawn(report: &mpsc::UnboundedSender<Report>, token: u64) -> bool {
 /// chose: a low allowance caps it (`usage::cap`). The run's own settings are
 /// left alone, so the bar and the report keep naming the choice rather than the
 /// condition of the moment — the same split `views/panelWidths.js` makes.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_batch(
     terminal: &TerminalHandle,
     run: &Run,
@@ -1364,6 +1383,7 @@ async fn spawn_batch(
     agent: &str,
     reports: &Path,
     batch: u32,
+    remove_worktrees: bool,
 ) -> Result<u64, String> {
     let (tx, rx) = oneshot::channel();
     let settings = RunSettings { max_parallel_tasks: tasks, ..run.settings.clone() };
@@ -1371,7 +1391,11 @@ async fn spawn_batch(
     // reason those do: the session outlives everything about the run except what
     // it was handed, and a batch working out its own file name is a batch the
     // app cannot then match to the one it timed.
-    let intent = Intent::Run { settings, reports: reports.to_path_buf(), batch };
+    // `remove_worktrees` rides beside them rather than inside `settings`, and
+    // the field's own doc on `Intent::Run` says why: `RunSettings` has a
+    // per-project mirror in `settings.json`, and this answer is global.
+    let intent =
+        Intent::Run { settings, reports: reports.to_path_buf(), batch, remove_worktrees };
     terminal
         .0
         .send(TerminalRequest::Create(run.project.clone(), agent.to_string(), intent, tx))

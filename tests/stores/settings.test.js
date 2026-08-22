@@ -32,10 +32,12 @@ describe('loading', () => {
       uiFontSize: 13
     })
     expect(settings.settings.editor).toEqual({ fontSize: 12 })
-    /* On, because the marks the Git panel draws are worthless when nothing goes
-       and asks. The switch is for the machines where background network is not
-       free, and `settings/model.rs` carries this same default. */
-    expect(settings.settings.git).toEqual({ autoFetch: true })
+    /* Both on. The fetch, because the marks the Git panel draws are worthless
+       when nothing goes and asks, and the switch is for the machines where
+       background network is not free. The removal, because that is today's
+       behaviour exactly — the running-tasks skill has always swept a merged
+       task's worktree up. `settings/model.rs` carries the same pair. */
+    expect(settings.settings.git).toEqual({ autoFetch: true, removeWorktrees: true })
     /* Today's board exactly: every column, every task. Nothing on anybody's
        screen moves until they go and choose. */
     expect(settings.settings.kanban).toEqual({
@@ -432,6 +434,31 @@ describe('the settings window', () => {
     expect(settings.settings.git.autoFetch).toBe(true)
   })
 
+  /* The Git tab's second switch, checked exactly as the first is. `false` is
+     the whole point of this one — it is the position that changes what a run
+     does — so it has to reach the store intact, and anything that is not a
+     boolean has to leave the previous choice standing. */
+  it('takes the worktree switch, and only a boolean one', async () => {
+    await emit(settings.SETTINGS_APPLY, { gitRemoveWorktrees: false })
+    await nextTick()
+    expect(settings.settings.git.removeWorktrees).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { gitRemoveWorktrees: 'no' })
+    await nextTick()
+    expect(settings.settings.git.removeWorktrees).toBe(
+      false,
+      'a value that is not a boolean is skipped'
+    )
+
+    /* Its neighbour is untouched by any of it: the two ride one message as
+       separate flat fields, and an edit to one must not carry the other. */
+    expect(settings.settings.git.autoFetch).toBe(true)
+
+    await emit(settings.SETTINGS_APPLY, { gitRemoveWorktrees: true })
+    await nextTick()
+    expect(settings.settings.git.removeWorktrees).toBe(true)
+  })
+
   /* The two sounds ride the same message as flat fields, named for their
      events. A value outside the closed list is skipped rather than reset: the
      person did not ask for the shipped default either. */
@@ -484,6 +511,7 @@ describe('the settings window', () => {
       kanbanInterval: 'all',
       kanbanUnlimited: [],
       gitAutoFetch: true,
+      gitRemoveWorktrees: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
       agent: 'claude',
@@ -515,6 +543,7 @@ describe('the settings window', () => {
       kanbanInterval: 'all',
       kanbanUnlimited: [],
       gitAutoFetch: true,
+      gitRemoveWorktrees: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
       agent: 'codex',

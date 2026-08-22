@@ -94,23 +94,32 @@ impl Default for EditorSettings {
     }
 }
 
-/// What the Git panel does on its own.
+/// What the app does to a person's repositories without asking each time.
 ///
 /// Global rather than under a project, the argument `kanban` and
 /// `layout.git_sections` are global on: whether this machine should go to the
-/// network by itself is a fact about a connection and a person, not about one
-/// repository.
+/// network by itself, and whether a finished task's checkout is swept up after
+/// it, are facts about a connection and a person, not about one repository.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct GitSettings {
     /// Fetch from the remote by itself — on window focus, throttled, and
     /// silently. The front end owns the throttle; this is only the switch.
     pub auto_fetch: bool,
+    /// Whether a run removes each task's worktree once the task is merged and
+    /// closed. Nothing in this app runs `git worktree` at all: the lead agent
+    /// cuts and removes them, so what this field reaches is one line of
+    /// `agents::prompt`'s run policy, beside `live_check` and `file_findings`.
+    ///
+    /// Affirmative rather than `keep_worktrees` so that `true` is the shipped
+    /// state and the label on screen names what is done. Shipped `true` because
+    /// that is exactly today's behaviour: the skill removes them unconditionally.
+    pub remove_worktrees: bool,
 }
 
 impl Default for GitSettings {
     fn default() -> Self {
-        Self { auto_fetch: true }
+        Self { auto_fetch: true, remove_worktrees: true }
     }
 }
 
@@ -1181,6 +1190,37 @@ mod tests {
         let mut written = Settings::default();
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert!(!written.git.auto_fetch, "merge must carry it back into the file");
+    }
+
+    /// Default on, because that is today's behaviour exactly: the running-tasks
+    /// skill removes a merged task's worktree unconditionally, so a switch that
+    /// shipped off would change what the app does the moment it was added.
+    ///
+    /// The neighbour is asserted in the same walk on purpose. `git` is read as
+    /// a whole section, so a field added to the struct and a file written
+    /// before it existed have to leave `auto_fetch` alone — the failure a
+    /// per-field test would not see is the two of them arriving together.
+    #[test]
+    fn removing_worktrees_defaults_on_and_a_stored_false_survives_beside_auto_fetch() {
+        assert!(Settings::default().git.remove_worktrees);
+        // Every settings file on a person's disk right now is this file: it has
+        // `autoFetch` and no `removeWorktrees` at all.
+        let older = settings_of(r#"{"version":1,"git":{"autoFetch":false}}"#);
+        assert!(!older.git.auto_fetch);
+        assert!(older.git.remove_worktrees, "a key the file never had is the shipped answer");
+
+        let file = settings_of(r#"{"version":1,"git":{"autoFetch":false,"removeWorktrees":false}}"#);
+        assert!(!file.git.remove_worktrees, "parse must read it off the disk");
+        assert!(!file.git.auto_fetch, "and must not lose its neighbour doing it");
+
+        let resolved = resolve(&file, None);
+        assert!(!resolved.git.remove_worktrees, "resolve must carry it to the front end");
+        assert!(!resolved.git.auto_fetch);
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert!(!written.git.remove_worktrees, "merge must carry it back into the file");
+        assert!(!written.git.auto_fetch);
     }
 
     /// Shipped on rather than off, and as two different sounds, for the reason
