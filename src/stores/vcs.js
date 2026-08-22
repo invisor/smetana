@@ -234,6 +234,17 @@ export async function loadRepos(project) {
     vcsState.messages = {}
     vcsState.suggestError = null
   }
+  /* Assigned before every `await` in this function. On the load path below —
+     and only there, since a falsy `project` returns through `reset()`, which
+     lowers it again — `loading` is raised in the same breath and stays raised
+     across `vcs_repos` → `selectRepo` → `loadStatus`, a handoff with no gap
+     where it reads false. Both are relied on outside this store: the Git tab
+     decides whether the count it can see is about the project being arrived at
+     or about the one being left (`components/git/changesFold.js`), and this
+     pair is the whole of how it tells. Note what is deliberately **not** done
+     here — the tree is left standing rather than cleared, so that a panel does
+     not blink through an empty list on every switch, which is exactly why that
+     reader cannot trust `tree` alone. */
   vcsState.project = project
   if (!project) {
     reset()
@@ -300,6 +311,12 @@ async function loadStatus() {
   try {
     const tree = await invoke('vcs_status', { repo: selected })
     if (vcsState.project !== project || vcsState.selected !== selected) return
+    /* **Replaced, never written into.** Every answer is a new object, which is
+       what lets a reader watch the identity and see an answer that changed
+       nothing — a switch between two projects with the same number of changes
+       is otherwise indistinguishable from no answer at all. Both failure arms of
+       this function leave `null` for the same reason `dirtyCount` is `null` and
+       never `0`: not knowing is not a clean tree. */
     vcsState.tree = tree
     vcsState.error = null
   } catch (err) {
