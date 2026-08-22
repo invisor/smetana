@@ -20,6 +20,20 @@
 //! what the caller asked for. A registration that failed therefore puts the
 //! switch back by itself, and there is no error branch to design.
 //!
+//! # No ACL grant, deliberately
+//!
+//! `capabilities/default.json` does **not** list `autostart:default`, and the
+//! absence is a decision rather than an oversight. Nothing in the front end
+//! calls the plugin: the two commands below reach it through
+//! `ManagerExt::autolaunch()`, which is Rust-side `State` and is not gated by
+//! the ACL at all, so the grant would be required by nothing. What it would
+//! cost is the one way round the guard in the next section — it publishes
+//! `plugin:autostart|enable` to the webview, and that command consults no
+//! `debug_assertions`, so it is exactly the route by which a `npm run tauri
+//! dev` webview could write `target/debug/smetana` into the machine's login
+//! items. That file's habit is narrow grants for what is actually called;
+//! **do not add the line to make this module "consistent".**
+//!
 //! # Not from a development build
 //!
 //! `supported` is false under `debug_assertions`, and the row is drawn disabled

@@ -57,6 +57,16 @@
 //! branches: a restore that failed must not be able to leave the app with no
 //! window at all.
 //!
+//! **That trailing `show()` is load-bearing rather than a precaution.** `FLAGS`
+//! is `StateFlags::all()`, which includes `VISIBLE`, and `restore_state` shows
+//! the window only when the state it read says the window was visible. Hiding
+//! it in the configuration is what makes a stored `visible: false` reachable in
+//! the first place — the plugin records visibility from the window as it finds
+//! it — and in that case `restore_state` returns `Ok(())` with nothing on
+//! screen, so this call is the only thing putting the app in front of anybody.
+//! Do not tidy it away as redundant, and do not narrow `FLAGS` without reading
+//! this first.
+//!
 //! Saving is the other half, and it is untouched by any of the above. The plugin
 //! writes to disk in exactly one place, `RunEvent::Exit`, and holds everything in
 //! memory until then. So any run that does not reach a clean exit — a crash, a
@@ -188,9 +198,14 @@ pub fn close_settings_with_main(app: &AppHandle) {
 ///
 /// The window is hidden until this runs — see the header — so this is also the
 /// only thing that ever puts it on screen. Hence the `show()` outside the
-/// branch: a refused or failed restore costs a window in the wrong place, and
+/// branch, which answers two different cases rather than one. A restore that
+/// failed, or was never asked for, costs a window in the wrong place, and
 /// showing it only on the way out of the restoring branch would cost the app
-/// its window altogether.
+/// its window altogether. The other is `restore_state` **succeeding and
+/// declining to show**: it carries `StateFlags::VISIBLE` and shows the window
+/// only if the state it read was visible, so a stored `visible: false` —
+/// reachable now that the window starts hidden — comes back `Ok(())` with
+/// nothing on screen. This line is what answers that, and it is not redundant.
 ///
 /// Neither failure is worth crashing over and neither is worth a dialog: the
 /// worst of them is a window at the size the configuration names, which is

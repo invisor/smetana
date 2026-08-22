@@ -105,8 +105,11 @@ than at the size in `tauri.conf.json`. The mechanism is `skip_initial_state("mai
 `tauri-plugin-window-state` rather than its `with_denylist`, and `src-tauri/src/window.rs` carries
 why, together with the consequence that put `"visible": false` in the configuration: windows
 declared there are built *before* the `setup` hook, so a window shown first and restored second is
-a visible jump. Three copies of the default, the same trio `git.autoFetch` has and for the same
-reason — Rust, `defaults()` in `stores/settings.js`, `view` in `SettingsWindow.vue`. It rides the
+a visible jump. **Four** copies of the default, the same four `git.autoFetch` has and for the same
+reason — Rust, `defaults()` in `stores/settings.js`, `view` in `SettingsWindow.vue`, and the prop
+default in `components/settings/GeneralSettings.vue`. The fourth is the one to say out loud: it is
+inert while the window always passes the prop, which is exactly what makes it the copy a sweep of
+the other three walks past. It rides the
 flat message as `restoreGeometry`, and `applyPatch` checks the type and nothing else: `false` is
 the whole point of the field, so a coercion would turn a malformed event into a deliberate-looking
 "off".
