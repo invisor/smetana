@@ -1,21 +1,31 @@
 <script setup>
 /* The Agents tab: which CLI coding agent the app starts, the language it talks
-   to the person in, the language it writes a task in, and what is known about
-   its subscription.
+   to the person in, the language it writes a task in, and what is left of its
+   subscription.
 
    The first three are real and take effect on the next session started — the id
    travels to `terminal_create`, and Rust resolves it (`agents::resolve`); the
    two languages travel by a different road and never cross the IPC as
    arguments at all, since `terminal::service` reads them from the file itself
    when it builds the session, which is what keeps a person's session and a
-   run's batch from disagreeing about them. The
-   second half is a placeholder with nothing behind it, and it says so in as many
-   words: a block of invented numbers under a real setting would claim the app
-   knows something it does not, which is the same mistake the fixture log pane in
-   the right column was removed for. */
+   run's batch from disagreeing about them.
+
+   The block under them was three dashes and a sentence saying nothing was read
+   here yet, which was honest and is no longer necessary: `agent_usage` asks the
+   harness the same question the run gate asks before every batch. It is still
+   presentational, like every component on this tab — the window does the
+   asking, so this renders in `?view=gallery` with nothing behind it — and every
+   sentence in it belongs to `usage.js`, since a `.vue` file is the one thing no
+   test here can reach.
+
+   Plan and Status are gone rather than kept as dashes: `/usage` reports two
+   percentages and two reset times and says nothing at all about a tariff, so
+   those two rows could only ever have stayed empty. */
 import { computed } from 'vue'
+import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
 import SettingsRow from './SettingsRow.vue'
+import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 
 const props = defineProps({
   agent: { type: String, default: 'claude' },
@@ -23,10 +33,25 @@ const props = defineProps({
      of a bd issue it writes is in. BCP-47 ids, validated in Rust against
      `agents::LANGUAGES`; `en` here mirrors that table's default. */
   agentLanguage: { type: String, default: 'en' },
-  taskLanguage: { type: String, default: 'en' }
+  taskLanguage: { type: String, default: 'en' },
+  /* `agent_usage`'s answer whole, in Rust's own shape, or `null` before there
+     has been one. */
+  usage: { type: Object, default: null },
+  /* A probe is out. It holds the button, since a second press would start a
+     second minute-long process against the same harness. */
+  busy: { type: Boolean, default: false },
+  /* What the last read was refused with, in one readable line. Not the same
+     thing as an allowance that could not be read — that is an answer and has
+     its own sentence; this is the channel failing. */
+  error: { type: String, default: null }
 })
 
-const emit = defineEmits(['update:agent', 'update:agentLanguage', 'update:taskLanguage'])
+const emit = defineEmits([
+  'update:agent',
+  'update:agentLanguage',
+  'update:taskLanguage',
+  'refresh'
+])
 
 /* The one place in the front end that names an agent. The ids are `agents::IDS`
    in `src-tauri/src/agents/mod.rs`, which is where the truth lives — Rust
@@ -78,13 +103,25 @@ const LANGUAGES = [
    app-wide font size instead of clipping at the top of the range. */
 const CONTROL_WIDTH = '30ch'
 
-/* The agent whose subscription the block below is about — by its own label,
-   because "your subscription" beside a picker showing something else reads as
-   the app having switched already. An id nobody ships (a hand-edited file) is
-   named as it stands rather than dressed up as one of ours. */
-const agentLabel = computed(
-  () => AGENTS.find((agent) => agent.value === props.agent)?.label ?? props.agent
-)
+/* What the block below is headed, and it names **whoever answered the probe**
+   rather than whoever is showing in the picker above. The two can differ:
+   `agents::pick` substitutes the first installed profile for a configured one
+   that is not on `PATH`, so a heading taken from the dropdown could say Claude
+   Code over Codex's allowance. An id nobody ships (a hand-edited file) is named
+   as it stands rather than dressed up as one of ours.
+
+   With nobody to name — nothing read yet, or no agent installed at all — the
+   heading is the bare word. Borrowing the selected agent's label for that
+   moment would be the app claiming a reading it has not got. */
+const heading = computed(() => {
+  const id = agentOf(props.usage)
+  if (!id) return 'Subscription'
+  return `${AGENTS.find((agent) => agent.value === id)?.label ?? id} subscription`
+})
+
+const lines = computed(() => usageLines(props.usage))
+const note = computed(() => usageNote(props.usage, props.busy))
+const refreshable = computed(() => offersRefresh(props.usage))
 
 const blockStyle = {
   marginTop: 'var(--space-5)',
@@ -95,6 +132,15 @@ const blockStyle = {
   display: 'flex',
   flexDirection: 'column',
   gap: 'var(--space-3)'
+}
+/* The heading and the button share a line: the button is about this block and
+   nothing else on the tab, and a row of its own under the rows it refreshes
+   would read as an action on the whole screen. */
+const headerStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 'var(--space-4)'
 }
 const headingStyle = {
   color: 'var(--text-primary)',
@@ -118,14 +164,10 @@ const noteStyle = {
   color: 'var(--text-secondary)',
   font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
 }
-
-/* Placeholder rows, not readings. The dash is the same "there is nothing to
-   show" the scope bar draws for a missing branch. */
-const FACTS = [
-  { name: 'Plan', value: '—' },
-  { name: 'Status', value: '—' },
-  { name: 'Allowance', value: '—' }
-]
+const errorStyle = {
+  color: 'var(--status-failed-fg)',
+  font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
+}
 </script>
 
 <template>
@@ -167,15 +209,25 @@ const FACTS = [
     </SettingsRow>
 
     <div :style="blockStyle">
-      <span :style="headingStyle">{{ agentLabel }} subscription</span>
-      <div v-for="fact in FACTS" :key="fact.name" :style="factStyle">
-        <span :style="nameStyle">{{ fact.name }}</span>
-        <span :style="valueStyle">{{ fact.value }}</span>
+      <div :style="headerStyle">
+        <span :style="headingStyle">{{ heading }}</span>
+        <Button
+          v-if="refreshable"
+          size="sm"
+          variant="ghost"
+          icon="refresh-cw"
+          :disabled="props.busy"
+          @click="emit('refresh')"
+        >
+          Refresh
+        </Button>
       </div>
-      <span :style="noteStyle">
-        Nothing is read from the agent here yet. A run asks it what is left of the allowance before
-        each batch; this block will show the same answer once it is wired to it.
-      </span>
+      <div v-for="line in lines" :key="line.name" :style="factStyle">
+        <span :style="nameStyle">{{ line.name }}</span>
+        <span :style="valueStyle">{{ line.value }}</span>
+      </div>
+      <span v-if="note" :style="noteStyle">{{ note }}</span>
+      <span v-if="props.error" :style="errorStyle">{{ props.error }}</span>
     </div>
   </div>
 </template>

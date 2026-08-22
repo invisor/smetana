@@ -1189,6 +1189,27 @@ const galleryAgent = ref('claude')
    twice would never draw it. */
 const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
+/* The subscription block. A reading rather than one of the two empty states:
+   those are a sentence each, while this is the shape with a layout to check —
+   two rows, the line about what a run would do, and a live Refresh beside the
+   heading. `reduced` rather than a comfortable level so that line says
+   something other than "a full batch", and the reset strings are the harness's
+   own words, timezone and all, exactly as `claude.rs` hands them over.
+
+   The agent is `claude` while the picker above it shows the same, which is the
+   ordinary case; the block naming a *different* agent is the substitution
+   `agents::pick` makes, and there is nothing in a browser to make it happen. */
+const galleryAgentUsage = {
+  state: 'read',
+  agent: 'claude',
+  usage: {
+    sessionPct: 10,
+    sessionReset: 'Aug 7 at 8pm (Europe/Moscow)',
+    weekPct: 78,
+    weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)'
+  },
+  band: 'reduced'
+}
 /* The Kanban tab. Both lists live rather than off, since the interesting shape
    of this tab is a checkbox column that does something — and the fixture board
    deliberately carries a name no column of it matches (`triage`), which is the
@@ -3165,6 +3186,7 @@ const menuTargetStyle = {
             :agent="galleryAgent"
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
+            :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
