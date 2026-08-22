@@ -37,6 +37,7 @@ import {
   appVersion,
   autostartState,
   openExternal,
+  readAgentUsage,
   setAutostart,
   watchBoardColumns,
   watchSettingsSection
@@ -109,9 +110,18 @@ const FIELDS = Object.keys(view)
    window's copy can be up to a debounce ahead of the file. */
 const heard = ref(false)
 
+/* Whether anything at all has landed in `view` — an announcement, the disk
+   read, or an edit made here — as opposed to `heard`, which is about the app
+   window alone and stays false for the disk. The difference matters to exactly
+   one reader, the subscription probe below: until this is true, every field in
+   `view` is the shipped painting default rather than an answer, and a question
+   asked out of one names a guess. */
+const adopted = ref(false)
+
 const adopt = (state, fromApp) => {
   if (!state) return
   if (fromApp) heard.value = true
+  adopted.value = true
   for (const field of FIELDS) {
     if (field in state && state[field] != null) view[field] = state[field]
   }
@@ -271,6 +281,74 @@ const clear = async () => {
   }
 }
 
+/* What is left of the agent's subscription, and the third part of this window
+   that is not a setting: nothing about it reaches `settings.json` either. It is
+   a question put to the harness itself, through Rust, and the answer belongs to
+   the minute it was given in.
+
+   Read on opening the Agents tab, the way the Storage numbers and the login
+   item are read on opening theirs — and here the argument is stronger than
+   theirs, because the probe is somebody else's CLI with a minute's ceiling over
+   it. Asking on mounting the window would start that process for everybody who
+   came to change the theme. Asking only on a press was the other rejected
+   option, and it is the original complaint back again: the block is empty at
+   first glance. There is no timer either, deliberately — this window can be
+   open for hours and an allowance moves in hours and days.
+
+   The reading is cleared at the start of every read rather than left on screen
+   under "Reading…", and that is what makes the agent dropdown correct: switch
+   Claude to Codex and the block must stop talking about the previous agent
+   before it knows anything about the new one.
+
+   **The agent is named in the question**, out of what this window is showing,
+   and never left to Rust to read off the disk. This window's edits reach
+   `settings.json` through the app window's 400 ms debounce, so the file is
+   behind what is on screen here for as long as it takes one edit to settle —
+   and a probe is up to sixty seconds. Asking without naming an agent therefore
+   answers about the agent somebody has just switched away from, every time
+   rather than occasionally.
+
+   **Until this window has adopted anything, it names nobody**, and that is the
+   same defect one door over. `view.agent` starts as the shipped `claude`, a
+   painting default so the window does not flash the wrong picker for a frame,
+   and it is replaced inside `onMounted` after an awaited call — while the
+   `watch` below runs synchronously during setup. So a window built on
+   `?tab=agents` would ask about `claude` whatever the file says, and nothing
+   would ask again once the real value arrived. Passing `null` there is not a
+   gap: nothing has been edited yet, so the file genuinely is the authority, and
+   `wanted`'s `None` branch is exactly that case.
+
+   The guard is a sequence number and not the `busy` flag alone: a change of
+   agent has to supersede a probe already out, so two can be in flight at once
+   and only the newest may be drawn. Without it, an answer about the agent
+   somebody has just switched away from would land last and win. */
+const usage = reactive({ reading: null, busy: false, error: null })
+let asked = 0
+
+const readUsage = async (agent = adopted.value ? view.agent : null) => {
+  const mine = (asked += 1)
+  usage.busy = true
+  usage.reading = null
+  usage.error = null
+  try {
+    const reading = await readAgentUsage(agent)
+    if (mine !== asked) return
+    usage.reading = reading
+  } catch (err) {
+    if (mine !== asked) return
+    usage.error = err.message
+  } finally {
+    if (mine === asked) usage.busy = false
+  }
+}
+
+/* An agent is chosen: the edit goes where every edit on this window goes, and
+   the block is asked again, since it is about whoever would answer now. */
+const chooseAgent = (id) => {
+  change({ agent: id })
+  readUsage(id)
+}
+
 /* The login item, and the other part of this window that is not a setting:
    nothing about it reaches `settings.json`, and `FIELDS` above deliberately
    does not name it. The operating system's own list is the truth
@@ -303,6 +381,10 @@ watch(
   (which) => {
     if (which === 'storage' && !storage.busy) readStorage()
     if (which === 'general') readAutostart()
+    /* Guarded by `busy` the way Storage is, and for a longer reason: walking
+       off this tab and back while a minute-long probe is out must not start a
+       second one against the same harness. */
+    if (which === 'agents' && !usage.busy) readUsage()
   },
   { immediate: true }
 )
@@ -368,9 +450,13 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :agent="view.agent"
           :agent-language="view.agentLanguage"
           :task-language="view.taskLanguage"
-          @update:agent="change({ agent: $event })"
+          :usage="usage.reading"
+          :busy="usage.busy"
+          :error="usage.error"
+          @update:agent="chooseAgent($event)"
           @update:agent-language="change({ agentLanguage: $event })"
           @update:task-language="change({ taskLanguage: $event })"
+          @refresh="readUsage()"
         />
         <KanbanSettings
           v-else-if="tab === 'kanban'"
