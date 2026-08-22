@@ -277,28 +277,32 @@ all three rows share one control column, wider than the shipped default because 
 ellipsises a label that does not fit and "Chinese (Simplified)" is the longest either list holds. The
 subscription block under it was a placeholder with dashes and is now the reading itself: the tab asks
 `agent_usage`, which is `runs/usage.rs`'s probe — the same one the run gate makes before every batch
-— put from the other end of the app. Three things about it are decisions rather than mechanics. The
+— put from the other end of the app. Four things about it are decisions rather than mechanics. The
 answer has **three distinguishable states** and not an `Option`: an agent with no `usage_command`
 (Codex) reads differently from one that was asked and could not answer, since those are different
 sentences for a person and different things to do about them. The **band comes from Rust**, through
 the existing `usage::decide`, so `REDUCED_THRESHOLD` and `PAUSE_THRESHOLD` keep one copy — a second
 copy in JS would drift from the first silently. And the answer **names the agent that actually
-replied**, because `agents::pick` substitutes the first installed profile for a configured one that is
-not on `PATH`, so a heading taken from the dropdown could say Claude Code over Codex's allowance;
-with nobody to name, the heading is the bare word rather than the selection. Plan and Status are gone
-rather than kept as dashes — `/usage` reports two percentages and two reset times and nothing about a
-tariff, so those rows could only ever have stayed empty. It is read on **opening the tab**, the way
-the Storage numbers and the login item are, and the argument is stronger here: the probe is somebody
-else's CLI under a 60-second ceiling, so asking on mounting the window would start it for everybody
-who came to change the theme, while asking only on a press leaves the block empty at first glance —
-which was the original complaint. There is no timer, and a reading is cached nowhere. The sentences
-are `components/settings/usage.js`, another of the `branchChoice.js` family, and the window clears
-the reading at the start of every read: switch the agent and the block has to stop talking about the
+replied**, because `agents::pick` substitutes the first installed profile for a configured one that
+is not on `PATH`, so a heading taken from the dropdown could say Claude Code over Codex's allowance;
+with nobody to name, the heading is the bare word rather than the selection. The fourth came later:
+**a percentage may be absent**, since either of the two lines `/usage` prints can be reworded away,
+and the half that was not read travels as `null` rather than as the zero it used to become — the
+block draws exactly the rows whose percentage arrived, one of them if that is all there was, and a
+real `0%` is still a row (smetana-7rp). Plan and Status are gone rather than kept as dashes —
+`/usage` reports two percentages and two reset times and nothing about a tariff, so those rows could
+only ever have stayed empty. It is read on **opening the tab**, the way the Storage numbers and the
+login item are, and the argument is stronger here: the probe is somebody else's CLI under a
+60-second ceiling, so asking on mounting the window would start it for everybody who came to change
+the theme, while asking only on a press leaves the block empty at first glance — which was the
+original complaint. There is no timer, and a reading is cached nowhere. The sentences are
+`components/settings/usage.js`, another of the `branchChoice.js` family, and the window clears the
+reading at the start of every read: switch the agent and the block has to stop talking about the
 previous one before it knows anything about the new one — which is also why the guard there is a
 sequence number rather than the busy flag alone, since a change of agent must supersede a probe
-already out. Kanban is the same shape one tab over, and the one tab whose lists are not a
-closed vocabulary at all — the columns it offers are the active project's own, read from the tracker,
-so with no project open or no answer yet it says so rather than drawing an empty list.
+already out. Kanban is the same shape one tab over, and the one tab whose lists are not a closed
+vocabulary at all — the columns it offers are the active project's own, read from the tracker, so
+with no project open or no answer yet it says so rather than drawing an empty list.
 
 **Two things on this screen are not settings at all**, and they are the exceptions that keep the
 rule readable. One is a whole tab and the other is a single row.

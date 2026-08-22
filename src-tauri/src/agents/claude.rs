@@ -333,28 +333,27 @@ const WEEK: &str = "Current week (all models):";
 
 fn usage(output: &str) -> Option<Usage> {
     let mut usage = Usage::default();
-    let mut read_one = false;
     for line in output.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix(SESSION) {
             if let Some((pct, resets)) = used(rest) {
-                usage.session_pct = pct;
+                usage.session_pct = Some(pct);
                 usage.session_reset = resets;
-                read_one = true;
             }
         } else if let Some(rest) = line.strip_prefix(WEEK) {
             if let Some((pct, resets)) = used(rest) {
-                usage.week_pct = pct;
+                usage.week_pct = Some(pct);
                 usage.week_reset = resets;
-                read_one = true;
             }
         }
     }
-    // One of the two is enough. A rename of either line loses that half and
-    // leaves it reading zero, which is the source's own behaviour and the
-    // benign direction to be wrong in: a run keeps going and finds the wall by
-    // hitting it, rather than pausing forever on a limit nobody has reached.
-    read_one.then_some(usage)
+    // One of the two is enough, and the half that was not read stays absent
+    // rather than reading zero. The source's own behaviour was the zero, and it
+    // is harmless in a run — `Usage::pct` takes the larger of the halves, so an
+    // invented zero never pauses anything — but the same reading is drawn on
+    // the settings window, where "This week: 0% used" under a real setting is
+    // the app claiming a quota it never read (smetana-7rp).
+    (usage.session_pct.is_some() || usage.week_pct.is_some()).then_some(usage)
 }
 
 /// ` 10% used · resets Aug 7 at 8pm (Europe/Moscow)` → `(10, Some("Aug 7 at 8pm (Europe/Moscow)"))`.
@@ -1206,9 +1205,9 @@ Last 24h · 2269 requests · 24 sessions
     #[test]
     fn both_plan_limits_are_read_out_of_what_the_cli_prints() {
         let read = usage(USAGE_OUTPUT).expect("the two lines are there");
-        assert_eq!(read.session_pct, 10);
+        assert_eq!(read.session_pct, Some(10));
         assert_eq!(read.session_reset.as_deref(), Some("Aug 7 at 8pm (Europe/Moscow)"));
-        assert_eq!(read.week_pct, 20);
+        assert_eq!(read.week_pct, Some(20));
         assert_eq!(read.week_reset.as_deref(), Some("Aug 11 at 5:59pm (Europe/Moscow)"));
     }
 
@@ -1219,7 +1218,7 @@ Last 24h · 2269 requests · 24 sessions
         // week is nearly spent. The CLI answers an exhausted model limit by
         // switching models, so it is not a run's business at all.
         let read = usage(USAGE_OUTPUT).expect("the two lines are there");
-        assert_eq!(read.week_pct, 20, "the per-model line must not overwrite the weekly one");
+        assert_eq!(read.week_pct, Some(20), "the per-model line must not overwrite the weekly one");
     }
 
     #[test]
@@ -1227,8 +1226,8 @@ Last 24h · 2269 requests · 24 sessions
         // "60% of your usage came from subagent-heavy sessions" is a share of
         // what was spent, not a share of the allowance. Matching it would pause
         // a run at 8% of its actual limit.
-        let read = usage(USAGE_OUTPUT).expect("the two lines are there");
-        assert!(read.pct() < 60, "read {}%, which is a line from the breakdown", read.pct());
+        let pct = usage(USAGE_OUTPUT).and_then(|read| read.pct()).expect("the two lines are there");
+        assert!(pct < 60, "read {pct}%, which is a line from the breakdown");
     }
 
     #[test]
@@ -1236,14 +1235,51 @@ Last 24h · 2269 requests · 24 sessions
         // A fresh week prints no reset. Refusing the whole reading over the
         // missing half would leave the run blind to a session at 95%.
         let read = usage("Current session: 95% used\n").expect("a percentage is a reading");
-        assert_eq!(read.session_pct, 95);
+        assert_eq!(read.session_pct, Some(95));
         assert_eq!(read.session_reset, None);
     }
 
     #[test]
+    fn a_line_that_was_not_read_leaves_its_half_absent_rather_than_zero() {
+        // Half a reading is a real answer and the half that arrived is shown,
+        // but the other half is not invented: `Some(0)` here would be drawn on
+        // the settings window as "This week: 0% used", a quota nobody read.
+        let renamed = USAGE_OUTPUT.replace("Current week (all models):", "Weekly limit:");
+        let read = usage(&renamed).expect("the session line is still there");
+        assert_eq!(read.session_pct, Some(10));
+        assert_eq!(read.week_pct, None);
+        assert_eq!(read.week_reset, None);
+        assert_eq!(read.pct(), Some(10), "the half that arrived is the whole of the reading");
+
+        // And the same the other way round, since either line can be the one
+        // that is reworded.
+        let renamed = USAGE_OUTPUT.replace("Current session:", "This session:");
+        let read = usage(&renamed).expect("the weekly line is still there");
+        assert_eq!(read.session_pct, None);
+        assert_eq!(read.session_reset, None);
+        assert_eq!(read.week_pct, Some(20));
+    }
+
+    #[test]
+    fn a_zero_the_cli_printed_is_a_reading_and_not_an_absence() {
+        // The point of the distinction cuts both ways: a fresh week really does
+        // print 0%, and hiding it would be the same class of lie as inventing
+        // it. `Some(0)` is what puts "This week: 0% used" on screen honestly.
+        let fresh = USAGE_OUTPUT.replace(
+            "Current week (all models): 20% used · resets Aug 11 at 5:59pm (Europe/Moscow)",
+            "Current week (all models): 0% used",
+        );
+        let read = usage(&fresh).expect("both lines are there");
+        assert_eq!(read.week_pct, Some(0));
+        assert_eq!(read.week_reset, None);
+    }
+
+    #[test]
     fn output_with_neither_line_in_it_is_no_reading_at_all() {
-        // Not a zero: `decide` treats `None` as no reason to hold a run up,
-        // while a zero would claim a fresh allowance nobody measured.
+        // Not an empty reading: `decide` treats `None` as no reason to hold a
+        // run up, and a `Usage` with both halves absent would be the same
+        // answer written twice — this one keeps `report` able to call it
+        // unreadable, which is a sentence a person can act on.
         assert_eq!(usage("Invalid API key · Please run /login"), None);
         assert_eq!(usage(""), None);
     }
