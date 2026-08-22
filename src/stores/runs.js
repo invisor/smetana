@@ -205,8 +205,13 @@ export async function loadBrowserTools(project) {
    put the field names in two places. Throws what the worker refused with, so
    the dialog can say which of its own fields is the problem: a project with no
    configuration, a damaged one, or settings that do not go together. */
-export async function startRun(project, settings) {
-  const run = await invoke('run_start', { project, settings })
+export async function startRun(project, runSettings) {
+  /* `runSettings` rather than `settings`: the module-scope `settings` above is
+     this app's preferences, which `upsert` reads the run sound off, and a
+     parameter of that name here would shadow it for anybody who later reached
+     for one inside this function. What arrives here is one run's configuration,
+     bound for Rust, and the two are not the same thing at all. */
+  const run = await invoke('run_start', { project, settings: runSettings })
   if (runsState.project === project) {
     /* The new run takes over its scope's slot: a stopped run of the same
        scope stays on screen only until its successor exists, exactly what the

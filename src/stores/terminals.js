@@ -637,13 +637,31 @@ export async function initTerminals() {
       kind: session.work?.kind
     })
     /* An agent that has stopped to ask something is the loudest thing this app
-       has to say, and the one somebody in another room is listening for. On the
-       way *in* only, so a session re-announcing the same wait costs nothing —
-       and for every project, because the marks cover every project. The first
-       read of `terminal_marks` above is deliberately not routed through here:
-       those sessions were already waiting before this window opened, and
-       announcing them would make starting the app a noise about the past. */
-    if (before !== 'needs-you' && session.state === 'needs-you') {
+       has to say, and the one somebody in another room is listening for. Three
+       conditions, and all three are load-bearing.
+
+       On the way *in* only, so a session re-announcing the same wait costs
+       nothing. For every project, because the marks cover every project and a
+       person supervising two overnight is waiting on both — and the first read
+       of `terminal_marks` above is deliberately not routed through here, since
+       those sessions were already waiting before this window opened and
+       announcing them would make starting the app a noise about the past.
+
+       And **not a shell**, which is the question `projectStates` above asks of
+       a mark, by the same word. A shell reaches `needs-you` by the shortest
+       path there is: any BEL byte sets `bell_pending` in
+       `terminal/service.rs`, and layer A of `terminal/detect.rs` turns that
+       into `NeedsYou` with no profile involved — and a shell has no profile at
+       all. So an ambiguous tab completion under zsh's `LIST_BEEP` or bash's
+       audible bell, both on by default, would play the notification sound at
+       somebody typing into that very tab. The rail already skips shells here
+       and the scope bar's counter already filters through `isShellSession`; a
+       sound that did not would be the loudest channel this app has going off
+       while both of those read zero, with nothing on screen to explain it.
+       Asked as "is a shell" rather than "is an agent" for the reason
+       `isShellSession` gives: work this front end has never heard of is an
+       agent, and still rings. */
+    if (before !== 'needs-you' && session.state === 'needs-you' && !isShellSession(session)) {
       chime(settings.notifications.needsAttention)
     }
     /* Asked before the upsert, because the upsert is what makes it false: a

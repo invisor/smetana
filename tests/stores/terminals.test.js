@@ -1530,6 +1530,35 @@ describe('the sound an agent waiting for an answer makes', () => {
     expect(chime).not.toHaveBeenCalled()
   })
 
+  it("a shell ringing its own bell is silent, and an agent beside it is not", async () => {
+    /* A shell reaches `needs-you` by the shortest path there is — any BEL byte
+       becomes `NeedsYou` through layer A of `detect.rs`, no profile involved —
+       so an ambiguous tab completion would otherwise play the sound at somebody
+       typing into that very tab. `projectStates` skips shells for the same
+       reason and by the same word; without this the sound would be the third
+       population, and the loud one. */
+    const { emit, nextTick } = await ready()
+
+    await emit('terminal:state', session({ id: 5, state: 'needs-you', work: { kind: 'shell' } }))
+    await nextTick()
+    expect(chime).not.toHaveBeenCalled()
+
+    await emit('terminal:state', session({ id: 6, state: 'needs-you' }))
+    await nextTick()
+    expect(chime).toHaveBeenCalledTimes(1)
+  })
+
+  it('work this front end has never heard of still rings', async () => {
+    // The question is "is a shell", not "is an agent": an unknown kind is an
+    // agent everywhere else in this file, and must not go quiet here.
+    const { emit, nextTick } = await ready()
+
+    await emit('terminal:state', session({ id: 7, state: 'needs-you', work: { kind: 'audit' } }))
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledTimes(1)
+  })
+
   it('off is silence, not a default sound', async () => {
     const { emit, stores, nextTick } = await ready()
     stores.settings.settings.notifications.needsAttention = 'off'

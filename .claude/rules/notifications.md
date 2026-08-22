@@ -111,7 +111,7 @@ throws over a noise is worse than a quiet one. Which sound each event makes is t
 section of `settings.json` (`.claude/rules/settings.md`), edited on the settings window's General
 tab.
 
-Two rules about where it fires, and both are easy to break by accident. The run sound is played in
+Three rules about where it fires, and all three are easy to break by accident. The run sound is played in
 `upsert` in `runs.js` — the one place a run's state ever changes — once per token, since the summary
 arrives seconds after the ending and is another event about the same stopped run; and **never from
 `loadRun`**, which replaces the list on every window focus and every project switch and would
@@ -126,6 +126,18 @@ of `terminal_marks`** in `initTerminals`, since those sessions were already wait
 window opened. A watcher in `DesktopApp.vue`, the shape report delivery uses, was rejected for the
 second of these: `terminalState.sessions` holds the active project only, so the sound would have
 gone quiet for exactly the second project the rail exists for.
+
+The third rule is **not a shell**, and it is the one the sound was written without at first. The
+listener asks `isShellSession` before it rings, which is `projectStates`' rule by the same word,
+because a shell reaches `needs-you` by the shortest path there is: any BEL byte sets `bell_pending`
+in `terminal/service.rs`, and layer A of `terminal/detect.rs` turns that into `NeedsYou` with no
+profile involved — and a shell has no profile. zsh's `LIST_BEEP` and bash's audible bell are both on
+by default, so an ambiguous tab completion would have played the notification sound at somebody
+typing into that very tab. The rail already skips shells and the scope bar's counter already filters
+through the same function; a sound that did not would have been the third population and the loud
+one, going off while both of those read zero with nothing on screen to explain it. It is asked as
+"is a shell" rather than "is an agent" for the reason `isShellSession` gives — work this front end
+has never heard of is an agent, and still rings.
 
 The sound is also the one announcement the two deliveries above do not divide. It plays whether the
 report went to a tab or to the bell, because it is about the run having ended rather than about the
