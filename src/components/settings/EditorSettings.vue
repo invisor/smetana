@@ -1,16 +1,26 @@
 <script setup>
 /* The Editor tab: the code editor in the centre column, and nothing else. Its
    size is deliberately not the app's — chrome and code are two questions, and
-   the app-wide size on the General tab leaves this one where it was. */
+   the app-wide size on the General tab leaves this one where it was.
+
+   Presentational, like every component here: handed the values, emitting what
+   was picked, so it renders in `?view=gallery` with nothing behind it. */
 import Dropdown from '../core/Dropdown.vue'
+import Switch from '../core/Switch.vue'
 import SettingsRow from './SettingsRow.vue'
 import { FONT_SIZES } from '../../appearance.js'
 
+/* `wordWrap` defaults off, mirroring `EditorSettings::default()` in Rust,
+   `defaults().editor` in `stores/settings.js` and `view` in
+   `SettingsWindow.vue` — a component defaulting the other way would draw the
+   opposite of what the editor is doing until the first value arrives. Off is
+   also today's behaviour: a long line scrolls sideways. */
 const props = defineProps({
-  fontSize: { type: Number, default: 12 }
+  fontSize: { type: Number, default: 12 },
+  wordWrap: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['update:fontSize'])
+const emit = defineEmits(['update:fontSize', 'update:wordWrap'])
 
 /* Numbers, and they stay numbers on the way out — see the note on the same list
    in `GeneralSettings`. */
@@ -27,6 +37,17 @@ const sizeOptions = FONT_SIZES.map((size) => ({ value: size, label: `${size} px`
         :model-value="props.fontSize"
         :options="sizeOptions"
         @update:model-value="emit('update:fontSize', $event)"
+      />
+    </SettingsRow>
+    <!-- It reaches an already open tab straight away: the value rides a
+         CodeMirror compartment, so nothing is reopened and no caret is lost. -->
+    <SettingsRow
+      label="Word wrap"
+      description="Wrap long lines instead of scrolling horizontally."
+    >
+      <Switch
+        :model-value="props.wordWrap"
+        @update:model-value="emit('update:wordWrap', $event)"
       />
     </SettingsRow>
   </div>

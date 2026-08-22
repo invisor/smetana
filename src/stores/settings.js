@@ -48,7 +48,13 @@ const defaults = () => ({
      section because it is pinned rather than scaled. Both mirror Rust's
      `UI_FONT_DEFAULT` / `EDITOR_FONT_DEFAULT`. */
   appearance: { theme: 'dark', density: 'comfortable', uiFontSize: UI_FONT_DEFAULT },
-  editor: { fontSize: EDITOR_FONT_DEFAULT },
+  /* `wordWrap` off is today's behaviour to the letter — long lines scroll
+     sideways — which is the argument the `kanban` defaults carry, and
+     deliberately not `git.autoFetch`'s: wrapping shows itself on the first file
+     opened, so shipping it on would re-lay somebody's editor out unasked. The
+     copies of this default in `EditorSettings::default()` (Rust) and in `view`
+     (`views/SettingsWindow.vue`) have to agree with this one. */
+  editor: { fontSize: EDITOR_FONT_DEFAULT, wordWrap: false },
   /* What the app may do to a person's repositories without asking each time.
      `autoFetch` is whether this app opens a socket by itself — on window focus,
      throttled, and silently — to find out whether a branch has commits waiting
@@ -412,6 +418,9 @@ function toShared(source) {
     density: appearance.density,
     uiFontSize: appearance.uiFontSize,
     editorFontSize: editor.fontSize,
+    /* Flat beside `editorFontSize`, and for the reason every flat field here
+       is: the payload is a message rather than a slice of the settings tree. */
+    editorWordWrap: editor.wordWrap,
     /* Flat, like `editor.fontSize` above and for the same reason: the payload
        is a message rather than a slice of the settings tree, and a nested
        `kanban` would invite somebody to send the whole section and quietly
@@ -467,6 +476,13 @@ export function applyPatch(patch) {
   }
   if ('editorFontSize' in patch) {
     settings.editor.fontSize = clampFont(patch.editorFontSize, settings.editor.fontSize)
+  }
+  /* A switch, so the whole check is the type — the rule `gitAutoFetch` below
+     records: an event is not a response to a request, so a malformed one leaves
+     the previous value standing rather than falling back to the shipped
+     default, and `false` is reachable because it is never coerced. */
+  if (typeof patch.editorWordWrap === 'boolean') {
+    settings.editor.wordWrap = patch.editorWordWrap
   }
   if (typeof patch.agent === 'string' && patch.agent) {
     settings.agent = patch.agent
