@@ -16,6 +16,7 @@
    file, so this renders in `?view=gallery` with nothing behind it. */
 import { computed } from 'vue'
 import Dropdown from '../core/Dropdown.vue'
+import Switch from '../core/Switch.vue'
 import SettingsRow from './SettingsRow.vue'
 import { FONT_SIZES, THEME_CHOICES } from '../../appearance.js'
 import { SOUND_CHOICES } from '../../sounds.js'
