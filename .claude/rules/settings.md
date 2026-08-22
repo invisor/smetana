@@ -69,10 +69,11 @@ today's behaviour to the letter — the argument `kanban`'s defaults carry. `aut
 ("a switch nobody finds is a feature nobody has") is deliberately declined here: wrapping shows
 itself on the first file opened and on every file after it, so shipping it on would re-lay somebody's
 editor out without being asked, where a background fetch shipped on is invisible until it helps.
-Three copies of that default rather than four — `EditorSettings::default()` in Rust, `defaults()` in
-`stores/settings.js` and `view` in `SettingsWindow.vue` — plus the component's own prop default,
-under the same obligation `git.autoFetch` carries: a disagreement draws the switch in the opposite
-position for exactly as long as it takes the first answer to arrive. Rust validates nothing about it,
+**Four** copies of that default, the same four `git.autoFetch` has and under the same obligation —
+`EditorSettings::default()` in Rust, `defaults()` in `stores/settings.js`, `view` in
+`SettingsWindow.vue`, and the prop default in `components/settings/EditorSettings.vue`: a
+disagreement draws the switch in the opposite position for exactly as long as it takes the first
+answer to arrive. Rust validates nothing about it,
 and deliberately: a bool has no value outside its set, so a damaged one is a damaged *type*, which
 loses the whole `editor` section to its defaults through `serde` — the case
 `a_broken_editor_section_does_not_take_the_rest_of_the_file` already pins. What makes the switch

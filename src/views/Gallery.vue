@@ -547,10 +547,14 @@ const editorMd = ref('# Heading\n\nA paragraph with **strong** and *emphasis*, p
 const editorPlain = ref('no language for this extension\nplain text, no colour\n')
 /* One line, far wider than the pane, so the pair of editors below shows both
    positions of the Editor tab's word-wrap switch side by side: the same text
-   scrolling sideways and wrapped. */
-const editorLongLine = ref(
+   scrolling sideways and wrapped. Two refs of one string rather than one ref
+   bound twice — a shared ref would send every character typed in either editor
+   through the other's `replaceDoc`, and the pair exists to be compared, so
+   poking at one must leave the other where it was. */
+const LONG_LINE =
   'const message = "one very long line, wider than any pane on this page, so that the difference between wrapping and scrolling sideways is visible without typing anything"\n'
-)
+const editorLongLine = ref(LONG_LINE)
+const editorLongLineWrapped = ref(LONG_LINE)
 
 /* The diff's two sides. Written to show every kind of chunk at once — a line
    changed in place, a line added, a line taken away — since which of the three
@@ -2139,7 +2143,7 @@ const menuTargetStyle = {
         <FileEditor v-model="editorLongLine" path="src/wide.js" />
       </div>
       <div :style="{ height: '100px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
-        <FileEditor v-model="editorLongLine" path="src/wide-wrapped.js" word-wrap />
+        <FileEditor v-model="editorLongLineWrapped" path="src/wide-wrapped.js" word-wrap />
       </div>
       <div :style="{ height: '120px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
         <FileEditor
