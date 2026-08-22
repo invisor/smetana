@@ -3,7 +3,7 @@
    finishes, and how the app starts. None of it is about any single part of the
    app, which is what makes this the tab these rows are on — the two sounds
    included, since a noise is a fact about a person and a room rather than about
-   anything on the screen; the report switch beside them, since whether a person
+   anything on the screen; the report switch above them, since whether a person
    wants that document put in front of them is a habit of reading rather than a
    fact about one project; and the Startup pair because it is about the app as a
    whole rather than about anything inside it. What the app does to a person's
@@ -19,6 +19,7 @@
 import { computed } from 'vue'
 import Dropdown from '../core/Dropdown.vue'
 import Switch from '../core/Switch.vue'
+import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { FONT_SIZES, THEME_CHOICES } from '../../appearance.js'
 import { SOUND_CHOICES } from '../../sounds.js'
@@ -71,15 +72,6 @@ const emit = defineEmits([
    read as fifteen, it silently takes the shipped size instead. */
 const sizeOptions = FONT_SIZES.map((size) => ({ value: size, label: `${size} px` }))
 
-/* The caption over a group of rows, the shape `KanbanSettings.vue` already
-   uses for its two. */
-const captionStyle = {
-  display: 'block',
-  marginTop: 'var(--space-5)',
-  color: 'var(--text-secondary)',
-  font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
-}
-
 /* Choosing a sound plays it: the choice is the preview, so there is no play
    button beside the list. A third control in the row would be the only action
    button on any settings row outside Storage, and somebody who wants to hear it
@@ -124,28 +116,14 @@ const autostartDescription = computed(() =>
         @update:model-value="emit('update:uiFontSize', $event)"
       />
     </SettingsRow>
-    <!-- What the app does when something finishes while nobody is looking at
-         the screen: two sounds, which is the half that reaches somebody out of
-         the room, and one switch over the report, which is the half waiting for
-         them when they come back. The bell in the scope bar is the third, and
-         it has no row here because it is not a preference. -->
-    <span :style="captionStyle">Notifications</span>
-    <SettingsRow
-      label="Run finished"
-      description="Played when a run reaches its ending, whether its report opens in a tab or waits in the bell."
-    >
-      <Dropdown
-        :model-value="props.notificationRunFinished"
-        :options="SOUND_CHOICES"
-        @update:model-value="pick('update:notificationRunFinished', $event)"
-      />
-    </SettingsRow>
-    <!-- Beside the sound that announces the same moment, and above the second
-         sound rather than below it: this row and the one over it are both about
-         a run that has ended, while "Agent needs you" is about something else
-         entirely. The description says what the switch does and does not
-         promise more than it can keep — a run that fell over without writing a
-         document still has nothing to open, and the bell keeps that case. -->
+    <!-- Above the Notifications caption rather than inside it: a notification
+         is what the app says while nobody is looking, and this is what it opens
+         when they are — a document put on the screen in front of somebody, not
+         a noise or a card waiting to be noticed. It sat under the caption once
+         and read as a third kind of announcement. The description says what the
+         switch does and does not promise more than it can keep — a run that fell
+         over without writing a document still has nothing to open, and the bell
+         keeps that case. -->
     <SettingsRow
       label="Show run report"
       description="Opens a run's report in a tab as soon as the run finishes. With it off, nothing opens and no card waits in the bell."
@@ -155,41 +133,58 @@ const autostartDescription = computed(() =>
         @update:model-value="emit('update:notificationShowReport', $event)"
       />
     </SettingsRow>
-    <SettingsRow
-      label="Agent needs you"
-      description="Played when an agent stops to ask something, in any open project."
-    >
-      <Dropdown
-        :model-value="props.notificationNeedsAttention"
-        :options="SOUND_CHOICES"
-        @update:model-value="pick('update:notificationNeedsAttention', $event)"
-      />
-    </SettingsRow>
+    <!-- What the app says when something finishes while nobody is looking at
+         the screen: two sounds, one for each of the two moments worth reaching
+         somebody out of the room for. The bell in the scope bar is the third,
+         and it has no row here because it is not a preference. -->
+    <SettingsGroup label="Notifications">
+      <SettingsRow
+        label="Run finished"
+        description="Played when a run reaches its ending, whether its report opens in a tab or waits in the bell."
+      >
+        <Dropdown
+          :model-value="props.notificationRunFinished"
+          :options="SOUND_CHOICES"
+          @update:model-value="pick('update:notificationRunFinished', $event)"
+        />
+      </SettingsRow>
+      <SettingsRow
+        label="Agent needs you"
+        description="Played when an agent stops to ask something, in any open project."
+      >
+        <Dropdown
+          :model-value="props.notificationNeedsAttention"
+          :options="SOUND_CHOICES"
+          @update:model-value="pick('update:notificationNeedsAttention', $event)"
+        />
+      </SettingsRow>
+    </SettingsGroup>
     <!-- Last on the tab, and the two halves of "how does this app come up":
          whether the operating system opens it, and where its window lands. -->
-    <span :style="captionStyle">Startup</span>
-    <SettingsRow
-      label="Launch at login"
-      :description="autostartDescription"
-    >
-      <Switch
-        :model-value="props.autostartEnabled"
-        :disabled="!props.autostartSupported"
-        @update:model-value="emit('update:autostartEnabled', $event)"
-      />
-    </SettingsRow>
-    <!-- "Applies on the next launch" is the truth rather than a hedge: the
-         decision is taken once, while the window is being shown. Turning this
-         off stops the window being put back and never stops its place being
-         remembered, so turning it on again returns it to where it was left. -->
-    <SettingsRow
-      label="Restore window position & size"
-      description="Reopens the main window where you left it. Applies on the next launch."
-    >
-      <Switch
-        :model-value="props.restoreGeometry"
-        @update:model-value="emit('update:restoreGeometry', $event)"
-      />
-    </SettingsRow>
+    <SettingsGroup label="Startup">
+      <SettingsRow
+        label="Launch at login"
+        :description="autostartDescription"
+      >
+        <Switch
+          :model-value="props.autostartEnabled"
+          :disabled="!props.autostartSupported"
+          @update:model-value="emit('update:autostartEnabled', $event)"
+        />
+      </SettingsRow>
+      <!-- "Applies on the next launch" is the truth rather than a hedge: the
+           decision is taken once, while the window is being shown. Turning this
+           off stops the window being put back and never stops its place being
+           remembered, so turning it on again returns it to where it was left. -->
+      <SettingsRow
+        label="Restore window position & size"
+        description="Reopens the main window where you left it. Applies on the next launch."
+      >
+        <Switch
+          :model-value="props.restoreGeometry"
+          @update:model-value="emit('update:restoreGeometry', $event)"
+        />
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>

@@ -155,7 +155,10 @@ field. Rust validates nothing about it, deliberately — a boolean has no values
 and a hand-edited file carrying something else there loses the whole `notifications` section through
 serde and takes the defaults, exactly as `editor.wordWrap` does. What the switch actually decides —
 that it is the **whole** of the delivery policy rather than one condition of two — is
-`.claude/rules/notifications.md`.
+`.claude/rules/notifications.md`. Its row is drawn **above** the tab's Notifications
+caption rather than under it: a notification is what the app says while nobody is looking, and this
+switch decides what it opens when somebody is. It sat inside that group at first and read as a third
+kind of announcement beside the two sounds.
 
 `window` is the fourth global section and holds one field, `restoreGeometry`, **shipped on** —
 today's behaviour to the letter, since the main window has opened where it was left since before
@@ -276,6 +279,34 @@ window renders in `?view=gallery` too. The sections themselves are a closed list
 *shape* of a `?tab=` name so nothing can smuggle a second parameter into the URL, never its
 vocabulary, and an unknown section opens on General. Git sits between Kanban and Storage rather than
 at the end, because the tabs before Storage are settings and Storage is the one that is not.
+
+A tab is a stack of `SettingsRow`s, and where a run of them belongs together it is wrapped in
+`SettingsGroup`. The group draws two marks and they say different halves of one thing: a **caption**
+in mono caps with a hairline running out to the right edge, and a **spine** — `border-left` in
+`--border-strong` with `--space-6` of indent — down the rows themselves. The spine is what a caption
+alone could never do, because it has an end: it starts at the first row's top edge and finishes on
+the last row's own bottom rule, so a person can see that Startup stops before the tab does. It spans
+exactly the slot's contents, so there is no arithmetic anywhere to keep in step with the rows. Before
+it there was only a line of sans text in the flow, which reads as a row missing its control rather
+than as a heading over what follows.
+
+The spine is a **border weight rather than a hue**, deliberately: the left edge of a thing is where
+this app puts dependency and status meaning, and a group of settings is neither. `--border-strong`
+against the row rules' `--border-subtle` is enough to read as deliberate in both themes and both
+densities with no second rule anywhere. The rhythm is `--space-8` over a caption against `--space-1`
+under it — the group reads tighter inside than the gap that precedes it, which is what makes a
+caption belong to the rows below rather than to the rows above — and the rows themselves are
+untouched apart from the indent. The caption is **not a control**: no press, no focus, no hover, so a
+tab's tab order stays the list of things a person can actually change. **One level of nesting**, and
+no more: a group inside a group needs a second spine beside the first, and a tab wanting more
+structure takes another top-level group instead.
+
+The label is optional and the headerless form is a real case rather than a fallback. General uses the
+named form for Notifications and Startup; the Kanban tab uses the bare one, because its lists of
+columns are exceptions to the row above them rather than groups with names of their own — the
+sentence over each stays sans prose outside the group, and what the group is used for there is the
+spine alone. The sentence standing in for a board nobody has open is outside it too: with no boxes to
+mark, a spine beside one line saying there is nothing would be marking its own absence.
 
 Every list on them is `Dropdown`, and with that **`Select` is drawn nowhere outside the gallery any
 more.** Its bargain — one element, accessible for free — buys a menu the operating system paints, in

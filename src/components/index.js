@@ -133,6 +133,7 @@ export { default as EditorSettings } from './settings/EditorSettings.vue'
 export { default as GeneralSettings } from './settings/GeneralSettings.vue'
 export { default as GitSettings } from './settings/GitSettings.vue'
 export { default as KanbanSettings } from './settings/KanbanSettings.vue'
+export { default as SettingsGroup } from './settings/SettingsGroup.vue'
 export { default as SettingsRow } from './settings/SettingsRow.vue'
 export { default as StorageSettings } from './settings/StorageSettings.vue'
 

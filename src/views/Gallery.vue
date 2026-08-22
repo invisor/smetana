@@ -67,6 +67,7 @@ import {
   ReportView,
   Select,
   RunBar,
+  SettingsGroup,
   SettingsRow,
   RunModal,
   SetupProjectModal,
@@ -3306,6 +3307,32 @@ const menuTargetStyle = {
           <SettingsRow label="A row on its own" description="Label, one line of explanation, and whatever control the setting needs.">
             <Switch :model-value="switched" label="" @update:model-value="switched = $event" />
           </SettingsRow>
+        </div>
+        <!-- The group, both ways round: named, which is what a tab's own
+             sections use, and headerless, which is what the Kanban tab's lists
+             of columns use under a caption of their own. The row above the
+             first group is there on purpose — the gap over a caption and the
+             spine's two ends are the whole of what this component draws, and
+             neither can be seen without something above it to be separated
+             from. -->
+        <div :style="{ width: '380px' }">
+          <SettingsRow label="Ungrouped row" description="Above the first group, so the gap over the caption can be seen.">
+            <Switch :model-value="switched" label="" @update:model-value="switched = $event" />
+          </SettingsRow>
+          <SettingsGroup label="A named group">
+            <SettingsRow label="First in the group" description="The spine starts at this row's top edge.">
+              <Switch :model-value="switched" label="" @update:model-value="switched = $event" />
+            </SettingsRow>
+            <SettingsRow label="Last in the group" description="And ends on this row's own bottom rule.">
+              <Switch :model-value="switched" label="" @update:model-value="switched = $event" />
+            </SettingsRow>
+          </SettingsGroup>
+          <SettingsGroup>
+            <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: 'var(--space-4) 0' }">
+              <Checkbox :model-value="checked" label="Headerless, for a list under a caption of its own" @update:model-value="checked = $event" />
+              <Checkbox :model-value="!checked" label="Spine and indent, no caps caption" @update:model-value="checked = !$event" />
+            </div>
+          </SettingsGroup>
         </div>
       </div>
     </section>

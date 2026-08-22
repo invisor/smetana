@@ -17,6 +17,7 @@
 import { computed } from 'vue'
 import Checkbox from '../core/Checkbox.vue'
 import Dropdown from '../core/Dropdown.vue'
+import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import {
   COLUMN_MODE_CHOICES,
@@ -52,11 +53,26 @@ const everything = computed(() => columnChoices(props.unlimited, props.boardColu
 const alwaysLive = computed(() => props.columns === 'non-empty')
 const unlimitedLive = computed(() => props.interval !== 'all')
 
-const listStyle = {
+/* A caption and the boxes under it. The caption stays outside the group and
+   the boxes go inside one, which is the whole difference from the General tab:
+   there the caption names a group and is drawn in the group's own idiom, while
+   this one is a sentence about the row above it — "always show these columns"
+   only means anything beside the setting it is an exception to. So it keeps its
+   sans prose, and what the group is used for here is the other half of it: the
+   spine, which says these boxes belong to the setting above and where they
+   stop. So the sentence that stands in for a board nobody has open is outside
+   the group as well: there are no boxes to mark, and a spine beside one line
+   saying there is nothing would be marking its own absence. */
+const listBlockStyle = {
   display: 'flex',
   flexDirection: 'column',
   gap: 'var(--space-3)',
   padding: 'var(--space-4) 0 var(--space-5)'
+}
+const listStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-3)'
 }
 const captionStyle = {
   color: 'var(--text-secondary)',
@@ -88,30 +104,34 @@ const emptyStyle = {
         @update:model-value="emit('update:columns', $event)"
       />
     </SettingsRow>
-    <div :style="listStyle">
+    <div :style="listBlockStyle">
       <span :style="captionStyle">Always show these columns, even when empty</span>
       <span v-if="!always.onBoard.length && !always.elsewhere.length" :style="emptyStyle">
         No board to take columns from.
       </span>
-      <Checkbox
-        v-for="entry in always.onBoard"
-        :key="entry.name"
-        :model-value="entry.checked"
-        :disabled="!alwaysLive"
-        :label="columnLabel(entry.name)"
-        @update:model-value="emit('update:alwaysShow', toggleColumn(props.alwaysShow, entry.name, $event))"
-      />
-      <span v-if="always.elsewhere.length" :style="elsewhereStyle">
-        Saved from another project's board
-      </span>
-      <Checkbox
-        v-for="entry in always.elsewhere"
-        :key="entry.name"
-        :model-value="entry.checked"
-        :disabled="!alwaysLive"
-        :label="columnLabel(entry.name)"
-        @update:model-value="emit('update:alwaysShow', toggleColumn(props.alwaysShow, entry.name, $event))"
-      />
+      <SettingsGroup v-else>
+        <div :style="listStyle">
+          <Checkbox
+            v-for="entry in always.onBoard"
+            :key="entry.name"
+            :model-value="entry.checked"
+            :disabled="!alwaysLive"
+            :label="columnLabel(entry.name)"
+            @update:model-value="emit('update:alwaysShow', toggleColumn(props.alwaysShow, entry.name, $event))"
+          />
+          <span v-if="always.elsewhere.length" :style="elsewhereStyle">
+            Saved from another project's board
+          </span>
+          <Checkbox
+            v-for="entry in always.elsewhere"
+            :key="entry.name"
+            :model-value="entry.checked"
+            :disabled="!alwaysLive"
+            :label="columnLabel(entry.name)"
+            @update:model-value="emit('update:alwaysShow', toggleColumn(props.alwaysShow, entry.name, $event))"
+          />
+        </div>
+      </SettingsGroup>
     </div>
 
     <SettingsRow
@@ -124,30 +144,34 @@ const emptyStyle = {
         @update:model-value="emit('update:interval', $event)"
       />
     </SettingsRow>
-    <div :style="listStyle">
+    <div :style="listBlockStyle">
       <span :style="captionStyle">Show everything in these columns, whatever the period</span>
       <span v-if="!everything.onBoard.length && !everything.elsewhere.length" :style="emptyStyle">
         No board to take columns from.
       </span>
-      <Checkbox
-        v-for="entry in everything.onBoard"
-        :key="entry.name"
-        :model-value="entry.checked"
-        :disabled="!unlimitedLive"
-        :label="columnLabel(entry.name)"
-        @update:model-value="emit('update:unlimited', toggleColumn(props.unlimited, entry.name, $event))"
-      />
-      <span v-if="everything.elsewhere.length" :style="elsewhereStyle">
-        Saved from another project's board
-      </span>
-      <Checkbox
-        v-for="entry in everything.elsewhere"
-        :key="entry.name"
-        :model-value="entry.checked"
-        :disabled="!unlimitedLive"
-        :label="columnLabel(entry.name)"
-        @update:model-value="emit('update:unlimited', toggleColumn(props.unlimited, entry.name, $event))"
-      />
+      <SettingsGroup v-else>
+        <div :style="listStyle">
+          <Checkbox
+            v-for="entry in everything.onBoard"
+            :key="entry.name"
+            :model-value="entry.checked"
+            :disabled="!unlimitedLive"
+            :label="columnLabel(entry.name)"
+            @update:model-value="emit('update:unlimited', toggleColumn(props.unlimited, entry.name, $event))"
+          />
+          <span v-if="everything.elsewhere.length" :style="elsewhereStyle">
+            Saved from another project's board
+          </span>
+          <Checkbox
+            v-for="entry in everything.elsewhere"
+            :key="entry.name"
+            :model-value="entry.checked"
+            :disabled="!unlimitedLive"
+            :label="columnLabel(entry.name)"
+            @update:model-value="emit('update:unlimited', toggleColumn(props.unlimited, entry.name, $event))"
+          />
+        </div>
+      </SettingsGroup>
     </div>
   </div>
 </template>
