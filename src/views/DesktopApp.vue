@@ -21,6 +21,14 @@ import ConflictModal from '../components/git/ConflictModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
+import {
+  NO_VISIT,
+  answeredCount,
+  changesVisible,
+  enterGitTab,
+  gitAnswered,
+  toggleChanges
+} from '../components/git/changesFold.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
@@ -574,10 +582,79 @@ const cutBranch = (ask) => {
    section given back to its content by a double click. */
 const gitSections = computed(() => settings.layout.gitSections)
 
-const FOLD_KEY = { repos: 'reposOpen', changes: 'changesOpen', branches: 'branchesOpen' }
+/* The two sections whose press is a plain inversion of what is stored. The
+   changes are deliberately not in here any more — they are the one section a
+   visit can be holding open, so the press is resolved against what is drawn
+   rather than against the stored flag, in `toggleGitSection` below. */
+const FOLD_KEY = { repos: 'reposOpen', branches: 'branchesOpen' }
 const ROWS_KEY = { repos: 'reposRows', branches: 'branchRows' }
 
+/* The one fold a visit to the tab is allowed to overrule, and the two fields
+   that hold it — `changesFold.js` is the rule, this is the half of it that
+   needs a tab and a store. Neither field reaches `settings.json`, and that is
+   the point rather than an omission: the reason is in the module's own header.
+
+   A visit starts on any move onto the Git tab and on the app starting or the
+   project changing with Git already open, which is exactly what this pair of
+   sources says with `immediate`. Both are watched rather than the tab alone,
+   because moving to another project leaves `sideTab` reading `'git'` before and
+   after, and the tree it is about is a different tree.
+
+   **And that last case is why the count is not simply read**: on a switch the
+   store still holds the departing project's tree, so a count taken here would
+   be about somewhere else. Which counts may be believed is `answeredCount` in
+   `changesFold.js`, with the window it closes and the measurement behind it —
+   the rule is there and not here for the reason the module exists at all, since
+   nothing in this file can be reached by a test. What is left in the view is
+   the three field reads and the wiring, which genuinely cannot move. */
+const changesVisit = ref(NO_VISIT)
+watch(
+  [activePath, () => project.sideTab],
+  ([path, tab]) => {
+    if (tab !== 'git') return
+    const store = { project: vcsState.project, loading: vcsState.loading, count: dirtyCount.value }
+    changesVisit.value = enterGitTab(answeredCount(store, path))
+  },
+  { immediate: true }
+)
+/* And the other half, for the ordinary case where the tab is on screen before
+   git has answered.
+
+   The source is the **tree** and not `dirtyCount`, because what settles a visit
+   is git having answered at all — the moment the tree is *replaced*, which
+   `loadStatus` always does rather than writing into the object in hand. Not
+   "the moment it stops being `null`": on a project switch it goes from the
+   departing project's object straight to the arriving one's and passes through
+   `null` not at all, and that case is the whole reason this watcher is keyed on
+   an identity. A count would not do it — it fires only when the number moves,
+   so six changes in one project followed by six in the next would leave a visit
+   armed for good. The count is still the only spelling of "how dirty": it is
+   read here, not re-derived. */
+watch(
+  () => vcsState.tree,
+  () => {
+    changesVisit.value = gitAnswered(changesVisit.value, dirtyCount.value)
+  }
+)
+
+/* What the panel is handed: the stored folds with the one the visit may have
+   overruled resolved first, so `GitPanel` goes on reading a single
+   `changesOpen` and neither its prop nor its events change shape. */
+const resolvedGitSections = computed(() => ({
+  ...gitSections.value,
+  changesOpen: changesVisible(gitSections.value.changesOpen, changesVisit.value)
+}))
+
 const toggleGitSection = (section) => {
+  /* The changes are the one section whose press is not an inversion of what is
+     stored — under a forced-open fold that would write `true` and fold nothing.
+     What a person folds is what they can see; the module says why. */
+  if (section === 'changes') {
+    const pressed = toggleChanges(gitSections.value.changesOpen, changesVisit.value)
+    gitSections.value.changesOpen = pressed.changesOpen
+    changesVisit.value = pressed.visit
+    return
+  }
   const key = FOLD_KEY[section]
   if (key) gitSections.value[key] = !gitSections.value[key]
 }
@@ -2993,7 +3070,7 @@ const toastStackStyle = {
                 :error="vcsState.error"
                 :loading="vcsState.loading"
                 :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
-                :sections="gitSections"
+                :sections="resolvedGitSections"
                 :branch-folders="project.branchFolders"
                 :message="draftMessage()"
                 :suggesting="vcsState.suggesting"

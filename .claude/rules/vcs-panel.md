@@ -100,6 +100,54 @@ rather than under the project: how tall somebody likes their branch list is a ha
 same argument `kanban` is global on. A folded caption **keeps its count** — folding the branches away
 says "do not draw me the list", not "stop telling me there are nine".
 
+**One of those three folds is overruled on the way in.** Arriving on the Git tab with anything
+uncommitted in the selected repository draws Changes open whatever is stored, because that list is
+what somebody came back for; inside the visit it folds on a press and stays folded until they leave
+the tab and return. The rule is `components/git/changesFold.js` — pure, tested, of the
+`sectionHeights.js` family. **What it deliberately does not do is write `changesOpen: true` on the
+way in**: a stored `false` would then survive only a clean tree, and folding this section away would
+stop meaning anything as a preference. So the visit is two fields held in `DesktopApp.vue` — an
+override and an arm — and neither reaches `settings.json` at all, which is the one place the global
+fold above is not the whole story.
+
+A visit is any move of `project.sideTab` onto `'git'` — a press or a line of code — plus the app
+starting and the project changing with Git already the open tab. Those last two are what the
+predicate is really for: nothing in this app assigns that tab `'git'` today, every programmatic
+switch goes to `'agents'`, so the interesting arrivals are the ones nobody clicked. One predicate
+with no exceptions, because a rule that told a press apart from an assignment would be visible
+nowhere on screen. The arm is what makes any of it work against a `loadRepos` nobody awaits, and it
+is the **first known answer of the visit** that settles it — the moment `vcsState.tree` is
+*replaced*, which `loadStatus` always does rather than writing into the object already in hand.
+Deliberately not "the moment it stops being `null`", which is how the task that built this described
+it: that is true of one project sitting still, and false of the case the rule exists for, since on a
+switch the tree goes from the departing project's object straight to the arriving one's and passes
+through `null` not at all. So the watch is on the identity, and a count would not serve — it fires
+only when the number moves, and six changes in one project followed by six in the next would arm a
+visit for good. Everything follows from that. A refresh
+under somebody already sitting on the tab, by focus or by the panel's own button, unfolds nothing,
+because the visit was spent long before it; a clean tree that goes dirty mid-visit is the same case
+and also draws nothing new; and a read that failed leaves the visit still waiting rather than reading
+as a clean tree, the `null`-and-never-`0` opposition again. The press on the caption stores the
+inverse of what is **drawn** rather than of what is stored, or the first press under a forced-open
+section would write `true` and fold nothing, and it spends the visit in both directions — a
+`vcs_status` still in flight must not reopen what was just folded.
+
+**A count about another project is not an answer, and the project switch is the case that proves
+it.** `moveTo` sets the active project synchronously and only reaches `loadRepos` after an awaited
+layout read, and `loadRepos` deliberately leaves `vcsState.tree` standing rather than clearing it —
+so for a moment the store holds the departing project's tree under the arriving project's name. A
+visit deciding from it would draw Changes open over an empty list one way and, the other way, spend
+itself on a clean tree that the arriving project's changes can then never open, which is this
+feature failing in exactly the entry case nothing on screen would explain. So the count is read only
+when the store is about this project and settled: `vcsState.project`, which is the guard token every
+call in `stores/vcs.js` already checks itself against, and `loading`, which is no such thing — a
+flag nothing in that store guards on, wanted here for the narrower window where `loadRepos` has
+claimed the new project before its first `await` and the tree in hand is still the previous one.
+Anything else arms the visit instead, and an arm is never wrong here, only slower. The predicate is
+`answeredCount` in `components/git/changesFold.js` rather than a condition in the view, which is
+this family's whole reason: the one defect this feature shipped with lived in the half that was
+inside the `.vue`, where no test in this repository could reach it.
+
 A caption carries `divided`, the hairline above it, and the repositories deliberately do not: every
 section here is `--row-h` and quiet, so with nothing between them the three ran together into one
 column of rows and neither the captions nor the blocks under them read as blocks at all. It is the
