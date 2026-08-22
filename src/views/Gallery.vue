@@ -545,6 +545,12 @@ const editorText = ref('fn main() {\n    println!("hello");\n}\n')
 const editorJs = ref('export function openFile(path, { permanent = false } = {}) {\n  // A single click opens a preview tab.\n  const state = project()\n  return state.openTabs.includes(path)\n}\n')
 const editorMd = ref('# Heading\n\nA paragraph with **strong** and *emphasis*, plus a [link](https://example.com).\n\n- an item\n- another item\n')
 const editorPlain = ref('no language for this extension\nplain text, no colour\n')
+/* One line, far wider than the pane, so the pair of editors below shows both
+   positions of the Editor tab's word-wrap switch side by side: the same text
+   scrolling sideways and wrapped. */
+const editorLongLine = ref(
+  'const message = "one very long line, wider than any pane on this page, so that the difference between wrapping and scrolling sideways is visible without typing anything"\n'
+)
 
 /* The diff's two sides. Written to show every kind of chunk at once — a line
    changed in place, a line added, a line taken away — since which of the three
@@ -1159,6 +1165,9 @@ const GALLERY_SESSION = 1
 const galleryTheme = ref('system')
 const galleryUiFont = ref(13)
 const galleryEditorFont = ref(12)
+/* The Editor tab's switch, local like the refs above and for the same reason.
+   Bound rather than left to its default so it actually moves when pressed. */
+const galleryEditorWordWrap = ref(false)
 /* The Git tab's two switches, local like the refs above and for the same
    reason: in the app these values come from the main window and go back to it
    as events, and neither end exists here. Bound rather than left to their
@@ -2124,6 +2133,13 @@ const menuTargetStyle = {
       </div>
       <div :style="{ height: '120px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
         <FileEditor v-model="editorPlain" path="notes.unknownext" />
+      </div>
+      <!-- The same long line twice: scrolling sideways, then wrapped. -->
+      <div :style="{ height: '100px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <FileEditor v-model="editorLongLine" path="src/wide.js" />
+      </div>
+      <div :style="{ height: '100px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <FileEditor v-model="editorLongLine" path="src/wide-wrapped.js" word-wrap />
       </div>
       <div :style="{ height: '120px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
         <FileEditor
@@ -3158,7 +3174,12 @@ const menuTargetStyle = {
           />
         </div>
         <div :style="{ width: '380px' }">
-          <EditorSettings :font-size="galleryEditorFont" @update:font-size="galleryEditorFont = $event" />
+          <EditorSettings
+            :font-size="galleryEditorFont"
+            :word-wrap="galleryEditorWordWrap"
+            @update:font-size="galleryEditorFont = $event"
+            @update:word-wrap="galleryEditorWordWrap = $event"
+          />
         </div>
         <div :style="{ width: '380px' }">
           <AgentSettings

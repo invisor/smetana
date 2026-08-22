@@ -3232,6 +3232,7 @@ const toastStackStyle = {
           :path="absoluteEditorPath(project.activeTab)"
           :model-value="activeBuffer?.text ?? ''"
           :read-only="!!activeBuffer?.error || !!activeBuffer?.loading"
+          :word-wrap="settings.editor.wordWrap"
           :notice="editorNotice"
           @update:model-value="setText(project.activeTab, $event)"
           @reload="reloadTab(project.activeTab)"
