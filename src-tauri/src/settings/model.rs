@@ -123,6 +123,41 @@ impl Default for GitSettings {
     }
 }
 
+/// What the main window does with the size and position it was left at.
+///
+/// Global rather than under a project, on `GitSettings`' argument exactly:
+/// there is one main window and it is a fact about a person's screen, not
+/// about a repository.
+///
+/// Shipped on, because that is today's behaviour to the letter — the geometry
+/// has always been restored, and this section is a switch over something that
+/// already happens rather than a new ability. Switching it off stops the
+/// *restoring* and never the *saving*: `window.rs` says why, and it is what
+/// makes the switch reversible the way a person expects, since turning it back
+/// on a week later opens the window where it was last left rather than at the
+/// size in `tauri.conf.json`.
+///
+/// One field and no validation: a bool has no value outside its allowed set,
+/// and a section whose *type* is wrong loses itself to this default in `parse`
+/// like every other section. The two other copies of the default are
+/// `defaults()` in `src/stores/settings.js` and `view` in
+/// `src/views/SettingsWindow.vue`, and they have to agree with this one for
+/// `GitSettings`' reason: the switch would otherwise draw the opposite of what
+/// the app is doing for as long as the first answer takes to arrive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WindowSettings {
+    /// Open the main window where it was left, rather than at the size the
+    /// configuration names.
+    pub restore_geometry: bool,
+}
+
+impl Default for WindowSettings {
+    fn default() -> Self {
+        Self { restore_geometry: true }
+    }
+}
+
 /// The closed list of sound ids `settings.json` may hold, `off` among them.
 /// Written out again as `SOUND_IDS` in `src/sounds.js`, with the obligation
 /// `SIDE_TABS` and the storage ladder carry: what the front end offers must be
@@ -523,6 +558,9 @@ pub struct Settings {
     /// What the Git panel may do on its own. At the root for the reason
     /// `GitSettings` records.
     pub git: GitSettings,
+    /// What the main window does with the geometry it was left at. At the root
+    /// for the reason `WindowSettings` records.
+    pub window: WindowSettings,
     /// What the app says out loud. At the root for the reason
     /// `NotificationSettings` records.
     pub notifications: NotificationSettings,
@@ -560,6 +598,7 @@ impl Default for Settings {
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
             git: GitSettings::default(),
+            window: WindowSettings::default(),
             notifications: NotificationSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -589,6 +628,8 @@ pub struct ResolvedSettings {
     pub kanban: KanbanSettings,
     /// What the Git panel may do on its own. See `Settings::git`.
     pub git: GitSettings,
+    /// What the main window does with its geometry. See `Settings::window`.
+    pub window: WindowSettings,
     /// What the app says out loud. See `Settings::notifications`.
     pub notifications: NotificationSettings,
     /// Which CLI agent the app starts. See `Settings::agent`.
@@ -615,6 +656,7 @@ impl Default for ResolvedSettings {
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
             git: GitSettings::default(),
+            window: WindowSettings::default(),
             notifications: NotificationSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -658,6 +700,7 @@ pub fn parse(text: &str) -> Outcome {
         editor: section(&object, "editor"),
         kanban: section(&object, "kanban"),
         git: section(&object, "git"),
+        window: section(&object, "window"),
         notifications: section(&object, "notifications"),
         agent: object.get("agent").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| "claude".into()),
         agent_language: language_field(&object, "agentLanguage"),
@@ -700,6 +743,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         editor: file.editor.clone(),
         kanban: file.kanban.clone(),
         git: file.git.clone(),
+        window: file.window.clone(),
         notifications: file.notifications.clone(),
         agent: file.agent.clone(),
         agent_language: file.agent_language.clone(),
@@ -724,6 +768,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.editor = resolved.editor;
     file.kanban = resolved.kanban;
     file.git = resolved.git;
+    file.window = resolved.window;
     file.notifications = resolved.notifications;
     file.agent = resolved.agent;
     file.agent_language = resolved.agent_language;
@@ -1190,6 +1235,45 @@ mod tests {
         let mut written = Settings::default();
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert!(!written.git.auto_fetch, "merge must carry it back into the file");
+    }
+
+    /// Default on, because it is today's behaviour to the letter: the window
+    /// has always opened where it was left, and the switch is over something
+    /// that already happens. Wired through `parse`, `resolve` and `merge` here
+    /// rather than asserted on the struct alone — a section added to the types
+    /// and missed in one of the three reads as the default for ever, and no
+    /// struct-alone test sees it.
+    #[test]
+    fn restoring_the_geometry_defaults_on_and_a_stored_false_survives_the_merge() {
+        assert!(Settings::default().window.restore_geometry);
+        // Every settings file on a person's disk right now is this file.
+        assert!(settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#).window.restore_geometry);
+
+        let file = settings_of(r#"{"version":1,"window":{"restoreGeometry":false}}"#);
+        assert!(!file.window.restore_geometry, "parse must read it off the disk");
+
+        let resolved = resolve(&file, None);
+        assert!(!resolved.window.restore_geometry, "resolve must carry it to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert!(!written.window.restore_geometry, "merge must carry it back into the file");
+    }
+
+    /// A section whose type is wrong loses the whole section to its defaults,
+    /// the way `kanban` does one field over: `false` is a real answer here, so
+    /// the failure has to land on the shipped `true` rather than on the `false`
+    /// a bool deserializes to when nobody was asked.
+    #[test]
+    fn a_window_section_of_the_wrong_type_falls_back_to_restoring() {
+        let settings =
+            settings_of(r#"{"version":1,"window":"remember","appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.window, WindowSettings::default());
+        assert!(settings.window.restore_geometry);
+        assert_eq!(settings.appearance.theme, "light", "the neighbouring section must survive");
+
+        let field = settings_of(r#"{"version":1,"window":{"restoreGeometry":"no"}}"#);
+        assert!(field.window.restore_geometry, "a field of the wrong type loses the section");
     }
 
     /// Default on, because that is today's behaviour exactly: the running-tasks

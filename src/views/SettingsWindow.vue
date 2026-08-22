@@ -33,7 +33,14 @@ import {
   sendSettingsPatch,
   watchSharedSettings
 } from '../stores/settings.js'
-import { appVersion, openExternal, watchBoardColumns, watchSettingsSection } from '../stores/app.js'
+import {
+  appVersion,
+  autostartState,
+  openExternal,
+  setAutostart,
+  watchBoardColumns,
+  watchSettingsSection
+} from '../stores/app.js'
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
 
 /* The query string's two overrides, passed down rather than read here so that
@@ -83,6 +90,10 @@ const view = reactive({
      the first answer arrives. */
   gitAutoFetch: true,
   gitRemoveWorktrees: true,
+  /* Whether the main window opens where it was left. Shipped on, the same as
+     `settings/model.rs` and `stores/settings.js`, for the reason the switch
+     above it carries. */
+  restoreGeometry: true,
   /* Which sound each announcement makes. Shipped as `settings/model.rs` and
      `stores/settings.js` ship them — the three copies of these defaults have to
      agree, or this window draws a sound the app is not playing for the moment
@@ -260,10 +271,38 @@ const clear = async () => {
   }
 }
 
+/* The login item, and the other part of this window that is not a setting:
+   nothing about it reaches `settings.json`, and `FIELDS` above deliberately
+   does not name it. The operating system's own list is the truth
+   (`src-tauri/src/autostart.rs`), so it is asked rather than remembered — and
+   asked on opening the General tab rather than on mounting the window, the way
+   the Storage numbers are, since a list somebody may have edited outside the
+   app is stale the moment it is cached.
+
+   `supported: false` until an answer arrives, so the row opens disabled and
+   settles into being live: the other way round it would offer a press for the
+   length of a round trip and then take it away. */
+const autostart = reactive({ supported: false, enabled: false })
+
+const readAutostart = async () => {
+  Object.assign(autostart, await autostartState())
+}
+
+/* Applied here and sent second, the way an edit to a setting is — a switch that
+   waited for the operating system before moving would read as a dead control —
+   but corrected by what Rust read *back* rather than by an announcement, since
+   there is no other window in this conversation. A registration the system
+   declined therefore returns the switch by itself. */
+const toggleAutostart = async (enabled) => {
+  autostart.enabled = enabled
+  Object.assign(autostart, await setAutostart(enabled))
+}
+
 watch(
   tab,
   (which) => {
     if (which === 'storage' && !storage.busy) readStorage()
+    if (which === 'general') readAutostart()
   },
   { immediate: true }
 )
@@ -307,10 +346,15 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           v-if="tab === 'general'"
           :theme="view.theme"
           :ui-font-size="view.uiFontSize"
+          :autostart-supported="autostart.supported"
+          :autostart-enabled="autostart.enabled"
+          :restore-geometry="view.restoreGeometry"
           :notification-run-finished="view.notificationRunFinished"
           :notification-needs-attention="view.notificationNeedsAttention"
           @update:theme="change({ theme: $event })"
           @update:ui-font-size="change({ uiFontSize: $event })"
+          @update:autostart-enabled="toggleAutostart($event)"
+          @update:restore-geometry="change({ restoreGeometry: $event })"
           @update:notification-run-finished="change({ notificationRunFinished: $event })"
           @update:notification-needs-attention="change({ notificationNeedsAttention: $event })"
         />

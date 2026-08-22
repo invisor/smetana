@@ -248,6 +248,17 @@ export function installMockBackend() {
       console.info('[mockBackend] a second window needs Tauri — open ?view=settings instead')
       return null
     }
+    /* The login item. A read, so it answers — otherwise the General tab could
+       not be opened under `npm run dev` without an error in the console, and
+       the tab is checked by eye there. `supported: false` is the honest answer
+       rather than a convenient one: a browser cannot register anything with the
+       operating system, so the row draws itself disabled, which is exactly what
+       a development build of the app shows.
+
+       `autostart_set` is deliberately absent and falls through to the loud
+       refusal at the bottom, like every other write. The switch is disabled
+       here, so nothing reaches it in the ordinary course. */
+    if (command === 'autostart_state') return { supported: false, enabled: false }
     if (command === 'tracker_set_project') return snapshot
     if (command === 'tracker_probe') {
       return MOCK_PROJECTS.map((path) => ({ path, tracked: path !== UNTRACKED }))

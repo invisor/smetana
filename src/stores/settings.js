@@ -61,6 +61,15 @@ const defaults = () => ({
      ships on because that is today's behaviour exactly. A section missing there
      is a section this window cannot draw. */
   git: { autoFetch: true, removeWorktrees: true },
+  /* What the main window does with the size and position it was left at.
+     `restoreGeometry` off stops it being put back and never stops it being
+     saved — `src-tauri/src/window.rs` holds that half — so switching it back on
+     a week later opens the window where it was last left rather than at the
+     size in the configuration. Global rather than per project for the reason
+     `WindowSettings` in Rust records: there is one main window, and it is a
+     fact about a person's screen. Shipped on, because that is today's
+     behaviour exactly, and Rust carries the same default. */
+  window: { restoreGeometry: true },
   /* How the board is drawn — which columns get a slot and how far back a card
      is worth looking at. Global rather than per project, for the reason
      `KanbanSettings` in Rust records, and shipped as today's board exactly:
@@ -333,6 +342,7 @@ export async function loadSettings() {
     applySection(settings.appearance, base.appearance, stored.appearance)
     applySection(settings.editor, base.editor, stored.editor)
     applySection(settings.git, base.git, stored.git)
+    applySection(settings.window, base.window, stored.window)
     applySection(settings.kanban, base.kanban, stored.kanban)
     applySection(settings.notifications, base.notifications, stored.notifications)
     applySection(settings.layout, base.layout, stored.layout)
@@ -392,6 +402,10 @@ function toShared(source) {
   const editor = { ...base.editor, ...source.editor }
   const kanban = { ...base.kanban, ...source.kanban }
   const git = { ...base.git, ...source.git }
+  /* Deliberately not `window`: that name is the global object, and shadowing it
+     inside this function would take `window.addEventListener` and every other
+     use of it in this module out of reach for whoever edits here next. */
+  const windowSection = { ...base.window, ...source.window }
   const notifications = { ...base.notifications, ...source.notifications }
   return {
     theme: appearance.theme,
@@ -409,6 +423,10 @@ function toShared(source) {
     /* Flat for the same reason the four above it are. */
     gitAutoFetch: git.autoFetch,
     gitRemoveWorktrees: git.removeWorktrees,
+    /* Flat for the same reason, and the whole of what this window may change
+       about the main window's geometry — where it is now is not a setting and
+       never crosses this contract. */
+    restoreGeometry: windowSection.restoreGeometry,
     /* Flat for the same reason, and named for the event rather than for the
        section: a `notifications` object in this message would invite somebody
        to send it whole and quietly blank the choice they left out. */
@@ -489,6 +507,12 @@ export function applyPatch(patch) {
      malformed event into a deliberate-looking answer either way. */
   if (typeof patch.gitRemoveWorktrees === 'boolean') {
     settings.git.removeWorktrees = patch.gitRemoveWorktrees
+  }
+  /* A switch too, checked exactly the way the two above it are and for the same
+     reason: `false` is the whole point of this field, so anything that is not a
+     boolean is skipped rather than coerced into a deliberate-looking "off". */
+  if (typeof patch.restoreGeometry === 'boolean') {
+    settings.window.restoreGeometry = patch.restoreGeometry
   }
   /* The two sounds. Checked against the closed list `sounds.js` holds — the
      same relationship the board's two scalars have with `boardView.js`: the

@@ -107,6 +107,39 @@ export async function watchBoardColumns(onColumns) {
   return stop
 }
 
+/* Whether the app opens itself when the person signs in, and the press that
+   changes it.
+
+   Here rather than in `settings.js` because none of it is a setting: nothing
+   about the login item reaches `settings.json`, and the machine's own list is
+   the whole of the truth — `src-tauri/src/autostart.rs` records why a copy of
+   it in a file of ours would be worse than none. Both answer with the state
+   Rust read back *after* doing anything, so a registration the system declined
+   puts the switch back by itself and there is no error branch here to design.
+
+   Neither ever rejects. Nobody to ask — a browser, an ACL — is answered with
+   "this build may not register anything", which is the same shape a development
+   build gets from Rust and draws the same disabled row. A thrown error would
+   instead leave the tab with no answer at all, on a screen where every other
+   row draws something. */
+export async function autostartState() {
+  try {
+    return await invoke('autostart_state')
+  } catch (err) {
+    console.debug('[app] nobody to ask about the login item (a browser, there is no Tauri):', err)
+    return { supported: false, enabled: false }
+  }
+}
+
+export async function setAutostart(enabled) {
+  try {
+    return await invoke('autostart_set', { enabled })
+  } catch (err) {
+    console.error('[app] the login item did not change:', err)
+    return { supported: false, enabled: false }
+  }
+}
+
 /* The version this build carries — `tauri.conf.json`'s `version`, which is the
    one a person would quote in a bug report. `null` when there is nobody to ask
    (a browser): the About tab draws a dash rather than inventing a number, since

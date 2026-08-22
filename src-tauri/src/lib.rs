@@ -1,5 +1,6 @@
 mod agents;
 mod attachments;
+mod autostart;
 mod files;
 mod git;
 mod project;
@@ -19,7 +20,22 @@ pub fn run() {
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_clipboard_manager::init())
-    .plugin(tauri_plugin_window_state::Builder::default().build())
+    // `skip_initial_state` and not `with_denylist`: the geometry goes on being
+    // saved in both positions of the switch, and putting it back is
+    // `window::open_main_window`'s decision — see `window.rs` for why the two
+    // halves are split at all.
+    .plugin(
+      tauri_plugin_window_state::Builder::default()
+        .skip_initial_state("main")
+        .build(),
+    )
+    // The login item, and nothing about it in `settings.json`: the operating
+    // system's own list is the whole of the truth. `autostart.rs` records why,
+    // and why the switch is dead in a development build.
+    .plugin(tauri_plugin_autostart::init(
+      tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+      None,
+    ))
     .plugin(tauri_plugin_dialog::init())
     .setup(|app| {
       // Before anything asks for an agent. A bundled app is handed launchd's
@@ -46,6 +62,19 @@ pub fn run() {
         .and_then(|settings| settings.last_project.clone())
         .map(std::path::PathBuf::from)
         .or_else(project::default_project);
+      // The same file says whether the window goes back where it was left. The
+      // main window is created hidden (`tauri.conf.json`), so this call is also
+      // what puts it on screen, and it is made here — as early as the answer
+      // exists — because everything below only starts worker threads, and a
+      // window that waited for them would be a window somebody waits for.
+      // Restoring a window already on screen is a jump they watch happen, which
+      // is the whole reason it starts hidden. No file at all is the first run,
+      // which has nothing to restore either way, so the fallback is only the
+      // shipped default agreeing with itself.
+      window::open_main_window(
+        app.handle(),
+        stored.as_ref().map(|settings| settings.window.restore_geometry).unwrap_or(true),
+      );
       // Every project this launch knows about, for the run worker's start-up
       // sweep: a `kill -9` leaves agent processes running and a record of them
       // in each project's `.smetana/runs.json`, and this is the list of files
@@ -134,6 +163,8 @@ pub fn run() {
       settings::commands::settings_load,
       settings::commands::settings_save,
       window::settings_window_open,
+      autostart::autostart_state,
+      autostart::autostart_set,
       terminal::commands::terminal_list,
       terminal::commands::terminal_marks,
       terminal::commands::terminal_create,

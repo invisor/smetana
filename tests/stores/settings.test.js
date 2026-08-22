@@ -38,6 +38,10 @@ describe('loading', () => {
        behaviour exactly — the running-tasks skill has always swept a merged
        task's worktree up. `settings/model.rs` carries the same pair. */
     expect(settings.settings.git).toEqual({ autoFetch: true, removeWorktrees: true })
+    /* On, because it is what the app has always done: the window has opened
+       where it was left since before there was a switch over it, and
+       `settings/model.rs` carries this same default. */
+    expect(settings.settings.window).toEqual({ restoreGeometry: true })
     /* Today's board exactly: every column, every task. Nothing on anybody's
        screen moves until they go and choose. */
     expect(settings.settings.kanban).toEqual({
@@ -64,6 +68,14 @@ describe('loading', () => {
 
     expect(settings.settings.notifications.runFinished).toBe('off')
     expect(settings.settings.notifications.needsAttention).toBe('sound-4')
+  })
+
+  it('reads a stored false for the window geometry off the file', async () => {
+    ipc.on('settings_load', { window: { restoreGeometry: false } })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.window.restoreGeometry).toBe(false)
   })
 
   it('reads the board settings off the file', async () => {
@@ -459,6 +471,32 @@ describe('the settings window', () => {
     expect(settings.settings.git.removeWorktrees).toBe(true)
   })
 
+  /* The switch that is not on that tab at all, and the one whose `false` the
+     app acts on by leaving a window where the configuration puts it. Skipped
+     rather than coerced for `gitAutoFetch`'s reason: coercion would turn a
+     malformed event into a deliberate-looking "off", and off here is a visible
+     change to where the app opens. */
+  it('takes the window-geometry switch, and only a boolean one', async () => {
+    await emit(settings.SETTINGS_APPLY, { restoreGeometry: false })
+    await nextTick()
+    expect(settings.settings.window.restoreGeometry).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { restoreGeometry: 'yes' })
+    await nextTick()
+    expect(settings.settings.window.restoreGeometry).toBe(
+      false,
+      'a value that is not a boolean is skipped'
+    )
+
+    await emit(settings.SETTINGS_APPLY, { restoreGeometry: null })
+    await nextTick()
+    expect(settings.settings.window.restoreGeometry).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { restoreGeometry: true })
+    await nextTick()
+    expect(settings.settings.window.restoreGeometry).toBe(true)
+  })
+
   /* The two sounds ride the same message as flat fields, named for their
      events. A value outside the closed list is skipped rather than reset: the
      person did not ask for the shipped default either. */
@@ -512,6 +550,7 @@ describe('the settings window', () => {
       kanbanUnlimited: [],
       gitAutoFetch: true,
       gitRemoveWorktrees: true,
+      restoreGeometry: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
       agent: 'claude',
@@ -544,6 +583,7 @@ describe('the settings window', () => {
       kanbanUnlimited: [],
       gitAutoFetch: true,
       gitRemoveWorktrees: true,
+      restoreGeometry: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
       agent: 'codex',

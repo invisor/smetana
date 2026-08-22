@@ -113,6 +113,25 @@ trash = "5"
 # Nothing is removed and no other crate moves version.
 keepawake = { version = "0.6", default-features = false }
 
+# The login item: whether the app opens itself when the person signs in. A
+# plugin rather than the platform calls, because there are three of them and no
+# two look alike — a `~/Library/LaunchAgents` plist on macOS, a registry value
+# under `Run` on Windows, a `.desktop` file in `~/.config/autostart` on Linux —
+# and each is a file format this app would otherwise have to write correctly
+# from memory, on a machine nobody here is testing on.
+#
+# The price, counted against `Cargo.lock` the way the clipboard plugin's and
+# keepawake's are above: four `[[package]]` entries. `auto-launch` itself, and
+# `dirs` 4.0 with `dirs-sys` and `redox_users` under it, for the one question of
+# where the home directory is. `dirs` 4 is a second major beside the `dirs` 6
+# already in the tree, which is `auto-launch` being a version behind rather than
+# anything to fix here. Nothing is removed and no other crate moves version.
+#
+# What is deliberately **not** stored is the switch's position: the login item
+# in the operating system is the whole of the truth, and `settings.json` holds
+# no copy of it. `src-tauri/src/autostart.rs` records why.
+tauri-plugin-autostart = "2.5.1"
+
 # Only to signal a process group, in the two places a killed process would
 # otherwise leave what it started behind: a PTY session on the exit path
 # (`terminal/pty.rs`), where portable-pty's own `kill` is SIGKILL to the direct

@@ -2,6 +2,7 @@
 paths:
   - "src-tauri/src/settings/**"
   - "src-tauri/src/window.rs"
+  - "src-tauri/src/autostart.rs"
   - "src/stores/settings.js"
   - "src/components/settings/**"
   - "src/views/SettingsWindow.vue"
@@ -23,8 +24,8 @@ At the root the file keeps appearance — theme, density and `uiFontSize` — pa
 state and width for each side, `railOpen` for whether the project rail is drawn beside the left
 panel, and `gitSections` beside them), `editor` with its own `fontSize`, `agent`, the id of the CLI agent to
 start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, `kanban`, how
-the board is drawn, `git`, what the app does to a person's repositories without asking each time, and
-`notifications`,
+the board is drawn, `git`, what the app does to a person's repositories without asking each time,
+`window`, whether the main window opens where it was left, and `notifications`,
 which sound each of the two announcements makes. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, active tab, selected task, `recentTasks`, selected
@@ -119,6 +120,25 @@ are edited, and **choosing one plays it**: the choice is the preview, so there i
 beside the list, and that press is also the one gesture a webview's autoplay policy is certain to
 allow. Where each sound actually fires is `.claude/rules/notifications.md`.
 
+`window` is the fourth global section and holds one field, `restoreGeometry`, **shipped on** —
+today's behaviour to the letter, since the main window has opened where it was left since before
+there was a switch over it. Global on `git`'s argument, one step shorter: there is one main window,
+and where it sits is a fact about a person's screen. What the switch reaches is the *restoring*
+alone; the saving is unconditional in both positions, which is what makes it reversible the way
+somebody expects — off for a week, then on again, and the window comes back where it was rather
+than at the size in `tauri.conf.json`. The mechanism is `skip_initial_state("main")` on
+`tauri-plugin-window-state` rather than its `with_denylist`, and `src-tauri/src/window.rs` carries
+why, together with the consequence that put `"visible": false` in the configuration: windows
+declared there are built *before* the `setup` hook, so a window shown first and restored second is
+a visible jump. **Four** copies of the default, the same four `git.autoFetch` has and for the same
+reason — Rust, `defaults()` in `stores/settings.js`, `view` in `SettingsWindow.vue`, and the prop
+default in `components/settings/GeneralSettings.vue`. The fourth is the one to say out loud: it is
+inert while the window always passes the prop, which is exactly what makes it the copy a sweep of
+the other three walks past. It rides the
+flat message as `restoreGeometry`, and `applyPatch` checks the type and nothing else: `false` is
+the whole point of the field, so a coercion would turn a malformed event into a deliberate-looking
+"off".
+
 The per-project four are per project for the reason the rest are: a status has no meaning in another
 repository's column order, a branch name has none in another repository, a repository inside one
 project is not one inside another, and the attachment folder the bell weighs is a different folder
@@ -146,7 +166,8 @@ last edit rather than the app.
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
 `appearance.theme`, `appearance.uiFontSize`, `editor.fontSize`, `agent`, the two languages beside it,
-the four `kanban` fields, both `git` fields and the two `notifications` sounds. Density is not among them, deliberately: nothing has asked for it yet,
+the four `kanban` fields, both `git` fields, `window.restoreGeometry` and the two `notifications`
+sounds. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
 still override the first two for one run and are deliberately **not** written back — one visit to the
 dev server must not repaint the app forever. `?view=gallery` neither reads nor writes.
@@ -241,8 +262,30 @@ pane was removed for. Kanban is the same shape one tab over, and the one tab who
 closed vocabulary at all — the columns it offers are the active project's own, read from the tracker,
 so with no project open or no answer yet it says so rather than drawing an empty list.
 
-**Storage is the one tab that is not a setting**, and it is the exception that keeps the rule
-readable. Nothing on it reaches `settings.json`: it asks Rust what the attachment store weighs
+**Two things on this screen are not settings at all**, and they are the exceptions that keep the
+rule readable. One is a whole tab and the other is a single row.
+
+The row is **Launch at login**, the first of the General tab's Startup pair, and nothing about it
+reaches `settings.json` — deliberately, and the rejected alternative is the ordinary boolean beside
+`git.autoFetch`. A login item can be removed from outside this app, in macOS System Settings →
+General → Login Items or whatever the platform's own list is, and a copy of it in a file of ours
+would then disagree with the machine. From there only two things can be done and both are worse
+than keeping no copy: bringing the system into line with the file at start-up is the app silently
+putting back what somebody removed by hand a minute earlier, and not reconciling at all is a switch
+stating a position the app does not hold until the next press — a control claiming a state it has
+no evidence for, which is the failure refused everywhere else here. So the operating system's list
+is the whole of the truth, read through `autostart_state` when the General tab is opened — on the
+same `watch(tab, …)` the Storage numbers ride, not on mounting the window — and written through
+`autostart_set`, which answers with the state read *back* rather than with what it was asked for,
+so a registration the system declined returns the switch by itself and there is no error branch to
+design. `src-tauri/src/autostart.rs` is the module, `stores/app.js` the wrappers, and neither ever
+rejects: nobody to ask is `{ supported: false, enabled: false }`. Under `debug_assertions`
+`supported` is false and the row is drawn **disabled rather than hidden**, with its own sentence
+saying why — enabling it from `npm run tauri dev` would write the path of `target/debug/smetana`
+into the machine's list, where it survives the `cargo clean` that removes the binary, and a row
+that simply is not there reads as "not built yet" to the next person.
+
+The tab is **Storage**. Nothing on it reaches `settings.json` either: it asks Rust what the attachment store weighs
 (`attachments_survey`) and, on a press, tells Rust to sweep the active project's folder
 (`attachments_clean`) — two commands about the app's own data directory, so the main window is still
 the only writer of settings. It is read when the tab is opened rather than when the window mounts,
@@ -277,11 +320,18 @@ purpose and stays empty.
 The side-tab set is a closed list written out twice, in `model.rs` and in `views/DesktopApp.vue`.
 Changing one without the other is silent: the value survives the session and comes back as Files.
 
-Window size and position are not in this file: `tauri-plugin-window-state` handles them, and
-`src-tauri/src/window.rs` is the one thing added on top. The plugin keeps geometry in memory and
-writes it to disk in exactly one place — `RunEvent::Exit` — so any run that does not reach a clean
-exit leaves the last run's geometry behind, and the symptom (a window opening at the configured
-1440×900 whatever size it was left at) is invisible from the front end, since `settings.json` keeps
-saving on its own debounce the whole time. So `persist_geometry` subscribes to `Resized`/`Moved` and
-saves 500 ms after the last one — a debounce that is not only about disk traffic, since it also
-settles handler order: the plugin's own listener has long since updated the cache by then.
+Window size and position are still not *values* in this file — `tauri-plugin-window-state` keeps
+them, in its own store — but **whether they are put back is**, and that is the whole of
+`window.restoreGeometry` above. `src-tauri/src/window.rs` is what is added on top, and it now holds
+both halves. Restoring: the plugin is built with `skip_initial_state("main")`, so it applies nothing
+by itself, and `open_main_window` is the one thing that ever calls `restore_state` — under the
+setting, in `setup`, where `settings.json` is already being read for `lastProject`. It shows the
+window in **both** branches, since a restore that failed must not be able to leave the app with no
+window at all. Saving: the plugin writes to disk in exactly one place — `RunEvent::Exit` — so any
+run that does not reach a clean exit would leave the last run's geometry behind, and the symptom (a
+window opening at the configured 1440×900 whatever size it was left at) is invisible from the front
+end, since `settings.json` keeps saving on its own debounce the whole time. So `persist_geometry`
+subscribes to `Resized`/`Moved` and saves 500 ms after the last one — a debounce that is not only
+about disk traffic, since it also settles handler order: the plugin's own listener has long since
+updated the cache by then. Both directions go through the one `FLAGS` constant, `StateFlags::all()`,
+so saving less than is restored cannot happen.
