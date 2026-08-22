@@ -378,10 +378,10 @@ fn writes_to_the_tracker(intent: &Intent) -> bool {
 /// literal `git merge --no-ff … -m "merge: <branch> into <target>"`, and
 /// `merge` is not one of the six, so an agent reconciling the two would rewrite
 /// a subject that `smetana:provisioning` then greps for by branch name. And
-/// this repository's own history is `настройки:`, `квота:`, `документация:` —
-/// a convention the paragraph would have quietly pushed into English. So the
-/// sentence protects whatever is there rather than saying what should be:
-/// exactly the shape `task_language` holds for the `##` headings and the
+/// this repository's own commit subjects are Russian words in front of the
+/// colon — a convention the paragraph would have quietly pushed into English.
+/// So the sentence protects whatever is there rather than saying what should
+/// be: exactly the shape `task_language` holds for the `##` headings and the
 /// `parked:` and `resolved:` markers. `oneshot::commit_prompt` still names the
 /// six, and the difference is who is writing — there the app composes the whole
 /// message itself, so the form is its own to choose.

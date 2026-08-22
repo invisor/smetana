@@ -150,26 +150,26 @@ the session prompt said nothing about commit form before this setting existed, `
 commits `merge: <branch> into <target>` with a word that is not one of the six, and
 `smetana:provisioning` greps that subject for the branch name afterwards — so a prompt asserting a
 convention costs a rewritten merge subject and a blocker nobody can find. This repository's own
-history (`настройки:`, `квота:`) is the second reason: a language field has no business moving a
-project's conventions into English. `oneshot::commit_prompt` still names the six, and the difference
-is who writes the message — there the app composes the whole of it, so the form is its own to
-choose. `Bare` is in for the reason the
-conversation sentence is in every intent — the ordinary session is exactly where somebody says
-"commit this" — while `NewTask`, `EditTask`, `ResolveTask` and `Setup` are out because they commit
-nothing: what `NewTask` writes goes under `.smetana/`, which is not in the repository at all. The task
-language goes only where the agent writes into bd — `NewTask`, `EditTask`, `ResolveTask` and `Run` —
-and it carries a caveat that is not optional, because what the setting must never move is a string
-some other piece of software matches on. The `##` section headings, since `bd create --validate`
-matches the wording of a heading and nothing else, so a translated `## Acceptance Criteria` is bd
-refusing the issue. And the markers a note begins with: `parked:` and `resolved:` are matched as
-literals by `components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked
-card's dialog says nothing is open while the Ready warning goes quiet — silent, and landing on
-somebody trying to answer a parked task. What the setting moves is the title, the body of the
-description, the criteria themselves and what follows the colon in a note. Specifications and plans
-are English whatever either setting says (`IN_ENGLISH` in `prompt.rs`): they are read by whoever
-picks the work up months later and by every agent after them. A setting for the language of *code
-comments* was asked for and refused — it would either do nothing in a repository with a convention,
-or produce exactly the regression the Language section names.
+commit subjects are Russian words in front of the colon, which is the second reason: a language
+field has no business moving a project's conventions into English. `oneshot::commit_prompt` still
+names the six, and the difference is who writes the message — there the app composes the whole of
+it, so the form is its own to choose. `Bare` is in for the reason the conversation sentence is in
+every intent — the ordinary session is exactly where somebody says "commit this" — while `NewTask`,
+`EditTask`, `ResolveTask` and `Setup` are out because they commit nothing: what `NewTask` writes
+goes under `.smetana/`, which is not in the repository at all. The task language goes only where the
+agent writes into bd — `NewTask`, `EditTask`, `ResolveTask` and `Run` — and it carries a caveat that
+is not optional, because what the setting must never move is a string some other piece of software
+matches on. The `##` section headings, since `bd create --validate` matches the wording of a heading
+and nothing else, so a translated `## Acceptance Criteria` is bd refusing the issue. And the markers
+a note begins with: `parked:` and `resolved:` are matched as literals by
+`components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked card's
+dialog says nothing is open while the Ready warning goes quiet — silent, and landing on somebody
+trying to answer a parked task. What the setting moves is the title, the body of the description,
+the criteria themselves and what follows the colon in a note. Specifications and plans are English
+whatever either setting says (`IN_ENGLISH` in `prompt.rs`): they are read by whoever picks the work
+up months later and by every agent after them. A setting for the language of *code comments* was
+asked for and refused — it would either do nothing in a repository with a convention, or produce
+exactly the regression the Language section names.
 
 Two directories under `src-tauri/resources/` are the library itself, both bundle resources.
 `smetana/` is ours — the directory is the list, for the reason the test-count note under Commands
