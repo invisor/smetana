@@ -1156,9 +1156,10 @@ const galleryEditorFont = ref(12)
    moves when it is pressed — a control that does not respond is the one thing
    this page cannot be used to check. */
 const galleryGitAutoFetch = ref(true)
-/* The two notification sounds, local for the same reason. Not both on the
-   shipped value: the second row is the one whose label is longest, and a page
-   drawing `Sound 1` twice would never show the list somewhere else. */
+/* The two notification sounds, local for the same reason. Deliberately not
+   both on a sound: this page is where the pair of rows is looked at, and one of
+   each shows the chosen state and the silent one side by side rather than the
+   same word twice. */
 const galleryRunSound = ref('sound-1')
 const galleryNeedsSound = ref('off')
 const galleryAgent = ref('claude')
