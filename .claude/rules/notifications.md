@@ -72,23 +72,36 @@ rather than of who spoke last: `SOURCES` declares the order and both writers han
 `arrange`, runs above storage, because a night that has ended is what somebody came back to read
 while a folder that has grown will still be there tomorrow.
 
-**The bell is one of two deliveries, though, and never both.** A card asks to be visited; a report
-already open in front of somebody is the visit. `components/run/reportDelivery.js` is the rule — the
-`branchChoice.js` family again — and it asks one thing: was the agent that earned this report the one
-this person has selected. The selection and nothing else, deliberately: not window focus, since
-somebody who left the app with an agent selected comes back to that agent, and not the centre tab
-either, since `activeId` survives leaving the terminal because `AgentList.vue` highlights its row
-from it. Two absent sessions are never one agent — a run from a worker too old to name its session
-met by a window with nothing selected would match under the obvious equality and open a tab neither
-asked for — and with no document there is no tab to open at all, which is the same case the card
-already draws without a button.
+**The bell is one of three deliveries, and never two of them at once.** A card asks to be visited; a
+report already open in front of somebody is the visit; and off is neither.
+`components/run/reportDelivery.js` is the rule — the `branchChoice.js` family again — and since
+smetana-qnt it asks **one** thing: `notifications.showReport`, the switch on the settings window's
+General tab (`.claude/rules/settings.md`). On, a run that has ended opens its report in a tab there
+and then. Off, nothing appears at all — not the tab and not the card, because a card is a button onto
+that very document and leaving it up would answer somebody who asked not to be shown their reports
+with a smaller version of the thing they declined. The sound is a separate answer and keeps playing,
+and the run bar still says the run has stopped.
 
-Which run's agent that was is `Run.last_session`, a second field beside `session` rather than a
-longer life for it: `session` is cleared the moment a run stops, and must be, because a row pointing
-at a dead session is worse than no row — while this decision is about a run that is over by
-definition. `Run::working_in` is the one write that fills both, since two assignments at the loop's
-one call site would compile perfectly with the second missing and the cost would be invisible: every
-report would simply go to the bell, which is a legitimate outcome of this very rule.
+**One condition, and that is the whole point of it.** What stood here before was a second one: was
+the agent that earned this report the one this person had selected at the moment the run stopped.
+Everything about that check was defensible in itself — the selection rather than window focus, since
+somebody who left the app with an agent selected comes back to that agent; and two absent sessions
+never read as one agent, since a run too old to name its session met by a window with nothing
+selected would match under the obvious equality. What was not defensible was the answer to "why did
+my report not open this time", which was a window state nobody could see. So the check was **removed**
+rather than put under the switch: kept, the switch would have been one condition of two and the
+complaint would have survived it being on.
+
+`Run.last_session` outlived that check and is still written, because the rest of the app reads it —
+it is a second field beside `session` rather than a longer life for it, since `session` is cleared
+the moment a run stops and must be, a row pointing at a dead session being worse than no row.
+`Run::working_in` is the one write that fills both.
+
+What the switch cannot cancel is physics rather than policy. With no document — a run that fell over
+before writing one, or one lying outside the open project, which `showReport` in `DesktopApp.vue`
+declines and logs — there is nothing for a tab to open, so a switched-on app still leaves the bell's
+card, which says how the run ended rather than merely linking to a file. Switched off there is still
+nothing at all.
 
 Carrying it out is `DesktopApp.vue`'s, because opening a tab is the one thing no store can do, and
 two details there are load-bearing. The watcher keeps its own set of tokens it has **decided** about
@@ -97,9 +110,12 @@ focus and every project switch, and remembering only the tabs would open last ni
 front of somebody who happened to select that agent hours later. And it rides the default `pre`
 flush: `syncRunCards` makes the card inside `upsert`, so for the moment between that and this the
 bell holds a card about to be taken back, and a `pre` watcher runs before this component's own render
-in the same tick, so the badge never paints the number. `deliveredInTab` is called only when the tab
-actually opened, since suppressing the card on the strength of a tab that never appeared would leave
-the person with neither.
+in the same tick, so the badge never paints the number — which is also what keeps the switched-off
+case honest: the card `syncRunCards` has just made is taken back before the frame, so the bell never
+shows a count for one. `markRunDelivered` — named for the outcome rather than for the tab, since
+there are now two ways to reach it — is called when the tab actually opened and when the answer was
+`none`, and never for `bell`: suppressing the card on the strength of a tab that never appeared would
+leave the person with neither.
 
 **Beside the bell there is a sound, and it is the half that reaches somebody who is not looking.**
 The bell is a badge on a bar somebody has to be looking at, and both things it carries happen when
@@ -139,10 +155,10 @@ one, going off while both of those read zero with nothing on screen to explain i
 "is a shell" rather than "is an agent" for the reason `isShellSession` gives — work this front end
 has never heard of is an agent, and still rings.
 
-The sound is also the one announcement the two deliveries above do not divide. It plays whether the
-report went to a tab or to the bell, because it is about the run having ended rather than about the
-card: somebody who had that agent selected still gets a document appearing in a tab they were not
-watching.
+The sound is also the one announcement the deliveries above do not divide, **the switch included**.
+It plays whether the report went to a tab, to the bell, or nowhere at all, because it is about the
+run having ended rather than about the document: a person who turned reports off asked not to have
+one put in front of them, not to be left wondering whether their night finished.
 
 The import between the two stores is circular by construction — `notifications.js` reads `runsState`,
 `runs.js` calls a hoisted function declaration — and **nothing in `notifications.js` may read

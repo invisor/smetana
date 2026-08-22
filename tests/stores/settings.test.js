@@ -54,10 +54,14 @@ describe('loading', () => {
     })
     /* Shipped on rather than off, and as two different sounds — a file written
        before this section existed is every file on a person's disk right now,
-       and `settings/model.rs` carries the same pair. */
+       and `settings/model.rs` carries the same pair. The report switch beside
+       them is on for the same reason one step over: that is what the app has
+       always done, and an update must not quietly stop a person's reports
+       arriving. */
     expect(settings.settings.notifications).toEqual({
       runFinished: 'sound-1',
-      needsAttention: 'sound-2'
+      needsAttention: 'sound-2',
+      showReport: true
     })
     expect(settings.settings.openProjects).toEqual([])
     expect(settings.settings.project.activeTab).toBe('kanban')
@@ -70,6 +74,18 @@ describe('loading', () => {
 
     expect(settings.settings.notifications.runFinished).toBe('off')
     expect(settings.settings.notifications.needsAttention).toBe('sound-4')
+  })
+
+  it('reads a stored report switch off the file', async () => {
+    ipc.on('settings_load', { notifications: { showReport: false } })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.notifications.showReport).toBe(false)
+    expect(settings.settings.notifications.runFinished).toBe(
+      'sound-1',
+      'a section naming only the switch leaves the sounds at their defaults'
+    )
   })
 
   it('reads a stored false for the window geometry off the file', async () => {
@@ -308,6 +324,16 @@ describe('writes', () => {
       'start:true/true',
       'end:true/true'
     ])
+  })
+
+  /* The choice has to survive a restart, and the whole of that is the store
+     writing the section back out: the save sends the settings object as it
+     stands, and Rust reads `notifications.showReport` off it by name. */
+  it('carries the report switch to the disk', async () => {
+    settings.settings.notifications.showReport = false
+    await settings.flushPending()
+
+    expect(ipc.calls('settings_save').at(-1).settings.notifications.showReport).toBe(false)
   })
 
   it('a plain object goes to the disk, not a reactive proxy', async () => {
@@ -562,6 +588,37 @@ describe('the settings window', () => {
     expect(shared.notificationNeedsAttention).toBe('sound-3')
   })
 
+  /* The one condition on whether a finished run shows its report, checked the
+     way the geometry switch above is: `false` is the whole point of it, so a
+     malformed event is skipped rather than coerced into a deliberate-looking
+     "off". */
+  it('takes the report switch, and only a boolean one', async () => {
+    await emit(settings.SETTINGS_APPLY, { notificationShowReport: false })
+    await nextTick()
+    expect(settings.settings.notifications.showReport).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { notificationShowReport: 'yes' })
+    await nextTick()
+    expect(settings.settings.notifications.showReport).toBe(
+      false,
+      'a value that is not a boolean is skipped'
+    )
+
+    await emit(settings.SETTINGS_APPLY, { notificationShowReport: null })
+    await nextTick()
+    expect(settings.settings.notifications.showReport).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { notificationShowReport: true })
+    await nextTick()
+    expect(settings.settings.notifications.showReport).toBe(true)
+  })
+
+  it('the report switch reaches the settings window as a flat field', async () => {
+    settings.settings.notifications.showReport = false
+
+    expect(settings.sharedSettings().notificationShowReport).toBe(false)
+  })
+
   it('answers a hello with what this window holds, not with what is on disk', async () => {
     settings.settings.appearance.uiFontSize = 20
     const heard = []
@@ -585,6 +642,7 @@ describe('the settings window', () => {
       restoreGeometry: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
+      notificationShowReport: true,
       agent: 'claude',
       agentLanguage: 'en',
       taskLanguage: 'en'
@@ -619,6 +677,7 @@ describe('the settings window', () => {
       restoreGeometry: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
+      notificationShowReport: true,
       agent: 'codex',
       agentLanguage: 'en',
       taskLanguage: 'en'

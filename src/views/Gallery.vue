@@ -1187,6 +1187,11 @@ const galleryRemoveWorktrees = ref(false)
    same word twice. */
 const galleryRunSound = ref('sound-1')
 const galleryNeedsSound = ref('off')
+/* The report switch that sits between those two rows, local for the same
+   reason, and on because that is what the app ships — this page is where the
+   Notifications group is looked at as a whole, and the row wants to be seen in
+   the position a person's app will actually be in. */
+const galleryShowReport = ref(true)
 /* The Startup pair, local for the same reason. `supported` is deliberately
    `true` here and nowhere else: in the app this row is disabled in every build
    a person can run this page from — a development build says so in its own
@@ -3207,12 +3212,14 @@ const menuTargetStyle = {
             :restore-geometry="galleryRestoreGeometry"
             :notification-run-finished="galleryRunSound"
             :notification-needs-attention="galleryNeedsSound"
+            :notification-show-report="galleryShowReport"
             @update:theme="galleryTheme = $event"
             @update:ui-font-size="galleryUiFont = $event"
             @update:autostart-enabled="galleryAutostartEnabled = $event"
             @update:restore-geometry="galleryRestoreGeometry = $event"
             @update:notification-run-finished="galleryRunSound = $event"
             @update:notification-needs-attention="galleryNeedsSound = $event"
+            @update:notification-show-report="galleryShowReport = $event"
           />
         </div>
         <div :style="{ width: '380px' }">

@@ -106,7 +106,13 @@ const view = reactive({
      agree, or this window draws a sound the app is not playing for the moment
      before the first answer arrives. */
   notificationRunFinished: 'sound-1',
-  notificationNeedsAttention: 'sound-2'
+  notificationNeedsAttention: 'sound-2',
+  /* Whether a finished run opens its report. Shipped on, the same as
+     `settings/model.rs`, `stores/settings.js` and the component's own prop
+     default — the four copies have to agree, or this window draws the switch in
+     the position opposite to what the app is doing for the moment before the
+     first answer arrives. */
+  notificationShowReport: true
 })
 const FIELDS = Object.keys(view)
 
@@ -439,12 +445,14 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :restore-geometry="view.restoreGeometry"
           :notification-run-finished="view.notificationRunFinished"
           :notification-needs-attention="view.notificationNeedsAttention"
+          :notification-show-report="view.notificationShowReport"
           @update:theme="change({ theme: $event })"
           @update:ui-font-size="change({ uiFontSize: $event })"
           @update:autostart-enabled="toggleAutostart($event)"
           @update:restore-geometry="change({ restoreGeometry: $event })"
           @update:notification-run-finished="change({ notificationRunFinished: $event })"
           @update:notification-needs-attention="change({ notificationNeedsAttention: $event })"
+          @update:notification-show-report="change({ notificationShowReport: $event })"
         />
         <EditorSettings
           v-else-if="tab === 'editor'"

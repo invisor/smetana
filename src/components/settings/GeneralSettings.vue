@@ -1,11 +1,13 @@
 <script setup>
-/* The General tab: how the app looks everywhere, the noise it makes, and how
-   the app starts. None of it is about any single part of the app, which is what
-   makes this the tab these rows are on — the two sounds included, since a noise
-   is a fact about a person and a room rather than about anything on the screen,
-   and the Startup pair because it is about the app as a whole rather than about
-   anything inside it. What the app does to a person's repositories on its own
-   is the Git tab, next door.
+/* The General tab: how the app looks everywhere, what it says when something
+   finishes, and how the app starts. None of it is about any single part of the
+   app, which is what makes this the tab these rows are on — the two sounds
+   included, since a noise is a fact about a person and a room rather than about
+   anything on the screen; the report switch beside them, since whether a person
+   wants that document put in front of them is a habit of reading rather than a
+   fact about one project; and the Startup pair because it is about the app as a
+   whole rather than about anything inside it. What the app does to a person's
+   repositories on its own is the Git tab, next door.
 
    Startup goes last on purpose. The top of this tab is the theme and the type
    size, which is what somebody opens this window for; a pair of switches set
@@ -44,7 +46,12 @@ const props = defineProps({
      a component that defaulted to silence would draw the opposite of what the
      app is doing for the moment before the first value arrives. */
   notificationRunFinished: { type: String, default: 'sound-1' },
-  notificationNeedsAttention: { type: String, default: 'sound-2' }
+  notificationNeedsAttention: { type: String, default: 'sound-2' },
+  /* Whether a run that has ended opens its own account in a tab. Shipped on,
+     mirroring Rust, `stores/settings.js` and `SettingsWindow.vue`: a component
+     that defaulted to off would draw the switch in the position opposite to
+     what the app is doing for the moment before the first value arrives. */
+  notificationShowReport: { type: Boolean, default: true }
 })
 
 const emit = defineEmits([
@@ -53,7 +60,8 @@ const emit = defineEmits([
   'update:autostartEnabled',
   'update:restoreGeometry',
   'update:notificationRunFinished',
-  'update:notificationNeedsAttention'
+  'update:notificationNeedsAttention',
+  'update:notificationShowReport'
 ])
 
 /* The number goes out as a number, and that is `Dropdown` doing it rather than
@@ -116,9 +124,11 @@ const autostartDescription = computed(() =>
         @update:model-value="emit('update:uiFontSize', $event)"
       />
     </SettingsRow>
-    <!-- The two things worth hearing rather than seeing, and both happen while
-         nobody is looking at the screen. The bell in the scope bar is the
-         visual half; this is the other one. -->
+    <!-- What the app does when something finishes while nobody is looking at
+         the screen: two sounds, which is the half that reaches somebody out of
+         the room, and one switch over the report, which is the half waiting for
+         them when they come back. The bell in the scope bar is the third, and
+         it has no row here because it is not a preference. -->
     <span :style="captionStyle">Notifications</span>
     <SettingsRow
       label="Run finished"
@@ -128,6 +138,21 @@ const autostartDescription = computed(() =>
         :model-value="props.notificationRunFinished"
         :options="SOUND_CHOICES"
         @update:model-value="pick('update:notificationRunFinished', $event)"
+      />
+    </SettingsRow>
+    <!-- Beside the sound that announces the same moment, and above the second
+         sound rather than below it: this row and the one over it are both about
+         a run that has ended, while "Agent needs you" is about something else
+         entirely. The description says what the switch does and does not
+         promise more than it can keep — a run that fell over without writing a
+         document still has nothing to open, and the bell keeps that case. -->
+    <SettingsRow
+      label="Show run report"
+      description="Opens a run's report in a tab as soon as the run finishes. With it off, nothing opens and no card waits in the bell."
+    >
+      <Switch
+        :model-value="props.notificationShowReport"
+        @update:model-value="emit('update:notificationShowReport', $event)"
       />
     </SettingsRow>
     <SettingsRow

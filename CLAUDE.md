@@ -208,7 +208,7 @@ cannot make it.
 | CLI agent profiles, intents, prompts, the skill library | `.claude/rules/agents.md` |
 | a parked task and the way back from one | `.claude/rules/parked-tasks.md` |
 | images on a task, and the one thing that deletes | `.claude/rules/attachments.md` |
-| the bell, and the two deliveries of a report | `.claude/rules/notifications.md` |
+| the bell, and the three deliveries of a report | `.claude/rules/notifications.md` |
 | runs: the loop, the registry, the report | `.claude/rules/runs.md` |
 | how wide a side panel may be | `.claude/rules/panel-widths.md` |
 | the column order, and what of the board is drawn | `.claude/rules/kanban-board.md` |

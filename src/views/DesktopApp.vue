@@ -81,8 +81,8 @@ import {
 } from '../stores/tracker.js'
 import NotificationPanel from '../components/notifications/NotificationPanel.vue'
 import {
-  deliveredInTab,
   dismiss as dismissNotification,
+  markRunDelivered,
   measureStorage,
   notificationsState
 } from '../stores/notifications.js'
@@ -2511,12 +2511,14 @@ const showReport = (report) => {
    else — the same reasoning `deliveredRuns` carries one file over, and the same
    token that is issued once per app process and never reused.
 
-   It holds the ones left to the bell as well as the ones opened in a tab, and
-   that width is the point: what is remembered is that the decision was *made*,
-   not which way it went. Without it, an ending that went to the bell would be
-   asked about again on the next `loadRun` — every window focus, every project
-   switch — and somebody who happened to select that agent hours later would
-   have last night's document open itself in front of them. */
+   It holds every ending this watcher has answered for — the ones left to the
+   bell and the ones shown nothing at all, as well as the ones opened in a tab —
+   and that width is the point: what is remembered is that the decision was
+   *made*, not which way it went. Without it, an ending that went to the bell
+   would be asked about again on the next `loadRun` — every window focus, every
+   project switch — and an ending answered while the switch was off would be
+   answered again the next time any run stopped, opening its tab if the switch
+   had been turned back on in between. */
 const decidedRuns = new Set()
 
 /* The scope bar's one sentence about this project. Derived rather than stored,
@@ -2550,21 +2552,27 @@ const stoppedRuns = computed(() =>
 /* Where a finished run's account goes, decided by `reportDelivery.js` and
    carried out here, because opening a tab is the one thing no store can do.
 
-   The default `pre` flush is what keeps the two deliveries from both being
-   seen: `syncRunCards` makes the card inside `upsert`, so for the moment
-   between that and this the bell holds a card we are about to take back — and a
-   `pre` watcher runs before this component's own render in the same tick, so
-   the badge never paints the number. A `post` flush would show it for a frame.
+   The default `pre` flush is what keeps two deliveries from both being seen,
+   and it is what keeps the switched-off case showing nothing at all:
+   `syncRunCards` makes the card inside `upsert`, so for the moment between that
+   and this the bell holds a card we are about to take back — and a `pre`
+   watcher runs before this component's own render in the same tick, so the
+   badge never paints the number. A `post` flush would show it for a frame.
 
-   `deliveredInTab` is called only when the tab actually opened. `showReport`
-   declines a document that is not in this project, and suppressing the card on
-   the strength of a tab that never appeared would leave the person with neither. */
+   `markRunDelivered` is called when the tab actually opened, and when the
+   answer was `none`. It is not called for `bell`: that card is the delivery and
+   it stands until somebody takes it. `showReport` declines a document that is
+   not in this project, and suppressing the card on the strength of a tab that
+   never appeared would leave the person with neither — which is the same reason
+   the answer `none` has to take the card back by hand rather than by never
+   having made one, since `syncRunCards` made it before this watcher ran. */
 watch(stoppedRuns, () => {
   for (const run of runsState.runs) {
-    const where = deliveryFor(run, terminalState.activeId, decidedRuns)
+    const where = deliveryFor(run, settings.notifications.showReport, decidedRuns)
     if (!where) continue
     decidedRuns.add(run.token)
-    if (where === 'tab' && showReport(run.summary.report)) deliveredInTab(run.token)
+    if (where === 'none') markRunDelivered(run.token)
+    else if (where === 'tab' && showReport(run.summary.report)) markRunDelivered(run.token)
   }
 })
 

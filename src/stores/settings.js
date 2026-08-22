@@ -82,13 +82,21 @@ const defaults = () => ({
      every column, every task. The rule these four feed is
      `components/kanban/boardView.js`. */
   kanban: { ...KANBAN_DEFAULTS, alwaysShow: [], unlimited: [] },
-  /* Which sound each of the two announcements makes, or `off` for none. Global
-     rather than per project for the reason `NotificationSettings` in Rust
-     records — a noise is a fact about a person and a room — and shipped on,
-     with two different sounds, for the reason `sounds.js` records. Rust holds
-     the same two defaults, and a section missing here is a section the settings
-     window cannot draw. */
-  notifications: { ...NOTIFICATION_DEFAULTS },
+  /* What the app says when a run ends or an agent stops to ask: which sound
+     each of the two announcements makes, or `off` for none, and whether a
+     finished run's report is put in front of the person at all. Global rather
+     than per project for the reason `NotificationSettings` in Rust records — a
+     noise is a fact about a person and a room, and wanting the document or not
+     is a habit of reading. Rust holds the same three defaults, and a section
+     missing here is a section the settings window cannot draw.
+
+     `showReport` is written out here rather than taken from
+     `NOTIFICATION_DEFAULTS`: that constant lives in `sounds.js`, which is the
+     closed list of sounds and the two shipped ones, and a boolean about a
+     document has no business in it. Shipped `true`, which is today's behaviour
+     — somebody updating the app must not find that reports have silently
+     stopped arriving. */
+  notifications: { ...NOTIFICATION_DEFAULTS, showReport: true },
   layout: {
     leftCollapsed: false,
     rightCollapsed: false,
@@ -441,6 +449,11 @@ function toShared(source) {
        to send it whole and quietly blank the choice they left out. */
     notificationRunFinished: notifications.runFinished,
     notificationNeedsAttention: notifications.needsAttention,
+    /* Flat beside the two sounds, and for the same reason. Named for what it
+       decides rather than for the section, since it is the whole of the report
+       delivery policy — `components/run/reportDelivery.js` asks this and
+       nothing else. */
+    notificationShowReport: notifications.showReport,
     agent: source.agent ?? base.agent,
     agentLanguage: source.agentLanguage ?? base.agentLanguage,
     taskLanguage: source.taskLanguage ?? base.taskLanguage
@@ -540,6 +553,12 @@ export function applyPatch(patch) {
   }
   if (isSound(patch.notificationNeedsAttention)) {
     settings.notifications.needsAttention = patch.notificationNeedsAttention
+  }
+  /* A switch, checked the way `restoreGeometry` above is and for the same
+     reason: `false` is the whole point of this field, so anything that is not a
+     boolean is skipped rather than coerced into a deliberate-looking "off". */
+  if (typeof patch.notificationShowReport === 'boolean') {
+    settings.notifications.showReport = patch.notificationShowReport
   }
 }
 

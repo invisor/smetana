@@ -82,9 +82,10 @@ function upsert(run) {
      filtered to the active project — and silence about another project's run is
      the better failure of the two.
 
-     The sound is played whichever way the report was delivered: the bell and
-     the tab are two deliveries of one report and never both, but this is about
-     the run having ended. */
+     The sound is played whichever way the report was delivered, and it plays
+     when it was not delivered at all: the bell, the tab and the switch on the
+     General tab are three answers to one question and never two at once, but
+     this is about the run having ended rather than about the document. */
   if (run?.state?.kind === 'stopped' && !chimedRuns.has(run.token)) {
     chimedRuns.add(run.token)
     chime(settings.notifications.runFinished)
