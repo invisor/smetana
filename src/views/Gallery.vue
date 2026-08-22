@@ -577,6 +577,14 @@ const pickedBranch = ref('staging')
 const branchIsNew = ref(false)
 const groupedBranch = ref('develop')
 const narrowBranch = ref('spike/auth')
+/* Two lists holding a row that is known and cannot be picked. The settings
+   window's agent picker is the one in the app, and a `.vue` file is reachable
+   by no test here, so this section is where that row is looked at. The second
+   one opens *on* an unavailable value, which is not a fixture whim: the block
+   is drawn only in the front end, so a `settings.json` that already holds one
+   comes back exactly like this. */
+const pickedAgent = ref('claude')
+const pickedMode = ref('done')
 /* Records for the branch fields below — the shape `target_branches` actually
    answers with, now that git.js passes it straight through. */
 const everywhere = (...names) => names.map((name) => ({ name, missing_in: [] }))
@@ -2870,6 +2878,41 @@ const menuTargetStyle = {
               { value: 'ready', label: 'Autopilot' },
               { value: 'running', label: 'Crew' },
               { value: 'done', label: 'Solo' }
+            ]"
+          />
+        </div>
+        <!-- A row the list names and cannot pick, drawn as the agent picker in
+             the settings window draws it: muted, a note beside it, the same
+             height as the row above so the list keeps its rhythm, and
+             `not-allowed` under the pointer. The arrows step straight over it
+             and Enter takes Claude Code from either direction. -->
+        <div :style="{ width: '220px' }">
+          <Dropdown
+            v-model="pickedAgent"
+            :options="[
+              { value: 'claude', label: 'Claude Code' },
+              { value: 'codex', label: 'Codex', disabled: true, note: 'Not supported yet' }
+            ]"
+          />
+        </div>
+        <!-- The same flag against captions and a filter, and two things worth
+             looking at. The field opens on Solo, which cannot be picked: no row
+             carries the check, since what is held is said by the field and the
+             list says what can be set. And "Later" is drawn nowhere at all — a
+             caption whose whole group is unavailable is a heading over nothing,
+             exactly as one filtered down to nothing is. Type in the filter and
+             the same rule prunes "Available". -->
+        <div :style="{ width: '220px' }">
+          <Dropdown
+            v-model="pickedMode"
+            searchable
+            search-label="Search modes"
+            :options="[
+              { header: true, label: 'Available' },
+              { value: 'ready', label: 'Autopilot' },
+              { value: 'running', label: 'Crew', disabled: true, note: 'Not supported yet' },
+              { header: true, label: 'Later' },
+              { value: 'done', label: 'Solo', disabled: true, note: 'Not supported yet' }
             ]"
           />
         </div>
