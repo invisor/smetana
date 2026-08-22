@@ -1,14 +1,20 @@
 <script setup>
-/* The Agents tab: which CLI coding agent the app starts, the language it talks
-   to the person in, the language it writes a task in, and what is left of its
-   subscription.
+/* The Agents tab: which CLI coding agent the app starts, the three languages it
+   works in, and what is left of its subscription.
 
-   The first three are real and take effect on the next session started — the id
+   The first four are real and take effect on the next session started — the id
    travels to `terminal_create`, and Rust resolves it (`agents::resolve`); the
-   two languages travel by a different road and never cross the IPC as
+   three languages travel by a different road and never cross the IPC as
    arguments at all, since `terminal::service` reads them from the file itself
    when it builds the session, which is what keeps a person's session and a
-   run's batch from disagreeing about them.
+   run's batch from disagreeing about them. The commit language has a second
+   reader beside a session: `vcs_suggest_message` reads the same field for the
+   Git panel's "suggest a message" button, so the two cannot disagree either.
+
+   The three sit inside one `SettingsGroup` and the Agent row above stays
+   outside it — the shape the General tab already draws, and there is no second
+   group over that one row: a caption over a single row is a caption for its own
+   sake.
 
    The block under them was three dashes and a sentence saying nothing was read
    here yet, which was honest and is no longer necessary: `agent_usage` asks the
@@ -24,16 +30,20 @@
 import { computed } from 'vue'
 import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
+import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 
 const props = defineProps({
   agent: { type: String, default: 'claude' },
-  /* The language the agent talks to the person in, and the language the prose
-     of a bd issue it writes is in. BCP-47 ids, validated in Rust against
-     `agents::LANGUAGES`; `en` here mirrors that table's default. */
+  /* The language the agent talks to the person in, the language the prose of a
+     bd issue it writes is in, and the language a git commit message it writes
+     is in. BCP-47 ids, validated in Rust against `agents::LANGUAGES`; `en` here
+     mirrors that table's default, and for the commit language that default is
+     today's behaviour to the letter. */
   agentLanguage: { type: String, default: 'en' },
   taskLanguage: { type: String, default: 'en' },
+  commitLanguage: { type: String, default: 'en' },
   /* `agent_usage`'s answer whole, in Rust's own shape, or `null` before there
      has been one. */
   usage: { type: Object, default: null },
@@ -50,6 +60,7 @@ const emit = defineEmits([
   'update:agent',
   'update:agentLanguage',
   'update:taskLanguage',
+  'update:commitLanguage',
   'refresh'
 ])
 
@@ -97,10 +108,10 @@ const LANGUAGES = [
 ]
 
 /* Every row on this tab shares one control column, wider than the shipped
-   default: "Chinese (Simplified)" is the longest label either list holds, and
-   `Dropdown` ellipsises a label that does not fit its field rather than growing
-   it. In `ch` like the rest of this window, so the column grows with the
-   app-wide font size instead of clipping at the top of the range. */
+   default: "Chinese (Simplified)" is the longest label any of the lists holds,
+   and `Dropdown` ellipsises a label that does not fit its field rather than
+   growing it. In `ch` like the rest of this window, so the column grows with
+   the app-wide font size instead of clipping at the top of the range. */
 const CONTROL_WIDTH = '30ch'
 
 /* What the block below is headed, and it names **whoever answered the probe**
@@ -184,29 +195,47 @@ const errorStyle = {
       />
     </SettingsRow>
 
-    <SettingsRow
-      label="Conversation language"
-      description="What an agent says to you is written in this. It reaches the next session started, not the ones already running."
-      :control-width="CONTROL_WIDTH"
-    >
-      <Dropdown
-        :model-value="props.agentLanguage"
-        :options="LANGUAGES"
-        @update:model-value="emit('update:agentLanguage', $event)"
-      />
-    </SettingsRow>
+    <!-- The three that answer the same question about different writing. The
+         Agent row above is outside the group deliberately: a second group over
+         one row would be a caption for its own sake, and the General tab does
+         not do that either. -->
+    <SettingsGroup label="Languages">
+      <SettingsRow
+        label="Conversation language"
+        description="What an agent says to you is written in this. It reaches the next session started, not the ones already running."
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.agentLanguage"
+          :options="LANGUAGES"
+          @update:model-value="emit('update:agentLanguage', $event)"
+        />
+      </SettingsRow>
 
-    <SettingsRow
-      label="Task language"
-      description="What an agent writes into a task is written in this — the title, the description, the criteria. Section headings stay English, and so do specifications and plans."
-      :control-width="CONTROL_WIDTH"
-    >
-      <Dropdown
-        :model-value="props.taskLanguage"
-        :options="LANGUAGES"
-        @update:model-value="emit('update:taskLanguage', $event)"
-      />
-    </SettingsRow>
+      <SettingsRow
+        label="Task language"
+        description="What an agent writes into a task is written in this — the title, the description, the criteria. Section headings stay English, and so do specifications and plans."
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.taskLanguage"
+          :options="LANGUAGES"
+          @update:model-value="emit('update:taskLanguage', $event)"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Commit language"
+        description="What an agent writes in a git commit message is written in this — both the suggested message in the Git panel and the commits it makes during a run. What sits in front of the colon is left as it is."
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.commitLanguage"
+          :options="LANGUAGES"
+          @update:model-value="emit('update:commitLanguage', $event)"
+        />
+      </SettingsRow>
+    </SettingsGroup>
 
     <div :style="blockStyle">
       <div :style="headerStyle">

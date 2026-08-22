@@ -129,13 +129,18 @@ const defaults = () => ({
      changes it, through `applyPatch` below. The defaults here and in Rust have
      to agree, the same as appearance and layout do. */
   agent: 'claude',
-  /* The language a session talks to the person in, and the language the prose
-     of a bd issue it writes is in — both BCP-47 ids, both at the root beside
-     `agent` because which language somebody wants to be spoken to in is a habit
-     of theirs rather than a property of a repository. The list of legal ids is
-     `agents::LANGUAGES` in Rust; these two defaults mirror its `en`. */
+  /* The language a session talks to the person in, the language the prose of a
+     bd issue it writes is in, and the language it writes a git commit message
+     in — all three BCP-47 ids, all three at the root beside `agent` because
+     which language somebody wants to be spoken to in is a habit of theirs
+     rather than a property of a repository. The list of legal ids is
+     `agents::LANGUAGES` in Rust; these three defaults mirror its `en`. For
+     `commitLanguage` that `en` is also today's behaviour to the letter: the
+     commit-message prompt asked for English outright before the setting
+     existed. */
   agentLanguage: 'en',
   taskLanguage: 'en',
+  commitLanguage: 'en',
   openProjects: [],
   activeProject: null,
   project: {
@@ -366,6 +371,7 @@ export async function loadSettings() {
     settings.agent = stored.agent ?? base.agent
     settings.agentLanguage = stored.agentLanguage ?? base.agentLanguage
     settings.taskLanguage = stored.taskLanguage ?? base.taskLanguage
+    settings.commitLanguage = stored.commitLanguage ?? base.commitLanguage
   } catch (err) {
     console.error('[settings] the read failed, taking the defaults:', err)
   }
@@ -456,7 +462,8 @@ function toShared(source) {
     notificationShowReport: notifications.showReport,
     agent: source.agent ?? base.agent,
     agentLanguage: source.agentLanguage ?? base.agentLanguage,
-    taskLanguage: source.taskLanguage ?? base.taskLanguage
+    taskLanguage: source.taskLanguage ?? base.taskLanguage,
+    commitLanguage: source.commitLanguage ?? base.commitLanguage
   }
 }
 
@@ -476,9 +483,10 @@ export const sharedSettings = () => toShared(settings)
    `agent` is the exception that proves the rule: the list of agent ids lives in
    `agents::IDS` and Rust is the only party that holds it, so anything non-empty
    travels and an id nobody ships is dropped on the way to the file — which is
-   exactly what `Settings::validate` already does for a hand-edited one. The two
-   languages are checked the same way and for the same reason: `agents::LANGUAGES`
-   is Rust's list, so what is guarded here is the shape and not the vocabulary. */
+   exactly what `Settings::validate` already does for a hand-edited one. The
+   three languages are checked the same way and for the same reason:
+   `agents::LANGUAGES` is Rust's list, so what is guarded here is the shape and
+   not the vocabulary. */
 export function applyPatch(patch) {
   if (!patch || typeof patch !== 'object') return
   if (THEME_CHOICES.some((choice) => choice.value === patch.theme)) {
@@ -505,6 +513,9 @@ export function applyPatch(patch) {
   }
   if (typeof patch.taskLanguage === 'string' && patch.taskLanguage) {
     settings.taskLanguage = patch.taskLanguage
+  }
+  if (typeof patch.commitLanguage === 'string' && patch.commitLanguage) {
+    settings.commitLanguage = patch.commitLanguage
   }
   /* The board's four. The two scalars are checked against the closed lists
      `boardView.js` holds — unlike `agent`, where Rust is the only party with

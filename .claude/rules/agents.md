@@ -113,40 +113,63 @@ only way to see it. When nothing at all is installed the session fails with `NoA
 
 `agents::LANGUAGES` is the same idea one field over: the twelve languages a person may choose, as
 BCP-47 ids **with the English name of each**, and the only copy of that list — `settings/model.rs`
-validates `agentLanguage` and `taskLanguage` against it exactly as it validates `agent` against
+validates `agentLanguage`, `taskLanguage` and `commitLanguage` against it exactly as it validates
+`agent` against
 `IDS`. The name is carried beside the id because the name is what goes into the prompt: `zh-Hans` is
-a tag out of a settings file, "Chinese (Simplified)" is a sentence. Both default to `en` rather than
-to an Auto position, which would have meant "say nothing about language" — today's behaviour exactly,
-so an update changes nothing until somebody chooses. The price is deliberate: `Intent::Bare` no
+a tag out of a settings file, "Chinese (Simplified)" is a sentence. All three default to `en` rather
+than to an Auto position, which would have meant "say nothing about language" — today's behaviour exactly,
+so an update changes nothing until somebody chooses — and for the commit language that default is
+today's behaviour to the letter, since `oneshot::commit_prompt` asked for a message "in English"
+outright before the setting existed. The price is deliberate: `Intent::Bare` no
 longer opens on nothing, since it carries the one sentence naming the conversation language, and the
 alternative was that the session where a person talks to the agent most is the one the setting cannot
 reach.
 
-Neither language crosses the IPC. `settings::languages(app)` reads the file where
+None of the three crosses the IPC. `settings::languages(app)` reads the file where
 `settings::agent(app)` already does, and `terminal::service`'s `Create` arm calls it while building
 the `Launch` — the one place every session in the app is built, so a person's session and a run's
-batch get the same answer by construction. From the `Launch` the two ids reach `prompt::build`, which
-stays pure. Two costs come with reading it there and both are accepted: a session started in the same
+batch get the same answer by construction. From the `Launch` the three ids reach `prompt::build`,
+which stays pure. The commit language has one reader outside a session, and it reads the same field
+by the same road: `vcs_suggest_message` calls `settings::languages(&app).commit` for the Git panel's
+button, so the message a person is offered and the messages a run writes overnight cannot disagree —
+closing only one of the two was the rejected design, since a setting that lies about half its cases
+is worse than none. Two costs come with reading it there and both are accepted: a session started in the same
 fraction of a second as a language change reads the previous language (the front end writes on a
 400 ms debounce, the lag `settings::agent(app)` already lives with), and a run reads the languages
 **per batch** rather than snapshotting them, so a language changed at 2am reaches the next batch and
 one run's issues can end up in two languages. Putting them on `Intent::Run` instead would be a second
 road into a session, which is what reading them in one place exists to prevent.
 
-What each moves is not the same. The conversation language goes into **every** intent; the task
-language goes only where the agent writes into bd — `NewTask`, `EditTask`, `ResolveTask` and `Run` —
-and it carries a caveat that is not optional, because what the setting must never move is a string
-some other piece of software matches on. The `##` section headings, since `bd create --validate`
-matches the wording of a heading and nothing else, so a translated `## Acceptance Criteria` is bd
-refusing the issue. And the markers a note begins with: `parked:` and `resolved:` are matched as
-literals by `components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked
-card's dialog says nothing is open while the Ready warning goes quiet — silent, and landing on
-somebody trying to answer a parked task. What the setting moves is the title, the body of the
-description, the criteria themselves and what follows the colon in a note. Specifications and plans
-are English whatever either setting says (`IN_ENGLISH` in `prompt.rs`): they are read by whoever
-picks the work up months later and by every agent after them. A setting for the language of *code
-comments* was asked for and refused — it would either do nothing in a repository with a convention,
-or produce exactly the regression the Language section names.
+What each moves is not the same, and `prompt.rs` carries one predicate per language for it. The
+conversation language goes into **every** intent. The commit language goes where the agent's own
+hands reach git — `commits_to_git`, which is `Run`, `ResolveConflict` and `Bare` — and it leaves
+whatever sits in front of the colon exactly as the project already writes it, along with any
+identifier in the message and anything git wrote itself. **It names no form**, and the paragraph
+saying `type: subject` with the six Conventional Commits types is the version that was thrown away:
+the session prompt said nothing about commit form before this setting existed, `smetana:merging`
+commits `merge: <branch> into <target>` with a word that is not one of the six, and
+`smetana:provisioning` greps that subject for the branch name afterwards — so a prompt asserting a
+convention costs a rewritten merge subject and a blocker nobody can find. This repository's own
+commit subjects are Russian words in front of the colon, which is the second reason: a language
+field has no business moving a project's conventions into English. `oneshot::commit_prompt` still
+names the six, and the difference is who writes the message — there the app composes the whole of
+it, so the form is its own to choose. `Bare` is in for the reason the conversation sentence is in
+every intent — the ordinary session is exactly where somebody says "commit this" — while `NewTask`,
+`EditTask`, `ResolveTask` and `Setup` are out because they commit nothing: what `NewTask` writes
+goes under `.smetana/`, which is not in the repository at all. The task language goes only where the
+agent writes into bd — `NewTask`, `EditTask`, `ResolveTask` and `Run` — and it carries a caveat that
+is not optional, because what the setting must never move is a string some other piece of software
+matches on. The `##` section headings, since `bd create --validate` matches the wording of a heading
+and nothing else, so a translated `## Acceptance Criteria` is bd refusing the issue. And the markers
+a note begins with: `parked:` and `resolved:` are matched as literals by
+`components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked card's
+dialog says nothing is open while the Ready warning goes quiet — silent, and landing on somebody
+trying to answer a parked task. What the setting moves is the title, the body of the description,
+the criteria themselves and what follows the colon in a note. Specifications and plans are English
+whatever either setting says (`IN_ENGLISH` in `prompt.rs`): they are read by whoever picks the work
+up months later and by every agent after them. A setting for the language of *code comments* was
+asked for and refused — it would either do nothing in a repository with a convention, or produce
+exactly the regression the Language section names.
 
 Two directories under `src-tauri/resources/` are the library itself, both bundle resources.
 `smetana/` is ours — the directory is the list, for the reason the test-count note under Commands

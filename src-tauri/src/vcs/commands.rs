@@ -422,7 +422,13 @@ pub async fn vcs_suggest_message(
         let agent = crate::settings::agent(&app);
         let profile = crate::agents::pick(&agent, crate::shell_env::path())
             .ok_or_else(|| OneshotError::NoAgent(agent.clone()))?;
-        let prompt = describe(Path::new(&repo)).map_err(|err| OneshotError::Git(err.to_string()))?;
+        // The same file the agent id came from, one field over, and read the
+        // same way — a session's own commits are told this language by
+        // `agents::prompt`, so the button and the run agree by construction
+        // rather than by two people remembering to keep them in step.
+        let language = crate::agents::language_name(&crate::settings::languages(&app).commit);
+        let prompt = describe(Path::new(&repo), language)
+            .map_err(|err| OneshotError::Git(err.to_string()))?;
         oneshot::ask(profile, &prompt)
     })
     .await
@@ -441,7 +447,11 @@ pub async fn vcs_suggest_message(
 /// thing entirely. So `HEAD` is verified first, through the one call that reads
 /// a non-zero exit as an answer, and its absence leaves the diff empty: in that
 /// repository every file is untracked and the list above is the whole change.
-fn describe(repo: &Path) -> Result<String, VcsError> {
+///
+/// `language` is the English name of the person's `commitLanguage`, already
+/// resolved by the caller — this function is git and text, and reading a
+/// settings file here would be a second road to the same answer.
+fn describe(repo: &Path, language: &str) -> Result<String, VcsError> {
     let tree = working_tree(repo)?;
     let untracked: Vec<String> = tree
         .changes
@@ -455,7 +465,7 @@ fn describe(repo: &Path) -> Result<String, VcsError> {
     } else {
         (String::new(), String::new())
     };
-    Ok(oneshot::commit_prompt(&stat, &untracked, &patch))
+    Ok(oneshot::commit_prompt(language, &stat, &untracked, &patch))
 }
 
 /// A merge or a rebase, and the reading of what it left behind.

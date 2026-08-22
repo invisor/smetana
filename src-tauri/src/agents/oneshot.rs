@@ -112,16 +112,31 @@ impl Serialize for OneshotError {
 /// around the message, a code fence, or a second paragraph is all cost. `clean`
 /// below is the belt to this braces, and both are needed — models do add the
 /// fence.
-pub fn commit_prompt(stat: &str, untracked: &[String], patch: &str) -> String {
-    let mut out = String::new();
-    out.push_str(
+///
+/// `language` is the **English name** of the person's `commitLanguage`, from
+/// `agents::language_name` — a name rather than the `zh-Hans` out of the
+/// settings file, because a tag is not something to write an instruction in.
+/// It moves the prose of the message and nothing else: the form in front of the
+/// colon, the six types, the imperative mood and the 72 characters are the same
+/// sentence whatever is chosen, since they are grepped and read by people
+/// rather than translated. That watershed is `task_language`'s one field over,
+/// and the default is `en` because "in English" was written into this prompt
+/// outright before the setting existed.
+pub fn commit_prompt(
+    language: &str,
+    stat: &str,
+    untracked: &[String],
+    patch: &str,
+) -> String {
+    let mut out = format!(
         "Write a git commit message for the changes below.\n\
          \n\
          Answer with the message and nothing else: one line, at most 72 \
-         characters, in English, in the Conventional Commits form \
-         `type: subject` (feat, fix, docs, refactor, test, chore). Use the \
-         imperative mood. Do not add a body, an explanation, quotation marks \
-         or a code fence.\n",
+         characters, in the Conventional Commits form `type: subject` (feat, \
+         fix, docs, refactor, test, chore). Use the imperative mood. Write the \
+         subject in {language}; the type in front of the colon stays English \
+         whatever the subject is written in. Do not add a body, an \
+         explanation, quotation marks or a code fence.\n"
     );
     if !stat.trim().is_empty() {
         out.push_str("\nFiles changed:\n");
@@ -307,7 +322,8 @@ mod tests {
 
     #[test]
     fn the_prompt_carries_the_stat_the_untracked_and_the_patch() {
-        let prompt = commit_prompt(" a.rs | 2 +-\n", &["b.rs".to_string()], "diff --git a/a.rs\n");
+        let prompt =
+            commit_prompt("English", " a.rs | 2 +-\n", &["b.rs".to_string()], "diff --git a/a.rs\n");
         assert!(prompt.contains("Conventional Commits"));
         assert!(prompt.contains("a.rs | 2 +-"));
         assert!(prompt.contains("New files, not yet tracked by git:\nb.rs"));
@@ -316,7 +332,7 @@ mod tests {
 
     #[test]
     fn an_empty_section_is_left_out_rather_than_left_blank() {
-        let prompt = commit_prompt("", &[], "");
+        let prompt = commit_prompt("English", "", &[], "");
         assert!(!prompt.contains("Files changed"));
         assert!(!prompt.contains("New files"));
         assert!(!prompt.contains("The diff"));
@@ -325,16 +341,47 @@ mod tests {
     #[test]
     fn a_long_patch_is_cut_and_says_so() {
         let patch = "x".repeat(MAX_PATCH * 2);
-        let prompt = commit_prompt("", &[], &patch);
+        let prompt = commit_prompt("English", "", &[], &patch);
         assert!(prompt.contains("was cut here"));
         assert!(prompt.len() < MAX_PATCH * 2);
     }
 
     #[test]
     fn a_patch_under_the_ceiling_is_whole_and_unannounced() {
-        let prompt = commit_prompt("", &[], "diff --git a/a.rs\n+one line\n");
+        let prompt = commit_prompt("English", "", &[], "diff --git a/a.rs\n+one line\n");
         assert!(prompt.contains("+one line"));
         assert!(!prompt.contains("was cut here"));
+    }
+
+    #[test]
+    fn the_chosen_language_is_named_in_the_instruction() {
+        // The literal `in English` is gone from this file: what the person
+        // chose is what the model is asked for, and the name comes in already
+        // resolved by `agents::language_name`.
+        let prompt = commit_prompt("Russian", "", &[], "");
+        assert!(prompt.contains("Write the subject in Russian"), "{prompt}");
+        assert!(!prompt.contains("in English, in the Conventional Commits"), "{prompt}");
+    }
+
+    #[test]
+    fn the_form_stays_english_whatever_the_subject_is_written_in() {
+        // The setting moves prose, not literals: the type in front of the
+        // colon is grepped and read rather than translated, and the two limits
+        // around it are the same sentence in every language.
+        for language in ["English", "Russian", "Chinese (Simplified)", "Turkish"] {
+            let prompt = commit_prompt(language, "", &[], "");
+            assert!(prompt.contains("`type: subject`"), "{language}: {prompt}");
+            assert!(
+                prompt.contains("(feat, fix, docs, refactor, test, chore)"),
+                "{language}: {prompt}"
+            );
+            assert!(prompt.contains("imperative mood"), "{language}: {prompt}");
+            assert!(prompt.contains("at most 72 characters"), "{language}: {prompt}");
+            assert!(
+                prompt.contains("stays English"),
+                "{language}: the type must be exempted out loud: {prompt}"
+            );
+        }
     }
 
     /// The cut is by character and not by byte, so a diff whose 48 000th
@@ -343,7 +390,7 @@ mod tests {
     #[test]
     fn cutting_lands_on_a_character_boundary() {
         let patch = "é".repeat(MAX_PATCH * 2);
-        let prompt = commit_prompt("", &[], &patch);
+        let prompt = commit_prompt("English", "", &[], &patch);
         assert!(prompt.contains("was cut here"));
     }
 }

@@ -164,13 +164,19 @@ describe('loading', () => {
     await stores.settings.loadSettings()
     expect(stores.settings.settings.agentLanguage).toBe('en')
     expect(stores.settings.settings.taskLanguage).toBe('en')
+    expect(stores.settings.settings.commitLanguage).toBe('en')
 
     const second = await loadStores()
-    second.ipc.on('settings_load', { agentLanguage: 'ru', taskLanguage: 'ja' })
+    second.ipc.on('settings_load', {
+      agentLanguage: 'ru',
+      taskLanguage: 'ja',
+      commitLanguage: 'de'
+    })
     second.ipc.on('settings_save', null)
     await second.stores.settings.loadSettings()
     expect(second.stores.settings.settings.agentLanguage).toBe('ru')
     expect(second.stores.settings.settings.taskLanguage).toBe('ja')
+    expect(second.stores.settings.settings.commitLanguage).toBe('de')
 
     /* And back out on the next write, so a restart brings the choice back. */
     second.stores.settings.settings.appearance.theme = 'light'
@@ -178,6 +184,7 @@ describe('loading', () => {
     const sent = second.ipc.calls('settings_save').at(-1).settings
     expect(sent.agentLanguage).toBe('ru')
     expect(sent.taskLanguage).toBe('ja')
+    expect(sent.commitLanguage).toBe('de')
   })
 })
 
@@ -406,19 +413,25 @@ describe('the settings window', () => {
     /* Rust owns the list of language ids (`agents::LANGUAGES`), so what is
        guarded here is the shape and nothing else: a string travels, and an id
        nobody ships is dropped on the way to the file. */
-    await emit(settings.SETTINGS_APPLY, { agentLanguage: 'ru', taskLanguage: 'zh-Hans' })
+    await emit(settings.SETTINGS_APPLY, {
+      agentLanguage: 'ru',
+      taskLanguage: 'zh-Hans',
+      commitLanguage: 'tr'
+    })
     await nextTick()
     expect(settings.settings.agentLanguage).toBe('ru')
     expect(settings.settings.taskLanguage).toBe('zh-Hans')
+    expect(settings.settings.commitLanguage).toBe('tr')
 
     /* Skipped rather than reset to the shipped default, the same as every other
        field here: an event is not a response to anything, so a malformed one
        must cost nothing — and reverting to English would be a change nobody
        asked for. */
-    await emit(settings.SETTINGS_APPLY, { agentLanguage: 7, taskLanguage: '' })
+    await emit(settings.SETTINGS_APPLY, { agentLanguage: 7, taskLanguage: '', commitLanguage: null })
     await nextTick()
     expect(settings.settings.agentLanguage).toBe('ru')
     expect(settings.settings.taskLanguage).toBe('zh-Hans')
+    expect(settings.settings.commitLanguage).toBe('tr')
   })
 
   it('takes the board settings and cleans the two column lists on the way in', async () => {
@@ -645,7 +658,8 @@ describe('the settings window', () => {
       notificationShowReport: true,
       agent: 'claude',
       agentLanguage: 'en',
-      taskLanguage: 'en'
+      taskLanguage: 'en',
+      commitLanguage: 'en'
     })
   })
 
@@ -680,7 +694,8 @@ describe('the settings window', () => {
       notificationShowReport: true,
       agent: 'codex',
       agentLanguage: 'en',
-      taskLanguage: 'en'
+      taskLanguage: 'en',
+      commitLanguage: 'en'
     })
   })
 })
