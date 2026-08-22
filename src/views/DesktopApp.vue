@@ -597,23 +597,50 @@ const ROWS_KEY = { repos: 'reposRows', branches: 'branchRows' }
    project changing with Git already open, which is exactly what this pair of
    sources says with `immediate`. Both are watched rather than the tab alone,
    because moving to another project leaves `sideTab` reading `'git'` before and
-   after, and the tree it is about is a different tree. */
+   after, and the tree it is about is a different tree.
+
+   **And that last case is why the count is guarded rather than simply read.**
+   `moveTo` sets `settings.activeProject` synchronously and only reaches
+   `loadRepos` after an awaited layout read, so this watcher flushes a microtask
+   later with the store still holding the project being left — and `loadRepos`
+   deliberately does not clear `vcsState.tree`, so the old tree stands until the
+   new `vcs_status` lands. Read unguarded, a switch would decide the visit from
+   another project's working tree: Changes drawn open over an empty list, or —
+   worse, because it is this feature failing silently — a visit spent on a clean
+   tree that the arriving project's five changes can no longer open.
+
+   So the store has to be about this project (`vcsState.project`, the guard
+   token every call in that file already checks against) and settled. `loading`
+   is in there for the narrower window on the same defect: it covers the moment
+   after `loadRepos` has claimed the new project and before its first status
+   answers, where the tree in hand is still the previous one. Anything else is
+   "not read yet", which arms the visit — and an arm is never wrong here, only
+   slower. */
 const changesVisit = ref(NO_VISIT)
 watch(
   [activePath, () => project.sideTab],
-  ([, tab]) => {
-    if (tab === 'git') changesVisit.value = enterGitTab(dirtyCount.value)
+  ([path, tab]) => {
+    if (tab !== 'git') return
+    const answered = vcsState.project === path && !vcsState.loading
+    changesVisit.value = enterGitTab(answered ? dirtyCount.value : null)
   },
   { immediate: true }
 )
 /* And the other half, for the ordinary case where the tab is on screen before
-   git has answered. `dirtyCount` and not `vcsState.tree`: it is the count this
-   rule is about, already spelled once in the store, and it is `null` for an
-   unread tree exactly as the tree is — so a failed read leaves the visit still
-   waiting rather than reading as a clean tree. */
-watch(dirtyCount, (dirty) => {
-  changesVisit.value = gitAnswered(changesVisit.value, dirty)
-})
+   git has answered.
+
+   The source is the **tree** and not `dirtyCount`, because what settles a visit
+   is git having answered at all — the moment `vcsState.tree` stops being `null`
+   — and a count only fires a watcher when the number changes. Keyed on the
+   count, a switch from a project with six uncommitted files to another with six
+   would leave the visit armed for good and never open the section. The count is
+   still the only spelling of "how dirty": it is read here, not re-derived. */
+watch(
+  () => vcsState.tree,
+  () => {
+    changesVisit.value = gitAnswered(changesVisit.value, dirtyCount.value)
+  }
+)
 
 /* What the panel is handed: the stored folds with the one the visit may have
    overruled resolved first, so `GitPanel` goes on reading a single

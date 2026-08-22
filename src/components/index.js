@@ -93,6 +93,13 @@ export { branchMenuItems } from './git/branchMenu.js'
 export { branchNameError, canCreate } from './git/branchName.js'
 export { branchRows, currentChain, expandedFolders, toggleFolder } from './git/branchTree.js'
 export { changeStatus } from './git/changeStatus.js'
+export {
+  NO_VISIT,
+  changesVisible,
+  enterGitTab,
+  gitAnswered,
+  toggleChanges
+} from './git/changesFold.js'
 export { canCommit, canSuggest, commitHint, commitLabel } from './git/commitBox.js'
 export { gitActions } from './git/gitActions.js'
 export { BRANCH_ROWS, filler, resolveDrag } from './git/sectionHeights.js'

@@ -110,12 +110,16 @@ stop meaning anything as a preference. So the visit is two fields held in `Deskt
 override and an arm — and neither reaches `settings.json` at all, which is the one place the global
 fold above is not the whole story.
 
-A visit is any move of `project.sideTab` onto `'git'` — a click or a line of code, and the way out of
-a conflict is the second kind and leads to exactly this list — plus the app starting and the project
-changing with Git already the open tab. One predicate with no exceptions: a rule that told the
-conflict's own switch apart from a click would be visible nowhere on screen. The arm is what makes
-any of it work against a `loadRepos` nobody awaits, and it is the **first known answer of the visit**
-that settles it — the moment `dirtyCount` stops being `null`. Everything follows from that. A refresh
+A visit is any move of `project.sideTab` onto `'git'` — a press or a line of code — plus the app
+starting and the project changing with Git already the open tab. Those last two are what the
+predicate is really for: nothing in this app assigns that tab `'git'` today, every programmatic
+switch goes to `'agents'`, so the interesting arrivals are the ones nobody clicked. One predicate
+with no exceptions, because a rule that told a press apart from an assignment would be visible
+nowhere on screen. The arm is what makes any of it work against a `loadRepos` nobody awaits, and it
+is the **first known answer of the visit** that settles it — the moment `vcsState.tree` stops being
+`null`, watched on the tree itself rather than on the count, since a count fires only when the
+number moves and six changes in one project followed by six in the next would arm a visit for
+good. Everything follows from that. A refresh
 under somebody already sitting on the tab, by focus or by the panel's own button, unfolds nothing,
 because the visit was spent long before it; a clean tree that goes dirty mid-visit is the same case
 and also draws nothing new; and a read that failed leaves the visit still waiting rather than reading
@@ -123,6 +127,17 @@ as a clean tree, the `null`-and-never-`0` opposition again. The press on the cap
 inverse of what is **drawn** rather than of what is stored, or the first press under a forced-open
 section would write `true` and fold nothing, and it spends the visit in both directions — a
 `vcs_status` still in flight must not reopen what was just folded.
+
+**A count about another project is not an answer, and the project switch is the case that proves
+it.** `moveTo` sets the active project synchronously and only reaches `loadRepos` after an awaited
+layout read, and `loadRepos` deliberately leaves `vcsState.tree` standing rather than clearing it —
+so for a moment the store holds the departing project's tree under the arriving project's name. A
+visit deciding from it would draw Changes open over an empty list one way and, the other way, spend
+itself on a clean tree that the arriving project's changes can then never open, which is this
+feature failing in exactly the entry case nothing on screen would explain. So the count is read only
+when the store is about this project and settled — `vcsState.project` and `loading`, the guard token
+every call in `stores/vcs.js` already checks itself against — and anything else arms the visit
+instead. An arm is never wrong here, only slower.
 
 A caption carries `divided`, the hairline above it, and the repositories deliberately do not: every
 section here is `--row-h` and quiet, so with nothing between them the three ran together into one

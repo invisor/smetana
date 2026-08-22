@@ -25,11 +25,12 @@
    nobody had read.
 
    What counts as arriving is one predicate with no exceptions, and it is the
-   caller's half: any move of `project.sideTab` onto `'git'` from anything else,
-   by a click or set programmatically, plus the app starting and the project
-   changing with Git already the open tab. The way out of a conflict sets that
-   tab itself, and it leads somebody to exactly this list — telling it apart
-   from a click would be a rule visible nowhere on screen. */
+   caller's half: any move of `project.sideTab` onto `'git'`, by a press or set
+   from code, plus the app starting and the project changing with Git already
+   the open tab. Those last two are what make the predicate worth stating at
+   all — no line in this app sets that tab to `'git'` today, every programmatic
+   switch there is goes to `'agents'` — and a rule that told a press apart from
+   an assignment would be one visible nowhere on screen. */
 
 /** Before any visit, and what a visit spent on a clean tree comes back to: the
  *  stored fold, drawn exactly as it is stored. */
@@ -56,6 +57,15 @@ export function changesVisible(stored, visit) {
  * the tree itself is deliberate: "is the tree known, and is there anything in
  * it" is the whole of what this file needs to know, it is already spelled once
  * in the store, and a second spelling of one rule is the half that drifts.
+ *
+ * **`null` also means a count about somewhere else**, and that is the caller's
+ * side of the bargain rather than a note about it: a project switch reaches
+ * this before the arriving project's `vcs_status` does, with the store still
+ * holding the tree of the project being left, and a count about another
+ * repository is not a late answer but a wrong one. Handing `null` there arms
+ * the visit, which costs nothing but a wait; handing the stale number spends
+ * it, and a visit spent on somebody else's clean tree can never be given back
+ * — which is this whole feature failing with nothing on screen to say so.
  *
  * The answer is very often already in by the time somebody arrives — the tab
  * was open a minute ago, or this is a second visit — which is why this is the
