@@ -1162,6 +1162,15 @@ const galleryGitAutoFetch = ref(true)
    same word twice. */
 const galleryRunSound = ref('sound-1')
 const galleryNeedsSound = ref('off')
+/* The Startup pair, local for the same reason. `supported` is deliberately
+   `true` here and nowhere else: in the app this row is disabled in every build
+   a person can run this page from — a development build says so in its own
+   sentence, and `?view=settings` in a browser has no operating system to ask —
+   so this is the only place the live control can be looked at at all. The
+   disabled state is the one that needs no fixture. */
+const galleryAutostartSupported = ref(true)
+const galleryAutostartEnabled = ref(false)
+const galleryRestoreGeometry = ref(true)
 const galleryAgent = ref('claude')
 /* The Agents tab's two language pickers. Not both on English: the longest label
    either list holds is the one worth looking at, and a tab showing "English"
@@ -3081,11 +3090,16 @@ const menuTargetStyle = {
             :theme="galleryTheme"
             :ui-font-size="galleryUiFont"
             :git-auto-fetch="galleryGitAutoFetch"
+            :autostart-supported="galleryAutostartSupported"
+            :autostart-enabled="galleryAutostartEnabled"
+            :restore-geometry="galleryRestoreGeometry"
             :notification-run-finished="galleryRunSound"
             :notification-needs-attention="galleryNeedsSound"
             @update:theme="galleryTheme = $event"
             @update:ui-font-size="galleryUiFont = $event"
             @update:git-auto-fetch="galleryGitAutoFetch = $event"
+            @update:autostart-enabled="galleryAutostartEnabled = $event"
+            @update:restore-geometry="galleryRestoreGeometry = $event"
             @update:notification-run-finished="galleryRunSound = $event"
             @update:notification-needs-attention="galleryNeedsSound = $event"
           />

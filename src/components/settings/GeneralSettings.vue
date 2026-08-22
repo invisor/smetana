@@ -1,16 +1,22 @@
 <script setup>
-/* The General tab: how the app looks everywhere, and the two things it does on
-   its own — go to a remote, and make a noise. None of them is about any single
-   part of the app, which is what makes this the tab they are on. The background
-   fetch is here for that reason rather than under a Git tab there is none of:
-   what it settles is whether this machine opens a socket by itself, which is a
-   fact about a connection and a person and not about a repository. The two
-   sounds are here on the same argument — a noise is a fact about a person and a
-   room.
+/* The General tab: how the app looks everywhere, the two things it does on its
+   own — go to a remote, and make a noise — and how it starts. None of them is
+   about any single part of the app, which is what makes this the tab they are
+   on. The background fetch is here for that reason rather than under a Git tab
+   there is none of: what it settles is whether this machine opens a socket by
+   itself, which is a fact about a connection and a person and not about a
+   repository. The two sounds are here on the same argument — a noise is a fact
+   about a person and a room — and the Startup pair is about the app as a whole
+   rather than about anything inside it.
+
+   Startup goes last on purpose. The top of this tab is the theme and the type
+   size, which is what somebody opens this window for; a pair of switches set
+   once, on the day the app is installed, has no claim on that space.
 
    Presentational, like every component here: it is handed the values and emits
    what a person picked. The window is what talks to the main window and to the
    file, so this renders in `?view=gallery` with nothing behind it. */
+import { computed } from 'vue'
 import Dropdown from '../core/Dropdown.vue'
 import Switch from '../core/Switch.vue'
 import SettingsRow from './SettingsRow.vue'
@@ -22,6 +28,21 @@ const props = defineProps({
   theme: { type: String, default: 'dark' },
   uiFontSize: { type: Number, default: 13 },
   gitAutoFetch: { type: Boolean, default: true },
+  /* Whether this build may register a login item at all. False in a
+     development build and in a browser, where the row is drawn disabled with a
+     sentence saying so rather than hidden — a row that is not there reads as
+     "not built yet" to the next person, and this page is what they would be
+     reading it on. */
+  autostartSupported: { type: Boolean, default: false },
+  /* Whether there is a login item right now, as the operating system reports
+     it — never a copy kept in a settings file, for the reason
+     `src-tauri/src/autostart.rs` records. */
+  autostartEnabled: { type: Boolean, default: false },
+  /* Whether the main window opens where it was left. Shipped on, mirroring
+     Rust and `stores/settings.js`: a component that defaulted to off would draw
+     the opposite of what the app is doing for the moment before the first value
+     arrives. */
+  restoreGeometry: { type: Boolean, default: true },
   /* A sound id or `off`. The two shipped ones, mirroring `sounds.js` and Rust:
      a component that defaulted to silence would draw the opposite of what the
      app is doing for the moment before the first value arrives. */
@@ -33,6 +54,8 @@ const emit = defineEmits([
   'update:theme',
   'update:uiFontSize',
   'update:gitAutoFetch',
+  'update:autostartEnabled',
+  'update:restoreGeometry',
   'update:notificationRunFinished',
   'update:notificationNeedsAttention'
 ])
@@ -63,6 +86,16 @@ function pick(event, value) {
   emit(event, value)
   chime(value)
 }
+
+/* One line under the label, and which one depends on whether the switch can do
+   anything at all. Naming the reason is the whole point of drawing the row
+   disabled instead of leaving it out: a control that refuses a press without
+   saying why is worse than one that is not there. */
+const autostartDescription = computed(() =>
+  props.autostartSupported
+    ? 'Opens Smetana automatically when you sign in.'
+    : 'Not available in a development build.'
+)
 </script>
 
 <template>
@@ -121,6 +154,32 @@ function pick(event, value) {
         :model-value="props.notificationNeedsAttention"
         :options="SOUND_CHOICES"
         @update:model-value="pick('update:notificationNeedsAttention', $event)"
+      />
+    </SettingsRow>
+    <!-- Last on the tab, and the two halves of "how does this app come up":
+         whether the operating system opens it, and where its window lands. -->
+    <span :style="captionStyle">Startup</span>
+    <SettingsRow
+      label="Launch at login"
+      :description="autostartDescription"
+    >
+      <Switch
+        :model-value="props.autostartEnabled"
+        :disabled="!props.autostartSupported"
+        @update:model-value="emit('update:autostartEnabled', $event)"
+      />
+    </SettingsRow>
+    <!-- "Applies on the next launch" is the truth rather than a hedge: the
+         decision is taken once, while the window is being shown. Turning this
+         off stops the window being put back and never stops its place being
+         remembered, so turning it on again returns it to where it was left. -->
+    <SettingsRow
+      label="Restore window position & size"
+      description="Reopens the main window where you left it. Applies on the next launch."
+    >
+      <Switch
+        :model-value="props.restoreGeometry"
+        @update:model-value="emit('update:restoreGeometry', $event)"
       />
     </SettingsRow>
   </div>
