@@ -52,17 +52,17 @@ export const runsState = reactive({
   browserTools: null
 })
 
-/* One run replaced or learned about. By token, which is the only name that is
-   never two runs': a late event for a run that ended cannot land on the one
-   that started after it. Insertion keeps the list oldest-first the way the
-   worker answers `run_state`, so a bar segment does not jump when a response
-   and an event interleave. */
 /* Every run token this window has already made a noise about. In memory only,
    like `deliveredRuns` in `notifications.js` and for the same reason: a token
    is issued once per app process and never reused, so nothing here has to
    survive a restart — and a run does not either. */
 const chimedRuns = new Set()
 
+/* One run replaced or learned about. By token, which is the only name that is
+   never two runs': a late event for a run that ended cannot land on the one
+   that started after it. Insertion keeps the list oldest-first the way the
+   worker answers `run_state`, so a bar segment does not jump when a response
+   and an event interleave. */
 function upsert(run) {
   const at = runsState.runs.findIndex((r) => r.token === run.token)
   if (at !== -1) runsState.runs[at] = run
