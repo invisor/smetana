@@ -28,7 +28,11 @@ import Icon from './Icon.vue'
 const props = defineProps({
   modelValue: { type: [String, Number], default: '' },
   /* Accepts ['a','b'] or [{ value, label }], exactly as `Select` does — the two
-     are interchangeable at the call site on purpose. */
+     are interchangeable at the call site on purpose. An object row carries up
+     to three flags of its own: `header` makes it a caption over the group that
+     follows, `note` adds a muted word about that row on the right, and
+     `disabled` draws it as a row this list knows about and cannot pick — see
+     `selectable` for what the last one costs the keyboard and the filter. */
   options: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
   /* A filter above the list. Off by default: it is worth the extra field only
@@ -76,32 +80,52 @@ const items = computed(() =>
   props.options.map((o) => (typeof o === 'object' && o !== null ? o : { value: o, label: String(o) }))
 )
 
+/* The one question the cursor, Enter and the caption rule all ask. A caption is
+   not a choice and a disabled row is a choice that is not available, and the two
+   are drawn quite differently — but to everything that walks this list they are
+   the same thing: a row the keyboard steps over and Enter cannot take. Asked in
+   one place so a fourth kind of unpickable row cannot be added to some of them
+   and missed by the rest. */
+const selectable = (option) => !option.header && !option.disabled
+
 /* Filtering hides options, and a caption whose whole group went with them is a
    heading over nothing. A header survives only when something choosable follows
-   it before the next one does. */
+   it before the next one does — and "choosable" is `selectable`, so a group
+   filtered down to nothing but disabled rows counts as empty and loses its
+   caption. The rows themselves stay: filtering singles a disabled row out
+   neither way, it matches the needle or it does not, exactly like any other. */
 const matches = computed(() => {
   const needle = query.value.trim().toLowerCase()
   const kept = needle
     ? items.value.filter((o) => o.header || String(o.label).toLowerCase().includes(needle))
     : items.value
-  return kept.filter((o, i) => !o.header || (!!kept[i + 1] && !kept[i + 1].header))
+  return kept.filter((o, i) => {
+    if (!o.header) return true
+    for (let j = i + 1; j < kept.length && !kept[j].header; j += 1) {
+      if (selectable(kept[j])) return true
+    }
+    return false
+  })
 })
 
 /* A value that is not in the list is still shown, as itself. The list is what
    can be picked, not what can be held: a branch just named here is not in it
    yet, and a value kept in settings may have gone since. Blanking the field to
    the placeholder in either case would say "nothing is chosen" about something
-   that is about to be acted on. */
+   that is about to be acted on. A disabled row answers here as readily as any
+   other, and deliberately: a value that can no longer be picked is still a
+   value that is held, and the field naming it is the only place that says so. */
 const selectedLabel = computed(() => {
   const found = items.value.find((o) => !o.header && o.value === props.modelValue)
   if (found) return String(found.label)
   return props.modelValue === '' || props.modelValue == null ? '' : String(props.modelValue)
 })
 
-/* Never a header: the cursor is where Enter lands, and Enter on a caption would
-   do nothing while looking exactly like a row that refuses to be picked. */
+/* Never a caption and never a disabled row: the cursor is where Enter lands, and
+   Enter on either would do nothing while looking exactly like a row that refuses
+   to be picked. */
 watch(matches, () => {
-  cursor.value = Math.max(0, matches.value.findIndex((o) => !o.header))
+  cursor.value = Math.max(0, matches.value.findIndex(selectable))
 })
 
 const show = async () => {
@@ -115,8 +139,8 @@ const show = async () => {
      the highlight then sits on one row while Enter takes another, silently. The
      `matches` watcher is no rescue here — `hide` has already cleared `query`, so
      opening changes nothing about `matches` and the watcher never fires. */
-  const chosen = matches.value.findIndex((o) => !o.header && o.value === props.modelValue)
-  cursor.value = chosen >= 0 ? chosen : Math.max(0, matches.value.findIndex((o) => !o.header))
+  const chosen = matches.value.findIndex((o) => selectable(o) && o.value === props.modelValue)
+  cursor.value = chosen >= 0 ? chosen : Math.max(0, matches.value.findIndex(selectable))
   at.value = null
   width.value = field.value?.getBoundingClientRect().width ?? 0
   emit('open')
@@ -208,6 +232,15 @@ const choose = (value) => {
   hide()
 }
 
+/* The pointer moves the cursor, and a disabled row is the one place it must
+   not: the cursor is where Enter lands, so a pointer resting on an unavailable
+   row would arm Enter over nothing. Written out rather than left to the
+   `disabled` attribute, which suppresses mouse events on the browsers this ships
+   in but is not the reason the rule holds. */
+const hover = (option, index) => {
+  if (!option.disabled) cursor.value = index
+}
+
 /* Which controls Enter is this handler's to answer: the panel itself, the
    filter, and the option rows — the three the cursor is a cursor over. Anything
    else inside the panel is a control of its own, and the header slot is where
@@ -239,16 +272,17 @@ const ownsEnter = (target) =>
    Enter branch asks where the press came from and leaves everything else to the
    control it was aimed at. */
 
-/* One step in a list that has rows the keyboard must pass over. Bounded by the
-   list's own length, so a list of nothing but captions stops rather than
-   spinning. */
+/* One step in a list that has rows the keyboard must pass over — captions and
+   disabled rows alike, which is the whole of what `selectable` says. Bounded by
+   the list's own length, so a list with nothing pickable in it stops rather than
+   spinning, and the highlight stays where it was. */
 const step = (delta) => {
   const n = matches.value.length
   if (!n) return
   let i = cursor.value
   for (let taken = 0; taken < n; taken += 1) {
     i = (i + delta + n) % n
-    if (!matches.value[i].header) {
+    if (selectable(matches.value[i])) {
       cursor.value = i
       return
     }
@@ -263,7 +297,10 @@ const onKeydown = (event) => {
     if (!ownsEnter(event.target)) return
     event.preventDefault()
     const pick = matches.value[cursor.value]
-    if (pick && !pick.header) choose(pick.value)
+    /* Asked again rather than trusted: `step` never leaves the cursor on an
+       unpickable row, but the seat it starts from is `Math.max(0, …)` and that
+       floor lands on row zero when a filter has left nothing pickable at all. */
+    if (pick && selectable(pick)) choose(pick.value)
   } else if (event.key === 'Escape') {
     event.preventDefault()
     hide()
@@ -388,11 +425,22 @@ const optionStyle = (option, index) => ({
   textAlign: 'left',
   /* Where the keyboard is and what is chosen are different facts and are drawn
      differently: a surface step for the first, a check for the second. Colour
-     is never the only signal here either. */
-  background: index === cursor.value ? 'var(--surface-hover)' : 'transparent',
-  color: option.value === props.modelValue ? 'var(--text-primary)' : 'var(--text-secondary)',
+     is never the only signal here either.
+
+     A disabled row takes neither. The cursor cannot land on it, but the seat
+     described at the Enter branch can, and a highlight there would promise a
+     press that does nothing. */
+  background: !option.disabled && index === cursor.value ? 'var(--surface-hover)' : 'transparent',
+  /* One step further back than an unselected row, which is the whole of how a
+     row that cannot be picked is told from one that simply is not — the same
+     `--text-muted` the field itself takes when the control is disabled. */
+  color: option.disabled
+    ? 'var(--text-muted)'
+    : option.value === props.modelValue
+      ? 'var(--text-primary)'
+      : 'var(--text-secondary)',
   font: `var(--weight-regular) var(--text-sm)/1 ${props.mono ? 'var(--font-mono)' : 'var(--font-sans)'}`,
-  cursor: 'default'
+  cursor: option.disabled ? 'not-allowed' : 'default'
 })
 
 /* The label and the note share a box of their own rather than sitting directly
@@ -517,23 +565,36 @@ const headerStyle = (index) => ({
       />
       <div ref="list" :style="listStyle">
         <template v-for="(option, i) in matches" :key="option.header ? `h:${option.label}` : option.value">
-          <!-- A caption is a `div` and not a disabled `button`: it is not a
-               choice that happens to be unavailable, and a disabled control in
-               the tab order is a stop for no reason. It stays a child of this
-               same list, which is what keeps `reveal`'s `children[cursor]`
-               pointing at the row the cursor names. -->
+          <!-- A caption is a `div` and not a disabled `button`: it is structure
+               rather than a choice that happens to be unavailable — that row is
+               the one below, and telling somebody a heading is unavailable is a
+               stop for no reason. It stays a child of this same list, which is
+               what keeps `reveal`'s `children[cursor]` pointing at the row the
+               cursor names. -->
           <div v-if="option.header" :style="headerStyle(i)">{{ option.label }}</div>
+          <!-- A row that is known and cannot be picked is a real
+               `<button disabled>`: the browser gives the semantics, keeps it out
+               of the tab order on its own and refuses the click, so nothing here
+               has to remember to. -->
           <button
             v-else
             type="button"
+            :disabled="option.disabled"
             :style="optionStyle(option, i)"
-            @mouseenter="cursor = i"
+            @mouseenter="hover(option, i)"
             @click="choose(option.value)"
           >
+            <!-- Hidden rather than absent, so every row keeps the same left
+                 edge and the same height whatever it is. A disabled row never
+                 shows the check: it is not what this list can be set to, and
+                 what the field holds is said by the field. -->
             <Icon
               name="check"
               :size="12"
-              :style="{ visibility: option.value === modelValue ? 'visible' : 'hidden', flexShrink: 0 }"
+              :style="{
+                visibility: !option.disabled && option.value === modelValue ? 'visible' : 'hidden',
+                flexShrink: 0
+              }"
             />
             <span :style="rowTextStyle">
               <span :style="labelStyle(option)">{{ option.label }}</span>

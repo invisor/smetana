@@ -33,10 +33,19 @@ const emit = defineEmits(['update:agent', 'update:agentLanguage', 'update:taskLa
    validates `agent` against that list on the way to the file and drops anything
    else. So this list is a set of labels for ids Rust already knows, and an id
    added there and not here is simply not offered, while one added here and not
-   there is picked, dropped on save and back to Claude Code after a restart. */
+   there is picked, dropped on save and back to Claude Code after a restart.
+
+   Codex is offered and not selectable, and the restriction is this row and
+   nothing else: Rust still knows `codex`, `agents/codex.rs` is complete, and a
+   `settings.json` that already holds it goes on starting Codex sessions. That
+   is accepted rather than overlooked — the working code is not worth breaking
+   for a temporary limit, and lifting the limit is deleting the two fields
+   below. It is shown rather than dropped from the list because a person should
+   be able to see that the app knows the agent and has not switched it on yet;
+   a list of one says nothing at all. */
 const AGENTS = [
   { value: 'claude', label: 'Claude Code' },
-  { value: 'codex', label: 'Codex' }
+  { value: 'codex', label: 'Codex', disabled: true, note: 'Not supported yet' }
 ]
 
 /* The same doubling one row down, accepted for the same reason. The ids are
