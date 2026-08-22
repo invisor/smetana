@@ -140,6 +140,43 @@ export async function setAutostart(enabled) {
   }
 }
 
+/* What is left of the subscription of the agent this machine would actually
+   run, for the Agents tab in the settings window.
+
+   This store rather than `runs.js`, and the reason is what `app.js` is for: it
+   is a one-off question put to the desktop with no state behind it and nothing
+   to keep — the answer is minutes old the moment it is given, it belongs to no
+   project and no run, and it does not outlive the window that asked. Keeping it
+   in `runs.js` was the rejected alternative: nothing about it is a run, and it
+   would have acquired a place in a store that survives the settings window
+   closing.
+
+   The answer travels whole, in Rust's own shape, and is handed to the pure
+   module that turns it into sentences (`components/settings/usage.js`) — the
+   same division `surveyStorage` keeps with `storage.js`.
+
+   It rejects rather than answering with a shape of its own, unlike
+   `autostartState` above: the command is infallible in Rust, so a failure here
+   is the channel rather than the answer, and there is a line on that tab for
+   saying so. An invented "unreadable" would put a sentence about somebody's
+   login under a fault that has nothing to do with it.
+
+   The agent is named by the caller rather than left to Rust to read out of
+   `settings.json`, and that is not an optimisation. The front end owns that
+   field and the file is up to a debounce behind it, so a window that has just
+   changed the agent and asks in the same breath would be answered about the one
+   it left — for as long as the probe takes, under a heading honest enough about
+   who replied to look like an ordinary substitution. `null` is a caller with no
+   opinion, which is what the file is still for. */
+export async function readAgentUsage(agent = null) {
+  try {
+    return await invoke('agent_usage', { agent })
+  } catch (err) {
+    console.error('[app] the subscription allowance could not be read:', err)
+    throw new Error(err && typeof err === 'object' && typeof err.message === 'string' ? err.message : String(err))
+  }
+}
+
 /* The version this build carries — `tauri.conf.json`'s `version`, which is the
    one a person would quote in a bug report. `null` when there is nobody to ask
    (a browser): the About tab draws a dash rather than inventing a number, since

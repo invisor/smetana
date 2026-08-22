@@ -1202,6 +1202,36 @@ const galleryAgent = ref('claude')
    twice would never draw it. */
 const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
+/* The subscription block. A reading rather than one of the two empty states:
+   those are a sentence each, while this is the shape with a layout to check —
+   two rows, the line about what a run would do, and a live Refresh beside the
+   heading. `reduced` rather than a comfortable level so that line says
+   something other than "a full batch", and the reset strings are the harness's
+   own words, timezone and all, exactly as `claude.rs` hands them over.
+
+   The agent is `claude` while the picker above it shows the same, which is the
+   ordinary case; the block naming a *different* agent is the substitution
+   `agents::pick` makes, and there is nothing in a browser to make it happen. */
+const galleryAgentUsage = {
+  state: 'read',
+  agent: 'claude',
+  usage: {
+    sessionPct: 10,
+    sessionReset: 'Aug 7 at 8pm (Europe/Moscow)',
+    weekPct: 78,
+    weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)'
+  },
+  band: 'reduced'
+}
+/* The other three shapes the block takes, and none of them is reachable any
+   other way: the mock answers a reading, so `?view=settings&tab=agents` cannot
+   show them either, and two of the three are what an acceptance criterion is
+   about. `unsupported` is the one that changes the layout rather than the
+   words — no Refresh at all, so the heading loses the counterweight
+   `space-between` gives it — and it is also the one where the heading names an
+   agent the picker above it does not. */
+const galleryAgentUsageUnsupported = { state: 'unsupported', agent: 'codex' }
+const galleryAgentUsageUnreadable = { state: 'unreadable', agent: 'claude' }
 /* The Kanban tab. Both lists live rather than off, since the interesting shape
    of this tab is a checkbox column that does something — and the fixture board
    deliberately carries a name no column of it matches (`triage`), which is the
@@ -3190,10 +3220,28 @@ const menuTargetStyle = {
             :agent="galleryAgent"
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
+            :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
           />
+        </div>
+        <!-- The subscription block in its other three shapes, the way the
+             Storage tab below is drawn in three: an agent that does not answer
+             the question at all, one that was asked and could not, and a probe
+             still out. The first is the one with a layout of its own — the
+             Refresh button is gone rather than disabled — and the last is the
+             only place the disabled button can be looked at. The three rows
+             above them are along for the ride; the block is what these are
+             for. -->
+        <div :style="{ width: '380px' }">
+          <AgentSettings agent="codex" :usage="galleryAgentUsageUnsupported" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <AgentSettings :usage="galleryAgentUsageUnreadable" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <AgentSettings busy />
         </div>
         <div :style="{ width: '380px' }">
           <KanbanSettings
