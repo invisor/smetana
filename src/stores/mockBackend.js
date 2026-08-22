@@ -411,6 +411,34 @@ export function installMockBackend() {
         { name: 'release/7', missing_in: ['admin', 'extension'] }
       ]
     }
+    /* What the Agents tab says about the subscription. A read, so it answers:
+       without it `?view=settings&tab=agents` opens on the loud refusal at the
+       bottom of this file and the block can never be looked at in a browser at
+       all.
+
+       A reading rather than one of the two empty states, and a `reduced` one
+       rather than a comfortable one: the empty states are a sentence each and
+       can be read off the source, while the two rows and the line about what a
+       run would do are the part with a layout to check. The numbers are
+       `claude.rs`'s own fixture output, so the reset strings are shaped exactly
+       as the parser hands them over — the harness's words, timezone and all.
+
+       `claude` and not whatever the settings fixture says, deliberately: the
+       real command answers with the agent that was actually reachable, and the
+       browser has no `PATH` to look at. */
+    if (command === 'agent_usage') {
+      return {
+        state: 'read',
+        agent: 'claude',
+        usage: {
+          sessionPct: 10,
+          sessionReset: 'Aug 7 at 8pm (Europe/Moscow)',
+          weekPct: 78,
+          weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)'
+        },
+        band: 'reduced'
+      }
+    }
     /* The Storage tab's numbers. A read, so it answers — otherwise the section
        could not be looked at under `npm run dev` at all, and the one place in
        the app that deletes anything would be the one screen nobody could see.
