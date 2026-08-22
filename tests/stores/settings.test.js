@@ -44,8 +44,24 @@ describe('loading', () => {
       interval: 'all',
       unlimited: []
     })
+    /* Shipped on rather than off, and as two different sounds — a file written
+       before this section existed is every file on a person's disk right now,
+       and `settings/model.rs` carries the same pair. */
+    expect(settings.settings.notifications).toEqual({
+      runFinished: 'sound-1',
+      needsAttention: 'sound-2'
+    })
     expect(settings.settings.openProjects).toEqual([])
     expect(settings.settings.project.activeTab).toBe('kanban')
+  })
+
+  it('reads a stored pair of sounds off the file', async () => {
+    ipc.on('settings_load', { notifications: { runFinished: 'off', needsAttention: 'sound-4' } })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.notifications.runFinished).toBe('off')
+    expect(settings.settings.notifications.needsAttention).toBe('sound-4')
   })
 
   it('reads the board settings off the file', async () => {
@@ -416,6 +432,40 @@ describe('the settings window', () => {
     expect(settings.settings.git.autoFetch).toBe(true)
   })
 
+  /* The two sounds ride the same message as flat fields, named for their
+     events. A value outside the closed list is skipped rather than reset: the
+     person did not ask for the shipped default either. */
+  it('takes a sound this build ships, and leaves the previous one standing otherwise', async () => {
+    await emit(settings.SETTINGS_APPLY, { notificationRunFinished: 'sound-4' })
+    await nextTick()
+    expect(settings.settings.notifications.runFinished).toBe('sound-4')
+
+    await emit(settings.SETTINGS_APPLY, { notificationRunFinished: 'sound-9' })
+    await nextTick()
+    expect(settings.settings.notifications.runFinished).toBe(
+      'sound-4',
+      'a sound nobody ships is skipped, not replaced by the default'
+    )
+
+    await emit(settings.SETTINGS_APPLY, { notificationRunFinished: null })
+    await nextTick()
+    expect(settings.settings.notifications.runFinished).toBe('sound-4')
+
+    await emit(settings.SETTINGS_APPLY, { notificationNeedsAttention: 'off' })
+    await nextTick()
+    expect(settings.settings.notifications.needsAttention).toBe('off', 'off is a value it accepts')
+  })
+
+  it('both sounds reach the settings window as flat fields', async () => {
+    settings.settings.notifications.runFinished = 'off'
+    settings.settings.notifications.needsAttention = 'sound-3'
+
+    const shared = settings.sharedSettings()
+
+    expect(shared.notificationRunFinished).toBe('off')
+    expect(shared.notificationNeedsAttention).toBe('sound-3')
+  })
+
   it('answers a hello with what this window holds, not with what is on disk', async () => {
     settings.settings.appearance.uiFontSize = 20
     const heard = []
@@ -434,6 +484,8 @@ describe('the settings window', () => {
       kanbanInterval: 'all',
       kanbanUnlimited: [],
       gitAutoFetch: true,
+      notificationRunFinished: 'sound-1',
+      notificationNeedsAttention: 'sound-2',
       agent: 'claude',
       agentLanguage: 'en',
       taskLanguage: 'en'
@@ -463,6 +515,8 @@ describe('the settings window', () => {
       kanbanInterval: 'all',
       kanbanUnlimited: [],
       gitAutoFetch: true,
+      notificationRunFinished: 'sound-1',
+      notificationNeedsAttention: 'sound-2',
       agent: 'codex',
       agentLanguage: 'en',
       taskLanguage: 'en'

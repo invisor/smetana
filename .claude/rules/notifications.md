@@ -5,6 +5,8 @@ paths:
   - "src/components/run/reportDelivery.js"
   - "src/components/run/reportTab.js"
   - "src/components/run/stopReason.js"
+  - "src/sounds.js"
+  - "src/chime.js"
 ---
 
 # The bell: what the app has to say right now
@@ -98,6 +100,49 @@ bell holds a card about to be taken back, and a `pre` watcher runs before this c
 in the same tick, so the badge never paints the number. `deliveredInTab` is called only when the tab
 actually opened, since suppressing the card on the strength of a tab that never appeared would leave
 the person with neither.
+
+**Beside the bell there is a sound, and it is the half that reaches somebody who is not looking.**
+The bell is a badge on a bar somebody has to be looking at, and both things it carries happen when
+nobody is: a run ends at three in the morning, and an agent inside one stops to ask a permission
+question. `src/sounds.js` is what a sound may be — four ids, `off`, and the two shipped defaults —
+and `src/chime.js` is the half that touches the DOM, one `Audio` per id, with a rejected `play()`
+warned about and swallowed, because a webview may refuse audio no gesture asked for and an app that
+throws over a noise is worse than a quiet one. Which sound each event makes is the `notifications`
+section of `settings.json` (`.claude/rules/settings.md`), edited on the settings window's General
+tab.
+
+Three rules about where it fires, and all three are easy to break by accident. The run sound is played in
+`upsert` in `runs.js` — the one place a run's state ever changes — once per token, since the summary
+arrives seconds after the ending and is another event about the same stopped run; and **never from
+`loadRun`**, which replaces the list on every window focus and every project switch and would
+announce this morning's run this afternoon. The cost is named rather than hidden: a run stopping
+while the window is pointed at another project is not announced at all, because `run:state` is
+filtered to the active project, and silence about another project's run is the better failure of the
+two. The needs-you sound is played in the `terminal:state` listener in `terminals.js`, comparing the
+mark already held with the state arriving and firing only on the transition *into* that state, so a
+session re-announcing the same wait costs nothing — for every project, since the marks cover every
+project and a person supervising two overnight is waiting on both; and **nothing on the first read
+of `terminal_marks`** in `initTerminals`, since those sessions were already waiting before this
+window opened. A watcher in `DesktopApp.vue`, the shape report delivery uses, was rejected for the
+second of these: `terminalState.sessions` holds the active project only, so the sound would have
+gone quiet for exactly the second project the rail exists for.
+
+The third rule is **not a shell**, and it is the one the sound was written without at first. The
+listener asks `isShellSession` before it rings, which is `projectStates`' rule by the same word,
+because a shell reaches `needs-you` by the shortest path there is: any BEL byte sets `bell_pending`
+in `terminal/service.rs`, and layer A of `terminal/detect.rs` turns that into `NeedsYou` with no
+profile involved — and a shell has no profile. zsh's `LIST_BEEP` and bash's audible bell are both on
+by default, so an ambiguous tab completion would have played the notification sound at somebody
+typing into that very tab. The rail already skips shells and the scope bar's counter already filters
+through the same function; a sound that did not would have been the third population and the loud
+one, going off while both of those read zero with nothing on screen to explain it. It is asked as
+"is a shell" rather than "is an agent" for the reason `isShellSession` gives — work this front end
+has never heard of is an agent, and still rings.
+
+The sound is also the one announcement the two deliveries above do not divide. It plays whether the
+report went to a tab or to the bell, because it is about the run having ended rather than about the
+card: somebody who had that agent selected still gets a document appearing in a tab they were not
+watching.
 
 The import between the two stores is circular by construction — `notifications.js` reads `runsState`,
 `runs.js` calls a hoisted function declaration — and **nothing in `notifications.js` may read
