@@ -15,6 +15,12 @@ They were handed over for this task in a folder of their own, under those names;
 Pixabay's for the author *Universfield*. The originals are recorded here rather than the shipped
 names alone, because a bare `sound-3.mp3` is a file nobody can ever replace with confidence.
 
+**No licence came with them, and none is claimed here.** The one comparable vendored asset in the
+tree — the file-type icons in `src/catppuccinIcon.js` — names its licence (MIT) in its own header,
+and these four ship inside the bundle exactly as those do. Naming a licence from the file names
+alone would be an invention presented as a fact, which is the thing the labels above are neutral to
+avoid; establishing it is a question for whoever handed the files over.
+
 The ids in `src/sounds.js` are `sound-1` … `sound-4` and the labels are `Sound 1` … `Sound 4`:
 nobody who wrote this code has heard them, and a label like `Chime` or `Bell` would be an invention
 presented as a fact. Somebody who has listened can rename them in one line of `src/sounds.js` —
