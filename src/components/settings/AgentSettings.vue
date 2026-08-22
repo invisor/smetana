@@ -120,7 +120,12 @@ const heading = computed(() => {
 })
 
 const lines = computed(() => usageLines(props.usage))
-const note = computed(() => usageNote(props.usage, props.busy))
+/* The error line replaces the sentence rather than stacking under it. The two
+   would otherwise contradict each other on the one path that produces both:
+   the window clears the reading before every read, so a channel that refused
+   leaves "the allowance has not been read yet" above the refusal saying it
+   was read and refused. */
+const note = computed(() => (props.error ? '' : usageNote(props.usage, props.busy)))
 const refreshable = computed(() => offersRefresh(props.usage))
 
 const blockStyle = {

@@ -141,10 +141,21 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
 /// Nothing is cached between this and the run gate, deliberately: a reading is
 /// minutes old the moment it is taken, and a person pressing Refresh is asking
 /// the harness rather than asking us what it last said.
+///
+/// **The caller may name the agent, and the settings window always does.** That
+/// is not a convenience: the front end owns the truth about this field and the
+/// file is up to a debounce behind it (`SAVE_DELAY`, 400 ms in
+/// `stores/settings.js`), so a window that changed the agent and asked in the
+/// same breath would be answered about the agent it had just left — reliably
+/// rather than racily, and for up to the sixty seconds the probe may take, with
+/// a heading honest enough about who answered to look exactly like
+/// `agents::pick`'s legitimate substitution. `None` is for a caller with no
+/// opinion and keeps the file as the answer.
 #[tauri::command]
-pub async fn agent_usage(app: AppHandle) -> AgentUsage {
+pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
     let profile = tokio::task::spawn_blocking(move || {
-        crate::agents::pick(&crate::settings::agent(&app), crate::shell_env::path())
+        let id = wanted(agent, || crate::settings::agent(&app));
+        crate::agents::pick(&id, crate::shell_env::path())
     })
     .await
     .unwrap_or(None);
@@ -154,6 +165,23 @@ pub async fn agent_usage(app: AppHandle) -> AgentUsage {
     // tells that `None` apart from a probe's.
     let reading = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
     usage::report(Some(profile), reading)
+}
+
+/// Which agent id `agent_usage` resolves: what the caller asked for, and the
+/// file only for a caller that asked for nothing.
+///
+/// The fall-back is a closure rather than a value so that a caller who named an
+/// agent costs no disk read at all — which is also the half of this worth
+/// pinning, since the read is invisible from the answer.
+///
+/// A blank id is nobody rather than a name: it can only come from a field that
+/// was never filled, and asking `pick` for `""` would silently substitute the
+/// first installed profile as though it had been chosen.
+fn wanted(asked: Option<String>, configured: impl FnOnce() -> String) -> String {
+    asked
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(configured)
 }
 
 /// How everything here reaches the worker, shaped exactly like the tracker's:
@@ -227,6 +255,33 @@ mod tests {
     fn config(root: &Path, body: &str) {
         fs::create_dir_all(root.join(".smetana")).expect("create .smetana");
         fs::write(root.join(".smetana/project.toml"), body).expect("write the config");
+    }
+
+    #[test]
+    fn the_agent_the_caller_named_wins_over_the_one_on_disk() {
+        // The settings window always names one, because the file is up to a
+        // debounce behind what it is showing: reading the file here would probe
+        // the agent somebody has just switched away from. The panic is the
+        // assertion — a caller who named an agent must not cost a disk read.
+        assert_eq!(
+            wanted(Some("codex".into()), || panic!("the file must not be read for a named agent")),
+            "codex"
+        );
+    }
+
+    #[test]
+    fn a_caller_with_no_opinion_still_gets_the_configured_agent() {
+        // Every other caller, and what this command did before it took an
+        // argument at all.
+        assert_eq!(wanted(None, || "claude".into()), "claude");
+    }
+
+    #[test]
+    fn a_blank_name_is_nobody_rather_than_an_agent() {
+        // `pick("")` substitutes the first installed profile, which would read
+        // as a choice rather than as the empty field it came from.
+        assert_eq!(wanted(Some("   ".into()), || "claude".into()), "claude");
+        assert_eq!(wanted(Some(String::new()), || "claude".into()), "claude");
     }
 
     #[test]

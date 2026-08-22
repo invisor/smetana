@@ -291,6 +291,14 @@ const clear = async () => {
    Claude to Codex and the block must stop talking about the previous agent
    before it knows anything about the new one.
 
+   **The agent is named in the question**, out of what this window is showing,
+   and never left to Rust to read off the disk. This window's edits reach
+   `settings.json` through the app window's 400 ms debounce, so the file is
+   behind what is on screen here for as long as it takes one edit to settle —
+   and a probe is up to sixty seconds. Asking without naming an agent therefore
+   answers about the agent somebody has just switched away from, every time
+   rather than occasionally.
+
    The guard is a sequence number and not the `busy` flag alone: a change of
    agent has to supersede a probe already out, so two can be in flight at once
    and only the newest may be drawn. Without it, an answer about the agent
@@ -298,13 +306,13 @@ const clear = async () => {
 const usage = reactive({ reading: null, busy: false, error: null })
 let asked = 0
 
-const readUsage = async () => {
+const readUsage = async (agent = view.agent) => {
   const mine = (asked += 1)
   usage.busy = true
   usage.reading = null
   usage.error = null
   try {
-    const reading = await readAgentUsage()
+    const reading = await readAgentUsage(agent)
     if (mine !== asked) return
     usage.reading = reading
   } catch (err) {
@@ -319,7 +327,7 @@ const readUsage = async () => {
    the block is asked again, since it is about whoever would answer now. */
 const chooseAgent = (id) => {
   change({ agent: id })
-  readUsage()
+  readUsage(id)
 }
 
 /* The login item, and the other part of this window that is not a setting:

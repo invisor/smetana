@@ -1210,6 +1210,15 @@ const galleryAgentUsage = {
   },
   band: 'reduced'
 }
+/* The other three shapes the block takes, and none of them is reachable any
+   other way: the mock answers a reading, so `?view=settings&tab=agents` cannot
+   show them either, and two of the three are what an acceptance criterion is
+   about. `unsupported` is the one that changes the layout rather than the
+   words — no Refresh at all, so the heading loses the counterweight
+   `space-between` gives it — and it is also the one where the heading names an
+   agent the picker above it does not. */
+const galleryAgentUsageUnsupported = { state: 'unsupported', agent: 'codex' }
+const galleryAgentUsageUnreadable = { state: 'unreadable', agent: 'claude' }
 /* The Kanban tab. Both lists live rather than off, since the interesting shape
    of this tab is a checkbox column that does something — and the fixture board
    deliberately carries a name no column of it matches (`triage`), which is the
@@ -3191,6 +3200,23 @@ const menuTargetStyle = {
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
           />
+        </div>
+        <!-- The subscription block in its other three shapes, the way the
+             Storage tab below is drawn in three: an agent that does not answer
+             the question at all, one that was asked and could not, and a probe
+             still out. The first is the one with a layout of its own — the
+             Refresh button is gone rather than disabled — and the last is the
+             only place the disabled button can be looked at. The three rows
+             above them are along for the ride; the block is what these are
+             for. -->
+        <div :style="{ width: '380px' }">
+          <AgentSettings agent="codex" :usage="galleryAgentUsageUnsupported" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <AgentSettings :usage="galleryAgentUsageUnreadable" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <AgentSettings busy />
         </div>
         <div :style="{ width: '380px' }">
           <KanbanSettings
