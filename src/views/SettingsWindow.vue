@@ -77,10 +77,11 @@ const view = reactive({
      arrives. Off is also today's behaviour exactly. */
   editorWordWrap: false,
   agent: 'claude',
-  /* Both BCP-47 ids, mirroring Rust's `en` — the same shipped-defaults
+  /* All three BCP-47 ids, mirroring Rust's `en` — the same shipped-defaults
      reasoning the four above carry. */
   agentLanguage: 'en',
   taskLanguage: 'en',
+  commitLanguage: 'en',
   /* The board's four, flat in the same message the rest ride in — see
      `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
      the same reason the four above are shipped values: this window paints
@@ -466,12 +467,14 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :agent="view.agent"
           :agent-language="view.agentLanguage"
           :task-language="view.taskLanguage"
+          :commit-language="view.commitLanguage"
           :usage="usage.reading"
           :busy="usage.busy"
           :error="usage.error"
           @update:agent="chooseAgent($event)"
           @update:agent-language="change({ agentLanguage: $event })"
           @update:task-language="change({ taskLanguage: $event })"
+          @update:commit-language="change({ commitLanguage: $event })"
           @refresh="readUsage()"
         />
         <KanbanSettings

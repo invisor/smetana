@@ -23,7 +23,8 @@ thin commands.
 At the root the file keeps appearance — theme, density and `uiFontSize` — panel layout (collapsed
 state and width for each side, `railOpen` for whether the project rail is drawn beside the left
 panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wordWrap`, `agent`, the id of the CLI agent to
-start, `agentLanguage` and `taskLanguage`, the two languages that agent works in, `kanban`, how
+start, `agentLanguage`, `taskLanguage` and `commitLanguage`, the three languages that agent works
+in, `kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
 `window`, whether the main window opens where it was left, and `notifications`,
 which sound each of the two announcements makes and whether a finished run shows its report. Below that, `openProjects` is the list of projects the window has open,
@@ -205,7 +206,7 @@ last edit rather than the app.
 
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
-`appearance.theme`, `appearance.uiFontSize`, both `editor` fields, `agent`, the two languages beside it,
+`appearance.theme`, `appearance.uiFontSize`, both `editor` fields, `agent`, the three languages beside it,
 the four `kanban` fields, both `git` fields, `window.restoreGeometry` and all three `notifications`
 fields. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
@@ -320,10 +321,14 @@ needed `reveal`, the cursor's row brought into view on opening and on walking of
 
 Agents is the one place in the front end that ever *names* an agent: the ids are still `agents::IDS`
 and Rust still drops one it does not ship, so this is a set of labels for ids Rust already knows. The
-two language pickers under it are the same doubling against `agents::LANGUAGES`, accepted for the
+three language pickers under it are the same doubling against `agents::LANGUAGES`, accepted for the
 same reason — Rust validates the ids, so drift costs a stale label rather than a lost setting — and
-all three rows share one control column, wider than the shipped default because `Dropdown`
-ellipsises a label that does not fit and "Chinese (Simplified)" is the longest either list holds. The
+all four rows share one control column, wider than the shipped default because `Dropdown`
+ellipsises a label that does not fit and "Chinese (Simplified)" is the longest label any of the lists
+holds. The three sit in a `SettingsGroup` captioned Languages and the Agent row stays outside it,
+which is General's own drawing: a second group over that one row would be a caption for its own sake.
+Commit language is the third of them and reaches two places rather than one — the button in the Git
+panel and a run's own commits — for the reason `.claude/rules/agents.md` records. The
 subscription block under it was a placeholder with dashes and is now the reading itself: the tab asks
 `agent_usage`, which is `runs/usage.rs`'s probe — the same one the run gate makes before every batch
 — put from the other end of the app. Four things about it are decisions rather than mechanics. The

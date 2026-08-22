@@ -1208,6 +1208,7 @@ const galleryAgent = ref('claude')
    twice would never draw it. */
 const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
+const galleryCommitLanguage = ref('ru')
 /* The subscription block. A reading rather than one of the two empty states:
    those are a sentence each, while this is the shape with a layout to check —
    two rows, the line about what a run would do, and a live Refresh beside the
@@ -3244,10 +3245,12 @@ const menuTargetStyle = {
             :agent="galleryAgent"
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
+            :commit-language="galleryCommitLanguage"
             :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
+            @update:commit-language="galleryCommitLanguage = $event"
           />
         </div>
         <!-- The subscription block in its other shapes, the way the Storage tab

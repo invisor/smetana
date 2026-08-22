@@ -361,6 +361,53 @@ fn writes_to_the_tracker(intent: &Intent) -> bool {
     )
 }
 
+/// The language a git commit message is written in, and it goes only where the
+/// agent's own hands reach git.
+///
+/// The caveat is the same watershed `task_language` holds one field over, and
+/// it is why this is prose rather than one clause. What the setting moves is
+/// the sentence a person reads; what it must not move is the literal another
+/// reader matches on — and in a commit message that literal is the form
+/// itself. `type: subject` with `feat`, `fix`, `docs`, `refactor`, `test` and
+/// `chore` in front of the colon is grepped, filtered on and read at a glance
+/// by whoever comes to the log next, so a translated type is not a difference
+/// of style: it is a history that no longer answers `git log --grep`.
+///
+/// The messages git writes by itself — a `--no-ff` merge, a revert — are named
+/// as outside this, because they are git's own text and an agent that took the
+/// instruction literally would start rewriting them by hand.
+fn commit_language(language: &str) -> String {
+    format!(
+        "Write the message of any git commit you make in {language}: the subject, and the body \
+         under it where you write one. The form stays English whatever this says, because it is \
+         matched and read rather than translated — a message is still `type: subject` in the \
+         Conventional Commits form, with the type one of feat, fix, docs, refactor, test or \
+         chore. Only what follows the colon is written in {language}. A message git writes for \
+         you, such as a merge or a revert, is git's own and is left as it stands."
+    )
+}
+
+/// Whether this session has any business making a commit, which is the whole of
+/// what `commitLanguage` is about — `writes_to_the_tracker`'s shape one field
+/// over, and deliberately not the same list.
+///
+/// `Run` is the obvious one: a lead commits and merges with its own hands for a
+/// whole night. `ResolveConflict` finishes a merge or a rebase git stopped, and
+/// finishing one is a commit. `Bare` is in for the reason the conversation
+/// language is in every intent — the "+ New agent" session is exactly where a
+/// person says "commit this", and a setting that missed it would miss the case
+/// it was asked for.
+///
+/// The other three are out because they do not touch a repository at all:
+/// `NewTask`, `EditTask` and `ResolveTask` write into bd, and what `NewTask`
+/// puts on disk goes under `.smetana/`, which `runs::gitignore` keeps out of
+/// the repository. `Setup` writes one toml file in the same folder. Putting the
+/// paragraph in every intent instead would open a filing session with three
+/// paragraphs about language in front of the work.
+fn commits_to_git(intent: &Intent) -> bool {
+    matches!(intent, Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::Bare)
+}
+
 /// What the session opens on. Never `None` any more: the conversation language
 /// is said in every intent, so even the "+ New agent" row opens on one
 /// sentence. The `Option` stays because it is the profiles' contract for "is
@@ -378,11 +425,17 @@ pub fn build(
     // The language rules come first, before the work rather than after it, for
     // the reason `stages` gives about a skill body: what is said last can be
     // pushed off the top of what the agent reads first by 7 KB of process, and
-    // these two paragraphs are short enough to cost nothing at the front.
+    // these paragraphs are short enough to cost nothing at the front. No
+    // session gets all three: the conversation is said in every intent, the
+    // other two go only where the agent writes an issue or makes a commit.
     let mut out = conversation(crate::agents::language_name(&languages.agent));
     if writes_to_the_tracker(intent) {
         out.push_str("\n\n");
         out.push_str(&task_language(crate::agents::language_name(&languages.task)));
+    }
+    if commits_to_git(intent) {
+        out.push_str("\n\n");
+        out.push_str(&commit_language(crate::agents::language_name(&languages.commit)));
     }
     if let Some(body) = body(intent, delivery, images, skills, facts, text) {
         out.push_str("\n\n");
@@ -1021,7 +1074,7 @@ mod tests {
     /// One language chosen for both, which is the case a person who does not
     /// work in English is actually in.
     fn russian() -> Languages {
-        Languages { agent: "ru".into(), task: "ru".into() }
+        Languages { agent: "ru".into(), task: "ru".into(), commit: "ru".into() }
     }
 
     /// Nothing read: what a PluginDir harness always gets, and what an Inline
@@ -1362,15 +1415,17 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_session_opens_on_the_language_and_nothing_else() {
+    fn a_bare_session_opens_on_the_languages_and_nothing_else() {
         // It used to open on nothing at all, and that changed with the choice
         // of an English default over an Auto position: the one session where a
         // person talks to the agent most cannot be the one the setting never
-        // reaches. What is imposed is still only the language — a bare session
-        // has no work, so there is nothing else to say.
+        // reaches. What is imposed is still only language — a bare session has
+        // no work, so there is nothing else to say — and the commit paragraph
+        // is there for the same argument one field over: "+ New agent" is
+        // exactly where somebody says "commit this".
         let text = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
-            .expect("a bare session opens on the language sentence");
-        assert_eq!(text, conversation("English"));
+            .expect("a bare session opens on the language sentences");
+        assert_eq!(text, format!("{}\n\n{}", conversation("English"), commit_language("English")));
 
         let russian = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &russian())
             .expect("builds");
@@ -2186,6 +2241,78 @@ mod tests {
     }
 
     #[test]
+    fn only_a_session_that_touches_git_is_told_the_commit_language() {
+        // The three that make a commit with their own hands: a run's lead
+        // commits and merges all night, a conflict session finishes the merge
+        // or the rebase git stopped on, and a bare session is where a person
+        // says "commit this". The other four write into bd or into
+        // `.smetana/`, and neither is a commit — telling them how to word one
+        // would be a paragraph about something that will not happen.
+        let intents: Vec<Intent> = every_intent()
+            .into_iter()
+            .chain([conflict(crate::vcs::model::OpKind::Merge), conflict(crate::vcs::model::OpKind::Rebase)])
+            .collect();
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for intent in &intents {
+                let commits = matches!(
+                    intent,
+                    Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::Bare
+                );
+                assert_eq!(commits_to_git(intent), commits, "{intent:?}");
+
+                let text = in_language(intent, delivery, &russian());
+                let told = text.contains("Write the message of any git commit");
+                assert_eq!(told, commits, "{intent:?}/{delivery:?}: {text}");
+                if commits {
+                    assert!(text.contains("in Russian"), "{intent:?}/{delivery:?}: {text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_conventional_commits_form_stays_english_whatever_the_commit_language_is() {
+        // The same watershed the section headings hold one field over: the type
+        // in front of the colon is grepped and read rather than translated, so
+        // the setting moves the subject and leaves the form where it is. The
+        // literals are asserted rather than the caveat's presence, because the
+        // caveat is only worth having if the form itself travels intact.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for intent in [Intent::Bare, conflict(crate::vcs::model::OpKind::Merge), run_intent(run_settings(RunMode::Auto, RunScope::Queue))] {
+                let text = in_language(&intent, delivery, &russian());
+                assert!(text.contains("`type: subject`"), "{intent:?}/{delivery:?}: {text}");
+                assert!(
+                    text.contains("feat, fix, docs, refactor, test or chore"),
+                    "{intent:?}/{delivery:?}: {text}"
+                );
+                assert!(
+                    text.contains("form stays English"),
+                    "{intent:?}/{delivery:?}: {text}"
+                );
+            }
+        }
+    }
+
+    /// A run session is told; a filing session is not. The two ends of
+    /// `commits_to_git`, named on their own so a change to the predicate that
+    /// happens to keep the walk above green still has to face these two.
+    #[test]
+    fn a_run_is_told_the_commit_language_and_a_filing_session_is_not() {
+        let run = in_language(
+            &run_intent(run_settings(RunMode::Auto, RunScope::Queue)),
+            SkillDelivery::PluginDir,
+            &russian(),
+        );
+        assert!(run.contains("Write the message of any git commit"), "{run}");
+
+        let filing = in_language(&new_task(Stage::Off), SkillDelivery::PluginDir, &russian());
+        assert!(
+            !filing.contains("Write the message of any git commit"),
+            "a filing session commits nothing: {filing}"
+        );
+    }
+
+    #[test]
     fn the_section_headings_stay_english_whatever_the_task_language_is() {
         // `bd create --validate` matches the wording of a heading and nothing
         // else, so a translated `## Acceptance Criteria` is not a difference of
@@ -2246,7 +2373,11 @@ mod tests {
         // whoever picks the work up months later and by every agent after them,
         // and the repository they sit beside is English throughout.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            for languages in [english(), russian(), Languages { agent: "ja".into(), task: "de".into() }] {
+            for languages in [
+                english(),
+                russian(),
+                Languages { agent: "ja".into(), task: "de".into(), commit: "it".into() },
+            ] {
                 for (spec, plan) in
                     [(Stage::On, Stage::On), (Stage::On, Stage::Off), (Stage::Auto, Stage::Auto)]
                 {
@@ -2267,7 +2398,7 @@ mod tests {
         let text = in_language(
             &Intent::Bare,
             SkillDelivery::PluginDir,
-            &Languages { agent: "xx".into(), task: "xx".into() },
+            &Languages { agent: "xx".into(), task: "xx".into(), commit: "xx".into() },
         );
         assert!(text.contains("Talk to me in English"), "{text}");
         assert!(!text.contains("xx"), "{text}");

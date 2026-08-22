@@ -278,9 +278,10 @@ impl Intent {
 /// The languages a session is started with: the one the agent talks to the
 /// person in, and the one the prose of a bd issue it writes is in.
 ///
-/// Two fields rather than one, because they answer different questions and a
+/// Three fields rather than one, because they answer different questions and a
 /// person may want them apart: a lead who reads Russian may still keep a
-/// tracker their whole team reads in English.
+/// tracker their whole team reads in English, and a repository whose history is
+/// English is not a reason to be spoken to in it.
 ///
 /// It travels on the `Launch` rather than through `terminal_create`'s
 /// signature, so that a session started by a person and a batch started by a
@@ -294,11 +295,22 @@ pub struct Languages {
     /// are the exception and stay English whatever this says — `prompt.rs`
     /// records why.
     pub task: String,
+    /// What a git commit message is written in — both the one the Git panel's
+    /// button asks for and the ones an agent writes with its own hands during a
+    /// run. The Conventional Commits form in front of the colon is the
+    /// exception and stays English whatever this says, for the reason
+    /// `prompt.rs` and `oneshot::commit_prompt` both record: it is grepped and
+    /// read rather than translated.
+    pub commit: String,
 }
 
 impl Default for Languages {
     fn default() -> Self {
-        Self { agent: DEFAULT_LANGUAGE.into(), task: DEFAULT_LANGUAGE.into() }
+        Self {
+            agent: DEFAULT_LANGUAGE.into(),
+            task: DEFAULT_LANGUAGE.into(),
+            commit: DEFAULT_LANGUAGE.into(),
+        }
     }
 }
 
@@ -484,10 +496,13 @@ pub const LANGUAGES: [(&str, &str); 12] = [
     ("tr", "Turkish"),
 ];
 
-/// What both language settings mean when nobody has chosen and what a value off
+/// What every language setting means when nobody has chosen and what a value off
 /// the table falls back to. English rather than an "Auto" that adds nothing to
 /// the prompt: an Auto default would be today's behaviour exactly, so the
-/// setting would do nothing for anybody until they went and changed it.
+/// setting would do nothing for anybody until they went and changed it. It is
+/// the same argument for all three, and for `commitLanguage` it is the letter
+/// of today's behaviour as well — `oneshot::commit_prompt` asked for a message
+/// in English outright before the setting existed.
 pub const DEFAULT_LANGUAGE: &str = "en";
 
 /// Whether this is a language the app ships. `settings/model.rs` asks, so that
@@ -574,7 +589,11 @@ mod tests {
     fn a_session_with_nothing_chosen_speaks_the_default() {
         assert_eq!(
             Languages::default(),
-            Languages { agent: DEFAULT_LANGUAGE.into(), task: DEFAULT_LANGUAGE.into() }
+            Languages {
+                agent: DEFAULT_LANGUAGE.into(),
+                task: DEFAULT_LANGUAGE.into(),
+                commit: DEFAULT_LANGUAGE.into()
+            }
         );
     }
 
