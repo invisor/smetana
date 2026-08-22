@@ -15,17 +15,25 @@
    that offers a button only in one panel is answering a different question
    about where the button should sit. */
 
-/* Why the two project-scoped verbs are refused elsewhere, and what to do about
-   it. `ContextMenu` clips a row's label rather than wrapping it and gives a row
-   no tooltip and no `title`, so the reason has to be in the label itself — the
-   same trade `taskMenu.js` makes, and the reason the caller buys the width. */
-const ELSEWHERE = 'switch to this project first'
+/* Why the two project-scoped verbs are refused elsewhere, and where that reason
+   is written. `ContextMenu` clips a row's label rather than wrapping it and
+   gives a row no tooltip and no `title`, so a reason suffixed onto each label
+   is a reason that runs off the end of the panel — which is what these two did,
+   reading "Set up — switch to this pr…" at a ceiling wide enough for anything
+   else this menu holds.
 
-const withReason = (label, reason) => (reason ? `${label} — ${reason}` : label)
+   **One fact refuses both verbs, so it is said once, above them.** That is
+   `branchMenu.js`'s shape, and its note about the two files is now a
+   description of the same rule rather than a contrast: a caption refuses a
+   group, and how far it reaches is the greying under it — "Remove from list" is
+   live below the separator and visibly not part of the group. A per-row suffix
+   would be for a menu whose rows are refused for *different* reasons, and this
+   one has never been that. */
+const ELSEWHERE = 'Switch to this project first'
 
 /* `configured` and `configBroken` are measured for the active project alone —
-   probing every row would be a command per project for a mark nobody reads — so
-   they are read here only when this row *is* that project. Anywhere else the
+   probing every row would be a command per project for a mark nobody reads —
+   so they are read here only when this row *is* that project. Anywhere else the
    setup item says the bare verb: "Set up" claims nothing about a file, where
    "Set up again" would be claiming another project's state.
 
@@ -34,7 +42,6 @@ const withReason = (label, reason) => (reason ? `${label} — ${reason}` : label
    which half of each row rule the menu keeps. */
 export function projectMenuItems({ active, configured, configBroken, canAddAgent }) {
   const here = Boolean(active)
-  const reason = here ? '' : ELSEWHERE
   /* A file is there, parseable or not — which is the whole of what the setup
      dialog needs in order to choose its words, and why a damaged configuration
      reads "Set up again" like a working one. That damaged case is exactly what
@@ -43,9 +50,10 @@ export function projectMenuItems({ active, configured, configBroken, canAddAgent
   const existing = here && Boolean(configured || configBroken)
 
   return [
+    ...(here ? [] : [{ type: 'label', label: ELSEWHERE }]),
     {
       kind: 'setup',
-      label: withReason(existing ? 'Set up again' : 'Set up', reason),
+      label: existing ? 'Set up again' : 'Set up',
       icon: 'settings-2',
       /* What `SetupProjectModal` opens on: its copy differs between a project
          being set up for the first time and one being set up over. Carried on
@@ -56,7 +64,7 @@ export function projectMenuItems({ active, configured, configBroken, canAddAgent
     },
     {
       kind: 'add-agent',
-      label: withReason('New agent', reason),
+      label: 'New agent',
       icon: 'plus',
       disabled: !here
     },
@@ -65,7 +73,8 @@ export function projectMenuItems({ active, configured, configBroken, canAddAgent
       /* Live on every row, and the one item that is: removing a project from
          the list is about the list, not about the project the window is pointed
          at, and pruning a list is what people do to the rows they are *not*
-         working in. */
+         working in. It is also what the caption above does not reach, which is
+         the whole reason the two groups are drawn apart. */
       kind: 'remove',
       label: 'Remove from list',
       icon: 'x',

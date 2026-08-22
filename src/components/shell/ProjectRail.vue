@@ -82,14 +82,18 @@ const addStyle = computed(() => ({
 }))
 
 /* Which tile the open menu is about, by path. Cleared on close, and read while
-   the menu is up so `projectMenuItems` can word the two project-scoped verbs
-   for the tile they were opened on rather than for the active one. */
+   the menu is up so `projectMenuItems` refuses the two project-scoped verbs —
+   and captions the refusal — for the tile they were opened on rather than for
+   the active one. */
 const menu = ref(null)
 const menuFor = ref(null)
 
-/* `ProjectList`'s number, and its reasoning with it: `ContextMenu` clips a
-   label rather than wrapping it, and the longest row here is still "New agent —
-   switch to this project first". */
+/* `ProjectList`'s number, kept, though what it now has to clear is not a row.
+   The refusal moved off the two labels and into a caption above them
+   (`projectMenu.js`), so the verbs are three short words each and the widest
+   thing in the panel is "Switch to this project first" — and a caption is the
+   one kind of row `ContextMenu` **wraps** rather than clipping, which is why
+   the ceiling is left with room over it rather than trimmed to the new rows. */
 const MENU_W = 260
 
 const items = computed(() =>

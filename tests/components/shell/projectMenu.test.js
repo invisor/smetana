@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { projectMenuItems } from '../../../src/components/shell/projectMenu.js'
 
 const base = { active: true, configured: true, configBroken: false, canAddAgent: true }
-const kinds = (items) => items.filter((i) => i.type !== 'separator').map((i) => i.kind)
+const kinds = (items) => items.filter((i) => !i.type).map((i) => i.kind)
+const caption = (items) => items.find((i) => i.type === 'label')?.label
 const find = (items, kind) => items.find((i) => i.kind === kind)
 
 describe('projectMenuItems', () => {
@@ -10,6 +11,13 @@ describe('projectMenuItems', () => {
     const items = projectMenuItems(base)
     expect(kinds(items)).toEqual(['setup', 'add-agent', 'remove'])
     expect(items.at(-2)).toEqual({ type: 'separator' })
+    // The caption's reach: removal is live below the separator, so it is not
+    // part of the group the caption refuses.
+    expect(kinds(projectMenuItems({ ...base, active: false }))).toEqual([
+      'setup',
+      'add-agent',
+      'remove'
+    ])
     expect(find(items, 'remove').tone).toBe('danger')
   })
 
@@ -37,23 +45,24 @@ describe('projectMenuItems', () => {
     })
   })
 
-  it('greys the two project-scoped verbs elsewhere, and says why in the row', () => {
+  it('greys the two project-scoped verbs elsewhere, and says why once above them', () => {
+    // One fact refuses both, so it is a caption and not a suffix per label: the
+    // suffixed version ran past the panel's ceiling and clipped mid-word.
     const items = projectMenuItems({ ...base, active: false })
-    expect(find(items, 'setup')).toMatchObject({
-      label: 'Set up — switch to this project first',
-      disabled: true
-    })
-    expect(find(items, 'add-agent')).toMatchObject({
-      label: 'New agent — switch to this project first',
-      disabled: true
-    })
+    expect(items[0]).toEqual({ type: 'label', label: 'Switch to this project first' })
+    expect(find(items, 'setup')).toMatchObject({ label: 'Set up', disabled: true })
+    expect(find(items, 'add-agent')).toMatchObject({ label: 'New agent', disabled: true })
+  })
+
+  it('captions nothing on the project the window is pointed at', () => {
+    expect(caption(projectMenuItems(base))).toBeUndefined()
   })
 
   it('claims nothing about the configuration of a project it was not measured for', () => {
     // `configured` and `configBroken` are measured for the active project only,
     // so on any other row they are not this row's to draw.
     const items = projectMenuItems({ ...base, active: false, configured: true })
-    expect(find(items, 'setup')).toMatchObject({ label: 'Set up — switch to this project first' })
+    expect(find(items, 'setup')).toMatchObject({ label: 'Set up' })
     expect(find(items, 'setup').existing).toBe(false)
   })
 

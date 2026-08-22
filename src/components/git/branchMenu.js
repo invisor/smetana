@@ -19,11 +19,14 @@
    own, because it is the only item that leaves the list longer than it found
    it.
 
-   **The reason is a caption, not a suffix per row.** `projectMenu.js` writes its
-   refusal into each label because its items are refused for different reasons
-   and `ContextMenu` gives a row no tooltip and no `title`. Here one fact refuses
-   a whole group at once, so the sentence sits above the group as a caption, said
-   once.
+   **The reason is a caption, not a suffix per row.** One fact refuses a whole
+   group at once, so the sentence sits above the group and is said once.
+   `projectMenu.js` used to be the counter-example and is now the second case of
+   the same rule: it suffixed its one refusal onto both of its refused labels,
+   and `ContextMenu` — which clips a row rather than wrapping it, and gives it
+   no tooltip and no `title` — cut the sentence off mid-word on each of them. A
+   suffix is for a menu whose rows are refused for *different* reasons; neither
+   of these two ever was.
 
    **Two refusals of different reach**, which is the whole shape of this rule. A
    run or an operation already going refuses everything, caption at the top. The

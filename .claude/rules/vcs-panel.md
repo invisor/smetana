@@ -151,8 +151,9 @@ reads as a place that cannot do it.
 What that costs is a gesture nobody is told about: nothing on the row says the two verbs exist. It is
 the deliberate trade, and the only thing paying it back is that the project list one level up answers
 the same gesture the same way. **The refusal is one caption above the rows, not a clause on each**,
-which is where this parts company with `shell/projectMenu.js`: there the items are refused for
-different reasons and each has to say its own, while here one fact refuses all three — the branch is
+which `shell/projectMenu.js` now does too: it suffixed its one refusal onto each of its two refused
+labels until the sentence was found clipped mid-word, a clause per row being for a menu whose rows
+are refused for *different* reasons. Here one fact refuses all three — the branch is
 the one already checked out, a run holds the repository, or git is mid-operation — and the caption
 says it once. The current branch wins that caption even under a run, because somebody right-clicking
 the row with the tick is asking about that row. The menu opens on **every** branch row including the
