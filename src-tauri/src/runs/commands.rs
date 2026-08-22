@@ -11,6 +11,7 @@ use super::browser::{self, BrowserTools};
 use super::config::{self, ConfigState, LiveCheckMode};
 use super::model::{Run, RunError, RunSettings};
 use super::service::{Request, RunHandle};
+use super::usage::{self, AgentUsage};
 
 /// Every outcome is a state, so this cannot fail: a project with no config is
 /// the ordinary case, and an unreadable one is `Broken` with what the OS said.
@@ -112,6 +113,47 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
     });
 
     browser::detect(Path::new(&project), holder)
+}
+
+/// What is left of the subscription, for the Agents tab in the settings window.
+///
+/// The same reading the run gate makes before every batch
+/// (`runs::service::ask`), asked from the other end of the app and answered in
+/// a shape with a person in mind rather than a decision: three distinguishable
+/// states, and the band beside the percentages rather than the thresholds that
+/// produced it. `usage::report` is the whole of that mapping and is where its
+/// tests are; what is left here is getting it its two arguments.
+///
+/// Infallible, like `project_config` and `browser_tools` above and for their
+/// reason: every outcome is a state. A machine with no agent installed, an
+/// agent that cannot be asked and a probe that came back empty are all answers.
+///
+/// **Both halves are blocking and neither may sit on the async runtime.**
+/// `shell_env::path` can be a login shell's whole start-up on its first call,
+/// and the probe is somebody else's CLI with a 60-second ceiling over it — a
+/// minute of the runtime's workers taken out of the file tree and the board,
+/// with nothing on screen saying why. So each goes to the blocking pool, and
+/// they go separately so that the failure of either lands as what it actually
+/// is: a joined task that fell over before the profile was resolved has nobody
+/// to name, while one that fell over during the probe has an agent and no
+/// reading, which is exactly `Unreadable`.
+///
+/// Nothing is cached between this and the run gate, deliberately: a reading is
+/// minutes old the moment it is taken, and a person pressing Refresh is asking
+/// the harness rather than asking us what it last said.
+#[tauri::command]
+pub async fn agent_usage(app: AppHandle) -> AgentUsage {
+    let profile = tokio::task::spawn_blocking(move || {
+        crate::agents::pick(&crate::settings::agent(&app), crate::shell_env::path())
+    })
+    .await
+    .unwrap_or(None);
+    let Some(profile) = profile else { return usage::report(None, None) };
+    // `read` answers `None` for a profile with no `usage_command` without
+    // spawning anything, so this costs nothing for Codex; `report` is what
+    // tells that `None` apart from a probe's.
+    let reading = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
+    usage::report(Some(profile), reading)
 }
 
 /// How everything here reaches the worker, shaped exactly like the tracker's:

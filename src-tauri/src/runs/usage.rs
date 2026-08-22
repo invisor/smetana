@@ -51,7 +51,12 @@ pub const POLL: Duration = Duration::from_secs(10 * 60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What the harness said is left. Percentages used, not remaining.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// `Serialize` because this rides out to the settings window as well as into
+/// the run gate, and `camelCase` because that is what every other type crossing
+/// that boundary uses — `settings/model.rs` and `git.rs` among them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Usage {
     pub session_pct: u8,
     /// When it resets, in the harness's own words. Deliberately a string and
@@ -109,6 +114,82 @@ pub fn decide(usage: Option<&Usage>) -> Decision {
         return Decision::Reduced { pct };
     }
     Decision::Normal
+}
+
+/// Which of `decide`'s three bands a reading falls in, and nothing else from it.
+///
+/// The band travels to the front end while `PAUSE_THRESHOLD` and
+/// `REDUCED_THRESHOLD` stay here. Handing the percentages over and comparing
+/// them against 75 and 90 in JS was the alternative, and it was refused for the
+/// reason two copies of a threshold are always refused: the second copy drifts
+/// from the first with nothing on screen to say it has.
+///
+/// The reading itself is not repeated inside it the way `Decision` repeats it,
+/// since the whole `Usage` is already beside it in the answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Band {
+    Normal,
+    Reduced,
+    Pause,
+}
+
+impl Band {
+    fn of(decision: &Decision) -> Self {
+        match decision {
+            Decision::Normal => Band::Normal,
+            Decision::Reduced { .. } => Band::Reduced,
+            Decision::Pause { .. } => Band::Pause,
+        }
+    }
+}
+
+/// What the settings window is told when it asks what is left of the
+/// subscription.
+///
+/// **Three distinguishable states rather than an `Option<Usage>`**, and the
+/// third is the whole reason for the type. Through an `Option` the front end
+/// could not tell "this agent does not answer that question at all" — Codex has
+/// no `usage_command` — from "this agent was asked and could not answer", and
+/// those are different sentences for a person and different things for them to
+/// do about it. The run gate needs no such distinction, since both of them are
+/// `Decision::Normal` there, which is why `decide` keeps taking an `Option` and
+/// this is a second reading of the same fact rather than a change to that one.
+///
+/// **The agent rides in the answer.** `agents::pick` substitutes the first
+/// installed profile for a configured one that is not on `PATH`, so the block
+/// headed "Claude Code subscription" can be about Codex; the heading has to
+/// name whoever actually answered rather than whoever is showing in the
+/// dropdown.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum AgentUsage {
+    /// There is nothing to ask. Either the profile has no `usage_command` of
+    /// its own, or no agent is installed at all — and that second case is the
+    /// one with no agent to name, which is what the `Option` is for.
+    Unsupported { agent: Option<String> },
+    /// The probe was made and nothing could be read out of it: not signed in,
+    /// not installed, or a CLI that has reworded its own output.
+    Unreadable { agent: String },
+    /// A reading, with the band it falls in.
+    Read { agent: String, usage: Usage, band: Band },
+}
+
+/// The one mapping from "who would answer, and what did they say" to what the
+/// settings window draws. Pure, and the whole of the command behind it: the
+/// command's own body is the two blocking calls that produce these arguments.
+pub fn report(profile: Option<&'static dyn Profile>, reading: Option<Usage>) -> AgentUsage {
+    let Some(profile) = profile else { return AgentUsage::Unsupported { agent: None } };
+    let agent = profile.id().to_owned();
+    // Asked before the reading is looked at, because a profile that cannot be
+    // asked and one that was asked and said nothing both arrive here as `None`
+    // — `read` answers that for every way of failing, this one included.
+    if profile.usage_command().is_none() {
+        return AgentUsage::Unsupported { agent: Some(agent) };
+    }
+    let Some(usage) = reading else { return AgentUsage::Unreadable { agent } };
+    let band = Band::of(&decide(Some(&usage)));
+    AgentUsage::Read { agent, usage, band }
 }
 
 /// How many tasks the next batch may take.
@@ -228,6 +309,71 @@ mod tests {
         for decision in [Decision::Normal, Decision::Pause { pct: 99, resets: None }] {
             assert_eq!(cap(Some(4), &decision), Some(4));
         }
+    }
+
+    #[test]
+    fn an_agent_with_no_way_to_be_asked_is_unsupported_rather_than_a_failed_read() {
+        // Codex overrides neither half of the pair, so the question cannot be
+        // put to it at all. Reading that as a failed probe would send somebody
+        // to check a login that has nothing to do with it.
+        assert_eq!(
+            report(Some(&crate::agents::codex::Codex), None),
+            AgentUsage::Unsupported { agent: Some("codex".into()) }
+        );
+    }
+
+    #[test]
+    fn a_machine_with_no_agent_at_all_has_nobody_to_name() {
+        assert_eq!(report(None, None), AgentUsage::Unsupported { agent: None });
+    }
+
+    #[test]
+    fn a_probe_that_gave_nothing_back_is_unreadable_and_never_a_reading_of_zero() {
+        // The state this whole type exists for: the same `None` a profile with
+        // no command produces, from a profile that has one. A `Usage::default`
+        // here would put "0% used" on the screen of somebody who is simply not
+        // signed in.
+        assert_eq!(
+            report(Some(&crate::agents::claude::Claude), None),
+            AgentUsage::Unreadable { agent: "claude".into() }
+        );
+    }
+
+    #[test]
+    fn a_reading_carries_the_agent_that_answered_and_the_band_it_falls_in() {
+        let AgentUsage::Read { agent, usage: read, band } =
+            report(Some(&crate::agents::claude::Claude), Some(usage(10, 80)))
+        else {
+            panic!("a reading from a profile that can be asked");
+        };
+        assert_eq!(agent, "claude");
+        assert_eq!(read, usage(10, 80));
+        assert_eq!(band, Band::Reduced);
+    }
+
+    #[test]
+    fn the_wire_shape_is_the_one_the_settings_window_reads() {
+        // The names are load-bearing and nothing else pins them: the front end
+        // reads `state`, `agent`, `band` and the four camelCase fields of the
+        // reading, and a rename here would empty the block with every gate
+        // still green.
+        let json = serde_json::to_value(report(
+            Some(&crate::agents::claude::Claude),
+            Some(usage(10, 20)),
+        ))
+        .expect("the answer serializes");
+        assert_eq!(json["state"], "read");
+        assert_eq!(json["agent"], "claude");
+        assert_eq!(json["band"], "normal");
+        assert_eq!(json["usage"]["sessionPct"], 10);
+        assert_eq!(json["usage"]["sessionReset"], "Aug 7 at 8pm");
+        assert_eq!(json["usage"]["weekPct"], 20);
+        assert_eq!(json["usage"]["weekReset"], "Aug 11 at 5:59pm");
+
+        let json = serde_json::to_value(report(Some(&crate::agents::codex::Codex), None))
+            .expect("the answer serializes");
+        assert_eq!(json["state"], "unsupported");
+        assert_eq!(json["agent"], "codex");
     }
 
     #[test]
