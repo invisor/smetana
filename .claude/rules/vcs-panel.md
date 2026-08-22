@@ -116,10 +116,14 @@ predicate is really for: nothing in this app assigns that tab `'git'` today, eve
 switch goes to `'agents'`, so the interesting arrivals are the ones nobody clicked. One predicate
 with no exceptions, because a rule that told a press apart from an assignment would be visible
 nowhere on screen. The arm is what makes any of it work against a `loadRepos` nobody awaits, and it
-is the **first known answer of the visit** that settles it — the moment `vcsState.tree` stops being
-`null`, watched on the tree itself rather than on the count, since a count fires only when the
-number moves and six changes in one project followed by six in the next would arm a visit for
-good. Everything follows from that. A refresh
+is the **first known answer of the visit** that settles it — the moment `vcsState.tree` is
+*replaced*, which `loadStatus` always does rather than writing into the object already in hand.
+Deliberately not "the moment it stops being `null`", which is how the task that built this described
+it: that is true of one project sitting still, and false of the case the rule exists for, since on a
+switch the tree goes from the departing project's object straight to the arriving one's and passes
+through `null` not at all. So the watch is on the identity, and a count would not serve — it fires
+only when the number moves, and six changes in one project followed by six in the next would arm a
+visit for good. Everything follows from that. A refresh
 under somebody already sitting on the tab, by focus or by the panel's own button, unfolds nothing,
 because the visit was spent long before it; a clean tree that goes dirty mid-visit is the same case
 and also draws nothing new; and a read that failed leaves the visit still waiting rather than reading
@@ -135,9 +139,14 @@ so for a moment the store holds the departing project's tree under the arriving 
 visit deciding from it would draw Changes open over an empty list one way and, the other way, spend
 itself on a clean tree that the arriving project's changes can then never open, which is this
 feature failing in exactly the entry case nothing on screen would explain. So the count is read only
-when the store is about this project and settled — `vcsState.project` and `loading`, the guard token
-every call in `stores/vcs.js` already checks itself against — and anything else arms the visit
-instead. An arm is never wrong here, only slower.
+when the store is about this project and settled: `vcsState.project`, which is the guard token every
+call in `stores/vcs.js` already checks itself against, and `loading`, which is no such thing — a
+flag nothing in that store guards on, wanted here for the narrower window where `loadRepos` has
+claimed the new project before its first `await` and the tree in hand is still the previous one.
+Anything else arms the visit instead, and an arm is never wrong here, only slower. The predicate is
+`answeredCount` in `components/git/changesFold.js` rather than a condition in the view, which is
+this family's whole reason: the one defect this feature shipped with lived in the half that was
+inside the `.vue`, where no test in this repository could reach it.
 
 A caption carries `divided`, the hairline above it, and the repositories deliberately do not: every
 section here is `--row-h` and quiet, so with nothing between them the three ran together into one

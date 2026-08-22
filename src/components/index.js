@@ -95,6 +95,7 @@ export { branchRows, currentChain, expandedFolders, toggleFolder } from './git/b
 export { changeStatus } from './git/changeStatus.js'
 export {
   NO_VISIT,
+  answeredCount,
   changesVisible,
   enterGitTab,
   gitAnswered,

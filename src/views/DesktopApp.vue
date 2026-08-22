@@ -23,6 +23,7 @@ import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
 import {
   NO_VISIT,
+  answeredCount,
   changesVisible,
   enterGitTab,
   gitAnswered,
@@ -599,30 +600,20 @@ const ROWS_KEY = { repos: 'reposRows', branches: 'branchRows' }
    because moving to another project leaves `sideTab` reading `'git'` before and
    after, and the tree it is about is a different tree.
 
-   **And that last case is why the count is guarded rather than simply read.**
-   `moveTo` sets `settings.activeProject` synchronously and only reaches
-   `loadRepos` after an awaited layout read, so this watcher flushes a microtask
-   later with the store still holding the project being left — and `loadRepos`
-   deliberately does not clear `vcsState.tree`, so the old tree stands until the
-   new `vcs_status` lands. Read unguarded, a switch would decide the visit from
-   another project's working tree: Changes drawn open over an empty list, or —
-   worse, because it is this feature failing silently — a visit spent on a clean
-   tree that the arriving project's five changes can no longer open.
-
-   So the store has to be about this project (`vcsState.project`, the guard
-   token every call in that file already checks against) and settled. `loading`
-   is in there for the narrower window on the same defect: it covers the moment
-   after `loadRepos` has claimed the new project and before its first status
-   answers, where the tree in hand is still the previous one. Anything else is
-   "not read yet", which arms the visit — and an arm is never wrong here, only
-   slower. */
+   **And that last case is why the count is not simply read**: on a switch the
+   store still holds the departing project's tree, so a count taken here would
+   be about somewhere else. Which counts may be believed is `answeredCount` in
+   `changesFold.js`, with the window it closes and the measurement behind it —
+   the rule is there and not here for the reason the module exists at all, since
+   nothing in this file can be reached by a test. What is left in the view is
+   the three field reads and the wiring, which genuinely cannot move. */
 const changesVisit = ref(NO_VISIT)
 watch(
   [activePath, () => project.sideTab],
   ([path, tab]) => {
     if (tab !== 'git') return
-    const answered = vcsState.project === path && !vcsState.loading
-    changesVisit.value = enterGitTab(answered ? dirtyCount.value : null)
+    const store = { project: vcsState.project, loading: vcsState.loading, count: dirtyCount.value }
+    changesVisit.value = enterGitTab(answeredCount(store, path))
   },
   { immediate: true }
 )
@@ -630,11 +621,15 @@ watch(
    git has answered.
 
    The source is the **tree** and not `dirtyCount`, because what settles a visit
-   is git having answered at all — the moment `vcsState.tree` stops being `null`
-   — and a count only fires a watcher when the number changes. Keyed on the
-   count, a switch from a project with six uncommitted files to another with six
-   would leave the visit armed for good and never open the section. The count is
-   still the only spelling of "how dirty": it is read here, not re-derived. */
+   is git having answered at all — the moment the tree is *replaced*, which
+   `loadStatus` always does rather than writing into the object in hand. Not
+   "the moment it stops being `null`": on a project switch it goes from the
+   departing project's object straight to the arriving one's and passes through
+   `null` not at all, and that case is the whole reason this watcher is keyed on
+   an identity. A count would not do it — it fires only when the number moves,
+   so six changes in one project followed by six in the next would leave a visit
+   armed for good. The count is still the only spelling of "how dirty": it is
+   read here, not re-derived. */
 watch(
   () => vcsState.tree,
   () => {

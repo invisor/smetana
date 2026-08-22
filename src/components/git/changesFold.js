@@ -49,6 +49,43 @@ export function changesVisible(stored, visit) {
 }
 
 /**
+ * The count a visit may be decided from, or `null` for "nothing about here".
+ *
+ * `store` is three fields of `stores/vcs.js`, read at the moment of arrival:
+ * `{ project, loading, count }`, where `count` is that store's own
+ * `dirtyCount`. `path` is the project being arrived at.
+ *
+ * **The count is handed in and never derived here, and that is deliberate.**
+ * `dirtyCount` in the store against the changes caption in `GitPanel.vue` are
+ * already two spellings of one rule, held to the promise that the number in the
+ * scope bar is the rows of the panel's list; a `tree.changes.length` in this
+ * file would be a third, and the first to drift. So this function filters a
+ * count rather than computing one, and `tree` is not among its fields at all —
+ * `dirtyCount` is `null` exactly when `tree` is, so an unread tree already
+ * arrives here as an unread count and nothing is lost by not looking.
+ *
+ * What it is guarding against is a count about **somewhere else**. `moveTo`
+ * sets the active project synchronously and only reaches `loadRepos` after an
+ * awaited layout read, and `loadRepos` deliberately does not clear the tree, so
+ * a switch reaches this with the departing project's changes still in the
+ * store. `project` catches that window. `loading` catches the narrower one
+ * behind it: `loadRepos` claims the new project before its first `await` and
+ * holds `loading` across `vcs_repos` → `selectRepo` → `loadStatus`, so between
+ * those two moments the project matches while the tree in hand is still the
+ * previous one. Both were measured against the real defect rather than
+ * imagined — the project term alone leaves a section drawn open over an empty
+ * list.
+ *
+ * Answering `null` is always the safe way to be wrong: it arms the visit, which
+ * costs a wait. Answering with somebody else's number spends it, and a visit
+ * spent cannot be given back until the person leaves the tab and returns.
+ */
+export function answeredCount({ project, loading, count }, path) {
+  if (project !== path || loading) return null
+  return count ?? null
+}
+
+/**
  * What arriving on the Git tab leaves behind.
  *
  * `dirty` is how many uncommitted files the selected repository has — the
@@ -58,14 +95,10 @@ export function changesVisible(stored, visit) {
  * it" is the whole of what this file needs to know, it is already spelled once
  * in the store, and a second spelling of one rule is the half that drifts.
  *
- * **`null` also means a count about somewhere else**, and that is the caller's
- * side of the bargain rather than a note about it: a project switch reaches
- * this before the arriving project's `vcs_status` does, with the store still
- * holding the tree of the project being left, and a count about another
- * repository is not a late answer but a wrong one. Handing `null` there arms
- * the visit, which costs nothing but a wait; handing the stale number spends
- * it, and a visit spent on somebody else's clean tree can never be given back
- * — which is this whole feature failing with nothing on screen to say so.
+ * **`null` also means a count about somewhere else**, which is why the caller
+ * reaches this through `answeredCount` above rather than handing over whatever
+ * the store happens to hold: a count about another project is not a late answer
+ * but a wrong one.
  *
  * The answer is very often already in by the time somebody arrives — the tab
  * was open a minute ago, or this is a second visit — which is why this is the

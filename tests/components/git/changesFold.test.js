@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   NO_VISIT,
+  answeredCount,
   changesVisible,
   enterGitTab,
   gitAnswered,
@@ -28,6 +29,62 @@ describe('what the Changes section is drawn as', () => {
 
   it('is the override where a visit has one', () => {
     expect(changesVisible(false, { override: true, armed: false })).toBe(true)
+  })
+})
+
+/* `stores/vcs.js` as this rule reads it: which project the store is about,
+   whether it is still mid-load, and its own `dirtyCount`. */
+const HERE = '/Users/you/dev/smetana'
+const THERE = '/Users/you/dev/notes'
+const settled = (over) => ({ project: HERE, loading: false, count: DIRTY, ...over })
+
+describe('which count a visit may be decided from', () => {
+  it('is the store\'s own count once it is about this project and settled', () => {
+    expect(answeredCount(settled(), HERE)).toBe(DIRTY)
+    expect(answeredCount(settled({ count: CLEAN }), HERE)).toBe(CLEAN)
+  })
+
+  /* The defect this rule was written for. `moveTo` sets the active project
+     synchronously and only reaches `loadRepos` after an awaited layout read,
+     and `loadRepos` deliberately leaves the tree standing — so a switch arrives
+     here with the departing project's changes still in the store. Believing
+     them draws Changes open over an empty list one way and, the other way,
+     spends the visit on a clean tree that the arriving project's changes can
+     then never open. */
+  it('is nothing while the store is still about the project being left', () => {
+    expect(answeredCount({ project: THERE, loading: false, count: DIRTY }, HERE)).toBe(null)
+  })
+
+  /* The narrower window behind the same defect, and it is not hypothetical:
+     `loadRepos` claims the new project before its first `await` and holds
+     `loading` across `vcs_repos` → `selectRepo` → `loadStatus`, so the project
+     matches here while the tree in hand is still the previous one. Guarded on
+     the project alone, this case fails exactly as the unguarded version does. */
+  it('is nothing while the store is mid-load, even about the right project', () => {
+    expect(answeredCount(settled({ loading: true }), HERE)).toBe(null)
+  })
+
+  /* A read that failed leaves `vcsState.tree` at `null`, which reaches this as
+     a `null` count — the `null`-and-never-`0` opposition the store keeps. Not
+     knowing is not a clean tree, so the visit is owed its opening still. */
+  it('is nothing when the tree could not be read', () => {
+    expect(answeredCount(settled({ count: null }), HERE)).toBe(null)
+    expect(enterGitTab(answeredCount(settled({ count: null }), HERE)).armed).toBe(true)
+  })
+
+  /* Before anything has been read at all — the app starting with Git already
+     the open tab, where the store is about no project yet. */
+  it('is nothing before the store is about any project', () => {
+    expect(answeredCount({ project: null, loading: false, count: null }, HERE)).toBe(null)
+  })
+
+  /* End to end over the switch, which is what the three above add up to: the
+     visit arms instead of spending itself, and the arriving project's own
+     answer is what opens the section. */
+  it('arms the visit on a switch, and the arriving answer settles it', () => {
+    const waiting = enterGitTab(answeredCount({ project: THERE, loading: true, count: CLEAN }, HERE))
+    expect(changesVisible(false, waiting)).toBe(false)
+    expect(changesVisible(false, gitAnswered(waiting, DIRTY))).toBe(true)
   })
 })
 
