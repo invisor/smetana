@@ -20,6 +20,11 @@ import { sameScope } from '../components/run/runScopes.js'
    inside the notifications store — would make the cards a frame late for no
    gain. */
 import { syncRunCards } from './notifications.js'
+/* The other half of what a finished run is announced with. The bell is the
+   visual delivery and this is the audible one, for somebody who is not looking
+   at the screen at all. */
+import { chime } from '../chime.js'
+import { settings } from './settings.js'
 
 const NONE = { state: 'missing' }
 
@@ -52,6 +57,12 @@ export const runsState = reactive({
    that started after it. Insertion keeps the list oldest-first the way the
    worker answers `run_state`, so a bar segment does not jump when a response
    and an event interleave. */
+/* Every run token this window has already made a noise about. In memory only,
+   like `deliveredRuns` in `notifications.js` and for the same reason: a token
+   is issued once per app process and never reused, so nothing here has to
+   survive a restart — and a run does not either. */
+const chimedRuns = new Set()
+
 function upsert(run) {
   const at = runsState.runs.findIndex((r) => r.token === run.token)
   if (at !== -1) runsState.runs[at] = run
@@ -59,6 +70,25 @@ function upsert(run) {
   /* A run reaching `stopped` is what puts its card in the bell, and this is the
      one place a run's state ever changes. */
   syncRunCards()
+  /* And the same moment is what makes the noise — the one somebody asleep in
+     another room is listening for. Once per token: the summary arrives seconds
+     after the ending and is another event about the same stopped run.
+
+     Here rather than in `loadRun`, deliberately. That function replaces the
+     whole list on every window focus and every project switch, so a chime there
+     would announce a run that stopped before lunch at the moment somebody came
+     back to the app. The cost is that a run stopping while this window is
+     pointed at another project is never announced at all — `run:state` is
+     filtered to the active project — and silence about another project's run is
+     the better failure of the two.
+
+     The sound is played whichever way the report was delivered: the bell and
+     the tab are two deliveries of one report and never both, but this is about
+     the run having ended. */
+  if (run?.state?.kind === 'stopped' && !chimedRuns.has(run.token)) {
+    chimedRuns.add(run.token)
+    chime(settings.notifications.runFinished)
+  }
 }
 
 /* An offer to set the project up, not a warning: most projects are here, and

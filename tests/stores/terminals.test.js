@@ -1,5 +1,15 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
+
+/* The DOM half of the sound, stood in for — the same seam `runs.test.js` uses,
+   and for the same reason: what this store is answerable for is which sound it
+   asks for, not whether an element played it. */
+const chime = vi.fn()
+vi.mock('../../src/chime.js', () => ({ chime: (id) => chime(id) }))
+
+beforeEach(() => {
+  chime.mockClear()
+})
 
 const session = (over = {}) => ({
   id: 1,
@@ -1473,5 +1483,62 @@ describe('project states', () => {
     expect(loaded.stores.terminals.terminalState.sessions).toHaveLength(1)
     expect(loaded.stores.terminals.projectState('/p')).toBe('idle')
     complained.mockRestore()
+  })
+})
+
+describe('the sound an agent waiting for an answer makes', () => {
+  it('plays on the way into needs-you, and not on every event after it', async () => {
+    const { emit, stores, nextTick } = await ready()
+    stores.settings.settings.notifications.needsAttention = 'sound-4'
+
+    await emit('terminal:state', session({ state: 'needs-you', question: { text: 'May I?' } }))
+    await nextTick()
+    expect(chime).toHaveBeenCalledWith('sound-4')
+
+    await emit('terminal:state', session({ state: 'needs-you', question: { text: 'May I?' } }))
+    await nextTick()
+    expect(chime).toHaveBeenCalledTimes(1)
+
+    // Answered, then asked again: that is a second wait and a second sound.
+    await emit('terminal:state', session({ state: 'running' }))
+    await emit('terminal:state', session({ state: 'needs-you', question: { text: 'And this?' } }))
+    await nextTick()
+    expect(chime).toHaveBeenCalledTimes(2)
+  })
+
+  it('a session of another project is announced too', async () => {
+    // The marks cover every project — that is what the rail's dots are drawn
+    // from — and somebody supervising two projects overnight is waiting on
+    // both, which a watcher over `terminalState.sessions` could not have said.
+    const { emit, nextTick } = await ready()
+
+    await emit('terminal:state', session({ id: 9, project: '/other', state: 'needs-you' }))
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledTimes(1)
+  })
+
+  it('sessions already waiting when the window opens are silent', async () => {
+    // The first read of `terminal_marks` is the past, not an event. Announcing
+    // it would make starting the app a noise about something that happened
+    // before it.
+    const loaded = await loadStores()
+    loaded.ipc.on('terminal_list', [])
+    loaded.ipc.on('terminal_marks', [mark({ id: 4, state: 'needs-you' })])
+    await loaded.stores.terminals.initTerminals()
+
+    expect(chime).not.toHaveBeenCalled()
+  })
+
+  it('off is silence, not a default sound', async () => {
+    const { emit, stores, nextTick } = await ready()
+    stores.settings.settings.notifications.needsAttention = 'off'
+
+    await emit('terminal:state', session({ state: 'needs-you' }))
+    await nextTick()
+
+    // `chime` refuses `off` itself, so there is one place that knows what
+    // silence is.
+    expect(chime).toHaveBeenCalledWith('off')
   })
 })

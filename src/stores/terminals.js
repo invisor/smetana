@@ -17,6 +17,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { basename } from '../paths.js'
+/* The audible half of what the app has to say. Here rather than in a watcher
+   over the session list, because the list holds the active project only and the
+   marks below hold every project — and somebody supervising two overnight is
+   waiting on both. */
+import { chime } from '../chime.js'
 import { runsState } from './runs.js'
 import { settings } from './settings.js'
 import { isLockIssue, trackerState } from './tracker.js'
@@ -613,6 +618,11 @@ export async function initTerminals() {
   }
   await listen('terminal:state', (event) => {
     const session = event.payload
+    /* The state this session was last known to be in, read before the mark is
+       replaced: it is the whole of what tells a session that has just started
+       waiting from one that has been waiting for an hour and is emitting
+       again. */
+    const before = marks.get(session.id)?.state
     /* Before anything else, because `upsert` returns early for a session of
        another project and the mark is wanted for exactly those: the rail draws
        a dot for every project, and this window is pointed at one of them. */
@@ -626,6 +636,16 @@ export async function initTerminals() {
          lighting the tile for good. */
       kind: session.work?.kind
     })
+    /* An agent that has stopped to ask something is the loudest thing this app
+       has to say, and the one somebody in another room is listening for. On the
+       way *in* only, so a session re-announcing the same wait costs nothing —
+       and for every project, because the marks cover every project. The first
+       read of `terminal_marks` above is deliberately not routed through here:
+       those sessions were already waiting before this window opened, and
+       announcing them would make starting the app a noise about the past. */
+    if (before !== 'needs-you' && session.state === 'needs-you') {
+      chime(settings.notifications.needsAttention)
+    }
     /* Asked before the upsert, because the upsert is what makes it false: a
        session nobody has seen before is a start, anything else is one of the
        many state events a live session goes on emitting — a question, an exit —

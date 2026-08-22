@@ -1,5 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadStores } from '../support/stores.js'
+
+/* The DOM half of the sound, stood in for. Mocked here rather than at
+   `HTMLMediaElement.prototype.play`, because the seam this store is answerable
+   for is which sound it asks for — whether an element then plays is
+   `chime.js`'s business and a browser's. `vi.mock` is hoisted above the imports
+   and survives the `vi.resetModules()` `loadStores` does. */
+const chime = vi.fn()
+vi.mock('../../src/chime.js', () => ({ chime: (id) => chime(id) }))
+
+beforeEach(() => {
+  chime.mockClear()
+})
 
 const OK = { state: 'ok', config: { project: { repos: ['.'] } } }
 
@@ -386,5 +398,79 @@ describe('what this machine can drive a browser with', () => {
     await stores.runs.loadBrowserTools('/p')
 
     expect(stores.runs.runsState.browserTools).toBe(null)
+  })
+})
+
+describe('the sound a finished run makes', () => {
+  const stopped = (over = {}) => ({
+    ...RUN,
+    state: { kind: 'stopped', reason: { kind: 'queue_empty' } },
+    session: null,
+    ...over
+  })
+
+  it('a run reaching its ending plays the chosen sound exactly once', async () => {
+    const { emit, ipc, stores, nextTick } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+    stores.settings.settings.notifications.runFinished = 'sound-3'
+
+    await emit('run:state', RUN)
+    await nextTick()
+    expect(chime).not.toHaveBeenCalled()
+
+    await emit('run:state', stopped())
+    await nextTick()
+    expect(chime).toHaveBeenCalledWith('sound-3')
+
+    // The summary lands seconds after the ending and is another event about the
+    // same stopped run. One run, one sound.
+    await emit('run:state', stopped({ summary: { tasks: null } }))
+    await nextTick()
+    expect(chime).toHaveBeenCalledTimes(1)
+  })
+
+  it('another run gets its own sound', async () => {
+    const { emit, ipc, stores, nextTick } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+
+    await emit('run:state', stopped({ token: 11 }))
+    await emit('run:state', stopped({ token: 12 }))
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledTimes(2)
+  })
+
+  it('a run this window never saw stop is not announced when the list is reread', async () => {
+    // `loadRun` replaces the list on every window focus and every project
+    // switch: a sound from there would announce this morning's run this
+    // afternoon.
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('run_state', [stopped()])
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+
+    await stores.runs.loadRun('/p')
+
+    expect(chime).not.toHaveBeenCalled()
+  })
+
+  it('off is silence, not a default sound', async () => {
+    const { emit, ipc, stores, nextTick } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+    stores.settings.settings.notifications.runFinished = 'off'
+
+    await emit('run:state', stopped())
+    await nextTick()
+
+    // `chime` itself refuses `off`; the store still hands it over rather than
+    // deciding here, so there is one place that knows what silence is.
+    expect(chime).toHaveBeenCalledWith('off')
   })
 })
