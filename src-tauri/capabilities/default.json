@@ -10,6 +10,7 @@
     "core:default",
     "core:window:allow-destroy",
     "window-state:default",
+    "autostart:default",
     "dialog:allow-open",
     "clipboard-manager:allow-write-text",
     "opener:allow-reveal-item-in-dir",
