@@ -125,17 +125,23 @@ const unguard = () => {
 
 let capture = null
 let moved = false
-/* The box of the held tab, kept from the moment the row last settled. Nothing
-   moves again until the pointer leaves it, and this is the one thing here the
-   board does not need.
-   Columns are all one width, so after a swap the pointer is over the held
-   column again by construction and the next move finds it already where it
-   belongs. A tab is as wide as its label up to 200px, and that guarantee is
-   simply false: a narrow tab dragged through a wide one lands in a position
-   where the neighbour is under the pointer once more, and the row would then
-   trade the two back and forth at the frame rate with the pointer standing
-   still. `settling` covers the frame between the draft changing and the row
-   being redrawn, during which no box can be measured. */
+/* The box the pointer is standing in, measured from the moment the row last
+   settled. Nothing moves again until the pointer leaves it, and this latch is
+   the one thing here the board does not need.
+
+   Columns are all one width, so after a swap the pointer is over the held column
+   again by construction, and the next move finds it already where it belongs. A
+   tab is as wide as its label up to 200px and that guarantee is simply false: a
+   narrow tab dragged through a wide one comes to rest *beside* the pointer
+   rather than under it, so the two would trade places back and forth at the
+   frame rate with the pointer standing still. Latching on the held tab's own box
+   is no help at all, since that is precisely the box the pointer is not in —
+   what is latched is whichever cell the pointer actually ended up in, and
+   leaving that cell is then always a move in the direction of travel.
+
+   `settling` covers the frame between the draft changing and the row being
+   redrawn, during which nothing can be measured where it is about to stand: the
+   cells still sit where they sat before the swap. */
 let lock = null
 let settling = false
 
@@ -162,8 +168,10 @@ const tabAt = (x) => {
   return boxes.length - 1
 }
 
-const heldBox = () => {
-  const box = cells()[rest.value.findIndex((tab) => tab.id === held.value)]
+/* One cell's horizontal extent, or nothing when the row no longer has that
+   index — a tab can close under a drag. */
+const cellBox = (at) => {
+  const box = cells()[at]
   if (!box) return null
   const { left, right } = box.getBoundingClientRect()
   return { left, right }
@@ -177,6 +185,67 @@ const onKeydown = (event) => {
   end(false)
 }
 
+/* A press is not yet a drag, and on this row that distinction is the whole of
+   whether a tab can still be clicked at all.
+
+   Pointer capture retargets the compatibility mouse events. With the capture
+   taken in `pointerdown` the `mouseup` goes to the strip, the `click` is then
+   dispatched at the nearest common ancestor — the strip again — and `Tab.vue`'s
+   own `@click` and `@dblclick` never fire: a single click stops selecting a tab
+   and a double click stops promoting a preview. `KanbanBoard.vue` captures on
+   the press and is right to, because a column header carries no click of its
+   own. A tab carries two, and they are the most used gestures in the centre
+   column, so this is the one place where copying the board verbatim was not
+   safe.
+
+   So a press only **arms**: it remembers the tab and the box it was pressed in,
+   and waits. A release inside that box takes no capture at all and stays an
+   ordinary click, double click included. The drag begins the moment the pointer
+   leaves that box sideways — the same threshold the latch uses for every swap
+   after it, which is why there is no separate one at the start.
+
+   The page guards go on here rather than at the drag's start: a press that has
+   not moved yet may still become one, and a text selection begun in the meantime
+   would outlive it. Neither costs a plain click anything — the body's cursor is
+   not the tab's, and the tab keeps the `grab` of its own. */
+let armed = null
+
+const armedOff = () => {
+  window.removeEventListener('pointermove', onArmedMove)
+  window.removeEventListener('pointerup', onArmedUp)
+  window.removeEventListener('pointercancel', onArmedUp)
+  armed = null
+}
+
+const onArmedUp = () => {
+  armedOff()
+  unguard()
+}
+
+const onGrab = (id, event) => {
+  if (!movable.value || draft.value || armed) return
+  const box = cellBox(rest.value.findIndex((tab) => tab.id === id))
+  if (!box) return
+  armed = { id, pointerId: event.pointerId, box }
+  guard()
+  /* On the window rather than on the strip: until the capture is taken there is
+     nothing making the moves arrive at any one element, and a pointer that left
+     the strip — past its right-hand edge, or out of the window altogether —
+     would leave the press armed with nothing to disarm it. */
+  window.addEventListener('pointermove', onArmedMove)
+  window.addEventListener('pointerup', onArmedUp)
+  window.addEventListener('pointercancel', onArmedUp)
+}
+
+const onArmedMove = (event) => {
+  if (!armed || event.pointerId !== armed.pointerId) return
+  if (event.clientX >= armed.box.left && event.clientX <= armed.box.right) return
+  const { id, pointerId } = armed
+  armedOff()
+  begin(id, pointerId)
+  onPointermove(event)
+}
+
 /* Capture goes on the scrolling strip, not on the tab that was pressed. It is
    what makes a release outside the window still end the drag — and taking it
    here means every move and release arrives at one element regardless of which
@@ -186,21 +255,17 @@ const onKeydown = (event) => {
    knows. Letting that escape would leave the page unselectable with no drag left
    to release it, so a refused capture costs the drag once the pointer leaves the
    strip, and nothing more. */
-const onGrab = (id, event) => {
-  if (!movable.value || draft.value) return
+const begin = (id, pointerId) => {
   held.value = id
   draft.value = rest.value.map((tab) => tab.id)
   moved = false
-  /* Latched from the start rather than from the first swap: the tab under the
-     pointer is the held one, so until the pointer leaves its box there is
-     nothing to decide — and that doubles as the threshold that keeps a plain
-     click from being a drag of nothing. */
-  lock = heldBox()
-  guard()
+  /* Unlatched: the pointer has just left the pressed tab's box, which is exactly
+     the condition the latch spends the rest of the drag waiting for. */
+  lock = null
   window.addEventListener('keydown', onKeydown)
   try {
-    scrollerRef.value.setPointerCapture(event.pointerId)
-    capture = event.pointerId
+    scrollerRef.value.setPointerCapture(pointerId)
+    capture = pointerId
   } catch {
     capture = null
   }
@@ -221,13 +286,10 @@ const onPointermove = (event) => {
   if (next === order) return
   draft.value = next
   moved = true
-  /* The row has not been redrawn yet, so the held tab's new box cannot be
-     measured until the next tick. Until then nothing else may move: measuring
-     the old box would latch onto a position the tab has already left. */
   settling = true
   nextTick(() => {
     settling = false
-    lock = heldBox()
+    lock = cellBox(tabAt(x))
   })
 }
 
@@ -255,8 +317,10 @@ const end = (commit = true) => {
   if (commit && changed) emit('reorder', order)
 }
 
-// A drag that outlives the component would leave the page unselectable.
+// A press or a drag that outlives the component would leave the page
+// unselectable, and its window listeners attached to nothing.
 onBeforeUnmount(() => {
+  armedOff()
   unguard()
   window.removeEventListener('keydown', onKeydown)
 })

@@ -145,19 +145,36 @@ describe('a preview tab keeps its place', () => {
     expect(ids()).toEqual(['kanban', 'b.js'])
   })
 
-  /* A path can already be in the order from before it was closed. Two entries
-     for one tab would put it back at the older of the two places on the next
-     load, and nothing on screen would say why. */
-  it('leaves no second mention of a file the order already knew', async () => {
-    await opened('a.js')
+  /* A path can already be in the order from a drag before it was closed —
+     closing a tab prunes nothing — and the older entry is as likely to sit in
+     front of the preview's slot as behind it. `orderTabs` takes the first
+     mention, so a survivor to the left would draw the incoming file at the old
+     position rather than in the slot the outgoing preview held, and `sane_list`
+     in Rust would drop the second on the way to disk and cement it. */
+  it('leaves no second mention of a file the order already knew, on either side', async () => {
     await opened('b.js')
-    state().tabOrder = ['b.js', 'a.js']
-    tabs.closeTab('b.js')
-    tabs.openFile('preview.js')
+    tabs.openFile('p.js')
+    await vi.waitFor(() => expect(tabs.buffers.get('p.js').loading).toBe(false))
+    // `x.js` was dragged to the front of the row and closed since; the preview
+    // sits behind `b.js`, which is where the incoming tab has to land.
+    state().tabOrder = ['x.js', 'b.js', 'p.js']
 
-    tabs.openFile('b.js')
+    tabs.openFile('x.js')
 
-    expect(state().tabOrder).toEqual(['b.js', 'a.js'])
+    expect(state().tabOrder).toEqual(['b.js', 'x.js'])
+    expect(ids()).toEqual(['kanban', 'b.js', 'x.js'])
+  })
+
+  it('and the same when the older mention sits behind the slot', async () => {
+    await opened('b.js')
+    tabs.openFile('p.js')
+    await vi.waitFor(() => expect(tabs.buffers.get('p.js').loading).toBe(false))
+    state().tabOrder = ['p.js', 'b.js', 'x.js']
+
+    tabs.openFile('x.js')
+
+    expect(state().tabOrder).toEqual(['x.js', 'b.js'])
+    expect(ids()).toEqual(['kanban', 'x.js', 'b.js'])
   })
 })
 

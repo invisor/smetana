@@ -246,10 +246,18 @@ const rawTabList = computed(() => [
 export const tabList = computed(() => orderTabs(rawTabList.value, project().tabOrder))
 
 /* The part of the row a person can rearrange, and the part `neighbourIn` is
-   asked about: the pinned run is not in it. Written by hand rather than taken
-   from `tabOrder.js` because there is no third reader — that module slices the
-   leading run for its own purpose, and this filter says the same thing about
-   the same list, which `tabList` has already put in one order. */
+   asked about: the pinned run is not in it.
+
+   A filter by kind, where `tabOrder.js` and `TabBar.vue` both slice off the
+   *leading* run instead — and the difference is deliberate rather than a second
+   reading of one rule. Those two are about a **position**: the module has to put
+   the pinned tabs back at the front, and the component has to know where the
+   `afterPinned` slot goes, so for them "pinned" means "at the head of the row".
+   This is about **membership** — which tabs are candidates at all — and it has
+   no head to measure from, since `tabList` has already been through `orderTabs`
+   by the time it is read. The two agree exactly while a pinned tab appears
+   nowhere but the front, which is `PINNED` and `AGENT_TAB`'s doing at the top of
+   this file and the one thing that would have to change first. */
 const movableIds = () => tabList.value.filter((tab) => tab.kind !== 'pinned').map((tab) => tab.id)
 
 export const activeBuffer = computed(() => buffers.get(project().activeTab) ?? null)
@@ -319,17 +327,19 @@ async function load(path, { force = false } = {}) {
    when the order has never heard of the outgoing tab — which is the ordinary
    case, since nothing writes to the field until somebody drags something.
 
-   The second mention is taken out rather than left: a path can already be in
-   the order from a drag before it was closed, and two entries for one tab would
-   put it back where the older of them stood on the next reload. `orderTabs`
-   takes the first mention and `sane_list` in Rust drops the repeat, so the cost
-   of leaving it would be silent rather than visible — which is the reason to
-   deal with it here. */
+   The other mention is taken out rather than left, and it is searched for on
+   **both** sides of the replaced index. A path can already be in the order from
+   a drag before it was closed — closing a tab prunes nothing — and that older
+   entry is as likely to sit in front of the preview's slot as behind it. Two
+   entries for one tab is not a tidiness matter: `orderTabs` takes the first
+   mention, so a survivor to the left would draw the incoming file at the old
+   position instead of the slot the outgoing preview held, and `sane_list` in
+   Rust drops the second on the way to disk, which cements it. */
 function replaceInOrder(state, from, to) {
   const at = state.tabOrder.indexOf(from)
   if (at === -1) return
   state.tabOrder.splice(at, 1, to)
-  const again = state.tabOrder.indexOf(to, at + 1)
+  const again = state.tabOrder.findIndex((id, i) => i !== at && id === to)
   if (again !== -1) state.tabOrder.splice(again, 1)
 }
 

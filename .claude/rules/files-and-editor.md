@@ -197,22 +197,34 @@ is asked about the **movable** part of the row, deliberately not the whole of it
 always present there would be no "nobody left" case, and closing the last file tab while an agent
 runs would land on the Agent tab instead of the board.
 
-The gesture is `TabBar.vue`'s and is `KanbanBoard.vue`'s down to the last decision — capture on the
-scrolling strip, a draft order that lives only while the pointer is down, the row rearranging live
-under the pointer with nothing following the cursor and nothing transformed, Esc abandoning,
+The gesture is `TabBar.vue`'s and is `KanbanBoard.vue`'s in almost every decision — a draft order
+that lives only while the pointer is down, the row rearranging live under the pointer with nothing
+following the cursor and nothing transformed, capture on the scrolling strip, Esc abandoning,
 `pointercancel` and `lostpointercapture` ending it too, and the same pair of page-wide guards.
 HTML5 `draggable` is **not** an option here and the reason is not taste: `dragDropEnabled` is on in
 `tauri.conf.json`, so Tauri intercepts a drag at the window level before the webview sees it, and
 `stores/attachments.js` and `stores/terminals.js` both hang on `onDragDropEvent` — turning it off
 would take dropped files away from the terminal and from the new-task dialog.
 
-One thing the board did not need: **a latch on the held tab's box.** Columns are one width, so after
-a swap the pointer is over the held column again by construction; tabs are as wide as their labels up
-to 200px and that guarantee is simply false, so a narrow tab dragged through a wide one lands where
-the neighbour is under the pointer once more and the row would trade the two back and forth at the
-frame rate with the pointer standing still. Nothing moves again until the pointer leaves the held
-tab's box, and the box is re-measured a tick after each swap, since the row has not been redrawn at
-the moment the draft changes.
+Two places where copying the board verbatim was wrong, and both cost a real defect before they were
+found.
+
+**The capture is not taken on the press.** Pointer capture retargets the compatibility mouse events,
+so a capture in `pointerdown` sends the `mouseup` to the strip, has the `click` dispatched at the
+nearest common ancestor — the strip again — and `Tab.vue`'s `@click` and `@dblclick` then never fire:
+a single click stops selecting a tab and a double click stops promoting a preview. The board does
+capture on the press and is right to, because a column header carries no click of its own. So a press
+here only **arms** — it remembers the tab and the box it was pressed in — and the capture is taken
+only when the pointer leaves that box sideways. A release inside it was an ordinary click all along.
+
+**The latch is on the cell the pointer is in, not on the held tab's.** Columns are one width, so
+after a swap the pointer is over the held column again by construction; a tab is as wide as its label
+up to 200px, so a narrow tab dragged through a wide one comes to rest *beside* the pointer rather
+than under it. Latching the held tab's box is therefore a no-op in exactly the case that needs it —
+measured at 4 alternations over 34px of travel as the row is drawn, and 11 over 30px with the wide
+tab at the 200px cap. What is latched is whichever cell the pointer ended up in, measured a tick
+after the swap because the row has not been redrawn at the moment the draft changes. Leaving that
+cell is then always a move in the direction of travel.
 
 Terminal tab numbering is **not** touched by any of this and should not be: `terminalTabs` numbers by
 position among the shell sessions rather than among the tabs, so a row reading `[Terminal 2][Terminal
