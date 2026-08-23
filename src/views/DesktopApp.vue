@@ -3116,12 +3116,22 @@ const toastStackStyle = {
 
       <!-- centre: tabs over the board -->
       <div :style="centerStyle">
+        <!-- The dragged order is written straight through, with no `mergeOrder`
+             beside it as the board has. The board needs one because a hidden
+             column would otherwise be struck out of the stored order by the
+             first drag; the row draws every tab it has — `overflowCount` is a
+             prop nobody connects — so what comes back is the whole of the row
+             and there is nothing to merge it with. Connect an overflow menu one
+             day and that stops being true, and a tab that was not drawn will
+             want its place kept exactly the way `boardView.js:mergeOrder` keeps
+             a column's. -->
         <TabBar
           :tabs="tabList"
           :active-id="project.activeTab"
           @select="project.activeTab = $event"
           @close="onCloseTab"
           @promote="promote"
+          @reorder="project.tabOrder = $event"
         >
           <!-- Beside the pinned block rather than at the far right of the row:
                it is about those first two tabs, and past the strut it would
