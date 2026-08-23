@@ -59,7 +59,11 @@ test on either side of the boundary states it.
 
 Every transition on `Machine` is guarded by the state it comes from and a transition that does not
 fit is ignored, which is what makes a late callback harmless — progress arriving after its flow has
-failed finds a machine that is no longer downloading. `check` is accepted from `idle` and `failed`
+failed finds a machine that is no longer downloading. **`failed` is the one exception and is
+unguarded deliberately**: there is only ever one flow in flight, so a failure always belongs to the
+state the machine is in, and a failure nobody is told about is the one thing worse than a failure. A
+reader taking the guard rule literally would expect a failing flow to be swallowed once its own state
+has moved, which is the opposite of what happens. `check` is accepted from `idle` and `failed`
 only. `ready` refuses because a check from there would fetch the same release again over the one
 being offered; `available` refuses for the sharper reason that it lasts only the two statements
 between finding a release and asking for its first byte, and a second flow started in that window
@@ -110,7 +114,11 @@ which is the whole of why the switch takes effect with no restart; the timer kee
 way, so there is nothing to start up when it comes back on. A platform that will not name a config
 directory, or a file that will not parse, answers `true` — the switch exists to *stop* a request, so
 an unreadable file must not silently strand somebody on an old build. `.claude/rules/settings.md`
-holds the rest, including the five copies of that default.
+holds the rest, including the **four** copies of that default — Rust, `defaults()` in
+`stores/settings.js`, `view` in `SettingsWindow.vue`, and the prop default in
+`GeneralSettings.vue`. The fallback two sentences up is not a fifth copy: it derives from
+`Settings::default()` rather than spelling `true` again. It is a fifth place the answer has to come
+out right, and the one a sweep of the four walks past.
 
 The press on About goes on working with the switch off, because a press is not the app acting on its
 own, and anything already downloaded stays staged and installable.
@@ -205,10 +213,17 @@ that, kept saying the same thing, and the second is the one strangers read.
 It is once per machine rather than once per launch. What it does not cost is a repeat on every
 version: that step belongs to a copy somebody downloaded in a browser and opened by hand, and an
 update the plugin installs replaces the bundle in place with no such download and no such open.
-**That last sentence is the one claim in this file the tree does not verify** — no code and no test
-asserts it, and README's `## First launch` and `## Releases` sections plus the workflow's
-`releaseBody` still say the opposite ("there is no in-app updater"), all three written before there
-was one. Fixing those three is smetana-j98's, not this file's.
+**That last sentence is verified nowhere in the tree** — no code and no test asserts it. It is the
+second thing in this file that only prose says, and the sharper of the two: the key custody above is
+at least written down in README, while this is written down nowhere at all.
+
+Three copies of the claim it contradicts are still standing, all written before there was an updater:
+README's `## First launch` ("there is no in-app updater"), the `releaseBody` in
+`.github/workflows/release.yml`, and the comment on that file's build step ("Nothing verifies it yet
+— the app has no updater"). README's `## Releases` is **not** one of them and is stale differently:
+it describes the updater, its schedule and the run gate correctly, and then says the part drawn on
+screen is missing and the About rows are a separate task, which smetana-oau made false. All four are
+smetana-j98's to settle, not this file's.
 
 ## The front end, in one paragraph
 
