@@ -1,20 +1,32 @@
 <script setup>
-/* The Agents tab: which CLI coding agent the app starts, the three languages it
-   works in, and what is left of its subscription.
+/* The Agents tab: which CLI coding agent the app starts, the languages it works
+   in, and what is left of its subscription.
 
-   The first four are real and take effect on the next session started — the id
-   travels to `terminal_create`, and Rust resolves it (`agents::resolve`); the
-   three languages travel by a different road and never cross the IPC as
-   arguments at all, since `terminal::service` reads them from the file itself
-   when it builds the session, which is what keeps a person's session and a
-   run's batch from disagreeing about them. The commit language has a second
-   reader beside a session: `vcs_suggest_message` reads the same field for the
-   Git panel's "suggest a message" button, so the two cannot disagree either.
+   The picker and the languages under it are real and take effect on the next
+   session started — the id travels to `terminal_create`, and Rust resolves it
+   (`agents::resolve`); the languages travel by a different road and never cross
+   the IPC as arguments at all, since `terminal::service` reads them from the
+   file itself when it builds the session, which is what keeps a person's
+   session and a run's batch from disagreeing about them. The commit language
+   has a second reader beside a session: `vcs_suggest_message` reads the same
+   field for the Git panel's "suggest a message" button, so the two cannot
+   disagree either.
 
-   The three sit inside one `SettingsGroup` and the Agent row above stays
+   The languages sit inside one `SettingsGroup` and the Agent row above stays
    outside it — the shape the General tab already draws, and there is no second
    group over that one row: a caption over a single row is a caption for its own
    sake.
+
+   Report language is the one row here with a condition on it, and the condition
+   belongs to another tab: with **Show run report** off on General, the row is
+   drawn `disabled` and its description says so. Disabled rather than absent, for
+   the answer `GeneralSettings.vue` already carries in its Launch at login row —
+   the one in the Startup group, drawn disabled with `autostartDescription`
+   naming the reason — that a control which refuses a press without saying why is
+   worse than one that is not there. A row vanishing from this tab because of a
+   switch on another is the second half of it: a change nobody sees happen. The
+   stored value is untouched while the row is disabled, so turning the switch
+   back on brings the choice back rather than `en`.
 
    The block under them was three dashes and a sentence saying nothing was read
    here yet, which was honest and is no longer necessary: `agent_usage` asks the
@@ -37,13 +49,24 @@ import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 const props = defineProps({
   agent: { type: String, default: 'claude' },
   /* The language the agent talks to the person in, the language the prose of a
-     bd issue it writes is in, and the language a git commit message it writes
-     is in. BCP-47 ids, validated in Rust against `agents::LANGUAGES`; `en` here
-     mirrors that table's default, and for the commit language that default is
-     today's behaviour to the letter. */
+     bd issue it writes is in, the language a git commit message it writes is
+     in, and the language the prose of a run's report is in. BCP-47 ids,
+     validated in Rust against `agents::LANGUAGES`; `en` here mirrors that
+     table's default, and for the commit language that default is today's
+     behaviour to the letter. */
   agentLanguage: { type: String, default: 'en' },
   taskLanguage: { type: String, default: 'en' },
   commitLanguage: { type: String, default: 'en' },
+  reportLanguage: { type: String, default: 'en' },
+  /* Whether **Show run report** is on, which lives on the General tab and is
+     `view.notificationShowReport` in `SettingsWindow.vue`. Read and never
+     emitted back: this tab does not own it, it only draws the Report language
+     row disabled while it is off — hence the name here drops the section prefix
+     rather than the field, the way `GitSettings.vue` takes `gitAutoFetch` as
+     `autoFetch`, so that one grep still finds both ends of the pair. Default
+     `true`, the shipped position, so the row is usable in the moment before the
+     first answer arrives rather than greying itself out and back. */
+  showReport: { type: Boolean, default: true },
   /* `agent_usage`'s answer whole, in Rust's own shape, or `null` before there
      has been one. */
   usage: { type: Object, default: null },
@@ -61,6 +84,7 @@ const emit = defineEmits([
   'update:agentLanguage',
   'update:taskLanguage',
   'update:commitLanguage',
+  'update:reportLanguage',
   'refresh'
 ])
 
@@ -130,6 +154,23 @@ const heading = computed(() => {
   return `${AGENTS.find((agent) => agent.value === id)?.label ?? id} subscription`
 })
 
+/* One line under the label, and which one depends on whether the report is ever
+   put in front of anybody. The shape `autostartDescription` in
+   `GeneralSettings.vue` already has, and no pure module of its own: `usage.js`
+   exists because its sentences are a rule with cases, and this is one boolean
+   and two strings.
+
+   The Off sentence names the reason and the tab it is on, and it is careful
+   about what it does not claim: the document is still written, since
+   `runs::service::finish` renders it whatever the switch says and a lead writes
+   its batch file either way. What the switch stops is the delivery, so the
+   sentence says reports are not shown — not that none is written. */
+const reportDescription = computed(() =>
+  props.showReport
+    ? 'What a run writes about itself is written in this — what each task did, and any note on the batch. Field names, paths and identifiers stay as they are, and so do the report\'s own labels.'
+    : 'Reports are not shown, so there is nothing here to show you. Turn on Show run report on the General tab to choose a language.'
+)
+
 const lines = computed(() => usageLines(props.usage))
 const note = computed(() => usageNote(props.usage, props.busy, props.error))
 const refreshable = computed(() => offersRefresh(props.usage))
@@ -195,7 +236,7 @@ const errorStyle = {
       />
     </SettingsRow>
 
-    <!-- The three that answer the same question about different writing. The
+    <!-- The rows that answer the same question about different writing. The
          Agent row above is outside the group deliberately: a second group over
          one row would be a caption for its own sake, and the General tab does
          not do that either. -->
@@ -233,6 +274,22 @@ const errorStyle = {
           :model-value="props.commitLanguage"
           :options="LANGUAGES"
           @update:model-value="emit('update:commitLanguage', $event)"
+        />
+      </SettingsRow>
+
+      <!-- Last in the group, and the only row here whose control can be shut:
+           its description carries the reason, which is the whole point of
+           drawing it rather than removing it. -->
+      <SettingsRow
+        label="Report language"
+        :description="reportDescription"
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.reportLanguage"
+          :options="LANGUAGES"
+          :disabled="!props.showReport"
+          @update:model-value="emit('update:reportLanguage', $event)"
         />
       </SettingsRow>
     </SettingsGroup>

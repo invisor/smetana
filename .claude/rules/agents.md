@@ -113,11 +113,11 @@ only way to see it. When nothing at all is installed the session fails with `NoA
 
 `agents::LANGUAGES` is the same idea one field over: the twelve languages a person may choose, as
 BCP-47 ids **with the English name of each**, and the only copy of that list — `settings/model.rs`
-validates `agentLanguage`, `taskLanguage` and `commitLanguage` against it exactly as it validates
-`agent` against
+validates `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage` against it exactly
+as it validates `agent` against
 `IDS`. The name is carried beside the id because the name is what goes into the prompt: `zh-Hans` is
-a tag out of a settings file, "Chinese (Simplified)" is a sentence. All three default to `en` rather
-than to an Auto position, which would have meant "say nothing about language" — today's behaviour exactly,
+a tag out of a settings file, "Chinese (Simplified)" is a sentence. Every one of them defaults to
+`en` rather than to an Auto position, which would have meant "say nothing about language" — today's behaviour exactly,
 so an update changes nothing until somebody chooses — and for the commit language that default is
 today's behaviour to the letter, since `oneshot::commit_prompt` asked for a message "in English"
 outright before the setting existed. The price is deliberate: `Intent::Bare` no
@@ -125,10 +125,10 @@ longer opens on nothing, since it carries the one sentence naming the conversati
 alternative was that the session where a person talks to the agent most is the one the setting cannot
 reach.
 
-None of the three crosses the IPC. `settings::languages(app)` reads the file where
+None of them crosses the IPC. `settings::languages(app)` reads the file where
 `settings::agent(app)` already does, and `terminal::service`'s `Create` arm calls it while building
 the `Launch` — the one place every session in the app is built, so a person's session and a run's
-batch get the same answer by construction. From the `Launch` the three ids reach `prompt::build`,
+batch get the same answer by construction. From the `Launch` the ids reach `prompt::build`,
 which stays pure. The commit language has one reader outside a session, and it reads the same field
 by the same road: `vcs_suggest_message` calls `settings::languages(&app).commit` for the Git panel's
 button, so the message a person is offered and the messages a run writes overnight cannot disagree —
@@ -161,8 +161,10 @@ agent may write into bd — `Bare`, `NewTask`, `EditTask`, `ResolveTask` and `Ru
 the same reason it is in the commit half: "+ New agent" is exactly where somebody says "file tasks
 for this", and a bare session left out of it filed English issues under a Russian setting. The price
 is that session opening on three language paragraphs before any work, taken knowingly — and it is
-the shape `Run` has always had, since a lead is the other intent in which all three are true at
-once, so the cost is one already in the tree rather than a new one. `Setup` and `ResolveConflict`
+the shape `Run` has always had, since a lead is the other intent in which the conversation, the
+issues and the commits are all three true at once, so the cost is one already in the tree rather
+than a new one. `Run` carries a fourth on top of those, the report language below, and `Bare` does
+not: a bare session writes no batch file. `Setup` and `ResolveConflict`
 stay out because neither files an issue. The paragraph carries a caveat that is not optional,
 because what the setting must never move is a string some other piece of software matches on. The
 `##` section headings, since `bd create --validate` matches the wording of a heading and nothing
@@ -173,7 +175,28 @@ dialog says nothing is open while the Ready warning goes quiet — silent, and l
 trying to answer a parked task. What the setting moves is the title, the body of the description,
 the criteria themselves and what follows the colon in a note. Specifications and plans are English
 whatever either setting says (`IN_ENGLISH` in `prompt.rs`): they are read by whoever picks the work
-up months later and by every agent after them. A setting for the language of *code comments* was
+up months later and by every agent after them.
+
+The report language is the narrowest of the four: `leaves_a_run_report` is `Intent::Run` and nothing
+else, since a run's lead is the only session that ever writes
+`.smetana/runs/<token>/batch-<n>.json` and a session that never writes one has nothing to hear about
+how to word it. What it moves is that file's **prose** — the `did` line per task and the batch's
+`notes` — and the paragraph closes two exceptions in a fixed order, the field names first, because a
+model that reads the sentence and stops has to have met the half that breaks the document.
+`report::parse_batch` reads `tasks`, `id`, `did` and `notes` through serde by literal match, so a
+translated key is not a document in another language: it is a batch drawn in the report as having
+left no account of itself. An identifier inside a line travels unchanged for the reason it does in a
+commit message, and `report::prose` draws it as `<code>`. The last clause names the *other* report —
+what the lead says back in the conversation stays under the conversation language — because the two
+reports come out of the same batch, and somebody who set this and then watched the terminal would
+otherwise have been told nothing at all. `report.rs`'s own labels (`smetana · run report`, `closed`,
+`parked`, `batch N`, `<html lang="en">`) do not move and are not mentioned in the prompt: they are
+this product's interface copy, CLAUDE.md says interface copy is English, and translating them would
+be a table of twelve languages in Rust for words one long. The switch that hides the report changes
+none of this — `runs::service::finish` renders the document whatever it says, so the setting goes on
+moving text that lands on disk; **Show run report** only decides whether anybody is handed it.
+
+A setting for the language of *code comments* was
 asked for and refused — it would either do nothing in a repository with a convention, or produce
 exactly the regression the Language section names.
 
