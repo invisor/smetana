@@ -149,10 +149,11 @@ jobs:
             The app is not signed with an Apple Developer ID, so macOS will not
             open a freshly downloaded copy on a double-click. Right-click
             Smetana.app and choose Open. On macOS 14 and earlier the dialog that
-            appears has an Open button and that is all. From macOS 15 Sequoia it
-            does not — dismiss it, then go to System Settings → Privacy &
-            Security, scroll to the message naming Smetana and press Open Anyway.
-            Once per machine.
+            appears has an Open button and that is all. From macOS 15 Sequoia on
+            it does not — dismiss it, then go to System Settings → Privacy &
+            Security, scroll to the message naming Smetana and press Open Anyway;
+            that asks for Touch ID or your password and confirms once more before
+            the app opens. Once per machine.
 
             There is no in-app updater yet, so a new version means downloading
             the .dmg again and letting it past Gatekeeper the same way.

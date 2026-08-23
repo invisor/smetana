@@ -48,22 +48,25 @@ exist so that it has something real to check itself against on the day it lands.
 Three things have to be done by a person, once, before the first release will work.
 They are not in place yet.
 
-1. Run `npm run tauri signer generate`. It produces a minisign key pair. Tauri's
-   update signature is mandatory and cannot be turned off.
+1. Run `npm run tauri signer generate`. It prints a minisign key pair to the
+   terminal — two base64 blobs, under `Private:` and `Public:` — and writes nothing
+   to disk unless you pass `-w <path>`. It asks for a password along the way: give
+   it one, as the CLI's own warning recommends. Tauri's update signature is
+   mandatory and cannot be turned off.
 2. Paste the public key into `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`
    and commit it. It is an empty string today, and the workflow refuses to build
    while it stays empty rather than publish a release nobody can install as an
    update.
 3. Set two repository secrets, under Settings → Secrets and variables → Actions.
-   `TAURI_SIGNING_PRIVATE_KEY` takes the **contents** of the private key file, not a
-   path to it: the CLI accepts a path when it runs on your own machine, which is the
-   natural thing to copy out of a `-w` run, and on a runner that path resolves to
-   nothing. `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` takes the password — and the
-   workflow passes that variable on every run, so a key generated without one still
-   needs the secret to exist, set to an empty value. Leaving it unset instead fails
-   the build with `incorrect updater private key password`, which reads like the
-   wrong password rather than a missing secret, and costs somebody the debugging
-   twice. The private key belongs in neither the repository nor a run log.
+   `TAURI_SIGNING_PRIVATE_KEY` takes the blob printed under `Private:`. If you did
+   write the pair out with `-w`, the secret takes that file's **contents** and never
+   a path to it — the CLI accepts a path when it runs on your own machine, which is
+   the tempting thing to paste, and on a runner a path resolves to nothing.
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` takes the password you gave the key in step
+   1. Forgetting that second secret fails the build with `incorrect updater private
+   key password`, which reads like a wrong password rather than a missing one, and
+   costs somebody the debugging twice. The private key belongs in neither the
+   repository nor a run log.
 
 **Losing the private key means every already-installed copy can never be updated
 again.** There is no way back from it: a copy already out there accepts only an
@@ -85,10 +88,10 @@ depends on the version:
 
 - Right-click `Smetana.app` and choose Open. On macOS 14 and earlier the dialog that
   appears carries an Open button, and pressing it is the whole of it.
-- From macOS 15 Sequoia that button is gone — the dialog offers only Move to Trash
-  and Done. Dismiss it, then go to System Settings → Privacy & Security, scroll down
-  to the message naming Smetana, and press Open Anyway. This is the path that
-  applies on the arm64 Macs the release targets.
+- From macOS 15 Sequoia on, that button is gone — the dialog offers only Move to
+  Trash and Done. Dismiss it, then go to System Settings → Privacy & Security,
+  scroll down to the message naming Smetana, and press Open Anyway. That asks for
+  Touch ID or your password, and then confirms once more before the app opens.
 
 Either way it is once per machine, not once per launch. It is **not** once per
 version, though, because there is no in-app updater: a new version means downloading
