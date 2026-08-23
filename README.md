@@ -45,39 +45,46 @@ registers it and no capability grants it, so a released copy never fetches
 `latest.json` at all. Teaching the app to is a separate task, and these artefacts
 exist so that it has something real to check itself against on the day it lands.
 
-Three things have to be done by a person, once, before the first release will work.
-They are not in place yet.
+Three things had to be done by a person, once, before the first release could work.
+All three are in place, done by the repository owner on the branch this pipeline
+arrived on. They are written out here as what happened rather than as instructions,
+because each of them has a detail that is expensive to rediscover.
 
-1. Run `npm run tauri signer generate`. It prints a minisign key pair to the
-   terminal — two base64 blobs, under `Private:` and `Public:` — and writes nothing
-   to disk unless you pass `-w <path>`. It asks for a password along the way: give
-   it one, as the CLI's own warning recommends. Tauri's update signature is
-   mandatory and cannot be turned off.
-2. Paste the public key into `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`
-   and commit it. It is an empty string today, and the workflow refuses to build
-   while it stays empty rather than publish a release nobody can install as an
-   update.
-3. Set two repository secrets, under Settings → Secrets and variables → Actions.
-   `TAURI_SIGNING_PRIVATE_KEY` takes the blob printed under `Private:`. If you did
-   write the pair out with `-w`, the secret takes that file's **contents** and never
-   a path to it — the CLI accepts a path when it runs on your own machine, which is
-   the tempting thing to paste, and on a runner a path resolves to nothing.
-   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` takes the password you gave the key in step
-   1. Forgetting that second secret fails the build with `incorrect updater private
-   key password`, which reads like a wrong password rather than a missing one, and
-   costs somebody the debugging twice. The private key belongs in neither the
-   repository nor a run log.
+1. `npm run tauri signer generate` produced the minisign key pair, and it was given a
+   password. The command prints both halves to the terminal — two base64 blobs, under
+   `Private:` and `Public:` — and writes nothing to disk unless you pass `-w <path>`.
+   Tauri's update signature is mandatory and cannot be turned off.
+2. The public half is committed, as `plugins.updater.pubkey` in
+   `src-tauri/tauri.conf.json`. The `check` job in the workflow refuses to build while
+   that field is empty, rather than publish a release nobody can install as an update.
+   It now guards against somebody emptying it rather than against the first release
+   going out unsigned.
+3. `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are set as
+   repository secrets, under Settings → Secrets and variables → Actions. The first
+   holds the blob printed under `Private:`; a pair written out with `-w` goes in as
+   that file's **contents** and never as a path to it — the CLI accepts a path when it
+   runs on your own machine, which is the tempting thing to paste, and on a runner a
+   path resolves to nothing. The second holds the password from step 1, and forgetting
+   it fails the build with `incorrect updater private key password`, which reads like a
+   wrong password rather than a missing one and costs somebody the debugging twice.
+
+The private half and that password live in the repository owner's password manager.
+Neither has ever been in this tree, and neither belongs in a run log.
 
 **Losing the private key means every already-installed copy can never be updated
 again.** There is no way back from it: a copy already out there accepts only an
-update signed by the key whose public half it was built with. Keep it somewhere
-that outlives the machine it was generated on.
+update signed by the key whose public half it was built with, so generating a fresh
+pair is not a repair — it abandons everybody already running the app. Keep it
+somewhere that outlives the machine it was generated on.
 
-One local consequence while `pubkey` is still empty: `npm run tauri build` may refuse
-to bundle with "A public key has been found, but no private key", the bundler looking
-for something to sign the updater archive with. `npm run tauri build -- --no-sign` is
-the way past it. `npm run tauri dev` is unaffected, and so is everything `npm test`,
-`npm run build` and `cargo test` do — none of them bundles.
+One local consequence, now that `pubkey` is no longer empty: `npm run tauri build`
+refuses to bundle with "A public key has been found, but no private key", the bundler
+looking for something to sign the updater archive with and finding nothing in the
+environment. That is the intended state — the private key is deliberately on no
+laptop — so `npm run tauri build -- --no-sign` remains the way past it, for that
+reason now rather than because the key was missing from the conf.
+`npm run tauri dev` is unaffected, and so is everything `npm test`, `npm run build`
+and `cargo test` do — none of them bundles.
 
 ## First launch
 

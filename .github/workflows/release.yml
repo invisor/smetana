@@ -6,15 +6,16 @@
 # which is why the release must not be a draft or a prerelease: that URL
 # resolves against the latest published release only.
 #
-# Two things a person has to have done first, once, before the first release —
-# see the "Releases" section of README.md:
-#   * npm run tauri signer generate, with the public key pasted into
+# Two things this depends on were done by a person, once, and are in place —
+# the "Releases" section of README.md records what was done and where the
+# private half of the key lives:
+#   * npm run tauri signer generate, with the public key committed as
 #     plugins.updater.pubkey in src-tauri/tauri.conf.json;
 #   * TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD set as
 #     repository secrets.
-# The check job below refuses to build while the public key is still empty,
-# because a release with an unsigned latest.json cannot be installed as an
-# update by anybody.
+# The check job below refuses to build if the public key is ever empty, because
+# a release with an unsigned latest.json cannot be installed as an update by
+# anybody.
 name: Release
 
 on:
