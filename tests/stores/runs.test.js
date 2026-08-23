@@ -4,10 +4,13 @@ import { loadStores } from '../support/stores.js'
 /* The DOM half of the sound, stood in for. Mocked here rather than at
    `HTMLMediaElement.prototype.play`, because the seam this store is answerable
    for is which sound it asks for — whether an element then plays is
-   `chime.js`'s business and a browser's. `vi.mock` is hoisted above the imports
-   and survives the `vi.resetModules()` `loadStores` does. */
+   `chime.js`'s business and a browser's. The options object is forwarded too:
+   whether the main window has focus is `chime.js`'s question, and what this
+   store is answerable for is handing the current setting over. `vi.mock` is
+   hoisted above the imports and survives the `vi.resetModules()` `loadStores`
+   does. */
 const chime = vi.fn()
-vi.mock('../../src/chime.js', () => ({ chime: (id) => chime(id) }))
+vi.mock('../../src/chime.js', () => ({ chime: (id, options) => chime(id, options) }))
 
 beforeEach(() => {
   chime.mockClear()
@@ -422,7 +425,7 @@ describe('the sound a finished run makes', () => {
 
     await emit('run:state', stopped())
     await nextTick()
-    expect(chime).toHaveBeenCalledWith('sound-3')
+    expect(chime).toHaveBeenCalledWith('sound-3', { unlessFocused: true })
 
     // The summary lands seconds after the ending and is another event about the
     // same stopped run. One run, one sound.
@@ -471,6 +474,22 @@ describe('the sound a finished run makes', () => {
 
     // `chime` itself refuses `off`; the store still hands it over rather than
     // deciding here, so there is one place that knows what silence is.
-    expect(chime).toHaveBeenCalledWith('off')
+    expect(chime).toHaveBeenCalledWith('off', { unlessFocused: true })
+  })
+
+  it('hands the focus switch over as it stands, and never decides it here', async () => {
+    /* The same division as `off` above: this store reads the setting and passes
+       it, and whether the main window has focus is asked in `chime.js`, which
+       is the one place with a document to ask. */
+    const { emit, ipc, stores, nextTick } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+    stores.settings.settings.notifications.onlyWhenUnfocused = false
+
+    await emit('run:state', stopped())
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledWith('sound-1', { unlessFocused: false })
   })
 })

@@ -48,6 +48,12 @@ const props = defineProps({
      app is doing for the moment before the first value arrives. */
   notificationRunFinished: { type: String, default: 'sound-1' },
   notificationNeedsAttention: { type: String, default: 'sound-2' },
+  /* Whether the two sounds above wait until the main window is in the
+     background. Shipped on, mirroring Rust, `stores/settings.js` and
+     `SettingsWindow.vue`: a component that defaulted to off would draw the
+     switch in the position opposite to what the app is doing for the moment
+     before the first value arrives. */
+  notificationOnlyWhenUnfocused: { type: Boolean, default: true },
   /* Whether a run that has ended opens its own account in a tab. Shipped on,
      mirroring Rust, `stores/settings.js` and `SettingsWindow.vue`: a component
      that defaulted to off would draw the switch in the position opposite to
@@ -62,6 +68,7 @@ const emit = defineEmits([
   'update:restoreGeometry',
   'update:notificationRunFinished',
   'update:notificationNeedsAttention',
+  'update:notificationOnlyWhenUnfocused',
   'update:notificationShowReport'
 ])
 
@@ -77,7 +84,14 @@ const sizeOptions = FONT_SIZES.map((size) => ({ value: size, label: `${size} px`
    button on any settings row outside Storage, and somebody who wants to hear it
    again picks it again. It also means every press is a gesture, which is the
    condition a webview's autoplay policy asks for — this is the one place the
-   sound is certain to be allowed. */
+   sound is certain to be allowed.
+
+   It plays whatever the switch under it says, and deliberately: `chime` is
+   called with no second argument, so `unlessFocused` stays false. A preview is
+   somebody listening to a choice rather than the app announcing something, and
+   this window is focused by definition at the moment of the press — obeying the
+   option would make the whole list silent in exactly the place a sound is
+   picked, which is the option switched on for everybody by default. */
 function pick(event, value) {
   emit(event, value)
   chime(value)
@@ -156,6 +170,21 @@ const autostartDescription = computed(() =>
           :model-value="props.notificationNeedsAttention"
           :options="SOUND_CHOICES"
           @update:model-value="pick('update:notificationNeedsAttention', $event)"
+        />
+      </SettingsRow>
+      <!-- Inside the group and under both lists, which is what says it is about
+           them: this is one condition over the two sounds above rather than a
+           third announcement. That is the opposite placing to Show run report,
+           which sits above the caption because it is about a document. Shipped
+           on: a sound is for the person who is not at the screen, and one
+           played at somebody who is looking is noise. -->
+      <SettingsRow
+        label="Only when the main window is not focused"
+        description="Plays the sounds above only while the main window is in the background. With it off, they play whether or not you are looking."
+      >
+        <Switch
+          :model-value="props.notificationOnlyWhenUnfocused"
+          @update:model-value="emit('update:notificationOnlyWhenUnfocused', $event)"
         />
       </SettingsRow>
     </SettingsGroup>

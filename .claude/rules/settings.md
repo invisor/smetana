@@ -126,9 +126,9 @@ worktree because somebody is coming to look, a task waiting on a live check keep
 not closed yet, and a worktree that refuses to go — dirty, locked — is a line in the report and never
 a stop.
 
-`notifications` is the third global section, and it holds three fields: the two sounds —
-`runFinished` and `needsAttention`, each one of `off`, `sound-1` … `sound-4` — and `showReport`, a
-boolean beside them. Global on `git`'s argument exactly: a
+`notifications` is the third global section, and it holds four fields: the two sounds —
+`runFinished` and `needsAttention`, each one of `off`, `sound-1` … `sound-4` — and two booleans
+beside them, `onlyWhenUnfocused` and `showReport`. Global on `git`'s argument exactly: a
 noise is a fact about a person and a room rather than about one repository. Both sounds ship as a sound
 rather than as `off`, and as two *different* sounds, for the reason `src/sounds.js` records — a
 feature nobody switches on is a feature nobody finds, and a run that ended can be read in the
@@ -141,10 +141,27 @@ are edited, and **choosing one plays it**: the choice is the preview, so there i
 beside the list, and that press is also the one gesture a webview's autoplay policy is certain to
 allow. Where each sound actually fires is `.claude/rules/notifications.md`.
 
-`showReport` is the third field of that section and the one that is not a sound, which is why it is
-written out in `defaults()` by hand rather than taken from `NOTIFICATION_DEFAULTS`: that constant
-lives in `src/sounds.js`, which is the closed list of sounds and the two shipped ones, and a boolean
-about a document has no business in it. It is **shipped on**, on `window.restoreGeometry`'s argument
+`onlyWhenUnfocused` is the third field and the one condition over both sounds: on, they play only
+while the main window is **not** focused, and off is the behaviour that stood before it existed. It
+is one field rather than one per sound deliberately — a person is either at the screen or not, and
+two switches would ask the same question twice. It is **shipped on**, and it is the one default in
+this file that *changes* what the app does rather than preserving it; the argument is named rather
+than smuggled, and it is the one the request itself made: a sound exists for the person who is not
+looking at the screen, so a sound played at somebody who is looking is noise. **Four** copies of that
+default, the same four `git.autoFetch` has — Rust, `defaults()`, `view` in `SettingsWindow.vue`, and
+the prop default in `components/settings/GeneralSettings.vue` — and it rides the flat message as
+`notificationOnlyWhenUnfocused`, named for what it decides rather than for its section, with
+`applyPatch` checking the type and nothing else for `showReport`'s reason. Rust validates nothing
+about it, on that same field's argument. Its row is drawn **inside** the Notifications group and
+under both sound lists, which is the opposite placing to `showReport` below and says the same thing
+in reverse: this is one condition over those two sounds rather than a third kind of announcement.
+What "focused" means, and the one place the switch deliberately does not reach — the preview a
+dropdown plays — is `.claude/rules/notifications.md`.
+
+`showReport` is the fourth field of that section, and it and `onlyWhenUnfocused` are both written
+out in `defaults()` by hand rather than taken from `NOTIFICATION_DEFAULTS`: that constant lives in
+`src/sounds.js`, which is the closed list of sounds and the two shipped ones, and neither a boolean
+about a document nor one about when to make a noise has any business in it. It is **shipped on**, on `window.restoreGeometry`'s argument
 exactly — today's behaviour to the letter, since a finished run has put its report in front of
 somebody since before there was a switch over it, and an update that quietly stopped reports arriving
 would be a feature taken away rather than added. **Four** copies of that default, the same four
@@ -207,7 +224,7 @@ last edit rather than the app.
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
 `appearance.theme`, `appearance.uiFontSize`, both `editor` fields, `agent`, the three languages beside it,
-the four `kanban` fields, both `git` fields, `window.restoreGeometry` and all three `notifications`
+the four `kanban` fields, both `git` fields, `window.restoreGeometry` and all four `notifications`
 fields. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
 still override the first two for one run and are deliberately **not** written back — one visit to the

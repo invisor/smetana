@@ -61,6 +61,7 @@ describe('loading', () => {
     expect(settings.settings.notifications).toEqual({
       runFinished: 'sound-1',
       needsAttention: 'sound-2',
+      onlyWhenUnfocused: true,
       showReport: true
     })
     expect(settings.settings.openProjects).toEqual([])
@@ -74,6 +75,20 @@ describe('loading', () => {
 
     expect(settings.settings.notifications.runFinished).toBe('off')
     expect(settings.settings.notifications.needsAttention).toBe('sound-4')
+  })
+
+  it('reads the stored focus switch off the file', async () => {
+    /* The one default here that is a change rather than a preservation, so the
+       stored `false` is somebody asking for what the app used to do. */
+    ipc.on('settings_load', { notifications: { onlyWhenUnfocused: false } })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.notifications.onlyWhenUnfocused).toBe(false)
+    expect(
+      settings.settings.notifications.showReport,
+      'a section naming only this switch leaves the one beside it alone'
+    ).toBe(true)
   })
 
   it('reads a stored report switch off the file', async () => {
@@ -626,6 +641,36 @@ describe('the settings window', () => {
     expect(settings.settings.notifications.showReport).toBe(true)
   })
 
+  /* The switch over the two sounds, checked the same way and for the same
+     reason: `false` is the whole point of it, so a malformed event is skipped
+     rather than coerced into a deliberate-looking "off". */
+  it('takes the focus switch, and only a boolean one', async () => {
+    await emit(settings.SETTINGS_APPLY, { notificationOnlyWhenUnfocused: false })
+    await nextTick()
+    expect(settings.settings.notifications.onlyWhenUnfocused).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { notificationOnlyWhenUnfocused: 'yes' })
+    await nextTick()
+    expect(settings.settings.notifications.onlyWhenUnfocused).toBe(
+      false,
+      'a value that is not a boolean is skipped'
+    )
+
+    await emit(settings.SETTINGS_APPLY, { notificationOnlyWhenUnfocused: null })
+    await nextTick()
+    expect(settings.settings.notifications.onlyWhenUnfocused).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { notificationOnlyWhenUnfocused: true })
+    await nextTick()
+    expect(settings.settings.notifications.onlyWhenUnfocused).toBe(true)
+  })
+
+  it('the focus switch reaches the settings window as a flat field', async () => {
+    settings.settings.notifications.onlyWhenUnfocused = false
+
+    expect(settings.sharedSettings().notificationOnlyWhenUnfocused).toBe(false)
+  })
+
   it('the report switch reaches the settings window as a flat field', async () => {
     settings.settings.notifications.showReport = false
 
@@ -655,6 +700,7 @@ describe('the settings window', () => {
       restoreGeometry: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
+      notificationOnlyWhenUnfocused: true,
       notificationShowReport: true,
       agent: 'claude',
       agentLanguage: 'en',
@@ -691,6 +737,7 @@ describe('the settings window', () => {
       restoreGeometry: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
+      notificationOnlyWhenUnfocused: true,
       notificationShowReport: true,
       agent: 'codex',
       agentLanguage: 'en',

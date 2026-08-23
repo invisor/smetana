@@ -662,7 +662,13 @@ export async function initTerminals() {
        `isShellSession` gives: work this front end has never heard of is an
        agent, and still rings. */
     if (before !== 'needs-you' && session.state === 'needs-you' && !isShellSession(session)) {
-      chime(settings.notifications.needsAttention)
+      /* A fourth condition rides on top of the three, and it is the option
+         rather than a rule of this store: `onlyWhenUnfocused` is handed to
+         `chime` and answered there, because whether the main window has focus
+         is a question about a document and this file has none. */
+      chime(settings.notifications.needsAttention, {
+        unlessFocused: settings.notifications.onlyWhenUnfocused
+      })
     }
     /* Asked before the upsert, because the upsert is what makes it false: a
        session nobody has seen before is a start, anything else is one of the

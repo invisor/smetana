@@ -3,9 +3,10 @@ import { loadStores } from '../support/stores.js'
 
 /* The DOM half of the sound, stood in for — the same seam `runs.test.js` uses,
    and for the same reason: what this store is answerable for is which sound it
-   asks for, not whether an element played it. */
+   asks for and under which option, not whether an element played it or whether
+   the window had focus at the time. */
 const chime = vi.fn()
-vi.mock('../../src/chime.js', () => ({ chime: (id) => chime(id) }))
+vi.mock('../../src/chime.js', () => ({ chime: (id, options) => chime(id, options) }))
 
 beforeEach(() => {
   chime.mockClear()
@@ -1493,7 +1494,7 @@ describe('the sound an agent waiting for an answer makes', () => {
 
     await emit('terminal:state', session({ state: 'needs-you', question: { text: 'May I?' } }))
     await nextTick()
-    expect(chime).toHaveBeenCalledWith('sound-4')
+    expect(chime).toHaveBeenCalledWith('sound-4', { unlessFocused: true })
 
     await emit('terminal:state', session({ state: 'needs-you', question: { text: 'May I?' } }))
     await nextTick()
@@ -1568,6 +1569,19 @@ describe('the sound an agent waiting for an answer makes', () => {
 
     // `chime` refuses `off` itself, so there is one place that knows what
     // silence is.
-    expect(chime).toHaveBeenCalledWith('off')
+    expect(chime).toHaveBeenCalledWith('off', { unlessFocused: true })
+  })
+
+  it('hands the focus switch over as it stands, and never decides it here', async () => {
+    /* The same division as `off` above: this store reads the setting and passes
+       it, and whether the main window has focus is asked in `chime.js`, which
+       is the one place with a document to ask. */
+    const { emit, stores, nextTick } = await ready()
+    stores.settings.settings.notifications.onlyWhenUnfocused = false
+
+    await emit('terminal:state', session({ state: 'needs-you' }))
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledWith('sound-2', { unlessFocused: false })
   })
 })

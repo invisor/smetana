@@ -83,20 +83,24 @@ const defaults = () => ({
      `components/kanban/boardView.js`. */
   kanban: { ...KANBAN_DEFAULTS, alwaysShow: [], unlimited: [] },
   /* What the app says when a run ends or an agent stops to ask: which sound
-     each of the two announcements makes, or `off` for none, and whether a
-     finished run's report is put in front of the person at all. Global rather
-     than per project for the reason `NotificationSettings` in Rust records — a
-     noise is a fact about a person and a room, and wanting the document or not
-     is a habit of reading. Rust holds the same three defaults, and a section
-     missing here is a section the settings window cannot draw.
+     each of the two announcements makes, or `off` for none, whether those
+     sounds wait until nobody is looking, and whether a finished run's report is
+     put in front of the person at all. Global rather than per project for the
+     reason `NotificationSettings` in Rust records — a noise is a fact about a
+     person and a room, and wanting the document or not is a habit of reading.
+     Rust holds the same four defaults, and a section missing here is a section
+     the settings window cannot draw.
 
-     `showReport` is written out here rather than taken from
+     The two booleans are written out here rather than taken from
      `NOTIFICATION_DEFAULTS`: that constant lives in `sounds.js`, which is the
-     closed list of sounds and the two shipped ones, and a boolean about a
-     document has no business in it. Shipped `true`, which is today's behaviour
-     — somebody updating the app must not find that reports have silently
-     stopped arriving. */
-  notifications: { ...NOTIFICATION_DEFAULTS, showReport: true },
+     closed list of sounds and the two shipped ones, and neither a boolean about
+     a document nor one about when to make a noise has any business in it.
+     `showReport` ships `true` because that is today's behaviour — somebody
+     updating the app must not find that reports have silently stopped arriving
+     — and `onlyWhenUnfocused` ships `true` for the opposite reason, named in
+     `sounds.js`: a sound is for the person who is not looking, so this is a
+     change to what the app does and a deliberate one. */
+  notifications: { ...NOTIFICATION_DEFAULTS, onlyWhenUnfocused: true, showReport: true },
   layout: {
     leftCollapsed: false,
     rightCollapsed: false,
@@ -455,6 +459,11 @@ function toShared(source) {
        to send it whole and quietly blank the choice they left out. */
     notificationRunFinished: notifications.runFinished,
     notificationNeedsAttention: notifications.needsAttention,
+    /* Flat beside the two sounds, and named for what it decides rather than for
+       its section — the name `applyPatch` reads back, and the two spellings
+       have to be the same word or the switch moves on screen, is dropped on
+       arrival and reverts on the next open with nothing to say so. */
+    notificationOnlyWhenUnfocused: notifications.onlyWhenUnfocused,
     /* Flat beside the two sounds, and for the same reason. Named for what it
        decides rather than for the section, since it is the whole of the report
        delivery policy — `components/run/reportDelivery.js` asks this and
@@ -565,9 +574,13 @@ export function applyPatch(patch) {
   if (isSound(patch.notificationNeedsAttention)) {
     settings.notifications.needsAttention = patch.notificationNeedsAttention
   }
-  /* A switch, checked the way `restoreGeometry` above is and for the same
-     reason: `false` is the whole point of this field, so anything that is not a
-     boolean is skipped rather than coerced into a deliberate-looking "off". */
+  /* Two switches, both checked the way `restoreGeometry` above is and for the
+     same reason: `false` is the whole point of either field, so anything that
+     is not a boolean is skipped rather than coerced into a deliberate-looking
+     "off". */
+  if (typeof patch.notificationOnlyWhenUnfocused === 'boolean') {
+    settings.notifications.onlyWhenUnfocused = patch.notificationOnlyWhenUnfocused
+  }
   if (typeof patch.notificationShowReport === 'boolean') {
     settings.notifications.showReport = patch.notificationShowReport
   }

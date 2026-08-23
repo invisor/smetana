@@ -188,9 +188,9 @@ const SOUNDS: [&str; 5] = ["off", "sound-1", "sound-2", "sound-3", "sound-4"];
 /// sounds: the events they announce — a run that has ended, an agent that has
 /// stopped to ask something — call for different reactions, and a feature
 /// nobody switches on is a feature nobody finds. `NOTIFICATION_DEFAULTS` in
-/// `src/sounds.js` is the other copy of those two values; `show_report` is
-/// deliberately not in that file, which is about sounds and has no business
-/// holding a boolean.
+/// `src/sounds.js` is the other copy of those two values; neither
+/// `only_when_unfocused` nor `show_report` is in that file, which is about
+/// sounds and has no business holding a boolean.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct NotificationSettings {
@@ -200,6 +200,16 @@ pub struct NotificationSettings {
     pub run_finished: String,
     /// Played when an agent session enters `needs-you`, in any project.
     pub needs_attention: String,
+    /// Whether the two sounds above wait until the main window is in the
+    /// background. Shipped **on**, and it is the one default in this file that
+    /// changes what the app does rather than preserving it: a sound exists for
+    /// the person who is not looking at the screen, and one played at somebody
+    /// who is looking is noise. The question is asked of the main window's
+    /// document at the moment of the noise — `src/chime.js` over `shouldPlay`
+    /// in `src/sounds.js` — so nothing about focus reaches this side at all.
+    /// The preview on the General tab is deliberately outside it: choosing a
+    /// sound plays it whatever this says.
+    pub only_when_unfocused: bool,
     /// Whether a run that has ended puts its report in front of the person.
     /// The whole of the delivery policy — `src/components/run/reportDelivery.js`
     /// asks this and nothing else — and shipped **on**, because that is today's
@@ -213,13 +223,14 @@ impl Default for NotificationSettings {
         Self {
             run_finished: "sound-1".into(),
             needs_attention: "sound-2".into(),
+            only_when_unfocused: true,
             show_report: true,
         }
     }
 }
 
 impl NotificationSettings {
-    /// Nothing is checked for `show_report`, deliberately: a boolean has no
+    /// Nothing is checked for either boolean, deliberately: a boolean has no
     /// values outside its own set, and a hand-edited file carrying something
     /// else there loses the whole `notifications` section through serde and
     /// takes the defaults — exactly what `editor.wordWrap` does one struct over.
@@ -1403,6 +1414,43 @@ mod tests {
         assert!(!written.notifications.show_report, "merge must carry it back into the file");
     }
 
+    /// Shipped on, and the same walk the fields beside it make. The default is
+    /// the one here that changes today's behaviour rather than keeping it, so
+    /// this test is also where that decision is written down: somebody watching
+    /// the app stops hearing the two sounds, which is what was asked for.
+    #[test]
+    fn playing_only_when_unfocused_defaults_on_and_survives_the_round_trip() {
+        let shipped = Settings::default();
+        assert!(
+            shipped.notifications.only_when_unfocused,
+            "a sound is for the person who is not looking at the screen"
+        );
+
+        let file = settings_of(r#"{"version":1,"notifications":{"onlyWhenUnfocused":false}}"#);
+        assert!(!file.notifications.only_when_unfocused, "parse must read it off the disk");
+        assert_eq!(
+            file.notifications.run_finished, "sound-1",
+            "and must leave the sounds beside it at their defaults"
+        );
+        assert!(
+            file.notifications.show_report,
+            "and the other switch in the section with it"
+        );
+
+        let resolved = resolve(&file, None);
+        assert!(
+            !resolved.notifications.only_when_unfocused,
+            "resolve must carry it to the front end"
+        );
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-23T10:00:00Z".into());
+        assert!(
+            !written.notifications.only_when_unfocused,
+            "merge must carry it back into the file"
+        );
+    }
+
     #[test]
     fn a_file_written_before_the_switch_existed_opens_with_the_report_showing() {
         // Every settings file on a person's disk right now is this file, and
@@ -1433,6 +1481,11 @@ mod tests {
         assert!(
             settings.notifications.show_report,
             "and with its report showing, which is what the app did before the switch existed"
+        );
+        assert!(
+            settings.notifications.only_when_unfocused,
+            "and holding those sounds while somebody is looking, which is the change \
+             this default makes on purpose"
         );
     }
 

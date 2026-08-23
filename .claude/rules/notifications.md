@@ -160,6 +160,30 @@ It plays whether the report went to a tab, to the bell, or nowhere at all, becau
 run having ended rather than about the document: a person who turned reports off asked not to have
 one put in front of them, not to be left wondering whether their night finished.
 
+**One thing can silence both sounds, and it is the only thing that can**:
+`notifications.onlyWhenUnfocused`, the switch under the two sound lists on the General tab
+(`.claude/rules/settings.md`), shipped **on**. With it on, either sound plays only while the main
+window is not focused — the whole argument for a sound in the first place is the person who is not
+looking at the screen, and one played at somebody who is looking is noise. The rule is
+`shouldPlay` in `src/sounds.js`, pure and reachable by a test, and the gate is in `chime.js`, whose
+signature is `chime(id, { unlessFocused })`: both call sites hand the setting over and neither asks
+about focus itself, which is what keeps the DOM question in the one file that has a document.
+
+**What counts as focus is `document.hasFocus()` in the main window, at the moment of the noise** —
+no listener, no stored flag, no new IPC event and nothing about focus on the Rust side. Both call
+sites live in the main window's stores, so the question means what it needs to mean by construction.
+The consequence is named rather than discovered: the settings window is a second `WebviewWindow`
+with a document of its own, so somebody working in an open settings window with the app behind it
+still hears the sound. Reading both windows' focus is the honest reading of the word "app" and was
+rejected for its price — the main window would have to be told about the second window's focus, a
+channel of state bought for a word.
+
+**The preview is deliberately outside all of this.** Choosing a sound in a dropdown calls
+`chime(value)` with no second argument and plays it every time, at any position of the switch and
+with the settings window plainly focused: a preview is somebody listening to a choice rather than
+the app announcing something, and obeying the option would make the list silent in exactly the place
+a sound is picked — for everybody, since the option ships on.
+
 The import between the two stores is circular by construction — `notifications.js` reads `runsState`,
 `runs.js` calls a hoisted function declaration — and **nothing in `notifications.js` may read
 `runsState` at evaluation time**, only inside `syncRunCards`. That is not a style rule: the bundler
