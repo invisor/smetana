@@ -213,6 +213,7 @@ cannot make it.
 | how wide a side panel may be | `.claude/rules/panel-widths.md` |
 | the column order, and what of the board is drawn | `.claude/rules/kanban-board.md` |
 | `settings.json`, and the settings window | `.claude/rules/settings.md` |
+| in-app updates, and the release that feeds them | `.claude/rules/updates.md` |
 
 ### The bd sidecar
 
