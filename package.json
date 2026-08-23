@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "tauri": "tauri",
     "postinstall": "node scripts/fetch-bd.mjs --optional",
-    "fetch-bd": "node scripts/fetch-bd.mjs"
+    "fetch-bd": "node scripts/fetch-bd.mjs",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",
