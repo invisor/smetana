@@ -302,7 +302,8 @@ const SETUP: &str = "Work out what this project is made of and write .smetana/pr
 /// mean "say nothing about language", which is today's behaviour exactly, so
 /// the setting would do nothing for anybody until they changed it. The price is
 /// visible and was taken deliberately — "+ New agent" opens having submitted
-/// one sentence — because the alternative is that the one session where a
+/// the language paragraphs, all three of them since `writes_to_the_tracker`
+/// took `Bare` in — because the alternative is that the one session where a
 /// person talks to the agent most is the one session the setting cannot reach.
 fn conversation(language: &str) -> String {
     format!(
@@ -311,8 +312,11 @@ fn conversation(language: &str) -> String {
     )
 }
 
-/// The language the prose of a bd issue is written in, and it goes only where
-/// the agent writes into bd.
+/// The language the prose of a bd issue is written in, and it goes where the
+/// agent may write into bd rather than only where filing is the work: `Bare` is
+/// in, because a person in that session asks for a task to be filed as readily
+/// as for anything else, and that shift is the whole of what
+/// `writes_to_the_tracker` decides.
 ///
 /// The caveat is not optional and is why this is prose rather than one clause.
 /// What this setting moves is prose; what it must not move is any string
@@ -492,7 +496,7 @@ pub fn build(
 
 /// The work itself, with nothing about language in it. `None` is the bare
 /// session: a person with their own reason, and nothing to impose on them
-/// beyond the one sentence `build` puts in front of this.
+/// beyond what `build` puts in front of this.
 #[allow(clippy::too_many_arguments)]
 fn body(
     intent: &Intent,
