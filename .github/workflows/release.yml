@@ -1,0 +1,164 @@
+# Cuts a release: push a tag v<x.y.z> and this builds the bundle and publishes a
+# GitHub release carrying it, its updater archive and signature, and latest.json.
+#
+# plugins.updater.endpoints points at
+# https://github.com/invisor/smetana/releases/latest/download/latest.json,
+# which is why the release must not be a draft or a prerelease: that URL
+# resolves against the latest published release only.
+#
+# Two things this depends on were done by a person, once, and are in place —
+# the "Releases" section of README.md records what was done and where the
+# private half of the key lives:
+#   * npm run tauri signer generate, with the public key committed as
+#     plugins.updater.pubkey in src-tauri/tauri.conf.json;
+#   * TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD set as
+#     repository secrets.
+# The check job below refuses to build if the public key is ever empty, because
+# a release with an unsigned latest.json cannot be installed as an update by
+# anybody.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Only the job that publishes gets write.
+permissions:
+  contents: read
+
+jobs:
+  # Runs once, before any of the matrix, so a mismatch costs a few seconds
+  # rather than a full macOS build.
+  check:
+    name: Check the tag and the signing key
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # tauri.conf.json is the single source of the version: it is what
+      # getVersion() reports inside the app and the number a person quotes in a
+      # bug report. package.json and Cargo.toml carry their own and mean
+      # nothing. If the tag and the conf disagree, latest.json would announce a
+      # version the bundle does not carry, and every installed copy would try
+      # to update to it for ever.
+      - name: Check the tag against the version in tauri.conf.json
+        run: |
+          conf="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$conf" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} and version ${conf} in src-tauri/tauri.conf.json disagree — the tag says ${tag}"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches version ${conf} in src-tauri/tauri.conf.json"
+
+      - name: Check the updater public key has been filled in
+        run: |
+          pubkey="$(node -p "require('./src-tauri/tauri.conf.json').plugins.updater.pubkey")"
+          if [ -z "$pubkey" ]; then
+            echo "::error::plugins.updater.pubkey in src-tauri/tauri.conf.json is empty — run npm run tauri signer generate, commit the public key, and set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets. See the Releases section of README.md."
+            exit 1
+          fi
+
+  release:
+    name: Build and publish
+    needs: check
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # One entry for now: macOS arm64. The row builds for the runner's own
+        # architecture, and that is a constraint rather than a coincidence —
+        # scripts/fetch-bd.mjs fetches the sidecar for the host triple, and
+        # bundle.externalBin looks it up by the build target's. A row that
+        # cross-compiles needs fetch-bd taught about it first. Windows and Linux
+        # are both wanted and neither has been checked by eye yet, so each is a
+        # row added here and nothing else — the steps below already carry the
+        # conditions they need:
+        #   - platform: windows-latest
+        #     rustTargets: ''
+        #     args: ''
+        #   - platform: ubuntu-22.04
+        #     rustTargets: ''
+        #     args: ''
+        include:
+          - platform: macos-latest
+            rustTargets: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      # Before npm ci, and that ordering is load-bearing twice over. postinstall
+      # runs scripts/fetch-bd.mjs, which asks rustc for the host triple; and its
+      # --optional flag is deliberately ignored when CI is set, so on a runner a
+      # missing toolchain would fail the install outright rather than warn.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rustTargets }}
+
+      # Inert while the matrix holds macOS alone. It is here so that adding an
+      # ubuntu row above is the whole change.
+      - name: Install the Linux build dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Install the front-end dependencies
+        run: npm ci
+
+      # The failing form, never --optional: bd ships inside the bundle
+      # (bundle.externalBin) and src-tauri/binaries/ is gitignored, so a bundle
+      # built without this step is an app that cannot do anything at all.
+      # postinstall has usually put the binary there already, in which case this
+      # says so and downloads nothing — it is the guarantee, not the download.
+      - name: Fetch the bd sidecar
+        run: npm run fetch-bd
+
+      # The bundle is ad-hoc signed: there is no Apple Developer ID and no
+      # notarization, so a downloaded copy has to be let past Gatekeeper by hand
+      # once — releaseBody below says how. The minisign signature is a different
+      # thing entirely: Tauri's own, mandatory, and what an updater would verify.
+      # Nothing verifies it yet — the app has no updater, and these artefacts are
+      # produced ahead of the task that adds one.
+      - name: Build the bundle and publish the release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Smetana ${{ github.ref_name }}'
+          # Kept saying the same thing as the "First launch" section of
+          # README.md, which is the other half of this pair. This copy is the one
+          # strangers read, because it is printed on the release page itself.
+          releaseBody: |
+            Download the .dmg below.
+
+            The app is not signed with an Apple Developer ID, so macOS will not
+            open a freshly downloaded copy on a double-click. Right-click
+            Smetana.app and choose Open. On macOS 14 and earlier the dialog that
+            appears has an Open button and that is all. From macOS 15 Sequoia on
+            it does not — dismiss it, then go to System Settings → Privacy &
+            Security, scroll to the message naming Smetana and press Open Anyway;
+            that asks for Touch ID or your password and confirms once more before
+            the app opens. Once per machine.
+
+            There is no in-app updater yet, so a new version means downloading
+            the .dmg again and letting it past Gatekeeper the same way.
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          args: ${{ matrix.args }}
