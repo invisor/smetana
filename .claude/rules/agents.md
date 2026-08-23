@@ -156,12 +156,20 @@ names the six, and the difference is who writes the message — there the app co
 it, so the form is its own to choose. `Bare` is in for the reason the conversation sentence is in
 every intent — the ordinary session is exactly where somebody says "commit this" — while `NewTask`,
 `EditTask`, `ResolveTask` and `Setup` are out because they commit nothing: what `NewTask` writes
-goes under `.smetana/`, which is not in the repository at all. The task language goes only where the
-agent writes into bd — `NewTask`, `EditTask`, `ResolveTask` and `Run` — and it carries a caveat that
-is not optional, because what the setting must never move is a string some other piece of software
-matches on. The `##` section headings, since `bd create --validate` matches the wording of a heading
-and nothing else, so a translated `## Acceptance Criteria` is bd refusing the issue. And the markers
-a note begins with: `parked:` and `resolved:` are matched as literals by
+goes under `.smetana/`, which is not in the repository at all. The task language goes where the
+agent may write into bd — `Bare`, `NewTask`, `EditTask`, `ResolveTask` and `Run`. `Bare` is in for
+the same reason it is in the commit half: "+ New agent" is exactly where somebody says "file tasks
+for this", and a bare session left out of it filed English issues under a Russian setting. The price
+is that session opening on three language paragraphs before any work, taken knowingly — and it is
+the shape `Run` has always had, since a lead is the other intent in which the conversation, the
+issues and the commits are all three true at once, so the cost is one already in the tree rather
+than a new one. `Run` carries a fourth on top of those, the report language below, and `Bare` does
+not: a bare session writes no batch file. `Setup` and `ResolveConflict`
+stay out because neither files an issue. The paragraph carries a caveat that is not optional,
+because what the setting must never move is a string some other piece of software matches on. The
+`##` section headings, since `bd create --validate` matches the wording of a heading and nothing
+else, so a translated `## Acceptance Criteria` is bd refusing the issue. And the markers a note
+begins with: `parked:` and `resolved:` are matched as literals by
 `components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked card's
 dialog says nothing is open while the Ready warning goes quiet — silent, and landing on somebody
 trying to answer a parked task. What the setting moves is the title, the body of the description,

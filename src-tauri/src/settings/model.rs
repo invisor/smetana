@@ -48,6 +48,14 @@ pub const MAX_OPEN_TABS: usize = 50;
 /// adds custom ones; the cap is generous by that measure and only there to stop
 /// a garbage list from growing without bound.
 const MAX_COLUMNS: usize = 60;
+/// How many tabs an order may name. Deliberately well past `MAX_OPEN_TABS`:
+/// this list holds every tab of the centre row that is not pinned — the open
+/// files, plus the diffs and the shell tabs, neither of which is remembered
+/// anywhere and neither of which is counted by that ceiling. The number is only
+/// there to stop a hand-edited file growing without bound; the app rewrites the
+/// field whole on every drag, from the tabs that exist at that moment, so what
+/// it actually holds can never outgrow the row.
+const MAX_TAB_ORDER: usize = 200;
 /// How many recently opened tasks a project remembers. The palette draws them
 /// under `Recent` with an empty query, and `RECENT_LIMIT` in `DesktopApp.vue` is
 /// the same number on the other side — three rows is a reminder, and a longer
@@ -468,6 +476,23 @@ pub struct ProjectState {
     /// here that bd no longer has costs nothing and is not pruned, so a status
     /// that comes back finds its place again.
     pub column_order: Vec<String>,
+    /// The centre's tab row in the order it was dragged into, by tab id, and
+    /// only the tabs that can be dragged: the pinned run — the board and the
+    /// Agent tab — is not in it and cannot be moved.
+    ///
+    /// Beside `open_tabs` rather than instead of it, and the two answer
+    /// different questions. That one is the set of files to open again, and the
+    /// dirty marks, the focus sweep and the closing of tabs over a deleted file
+    /// all hang on it; this one is a sequence, and it names diffs and shell tabs
+    /// too — ids of things that die with the app. Merging them would put a dead
+    /// session's id in the list that decides which files to read.
+    ///
+    /// A hint rather than a truth, exactly as `column_order` is: an id nothing
+    /// matches is passed over rather than pruned, so after a restart, when only
+    /// the file tabs are back, the entries for the diffs and the terminals cost
+    /// nothing. The front end rewrites the field whole on the next drag, from
+    /// the tabs standing at that moment, so the file cleans itself up.
+    pub tab_order: Vec<String>,
     /// What the run dialog was last set to here. `None` until somebody opens
     /// it, which is every settings file written before this existed.
     ///
@@ -509,6 +534,7 @@ impl Default for ProjectState {
             open_tabs: Vec::new(),
             preview_tab: None,
             column_order: Vec::new(),
+            tab_order: Vec::new(),
             run_settings: None,
             storage_warned_mib: None,
             used_at: None,
@@ -1076,6 +1102,13 @@ impl ProjectState {
         // is deliberately not checked: bd's set of statuses is not known here,
         // and a name that matches nothing is passed over by the board anyway.
         sane_list(&mut self.column_order, MAX_COLUMNS, MAX_ID_LEN);
+        // A tab id, which for a file tab is a path — hence the path ceiling and
+        // not the identifier one `column_order` takes a line above, and hence a
+        // count well clear of `MAX_OPEN_TABS`: the diffs and the shell tabs are
+        // in this list too and in neither of the other two. Membership is
+        // deliberately not checked, for the same reason as the column order: an
+        // id that matches no tab is passed over by the row.
+        sane_list(&mut self.tab_order, MAX_TAB_ORDER, MAX_PATH_LEN);
         if let Some(run) = self.run_settings.as_mut() {
             run.validate();
         }
@@ -2181,6 +2214,96 @@ mod tests {
         assert_eq!(
             file.projects["/p"].column_order,
             vec!["running".to_string(), "ready".to_string()]
+        );
+    }
+
+    #[test]
+    fn the_tab_order_is_read_and_written() {
+        let settings =
+            settings_of(r#"{"version":1,"projects":{"/p":{"tabOrder":["b.rs","a.rs"]}}}"#);
+        assert_eq!(
+            settings.projects["/p"].tab_order,
+            vec!["b.rs".to_string(), "a.rs".to_string()]
+        );
+
+        let mut file = Settings::default();
+        let resolved = ResolvedSettings {
+            project: ProjectState {
+                tab_order: vec!["a.rs".into(), "b.rs".into()],
+                ..ProjectState::default()
+            },
+            open_projects: vec!["/p".into()],
+            active_project: Some("/p".into()),
+            ..ResolvedSettings::default()
+        };
+        merge(&mut file, resolved, "2026-08-01T09:12:00+00:00".into());
+        assert_eq!(
+            file.projects["/p"].tab_order,
+            vec!["a.rs".to_string(), "b.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_file_written_before_the_tab_order_reads_without_it() {
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"sideTab":"agents"}}}"#);
+        assert!(
+            settings.projects["/p"].tab_order.is_empty(),
+            "nothing rearranged here, and the row draws its own order"
+        );
+    }
+
+    /// The ceilings are not `column_order`'s and the difference is the whole
+    /// point of the field: an entry is a tab id, and a file tab's id is a path,
+    /// so a name far longer than a status name survives. The count is well past
+    /// `MAX_OPEN_TABS` because the diffs and the shell tabs share this list.
+    #[test]
+    fn the_tab_order_measures_an_entry_as_a_path_and_not_as_an_identifier() {
+        let long = "x".repeat(MAX_ID_LEN + 1);
+        assert!(long.len() < MAX_PATH_LEN);
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {"tabOrder": [long]}}});
+
+        let stored = &settings_of(&text.to_string()).projects["/p"].tab_order;
+
+        assert_eq!(stored.len(), 1, "a long path is an ordinary tab id here");
+        assert!(MAX_TAB_ORDER > MAX_OPEN_TABS, "diffs and shells are in this list too");
+    }
+
+    #[test]
+    fn the_tab_order_loses_blanks_duplicates_and_everything_past_the_limit() {
+        let mut order = vec![
+            String::from("a.rs"),
+            String::from("a.rs"),
+            String::new(),
+            "x".repeat(MAX_PATH_LEN + 1),
+        ];
+        for i in 0..MAX_TAB_ORDER {
+            order.push(format!("f{i:04}.rs"));
+        }
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {"tabOrder": order}}});
+
+        let stored = &settings_of(&text.to_string()).projects["/p"].tab_order;
+
+        assert_eq!(stored.len(), MAX_TAB_ORDER, "the order is not stored past the limit");
+        assert_eq!(stored[0], "a.rs");
+        assert_eq!(stored[1], "f0000.rs", "the duplicate, the empty id and the overlong one fell out");
+        assert_eq!(
+            stored.last(),
+            Some(&format!("f{:04}.rs", MAX_TAB_ORDER - 2)),
+            "the tail is trimmed, not the head"
+        );
+    }
+
+    /// A diff tab and a shell tab die with the app, so on the next launch their
+    /// ids name nothing. They are kept rather than pruned, exactly as a status
+    /// bd no longer has is: the row passes them over, and the first drag
+    /// rewrites the field from the tabs standing at that moment.
+    #[test]
+    fn the_tab_order_keeps_an_id_nothing_matches() {
+        let settings =
+            settings_of(r#"{"version":1,"projects":{"/p":{"tabOrder":["a.rs","\u0000term:4","b.rs"]}}}"#);
+        assert_eq!(
+            settings.projects["/p"].tab_order,
+            vec!["a.rs".to_string(), "\u{0}term:4".to_string(), "b.rs".to_string()]
         );
     }
 

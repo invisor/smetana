@@ -39,10 +39,18 @@ const props = defineProps({
      it — the file cannot be opened as text, an agent holds the file — and the
      hint has to name the one that happened. The default names none of them:
      better to say little than to name the wrong one. */
-  readOnlyHint: { type: String, default: 'Read-only' }
+  readOnlyHint: { type: String, default: 'Read-only' },
+  /* Whether this tab can be dragged to another place in the row, and whether it
+     is the one being dragged right now. The pair `ColumnHeader.vue` takes, doing
+     the same two jobs: the first decides the cursor and whether a press starts
+     anything at all, the second is the surface step up that says which tab the
+     pointer is holding. Both are decided by the row — a single tab cannot know
+     whether there is anywhere to move it to. */
+  movable: { type: Boolean, default: false },
+  moving: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'close', 'promote'])
+const emit = defineEmits(['select', 'close', 'promote', 'grab'])
 
 const hover = ref(false)
 const preview = computed(() => props.kind === 'preview')
@@ -60,13 +68,27 @@ const style = computed(() => ({
   height: 'var(--tab-h)',
   padding: '0 var(--space-4) 0 var(--space-5)',
   position: 'relative',
-  background: props.active ? 'var(--surface-raised)' : hover.value ? 'var(--surface-hover)' : 'transparent',
+  /* Being dragged is a surface step up, the same as every other interaction in
+     this system — never a colour change and never a transform, so a tab under
+     the pointer cannot jump away from it. It sits above the active surface
+     deliberately: the tab being held is the one thing on the row that has to be
+     findable while the rest of it slides about. */
+  background: props.moving
+    ? 'var(--surface-active)'
+    : props.active
+      ? 'var(--surface-raised)'
+      : hover.value
+        ? 'var(--surface-hover)'
+        : 'transparent',
   color: props.active ? 'var(--text-primary)' : 'var(--text-secondary)',
   borderRight: 'var(--border-w) solid var(--border-subtle)',
   boxShadow: props.active ? 'inset 0 2px 0 0 var(--text-primary)' : 'none',
   font: `var(--weight-regular) var(--text-sm)/1 ${PROSE.has(props.kind) ? 'var(--font-sans)' : 'var(--font-mono)'}`,
-  cursor: 'default',
+  cursor: props.movable ? (props.moving ? 'grabbing' : 'grab') : 'default',
   maxWidth: '200px',
+  /* Without this a touch drag scrolls the tab strip instead of moving the tab,
+     and the pointer capture never sees the moves. */
+  touchAction: props.movable ? 'none' : 'auto',
   transition: 'var(--transition-control)'
 }))
 
@@ -82,6 +104,20 @@ const onClose = (e) => {
   e.stopPropagation()
   emit('close')
 }
+
+/* A pointerdown on the cross is a press of that button and nothing else —
+   `ColumnHeader.vue`'s guard, for the reason it gives: without it the close
+   button still works, because a click survives a drag that moved nothing, but
+   the row would slide about while somebody aims at a 16px target.
+
+   Nothing here touches the click: a press and a release with no move in between
+   still selects the tab, and a second one still promotes a preview. The drag is
+   the row's to run — this only says which tab was taken hold of. */
+const onPointerdown = (event) => {
+  if (!props.movable || event.button !== 0) return
+  if (event.target.closest('button')) return
+  emit('grab', event)
+}
 </script>
 
 <template>
@@ -93,6 +129,7 @@ const onClose = (e) => {
     :style="style"
     @click="emit('select')"
     @dblclick="emit('promote')"
+    @pointerdown="onPointerdown"
     @mouseenter="hover = true"
     @mouseleave="hover = false"
   >
