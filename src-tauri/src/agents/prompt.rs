@@ -367,9 +367,11 @@ fn task_language(language: &str) -> String {
 /// its prompt had said otherwise.
 ///
 /// **The price of that is three paragraphs, and it is paid knowingly.** `Bare`
-/// is the one intent in which all three language rules are true at once, since
-/// a person in it may ask for anything, so the bare session now opens on the
-/// conversation, the issues and the commits before any work. `commits_to_git`
+/// and `Run` are the two intents in which all three language rules are true at
+/// once — a lead commits and files all night, and a person in a bare session
+/// may ask for anything — so the bare session now opens on the conversation,
+/// the issues and the commits before any work, which is the shape a run has
+/// opened on all along rather than a new one. `commits_to_git`
 /// warns against exactly that shape, and the warning still holds where it was
 /// aimed: handing a paragraph to every intent would open a filing session with
 /// three of them in front of work that makes no commit. Here it is the other
@@ -474,10 +476,10 @@ pub fn build(
     // The language rules come first, before the work rather than after it, for
     // the reason `stages` gives about a skill body: what is said last can be
     // pushed off the top of what the agent reads first by 7 KB of process, and
-    // these paragraphs are short enough to cost nothing at the front. Only the
-    // bare session gets all three: the conversation is said in every intent,
-    // and the other two both reach "+ New agent" because a person there can
-    // ask for either. Every other intent gets one or two.
+    // these paragraphs are short enough to cost nothing at the front. Two
+    // intents get all three: the conversation is said in every intent, and the
+    // other two both reach `Run` and `Bare` — a lead commits and files, and a
+    // person at "+ New agent" can ask for either. The rest get one or two.
     let mut out = conversation(crate::agents::language_name(&languages.agent));
     if writes_to_the_tracker(intent) {
         out.push_str("\n\n");
@@ -1472,9 +1474,10 @@ mod tests {
         // reaches. What is imposed is still only language — a bare session has
         // no work, so there is nothing else to say — but it is all three
         // paragraphs, in the order the caller writes them: the conversation,
-        // the issues, the commits. "+ New agent" is the one intent where every
-        // one of the three is true, because a person there says "commit this"
-        // and "file tasks for this" in the same breath.
+        // the issues, the commits. "+ New agent" is one of the two intents
+        // where every one of the three is true — `Run` is the other and always
+        // was — because a person there says "commit this" and "file tasks for
+        // this" in the same breath.
         let text = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
             .expect("a bare session opens on the language sentences");
         assert_eq!(

@@ -160,13 +160,14 @@ goes under `.smetana/`, which is not in the repository at all. The task language
 agent may write into bd — `Bare`, `NewTask`, `EditTask`, `ResolveTask` and `Run`. `Bare` is in for
 the same reason it is in the commit half: "+ New agent" is exactly where somebody says "file tasks
 for this", and a bare session left out of it filed English issues under a Russian setting. The price
-is that one session opening on three language paragraphs before any work, taken knowingly, and it is
-the only intent in which all three are true at once; `Setup` and `ResolveConflict` stay out because
-neither files an issue. The paragraph carries a caveat that is not optional, because what the
-setting must never move is a string some other piece of software matches on. The `##` section
-headings, since `bd create --validate` matches the wording of a heading and nothing else, so a
-translated `## Acceptance Criteria` is bd refusing the issue. And the markers
-a note begins with: `parked:` and `resolved:` are matched as literals by
+is that session opening on three language paragraphs before any work, taken knowingly — and it is
+the shape `Run` has always had, since a lead is the other intent in which all three are true at
+once, so the cost is one already in the tree rather than a new one. `Setup` and `ResolveConflict`
+stay out because neither files an issue. The paragraph carries a caveat that is not optional,
+because what the setting must never move is a string some other piece of software matches on. The
+`##` section headings, since `bd create --validate` matches the wording of a heading and nothing
+else, so a translated `## Acceptance Criteria` is bd refusing the issue. And the markers a note
+begins with: `parked:` and `resolved:` are matched as literals by
 `components/kanban/parked.js`, so a translated one empties `openQuestions` and the parked card's
 dialog says nothing is open while the Ready warning goes quiet — silent, and landing on somebody
 trying to answer a parked task. What the setting moves is the title, the body of the description,
