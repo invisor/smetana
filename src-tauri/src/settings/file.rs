@@ -92,6 +92,19 @@ pub fn git_remove_worktrees(path: &Path) -> bool {
     load(path).0.git.remove_worktrees
 }
 
+/// Whether the update timer may go to the release feed by itself, and nothing
+/// else out of the file. The shape of `agent` above, one section over, and read
+/// from the disk at every tick rather than once at start: that is the whole of
+/// what makes the switch take effect without a restart.
+///
+/// A missing or unreadable file answers `true`, the shipped state, for
+/// `git_remove_worktrees`' reason read the other way round: this switch exists
+/// to *stop* the check, so a file nobody could read must not silently leave
+/// somebody on an old build for ever.
+pub fn updates_auto_check(path: &Path) -> bool {
+    load(path).0.updates.auto_check
+}
+
 /// The write is atomic: a neighbouring file first, then a rename. Otherwise a
 /// break halfway through would leave half a JSON and the next launch would lose
 /// everything. The content is flushed to disk before the rename — without that
@@ -276,6 +289,34 @@ mod tests {
         let unreadable = dir.join("a-directory-in-its-place");
         fs::create_dir_all(&unreadable).expect("setup");
         assert!(git_remove_worktrees(&unreadable));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn whether_updates_are_checked_for_is_read_off_the_disk_and_defaults_to_checking() {
+        // The path the timer takes at every tick, and not the path
+        // `settings_load` takes, so the round trip `model.rs` pins says nothing
+        // about this one.
+        let dir = temp_dir();
+
+        let stored = dir.join("stored.json");
+        fs::write(&stored, r#"{"version":1,"updates":{"autoCheck":false}}"#).expect("setup");
+        assert!(!updates_auto_check(&stored));
+
+        // Three ways to have no answer, and every one of them has to say
+        // "check": the switch is there to stop the request, so a file nobody
+        // can read must not quietly strand somebody on an old build.
+        let missing = dir.join("settings.json");
+        assert!(updates_auto_check(&missing), "a missing file is the first run");
+
+        let broken = dir.join("broken.json");
+        fs::write(&broken, "{not json").expect("setup");
+        assert!(updates_auto_check(&broken));
+
+        let unreadable = dir.join("a-directory-in-its-place");
+        fs::create_dir_all(&unreadable).expect("setup");
+        assert!(updates_auto_check(&unreadable));
 
         let _ = fs::remove_dir_all(&dir);
     }

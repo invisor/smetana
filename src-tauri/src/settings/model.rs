@@ -174,6 +174,61 @@ impl Default for WindowSettings {
     }
 }
 
+/// Whether the app goes to GitHub by itself to ask whether a newer version
+/// exists.
+///
+/// A section rather than a flat field, matching `WindowSettings` above: one
+/// field is already the house shape here, the key names the subsystem, and a
+/// second update-related preference later has somewhere to go without moving
+/// this one.
+///
+/// Global on `GitSettings`' argument, one step shorter even than `window`'s:
+/// there is one application and one release feed, and whether this machine may
+/// reach for it is a fact about a person's connection rather than about any
+/// repository. It is the second switch in this file over "may this app open a
+/// socket by itself", `git.auto_fetch` being the first, and the interval beside
+/// it is deliberately not a field for that one's reason: a person can decide
+/// whether their machine reaches the network on its own and cannot reasonably
+/// decide whether a day is better than two.
+///
+/// Shipped **on**. An app that never checks is an app whose update system does
+/// not exist for anybody who does not go looking, and the switch is there so a
+/// person can decline the background request rather than so they have to opt
+/// into being told about a release.
+///
+/// What it reaches is the **timer alone** — `updates::schedule`, which asks for
+/// this value at each tick rather than reading it once, so switching it off
+/// stops the scheduled check and switching it back on restores it with no
+/// restart. It does not reach `updates_check`, the press on the About tab: a
+/// press is not this app acting on its own, exactly as `git.auto_fetch` leaves
+/// the check in the Branches caption alone. Nor does it discard anything
+/// already downloaded — the machine's `ready` state and the staged bytes are
+/// untouched by the switch, so an update that is waiting is still waiting and
+/// still installable.
+///
+/// No validation, deliberately, and for `WindowSettings`' reason: a bool has no
+/// value outside its allowed set, so a section whose *type* is wrong loses
+/// itself to this default in `parse` like every other section. The three other
+/// copies of the default are `defaults()` in `src/stores/settings.js`, `view`
+/// in `src/views/SettingsWindow.vue` and the prop default in
+/// `src/components/settings/GeneralSettings.vue`, and they have to agree with
+/// this one for `GitSettings`' reason: the switch would otherwise draw the
+/// opposite of what the app is doing for as long as the first answer takes to
+/// arrive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UpdateSettings {
+    /// Ask the release feed by itself — a minute after launch and once a day
+    /// after that. The timer owns the schedule; this is only the switch.
+    pub auto_check: bool,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self { auto_check: true }
+    }
+}
+
 /// The closed list of sound ids `settings.json` may hold, `off` among them.
 /// Written out again as `SOUND_IDS` in `src/sounds.js`, with the obligation
 /// `SIDE_TABS` and the storage ladder carry: what the front end offers must be
@@ -628,6 +683,9 @@ pub struct Settings {
     /// What the main window does with the geometry it was left at. At the root
     /// for the reason `WindowSettings` records.
     pub window: WindowSettings,
+    /// Whether the app asks about a newer version by itself. At the root for
+    /// the reason `UpdateSettings` records.
+    pub updates: UpdateSettings,
     /// What the app says out loud. At the root for the reason
     /// `NotificationSettings` records.
     pub notifications: NotificationSettings,
@@ -678,6 +736,7 @@ impl Default for Settings {
             kanban: KanbanSettings::default(),
             git: GitSettings::default(),
             window: WindowSettings::default(),
+            updates: UpdateSettings::default(),
             notifications: NotificationSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -711,6 +770,9 @@ pub struct ResolvedSettings {
     pub git: GitSettings,
     /// What the main window does with its geometry. See `Settings::window`.
     pub window: WindowSettings,
+    /// Whether the app checks for a newer version by itself. See
+    /// `Settings::updates`.
+    pub updates: UpdateSettings,
     /// What the app says out loud. See `Settings::notifications`.
     pub notifications: NotificationSettings,
     /// Which CLI agent the app starts. See `Settings::agent`.
@@ -740,6 +802,7 @@ impl Default for ResolvedSettings {
             kanban: KanbanSettings::default(),
             git: GitSettings::default(),
             window: WindowSettings::default(),
+            updates: UpdateSettings::default(),
             notifications: NotificationSettings::default(),
             agent: "claude".into(),
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
@@ -786,6 +849,7 @@ pub fn parse(text: &str) -> Outcome {
         kanban: section(&object, "kanban"),
         git: section(&object, "git"),
         window: section(&object, "window"),
+        updates: section(&object, "updates"),
         notifications: section(&object, "notifications"),
         agent: object.get("agent").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| "claude".into()),
         agent_language: language_field(&object, "agentLanguage"),
@@ -831,6 +895,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         kanban: file.kanban.clone(),
         git: file.git.clone(),
         window: file.window.clone(),
+        updates: file.updates.clone(),
         notifications: file.notifications.clone(),
         agent: file.agent.clone(),
         agent_language: file.agent_language.clone(),
@@ -858,6 +923,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.kanban = resolved.kanban;
     file.git = resolved.git;
     file.window = resolved.window;
+    file.updates = resolved.updates;
     file.notifications = resolved.notifications;
     file.agent = resolved.agent;
     file.agent_language = resolved.agent_language;
@@ -1360,6 +1426,45 @@ mod tests {
         let mut written = Settings::default();
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert!(!written.window.restore_geometry, "merge must carry it back into the file");
+    }
+
+    /// Default on, because an app that never asks is an app whose update
+    /// system does not exist for anybody who does not go looking. The walk is
+    /// `restoreGeometry`'s and for its reason: a section added to the types and
+    /// missed in one of `parse`, `resolve` and `merge` reads as the default for
+    /// ever, and no struct-alone test sees it.
+    #[test]
+    fn checking_for_updates_defaults_on_and_a_stored_false_survives_the_merge() {
+        assert!(Settings::default().updates.auto_check);
+        // Every settings file written by a build before this switch existed,
+        // which is every file on a person's disk right now.
+        assert!(settings_of(r#"{"version":1,"appearance":{"theme":"light"}}"#).updates.auto_check);
+
+        let file = settings_of(r#"{"version":1,"updates":{"autoCheck":false}}"#);
+        assert!(!file.updates.auto_check, "parse must read it off the disk");
+
+        let resolved = resolve(&file, None);
+        assert!(!resolved.updates.auto_check, "resolve must carry it to the front end");
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert!(!written.updates.auto_check, "merge must carry it back into the file");
+    }
+
+    /// The same failure `a_window_section_of_the_wrong_type_falls_back_to_restoring`
+    /// pins, one section over and for the same reason: `false` is a real answer
+    /// here, so damage must land on the shipped `true` rather than on the
+    /// `false` a bool deserializes to when nobody was asked.
+    #[test]
+    fn an_updates_section_of_the_wrong_type_falls_back_to_checking() {
+        let settings =
+            settings_of(r#"{"version":1,"updates":"daily","appearance":{"theme":"light"}}"#);
+        assert_eq!(settings.updates, UpdateSettings::default());
+        assert!(settings.updates.auto_check);
+        assert_eq!(settings.appearance.theme, "light", "the neighbouring section must survive");
+
+        let field = settings_of(r#"{"version":1,"updates":{"autoCheck":"no"}}"#);
+        assert!(field.updates.auto_check, "a field of the wrong type loses the section");
     }
 
     /// A section whose type is wrong loses the whole section to its defaults,

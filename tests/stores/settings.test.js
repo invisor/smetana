@@ -44,6 +44,10 @@ describe('loading', () => {
        where it was left since before there was a switch over it, and
        `settings/model.rs` carries this same default. */
     expect(settings.settings.window).toEqual({ restoreGeometry: true })
+    /* On, because an app that never asks is an app whose update system does not
+       exist for anybody who does not go looking. `settings/model.rs` carries
+       this same default, and so do the settings window and the component. */
+    expect(settings.settings.updates).toEqual({ autoCheck: true })
     /* Today's board exactly: every column, every task. Nothing on anybody's
        screen moves until they go and choose. */
     expect(settings.settings.kanban).toEqual({
@@ -109,6 +113,23 @@ describe('loading', () => {
     await settings.loadSettings()
 
     expect(settings.settings.window.restoreGeometry).toBe(false)
+  })
+
+  /* A file written by a build before this section existed is every file on a
+     person's disk right now, and it has to open with the check on rather than
+     with the `undefined` a missing section would otherwise leave. */
+  it('reads the update switch off the file, and takes the default without one', async () => {
+    ipc.on('settings_load', { updates: { autoCheck: false } })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.updates.autoCheck).toBe(false)
+
+    ipc.on('settings_load', { appearance: { theme: 'light' } })
+
+    await settings.loadSettings()
+
+    expect(settings.settings.updates.autoCheck).toBe(true)
   })
 
   it('reads the board settings off the file', async () => {
@@ -594,6 +615,36 @@ describe('the settings window', () => {
     expect(settings.settings.window.restoreGeometry).toBe(true)
   })
 
+  /* The switch over the update timer, checked the same way and for the same
+     reason: coercing a malformed event into a deliberate-looking "off" would
+     quietly stop somebody being told a release exists. */
+  it('takes the update switch, and only a boolean one', async () => {
+    await emit(settings.SETTINGS_APPLY, { updatesAutoCheck: false })
+    await nextTick()
+    expect(settings.settings.updates.autoCheck).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { updatesAutoCheck: 'yes' })
+    await nextTick()
+    expect(settings.settings.updates.autoCheck).toBe(
+      false,
+      'a value that is not a boolean is skipped'
+    )
+
+    await emit(settings.SETTINGS_APPLY, { updatesAutoCheck: null })
+    await nextTick()
+    expect(settings.settings.updates.autoCheck).toBe(false)
+
+    await emit(settings.SETTINGS_APPLY, { updatesAutoCheck: true })
+    await nextTick()
+    expect(settings.settings.updates.autoCheck).toBe(true)
+  })
+
+  it('the update switch reaches the settings window as a flat field', async () => {
+    settings.settings.updates.autoCheck = false
+
+    expect(settings.sharedSettings().updatesAutoCheck).toBe(false)
+  })
+
   /* The two sounds ride the same message as flat fields, named for their
      events. A value outside the closed list is skipped rather than reset: the
      person did not ask for the shipped default either. */
@@ -710,6 +761,7 @@ describe('the settings window', () => {
       gitAutoFetch: true,
       gitRemoveWorktrees: true,
       restoreGeometry: true,
+      updatesAutoCheck: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
       notificationOnlyWhenUnfocused: true,
@@ -748,6 +800,7 @@ describe('the settings window', () => {
       gitAutoFetch: true,
       gitRemoveWorktrees: true,
       restoreGeometry: true,
+      updatesAutoCheck: true,
       notificationRunFinished: 'sound-1',
       notificationNeedsAttention: 'sound-2',
       notificationOnlyWhenUnfocused: true,

@@ -60,3 +60,21 @@ pub fn git_remove_worktrees(app: &AppHandle) -> bool {
         .map(|path| file::git_remove_worktrees(&path))
         .unwrap_or_else(|| model::Settings::default().git.remove_worktrees)
 }
+
+/// Whether the update timer may ask the release feed by itself.
+///
+/// Beside `agent` above and read the same way, from the disk on each call — and
+/// here that is not merely acceptable but the mechanism: `updates::schedule`
+/// asks at every tick, which is what lets the switch stop and restart the
+/// scheduled check without a restart of the app. The opposite of
+/// `git_remove_worktrees`' caller, which reads once and carries the answer for
+/// the whole of a run.
+///
+/// A platform that will not name a config directory answers `true`, the shipped
+/// state — the same fallback `file::updates_auto_check` makes, and for the
+/// reason written there.
+pub fn updates_auto_check(app: &AppHandle) -> bool {
+    path(app)
+        .map(|path| file::updates_auto_check(&path))
+        .unwrap_or_else(|| model::Settings::default().updates.auto_check)
+}
