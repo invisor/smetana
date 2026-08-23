@@ -85,10 +85,19 @@ function upsert(run) {
      The sound is played whichever way the report was delivered, and it plays
      when it was not delivered at all: the bell, the tab and the switch on the
      General tab are three answers to one question and never two at once, but
-     this is about the run having ended rather than about the document. */
+     this is about the run having ended rather than about the document.
+
+     The one thing that can silence it is `onlyWhenUnfocused`, handed over as
+     the option rather than asked here: whether the main window has focus is
+     `chime.js`'s question, and the rule it feeds is `shouldPlay` in
+     `sounds.js`. The token is still marked either way, so a run silenced
+     because somebody was watching does not ring later when the summary lands
+     and they have looked away. */
   if (run?.state?.kind === 'stopped' && !chimedRuns.has(run.token)) {
     chimedRuns.add(run.token)
-    chime(settings.notifications.runFinished)
+    chime(settings.notifications.runFinished, {
+      unlessFocused: settings.notifications.onlyWhenUnfocused
+    })
   }
 }
 

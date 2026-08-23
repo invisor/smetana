@@ -108,6 +108,12 @@ const view = reactive({
      before the first answer arrives. */
   notificationRunFinished: 'sound-1',
   notificationNeedsAttention: 'sound-2',
+  /* Whether those two sounds wait until the main window is in the background.
+     Shipped on, the same as `settings/model.rs`, `stores/settings.js` and the
+     component's own prop default — the four copies have to agree, or this
+     window draws the switch in the position opposite to what the app is doing
+     for the moment before the first answer arrives. */
+  notificationOnlyWhenUnfocused: true,
   /* Whether a finished run opens its report. Shipped on, the same as
      `settings/model.rs`, `stores/settings.js` and the component's own prop
      default — the four copies have to agree, or this window draws the switch in
@@ -446,6 +452,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :restore-geometry="view.restoreGeometry"
           :notification-run-finished="view.notificationRunFinished"
           :notification-needs-attention="view.notificationNeedsAttention"
+          :notification-only-when-unfocused="view.notificationOnlyWhenUnfocused"
           :notification-show-report="view.notificationShowReport"
           @update:theme="change({ theme: $event })"
           @update:ui-font-size="change({ uiFontSize: $event })"
@@ -453,6 +460,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:restore-geometry="change({ restoreGeometry: $event })"
           @update:notification-run-finished="change({ notificationRunFinished: $event })"
           @update:notification-needs-attention="change({ notificationNeedsAttention: $event })"
+          @update:notification-only-when-unfocused="change({ notificationOnlyWhenUnfocused: $event })"
           @update:notification-show-report="change({ notificationShowReport: $event })"
         />
         <EditorSettings

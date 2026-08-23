@@ -12,7 +12,7 @@
    because a sound would not play is worse than a quiet one. This is also the one
    part of the feature a browser cannot verify: `npm run dev` is Chrome-shaped
    and proves nothing about the webview the app actually runs in. */
-import { SOUND_OFF, isSound } from './sounds.js'
+import { shouldPlay } from './sounds.js'
 
 /* Vite resolves each of these to a URL and emits the file into the bundle. The
    map is keyed by the ids in `sounds.js`, so a sound added there without a file
@@ -31,8 +31,34 @@ const FILES = {
 
 const players = new Map()
 
-export function chime(id) {
-  if (!isSound(id) || id === SOUND_OFF) return
+/* Whether the person is looking at this document right now. This is the whole
+   of what `notifications.onlyWhenUnfocused` means, and the question is
+   deliberately synchronous and asked at the moment of the noise: no listener,
+   no stored flag, no new event across IPC. Both call sites live in the main
+   window's stores, so "this document" is the main window and nothing else —
+   the settings window is a second `WebviewWindow` with a document of its own.
+   The consequence is named rather than discovered: somebody working in an open
+   settings window with the app behind it still hears the sound. Reading the
+   focus of both windows would need the main one to be told about the other's,
+   which is a channel of state bought for a word.
+
+   A document with no `hasFocus` at all — a webview stranger than any this ships
+   in, or a test stub — answers "not focused", so the sound plays. The option
+   can then only fail towards what the app did before it existed. */
+const documentFocused = () =>
+  typeof document !== 'undefined' && typeof document.hasFocus === 'function'
+    ? document.hasFocus()
+    : false
+
+export function chime(id, { unlessFocused = false } = {}) {
+  /* Asked only when the answer can matter, which is also what keeps the preview
+     on the settings window free of it: `pick` there calls this with no options
+     at all, so nothing is asked of any document and the chosen sound plays.
+     `shouldPlay` reads this third argument only under the second, so the
+     short-circuit changes no answer it could give — only whether a document was
+     asked a question nothing would have done with. */
+  const focused = unlessFocused ? documentFocused() : false
+  if (!shouldPlay(id, unlessFocused, focused)) return
   const file = FILES[id]
   if (!file) return
   try {

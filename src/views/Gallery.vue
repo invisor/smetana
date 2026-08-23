@@ -1193,6 +1193,11 @@ const galleryNeedsSound = ref('off')
    Notifications group is looked at as a whole, and the row wants to be seen in
    the position a person's app will actually be in. */
 const galleryShowReport = ref(true)
+/* The switch under the two sound rows, local for the same reason and on for the
+   one the report switch above it carries: this page is where the Notifications
+   group is looked at as a whole, and the row wants to be seen in the position
+   the shipped app puts it in. */
+const galleryOnlyWhenUnfocused = ref(true)
 /* The Startup pair, local for the same reason. `supported` is deliberately
    `true` here and nowhere else: in the app this row is disabled in every build
    a person can run this page from — a development build says so in its own
@@ -3219,6 +3224,7 @@ const menuTargetStyle = {
             :notification-run-finished="galleryRunSound"
             :notification-needs-attention="galleryNeedsSound"
             :notification-show-report="galleryShowReport"
+            :notification-only-when-unfocused="galleryOnlyWhenUnfocused"
             @update:theme="galleryTheme = $event"
             @update:ui-font-size="galleryUiFont = $event"
             @update:autostart-enabled="galleryAutostartEnabled = $event"
@@ -3226,6 +3232,7 @@ const menuTargetStyle = {
             @update:notification-run-finished="galleryRunSound = $event"
             @update:notification-needs-attention="galleryNeedsSound = $event"
             @update:notification-show-report="galleryShowReport = $event"
+            @update:notification-only-when-unfocused="galleryOnlyWhenUnfocused = $event"
           />
         </div>
         <div :style="{ width: '380px' }">

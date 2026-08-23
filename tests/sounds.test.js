@@ -5,7 +5,8 @@ import {
   SOUND_IDS,
   SOUND_OFF,
   isSound,
-  normalizeSound
+  normalizeSound,
+  shouldPlay
 } from '../src/sounds.js'
 
 describe('what a notification sound may be', () => {
@@ -43,5 +44,46 @@ describe('what a notification sound may be', () => {
 
   it('with no fallback given, junk becomes off rather than a noise nobody chose', () => {
     expect(normalizeSound('sound-9')).toBe(SOUND_OFF)
+  })
+})
+
+describe('whether a chime asked for right now makes a noise', () => {
+  /* Every combination of the three answers, because the option only ever takes
+     a noise away and the way to see that is the whole table. Focus arrives as
+     an argument: `document.hasFocus` is `chime.js`'s question, which is what
+     leaves this rule reachable by a test at all. */
+  it('with the option on, a sound waits until the window is in the background', () => {
+    expect(shouldPlay('sound-1', true, false)).toBe(true)
+    expect(shouldPlay('sound-1', true, true)).toBe(false)
+  })
+
+  it('with the option off, a sound plays whether or not somebody is looking', () => {
+    // Exactly the behaviour that stood before the option existed.
+    expect(shouldPlay('sound-1', false, false)).toBe(true)
+    expect(shouldPlay('sound-1', false, true)).toBe(true)
+  })
+
+  it('off is silence in all four positions of the other two', () => {
+    for (const onlyWhenUnfocused of [true, false]) {
+      for (const focused of [true, false]) {
+        expect(shouldPlay(SOUND_OFF, onlyWhenUnfocused, focused)).toBe(false)
+      }
+    }
+  })
+
+  it('a value that is not a sound at all is silence too', () => {
+    // The same fallback `normalizeSound` makes, one question over: an id nobody
+    // ships must not become a noise nobody chose.
+    for (const junk of ['sound-9', '', null, undefined, 3, {}]) {
+      expect(shouldPlay(junk, false, false)).toBe(false)
+      expect(shouldPlay(junk, true, false)).toBe(false)
+    }
+  })
+
+  it('every shipped sound answers the same way, so the rule is about the option', () => {
+    for (const id of SOUND_IDS) {
+      expect(shouldPlay(id, true, true)).toBe(false)
+      expect(shouldPlay(id, true, false)).toBe(true)
+    }
   })
 })
