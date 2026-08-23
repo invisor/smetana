@@ -351,13 +351,40 @@ fn task_language(language: &str) -> String {
 }
 
 /// Whether this session writes into the tracker, which is the whole of what
-/// `taskLanguage` is about. A setup session writes one toml file and a bare one
-/// has no work at all — telling either how to word an issue would be prose
+/// `taskLanguage` is about.
+///
+/// Four of the five run `bd create` or `bd update` as the work they were
+/// opened for. `Bare` is the fifth, and it is in for the reason
+/// `commits_to_git` gives for having it: the "+ New agent" session is exactly
+/// where a person says "file tasks for this", and a setting that missed it
+/// would miss the place it is used most. That is not hypothetical — with
+/// `taskLanguage` set to Russian, a bare session split one afternoon's work
+/// into five issues and wrote every one of them in English, because nothing in
+/// its prompt had said otherwise.
+///
+/// **The price of that is three paragraphs, and it is paid knowingly.** `Bare`
+/// is the one intent in which all three language rules are true at once, since
+/// a person in it may ask for anything, so the bare session now opens on the
+/// conversation, the issues and the commits before any work. `commits_to_git`
+/// warns against exactly that shape, and the warning still holds where it was
+/// aimed: handing a paragraph to every intent would open a filing session with
+/// three of them in front of work that makes no commit. Here it is the other
+/// way round, and three short paragraphs in the one session that can do all
+/// three things is the smaller evil than a setting that does not reach the
+/// place it is used from.
+///
+/// `Setup` and `ResolveConflict` stay out. A setup session writes one toml
+/// file, a conflict session finishes a merge or a rebase git stopped on, and
+/// neither files an issue — telling either how to word one would be prose
 /// about something that is not going to happen.
 fn writes_to_the_tracker(intent: &Intent) -> bool {
     matches!(
         intent,
-        Intent::NewTask { .. } | Intent::EditTask { .. } | Intent::ResolveTask { .. } | Intent::Run { .. }
+        Intent::NewTask { .. }
+            | Intent::EditTask { .. }
+            | Intent::ResolveTask { .. }
+            | Intent::Run { .. }
+            | Intent::Bare
     )
 }
 
@@ -443,9 +470,10 @@ pub fn build(
     // The language rules come first, before the work rather than after it, for
     // the reason `stages` gives about a skill body: what is said last can be
     // pushed off the top of what the agent reads first by 7 KB of process, and
-    // these paragraphs are short enough to cost nothing at the front. No
-    // session gets all three: the conversation is said in every intent, the
-    // other two go only where the agent writes an issue or makes a commit.
+    // these paragraphs are short enough to cost nothing at the front. Only the
+    // bare session gets all three: the conversation is said in every intent,
+    // and the other two both reach "+ New agent" because a person there can
+    // ask for either. Every other intent gets one or two.
     let mut out = conversation(crate::agents::language_name(&languages.agent));
     if writes_to_the_tracker(intent) {
         out.push_str("\n\n");
@@ -1438,12 +1466,22 @@ mod tests {
         // of an English default over an Auto position: the one session where a
         // person talks to the agent most cannot be the one the setting never
         // reaches. What is imposed is still only language — a bare session has
-        // no work, so there is nothing else to say — and the commit paragraph
-        // is there for the same argument one field over: "+ New agent" is
-        // exactly where somebody says "commit this".
+        // no work, so there is nothing else to say — but it is all three
+        // paragraphs, in the order the caller writes them: the conversation,
+        // the issues, the commits. "+ New agent" is the one intent where every
+        // one of the three is true, because a person there says "commit this"
+        // and "file tasks for this" in the same breath.
         let text = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english())
             .expect("a bare session opens on the language sentences");
-        assert_eq!(text, format!("{}\n\n{}", conversation("English"), commit_language("English")));
+        assert_eq!(
+            text,
+            format!(
+                "{}\n\n{}\n\n{}",
+                conversation("English"),
+                task_language("English"),
+                commit_language("English")
+            )
+        );
 
         let russian = build(&Intent::Bare, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &russian())
             .expect("builds");
@@ -2236,12 +2274,24 @@ mod tests {
 
     #[test]
     fn only_a_session_that_writes_to_bd_is_told_the_task_language() {
-        // The four that run `bd create` or `bd update`. A setup session writes
-        // one toml file and a bare one has no work at all — telling either how
-        // to word an issue would be prose about something that will not happen.
+        // Five. Four of them run `bd create` or `bd update` as the work they
+        // were opened for, and `Bare` is in because it is where a person says
+        // "file tasks for this" — the same reason `commits_to_git` has it, and
+        // the case the setting was asked for in the first place. It costs that
+        // one session a third paragraph about language, which is cheaper than
+        // a bare session filing English issues under a Russian setting.
+        //
+        // `Setup` and `ResolveConflict` stay out: one writes a toml file, the
+        // other finishes a merge or a rebase git stopped on, and neither files
+        // an issue — the paragraph there would be prose about something that
+        // will not happen.
+        let intents: Vec<Intent> = every_intent()
+            .into_iter()
+            .chain([conflict(crate::vcs::model::OpKind::Merge), conflict(crate::vcs::model::OpKind::Rebase)])
+            .collect();
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-            for intent in every_intent() {
-                let text = in_language(&intent, delivery, &russian());
+            for intent in &intents {
+                let text = in_language(intent, delivery, &russian());
                 let told = text.contains("Write the prose of any bd issue");
                 let writes = matches!(
                     intent,
@@ -2249,7 +2299,9 @@ mod tests {
                         | Intent::EditTask { .. }
                         | Intent::ResolveTask { .. }
                         | Intent::Run { .. }
+                        | Intent::Bare
                 );
+                assert_eq!(writes_to_the_tracker(intent), writes, "{intent:?}");
                 assert_eq!(told, writes, "{intent:?}/{delivery:?}: {text}");
                 if writes {
                     assert!(text.contains("in Russian"), "{intent:?}/{delivery:?}: {text}");
