@@ -45,10 +45,10 @@ registers it and no capability grants it, so a released copy never fetches
 `latest.json` at all. Teaching the app to is a separate task, and these artefacts
 exist so that it has something real to check itself against on the day it lands.
 
-Three things had to be done by a person, once, before the first release could work.
-All three are in place, done by the repository owner on the branch this pipeline
-arrived on. They are written out here as what happened rather than as instructions,
-because each of them has a detail that is expensive to rediscover.
+Three things had to be done by a person before the first release could work, and all
+three are in place, done once by the repository owner. They are written out here
+as what happened rather than as instructions, because each of them carries a detail
+that is expensive to rediscover and there is nowhere else it is written down.
 
 1. `npm run tauri signer generate` produced the minisign key pair, and it was given a
    password. The command prints both halves to the terminal — two base64 blobs, under
@@ -80,9 +80,11 @@ somewhere that outlives the machine it was generated on.
 One local consequence, now that `pubkey` is no longer empty: `npm run tauri build`
 refuses to bundle with "A public key has been found, but no private key", the bundler
 looking for something to sign the updater archive with and finding nothing in the
-environment. That is the intended state — the private key is deliberately on no
-laptop — so `npm run tauri build -- --no-sign` remains the way past it, for that
-reason now rather than because the key was missing from the conf.
+environment. That is the intended state rather than a fault: the private key lives in
+the repository secrets, and a build that signs an updater archive is the workflow's job
+and not a laptop's. `npm run tauri build -- --no-sign` remains the way past it — it
+skips the updater signature along with the code signing — for that reason now rather
+than because the key was missing from the conf.
 `npm run tauri dev` is unaffected, and so is everything `npm test`, `npm run build`
 and `cargo test` do — none of them bundles.
 
