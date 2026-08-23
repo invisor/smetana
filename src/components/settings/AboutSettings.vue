@@ -4,8 +4,14 @@
    asking Tauri for it is the window's business, and a component that did it
    itself would be the first one in `src/components/` to know Tauri exists. */
 import { computed } from 'vue'
+import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
+import SettingsRow from './SettingsRow.vue'
 import { useInteractive } from '../core/interactive.js'
+/* The whole of what this tab says about updating, out here where a test can
+   reach it. This component decides where the row sits and what it is made of,
+   and nothing about which of the six states the app is in. */
+import { installRefusal, updateAction, updateLine, updatesKnown } from './update.js'
 /* The one raster in the interface, and the one place the constraint against
    images is lifted: this is the app icon itself, the same artwork the Dock and
    the installer draw, so anything redrawn from tokens here would be a second
@@ -18,10 +24,30 @@ const props = defineProps({
   /* `null` where there is nobody to ask — a browser. Drawn as a dash rather
      than as a guess: a wrong version in a bug report is worse than none. */
   version: { type: String, default: null },
-  repository: { type: String, default: 'https://github.com/invisor/smetana' }
+  repository: { type: String, default: 'https://github.com/invisor/smetana' },
+  /* `UpdateState` whole, in Rust's own shape, or `null` where there is nobody
+     to ask. The window reads it from `stores/updates.js`; this component never
+     asks anybody anything, which is what keeps it drawable in the gallery with
+     nothing behind it. */
+  updateState: { type: Object, default: null },
+  /* Why the last press on Install was refused, in one line — the run gate above
+     all, which this window cannot see for itself and must not guess at. Held by
+     the window rather than by the state, because it is the answer to a press
+     and not a state the machine is in: `updates.rs` deliberately leaves the
+     machine at `ready` through a refusal, since what was downloaded is still
+     downloaded. */
+  updateRefusal: { type: [Object, String], default: null }
 })
 
-const emit = defineEmits(['open'])
+/* `check` and `install` carry nothing: there is one update machine and the
+   window knows how to reach it. The verb is the pure rule's (`updateAction`),
+   so the label — which is prose — is never what the window switches on. */
+const emit = defineEmits(['open', 'check', 'install'])
+
+const showsUpdate = computed(() => updatesKnown(props.updateState))
+const updateSentence = computed(() => updateLine(props.updateState))
+const updateControl = computed(() => updateAction(props.updateState))
+const refusal = computed(() => installRefusal(props.updateRefusal))
 
 const { hover, handlers } = useInteractive()
 
@@ -77,6 +103,14 @@ const linkStyle = {
 const addressStyle = computed(() => ({
   textDecoration: hover.value ? 'underline' : 'none'
 }))
+
+/* Under the row rather than in its description, and the same shape the Storage
+   tab gives its own refusals: a row's description says what a control does,
+   while this says what happened when somebody pressed it. */
+const refusalStyle = {
+  color: 'var(--status-failed-fg)',
+  font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
+}
 </script>
 
 <template>
@@ -90,6 +124,24 @@ const addressStyle = computed(() => ({
         <span :style="versionStyle">{{ props.version ? `v${props.version}` : '—' }}</span>
       </div>
     </div>
+
+    <!-- The update row, directly under the version it is about, and drawn only
+         where there is somebody to ask: in a browser there is no updater, and a
+         row offering a check nothing could carry out would be the same invention
+         as a version number made up for the line above. -->
+    <template v-if="showsUpdate">
+      <SettingsRow label="Updates" :description="updateSentence" control-width="22ch">
+        <Button
+          v-if="updateControl"
+          :variant="updateControl.verb === 'install' ? 'primary' : 'secondary'"
+          :disabled="updateControl.disabled"
+          @click="emit(updateControl.verb)"
+        >
+          {{ updateControl.label }}
+        </Button>
+      </SettingsRow>
+      <p v-if="refusal" :style="refusalStyle">{{ refusal }}</p>
+    </template>
 
     <p :style="proseStyle">
       An open-source desktop app for supervising autonomous coding agents: one window over a

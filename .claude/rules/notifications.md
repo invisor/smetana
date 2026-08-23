@@ -2,6 +2,7 @@
 paths:
   - "src/components/notifications/**"
   - "src/stores/notifications.js"
+  - "src/stores/updates.js"
   - "src/components/run/reportDelivery.js"
   - "src/components/run/reportTab.js"
   - "src/components/run/stopReason.js"
@@ -13,9 +14,10 @@ paths:
 
 The bell in the scope bar opens a panel of notifications, and the badge counts what is in it —
 `components/notifications/` (the pure `notifications.js`, `NotificationPanel.vue`,
-`NotificationCard.vue`) over `src/stores/notifications.js`. There are two sources — the attachment
-store growing, and a run that is over — and the badge counts one card per stopped run whose report
-was not put straight in front of the person, beside the one the storage source is ever allowed.
+`NotificationCard.vue`) over `src/stores/notifications.js`. There are three sources — the attachment
+store growing, a run that is over, and an update downloaded and waiting — and the badge counts one
+card per stopped run whose report was not put straight in front of the person, beside the one the
+storage source is ever allowed and the one the update source is ever allowed.
 
 **The list is derived, not an inbox.** A notification is computed from the state of its source and
 thrown away when that state goes away; nothing accumulates on disk — no history, no message log, no
@@ -221,6 +223,45 @@ because a worker that knows nothing of tabs has to name a file on disk, `openTab
 project-relative, and separators are normalised on both sides since `files.js` uses `/` while Rust
 wrote the platform's. It answers `null` rather than guessing for anything not squarely inside this
 project's reports folder.
+
+**The third source is an update that has finished downloading**, and it is the shortest-lived of the
+three: `updateNotification` beside the other two, one card keyed `update:<version>`, made from the
+`ready` state of the machine in `src-tauri/src/updates.rs` and gone the moment the machine is in any
+other state. `stores/updates.js` hands that state to `syncUpdateCard` on every change it adopts, and
+the card is derived from it exactly as the other two are derived from theirs — installing restarts
+the app, so the card cannot outlive what it is about even in principle.
+
+**Only `ready` is news, and the other five states are deliberately silent.** Checking and downloading
+are the app doing housekeeping it was not asked about; announcing either would interrupt somebody
+with something they can neither act on nor stop, and the agreed behaviour is that the app fetches
+quietly. `failed` is not news either — a check that could not reach GitHub is not a reason to put a
+row in front of anybody — and it belongs on the About tab, where a person went looking. So the bell
+has one thing to say about updating and it is the one thing a press answers.
+
+The card is **ordinary loudness, never `needs-you`**: loud is budgeted at one or two rows on a screen
+and belongs to an agent waiting for a person, while an update that has waited an hour is no worse off
+for waiting another. Its button opens the settings window on About rather than installing from the
+panel — the same bargain the storage card makes with Clean up, and for a sharper reason: installing
+restarts the app over unsaved editor buffers and live terminals, so the press belongs beside the
+sentence naming the version and the refusal that may come back from the run gate.
+
+The import direction is the **opposite of the runs source's, on purpose**. `runs.js` and
+`notifications.js` import each other, which is the cycle both files carry a warning about; nothing
+forces one here, because the state travels *into* `syncUpdateCard` as an argument rather than being
+read out of a store. `stores/notifications.js` therefore knows nothing of `stores/updates.js`, and
+the natural-looking symmetry with runs — a module-scope watcher over `updatesState` — is exactly the
+change that would create the cycle it was written to avoid.
+
+Dismissing is remembered **by version, in memory only** (`dismissedUpdates`), which is the same
+argument `deliveredRuns` makes one step smaller: the machine starts at `idle` on every launch, so a
+remembered version would name a state nothing can be in. A card dismissed for 0.2.0 says nothing
+about 0.3.0, and the next release speaks again.
+
+Both windows keep their own `stores/updates.js`, because a second webview is a second module graph,
+and the settings window asking Rust on its own is the whole of why one opened halfway through a
+download draws the download. The consequence is named rather than discovered: that window's
+notification store collects a card nobody draws there, which costs one object and no behaviour — the
+bell lives in the main window alone.
 
 There are no toasts. The bell is the whole surface: a folder that has grown is not a person waiting
 on an answer, a run that has finished is not one either, and the loud budget on that screen is one or

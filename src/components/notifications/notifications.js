@@ -26,6 +26,12 @@ import { formatBytes, projectBytes } from '../settings/storage.js'
    copy here would eventually disagree with the bar a few centimetres away, and
    the two would be describing the same run. */
 import { stopReason } from '../run/stopReason.js'
+/* What counts as an update waiting, decided once. The About tab draws the whole
+   of the machine's six states and this bell draws exactly one of them, so the
+   two would be a pair of copies of the same tag comparison — and the day one of
+   them learned a new state the other would be quietly wrong. Borrowed for the
+   reason the two imports above are borrowed. */
+import { readyVersion, updateKind } from '../settings/update.js'
 
 export { projectBytes }
 
@@ -200,5 +206,54 @@ export function runNotification(run) {
     /* No document, no button. A card offering details that are not there is
        worse than one carrying nothing but Dismiss. */
     ...(summary?.report ? { actionLabel: 'Show details' } : {})
+  }
+}
+
+/* ---- the third source: an update waiting to be installed -------------- */
+
+/* The card for an update that has been downloaded and is waiting, or `null` in
+   every other state of the machine.
+
+   **Only `ready` is news.** Checking and downloading are not: the app looks for
+   a new version by itself and fetches it quietly, and a bell that announced
+   either would interrupt somebody with housekeeping they did not ask for and
+   cannot act on. `failed` is not news either — a check that could not reach
+   GitHub is not a reason to interrupt anybody, and it belongs on the About tab
+   where a person went looking. What is left is the one statement that is worth a
+   row: there is a version on this disk, and one press puts the app on it.
+
+   It fits the shape the other two sources fill rather than straining it. The
+   card is derived from the state of its source and stops being true the moment
+   the update is installed — the app restarts and this front end starts again
+   with an empty list — so nothing accumulates, no history appears and the "no
+   inbox" rule holds unchanged.
+
+   Ordinary loudness, not `needs-you`: loud is budgeted at one or two rows on a
+   screen and belongs to an agent waiting for a person. An update that has
+   waited an hour is no worse off for waiting another.
+
+   The button leads to About rather than installing from here, and the body says
+   so — the same bargain the storage card makes with Clean up. Installing
+   restarts the app over unsaved editor buffers and live terminals, so the press
+   that does it belongs on the screen that carries the whole state, next to the
+   sentence naming the version. */
+export function updateNotification(state) {
+  if (updateKind(state) !== 'ready') return null
+  const version = readyVersion(state)
+  return {
+    /* One card at a time — there is one machine and one staged download — and
+       named by the version, so a card dismissed for one version says nothing
+       about the next. */
+    id: version ? `update:${version}` : 'update:ready',
+    source: 'update',
+    version,
+    /* Downloaded and sitting on the disk, which is what this glyph says.
+       Registered in `core/icons.js` already; nothing new is drawn here. */
+    icon: 'arrow-down-to-line',
+    title: 'Update ready',
+    body: version
+      ? `Smetana ${version} has been downloaded. Install opens About in settings, where the app restarts onto the new version.`
+      : 'A new version has been downloaded. Install opens About in settings, where the app restarts onto the new version.',
+    actionLabel: 'Install'
   }
 }
