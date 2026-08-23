@@ -614,10 +614,11 @@ pub struct Settings {
     /// back after a restart as something the person did not choose.
     pub agent: String,
     /// The language a CLI agent talks to the person in, the language the prose
-    /// of a bd issue it writes is in, and the language it writes a git commit
-    /// message in. All three at the root beside `agent` and for the same
-    /// reason: which language somebody wants to be spoken to in is a habit of
-    /// theirs and travels with them between repositories.
+    /// of a bd issue it writes is in, the language it writes a git commit
+    /// message in, and the language a run's report is written in. Every one of
+    /// them sits at the root beside `agent` and for the same reason: which
+    /// language somebody wants to be spoken to in is a habit of theirs and
+    /// travels with them between repositories.
     ///
     /// The set of legal values is `agents::LANGUAGES` and is not repeated here,
     /// the same as `agent` above.
@@ -626,6 +627,13 @@ pub struct Settings {
     /// What `commit_language` moves is the prose of a message; whatever sits in
     /// front of the colon stays as it is, whatever it says.
     pub commit_language: String,
+    /// What `report_language` moves is the prose a run's lead writes into
+    /// `.smetana/runs/<token>/batch-<n>.json` — the `did` line for each task
+    /// and the batch's `notes`. The JSON keys around that prose do not move,
+    /// because `runs::report` matches them as literal strings, and neither do
+    /// `runs::report`'s own English labels, which are this product's interface
+    /// copy. `prompt.rs` records the whole watershed.
+    pub report_language: String,
     pub last_project: Option<String>,
     /// The contents and order of the on-screen list — the order things were
     /// added, not how recent they are: rows that jump on every switch are
@@ -649,6 +657,7 @@ impl Default for Settings {
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
             commit_language: crate::agents::DEFAULT_LANGUAGE.into(),
+            report_language: crate::agents::DEFAULT_LANGUAGE.into(),
             last_project: None,
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
@@ -680,10 +689,11 @@ pub struct ResolvedSettings {
     pub notifications: NotificationSettings,
     /// Which CLI agent the app starts. See `Settings::agent`.
     pub agent: String,
-    /// The three languages. See `Settings::agent_language`.
+    /// The languages. See `Settings::agent_language`.
     pub agent_language: String,
     pub task_language: String,
     pub commit_language: String,
+    pub report_language: String,
     pub project: ProjectState,
     pub open_projects: Vec<String>,
     pub active_project: Option<String>,
@@ -709,6 +719,7 @@ impl Default for ResolvedSettings {
             agent_language: crate::agents::DEFAULT_LANGUAGE.into(),
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
             commit_language: crate::agents::DEFAULT_LANGUAGE.into(),
+            report_language: crate::agents::DEFAULT_LANGUAGE.into(),
             project: ProjectState::default(),
             open_projects: Vec::new(),
             active_project: None,
@@ -754,6 +765,7 @@ pub fn parse(text: &str) -> Outcome {
         agent_language: language_field(&object, "agentLanguage"),
         task_language: language_field(&object, "taskLanguage"),
         commit_language: language_field(&object, "commitLanguage"),
+        report_language: language_field(&object, "reportLanguage"),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
@@ -798,6 +810,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         agent_language: file.agent_language.clone(),
         task_language: file.task_language.clone(),
         commit_language: file.commit_language.clone(),
+        report_language: file.report_language.clone(),
         project: active
             .as_deref()
             .and_then(|path| file.projects.get(path))
@@ -824,6 +837,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.agent_language = resolved.agent_language;
     file.task_language = resolved.task_language;
     file.commit_language = resolved.commit_language;
+    file.report_language = resolved.report_language;
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
 
@@ -926,6 +940,7 @@ impl Settings {
         known_language(&mut self.agent_language);
         known_language(&mut self.task_language);
         known_language(&mut self.commit_language);
+        known_language(&mut self.report_language);
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -945,6 +960,7 @@ impl ResolvedSettings {
         known_language(&mut self.agent_language);
         known_language(&mut self.task_language);
         known_language(&mut self.commit_language);
+        known_language(&mut self.report_language);
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -2338,21 +2354,25 @@ mod tests {
         assert_eq!(settings.agent_language, "en");
         assert_eq!(settings.task_language, "en");
         assert_eq!(settings.commit_language, "en");
+        assert_eq!(settings.report_language, "en");
         assert_eq!(Settings::default().agent_language, "en");
         assert_eq!(Settings::default().commit_language, "en");
+        assert_eq!(Settings::default().report_language, "en");
         assert_eq!(ResolvedSettings::default().task_language, "en");
         assert_eq!(ResolvedSettings::default().commit_language, "en");
+        assert_eq!(ResolvedSettings::default().report_language, "en");
     }
 
     #[test]
     fn every_language_the_app_ships_survives_a_load() {
         for (id, _) in crate::agents::LANGUAGES {
             let settings = settings_of(&format!(
-                r#"{{"version":1,"agentLanguage":"{id}","taskLanguage":"{id}","commitLanguage":"{id}"}}"#
+                r#"{{"version":1,"agentLanguage":"{id}","taskLanguage":"{id}","commitLanguage":"{id}","reportLanguage":"{id}"}}"#
             ));
             assert_eq!(settings.agent_language, id);
             assert_eq!(settings.task_language, id);
             assert_eq!(settings.commit_language, id);
+            assert_eq!(settings.report_language, id);
         }
     }
 
@@ -2363,11 +2383,12 @@ mod tests {
         // reason to throw the rest of somebody's file away.
         let settings = settings_of(
             r#"{"version":1,"agentLanguage":"xx","taskLanguage":"ru","commitLanguage":"zz",
-                "agent":"codex","appearance":{"theme":"light"}}"#,
+                "reportLanguage":"qq","agent":"codex","appearance":{"theme":"light"}}"#,
         );
         assert_eq!(settings.agent_language, "en", "the bad one falls back");
-        assert_eq!(settings.commit_language, "en", "and so does the third");
-        assert_eq!(settings.task_language, "ru", "its neighbour is untouched");
+        assert_eq!(settings.commit_language, "en", "and so does its neighbour");
+        assert_eq!(settings.report_language, "en", "and so does the report language");
+        assert_eq!(settings.task_language, "ru", "the good one is untouched");
         assert_eq!(settings.agent, "codex", "and so is the rest of the file");
         assert_eq!(settings.appearance.theme, "light");
     }
@@ -2379,22 +2400,25 @@ mod tests {
     #[test]
     fn a_chosen_language_does_not_quietly_become_english_again() {
         let file = settings_of(
-            r#"{"version":1,"agentLanguage":"ru","taskLanguage":"ja","commitLanguage":"de"}"#,
+            r#"{"version":1,"agentLanguage":"ru","taskLanguage":"ja","commitLanguage":"de","reportLanguage":"it"}"#,
         );
         assert_eq!(file.agent_language, "ru", "parse must read it off the disk");
         assert_eq!(file.task_language, "ja");
         assert_eq!(file.commit_language, "de");
+        assert_eq!(file.report_language, "it");
 
         let resolved = resolve(&file, None);
         assert_eq!(resolved.agent_language, "ru", "resolve must carry it to the front end");
         assert_eq!(resolved.task_language, "ja");
         assert_eq!(resolved.commit_language, "de");
+        assert_eq!(resolved.report_language, "it");
 
         let mut written = Settings::default();
         merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
         assert_eq!(written.agent_language, "ru", "merge must carry it back into the file");
         assert_eq!(written.task_language, "ja");
         assert_eq!(written.commit_language, "de");
+        assert_eq!(written.report_language, "it");
     }
 
     #[test]

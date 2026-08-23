@@ -1218,6 +1218,7 @@ const galleryAgent = ref('claude')
 const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
 const galleryCommitLanguage = ref('ja')
+const galleryReportLanguage = ref('de')
 /* The subscription block. A reading rather than one of the two empty states:
    those are a sentence each, while this is the shape with a layout to check —
    two rows, the line about what a run would do, and a live Refresh beside the
@@ -3257,11 +3258,30 @@ const menuTargetStyle = {
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"
+            :report-language="galleryReportLanguage"
             :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
             @update:commit-language="galleryCommitLanguage = $event"
+            @update:report-language="galleryReportLanguage = $event"
+          />
+        </div>
+        <!-- The same tab with Show run report off on the General tab, which is
+             the other state the Report language row has: the control is drawn
+             and cannot be pressed, and the description names the reason and the
+             tab the switch is on. The chosen language is still handed in and
+             still stands, which is what says the switch shuts the row rather
+             than the setting. -->
+        <div :style="{ width: '380px' }">
+          <AgentSettings
+            :agent="galleryAgent"
+            :agent-language="galleryAgentLanguage"
+            :task-language="galleryTaskLanguage"
+            :commit-language="galleryCommitLanguage"
+            :report-language="galleryReportLanguage"
+            :show-run-report="false"
+            :usage="galleryAgentUsage"
           />
         </div>
         <!-- The subscription block in its other shapes, the way the Storage tab

@@ -426,6 +426,58 @@ fn commits_to_git(intent: &Intent) -> bool {
     matches!(intent, Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::Bare)
 }
 
+/// The language a run's report is written in, and it moves the prose of the
+/// batch file and nothing else in the document.
+///
+/// The same watershed the two paragraphs above hold, and here it is sharper
+/// than in either of them, because on the far side of it sits a program rather
+/// than a person's eye. `runs::report::parse_batch` reads `tasks`, `id`, `did`
+/// and `notes` through serde by literal match, so a translated key is not a
+/// document in another language — it is a batch that left no account of itself,
+/// drawn in the report as exactly that. Hence the field names first: a model
+/// that reads the sentence and stops has to have met the half that breaks the
+/// document.
+///
+/// An identifier is exempted for the reason it is one paragraph up — a path or
+/// a sha inside a `did` line is read rather than translated, and `report::prose`
+/// draws it as `<code>`.
+///
+/// The last clause is not a nicety. There are two reports at the end of a
+/// batch: this file, which one program reads to draw a document, and the
+/// account the lead gives back in the conversation, which is under the
+/// conversation language and stays there. Somebody who set this and watched the
+/// terminal for a change would have been told nothing at all, so the paragraph
+/// says which of the two it is about.
+///
+/// `report.rs`'s own words — `smetana · run report`, `closed`, `parked`,
+/// `batch N` — are not mentioned here at all, and deliberately: they are this
+/// product's interface copy, which CLAUDE.md says is English, and no agent
+/// writes them. Nothing in a prompt could move them even if it tried.
+fn report_language(language: &str) -> String {
+    format!(
+        "Write the prose of the batch file you leave when a batch is finished in {language}: the \
+         `did` line for each task and the batch's `notes`. The names of the fields are not prose \
+         and do not move — `tasks`, `id`, `did` and `notes` stay exactly those four words, \
+         because Smetana matches them letter for letter, and a renamed key is a batch that left \
+         no account of itself. An identifier inside a line — a path, a symbol, a command, a sha \
+         — is read rather than translated and travels unchanged for the same reason. The account \
+         you give back in this conversation is a separate report and keeps the language of the \
+         conversation: this setting moves the file on disk and nothing you say to me."
+    )
+}
+
+/// Whether this session ever writes a batch file, which is the whole of what
+/// `reportLanguage` is about — the shape `writes_to_the_tracker` and
+/// `commits_to_git` hold, and the narrowest of them.
+///
+/// `Run` alone. It is the only intent that names the file at all, and a session
+/// that will never write one has nothing to hear about how to word it: the
+/// paragraph would be prose about something that is not going to happen, in
+/// front of work that is.
+fn leaves_a_run_report(intent: &Intent) -> bool {
+    matches!(intent, Intent::Run { .. })
+}
+
 /// What the session opens on. Never `None` any more: the conversation language
 /// is said in every intent, so even the "+ New agent" row opens on one
 /// sentence. The `Option` stays because it is the profiles' contract for "is
@@ -444,8 +496,9 @@ pub fn build(
     // the reason `stages` gives about a skill body: what is said last can be
     // pushed off the top of what the agent reads first by 7 KB of process, and
     // these paragraphs are short enough to cost nothing at the front. No
-    // session gets all three: the conversation is said in every intent, the
-    // other two go only where the agent writes an issue or makes a commit.
+    // session gets every one of them: the conversation is said in every intent,
+    // the rest go only where the agent writes an issue, makes a commit or
+    // leaves a run's report behind it.
     let mut out = conversation(crate::agents::language_name(&languages.agent));
     if writes_to_the_tracker(intent) {
         out.push_str("\n\n");
@@ -454,6 +507,10 @@ pub fn build(
     if commits_to_git(intent) {
         out.push_str("\n\n");
         out.push_str(&commit_language(crate::agents::language_name(&languages.commit)));
+    }
+    if leaves_a_run_report(intent) {
+        out.push_str("\n\n");
+        out.push_str(&report_language(crate::agents::language_name(&languages.report)));
     }
     if let Some(body) = body(intent, delivery, images, skills, facts, text) {
         out.push_str("\n\n");
@@ -1092,7 +1149,12 @@ mod tests {
     /// One language chosen for both, which is the case a person who does not
     /// work in English is actually in.
     fn russian() -> Languages {
-        Languages { agent: "ru".into(), task: "ru".into(), commit: "ru".into() }
+        Languages {
+            agent: "ru".into(),
+            task: "ru".into(),
+            commit: "ru".into(),
+            report: "ru".into(),
+        }
     }
 
     /// Nothing read: what a PluginDir harness always gets, and what an Inline
@@ -2346,6 +2408,69 @@ mod tests {
     }
 
     #[test]
+    fn only_a_run_is_told_the_report_language() {
+        // A run's lead is the only session that ever writes a batch file, so it
+        // is the only one with anything to word. The walk is the one the two
+        // settings above get, in both deliveries, and the predicate is asserted
+        // beside the text so that a change to either has to face the other.
+        let intents: Vec<Intent> = every_intent()
+            .into_iter()
+            .chain([conflict(crate::vcs::model::OpKind::Merge)])
+            .collect();
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            for intent in &intents {
+                let leaves = matches!(intent, Intent::Run { .. });
+                assert_eq!(leaves_a_run_report(intent), leaves, "{intent:?}");
+
+                let text = in_language(intent, delivery, &russian());
+                let told = text.contains("Write the prose of the batch file");
+                assert_eq!(told, leaves, "{intent:?}/{delivery:?}: {text}");
+                if leaves {
+                    assert!(text.contains("in Russian"), "{intent:?}/{delivery:?}: {text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_report_paragraph_keeps_the_json_keys_and_names_the_other_report() {
+        // Asserted against the predicate's own text rather than against the
+        // whole prompt, and that is the point of the test: the shape of the
+        // file is already printed a paragraph below in the `Run` prompt, so a
+        // walk over the whole text would pass with the exception missing
+        // altogether.
+        //
+        // `report::parse_batch` reads these four through serde by literal
+        // match, so a translated key is not a document in another language — it
+        // is a batch drawn as having left no account of itself. And the last
+        // assertion is the other half: two reports come out of a batch, and
+        // somebody who set this and watched the terminal would otherwise have
+        // been told nothing at all.
+        let text = report_language("Russian");
+        for key in ["`tasks`", "`id`", "`did`", "`notes`"] {
+            assert!(text.contains(key), "{key} is not named as staying put: {text}");
+        }
+        assert!(text.contains("in Russian"), "{text}");
+        assert!(
+            text.contains("separate report") && text.contains("language of the conversation"),
+            "the account given in the conversation is not named as its own report: {text}"
+        );
+    }
+
+    #[test]
+    fn the_report_language_moves_no_word_the_document_writes_itself() {
+        // `runs::report` renders its own labels and this setting must not be
+        // read as an instruction about them: they are interface copy, CLAUDE.md
+        // says interface copy is English, and no agent writes them. A prompt
+        // that started naming them would be the first step towards a table of
+        // twelve translations in Rust.
+        let text = report_language("Russian");
+        for label in ["run report", "closed", "parked", "batches"] {
+            assert!(!text.contains(label), "{label} is named as if it moved: {text}");
+        }
+    }
+
+    #[test]
     fn the_section_headings_stay_english_whatever_the_task_language_is() {
         // `bd create --validate` matches the wording of a heading and nothing
         // else, so a translated `## Acceptance Criteria` is not a difference of
@@ -2409,7 +2534,12 @@ mod tests {
             for languages in [
                 english(),
                 russian(),
-                Languages { agent: "ja".into(), task: "de".into(), commit: "it".into() },
+                Languages {
+                    agent: "ja".into(),
+                    task: "de".into(),
+                    commit: "it".into(),
+                    report: "ko".into(),
+                },
             ] {
                 for (spec, plan) in
                     [(Stage::On, Stage::On), (Stage::On, Stage::Off), (Stage::Auto, Stage::Auto)]
@@ -2431,7 +2561,12 @@ mod tests {
         let text = in_language(
             &Intent::Bare,
             SkillDelivery::PluginDir,
-            &Languages { agent: "xx".into(), task: "xx".into(), commit: "xx".into() },
+            &Languages {
+                agent: "xx".into(),
+                task: "xx".into(),
+                commit: "xx".into(),
+                report: "xx".into(),
+            },
         );
         assert!(text.contains("Talk to me in English"), "{text}");
         assert!(!text.contains("xx"), "{text}");

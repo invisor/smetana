@@ -180,18 +180,21 @@ describe('loading', () => {
     expect(stores.settings.settings.agentLanguage).toBe('en')
     expect(stores.settings.settings.taskLanguage).toBe('en')
     expect(stores.settings.settings.commitLanguage).toBe('en')
+    expect(stores.settings.settings.reportLanguage).toBe('en')
 
     const second = await loadStores()
     second.ipc.on('settings_load', {
       agentLanguage: 'ru',
       taskLanguage: 'ja',
-      commitLanguage: 'de'
+      commitLanguage: 'de',
+      reportLanguage: 'it'
     })
     second.ipc.on('settings_save', null)
     await second.stores.settings.loadSettings()
     expect(second.stores.settings.settings.agentLanguage).toBe('ru')
     expect(second.stores.settings.settings.taskLanguage).toBe('ja')
     expect(second.stores.settings.settings.commitLanguage).toBe('de')
+    expect(second.stores.settings.settings.reportLanguage).toBe('it')
 
     /* And back out on the next write, so a restart brings the choice back. */
     second.stores.settings.settings.appearance.theme = 'light'
@@ -200,6 +203,7 @@ describe('loading', () => {
     expect(sent.agentLanguage).toBe('ru')
     expect(sent.taskLanguage).toBe('ja')
     expect(sent.commitLanguage).toBe('de')
+    expect(sent.reportLanguage).toBe('it')
   })
 })
 
@@ -431,22 +435,30 @@ describe('the settings window', () => {
     await emit(settings.SETTINGS_APPLY, {
       agentLanguage: 'ru',
       taskLanguage: 'zh-Hans',
-      commitLanguage: 'tr'
+      commitLanguage: 'tr',
+      reportLanguage: 'ko'
     })
     await nextTick()
     expect(settings.settings.agentLanguage).toBe('ru')
     expect(settings.settings.taskLanguage).toBe('zh-Hans')
     expect(settings.settings.commitLanguage).toBe('tr')
+    expect(settings.settings.reportLanguage).toBe('ko')
 
     /* Skipped rather than reset to the shipped default, the same as every other
        field here: an event is not a response to anything, so a malformed one
        must cost nothing — and reverting to English would be a change nobody
        asked for. */
-    await emit(settings.SETTINGS_APPLY, { agentLanguage: 7, taskLanguage: '', commitLanguage: null })
+    await emit(settings.SETTINGS_APPLY, {
+      agentLanguage: 7,
+      taskLanguage: '',
+      commitLanguage: null,
+      reportLanguage: {}
+    })
     await nextTick()
     expect(settings.settings.agentLanguage).toBe('ru')
     expect(settings.settings.taskLanguage).toBe('zh-Hans')
     expect(settings.settings.commitLanguage).toBe('tr')
+    expect(settings.settings.reportLanguage).toBe('ko')
   })
 
   it('takes the board settings and cleans the two column lists on the way in', async () => {
@@ -705,7 +717,8 @@ describe('the settings window', () => {
       agent: 'claude',
       agentLanguage: 'en',
       taskLanguage: 'en',
-      commitLanguage: 'en'
+      commitLanguage: 'en',
+      reportLanguage: 'en'
     })
   })
 
@@ -742,7 +755,8 @@ describe('the settings window', () => {
       agent: 'codex',
       agentLanguage: 'en',
       taskLanguage: 'en',
-      commitLanguage: 'en'
+      commitLanguage: 'en',
+      reportLanguage: 'en'
     })
   })
 })

@@ -278,10 +278,10 @@ impl Intent {
 /// The languages a session is started with: the one the agent talks to the
 /// person in, and the one the prose of a bd issue it writes is in.
 ///
-/// Three fields rather than one, because they answer different questions and a
-/// person may want them apart: a lead who reads Russian may still keep a
-/// tracker their whole team reads in English, and a repository whose history is
-/// English is not a reason to be spoken to in it.
+/// A field per question rather than one for all of them, because they answer
+/// different questions and a person may want them apart: a lead who reads
+/// Russian may still keep a tracker their whole team reads in English, and a
+/// repository whose history is English is not a reason to be spoken to in it.
 ///
 /// It travels on the `Launch` rather than through `terminal_create`'s
 /// signature, so that a session started by a person and a batch started by a
@@ -304,6 +304,12 @@ pub struct Languages {
     /// because the app composes that message itself, while a session is told to
     /// leave its project's own convention where it found it.
     pub commit: String,
+    /// What the prose of a run's batch file is written in — the `did` line for
+    /// each task and the batch's `notes`. Only a run's lead ever writes one, so
+    /// only `Intent::Run` is told about this; `prompt.rs` records why, and why
+    /// the JSON keys around that prose and `runs::report`'s own labels stay
+    /// English whatever this says.
+    pub report: String,
 }
 
 impl Default for Languages {
@@ -312,6 +318,7 @@ impl Default for Languages {
             agent: DEFAULT_LANGUAGE.into(),
             task: DEFAULT_LANGUAGE.into(),
             commit: DEFAULT_LANGUAGE.into(),
+            report: DEFAULT_LANGUAGE.into(),
         }
     }
 }
@@ -502,7 +509,7 @@ pub const LANGUAGES: [(&str, &str); 12] = [
 /// the table falls back to. English rather than an "Auto" that adds nothing to
 /// the prompt: an Auto default would be today's behaviour exactly, so the
 /// setting would do nothing for anybody until they went and changed it. It is
-/// the same argument for all three, and for `commitLanguage` it is the letter
+/// the same argument for every one of them, and for `commitLanguage` it is the letter
 /// of today's behaviour as well — `oneshot::commit_prompt` asked for a message
 /// in English outright before the setting existed.
 pub const DEFAULT_LANGUAGE: &str = "en";
@@ -594,7 +601,8 @@ mod tests {
             Languages {
                 agent: DEFAULT_LANGUAGE.into(),
                 task: DEFAULT_LANGUAGE.into(),
-                commit: DEFAULT_LANGUAGE.into()
+                commit: DEFAULT_LANGUAGE.into(),
+                report: DEFAULT_LANGUAGE.into()
             }
         );
     }
