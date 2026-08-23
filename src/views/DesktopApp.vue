@@ -157,6 +157,7 @@ import {
   startRun,
   stopRun
 } from '../stores/runs.js'
+import { initUpdates } from '../stores/updates.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
 import { absolutePath, folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
 import { checkNewName } from '../components/files/newEntry.js'
@@ -391,6 +392,13 @@ onMounted(initTerminals)
 // The run's own event can fire before the webview is listening, which is what
 // the loadRun calls beside every loadConfig are for.
 onMounted(initRuns)
+/* Nothing on this window draws the update state itself — About does, over in
+   the settings window, which asks Rust on its own. What this subscription is
+   for is the bell: an update that finished downloading has to reach somebody
+   who never opens the settings window, and the card is the only thing that
+   goes looking for them. Rust's first check waits a minute after launch, so
+   there is no race to lose here. */
+onMounted(initUpdates)
 
 /* A new agent becomes the one you're looking at right away: that is what it was
    created for. Both switches sit before the await, the same as on the other two
@@ -2552,12 +2560,22 @@ const toggleNotifications = () => {
 }
 onUnmounted(closeNotifications)
 
-/* A card's own button. Today there is one source and one verb, and the switch
-   is on the source rather than on the card's label: the label is prose and
-   changes with the copy, while the source is what the card came from. */
+/* A card's own button. The switch is on the source rather than on the card's
+   label: the label is prose and changes with the copy, while the source is what
+   the card came from. A source added to `notifications.js` and forgotten here
+   gets a button that does nothing, which is why the three places that name a
+   source — the card's own `source`, `SOURCES` in the store, and this — move
+   together.
+
+   The update card leads to About rather than installing from here, and that is
+   deliberate: installing restarts the app over unsaved editor buffers and live
+   terminals, so the press that does it belongs beside the sentence naming the
+   version and the refusal that may come back — which is the same bargain the
+   storage card makes with Clean up. */
 const actOnNotification = (notification) => {
   if (notification.source === 'storage') openSettingsWindow('storage')
   if (notification.source === 'run') showReport(notification.report)
+  if (notification.source === 'update') openSettingsWindow('about')
   closeNotifications()
 }
 

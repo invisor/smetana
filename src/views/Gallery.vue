@@ -89,7 +89,11 @@ import {
   Tooltip
 } from '../components/index.js'
 import { gitActions } from '../components/git/gitActions.js'
-import { runNotification, storageNotification } from '../components/notifications/notifications.js'
+import {
+  runNotification,
+  storageNotification,
+  updateNotification
+} from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 /* The app's one link-opening path, bound to what the inspector raises. In
@@ -1346,8 +1350,41 @@ const galleryNotifications = [
       report: '/Users/you/Projects/smetana/.smetana/reports/2026-08-12-143155.html'
     }
   }),
+  /* The third source, built the same way and from the one state that produces
+     a card: `ready`. Every other state of the update machine answers `null`
+     here, which is why there is only one of these — checking and downloading
+     are not news, and a failed check belongs on the About tab below. */
+  updateNotification({ kind: 'ready', version: '0.2.0' }),
   storageNotification('/Users/you/Projects/smetana', 62 * 1024 * 1024 + 700 * 1024, 50)
 ]
+
+/* The update machine's six states, in Rust's own shape, for the About tab
+   below. Seven entries, because `downloading` is worth looking at twice: a
+   server that said how long the body is, and one that did not — the second
+   draws a size with no end to measure it against, which is deliberate and would
+   otherwise never be seen.
+
+   This is the only place any of them can be looked at. A real one needs a
+   signed release on GitHub, a shipped build to run it in (a development build
+   refuses to update itself, by design) and a version newer than the one on
+   disk. */
+const galleryUpdateStates = [
+  { kind: 'idle' },
+  { kind: 'checking' },
+  { kind: 'available', version: '0.2.0', notes: null, date: '2026-08-20' },
+  { kind: 'downloading', received: 12 * 1024 * 1024 + 400 * 1024, total: 48 * 1024 * 1024 },
+  { kind: 'downloading', received: 12 * 1024 * 1024 + 400 * 1024, total: null },
+  { kind: 'ready', version: '0.2.0' },
+  { kind: 'failed', message: 'Could not check for updates: the release feed could not be reached.' }
+]
+
+/* The run gate, as `updates_install` refuses it — `UpdateError`'s `{kind,
+   detail}` exactly, since that is what a rejected `invoke` hands the window.
+   The refusal is the whole reason the Install control is never drawn dead: this
+   window cannot see a run in a project nobody is looking at, so the only honest
+   version of "you cannot install right now" is one that arrives from Rust with
+   the projects named. */
+const galleryUpdateRefusal = { kind: 'run_live', detail: { projects: 'smetana, holiday-curb' } }
 
 const sectionStyle = {
   display: 'flex', flexDirection: 'column', gap: 'var(--space-5)',
@@ -3351,8 +3388,30 @@ const menuTargetStyle = {
         <div :style="{ width: '380px' }">
           <StorageSettings :survey="galleryNoBoardSurvey" />
         </div>
+        <!-- About with nobody to ask about updates, which is what a browser
+             sees and what this file is opened in: no row at all, rather than a
+             row saying nothing. -->
         <div :style="{ width: '380px' }">
           <AboutSettings version="0.1.0" />
+        </div>
+        <!-- And the six states of the update machine, in the order a person
+             meets them. The last of them is the refusal: `ready` with a run
+             going somewhere, where the control stays live and the reason is in
+             words underneath — a control that will not act and will not say why
+             sends somebody to guess. -->
+        <div
+          v-for="(updateState, at) in galleryUpdateStates"
+          :key="at"
+          :style="{ width: '380px' }"
+        >
+          <AboutSettings version="0.1.0" :update-state="updateState" />
+        </div>
+        <div :style="{ width: '380px' }">
+          <AboutSettings
+            version="0.1.0"
+            :update-state="{ kind: 'ready', version: '0.2.0' }"
+            :update-refusal="galleryUpdateRefusal"
+          />
         </div>
         <div :style="{ width: '380px' }">
           <SettingsRow label="A row on its own" description="Label, one line of explanation, and whatever control the setting needs.">

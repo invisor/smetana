@@ -472,6 +472,34 @@ the scope declined. The predicate is "is there a real back end", which is **not*
 the dev server and quietly took the app's branch there, leaving the link opening nothing at all.
 `mockBackend.js` publishes what it decided (`usingMockBackend`), the only honest answer.
 
+**About also carries the whole of the update machine**, and it is the fifth part of this window that
+is not a setting: nothing about it reaches `settings.json`, and `FIELDS` in `SettingsWindow.vue`
+deliberately does not name it. `src-tauri/src/updates.rs` owns the state — `idle`, `checking`,
+`available`, `downloading`, `ready`, `failed`, one tagged value that travels whole — and
+`src/stores/updates.js` mirrors it: read once through `updates_state`, kept up to date by the
+`updates:state` event, with `updates_check` and `updates_install` as the two presses. The window
+subscribes on **mounting** rather than on opening the tab, unlike Storage and the subscription probe,
+because the answer is a subscription as much as a read and an event arriving while somebody is on the
+General tab has to be there when they walk over to About.
+
+`settings/update.js` is the pure half, another of the `branchChoice.js` family beside `storage.js`:
+state in, the sentence and the one control out. It knows a **seventh kind of its own**, `unavailable`,
+which is what a `null` from the store and a tag this build has never heard of both come to — in a
+browser there is nobody to ask, so About draws no update row at all rather than an "up to date" said
+by a window that never asked anybody. That is the same silence `appVersion()` produces by answering
+`null` and the version line drawing a dash. `mockBackend.js` answers `updates_state` with `null`
+rather than refusing it, since a read that threw would put an error in the console on every start of
+`npm run dev`.
+
+Two states offer no control — `available` and `downloading` are flows already in hand and finish by
+themselves — `checking` offers the button disabled rather than taking it away for the length of a
+round trip, and `ready` offers **Install and restart, live, always**. It is never drawn dead on a
+guess: the run gate is Rust's to answer, this window cannot see a run in a project nobody is looking
+at, and the refusal arrives as `UpdateError`'s `{kind, detail}` naming the projects — `installRefusal`
+turns it into a sentence under the row, the way `runFailure` does one window over. A control that will
+not act and will not say why sends somebody to guess, which is the whole reason the refusal travels
+with its reason attached.
+
 A missing file is the first run, not an error. A broken or too-new file is copied to
 `settings.json.bak` and the app starts from defaults. One that cannot be read at all — wrong
 permissions, a directory in its place — has nothing to copy, so it is logged *and* `settings_save`

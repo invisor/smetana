@@ -43,6 +43,7 @@ import {
   watchSettingsSection
 } from '../stores/app.js'
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
+import { checkForUpdate, initUpdates, installUpdate, updatesState } from '../stores/updates.js'
 
 /* The query string's two overrides, passed down rather than read here so that
    `App.vue` stays the one place that knows about them. They win over what the
@@ -166,7 +167,23 @@ const change = (patch) => {
 let stopWatching = null
 let stopSections = null
 let stopColumns = null
+let stopUpdates = null
 const version = ref(null)
+
+/* The update machine, and the fourth part of this window that is not a setting:
+   nothing about it reaches `settings.json` and `FIELDS` above deliberately does
+   not name it. It is asked of Rust directly, the way the Storage numbers and the
+   login item are, and for a reason sharper than either — the state is the app's
+   and not this window's, so a download started before this window opened is
+   already going and has to be drawn as such.
+
+   Read on mounting rather than on opening the About tab, unlike Storage and the
+   subscription probe. Two reasons, and the first is decisive: the answer is a
+   subscription as much as a read, and an event that arrives while somebody is
+   on the General tab has to be there when they walk over to About. The second
+   is that it costs nothing — a lock and three fields, with no worker queue and
+   no process behind it. */
+const updateRefusal = ref(null)
 
 /* Which columns the active project's board has, for the Kanban tab's two lists.
    Not a setting and not on the settings contract: it is announced by the app
@@ -207,12 +224,14 @@ onMounted(async () => {
     console.warn('[settings-window] the settings could not be read:', err)
   }
   version.value = await appVersion()
+  stopUpdates = await initUpdates()
 })
 
 onUnmounted(() => {
   stopWatching?.()
   stopSections?.()
   stopColumns?.()
+  stopUpdates?.()
 })
 
 /* This window paints itself: it is a separate webview with its own document
@@ -417,6 +436,28 @@ watch(
   { immediate: true }
 )
 
+/* The two presses on the About tab. Checking never fails — Rust answers with
+   the state that stopped it — so there is nothing to catch and nothing to say.
+
+   Installing is the opposite: every way it can decline is a refusal carrying its
+   reason, the run gate above all, and on success it does not return in any
+   useful sense because the app is on its way out. The refusal is cleared at the
+   start of the press rather than left standing, so a second press after a run
+   has ended does not read as having been refused again. */
+const check = () => {
+  updateRefusal.value = null
+  checkForUpdate()
+}
+
+const install = async () => {
+  updateRefusal.value = null
+  try {
+    await installUpdate()
+  } catch (err) {
+    updateRefusal.value = err
+  }
+}
+
 const rootStyle = {
   display: 'flex',
   flexDirection: 'column',
@@ -529,7 +570,15 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :cleaned="storage.cleaned"
           @clear="clear"
         />
-        <AboutSettings v-else :version="version" @open="openExternal" />
+        <AboutSettings
+          v-else
+          :version="version"
+          :update-state="updatesState.state"
+          :update-refusal="updateRefusal"
+          @open="openExternal"
+          @check="check"
+          @install="install"
+        />
       </div>
     </div>
   </div>
