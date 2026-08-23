@@ -27,15 +27,41 @@ second OS window loading that same query string.
 
 ## Releases
 
-A release is cut by pushing a tag `v<x.y.z>` whose number matches `version` in
-`src-tauri/tauri.conf.json`. That field is the single source of the app's version:
-it is what the app reports about itself and the number to quote in a bug report,
-while `package.json` and `src-tauri/Cargo.toml` carry their own and mean nothing.
-`.github/workflows/release.yml` compares the two and fails, naming both, when they
-disagree — otherwise `latest.json` would announce a version the bundle does not
-carry. The workflow then builds a macOS arm64 bundle and publishes a GitHub release
-holding the `.dmg`, the `.app.tar.gz` an updater installs, its `.sig`, and
-`latest.json`, which is what `plugins.updater.endpoints` points at —
+A release is cut with one command, from `main`:
+
+```sh
+npm run release            # 0.1.0 → 0.1.1
+npm run release -- minor   # 0.1.0 → 0.2.0
+npm run release -- major   # 0.1.0 → 1.0.0
+```
+
+The step is `patch` when no argument is given, which is what most releases are.
+An exact version number is not accepted as an argument at all, and that absence is
+the point rather than a gap: the number is computed from `version` in
+`src-tauri/tauri.conf.json`, so the only way to get it wrong — naming it yourself —
+is not available.
+
+`scripts/release.mjs` raises that one field, runs all three gates (`npm test`,
+`npm run build`, `cargo test`), then commits, pushes `main`, tags `v<x.y.z>` and
+pushes the tag. That is the same sequence a person used to run by hand, and it is
+still exactly what happens — what the script adds is that it cannot misremember the
+number and will not tag a commit no gate has seen. A red gate stops the release
+before the tag exists and puts `tauri.conf.json` back at the version it started
+from. It refuses outright, having changed nothing, on a dirty working tree, on any
+branch but `main`, or when `main` and `origin/main` have moved apart, and says
+which of the three it was. Nothing after the pushed tag is the script's business:
+it never touches the GitHub API, because the build and the signature belong to a
+runner that holds the secrets and no laptop does.
+
+Pushing that tag is what the rest hangs on. `.github/workflows/release.yml` listens
+on `v*` and on nothing else. `version` in `src-tauri/tauri.conf.json` is the single
+source of the app's version: it is what the app reports about itself and the number
+to quote in a bug report, while `package.json` and `src-tauri/Cargo.toml` carry
+their own and mean nothing. The workflow compares the tag against it and fails,
+naming both, when they disagree — otherwise `latest.json` would announce a version
+the bundle does not carry. It then builds a macOS arm64 bundle and publishes a
+GitHub release holding the `.dmg`, the `.app.tar.gz` an updater installs, its
+`.sig`, and `latest.json`, which is what `plugins.updater.endpoints` points at —
 `https://github.com/invisor/smetana/releases/latest/download/latest.json`, reachable
 with no token because this repository is public.
 
