@@ -5,8 +5,8 @@
    included, since a noise is a fact about a person and a room rather than about
    anything on the screen; the report switch above them, since whether a person
    wants that document put in front of them is a habit of reading rather than a
-   fact about one project; and the Startup pair because it is about the app as a
-   whole rather than about anything inside it. What the app does to a person's
+   fact about one project; and the Startup group because every row in it is about
+   the app as a whole rather than about anything inside it. What the app does to a person's
    repositories on its own is the Git tab, next door.
 
    Startup goes last on purpose. The top of this tab is the theme and the type
@@ -43,6 +43,11 @@ const props = defineProps({
      the opposite of what the app is doing for the moment before the first value
      arrives. */
   restoreGeometry: { type: Boolean, default: true },
+  /* Whether the app asks about a newer version by itself. Shipped on,
+     mirroring Rust, `stores/settings.js` and `SettingsWindow.vue`: a component
+     that defaulted to off would draw the switch in the position opposite to
+     what the app is doing for the moment before the first value arrives. */
+  updatesAutoCheck: { type: Boolean, default: true },
   /* A sound id or `off`. The two shipped ones, mirroring `sounds.js` and Rust:
      a component that defaulted to silence would draw the opposite of what the
      app is doing for the moment before the first value arrives. */
@@ -66,6 +71,7 @@ const emit = defineEmits([
   'update:uiFontSize',
   'update:autostartEnabled',
   'update:restoreGeometry',
+  'update:updatesAutoCheck',
   'update:notificationRunFinished',
   'update:notificationNeedsAttention',
   'update:notificationOnlyWhenUnfocused',
@@ -188,8 +194,10 @@ const autostartDescription = computed(() =>
         />
       </SettingsRow>
     </SettingsGroup>
-    <!-- Last on the tab, and the two halves of "how does this app come up":
-         whether the operating system opens it, and where its window lands. -->
+    <!-- Last on the tab, and what the app does by itself around starting up:
+         whether the operating system opens it, where its window lands, and
+         whether it goes and asks whether there is a newer version. A group of
+         its own for the last of those would be a heading over one row. -->
     <SettingsGroup label="Startup">
       <SettingsRow
         label="Launch at login"
@@ -212,6 +220,20 @@ const autostartDescription = computed(() =>
         <Switch
           :model-value="props.restoreGeometry"
           @update:model-value="emit('update:restoreGeometry', $event)"
+        />
+      </SettingsRow>
+      <!-- The one row on this tab about the app reaching the network. Off stops
+           the app asking on its own and nothing else: checking by hand still
+           works, and a version already downloaded is still waiting to be
+           installed. The description says the download happens too, because it
+           does — the only thing that waits for a person is the install. -->
+      <SettingsRow
+        label="Check for updates automatically"
+        description="Looks for a newer version once a day and downloads it in the background. Installing is always something you press."
+      >
+        <Switch
+          :model-value="props.updatesAutoCheck"
+          @update:model-value="emit('update:updatesAutoCheck', $event)"
         />
       </SettingsRow>
     </SettingsGroup>

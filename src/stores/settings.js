@@ -76,6 +76,17 @@ const defaults = () => ({
      fact about a person's screen. Shipped on, because that is today's
      behaviour exactly, and Rust carries the same default. */
   window: { restoreGeometry: true },
+  /* Whether the app goes to GitHub by itself to ask whether a newer version
+     exists. A section of its own rather than a flat field, matching `window`
+     above and for the reason `UpdateSettings` in Rust records: the key names
+     the subsystem, and a second update preference later has somewhere to go.
+     Shipped on, because an app that never checks is an app whose update system
+     does not exist for anybody who does not go looking — the switch is there so
+     a person can decline the background request, not so they have to opt into
+     being told. Rust carries the same default, and what it reaches is the timer
+     alone: the check on the About tab is a press, so it works with this off,
+     and an update already downloaded is untouched by it. */
+  updates: { autoCheck: true },
   /* How the board is drawn — which columns get a slot and how far back a card
      is worth looking at. Global rather than per project, for the reason
      `KanbanSettings` in Rust records, and shipped as today's board exactly:
@@ -377,6 +388,7 @@ export async function loadSettings() {
     applySection(settings.editor, base.editor, stored.editor)
     applySection(settings.git, base.git, stored.git)
     applySection(settings.window, base.window, stored.window)
+    applySection(settings.updates, base.updates, stored.updates)
     applySection(settings.kanban, base.kanban, stored.kanban)
     applySection(settings.notifications, base.notifications, stored.notifications)
     applySection(settings.layout, base.layout, stored.layout)
@@ -442,6 +454,7 @@ function toShared(source) {
      inside this function would take `window.addEventListener` and every other
      use of it in this module out of reach for whoever edits here next. */
   const windowSection = { ...base.window, ...source.window }
+  const updates = { ...base.updates, ...source.updates }
   const notifications = { ...base.notifications, ...source.notifications }
   return {
     theme: appearance.theme,
@@ -466,6 +479,13 @@ function toShared(source) {
        about the main window's geometry — where it is now is not a setting and
        never crosses this contract. */
     restoreGeometry: windowSection.restoreGeometry,
+    /* Flat for the same reason, and named for its section here because the
+       section is one word and the field is the whole of it: `updatesAutoCheck`
+       says what it decides on its own. The two spellings — this one and the one
+       `applyPatch` reads back — have to be the same word, or the switch moves on
+       screen, is dropped on arrival and reverts at the next open with nothing to
+       say so. */
+    updatesAutoCheck: updates.autoCheck,
     /* Flat for the same reason, and named for the event rather than for the
        section: a `notifications` object in this message would invite somebody
        to send it whole and quietly blank the choice they left out. */
@@ -578,6 +598,13 @@ export function applyPatch(patch) {
      boolean is skipped rather than coerced into a deliberate-looking "off". */
   if (typeof patch.restoreGeometry === 'boolean') {
     settings.window.restoreGeometry = patch.restoreGeometry
+  }
+  /* The switch over the update timer, checked exactly the way the three above
+     it are and for the same reason: `false` is the whole point of the field, so
+     a malformed event must not be coerced into a deliberate-looking "off" — that
+     would silently stop somebody being told about a release. */
+  if (typeof patch.updatesAutoCheck === 'boolean') {
+    settings.updates.autoCheck = patch.updatesAutoCheck
   }
   /* The two sounds. Checked against the closed list `sounds.js` holds — the
      same relationship the board's two scalars have with `boardView.js`: the

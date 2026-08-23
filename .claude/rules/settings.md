@@ -26,7 +26,8 @@ panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wor
 start, `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage`, the languages that agent
 works in, `kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
-`window`, whether the main window opens where it was left, and `notifications`,
+`window`, whether the main window opens where it was left, `updates`, whether the app asks
+about a newer version by itself, and `notifications`,
 which sound each of the two announcements makes and whether a finished run shows its report. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, active tab, selected task, `recentTasks`, selected
@@ -207,6 +208,32 @@ flat message as `restoreGeometry`, and `applyPatch` checks the type and nothing 
 the whole point of the field, so a coercion would turn a malformed event into a deliberate-looking
 "off".
 
+`updates` is the fifth global section and holds one field, `autoCheck`, **shipped on** — and it is
+the second switch in this file over whether the app may open a socket by itself, `git.autoFetch`
+being the first. A section rather than a flat field on `window`'s precedent: one field is already
+the house shape, the key names the subsystem, and a second update preference later has somewhere to
+go. Default **on** rather than today's-behaviour-to-the-letter, since there was no timer at all
+before smetana-vcv: an app that never checks is an app whose update system does not exist for
+anybody who does not go looking, so the switch is there to let a person decline the background
+request rather than to make them opt into being told. The interval beside it is deliberately not a
+field, on `autoFetch`'s argument exactly, and neither is a choice of channel: there is one channel,
+and a control over a set of one says nothing.
+
+What it reaches is the **timer alone** (`src-tauri/src/updates.rs`, `schedule`), which asks
+`settings::updates_auto_check` at **every tick** rather than reading it once — that is the whole of
+"off and on again without a restart", and the timer keeps ticking either way so there is nothing to
+start when it comes back on. It does not reach `updates_check`, the press on About, for the reason
+`autoFetch` does not reach the check in the Branches caption: a press is not the app acting on its
+own. And it does not reach anything already downloaded — the machine's `ready` state and the staged
+bytes are untouched, so an update that is waiting is still waiting and still installable.
+**Four** copies of the default, the same four `git.autoFetch` has — Rust, `defaults()` in
+`stores/settings.js`, `view` in `SettingsWindow.vue`, and the prop default in
+`components/settings/GeneralSettings.vue` — and it rides the flat message as `updatesAutoCheck`,
+with `applyPatch` checking the type and nothing else for `restoreGeometry`'s reason. Rust validates
+nothing about it, on that same field's argument. Its row is the last of the General tab's Startup
+group, under Launch at login and Restore window position: all three are what the app does by itself
+around starting up, and a group for this one row would be a heading for its own sake.
+
 The per-project four are per project for the reason the rest are: a status has no meaning in another
 repository's column order, a branch name has none in another repository, a repository inside one
 project is not one inside another, and the attachment folder the bell weighs is a different folder
@@ -234,8 +261,8 @@ last edit rather than the app.
 Most of the file is still only ever changed by *using* the app: a dragged panel, a switched project,
 an opened tab. A handful of fields are the exception and they are what the settings window edits —
 `appearance.theme`, `appearance.uiFontSize`, both `editor` fields, `agent`, the languages beside it,
-the four `kanban` fields, both `git` fields, `window.restoreGeometry` and all four `notifications`
-fields. Density is not among them, deliberately: nothing has asked for it yet,
+the four `kanban` fields, both `git` fields, `window.restoreGeometry`, `updates.autoCheck` and all
+four `notifications` fields. Density is not among them, deliberately: nothing has asked for it yet,
 and a screen full of switches nobody wanted is worse than a short one. `?theme=` and `?density=`
 still override the first two for one run and are deliberately **not** written back — one visit to the
 dev server must not repaint the app forever. `?view=gallery` neither reads nor writes.

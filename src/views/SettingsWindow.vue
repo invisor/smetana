@@ -105,6 +105,13 @@ const view = reactive({
      `settings/model.rs` and `stores/settings.js`, for the reason the switch
      above it carries. */
   restoreGeometry: true,
+  /* Whether the app asks about a newer version by itself. Shipped on, the same
+     as `settings/model.rs`, `stores/settings.js` and the component's own prop
+     default — the four copies have to agree, or this window draws the switch in
+     the position opposite to what the app is doing, and in a browser under
+     `?view=settings` it draws it that way for good, since no answer ever
+     comes. */
+  updatesAutoCheck: true,
   /* Which sound each announcement makes. Shipped as `settings/model.rs` and
      `stores/settings.js` ship them — the three copies of these defaults have to
      agree, or this window draws a sound the app is not playing for the moment
@@ -493,6 +500,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :autostart-supported="autostart.supported"
           :autostart-enabled="autostart.enabled"
           :restore-geometry="view.restoreGeometry"
+          :updates-auto-check="view.updatesAutoCheck"
           :notification-run-finished="view.notificationRunFinished"
           :notification-needs-attention="view.notificationNeedsAttention"
           :notification-only-when-unfocused="view.notificationOnlyWhenUnfocused"
@@ -501,6 +509,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:ui-font-size="change({ uiFontSize: $event })"
           @update:autostart-enabled="toggleAutostart($event)"
           @update:restore-geometry="change({ restoreGeometry: $event })"
+          @update:updates-auto-check="change({ updatesAutoCheck: $event })"
           @update:notification-run-finished="change({ notificationRunFinished: $event })"
           @update:notification-needs-attention="change({ notificationNeedsAttention: $event })"
           @update:notification-only-when-unfocused="change({ notificationOnlyWhenUnfocused: $event })"

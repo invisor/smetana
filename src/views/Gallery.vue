@@ -1213,7 +1213,7 @@ const galleryShowReport = ref(true)
    group is looked at as a whole, and the row wants to be seen in the position
    the shipped app puts it in. */
 const galleryOnlyWhenUnfocused = ref(true)
-/* The Startup pair, local for the same reason. `supported` is deliberately
+/* The Startup group's three, local for the same reason. `supported` is deliberately
    `true` here and nowhere else: in the app this row is disabled in every build
    a person can run this page from — a development build says so in its own
    sentence, and `?view=settings` in a browser has no operating system to ask —
@@ -1222,6 +1222,10 @@ const galleryOnlyWhenUnfocused = ref(true)
 const galleryAutostartSupported = ref(true)
 const galleryAutostartEnabled = ref(false)
 const galleryRestoreGeometry = ref(true)
+/* The third row of that group, on because that is what the app ships: this page
+   is where the group is looked at whole, and the row wants to be seen in the
+   position a person's app will actually be in. */
+const galleryUpdatesAutoCheck = ref(true)
 const galleryAgent = ref('claude')
 /* The Agents tab's three language pickers, and **no two of them alike**. Not
    all on English, because the longest label any of the lists holds is the one
@@ -3270,6 +3274,7 @@ const menuTargetStyle = {
             :autostart-supported="galleryAutostartSupported"
             :autostart-enabled="galleryAutostartEnabled"
             :restore-geometry="galleryRestoreGeometry"
+            :updates-auto-check="galleryUpdatesAutoCheck"
             :notification-run-finished="galleryRunSound"
             :notification-needs-attention="galleryNeedsSound"
             :notification-show-report="galleryShowReport"
@@ -3278,6 +3283,7 @@ const menuTargetStyle = {
             @update:ui-font-size="galleryUiFont = $event"
             @update:autostart-enabled="galleryAutostartEnabled = $event"
             @update:restore-geometry="galleryRestoreGeometry = $event"
+            @update:updates-auto-check="galleryUpdatesAutoCheck = $event"
             @update:notification-run-finished="galleryRunSound = $event"
             @update:notification-needs-attention="galleryNeedsSound = $event"
             @update:notification-show-report="galleryShowReport = $event"

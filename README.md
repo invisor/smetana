@@ -67,20 +67,22 @@ with no token because this repository is public.
 
 The last three of those now have something to read them. `tauri-plugin-updater` is
 a dependency, `lib.rs` registers it, and `src-tauri/src/updates.rs` owns everything
-that follows: a check a minute after start and once a day after that, a download
-that happens by itself, and an install that never does — the app holds unsaved
-editor buffers and live terminals, so a relaunch nobody asked for is a relaunch
-that loses somebody's work. An install is also refused outright while a run is
-going in any project, since restarting would kill the agent processes those
-sessions started. The capability file grants the plugin nothing, and that is the
-decision rather than an omission: the front end calls that module's own commands,
-so a grant would be required by nothing while publishing `download_and_install` to
-the webview.
+that follows: a check a minute after start and once a day after that while
+`updates.autoCheck` is on, a download that happens by itself, and an install that
+never does — the app holds unsaved editor buffers and live terminals, so a relaunch
+nobody asked for is a relaunch that loses somebody's work. That switch is on by
+default, and the General tab's Startup group is where somebody turns it off; off
+stops the schedule and nothing else, so an update already downloaded stays
+downloaded and a check asked for by hand is still made. An install is also refused
+outright while a run is going in any project, since restarting would kill the agent
+processes those sessions started. The capability file grants the plugin nothing, and
+that is the decision rather than an omission: the front end calls that module's own
+commands, so a grant would be required by nothing while publishing
+`download_and_install` to the webview.
 
-What is missing is the part drawn on screen. Nothing yet shows what a check found,
-offers the press that installs it, or lets somebody turn the daily check off — the
-About rows and the General tab toggle are separate tasks — so a released copy today
-checks, downloads and waits with nothing on screen saying so.
+What is missing is the part drawn on screen. Nothing yet shows what a check found
+or offers the press that installs it — the About rows are a separate task — so a
+released copy today checks, downloads and waits with nothing on screen saying so.
 
 Three things had to be done by a person before the first release could work, and all
 three are in place, done once by the repository owner. They are written out here

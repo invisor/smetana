@@ -36,6 +36,15 @@
 //! only ever [`updates_install`], because the app holds unsaved editor buffers
 //! and live terminals, and a relaunch nobody asked for loses them.
 //!
+//! # One switch, over the timer alone
+//!
+//! `updates.autoCheck` in `settings.json` decides whether [`schedule`] below
+//! reaches the network by itself, and it decides nothing else: the command a
+//! person presses on the About tab is accepted whatever it says, and an update
+//! already downloaded stays staged and installable. The value is read at each
+//! tick rather than once, which is what makes the switch take effect without a
+//! restart — see [`schedule`].
+//!
 //! # The run gate
 //!
 //! Installing restarts the app, and a restart kills the PTY children a run's
@@ -480,6 +489,19 @@ async fn live_runs(runs: &RunHandle) -> Result<Vec<String>, UpdateError> {
 /// A task rather than a call in `setup`: the delay is the whole point, and
 /// `setup` is on the path to the first frame. Nothing runs at all in a
 /// development build.
+///
+/// `updates.autoCheck` is asked **at every tick** and never read once into a
+/// variable here, which is the whole of "switching it off stops the scheduled
+/// check and switching it on restores it, both without a restart". The timer
+/// itself keeps ticking either way: a tick with the switch off skips the check
+/// and sleeps again, so there is nothing to start up when somebody turns it
+/// back on. Reading a file once a day costs nothing, and a channel from the
+/// front end would be a second route to a value that already has one.
+///
+/// The switch reaches this and nothing else. [`updates_check`] — the press on
+/// the About tab — goes on working with it off, because a press is not the app
+/// acting on its own; and anything already downloaded stays staged and
+/// installable, since nothing here touches the machine or the bytes.
 pub fn schedule(app: AppHandle) {
     if development() {
         log::info!("a development build does not check for updates");
@@ -489,7 +511,9 @@ pub fn schedule(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(FIRST_CHECK_DELAY).await;
         loop {
-            request_check(&app, &updates);
+            if crate::settings::updates_auto_check(&app) {
+                request_check(&app, &updates);
+            }
             tokio::time::sleep(CHECK_INTERVAL).await;
         }
     });
