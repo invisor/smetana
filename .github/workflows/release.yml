@@ -126,9 +126,11 @@ jobs:
         run: npm run fetch-bd
 
       # The bundle is ad-hoc signed: there is no Apple Developer ID and no
-      # notarization, so the first install has to be opened through right-click
-      # then Open. The minisign signature below is a different thing — Tauri's
-      # own, mandatory, and what the updater verifies.
+      # notarization, so a downloaded copy has to be let past Gatekeeper by hand
+      # once — releaseBody below says how. The minisign signature is a different
+      # thing entirely: Tauri's own, mandatory, and what an updater would verify.
+      # Nothing verifies it yet — the app has no updater, and these artefacts are
+      # produced ahead of the task that adds one.
       - name: Build the bundle and publish the release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -138,10 +140,22 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Smetana ${{ github.ref_name }}'
+          # Kept saying the same thing as the "First launch" section of
+          # README.md, which is the other half of this pair. This copy is the one
+          # strangers read, because it is printed on the release page itself.
           releaseBody: |
-            Download the .dmg below. The app is not signed with an Apple
-            Developer ID, so the first launch needs right-click then Open —
-            see the README. Later updates are applied from inside the app.
+            Download the .dmg below.
+
+            The app is not signed with an Apple Developer ID, so macOS will not
+            open a freshly downloaded copy on a double-click. Right-click
+            Smetana.app and choose Open. On macOS 14 and earlier the dialog that
+            appears has an Open button and that is all. From macOS 15 Sequoia it
+            does not — dismiss it, then go to System Settings → Privacy &
+            Security, scroll to the message naming Smetana and press Open Anyway.
+            Once per machine.
+
+            There is no in-app updater yet, so a new version means downloading
+            the .dmg again and letting it past Gatekeeper the same way.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

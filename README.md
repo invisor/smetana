@@ -34,10 +34,16 @@ while `package.json` and `src-tauri/Cargo.toml` carry their own and mean nothing
 `.github/workflows/release.yml` compares the two and fails, naming both, when they
 disagree — otherwise `latest.json` would announce a version the bundle does not
 carry. The workflow then builds a macOS arm64 bundle and publishes a GitHub release
-holding the `.dmg`, the `.app.tar.gz` the updater installs, its `.sig`, and
-`latest.json`. That last file is what `plugins.updater.endpoints` points the app at
-— `https://github.com/invisor/smetana/releases/latest/download/latest.json`, which
-needs no token because this repository is public.
+holding the `.dmg`, the `.app.tar.gz` an updater installs, its `.sig`, and
+`latest.json`, which is what `plugins.updater.endpoints` points at —
+`https://github.com/invisor/smetana/releases/latest/download/latest.json`, reachable
+with no token because this repository is public.
+
+The last three of those are produced ahead of the thing meant to read them: **the
+app has no updater yet.** `tauri-plugin-updater` is not a dependency, nothing
+registers it and no capability grants it, so a released copy never fetches
+`latest.json` at all. Teaching the app to is a separate task, and these artefacts
+exist so that it has something real to check itself against on the day it lands.
 
 Three things have to be done by a person, once, before the first release will work.
 They are not in place yet.
@@ -48,24 +54,45 @@ They are not in place yet.
    and commit it. It is an empty string today, and the workflow refuses to build
    while it stays empty rather than publish a release nobody can install as an
    update.
-3. Set the private key and its password as the repository secrets
-   `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The private
-   key belongs in neither the repository nor a run log.
+3. Set two repository secrets, under Settings → Secrets and variables → Actions.
+   `TAURI_SIGNING_PRIVATE_KEY` takes the **contents** of the private key file, not a
+   path to it: the CLI accepts a path when it runs on your own machine, which is the
+   natural thing to copy out of a `-w` run, and on a runner that path resolves to
+   nothing. `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` takes the password — and the
+   workflow passes that variable on every run, so a key generated without one still
+   needs the secret to exist, set to an empty value. Leaving it unset instead fails
+   the build with `incorrect updater private key password`, which reads like the
+   wrong password rather than a missing secret, and costs somebody the debugging
+   twice. The private key belongs in neither the repository nor a run log.
 
 **Losing the private key means every already-installed copy can never be updated
 again.** There is no way back from it: a copy already out there accepts only an
 update signed by the key whose public half it was built with. Keep it somewhere
 that outlives the machine it was generated on.
 
+One local consequence while `pubkey` is still empty: `npm run tauri build` may refuse
+to bundle with "A public key has been found, but no private key", the bundler looking
+for something to sign the updater archive with. `npm run tauri build -- --no-sign` is
+the way past it. `npm run tauri dev` is unaffected, and so is everything `npm test`,
+`npm run build` and `cargo test` do — none of them bundles.
+
 ## First launch
 
 The app is not signed with an Apple Developer ID and is not notarized — the bundle
 is ad-hoc signed, which is a deliberate choice and not an oversight. macOS therefore
-refuses to open a freshly downloaded copy on a double-click: the first launch has to
-be right-click on `Smetana.app`, then Open, then Open again in the dialog that
-appears. That is once per machine. Updates after that are applied by the app itself,
-which replaces the bundle in place without quarantining it, so they need no such
-step.
+refuses to open a freshly downloaded copy on a double-click, and the way past that
+depends on the version:
+
+- Right-click `Smetana.app` and choose Open. On macOS 14 and earlier the dialog that
+  appears carries an Open button, and pressing it is the whole of it.
+- From macOS 15 Sequoia that button is gone — the dialog offers only Move to Trash
+  and Done. Dismiss it, then go to System Settings → Privacy & Security, scroll down
+  to the message naming Smetana, and press Open Anyway. This is the path that
+  applies on the arm64 Macs the release targets.
+
+Either way it is once per machine, not once per launch. It is **not** once per
+version, though, because there is no in-app updater: a new version means downloading
+the `.dmg` again and going through the same step for it. See Releases above.
 
 ## Layout
 
