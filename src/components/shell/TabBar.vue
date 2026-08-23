@@ -217,7 +217,8 @@ const armedOff = () => {
   armed = null
 }
 
-const onArmedUp = () => {
+const onArmedUp = (event) => {
+  if (event.pointerId !== armed?.pointerId) return
   armedOff()
   unguard()
 }
