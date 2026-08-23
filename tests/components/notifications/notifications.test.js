@@ -8,9 +8,11 @@ import {
   rememberAfter,
   runNotification,
   stillOver,
-  storageNotification
+  storageNotification,
+  updateNotification
 } from '../../../src/components/notifications/notifications.js'
 import { REASONS } from '../../../src/components/run/stopReason.js'
+import { iconNodes } from '../../../src/components/core/icons.js'
 
 const mib = (n) => n * MIB
 
@@ -261,5 +263,54 @@ describe('the card for a run that is over', () => {
     expect(card.body).not.toContain('could not be read')
     expect(card.body).not.toContain('closed')
     expect(card.body).toBe(REASONS.cancelled.text)
+  })
+})
+
+const readyCard = () => updateNotification({ kind: 'ready', version: '0.2.0' })
+
+describe('the card for an update that is waiting', () => {
+  it('names the version and says where the button leads', () => {
+    const card = updateNotification({ kind: 'ready', version: '0.2.0' })
+
+    expect(card.source).toBe('update')
+    expect(card.id).toBe('update:0.2.0')
+    expect(card.version).toBe('0.2.0')
+    expect(card.title).toBe('Update ready')
+    expect(card.body).toContain('Smetana 0.2.0')
+    // The button opens About; the card says so rather than promising to install
+    // from the panel, which is the same honesty the storage card keeps about
+    // Clean up.
+    expect(card.body).toContain('Install opens About in settings')
+    expect(card.actionLabel).toBe('Install')
+  })
+
+  it('is the only state of the machine that says anything at all', () => {
+    // Checking and downloading are not news — the app fetches quietly — and a
+    // check that could not reach GitHub is not something to interrupt somebody
+    // with. All three belong on About, where a person went looking.
+    expect(updateNotification({ kind: 'idle' })).toBe(null)
+    expect(updateNotification({ kind: 'checking' })).toBe(null)
+    expect(updateNotification({ kind: 'available', version: '0.2.0' })).toBe(null)
+    expect(updateNotification({ kind: 'downloading', received: 1, total: 2 })).toBe(null)
+    expect(updateNotification({ kind: 'failed', message: 'no' })).toBe(null)
+  })
+
+  it('says nothing where there is nobody to ask', () => {
+    expect(updateNotification(null)).toBe(null)
+    expect(updateNotification({ kind: 'verifying' })).toBe(null)
+  })
+
+  it('still announces a ready update that arrived without a version', () => {
+    const card = updateNotification({ kind: 'ready', version: '' })
+
+    expect(card.id).toBe('update:ready')
+    expect(card.version).toBe(null)
+    expect(card.body).toContain('A new version has been downloaded')
+  })
+
+  it('draws a glyph the icon list already registers', () => {
+    // An unregistered name makes Icon warn in dev and draw nothing, and no test
+    // in this repository can see a component.
+    expect(iconNodes[readyCard().icon]).toBeTruthy()
   })
 })

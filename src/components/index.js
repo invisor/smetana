@@ -116,7 +116,8 @@ export {
   reachedThreshold,
   rememberAfter,
   stillOver,
-  storageNotification
+  storageNotification,
+  updateNotification
 } from './notifications/notifications.js'
 
 // overlays

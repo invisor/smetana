@@ -33,6 +33,7 @@ export async function loadStores() {
     runs,
     attachments,
     notifications,
+    updates,
     vcs
   ] =
     await Promise.all([
@@ -48,6 +49,7 @@ export async function loadStores() {
       import('../../src/stores/runs.js'),
       import('../../src/stores/attachments.js'),
       import('../../src/stores/notifications.js'),
+      import('../../src/stores/updates.js'),
       import('../../src/stores/vcs.js')
     ])
 
@@ -67,6 +69,7 @@ export async function loadStores() {
       runs,
       attachments,
       notifications,
+      updates,
       vcs
     }
   }

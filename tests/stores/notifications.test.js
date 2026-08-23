@@ -379,3 +379,122 @@ describe('the bell and a run that is over', () => {
     expect(sources(storageThenRuns)).toEqual(sources(runsThenStorage))
   })
 })
+
+describe('the bell and an update that is waiting', () => {
+  /* The state as `updates_state` answers it and as `updates:state` carries it —
+     the same value either way, which is the whole point of the machine handing
+     itself over as one tagged thing. */
+  const READY = { kind: 'ready', version: '0.2.0' }
+
+  it('shows exactly one card while an update is ready, and none in any other state', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('updates_state', { kind: 'idle' })
+
+    await stores.updates.initUpdates()
+    expect(stores.notifications.notificationsState.items).toEqual([])
+
+    // Checking and downloading are not news: the app fetches quietly and the
+    // bell says nothing until there is something to press.
+    await emit('updates:state', { kind: 'checking' })
+    expect(stores.notifications.notificationsState.items).toEqual([])
+    await emit('updates:state', { kind: 'available', version: '0.2.0' })
+    expect(stores.notifications.notificationsState.items).toEqual([])
+    await emit('updates:state', { kind: 'downloading', received: 4, total: 9 })
+    expect(stores.notifications.notificationsState.items).toEqual([])
+
+    await emit('updates:state', READY)
+    const items = stores.notifications.notificationsState.items
+    // The badge is this length, so one waiting update is a bell reading 1.
+    expect(items).toHaveLength(1)
+    expect(items[0].source).toBe('update')
+    expect(items[0].id).toBe('update:0.2.0')
+
+    // A check that could not reach GitHub is not something to interrupt
+    // anybody with; it belongs on About, where a person went looking.
+    await emit('updates:state', { kind: 'failed', message: 'the feed timed out' })
+    expect(stores.notifications.notificationsState.items).toEqual([])
+  })
+
+  it('draws a download already in progress when the window opens mid-flight', async () => {
+    // The state is the app's, not the window's: whatever was going on before
+    // this store existed is what the first read answers.
+    const { ipc, stores } = await loadStores()
+    ipc.on('updates_state', { kind: 'downloading', received: 12, total: 48 })
+
+    await stores.updates.initUpdates()
+
+    expect(stores.updates.updatesState.state).toEqual({ kind: 'downloading', received: 12, total: 48 })
+    expect(stores.notifications.notificationsState.items).toEqual([])
+  })
+
+  it('takes the card away once the update stops being one', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('updates_state', READY)
+
+    await stores.updates.initUpdates()
+    expect(stores.notifications.notificationsState.items).toHaveLength(1)
+
+    // An installed update leaves nothing behind: the app restarts and the next
+    // machine starts at idle. Nothing about the card is written anywhere, so a
+    // restart is this and nothing more.
+    await emit('updates:state', { kind: 'idle' })
+    expect(stores.notifications.notificationsState.items).toEqual([])
+
+    const afterRestart = await loadStores()
+    afterRestart.ipc.on('updates_state', { kind: 'idle' })
+    await afterRestart.stores.updates.initUpdates()
+    expect(afterRestart.stores.notifications.notificationsState.items).toEqual([])
+  })
+
+  it('keeps a dismissed card away, and says nothing about the next version', async () => {
+    const { ipc, emit, stores } = await loadStores()
+    ipc.on('updates_state', READY)
+
+    await stores.updates.initUpdates()
+    stores.notifications.dismiss('update:0.2.0')
+    expect(stores.notifications.notificationsState.items).toEqual([])
+
+    // The same state announced again — Rust re-emitting, or a second read —
+    // does not put it back.
+    await emit('updates:state', READY)
+    expect(stores.notifications.notificationsState.items).toEqual([])
+
+    // A different release is a different statement, and it speaks.
+    await emit('updates:state', { kind: 'ready', version: '0.3.0' })
+    expect(stores.notifications.notificationsState.items.map((item) => item.id)).toEqual([
+      'update:0.3.0'
+    ])
+  })
+
+  it('says nothing at all where there is nobody to ask', async () => {
+    // A browser: `mockBackend.js` answers this read with null rather than
+    // refusing it, so nothing reaches the console either.
+    const { ipc, stores } = await loadStores()
+    ipc.on('updates_state', null)
+
+    await stores.updates.initUpdates()
+
+    expect(stores.updates.updatesState.state).toBe(null)
+    expect(stores.notifications.notificationsState.items).toEqual([])
+  })
+
+  it('counts beside the other two sources, and sits between them', async () => {
+    const { ipc, stores } = await loadStores()
+    openOn(stores)
+    ipc.on('updates_state', READY)
+    ipc.on('attachments_survey', () => survey(12 * MIB))
+    ipc.on('project_config', { state: 'ok', config: {} })
+    ipc.on('run_state', [finished(1)])
+
+    await stores.notifications.measureStorage(PROJECT)
+    await stores.updates.initUpdates()
+    await stores.runs.loadConfig(PROJECT)
+    await stores.runs.loadRun(PROJECT)
+
+    const items = stores.notifications.notificationsState.items
+    // Three cards is a bell reading 3, and the order is the list's own rather
+    // than the order the three sources happened to speak in.
+    expect(items).toHaveLength(3)
+    expect(items.map((item) => item.source)).toEqual(['run', 'update', 'storage'])
+  })
+})

@@ -259,6 +259,22 @@ export function installMockBackend() {
        refusal at the bottom, like every other write. The switch is disabled
        here, so nothing reaches it in the ordinary course. */
     if (command === 'autostart_state') return { supported: false, enabled: false }
+    /* There is no updater in a browser, and `null` is the honest answer rather
+       than a state invented for it: `stores/updates.js` reads anything that is
+       not one of Rust's six tags as "there is nobody to ask", and the About tab
+       then draws nothing about updates at all — the same silence `appVersion()`
+       produces by answering `null` and the version line drawing a dash.
+
+       Answered rather than left to the loud refusal at the bottom, which is
+       what every unknown command gets. This one is a read, and a read that
+       threw would put an error in the console on every start of `npm run dev`
+       for a subsystem that is simply not there.
+
+       `updates_check` and `updates_install` are deliberately absent and fall
+       through to that refusal, like every other write. Nothing offers them
+       here: with the state unavailable the About tab draws no control at all,
+       so neither can be reached in the ordinary course. */
+    if (command === 'updates_state') return null
     if (command === 'tracker_set_project') return snapshot
     if (command === 'tracker_probe') {
       return MOCK_PROJECTS.map((path) => ({ path, tracked: path !== UNTRACKED }))

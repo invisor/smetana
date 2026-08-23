@@ -1,5 +1,6 @@
-/* What the bell has to say, and the two sources that say anything today: the
-   attachment store growing, and a run that is over.
+/* What the bell has to say, and the three sources that say anything today: the
+   attachment store growing, a run that is over, and an update downloaded and
+   waiting to be installed.
 
    This file knows nothing about Tauri: the back end it reads is
    `attachments.js`, which already owns the one command that weighs the store
@@ -41,7 +42,8 @@ import {
   rememberAfter,
   runNotification,
   stillOver,
-  storageNotification
+  storageNotification,
+  updateNotification
 } from '../components/notifications/notifications.js'
 
 export const notificationsState = reactive({
@@ -62,10 +64,12 @@ export const notificationsState = reactive({
 
    Runs first: a night that has ended is what somebody came back to the window
    to read, while a folder that has grown is housekeeping and will still be
-   there tomorrow. A source this list has never heard of sorts to the end rather
+   there tomorrow. An update sits between them for the same measure: it is one
+   press away from being over, which is more than a folder can say and less than
+   a night's work waiting to be read. A source this list has never heard of sorts to the end rather
    than to the front, since an unknown card has not earned the top of a panel
    budgeted at one or two rows. */
-const SOURCES = ['run', 'storage']
+const SOURCES = ['run', 'update', 'storage']
 
 const rank = (item) => {
   const at = SOURCES.indexOf(item.source)
@@ -207,6 +211,37 @@ export function syncRunCards() {
   notificationsState.items = arrange([...cards, ...others])
 }
 
+/* ---- the third source: an update waiting to be installed -------------- */
+
+/* Versions whose card has been dismissed, in memory and nowhere else — the same
+   reasoning `deliveredRuns` above carries, one step smaller. An update does not
+   survive its own installation and the machine starts at `idle` on every
+   launch, so a remembered version would refer to a state nothing can be in.
+
+   By version rather than by a flag: dismissing the card for 1.4.0 says nothing
+   about 1.5.0, and the next release speaks again. */
+const dismissedUpdates = new Set()
+
+/* The update card, rebuilt from the state `stores/updates.js` has just adopted.
+
+   The state arrives as an argument rather than being read from that store, and
+   that is the one thing to keep about this function: `runs.js` and this file
+   import each other, which is a cycle load-bearing enough to carry a warning in
+   both of them, and nothing about updates needs a second one. This module
+   therefore knows nothing of `stores/updates.js`, and the import goes one way.
+
+   Rebuilds this source's half of the list and leaves every other source's cards
+   exactly as they are, the way `syncRunCards` does. Every state that is not
+   `ready` — including the install having happened, and including there being
+   nobody to ask — takes the card away, which is the whole of "it stops being
+   true the moment the update is installed". */
+export function syncUpdateCard(state) {
+  const card = updateNotification(state)
+  const others = notificationsState.items.filter((item) => item.source !== 'update')
+  const wanted = card && !dismissedUpdates.has(card.id) ? [card] : []
+  notificationsState.items = arrange([...wanted, ...others])
+}
+
 /* Dismiss. For a storage card this is exactly the write an announcement makes,
    for the size measured at that moment — which is why there is no dismissed
    flag anywhere: the card is derived, and a threshold recorded as announced is
@@ -224,6 +259,10 @@ export function dismiss(id) {
      remembered instead — and only in memory, for the reason `deliveredRuns`
      gives. */
   if (card.source === 'run') deliveredRuns.add(card.token)
+  /* And an update card is derived from a state that outlives it too: the
+     machine stays `ready` until somebody installs, so the id is remembered for
+     the same reason and in the same way. */
+  if (card.source === 'update') dismissedUpdates.add(card.id)
   notificationsState.items = notificationsState.items.filter((item) => item.id !== id)
 }
 
