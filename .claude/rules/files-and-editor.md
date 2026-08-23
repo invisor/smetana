@@ -175,6 +175,50 @@ a not-yet-read buffer would otherwise become the whole file on the next save), `
 of choosing when the file moved under a dirty tab, and `error` locks the field without throwing away
 anything already typed.
 
+**The row is dragged into whatever order somebody wants, and the order is one row rather than four
+lists.** A terminal tab can stand between two files and a diff in front of all of them; the pinned
+run — the board, and the Agent tab while it exists — does not move and nothing can be put to the left
+of it, which is also what keeps the `afterPinned` slot's `+` button beside that run. The whole of the
+rule is `src/components/shell/tabOrder.js`, another of the pure family and shaped exactly like
+`kanban/columnOrder.js`: `orderTabs` reconciles a stored order against the row that actually exists,
+`moveTab` is one tab from one index to another, and `neighbourIn` answers which tab takes over when
+one is closed. What is stored is `tabOrder` on the project (`.claude/rules/settings.md`) and it is a
+hint, never the truth — an id nothing matches shifts nobody, which is the ordinary state after a
+restart, when the diffs and the shells in it are gone. Nothing sweeps those entries on the way in:
+the next drag rewrites the field whole from the tabs standing at that moment, so the file cleans
+itself up and can never outgrow the row.
+
+Two things about it are easy to undo by accident. **Exactly two places write to `tabOrder`** — the
+drag's commit, and `openFile`'s preview replacement, which puts the incoming path at the outgoing
+one's index for the reason it already splices `openTabs` in place: without it, the first single click
+after a rearrangement finds the new file unknown to the order and sends it to the end, so walking a
+folder by single clicks would drag the preview tab across the row on every press. And `neighbourIn`
+is asked about the **movable** part of the row, deliberately not the whole of it: with the board
+always present there would be no "nobody left" case, and closing the last file tab while an agent
+runs would land on the Agent tab instead of the board.
+
+The gesture is `TabBar.vue`'s and is `KanbanBoard.vue`'s down to the last decision — capture on the
+scrolling strip, a draft order that lives only while the pointer is down, the row rearranging live
+under the pointer with nothing following the cursor and nothing transformed, Esc abandoning,
+`pointercancel` and `lostpointercapture` ending it too, and the same pair of page-wide guards.
+HTML5 `draggable` is **not** an option here and the reason is not taste: `dragDropEnabled` is on in
+`tauri.conf.json`, so Tauri intercepts a drag at the window level before the webview sees it, and
+`stores/attachments.js` and `stores/terminals.js` both hang on `onDragDropEvent` — turning it off
+would take dropped files away from the terminal and from the new-task dialog.
+
+One thing the board did not need: **a latch on the held tab's box.** Columns are one width, so after
+a swap the pointer is over the held column again by construction; tabs are as wide as their labels up
+to 200px and that guarantee is simply false, so a narrow tab dragged through a wide one lands where
+the neighbour is under the pointer once more and the row would trade the two back and forth at the
+frame rate with the pointer standing still. Nothing moves again until the pointer leaves the held
+tab's box, and the box is re-measured a tick after each swap, since the row has not been redrawn at
+the moment the draft changes.
+
+Terminal tab numbering is **not** touched by any of this and should not be: `terminalTabs` numbers by
+position among the shell sessions rather than among the tabs, so a row reading `[Terminal 2][Terminal
+1]` is an accepted outcome. Numbering that followed the row would rename a tab under the hand that
+just moved it.
+
 The field itself is CodeMirror 6, assembled by hand under `src/components/files/editor/`: `theme.js`
 (chrome and syntax highlighting, entirely on tokens — see the styling exception in `CLAUDE.md`), `extensions.js`
 (an explicit extension list instead of `basic-setup`, which would have pulled in autocomplete, a

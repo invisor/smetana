@@ -31,7 +31,17 @@ which sound each of the two announcements makes and whether a finished run shows
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, active tab, selected task, `recentTasks`, selected
 path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`, `columnOrder`,
-`runSettings`, `storageWarnedMib`, `usedAt`).
+`tabOrder`, `runSettings`, `storageWarnedMib`, `usedAt`).
+
+`tabOrder` sits beside `openTabs` rather than replacing it, and the two answer different questions:
+that one is the **set of files to open again** — the dirty marks, the focus sweep and the closing of
+tabs over a deleted file all hang on it — while this one is a **sequence**, naming the diffs and the
+shell tabs too, whose ids die with the app. Merging them would put a dead session's id in the list
+that decides which files to read. It is validated with `sane_list` like every list here, and with
+ceilings that are deliberately not `column_order`'s: an entry is a tab id and a file tab's id is a
+path, so the item limit is `MAX_PATH_LEN`, and the count is well past `MAX_OPEN_TABS` because three
+kinds of tab share the one list. A hint rather than a truth, exactly as the column order is — the
+rule that reads it is `components/shell/tabOrder.js` (`.claude/rules/files-and-editor.md`).
 
 `layout.gitSections` is the other thing at the root that could plausibly have gone under a project and
 did not: how the Git panel's three sections are folded, and how tall two of them were dragged to. The

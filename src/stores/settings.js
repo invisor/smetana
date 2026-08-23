@@ -182,6 +182,14 @@ const defaults = () => ({
     /* The board's columns in the order a person dragged them to. Empty means
        "never rearranged", and the board then draws bd's own order. */
     columnOrder: [],
+    /* The centre's tab row in the order somebody dragged it into, by tab id and
+       without the pinned ones — the board and the Agent tab do not move. Empty
+       means "never rearranged", and the row then draws the order it grew in.
+       Beside `openTabs` rather than instead of it: that list is the set of files
+       to open again, and this one is a sequence naming diffs and shell tabs too,
+       ids that die with the app. `components/shell/tabOrder.js` is the rule that
+       reconciles the two. */
+    tabOrder: [],
     /* What the run dialog was last set to here — null until somebody runs
        something. Listed rather than left out, and the difference is not
        cosmetic: applySection is Object.assign(target, defaults, stored), so a

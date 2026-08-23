@@ -21,6 +21,10 @@ import { relativeTo } from '../paths.js'
    theme no store holds. */
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
+/* The row's own two rules, pure and outside this file for the reason the whole
+   of that family is outside its component: what order the tabs sit in, and
+   which tab takes over when one is closed. */
+import { neighbourIn, orderTabs } from '../components/shell/tabOrder.js'
 
 /* Pinned tabs are not stored in settings: they come first and cannot be closed.
 
@@ -172,7 +176,11 @@ export const dirtyPaths = computed(() => project().openTabs.filter(isDirty))
    open would lie about a permanent property of the tab. */
 const readOnlyHint = (buffer) => (buffer?.error ? fileErrorText(buffer.error) : null)
 
-export const tabList = computed(() => [
+/* The row before the person's own arrangement is laid over it: the four lists
+   glued together in the order they were grown in. Nothing outside this file
+   reads it — `tabList` below is what the app draws — and it is split out only so
+   that the gluing and the arranging are two readable things rather than one. */
+const rawTabList = computed(() => [
   ...PINNED,
   /* After the board and before everything else. The board is the one tab every
      project has, so it is the fixed point of the row and reads best as its
@@ -225,6 +233,24 @@ export const tabList = computed(() => [
     icon: 'terminal'
   }))
 ])
+
+/* The row as it is drawn: the four lists above, reconciled against the order
+   somebody dragged them into. That order is a hint and never the truth — see
+   `components/shell/tabOrder.js` — so a tab nothing remembers still appears, at
+   the end, and a stored id nothing matches shifts nobody.
+
+   The three paragraphs above about "after the files" and "after the diffs" are
+   still exactly right and are what this is layered over: they are the order a
+   row has before anybody has touched it, and they remain the order every tab
+   opened since the last drag falls into. */
+export const tabList = computed(() => orderTabs(rawTabList.value, project().tabOrder))
+
+/* The part of the row a person can rearrange, and the part `neighbourIn` is
+   asked about: the pinned run is not in it. Written by hand rather than taken
+   from `tabOrder.js` because there is no third reader — that module slices the
+   leading run for its own purpose, and this filter says the same thing about
+   the same list, which `tabList` has already put in one order. */
+const movableIds = () => tabList.value.filter((tab) => tab.kind !== 'pinned').map((tab) => tab.id)
 
 export const activeBuffer = computed(() => buffers.get(project().activeTab) ?? null)
 
@@ -289,6 +315,24 @@ async function load(path, { force = false } = {}) {
   }
 }
 
+/* One id put where another one stood in the stored order, and nothing at all
+   when the order has never heard of the outgoing tab — which is the ordinary
+   case, since nothing writes to the field until somebody drags something.
+
+   The second mention is taken out rather than left: a path can already be in
+   the order from a drag before it was closed, and two entries for one tab would
+   put it back where the older of them stood on the next reload. `orderTabs`
+   takes the first mention and `sane_list` in Rust drops the repeat, so the cost
+   of leaving it would be silent rather than visible — which is the reason to
+   deal with it here. */
+function replaceInOrder(state, from, to) {
+  const at = state.tabOrder.indexOf(from)
+  if (at === -1) return
+  state.tabOrder.splice(at, 1, to)
+  const again = state.tabOrder.indexOf(to, at + 1)
+  if (again !== -1) state.tabOrder.splice(again, 1)
+}
+
 /* Opening a file from the tree. All of VS Code's mechanics live here.
 
    A single click opens a preview tab; the next single click on another file
@@ -314,8 +358,17 @@ export function openFile(path, { permanent = false } = {}) {
     /* Replacement in place: the row must not rearrange itself just because a
        person is previewing files one after another. A preview tab is never
        dirty, so there is nothing to ask about. */
-    buffers.delete(state.openTabs[previewAt])
+    const previous = state.openTabs[previewAt]
+    buffers.delete(previous)
     state.openTabs.splice(previewAt, 1, path)
+    /* And in place in the arranged order too, by the index of the record rather
+       than by the position in `openTabs` — the two are different lists and after
+       a drag they disagree. This is the **one** thing besides a drag that writes
+       to `tabOrder`, and it has to: without it, the first single click after a
+       rearrangement would find the new file unknown to the order and put it at
+       the end, so walking a folder by single clicks would drag the preview tab
+       across the row on every press. */
+    replaceInOrder(state, previous, path)
   } else {
     state.openTabs.push(path)
   }
@@ -339,14 +392,23 @@ export function closeTab(path) {
   const state = project()
   const at = state.openTabs.indexOf(path)
   if (at === -1) return
+  /* Worked out against the row as it stands, before anything is taken out of
+     it — `neighbourIn` is a statement about what is on screen, and one frame
+     later the tab it is asked about is gone. */
+  const next = neighbourIn(movableIds(), path)
   state.openTabs.splice(at, 1)
   buffers.delete(path)
   if (state.previewTab === path) state.previewTab = null
   if (state.activeTab === path) {
     /* The neighbour on the right becomes active, or the one on the left for
        the last tab; with no tabs left, the board. removeProject behaves the
-       same way with the project list. */
-    state.activeTab = state.openTabs[at] ?? state.openTabs[at - 1] ?? 'kanban'
+       same way with the project list.
+       The rule itself is `neighbourIn`'s and is read off the drawn row rather
+       than off `openTabs`: a tab that was dragged elsewhere would otherwise hand
+       the choice to whoever happened to sit beside it in that list. Only the
+       fallback stays here, since the board is the store's answer and not a fact
+       about a row. */
+    state.activeTab = next ?? 'kanban'
   }
 }
 
@@ -449,14 +511,16 @@ function asError(error) {
 export function closeDiff(id) {
   const at = diffTabs.findIndex((tab) => tab.id === id)
   if (at === -1) return
+  /* The neighbour on the right, then the one on the left, then the board — one
+     rule over the whole row, which is what `closeTab` and `closeTerminalTab` now
+     ask as well. It used to be written out here over `diffTabs` with a hop into
+     `openTabs` at the seam, and the seams stopped being where the row's own
+     joins are the moment a tab could be dragged across one. */
+  const next = neighbourIn(movableIds(), id)
   diffTabs.splice(at, 1)
   const state = project()
   if (state.activeTab !== id) return
-  /* The neighbour on the right, then the one on the left, then back to the
-     files, then the board — `closeTab`'s rule, extended over the seam between
-     the two lists rather than restarted at it. */
-  state.activeTab =
-    diffTabs[at]?.id ?? diffTabs[at - 1]?.id ?? state.openTabs[state.openTabs.length - 1] ?? 'kanban'
+  state.activeTab = next ?? 'kanban'
 }
 
 /* Closing a terminal tab, which is the same act as killing the shell in it —
@@ -480,16 +544,15 @@ export function closeDiff(id) {
 export async function closeTerminalTab(id) {
   const tab = terminalTab(id)
   if (!tab) return
-  const before = terminalTabs.value.map((entry) => entry.id)
-  const at = before.indexOf(id)
+  /* The same one rule `closeTab` and `closeDiff` ask, over the same drawn row —
+     which is also why this is no longer a list of its own taken before the
+     await: the row is what the neighbour is read from, and `movableIds` is the
+     row. */
+  const next = neighbourIn(movableIds(), id)
   await removeSession(tab.session)
   const state = project()
   if (state.activeTab !== id || terminalTab(id)) return
-  /* The neighbour on the right, then the one on the left, then back to the
-     files, then the board — `closeDiff`'s rule, which is `closeTab`'s extended
-     over the seams between the lists rather than restarted at each. */
-  state.activeTab =
-    before[at + 1] ?? before[at - 1] ?? state.openTabs[state.openTabs.length - 1] ?? 'kanban'
+  state.activeTab = next ?? 'kanban'
 }
 
 /* The last agent has gone, so the Agent tab has gone with it. Nothing else in
