@@ -349,12 +349,15 @@ panel and a run's own commits — for the reason `.claude/rules/agents.md` recor
 
 Report language is last in that group and the one row on this tab with a condition on it, and the
 condition lives on another tab: `SettingsWindow.vue` hands `view.notificationShowReport` to
-`AgentSettings.vue` as `showRunReport`, and with **Show run report** off the `Dropdown` is drawn
+`AgentSettings.vue` as `showReport` — the section prefix dropped and the field name kept, the way
+`GitSettings.vue` takes `gitAutoFetch` as `autoFetch`, so that one grep still finds both ends of the
+pair — and with **Show run report** off the `Dropdown` is drawn
 `disabled` and the row's description says why and names the tab the switch is on. Disabled rather
-than removed, which is General's own answer one row above that switch — a control that refuses a
-press without saying why is worse than one that is not there, and a row vanishing from this tab
-because of a switch on another is a change nobody sees happen. The description is a `computed` of
-the shape `autostartDescription` already has in `GeneralSettings.vue`, deliberately not a pure module
+than removed, which is General's own answer in the Launch at login row of its Startup group, drawn
+disabled with `autostartDescription` naming the reason: a control that refuses a
+press without saying why is worse than one that is not there. A row vanishing from this tab
+because of a switch on another is the second half of it — a change nobody sees happen. The description is a `computed` of
+that same shape, deliberately not a pure module
 of its own: `usage.js` exists because its sentences are a rule with cases, and this is one boolean
 and two strings. Two things it must keep saying: the stored value is untouched while the row is shut,
 so turning the switch back on brings the choice back rather than `en`, and the Off sentence says

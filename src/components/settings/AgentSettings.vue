@@ -20,12 +20,13 @@
    Report language is the one row here with a condition on it, and the condition
    belongs to another tab: with **Show run report** off on General, the row is
    drawn `disabled` and its description says so. Disabled rather than absent, for
-   the answer `GeneralSettings.vue` already carries one row above that switch — a
-   control that refuses a press without saying why is worse than one that is not
-   there, and a row vanishing from this tab because of a switch on another is a
-   change nobody sees happen. The stored value is untouched while the row is
-   disabled, so turning the switch back on brings the choice back rather than
-   `en`.
+   the answer `GeneralSettings.vue` already carries in its Launch at login row —
+   the one in the Startup group, drawn disabled with `autostartDescription`
+   naming the reason — that a control which refuses a press without saying why is
+   worse than one that is not there. A row vanishing from this tab because of a
+   switch on another is the second half of it: a change nobody sees happen. The
+   stored value is untouched while the row is disabled, so turning the switch
+   back on brings the choice back rather than `en`.
 
    The block under them was three dashes and a sentence saying nothing was read
    here yet, which was honest and is no longer necessary: `agent_usage` asks the
@@ -60,10 +61,12 @@ const props = defineProps({
   /* Whether **Show run report** is on, which lives on the General tab and is
      `view.notificationShowReport` in `SettingsWindow.vue`. Read and never
      emitted back: this tab does not own it, it only draws the Report language
-     row disabled while it is off. Default `true`, the shipped position, so the
-     row is usable in the moment before the first answer arrives rather than
-     greying itself out and back. */
-  showRunReport: { type: Boolean, default: true },
+     row disabled while it is off — hence the name here drops the section prefix
+     rather than the field, the way `GitSettings.vue` takes `gitAutoFetch` as
+     `autoFetch`, so that one grep still finds both ends of the pair. Default
+     `true`, the shipped position, so the row is usable in the moment before the
+     first answer arrives rather than greying itself out and back. */
+  showReport: { type: Boolean, default: true },
   /* `agent_usage`'s answer whole, in Rust's own shape, or `null` before there
      has been one. */
   usage: { type: Object, default: null },
@@ -163,7 +166,7 @@ const heading = computed(() => {
    its batch file either way. What the switch stops is the delivery, so the
    sentence says reports are not shown — not that none is written. */
 const reportDescription = computed(() =>
-  props.showRunReport
+  props.showReport
     ? 'What a run writes about itself is written in this — what each task did, and any note on the batch. Field names, paths and identifiers stay as they are, and so do the report\'s own labels.'
     : 'Reports are not shown, so there is nothing here to show you. Turn on Show run report on the General tab to choose a language.'
 )
@@ -285,7 +288,7 @@ const errorStyle = {
         <Dropdown
           :model-value="props.reportLanguage"
           :options="LANGUAGES"
-          :disabled="!props.showRunReport"
+          :disabled="!props.showReport"
           @update:model-value="emit('update:reportLanguage', $event)"
         />
       </SettingsRow>

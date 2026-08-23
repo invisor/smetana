@@ -85,8 +85,9 @@ const view = reactive({
   reportLanguage: 'en',
   /* The board's four, flat in the same message the rest ride in — see
      `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
-     the same reason the four above are shipped values: this window paints
-     itself correctly in the moment before the first answer arrives. */
+     the same reason the agent and the languages above are shipped values: this
+     window paints itself correctly in the moment before the first answer
+     arrives. */
   kanbanColumns: 'all',
   kanbanAlwaysShow: [],
   kanbanInterval: 'all',
@@ -481,7 +482,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :task-language="view.taskLanguage"
           :commit-language="view.commitLanguage"
           :report-language="view.reportLanguage"
-          :show-run-report="view.notificationShowReport"
+          :show-report="view.notificationShowReport"
           :usage="usage.reading"
           :busy="usage.busy"
           :error="usage.error"

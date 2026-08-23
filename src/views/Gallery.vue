@@ -3280,7 +3280,7 @@ const menuTargetStyle = {
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
-            :show-run-report="false"
+            :show-report="false"
             :usage="galleryAgentUsage"
           />
         </div>
