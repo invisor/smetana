@@ -67,16 +67,17 @@ pub fn agent(path: &Path) -> String {
     load(path).0.agent
 }
 
-/// The three configured languages, and nothing else out of the file. The same
-/// shape as `agent` above and answering under the same guarantees: all three are
-/// always ids `agents::LANGUAGES` knows, because `parse` validates them on the
-/// way in, and a missing or unreadable file answers with the default set.
+/// The configured languages, and nothing else out of the file. The same shape
+/// as `agent` above and answering under the same guarantees: every one of them
+/// is always an id `agents::LANGUAGES` knows, because `parse` validates them on
+/// the way in, and a missing or unreadable file answers with the default set.
 pub fn languages(path: &Path) -> crate::agents::Languages {
     let settings = load(path).0;
     crate::agents::Languages {
         agent: settings.agent_language,
         task: settings.task_language,
         commit: settings.commit_language,
+        report: settings.report_language,
     }
 }
 

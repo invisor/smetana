@@ -8,6 +8,7 @@ import { branchMenuItems } from '../components/git/branchMenu.js'
 import { fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
+import { orderTabs } from '../components/shell/tabOrder.js'
 import {
   AboutSettings,
   AgentList,
@@ -614,7 +615,7 @@ const switched = ref(true)
    A computed and not a plain array: the icon carries a palette rather than a
    token, so flipping the theme has to rebuild it. In the app `tabList` is
    already a computed and gets this for free. */
-const tabs = computed(() => [
+const galleryTabs = computed(() => [
   { id: 'kanban', kind: 'pinned', label: 'Kanban' },
   { id: 'terminal', kind: 'pinned', label: 'Agent' },
   { id: 'tabs.rs', kind: 'file', label: 'tabs.rs', iconUrl: fileIconUrl('tabs.rs', documentTheme.value), dirty: true },
@@ -636,6 +637,16 @@ const tabs = computed(() => [
      kind. */
   { id: 'term:1', kind: 'terminal', label: 'Terminal 1', icon: 'terminal' }
 ])
+
+/* The row is draggable here, which is the only way the gesture can be checked
+   at all: no test in this repository reaches a `.vue`. The gallery plays the
+   part `settings.json` plays in the app — it holds the order the row was
+   dragged into and hands it back — so the sample behaves as the product does,
+   Kanban and the Agent tab immovable included. Empty is "never rearranged", and
+   `orderTabs` then draws the fixture as written. */
+const galleryTabOrder = ref([])
+
+const tabs = computed(() => orderTabs(galleryTabs.value, galleryTabOrder.value))
 
 /* `FileTree` walks a nested `children` array and draws a folder's contents only
    when `expanded` names it, while `MOCK_TREE` is keyed by directory the way
@@ -1218,6 +1229,7 @@ const galleryAgent = ref('claude')
 const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
 const galleryCommitLanguage = ref('ja')
+const galleryReportLanguage = ref('de')
 /* The subscription block. A reading rather than one of the two empty states:
    those are a sentence each, while this is the shape with a layout to check —
    two rows, the line about what a run would do, and a live Refresh beside the
@@ -2081,7 +2093,7 @@ const menuTargetStyle = {
 
     <section :style="sectionStyle">
       <div :style="headStyle">Shell</div>
-      <TabBar :tabs="tabs" active-id="kanban">
+      <TabBar :tabs="tabs" active-id="kanban" @reorder="galleryTabOrder = $event">
         <!-- The row's second slot, inside the scrolling strip and right after
              the pinned tabs, which is where the app puts it: the control is
              about those tabs and has to stay beside them however many files are
@@ -3257,11 +3269,30 @@ const menuTargetStyle = {
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"
+            :report-language="galleryReportLanguage"
             :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
             @update:commit-language="galleryCommitLanguage = $event"
+            @update:report-language="galleryReportLanguage = $event"
+          />
+        </div>
+        <!-- The same tab with Show run report off on the General tab, which is
+             the other state the Report language row has: the control is drawn
+             and cannot be pressed, and the description names the reason and the
+             tab the switch is on. The chosen language is still handed in and
+             still stands, which is what says the switch shuts the row rather
+             than the setting. -->
+        <div :style="{ width: '380px' }">
+          <AgentSettings
+            :agent="galleryAgent"
+            :agent-language="galleryAgentLanguage"
+            :task-language="galleryTaskLanguage"
+            :commit-language="galleryCommitLanguage"
+            :report-language="galleryReportLanguage"
+            :show-report="false"
+            :usage="galleryAgentUsage"
           />
         </div>
         <!-- The subscription block in its other shapes, the way the Storage tab

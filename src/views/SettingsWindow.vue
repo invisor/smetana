@@ -77,15 +77,17 @@ const view = reactive({
      arrives. Off is also today's behaviour exactly. */
   editorWordWrap: false,
   agent: 'claude',
-  /* All three BCP-47 ids, mirroring Rust's `en` — the same shipped-defaults
-     reasoning the four above carry. */
+  /* BCP-47 ids, every one of them mirroring Rust's `en` — the same
+     shipped-defaults reasoning the four above carry. */
   agentLanguage: 'en',
   taskLanguage: 'en',
   commitLanguage: 'en',
+  reportLanguage: 'en',
   /* The board's four, flat in the same message the rest ride in — see
      `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
-     the same reason the four above are shipped values: this window paints
-     itself correctly in the moment before the first answer arrives. */
+     the same reason the agent and the languages above are shipped values: this
+     window paints itself correctly in the moment before the first answer
+     arrives. */
   kanbanColumns: 'all',
   kanbanAlwaysShow: [],
   kanbanInterval: 'all',
@@ -470,12 +472,17 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:font-size="change({ editorFontSize: $event })"
           @update:word-wrap="change({ editorWordWrap: $event })"
         />
+        <!-- `notificationShowReport` is handed to two tabs out of this one
+             view. General owns the switch; Agents only reads it, to say why the
+             Report language row is drawn and cannot be used. -->
         <AgentSettings
           v-else-if="tab === 'agents'"
           :agent="view.agent"
           :agent-language="view.agentLanguage"
           :task-language="view.taskLanguage"
           :commit-language="view.commitLanguage"
+          :report-language="view.reportLanguage"
+          :show-report="view.notificationShowReport"
           :usage="usage.reading"
           :busy="usage.busy"
           :error="usage.error"
@@ -483,6 +490,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:agent-language="change({ agentLanguage: $event })"
           @update:task-language="change({ taskLanguage: $event })"
           @update:commit-language="change({ commitLanguage: $event })"
+          @update:report-language="change({ reportLanguage: $event })"
           @refresh="readUsage()"
         />
         <KanbanSettings
