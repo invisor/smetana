@@ -25,6 +25,48 @@ component before it reaches the product. It is code-split and never lands in the
 app bundle. `?view=settings` is the settings window, which in the desktop app is a
 second OS window loading that same query string.
 
+## Releases
+
+A release is cut by pushing a tag `v<x.y.z>` whose number matches `version` in
+`src-tauri/tauri.conf.json`. That field is the single source of the app's version:
+it is what the app reports about itself and the number to quote in a bug report,
+while `package.json` and `src-tauri/Cargo.toml` carry their own and mean nothing.
+`.github/workflows/release.yml` compares the two and fails, naming both, when they
+disagree — otherwise `latest.json` would announce a version the bundle does not
+carry. The workflow then builds a macOS arm64 bundle and publishes a GitHub release
+holding the `.dmg`, the `.app.tar.gz` the updater installs, its `.sig`, and
+`latest.json`. That last file is what `plugins.updater.endpoints` points the app at
+— `https://github.com/invisor/smetana/releases/latest/download/latest.json`, which
+needs no token because this repository is public.
+
+Three things have to be done by a person, once, before the first release will work.
+They are not in place yet.
+
+1. Run `npm run tauri signer generate`. It produces a minisign key pair. Tauri's
+   update signature is mandatory and cannot be turned off.
+2. Paste the public key into `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`
+   and commit it. It is an empty string today, and the workflow refuses to build
+   while it stays empty rather than publish a release nobody can install as an
+   update.
+3. Set the private key and its password as the repository secrets
+   `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The private
+   key belongs in neither the repository nor a run log.
+
+**Losing the private key means every already-installed copy can never be updated
+again.** There is no way back from it: a copy already out there accepts only an
+update signed by the key whose public half it was built with. Keep it somewhere
+that outlives the machine it was generated on.
+
+## First launch
+
+The app is not signed with an Apple Developer ID and is not notarized — the bundle
+is ad-hoc signed, which is a deliberate choice and not an oversight. macOS therefore
+refuses to open a freshly downloaded copy on a double-click: the first launch has to
+be right-click on `Smetana.app`, then Open, then Open again in the dialog that
+appears. That is once per machine. Updates after that are applied by the app itself,
+which replaces the bundle in place without quarantining it, so they need no such
+step.
+
 ## Layout
 
 ```
