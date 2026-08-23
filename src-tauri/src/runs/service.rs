@@ -102,6 +102,17 @@ pub enum Request {
     /// check that project declares, and `browser_tools` reads the config to
     /// settle it.
     BrowserBusy(oneshot::Sender<Vec<String>>),
+    /// Which projects hold a run at all — the whole map, not this project's
+    /// share of it. The updater's install gate asks before it replaces the
+    /// bundle and relaunches (`updates.rs`), and that question has no answer in
+    /// the front end: `runs.js` is filtered to the active project, so a run in
+    /// a neighbouring one is invisible there.
+    ///
+    /// One request rather than a widening of `State`, which is about one
+    /// project and answers with whole `Run` values: what the gate needs is the
+    /// projects and nothing else, and a caller handed every run in the app
+    /// would be a caller able to act on one.
+    LiveProjects(oneshot::Sender<Vec<String>>),
 }
 
 /// What a loop task says to the worker. Three messages on one channel so they
@@ -260,6 +271,9 @@ fn handle(
         }
         Request::BrowserBusy(tx) => {
             let _ = tx.send(browser_candidates(active));
+        }
+        Request::LiveProjects(tx) => {
+            let _ = tx.send(live_projects(active));
         }
         Request::Stop(token, tx) => {
             let mut answer = None;
@@ -558,6 +572,23 @@ fn browser_candidates(active: &HashMap<u64, Active>) -> Vec<String> {
         .filter(|a| !a.run.is_over() && a.run.settings.live_check)
         .map(|a| a.run.project.clone())
         .collect();
+    projects.sort();
+    projects.dedup();
+    projects
+}
+
+/// Every project the map holds an entry for, sorted and deduplicated — the
+/// updater's install gate reads it, and nothing else does.
+///
+/// **Every entry counts, whatever state its run is in**, which is the one place
+/// this differs from `browser_candidates` above. It is the same count
+/// `keeper.sync(active.len())` works from, and for the same reason: a run that
+/// has stopped and is winding down still has a batch in flight, so it is still
+/// agent processes a relaunch would orphan. Filtering by `is_over` here would
+/// let an install through in exactly the seconds a stop is being carried out.
+fn live_projects(active: &HashMap<u64, Active>) -> Vec<String> {
+    let mut projects: Vec<String> =
+        active.values().map(|entry| entry.run.project.clone()).collect();
     projects.sort();
     projects.dedup();
     projects
@@ -1702,6 +1733,38 @@ mod tests {
         let runs = runs_in(&active, "/p");
         assert_eq!(runs.iter().map(|r| r.token).collect::<Vec<_>>(), vec![2, 4]);
         assert!(runs.iter().all(|r| r.project == "/p"), "another project's run is not in it");
+    }
+
+    /// The updater's gate reads this, and the case it exists for is a run in a
+    /// project the person is not looking at — the one the front end cannot see,
+    /// since `runs.js` is filtered to the active project.
+    #[test]
+    fn the_live_projects_are_every_project_in_the_map_and_not_one_of_them() {
+        assert!(live_projects(&HashMap::new()).is_empty(), "an idle app installs freely");
+
+        let mut active = map(1);
+        insert(&mut active, 2, "/p", task("a-1"));
+        insert(&mut active, 3, "/elsewhere", RunScope::Queue);
+
+        assert_eq!(
+            live_projects(&active),
+            vec!["/elsewhere".to_string(), "/p".to_string()],
+            "one entry per project, however many runs it holds"
+        );
+    }
+
+    /// A stop is not an ending: the batch it asked to finish is still a process,
+    /// so the project stays in the list until the loop task reports itself gone.
+    /// The same rule the power assertion is held under.
+    #[test]
+    fn a_run_winding_down_is_still_a_live_project() {
+        let mut active = map(1);
+        active.get_mut(&1).expect("the entry").run.session = Some(9);
+        active.get_mut(&1).expect("the entry").run.request_stop(false);
+        assert_eq!(live_projects(&active), vec!["/p".to_string()]);
+
+        absorb(&mut active, Report::Ended { token: 1 });
+        assert!(live_projects(&active).is_empty(), "and the ending is what frees it");
     }
 
     #[test]
