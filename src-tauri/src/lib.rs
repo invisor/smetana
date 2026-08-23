@@ -9,6 +9,7 @@ mod settings;
 mod shell_env;
 mod terminal;
 mod tracker;
+mod updates;
 mod vcs;
 mod window;
 
@@ -37,6 +38,14 @@ pub fn run() {
       None,
     ))
     .plugin(tauri_plugin_dialog::init())
+    // The two halves of updating in place: `updater` fetches `latest.json`,
+    // verifies the signature and replaces the bundle; `process` is the relaunch
+    // afterwards. Neither is granted anything in `capabilities/default.json`
+    // and neither is called from the webview — `updates.rs` owns the whole
+    // state machine and the front end calls its three commands. That module's
+    // header records why the grants would be a hole rather than a formality.
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(tauri_plugin_process::init())
     .setup(|app| {
       // Before anything asks for an agent. A bundled app is handed launchd's
       // environment rather than the person's, so the answer takes a login
@@ -106,6 +115,14 @@ pub fn run() {
       let runs = runs::service::start(app.handle().clone(), tracker.clone(), terminal, known);
       app.manage(runs);
 
+      // Whether there is a newer version, and the download of it, are the
+      // app's own business rather than a window's: the About tab that shows
+      // this lives in the settings window, which is closed as soon as it has
+      // been read. Nothing here runs in a development build — `updates.rs`
+      // records what an install would do to `target/debug`.
+      app.manage(updates::Updates::default());
+      updates::schedule(app.handle().clone());
+
       // The plugin writes the window geometry only on exit; here it starts
       // being written along the way too, so that a run cut short without a
       // clean exit does not open at the size from the run before last.
@@ -166,6 +183,9 @@ pub fn run() {
       window::settings_window_open,
       autostart::autostart_state,
       autostart::autostart_set,
+      updates::updates_state,
+      updates::updates_check,
+      updates::updates_install,
       terminal::commands::terminal_list,
       terminal::commands::terminal_marks,
       terminal::commands::terminal_create,

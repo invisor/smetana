@@ -132,6 +132,76 @@ keepawake = { version = "0.6", default-features = false }
 # no copy of it. `src-tauri/src/autostart.rs` records why.
 tauri-plugin-autostart = "2.5.1"
 
+# Updating in place: fetch `latest.json` off the release the workflow published,
+# check the minisign signature against `plugins.updater.pubkey`, replace the
+# bundle. A plugin rather than anything of ours, because the signature check is
+# the whole of the security here and re-implementing minisign verification
+# against a downloaded archive is not a thing to do by hand.
+#
+# The price, counted against `Cargo.lock` rather than guessed at: **32
+# `[[package]]` entries**, of which 19 compile on this macOS build and 13 never
+# do here. Nothing is removed and no other crate moves version; `reqwest`,
+# `flate2`, `semver`, `time`, `tempfile` and `url` were all already in the tree,
+# so the HTTP client is not part of the bill.
+#
+# Where they go, traced with `cargo tree -i` rather than eyeballed. **Twenty-two
+# are TLS**, all of them behind the default `rustls-tls` feature, which is a
+# feature of `reqwest` — already in the tree — rather than a client of its own:
+# `rustls`, `rustls-pki-types`, `rustls-webpki`, `tokio-rustls`, `hyper-rustls`,
+# `ring` with `untrusted` and a fifth `windows-sys` major (0.52, beside the
+# 0.45.0, 0.59.0, 0.60.2 and 0.61.2 already in the lock file), `zeroize`,
+# `subtle`, and the whole of `rustls-platform-verifier`
+# — its `-android` half, `rustls-native-certs`, `webpki-root-certs`,
+# `openssl-probe`, `schannel`, `security-framework` with its `-sys`, and `jni`,
+# `jni-macros`, `simd_cesu8`, `simdutf8` for an Android target nobody builds.
+# The alternative was checked rather than assumed: `default-features = false`
+# with `native-tls` would drop most of them and buy a build-time dependency on
+# system OpenSSL for the Linux target, which is why the plugin ships rustls as
+# its default in the first place.
+#
+# **Six are archives**, from the `zip` feature — `zip` with `arbitrary` and
+# `derive_arbitrary` under it, and `tar` with `filetime` and `xattr`. The
+# feature cannot be turned off on the platform whose name is not in it: macOS
+# installs from the `.app.tar.gz`, so `tar` and the `flate2` already in the tree
+# are behind that same switch, while `zip` itself is the Windows half and never
+# compiles here.
+#
+# **Four are the work itself**: the plugin, `minisign-verify` for the signature,
+# and `osakit` with `objc2-osa-kit` for the AppleScript prompt macOS needs when
+# the bundle sits somewhere this user cannot write to.
+#
+# What is deliberately **not** granted is anything in
+# `capabilities/default.json`: the front end calls `updates_*`, never
+# `plugin:updater|*`, and `src-tauri/src/updates.rs` records why the grant would
+# be a hole rather than a formality.
+tauri-plugin-updater = "2.10.1"
+
+# The other half of the pair above, and the cheapest dependency in this file:
+# **one `[[package]]` entry**, itself, with nothing under it.
+#
+# It is registration and no more today, which is worth saying rather than
+# leaving to be discovered. What it exposes is two commands for the webview,
+# `exit` and `restart`; neither is granted in `capabilities/default.json`, and
+# the relaunch after an install is made from Rust instead, in `updates.rs`.
+#
+# Which of the two `AppHandle` methods that relaunch uses is the part worth
+# writing down, because the difference is silent and the cost is somebody's
+# terminals. `request_restart` asks the event loop to leave, so `RunEvent::Exit`
+# fires and `lib.rs` kills the PTY children on the way out; `restart` makes the
+# same trip **only when it is called off the main thread**, and skips both
+# events when it is not, which would leave every open session's process an
+# orphan. `updates_install` calls `request_restart`, and its own doc comment
+# says so.
+#
+# The plugin is **not** the hazard in that paragraph, and a follow-up designing
+# a "restart later" from here should know it: its `restart` command is a thin
+# wrapper over `app.request_restart()` — the identical call — so routing the
+# press through the webview would be as safe as the Rust path, and the only
+# question it raises is the ACL one. That is why this line stays: the updater's
+# flow is documented as the pair, and a front-end-driven restart is the obvious
+# next thing to want. If that never arrives, this is the line to delete.
+tauri-plugin-process = "2.3.1"
+
 # Only to signal a process group, in the two places a killed process would
 # otherwise leave what it started behind: a PTY session on the exit path
 # (`terminal/pty.rs`), where portable-pty's own `kill` is SIGKILL to the direct
