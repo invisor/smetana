@@ -3507,9 +3507,11 @@ const menuTargetStyle = {
         </div>
         <EmptyState title="No board yet" description="Connect a tracker to pull tasks, or create the first task locally." icon="columns-3" />
         <EmptyState tone="error" title="Tracker unreachable" description="bd exited 101." />
-        <!-- The `detail` slot, with a line long enough to reach its ellipsis:
-             what the failing thing said, in mono under the sentence about it,
-             and never wrapped. -->
+        <!-- The `detail` slot: what the failing thing said, in mono under the
+             sentence about it, never wrapped. The line is deliberately longer
+             than the slot's own 420px cap, so what this entry shows is the
+             ellipsis — which is the whole of the feature and the part a caller
+             cannot see any other way. -->
         <EmptyState
           tone="error"
           title="bd is failing"

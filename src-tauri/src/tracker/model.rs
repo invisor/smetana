@@ -199,12 +199,30 @@ pub struct Failure {
     /// long before the button was pressed, so this is remembered rather than
     /// reconstructed.
     pub command: String,
-    /// What bd printed to stderr on that failure, in full.
+    /// What the tracker is saying now — the current health line — with the
+    /// remembered stderr appended when it says something that line does not
+    /// already carry. Not simply "bd's stderr", and the difference matters: a
+    /// `Command` failure's health line quotes the stderr inside it, so the two
+    /// would otherwise be the same paragraph twice, while a trouble that never
+    /// reached a bd process at all has no stderr to give.
     pub stderr: String,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrackerError {
+    /// **`command` is the argument list verbatim, and it is unbounded.** That
+    /// is safe only because of where this error's text is read out, and the
+    /// invariant is written down here because nothing enforces it: the two
+    /// readers that keep it are `HealthReporter::failed`, whose message reaches
+    /// the screen, and `Request::Failure`, whose briefing reaches an agent —
+    /// and every call that arrives at either runs `list`, `statuses` or
+    /// `version`, none of which carry any of the issue's own prose.
+    ///
+    /// `update_args` embeds `--title`, `-d` and `--append-notes` values and
+    /// `close` embeds `-r <reason>`, so a write failing here renders a whole
+    /// issue description into this string. Today those errors go back to the
+    /// caller and no further. Route a write's failure into health, or into a
+    /// briefing, and truncate this first.
     #[error("bd {command} exited with code {code}: {stderr}")]
     Command { command: String, code: i32, stderr: String },
     /// The copy that has to be taken before a migration. Its message says what

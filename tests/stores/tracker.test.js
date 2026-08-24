@@ -678,7 +678,22 @@ describe('repairing a failing tracker', () => {
     expect(tracker.trackerState.issues.has('bd-1')).toBe(true)
     expect(tracker.trackerState.generation).toBe(3)
     expect(tracker.trackerState.switching).toBe(false)
-    expect(tracker.trackerState.lastError.title).toBe('Could not save to the tracker')
+    /* Its own caption, and not `write`'s. That one says "Nothing was written",
+       which is a claim this call cannot make: `bd migrate` failing part-way may
+       well have written, and the app has no way to know. */
+    expect(tracker.trackerState.lastError.title).toBe('Could not repair the tracker')
+    expect(tracker.trackerState.lastError.description).not.toContain('Nothing was written')
+  })
+
+  /* The tabs have already moved by the time this is awaited, so a rejection
+     that went nowhere would be a button that takes somebody to the agents panel
+     and then does nothing at all. */
+  it('a briefing that could not be read is reported before it is rethrown', async () => {
+    await start()
+    ipc.fail('tracker_failure', new Error('the tracker worker is not running'))
+
+    await expect(tracker.trackerFailure()).rejects.toThrow('the tracker worker is not running')
+    expect(tracker.trackerState.lastError.title).toBe('Could not read the tracker')
   })
 
   /* One call and not four: the tracker is what is broken, so nothing can be

@@ -39,16 +39,34 @@ const titleStyle = computed(() => ({
    line with an ellipsis because there is no bottom to how long such a line can
    be: bd will hand over a paragraph as readily as a sentence, and an empty
    state that grows to fit one has stopped being an empty state. What is cut off
-   is not lost — the whole of it is what the second button hands to an agent.
+   is not lost — the whole of it is what the second button hands to an agent,
+   which is what makes this a hint rather than the payload.
+
+   **The cap is the component's own, and that is the point of it.** `maxWidth:
+   '100%'` alone is not a cap at all: the box is then whatever the caller's
+   layout happens to be, so the same string ellipsises in a different place on
+   every screen, and in a flex row at `min-width: auto` it does not ellipsise —
+   it takes a line of its own at full width, which is exactly what the gallery
+   entry was doing when it claimed to be demonstrating this.
+
+   420px rather than the 280px `description` above uses, deliberately. That one
+   is a prose measure, chosen so the eye finds the start of the next line, and
+   there is no next line here. What a wider box buys is more of the diagnostic
+   before the cut, and half again as much is about twenty more characters of it
+   — while staying visibly narrower than any panel this sits in, so the cut is
+   this component's decision and not the window's. A px value for a measure is
+   what `description` already does in this file; nothing here is a colour, a
+   space, a radius or a size.
 
    Muted rather than `--status-failed-fg`, even under `tone="error"`: the title
    above is already the loud part, and this stays information. */
+const DETAIL_W = '420px'
+
 const detailStyle = computed(() => ({
   fontFamily: 'var(--font-mono)',
   fontSize: 'var(--text-xs)',
   color: 'var(--text-muted)',
-  maxWidth: '100%',
-  minWidth: 0,
+  maxWidth: `min(${DETAIL_W}, 100%)`,
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis'

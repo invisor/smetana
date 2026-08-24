@@ -106,10 +106,13 @@ struct HealthReporter {
     /// screen, and this is the briefing an agent is handed when the tracker
     /// itself is what is broken and cannot be asked again.
     ///
-    /// It survives a recovery on purpose. A tracker that failed a minute ago
-    /// and is failing again now usually failed the same way both times, and a
-    /// field cleared on every successful tick would be empty exactly when
-    /// somebody presses the button.
+    /// It is cleared the moment bd works again, and that matters more than
+    /// keeping it: a call that failed at ten o'clock and succeeded at five past
+    /// describes nothing about the watcher dying at half past, and a briefing
+    /// naming that stale command would send an agent at the wrong thing while
+    /// the actual trouble appeared nowhere in it. `Request::Failure` puts the
+    /// current health line in the briefing regardless, so nothing is lost by
+    /// this being empty.
     last_command_failure: Option<(String, String)>,
 }
 
@@ -158,7 +161,12 @@ impl HealthReporter {
     }
 
     /// bd worked: clear the one-off failure, but not the persistent trouble.
+    ///
+    /// The remembered command goes with it. It is an account of a failure, and
+    /// a successful call is the proof that the account is out of date — the
+    /// same reasoning that makes a one-off failure clear itself here.
     fn recovered(&mut self) {
+        self.last_command_failure = None;
         self.set(self.baseline());
     }
 
@@ -488,7 +496,21 @@ async fn handle(
                 let _ = reply.send(Err(TrackerError::NoTracker("no project selected".into())));
                 return false;
             };
-            // The copy first, and a failure to take it ends the whole thing
+            // Before the copy exists, not after: the entry that keeps it out of
+            // the person's repository has to be in place first, or an 84 MB
+            // Dolt copy is an untracked row in the Git panel for however long
+            // the two calls are apart. Kept in `runs::gitignore` rather than
+            // written here, because that file is where this app decides once,
+            // in code, what of its own it hides — and the terminal worker
+            // already calls the same function for `.smetana/`.
+            //
+            // A failure is logged and the repair goes on, the same way the
+            // terminal worker treats it: a `.gitignore` that could not be
+            // written is not a reason to leave a tracker broken.
+            if let Err(err) = crate::runs::gitignore::ensure(&dir) {
+                eprintln!("[tracker] could not add .beads.backup-*/ to .gitignore: {err}");
+            }
+            // The copy next, and a failure to take it ends the whole thing
             // here: it is the only reason the button in front of this has no
             // confirmation dialog, so a repair that could not take one has no
             // right to migrate. `TrackerError::Backup` says as much in its own
@@ -519,12 +541,28 @@ async fn handle(
 
             let output = match bd.repair().await {
                 Ok(output) => output,
-                // Health is deliberately left alone, the same way InitTracker
-                // leaves it: bd is still failing, that is still what the board's
-                // place should say, and this command's own answer is what tells
-                // the story of the migration. The copy stays where it is —
-                // nothing in this app removes a person's data quietly.
+                // **The migration's failure becomes the tracker's health, and
+                // that is a decision.** The state does not move — it was
+                // `error` and stays `error`, so the board's place keeps the
+                // notice and both buttons — but the message does, to the words
+                // of the call a person just asked for. Two things follow, and
+                // both are why this is not left alone the way `InitTracker`
+                // leaves it (there the state itself would have been wrong).
+                // The line under the notice stops quoting an older `bd list`
+                // failure while the migration's own words went only to the
+                // console, which is a small copy of the very defect this task
+                // closes. And `Request::Failure` then briefs the agent on the
+                // migration rather than on whatever failed before it, which is
+                // the more informative of the two and the reason the second
+                // button is being pressed at all.
+                //
+                // The next sixty-second sweep may overwrite it with a fresh
+                // `bd list` failure. That is fine: it is then what is true.
+                //
+                // The copy stays where it is — nothing in this app removes a
+                // person's data quietly.
                 Err(e) => {
+                    health.failed(&e);
                     let _ = reply.send(Err(e));
                     return false;
                 }
@@ -545,8 +583,28 @@ async fn handle(
             true
         }
         Request::Failure(reply) => {
-            let (command, stderr) =
-                health.last_command_failure.clone().unwrap_or_else(|| (String::new(), String::new()));
+            let (command, stderr) = health
+                .last_command_failure
+                .clone()
+                .unwrap_or_else(|| (String::new(), String::new()));
+            // What the tracker is saying **now** comes first and comes always,
+            // and the remembered stderr is appended only when it adds something
+            // the health line does not already carry. Two reasons, and the
+            // second is the one that bites. A failure whose health line is a
+            // `TrackerError::Command` already quotes bd's stderr inside it, so
+            // appending it again would hand the agent the same paragraph twice.
+            // And a trouble that never came from a bd command at all — the
+            // watcher dying, a folder with no `.beads` — has no stderr of its
+            // own, and would otherwise be briefed on as an older command's
+            // failure with the actual trouble named nowhere.
+            let now_says = health.current.message.clone().unwrap_or_default();
+            let mut said = now_says.clone();
+            if !stderr.trim().is_empty() && !now_says.contains(stderr.trim()) {
+                if !said.is_empty() {
+                    said.push_str("\n\n");
+                }
+                said.push_str(&stderr);
+            }
             let _ = reply.send(Failure {
                 dir: current
                     .as_ref()
@@ -554,14 +612,7 @@ async fn handle(
                     .unwrap_or_default(),
                 bd_version: EXPECTED_BD_VERSION.to_string(),
                 command,
-                // What bd said, and when bd never got as far as saying
-                // anything — a spawn failure, a folder with no tracker — the
-                // health line is the only account there is of it.
-                stderr: if stderr.is_empty() {
-                    health.current.message.clone().unwrap_or_default()
-                } else {
-                    stderr
-                },
+                stderr: said,
             });
             false
         }

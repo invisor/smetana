@@ -182,6 +182,18 @@ const ERRORS = {
   write: {
     title: 'Could not save to the tracker',
     description: 'Nothing was written. The board shows what the tracker has.'
+  },
+  /* A third caption, because neither of the two above is true of a repair.
+     "Nothing was written" is the claim `write` makes, and this is the one call
+     in the app that irreversibly migrates a database: `bd migrate` failing
+     part-way may well have written, and the app has no way to know. So this
+     says only what is certain — that the copy, if one was taken, is still
+     there, since nothing anywhere removes one — and points at the line under
+     the board, which now carries bd's own words about this very attempt. */
+  repair: {
+    title: 'Could not repair the tracker',
+    description:
+      'What bd said is under the board. Any copy it took is left where it is — nothing removes one.'
   }
 }
 
@@ -265,10 +277,13 @@ export async function initBd() {
    A refusal is reported and then rethrown rather than swallowed, and that is
    the whole difference between this and `resync`. The caller is a button
    somebody pressed: it has to stop reading "Repairing…", and what bd said has
-   to stay on the screen underneath — which it does, because a failed repair
-   leaves health where it was. `report('write', …)` is the right half of the
-   pair: this migrates a database, and calling it a read would file it under
-   "the board may be out of date". */
+   to stay on the screen underneath — which it does, and it is now the
+   migration's own words rather than an older failure's, because the worker puts
+   a failed repair into health before it answers.
+
+   Its own `ERRORS` entry rather than `write`'s: that one promises nothing was
+   written, and this is the one call here that can have written and cannot
+   know. */
 export async function repairTracker() {
   trackerState.switching = true
   try {
@@ -277,7 +292,7 @@ export async function repairTracker() {
     trackerState.lastError = null
     return result
   } catch (err) {
-    report('write', err)
+    report('repair', err)
     throw err
   } finally {
     trackerState.switching = false
@@ -291,9 +306,21 @@ export async function repairTracker() {
    the agent has started, and a briefing pieced together from `health.message`
    and a path taken a moment later could describe two different moments. It is
    also where the bd version comes from — the app has exactly one copy of that
-   number, and it is in Rust. */
-export function trackerFailure() {
-  return invoke('tracker_failure')
+   number, and it is in Rust.
+
+   It reports its own refusal, unlike a bare `invoke`, and that is not
+   symmetry for its own sake. The caller has already moved the person to the
+   agents panel and the terminal by the time this is awaited, so a rejection
+   swallowed here is a button that takes somebody somewhere and then does
+   nothing, with no line anywhere saying why. `read` is the right half of the
+   pair — nothing is written by this call. */
+export async function trackerFailure() {
+  try {
+    return await invoke('tracker_failure')
+  } catch (err) {
+    report('read', err)
+    throw err
+  }
 }
 
 /* Whether these folders have a tracker is a question for the filesystem, not
@@ -307,9 +334,14 @@ export async function probeProjects(paths) {
   }
 }
 
-/* health's message is diagnostics: it speaks bd's language. What goes to the
-   interface is a short text derived from `state` alone, and the detail stays
-   where it is looked for while debugging. */
+/* health's message is diagnostics: it speaks bd's language. Most of what goes
+   to the interface is still a short text derived from `state` alone — the
+   caption and the sentence under it are `HEALTH_NOTICE` in `views/DesktopApp.vue`
+   — but the message itself is no longer kept from the screen. Under `error` the
+   view draws its last non-empty line in mono beneath that sentence (`bdSaid`),
+   and the whole of the failure goes to the agent that the second button on that
+   screen starts. The console line below stays: it is the only trace for the
+   states that draw no detail, and it carries the message unabridged. */
 function setHealth(health) {
   trackerState.health = health
   if (health.state !== 'ok') console.warn('[tracker] health:', health.state, health.message ?? '')

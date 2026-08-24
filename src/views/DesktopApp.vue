@@ -1280,12 +1280,26 @@ const initHere = async () => {
    for the toast, and health is still `error`, so the screen keeps the whole
    notice with both buttons on it. Nothing removes the copy the repair took, on
    either outcome — a migration is the one irreversible thing this app does to
-   somebody's tracker, and the way back has to outlive the attempt. */
+   somebody's tracker, and the way back has to outlive the attempt.
+
+   Success says where the copy is, and that is not a courtesy. The board comes
+   back and takes the whole notice with it, so without this the one durable
+   thing the press left behind — a directory beside `.beads`, holding a copy of
+   a database, that nothing in this app will ever remove — would be something a
+   person next met while wondering what it was. The toast is held until it is
+   dismissed rather than timed out like the file tree's: a path somebody may
+   want to copy is not a fact that has finished being useful after three
+   seconds. */
 const repairing = ref(false)
+const repairNote = ref(null)
 const repairHere = async () => {
   repairing.value = true
   try {
-    await repairTracker()
+    const { backup } = await repairTracker()
+    repairNote.value = {
+      title: 'Tracker repaired',
+      description: `A copy of .beads was taken first, at ${backup}. Nothing removes it.`
+    }
   } catch {
     /* the message already sits in trackerState.lastError */
   } finally {
@@ -1317,7 +1331,13 @@ const askAgentAboutTracker = async () => {
       stderr: failure.stderr
     })
   } catch {
-    // already reported — see newAgent above
+    /* Both awaits report their own refusal before rejecting — `createSession`
+       into `terminalState.lastError`, `trackerFailure` into
+       `trackerState.lastError` — and both draw as a toast. That second half is
+       why the store wraps its `invoke` rather than handing the promise
+       straight over: the tabs have already moved by the time either is
+       awaited, so a silent rejection is a button that takes somebody somewhere
+       else and then does nothing. */
   }
 }
 /* bd gives a new task the one status it has for them — open, which the board
@@ -1826,8 +1846,15 @@ const askAgentToResolve = async (issue) => {
    there is nothing to connect to and creating a task there fails. Each state
    says what it is and what to do about it, and all of them stay quiet — this
    is information, not an emergency, and the loud budget belongs to the card
-   that is waiting on you. The diagnostic text from Rust goes to the console,
-   not here. */
+   that is waiting on you.
+
+   The diagnostic text from Rust used to go to the console and nowhere else,
+   which is the decision smetana-j7o overturned: a person whose board would not
+   come up was told to open developer tools to find out why. It is here now, in
+   `bdSaid` below and the `detail` slot it feeds — the last non-empty line of
+   what bd said, in mono, under the sentence about it. The line is a hint and
+   not the payload: the whole of the failure, the failed command and the bd
+   version with it, is what "Ask an agent" hands over. */
 const HEALTH_NOTICE = {
   'no-project': {
     icon: 'folder-git-2',
@@ -1857,7 +1884,7 @@ const HEALTH_NOTICE = {
        button a small decision: there is no confirmation dialog in front of it,
        and the reason there is none is that nothing is lost either way. */
     description:
-      'Most often the tracker was made by an older bd than this build ships. Repairing runs bd’s own migrations, and takes a copy of .beads beside it first.'
+      'Most often the tracker was made by an older bd than this build ships. Repairing runs bd\'s own migrations, and takes a copy of .beads beside it first.'
   }
 }
 
@@ -3607,8 +3634,19 @@ const toastStackStyle = {
         :description="terminalState.lastError.description"
         @close="terminalState.lastError = null"
       />
-      <!-- The file tree's menu, which is the one thing in this column that has
-           a success to report: a copy leaves nothing on screen behind it. -->
+      <!-- A repair's success, which the board coming back does not say: the
+           copy it took is the one thing left on disk afterwards, and nothing
+           will ever remove it. Held until dismissed, unlike the timed toast
+           below — this one names a path. -->
+      <Toast
+        v-if="repairNote"
+        tone="success"
+        :title="repairNote.title"
+        :description="repairNote.description"
+        @close="repairNote = null"
+      />
+      <!-- The file tree's menu, which is the other thing in this column that
+           has a success to report: a copy leaves nothing on screen behind it. -->
       <Toast
         v-if="fileMenuToast"
         :tone="fileMenuToast.tone"

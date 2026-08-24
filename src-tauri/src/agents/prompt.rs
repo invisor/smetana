@@ -475,13 +475,15 @@ fn commit_language(language: &str) -> String {
 /// person says "commit this", and a setting that missed it would miss the case
 /// it was asked for.
 ///
-/// The other four are out because they do not touch a repository at all:
-/// `NewTask`, `EditTask` and `ResolveTask` write into bd, and what `NewTask`
-/// puts on disk goes under `.smetana/`, which `runs::gitignore` keeps out of
-/// the repository. `Setup` writes one toml file in the same folder.
-/// `RepairTracker` works on `.beads`, which bd owns and commits for itself.
-/// Putting the paragraph in every intent instead would open a filing session
-/// with three paragraphs about language in front of the work.
+/// The rest are out because they do not touch a repository at all — the
+/// `matches!` below is the list, and a number written here would be wrong the
+/// next time somebody adds an intent, which is how this comment came to say
+/// "the other four" over five of them. `NewTask`, `EditTask` and `ResolveTask`
+/// write into bd, and what `NewTask` puts on disk goes under `.smetana/`, which
+/// `runs::gitignore` keeps out of the repository. `Setup` writes one toml file
+/// in the same folder. `RepairTracker` works on `.beads`, which bd owns and
+/// commits for itself. Putting the paragraph in every intent instead would open
+/// a filing session with three paragraphs about language in front of the work.
 fn commits_to_git(intent: &Intent) -> bool {
     matches!(intent, Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::Bare)
 }
@@ -2492,17 +2494,22 @@ mod tests {
 
     #[test]
     fn only_a_session_that_writes_to_bd_is_told_the_task_language() {
-        // Five. Four of them run `bd create` or `bd update` as the work they
-        // were opened for, and `Bare` is in because it is where a person says
-        // "file tasks for this" — the same reason `commits_to_git` has it, and
-        // the case the setting was asked for in the first place. It costs that
-        // one session a third paragraph about language, which is cheaper than
-        // a bare session filing English issues under a Russian setting.
+        // The ones that run `bd create` or `bd update` as the work they were
+        // opened for, plus `Bare` — in because it is where a person says "file
+        // tasks for this", the same reason `commits_to_git` has it, and the
+        // case the setting was asked for in the first place. It costs that one
+        // session a third paragraph about language, which is cheaper than a
+        // bare session filing English issues under a Russian setting. The
+        // `matches!` below is the list; no count is written here, because a
+        // count is wrong the next time an intent is added and nothing fails
+        // when it goes stale.
         //
-        // `Setup` and `ResolveConflict` stay out: one writes a toml file, the
-        // other finishes a merge or a rebase git stopped on, and neither files
-        // an issue — the paragraph there would be prose about something that
-        // will not happen.
+        // `Setup`, `ResolveConflict` and `RepairTracker` stay out: one writes a
+        // toml file, one finishes a merge or a rebase git stopped on, and one
+        // is looking at the tracker's own database — none of them files an
+        // issue, and the last could not if it wanted to, since bd is what is
+        // broken. The paragraph there would be prose about something that will
+        // not happen.
         let intents: Vec<Intent> = every_intent()
             .into_iter()
             .chain([conflict(crate::vcs::model::OpKind::Merge), conflict(crate::vcs::model::OpKind::Rebase)])
@@ -2530,12 +2537,17 @@ mod tests {
 
     #[test]
     fn only_a_session_that_touches_git_is_told_the_commit_language() {
-        // The three that make a commit with their own hands: a run's lead
+        // The ones that make a commit with their own hands: a run's lead
         // commits and merges all night, a conflict session finishes the merge
         // or the rebase git stopped on, and a bare session is where a person
-        // says "commit this". The other four write into bd or into
-        // `.smetana/`, and neither is a commit — telling them how to word one
-        // would be a paragraph about something that will not happen.
+        // says "commit this". The `matches!` below is the list, and no count is
+        // written here — the comment that did say one was already off by one
+        // before `RepairTracker` made it off by two.
+        //
+        // The rest write into bd, or into `.smetana/`, or into `.beads` which
+        // bd commits for itself, and none of those is a commit of this
+        // session's making — telling them how to word one would be a paragraph
+        // about something that will not happen.
         let intents: Vec<Intent> = every_intent()
             .into_iter()
             .chain([conflict(crate::vcs::model::OpKind::Merge), conflict(crate::vcs::model::OpKind::Rebase)])

@@ -174,9 +174,11 @@ impl Bd {
     async fn run(&self, args: Vec<String>) -> Result<String, TrackerError> {
         // Kept before the move into `args()`, because a failure has to be able
         // to say which call it was: the health line a person reads is this
-        // error's `Display`, and "bd exited with code 1" names none of the six
-        // things the worker asks bd for. It is also what the agent briefing
-        // carries as the failed command — see `Failure` in model.rs.
+        // error's `Display`, and "bd exited with code 1" names none of the
+        // subcommands the worker asks bd for — the methods below are the list.
+        // It is also what the agent briefing carries as the failed command; see
+        // `TrackerError::Command` in model.rs for what may and may not go in
+        // this string.
         let command = args.join(" ");
         let output = self
             .app

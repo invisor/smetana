@@ -75,7 +75,8 @@ Under `error` that empty state carries **what bd itself said** — the last non-
 `health.message`, in the `detail` slot `EmptyState` grew for it — and two buttons. "See the console"
 used to stand there instead, which was an instruction for whoever wrote the app addressed to whoever
 uses it, while the app held bd's own words and threw them away. `TrackerError::Command` now carries
-the argument list as well as the code, so that line names which of the six calls failed.
+the argument list as well as the code, so that line names which call failed — the methods on `Bd`
+are the list, and it is not the length it was when this was written.
 
 **Repair tracker** copies `.beads` to `.beads.backup-<UTC>` beside it, runs `bd migrate` and then
 `bd migrate schema`, and reopens the folder — which is what brings the board back with nothing for
@@ -105,11 +106,11 @@ agent cannot ask bd anything afterwards. That is the `ResolveConflict` shape and
 `tracker.js` also owns the two translations: bd's statuses to the design system's (`open → ready`,
 `in_progress → running`, `closed → done`; everything else, including custom statuses, passes through
 to `normalizeStatus` and gets a hash colour with a 2-letter code), and Rust's diagnostics to short
-English messages — the raw text is in the console, and under `error` it is on the screen as well. `projects.js` owns the list of open
-projects, which one is active, and moving between them — the front end holds the list's truth, bd
-holds the board's, so a switch reads the new project's layout with `settings_load` (only the layout:
-the list on disk is already the past by then) before it asks the tracker to point at the new
-directory — plus offering `bd init` in a folder that has none yet.
+English messages — the raw text is in the console, and under `error` it is on the screen as well.
+`projects.js` owns the list of open projects, which one is active, and moving between them — the
+front end holds the list's truth, bd holds the board's, so a switch reads the new project's layout
+with `settings_load` (only the layout: the list on disk is already the past by then) before it asks
+the tracker to point at the new directory — plus offering `bd init` in a folder that has none yet.
 
 ## The project rail
 
