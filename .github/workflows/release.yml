@@ -7,8 +7,8 @@
 # resolves against the latest published release only.
 #
 # Two things this depends on were done by a person, once, and are in place —
-# the "Releases" section of README.md records what was done and where the
-# private half of the key lives:
+# RELEASING.md records what was done and where the private half of the key
+# lives:
 #   * npm run tauri signer generate, with the public key committed as
 #     plugins.updater.pubkey in src-tauri/tauri.conf.json;
 #   * TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD set as
@@ -56,7 +56,7 @@ jobs:
         run: |
           pubkey="$(node -p "require('./src-tauri/tauri.conf.json').plugins.updater.pubkey")"
           if [ -z "$pubkey" ]; then
-            echo "::error::plugins.updater.pubkey in src-tauri/tauri.conf.json is empty — run npm run tauri signer generate, commit the public key, and set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets. See the Releases section of README.md."
+            echo "::error::plugins.updater.pubkey in src-tauri/tauri.conf.json is empty — run npm run tauri signer generate, commit the public key, and set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD as repository secrets. See RELEASING.md."
             exit 1
           fi
 
@@ -153,9 +153,18 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Smetana ${{ github.ref_name }}'
-          # Kept saying the same thing as the "First launch" section of
-          # README.md, which is the other half of this pair. This copy is the one
-          # strangers read, because it is printed on the release page itself.
+          # The Gatekeeper steps are kept saying the same thing as the First
+          # launch section of README.md, inside its Install section, which is the
+          # other half of that pair. This copy is the one strangers read, because
+          # it is printed on the release page itself.
+          #
+          # The last paragraph is no longer part of the pair and is knowingly
+          # stale: the app has had an updater since smetana-oau, and smetana-t3y
+          # dropped the matching sentence from README rather than restate it in a
+          # document that advertises in-place updates a few lines above. Fixing
+          # this copy is smetana-j98's, together with the "no updater" comment on
+          # this same step above. Do not quietly re-sync the two by putting the
+          # claim back into README.
           releaseBody: |
             Download the .dmg below.
 
