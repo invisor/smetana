@@ -54,8 +54,10 @@ where a missing boolean is indistinguishable from `false`.
 Every change is emitted on `updates:state`; `updates_state` answers the same value on demand. **The
 guarantee that a window opened halfway through a download draws the download is the command's, not
 the event's** — so `stores/updates.js` subscribes *before* it reads and lets an event that arrived
-first win over the read's older answer. That ordering looks like something to tidy and is not: no
-test on either side of the boundary states it.
+first win over the read's older answer. That ordering looks like something to tidy and is not, and
+the front end says so: `tests/stores/updates.test.js` pins it as "lets a state that arrived by event
+stand against the first read". Nothing on the Rust side states it and nothing can — `updates_state`
+answers the state it is in and has no idea who subscribed when.
 
 Every transition on `Machine` is guarded by the state it comes from and a transition that does not
 fit is ignored, which is what makes a late callback harmless — progress arriving after its flow has
