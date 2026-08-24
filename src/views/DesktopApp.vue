@@ -81,9 +81,12 @@ import {
   initTracker,
   isLockIssue,
   issueById,
+  lastDiagnosticLine,
+  repairTracker,
   searchSemantic,
   searchState,
   toUiStatus,
+  trackerFailure,
   trackerState,
   updateIssue
 } from '../stores/tracker.js'
@@ -1267,6 +1270,85 @@ const initHere = async () => {
     initing.value = false
   }
 }
+
+/* The deterministic door out of a failing tracker, and the same shape `initing`
+   above has: the empty state stays where it is and the button says what is
+   happening, because the sentence explaining the situation is the thing a
+   skeleton would replace.
+
+   The refusal is swallowed here and not rethrown, exactly as `initActive`
+   swallows `initBd`'s: the store has already put it in `trackerState.lastError`
+   for the toast, and health is still `error`, so the screen keeps the whole
+   notice with both buttons on it. Nothing removes the copy the repair took, on
+   either outcome — a migration is the one irreversible thing this app does to
+   somebody's tracker, and the way back has to outlive the attempt.
+
+   Success says where the copy is, and that is not a courtesy. The board comes
+   back and takes the whole notice with it, so without this the one durable
+   thing the press left behind — a directory beside `.beads`, holding a copy of
+   a database, that nothing in this app will ever remove — would be something a
+   person next met while wondering what it was. The toast is held until it is
+   dismissed rather than timed out like the file tree's: where a copy of one's
+   tracker went is not a fact that has finished being useful after three
+   seconds.
+
+   **The name, not the path.** A `Toast` is 320px with an icon and a dismiss
+   button beside its text, and nothing in it or in `tokens/base.css` sets
+   `overflow-wrap` — so an absolute path is one unbreakable ~70-character word
+   that runs past the toast's own border, and the path is the entire reason
+   this toast exists. `.beads.backup-<UTC>` beside `.beads` locates the copy
+   completely, because it is always beside the `.beads` of the project that was
+   just repaired, and it breaks nowhere it has to. */
+const repairing = ref(false)
+const repairNote = ref(null)
+const repairHere = async () => {
+  repairing.value = true
+  try {
+    const { backup } = await repairTracker()
+    repairNote.value = {
+      title: 'Tracker repaired',
+      description: `A copy of .beads was taken first, as ${basename(backup)} beside it. Nothing removes it.`
+    }
+  } catch {
+    /* the message already sits in trackerState.lastError */
+  } finally {
+    repairing.value = false
+  }
+}
+
+/* The other door, for the failure nothing here can classify — and there is
+   deliberately no classifier: bd offers no structured verdict about its own
+   database, so the app repairs without diagnosing and hands over the whole of
+   the failure when that was not enough.
+
+   The briefing is fetched at the moment of the press rather than assembled from
+   what the store happens to hold, and that is the point: the tracker is what is
+   broken, so the agent cannot ask it anything afterwards, and one answer from
+   the worker cannot describe two different moments the way two reads could. */
+const askAgentAboutTracker = async () => {
+  const path = activePath.value
+  if (!path) return
+  project.sideTab = 'agents'
+  project.activeTab = 'terminal'
+  try {
+    const failure = await trackerFailure()
+    await createSession(path, {
+      kind: 'repairTracker',
+      dir: failure.dir || path,
+      bdVersion: failure.bdVersion,
+      command: failure.command,
+      stderr: failure.stderr
+    })
+  } catch {
+    /* Both awaits report their own refusal before rejecting — `createSession`
+       into `terminalState.lastError`, `trackerFailure` into
+       `trackerState.lastError` — and both draw as a toast. That second half is
+       why the store wraps its `invoke` rather than handing the promise
+       straight over: the tabs have already moved by the time either is
+       awaited, so a silent rejection is a button that takes somebody somewhere
+       else and then does nothing. */
+  }
+}
 /* bd gives a new task the one status it has for them — open, which the board
    calls ready. So that column, and only it, carries the "+": a plus over any
    other column would promise a placement the tracker cannot make. */
@@ -1773,8 +1855,15 @@ const askAgentToResolve = async (issue) => {
    there is nothing to connect to and creating a task there fails. Each state
    says what it is and what to do about it, and all of them stay quiet — this
    is information, not an emergency, and the loud budget belongs to the card
-   that is waiting on you. The diagnostic text from Rust goes to the console,
-   not here. */
+   that is waiting on you.
+
+   The diagnostic text from Rust used to go to the console and nowhere else,
+   which is the decision smetana-j7o overturned: a person whose board would not
+   come up was told to open developer tools to find out why. It is here now, in
+   `bdSaid` below and the `detail` slot it feeds — the last non-empty line of
+   what bd said, in mono, under the sentence about it. The line is a hint and
+   not the payload: the whole of the failure, the failed command and the bd
+   version with it, is what "Ask an agent" hands over. */
 const HEALTH_NOTICE = {
   'no-project': {
     icon: 'folder-git-2',
@@ -1796,10 +1885,23 @@ const HEALTH_NOTICE = {
   error: {
     icon: 'triangle-alert',
     title: 'bd is failing',
+    /* Names the ordinary cause and what the button will do before it does
+       anything else. "See the console" used to stand here, which was an
+       instruction for whoever wrote the app rather than for whoever uses it —
+       and the diagnostic it pointed at is now on the screen, in the `detail`
+       slot below. The copy is mentioned because it is what makes pressing the
+       button a small decision: there is no confirmation dialog in front of it,
+       and the reason there is none is that nothing is lost either way. */
     description:
-      'The tracker command keeps returning errors — see the console for what it said. The board recovers on its own once it succeeds.'
+      'Most often the tracker was made by an older bd than this build ships. Repairing runs bd\'s own migrations, and takes a copy of .beads beside it first.'
   }
 }
+
+/* What bd itself said, cut to the one line worth putting on the screen. The
+   rule is the store's (`lastDiagnosticLine`) because the toast a failed repair
+   raises wants the same cut, and a copy of it here would be a rule living in
+   the one kind of file no test in this repository can reach. */
+const bdSaid = computed(() => lastDiagnosticLine(trackerState.health.message ?? ''))
 
 /* bd owns which columns exist; the settings own only their sequence, and the
    two meet in orderColumns. The stored order is per project, because the set of
@@ -2452,6 +2554,11 @@ watch(activePath, (path) => {
   loadHead(path)
   loadConfig(path)
   loadRun(path)
+  /* Held until dismissed is right for a note naming a folder, and it is what
+     makes this line necessary: the folder it names is beside one project's
+     `.beads`, so left standing it would sit over the next project telling
+     somebody about a copy that is not in it. */
+  repairNote.value = null
 })
 
 /* The other half of the background fetch, and it is keyed on the repository the
@@ -3365,10 +3472,19 @@ const toastStackStyle = {
              and the busy button says it better than six grey lines. Every
              other switch shows the skeleton — there the board is what is
              being replaced. -->
-        <div v-else-if="trackerState.switching && !initing" :style="{ padding: 'var(--panel-pad)' }">
+        <div
+          v-else-if="trackerState.switching && !initing && !repairing"
+          :style="{ padding: 'var(--panel-pad)' }"
+        >
           <Skeleton :lines="6" :height="12" />
         </div>
         <EmptyState v-else-if="healthNotice" v-bind="healthNotice">
+          <!-- What bd said, under the sentence about it: the diagnostic used to
+               go to the console alone, which asked a person to open developer
+               tools to find out why their board was empty. -->
+          <template v-if="trackerState.health.state === 'error' && bdSaid" #detail>
+            {{ bdSaid }}
+          </template>
           <template v-if="trackerState.health.state === 'not-a-beads-repo'" #action>
             <Button variant="primary" size="sm" :disabled="initing" @click="initHere">
               {{ initing ? 'Initializing…' : 'Initialize bd' }}
@@ -3376,6 +3492,22 @@ const toastStackStyle = {
           </template>
           <template v-else-if="trackerState.health.state === 'no-project'" #action>
             <Button variant="primary" size="sm" @click="onAddProject">Add project…</Button>
+          </template>
+          <!-- The deterministic door and the open-ended one, in that order and
+               in that weighting: repairing costs four seconds and fixes the
+               failure this screen was built for, while an agent costs a run and
+               tokens, so it is the second button rather than the only one. It
+               is offered on any failure, since there is nothing here that
+               classifies one. -->
+          <template v-else-if="trackerState.health.state === 'error'" #action>
+            <div :style="{ display: 'flex', gap: 'var(--space-3)' }">
+              <Button variant="primary" size="sm" :disabled="repairing" @click="repairHere">
+                {{ repairing ? 'Repairing…' : 'Repair tracker' }}
+              </Button>
+              <Button variant="ghost" size="sm" :disabled="repairing" @click="askAgentAboutTracker">
+                Ask an agent
+              </Button>
+            </div>
           </template>
         </EmptyState>
         <KanbanBoard
@@ -3510,8 +3642,19 @@ const toastStackStyle = {
         :description="terminalState.lastError.description"
         @close="terminalState.lastError = null"
       />
-      <!-- The file tree's menu, which is the one thing in this column that has
-           a success to report: a copy leaves nothing on screen behind it. -->
+      <!-- A repair's success, which the board coming back does not say: the
+           copy it took is the one thing left on disk afterwards, and nothing
+           will ever remove it. Held until dismissed, unlike the timed toast
+           below — this one names a path. -->
+      <Toast
+        v-if="repairNote"
+        tone="success"
+        :title="repairNote.title"
+        :description="repairNote.description"
+        @close="repairNote = null"
+      />
+      <!-- The file tree's menu, which is the other thing in this column that
+           has a success to report: a copy leaves nothing on screen behind it. -->
       <Toast
         v-if="fileMenuToast"
         :tone="fileMenuToast.tone"

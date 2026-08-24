@@ -141,6 +141,8 @@ pub fn run() {
       tracker::commands::tracker_delete,
       tracker::commands::tracker_set_project,
       tracker::commands::tracker_init,
+      tracker::commands::tracker_repair,
+      tracker::commands::tracker_failure,
       tracker::commands::tracker_probe,
       tracker::commands::tracker_search_semantic,
       tracker::commands::project_root,
