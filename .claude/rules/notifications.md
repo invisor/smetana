@@ -139,7 +139,7 @@ looking at the screen, and which project they happened to leave open when they w
 nothing about which ending they want to be woken for — two projects running overnight is the case
 both sounds exist for. It fires once per token, since the summary arrives seconds after the ending
 and is another event about the same stopped run, and **one set of tokens covers every project**,
-because a token is issued once per app process and is never two runs' whichever projects they are in.
+because a token is issued once per app process and is unique across projects as well as within one.
 What stays *below* that project check is the visual half — the list, the bell cards `syncRunCards`
 derives from it, and the report tab — since each of those is a statement about what this window is
 looking at, and a card for another project's run would be a button onto a document `showReport`

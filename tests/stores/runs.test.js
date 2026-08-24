@@ -464,6 +464,9 @@ describe('the sound a finished run makes', () => {
     await nextTick()
 
     expect(chime).toHaveBeenCalledWith('sound-4', { unlessFocused: true })
+    // Once, and the count is part of the rule rather than of the summary test
+    // below: one event about one ending is one sound, in any project.
+    expect(chime).toHaveBeenCalledTimes(1)
     expect(stores.runs.runsState.runs).toEqual([])
     expect(stores.notifications.notificationsState.items).toEqual([])
   })
