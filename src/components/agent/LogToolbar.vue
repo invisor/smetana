@@ -55,6 +55,11 @@ const dotStyle = computed(() => ({
       <span :style="dotStyle" />
       {{ label }}
     </span>
+    <!-- The search field is capped rather than fixed: `max-width` and not
+         `width: 180px`. At a fixed width it cannot give anything back, and the
+         follow-tail button on the right is clipped off the end of the bar
+         inside the 340px inspector panel — the narrowest place this toolbar is
+         drawn. -->
     <Input
       size="sm"
       mono

@@ -74,10 +74,13 @@ refusing from it costs nothing and buys "only one flow is ever in flight".
 
 `FIRST_CHECK_DELAY` is a minute, `CHECK_INTERVAL` a day, `PROGRESS_TICK` 250ms — an event per
 downloaded chunk would be a progress bar drawn more often than the screen refreshes, and the count
-stays exact whatever the telling. The README's `## Releases` section and `updateLine`'s idle sentence
-in `components/settings/update.js` both quote that schedule in prose, and
-`tests/components/settings/update.test.js` pins the sentence, so a changed interval fails a
-front-end test that names no constant.
+stays exact whatever the telling. `updateLine`'s idle sentence in `components/settings/update.js`
+quotes that schedule in prose, and `tests/components/settings/update.test.js` pins the sentence, so a
+changed interval fails a front-end test that names no constant. README's `## Releases` section used
+to quote it too and no longer exists: smetana-t3y made README a product document and moved the
+release mechanics to `RELEASING.md`, which describes what a release publishes and says nothing about
+when the app checks — so this file and that sentence are now the two places the schedule is written
+in prose.
 
 ## Downloading is automatic; installing never is
 
@@ -167,7 +170,7 @@ signing below. The `check` job in the workflow refuses to build while that field
 publish a release nobody can install as an update.
 
 The private half and its password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. README's `## Releases` section is where the rest is written
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. `RELEASING.md` is where the rest is written
 down and the only place it is: the two live in the repository owner's password manager, neither has
 ever been in this tree, and neither belongs in a run log. Nothing in the code can verify that, and
 there is nowhere else in the tree it is recorded.
@@ -209,8 +212,8 @@ The bundle is ad-hoc signed, not notarized, and that is a choice rather than an 
 costs is the first launch: macOS will not open a freshly downloaded copy on a double-click, so it is
 right-click → Open on macOS 14 and earlier, and on macOS 15 Sequoia on, where that dialog no longer
 carries an Open button, System Settings → Privacy & Security → Open Anyway with Touch ID or a
-password. README's `## First launch` section and the workflow's `releaseBody` are the two copies of
-that, kept saying the same thing, and the second is the one strangers read.
+password. README's First launch section, inside `## Install`, and the workflow's `releaseBody` are
+the two copies of that, kept saying the same thing, and the second is the one strangers read.
 
 What makes the bundle ad-hoc signed is one line — `bundle.macOS.signingIdentity` set to `"-"` in
 `src-tauri/tauri.conf.json` — and not the absence of a certificate, which is the trap: without that
@@ -229,14 +232,15 @@ version: that step belongs to a copy somebody downloaded in a browser and opened
 update the plugin installs replaces the bundle in place with no such download and no such open.
 **That last sentence is verified nowhere in the tree** — no code and no test asserts it. It is the
 second thing in this file that only prose says, and the sharper of the two: the key custody above is
-at least written down in README, while this is written down nowhere at all.
+at least written down in `RELEASING.md`, while this is written down nowhere at all.
 
-Three copies of the claim it contradicts are still standing, all written before there was an updater:
-README's `## First launch` ("there is no in-app updater"), the `releaseBody` in
-`.github/workflows/release.yml`, and the comment on that file's build step ("Nothing verifies it yet
-— the app has no updater"). README's `## Releases` is **not** one of them and is stale differently:
-it describes the updater, its schedule and the run gate correctly, and then says the part drawn on
-screen is missing and the About rows are a separate task, which smetana-oau made false. All four are
+Two copies of the claim it contradicts are still standing, both written before there was an updater:
+the `releaseBody` in `.github/workflows/release.yml`, and the comment on that file's build step
+("Nothing verifies it yet — the app has no updater"). There were four. README's `## First launch`
+was the third and its "there is no in-app updater" sentence went when smetana-t3y rewrote that
+document, which is also what took the fourth: `## Releases`, stale differently — it described the
+updater, its schedule and the run gate correctly and then said the part drawn on screen was missing
+and the About rows a separate task, which smetana-oau had made false. Both survivors are
 smetana-j98's to settle, not this file's.
 
 ## The front end, in one paragraph
