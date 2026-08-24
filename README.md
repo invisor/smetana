@@ -41,8 +41,9 @@ run state and reports in `.smetana/`. There is no server, no account and no data
 - **Two harnesses: Claude Code and Codex.** Which one runs is a setting; everything the app asks for
   is written once and translated per harness.
 - **Terminal tabs on real PTYs**, one per session, with the app reading the screen well enough to
-  tell that a session is waiting for a human — and saying so, on the tab, in the project rail and in
-  the bell, rather than leaving you to check.
+  tell that a session is waiting for a human — and saying so where you will see it: the agent's row
+  in the Agents list, the project's tile in the rail, the counter in the scope bar, and a sound,
+  rather than leaving you to go and check every tab.
 - **The project's file tree, and a CodeMirror editor** with tabs, for looking at what came out.
 - **A Git panel**: the working tree's status, merge, rebase and conflict resolution.
 - **A report for every run**: a self-contained HTML document under `.smetana/reports/`, saying what
