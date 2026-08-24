@@ -81,13 +81,14 @@ are the list, and it is not the length it was when this was written.
 **Repair tracker** copies `.beads` to `.beads.backup-<UTC>` beside it, runs `bd migrate` and then
 `bd migrate schema`, and reopens the folder — which is what brings the board back with nothing for
 the front end to ask for. Failing to take the copy **stops the repair**: the copy is the entire
-reason there is no confirmation dialog in front of the button, and `TrackerError::Backup` says in its
-own sentence that nothing was migrated, and that refusal goes through health like the migration's
-own, so the line under the board says why rather than quoting the last `bd list`. Nothing ever
-removes a copy — a migration is the one irreversible thing this app does to somebody's tracker. The
-copy earns its name by a rename from `<name>.partial`, and symbolic links inside `.beads` are
-followed with a canonicalised visited set rather than skipped: a copy silently missing a relocated
-store, under a toast saying it was taken, is the failure this whole screen exists to stop.
+reason there is no confirmation dialog in front of the button, and `TrackerError::Backup` says in
+its own sentence that nothing was migrated, and that refusal goes through health like the
+migration's own, so the line under the board says why rather than quoting the last `bd list`.
+Nothing ever removes a copy — a migration is the one irreversible thing this app does to somebody's
+tracker. The copy earns its name by a rename from `<name>.partial`, and symbolic links inside
+`.beads` are followed, bounded by a canonicalised ancestor chain rather than skipped: a copy
+silently missing whatever a person parked behind a link, under a toast naming the backup, is the
+failure this whole screen exists to stop.
 
 It is offered for **any** tracker failure, and that is a decision rather than laziness. bd offers no
 structured verdict about its own database: `bd doctor` answers "not yet supported in embedded mode",
