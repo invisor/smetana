@@ -23,14 +23,19 @@ import { settleStores } from './stores.js'
 
    In particular, this hook runs **last**, not first. A setup file registers its
    afterEach before a test file's, and vitest's default `sequence.hooks` is
-   `stack` (`vitest/dist/chunks/coverage.*.js`), under which the runner reverses
-   the after hooks and takes the innermost suite first
+   `stack` (grep `sequence.hooks ??=` under `vitest/dist`), under which the
+   runner reverses the after hooks and takes the innermost suite first
    (`@vitest/runner/dist/chunk-artifact.js`). Run in this tree, a describe-level
    afterEach went first, a test file's top-level afterEach second, and this one
-   third. So the guarantee the other way round is **not** available: a test file
-   cannot arrange its own afterEach to run after settleStores, and one that
-   reads `ipc.calls('settings_save')` will see the write settleStores makes.
-   Wanting that would mean moving this hook, not reasoning about it. */
+   third. So a test file cannot arrange its own afterEach to run after
+   settleStores. The consolation is that the write settleStores makes is
+   invisible to a test file's own hooks: they have all run by the time it
+   happens — probed here on a test left owing a write, a describe-level
+   afterEach and a top-level one each read a recorder of length 0, and that same
+   recorder, held by reference, stood at 1 in the test after. Asserting on
+   `ipc.calls` from an afterEach is safe for exactly that reason. Wanting a hook
+   that runs after settleStores would mean moving this one, not reasoning about
+   it. */
 afterEach(async () => {
   vi.useRealTimers()
   await settleStores()
