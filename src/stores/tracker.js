@@ -254,6 +254,48 @@ export async function initBd() {
   }
 }
 
+/* Take a copy of `.beads` and run bd's own migrations over the original.
+
+   The board comes back with the answer and is rolled out here, exactly as
+   `initBd` above rolls out what `tracker_init` returns: the worker reopens the
+   folder itself once the migrations pass, so there is nothing left for the
+   front end to ask for and a resync from here would only be a second full
+   sweep of the same directory.
+
+   A refusal is reported and then rethrown rather than swallowed, and that is
+   the whole difference between this and `resync`. The caller is a button
+   somebody pressed: it has to stop reading "Repairing…", and what bd said has
+   to stay on the screen underneath — which it does, because a failed repair
+   leaves health where it was. `report('write', …)` is the right half of the
+   pair: this migrates a database, and calling it a read would file it under
+   "the board may be out of date". */
+export async function repairTracker() {
+  trackerState.switching = true
+  try {
+    const result = await invoke('tracker_repair')
+    applySnapshot(result.snapshot)
+    trackerState.lastError = null
+    return result
+  } catch (err) {
+    report('write', err)
+    throw err
+  } finally {
+    trackerState.switching = false
+  }
+}
+
+/* The whole of the last tracker failure, for the session started to look at it.
+
+   One call rather than four reads of things the store already half knows, and
+   deliberately: bd is what is broken here, so nothing can be asked again once
+   the agent has started, and a briefing pieced together from `health.message`
+   and a path taken a moment later could describe two different moments. It is
+   also where the bd version comes from — the app has exactly one copy of that
+   number, and it is in Rust. */
+export function trackerFailure() {
+  return invoke('tracker_failure')
+}
+
 /* Whether these folders have a tracker is a question for the filesystem, not
    for bd. */
 export async function probeProjects(paths) {

@@ -8,14 +8,21 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::project;
 
+use super::backup;
 use super::bd::Bd;
-use super::model::{Delta, Health, HealthState, Issue, IssuePatch, Snapshot, TrackerError};
+use super::model::{
+    Delta, Failure, Health, HealthState, Issue, IssuePatch, Repair, Snapshot, TrackerError,
+};
 use super::store::Store;
 use super::watcher::{self, WatchEvent};
 
 /// The expected bd version. Kept in step with BD_VERSION in
 /// scripts/fetch-bd.mjs — a mismatch shows up in health.
-const EXPECTED_BD_VERSION: &str = "1.1.2";
+///
+/// `pub` because the briefing a repair session is started with names it, and
+/// naming it from one constant is what stops the agent being told about a bd
+/// this build does not ship.
+pub const EXPECTED_BD_VERSION: &str = "1.1.2";
 /// Writes arrive in bursts; we wait for the stream to settle.
 const DEBOUNCE: Duration = Duration::from_millis(250);
 /// The safety full sweep: it catches deletions and missed events.
@@ -44,6 +51,14 @@ pub enum Request {
     Current(oneshot::Sender<(Option<PathBuf>, Health, Snapshot)>),
     SetProject(Option<PathBuf>, oneshot::Sender<Snapshot>),
     InitTracker(oneshot::Sender<Result<Snapshot, TrackerError>>),
+    /// Take a copy of `.beads` and run bd's own two migrations over it, then
+    /// reopen the folder. Offered for **any** tracker failure rather than for a
+    /// diagnosis, because there is no diagnosis to be had — `Bd::repair`
+    /// records the measurements.
+    Repair(oneshot::Sender<Result<Repair, TrackerError>>),
+    /// The whole of the last tracker failure, for the agent that is being asked
+    /// to look at it. A read: nothing is called and nothing is written.
+    Failure(oneshot::Sender<Failure>),
     Resync(oneshot::Sender<Result<Snapshot, TrackerError>>),
     Update(String, IssuePatch, oneshot::Sender<Result<Issue, TrackerError>>),
     Close(String, Option<String>, oneshot::Sender<Result<Issue, TrackerError>>),
@@ -85,11 +100,28 @@ struct HealthReporter {
     current: Health,
     bd: Option<Health>,
     project: Option<Health>,
+    /// The last bd call that came back non-zero, as its argument list and its
+    /// stderr. Kept beside health rather than folded into it, because it is
+    /// remembered for a different reader: health is one sentence for the
+    /// screen, and this is the briefing an agent is handed when the tracker
+    /// itself is what is broken and cannot be asked again.
+    ///
+    /// It survives a recovery on purpose. A tracker that failed a minute ago
+    /// and is failing again now usually failed the same way both times, and a
+    /// field cleared on every successful tick would be empty exactly when
+    /// somebody presses the button.
+    last_command_failure: Option<(String, String)>,
 }
 
 impl HealthReporter {
     fn new(app: AppHandle) -> Self {
-        Self { app, current: Health { state: HealthState::Ok, message: None }, bd: None, project: None }
+        Self {
+            app,
+            current: Health { state: HealthState::Ok, message: None },
+            bd: None,
+            project: None,
+            last_command_failure: None,
+        }
     }
 
     fn current(&self) -> Health {
@@ -119,6 +151,9 @@ impl HealthReporter {
 
     /// A one-off failure of a bd call.
     fn failed(&mut self, e: &TrackerError) {
+        if let TrackerError::Command { command, stderr, .. } = e {
+            self.last_command_failure = Some((command.clone(), stderr.clone()));
+        }
         self.set(Health { state: HealthState::Error, message: Some(e.to_string()) });
     }
 
@@ -447,6 +482,88 @@ async fn handle(
                     false
                 }
             }
+        }
+        Request::Repair(reply) => {
+            let Some((dir, bd)) = current.as_ref().map(|p| (p.dir.clone(), p.bd.clone())) else {
+                let _ = reply.send(Err(TrackerError::NoTracker("no project selected".into())));
+                return false;
+            };
+            // The copy first, and a failure to take it ends the whole thing
+            // here: it is the only reason the button in front of this has no
+            // confirmation dialog, so a repair that could not take one has no
+            // right to migrate. `TrackerError::Backup` says as much in its own
+            // sentence. A folder with no `.beads` is refused by this very call
+            // rather than by a check above it — an empty copy would look like
+            // a taken one.
+            //
+            // On a blocking thread, because copying a database directory is
+            // however much of somebody's disk it is, and the worker is the one
+            // task answering every other command meanwhile.
+            let taken = {
+                let dir = dir.clone();
+                tokio::task::spawn_blocking(move || backup::copy_beads(&dir, chrono::Utc::now()))
+                    .await
+            };
+            let backup = match taken {
+                Ok(Ok(path)) => path,
+                Ok(Err(e)) => {
+                    let _ = reply.send(Err(e));
+                    return false;
+                }
+                Err(e) => {
+                    let _ = reply
+                        .send(Err(TrackerError::Backup(format!("the copy did not finish: {e}"))));
+                    return false;
+                }
+            };
+
+            let output = match bd.repair().await {
+                Ok(output) => output,
+                // Health is deliberately left alone, the same way InitTracker
+                // leaves it: bd is still failing, that is still what the board's
+                // place should say, and this command's own answer is what tells
+                // the story of the migration. The copy stays where it is —
+                // nothing in this app removes a person's data quietly.
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return false;
+                }
+            };
+
+            // Reopening is what makes the board come back without the front end
+            // asking for anything: a full sweep runs inside `open`, and health
+            // clears itself the moment bd reads the tracker again. The same
+            // drop-then-open order SetProject uses, for the same reason — the
+            // old watcher must not outlive the folder's state.
+            *current = None;
+            *current = open(app, Some(dir), store, health, tx_tick).await;
+            let _ = reply.send(Ok(Repair {
+                backup: backup.to_string_lossy().into_owned(),
+                output,
+                snapshot: store.snapshot(),
+            }));
+            true
+        }
+        Request::Failure(reply) => {
+            let (command, stderr) =
+                health.last_command_failure.clone().unwrap_or_else(|| (String::new(), String::new()));
+            let _ = reply.send(Failure {
+                dir: current
+                    .as_ref()
+                    .map(|p| p.dir.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                bd_version: EXPECTED_BD_VERSION.to_string(),
+                command,
+                // What bd said, and when bd never got as far as saying
+                // anything — a spawn failure, a folder with no tracker — the
+                // health line is the only account there is of it.
+                stderr: if stderr.is_empty() {
+                    health.current.message.clone().unwrap_or_default()
+                } else {
+                    stderr
+                },
+            });
+            false
         }
         Request::Resync(reply) => {
             let result = match tracked(current) {

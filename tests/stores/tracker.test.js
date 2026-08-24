@@ -639,6 +639,69 @@ describe('health and probing folders', () => {
   })
 })
 
+describe('repairing a failing tracker', () => {
+  /* The board is what a repair is for, so the snapshot that comes back with it
+     is applied here rather than left to a resync the front end would have to
+     ask for. The worker has already reopened the folder by the time this
+     answers; a second sweep from this side would be the same directory read
+     twice, and the board would sit empty for the length of it. */
+  it('a repair that worked puts the board it came back with on the screen', async () => {
+    await start(snapshot({ generation: 3, issues: [issue({ id: 'bd-1' })] }))
+    ipc.on('tracker_repair', () => ({
+      backup: '/p/.beads.backup-20260825T123000Z',
+      output: '✓ Version matches\n✓ Schema already at v53',
+      snapshot: snapshot({ generation: 9, issues: [issue({ id: 'bd-2' })] })
+    }))
+
+    const result = await tracker.repairTracker()
+
+    expect(result.backup).toBe('/p/.beads.backup-20260825T123000Z')
+    expect(tracker.trackerState.issues.has('bd-2')).toBe(true)
+    // In full, the way a resync is: the issues bd could not read before are
+    // not still on the board beside the ones it can read now.
+    expect(tracker.trackerState.issues.has('bd-1')).toBe(false)
+    expect(tracker.trackerState.generation).toBe(9)
+    expect(tracker.trackerState.switching).toBe(false)
+    expect(tracker.trackerState.lastError).toBe(null)
+  })
+
+  /* The one write in this store whose refusal has to reach its caller: the
+     caller is a button reading "Repairing…", and a rejection swallowed here
+     would leave it saying so for the rest of the session. */
+  it('a repair that failed reaches the caller rather than being swallowed', async () => {
+    await start(snapshot({ generation: 3, issues: [issue({ id: 'bd-1' })] }))
+    ipc.fail('tracker_repair', new Error('bd migrate exited with code 1: cannot open store'))
+
+    await expect(tracker.repairTracker()).rejects.toThrow('cannot open store')
+
+    // And the board is left exactly as it was, with the failure remembered.
+    expect(tracker.trackerState.issues.has('bd-1')).toBe(true)
+    expect(tracker.trackerState.generation).toBe(3)
+    expect(tracker.trackerState.switching).toBe(false)
+    expect(tracker.trackerState.lastError.title).toBe('Could not save to the tracker')
+  })
+
+  /* One call and not four: the tracker is what is broken, so nothing can be
+     asked again once the agent has started, and two reads could describe two
+     different moments. */
+  it('the failure handed to an agent is one answer carrying all four facts', async () => {
+    await start()
+    ipc.on('tracker_failure', () => ({
+      dir: '/p',
+      bdVersion: '1.1.2',
+      command: 'list --all -n 0 --json',
+      stderr: 'failed to open store'
+    }))
+
+    await expect(tracker.trackerFailure()).resolves.toEqual({
+      dir: '/p',
+      bdVersion: '1.1.2',
+      command: 'list --all -n 0 --json',
+      stderr: 'failed to open store'
+    })
+  })
+})
+
 describe('the semantic tier', () => {
   it('hands the agent a query and keeps the ids it answered with', async () => {
     ipc.on('tracker_search_semantic', () => ['smetana-a1a', 'smetana-b2b'])

@@ -15,7 +15,8 @@ runs is the `agent` field in `settings.json`.
 The split that makes this a module rather than a `match` in the terminal worker: **what the app wants
 done is the same for every agent, and how it reaches one is not.** An `Intent` — `Bare` from the
 "+ New agent" row, `NewTask` from the new-task dialog, `EditTask` from a card's "Edit", `ResolveTask`
-from a parked card's "Answer questions", `Setup` from the dialog a person gets when they add a
+from a parked card's "Answer questions", `RepairTracker` from the second button under a failing
+board, `Setup` from the dialog a person gets when they add a
 project, and `Run` for one batch of a run — is where the product decision lives, written once. `Run`
 is the only one no person sends: `runs::service` builds it, carrying the whole of what the run was
 asked to do rather than a reference to it, because a session outlives a settings change and a batch
@@ -155,8 +156,9 @@ field has no business moving a project's conventions into English. `oneshot::com
 names the six, and the difference is who writes the message — there the app composes the whole of
 it, so the form is its own to choose. `Bare` is in for the reason the conversation sentence is in
 every intent — the ordinary session is exactly where somebody says "commit this" — while `NewTask`,
-`EditTask`, `ResolveTask` and `Setup` are out because they commit nothing: what `NewTask` writes
-goes under `.smetana/`, which is not in the repository at all. The task language goes where the
+`EditTask`, `ResolveTask`, `Setup` and `RepairTracker` are out because they commit nothing: what
+`NewTask` writes goes under `.smetana/`, which is not in the repository at all, and a repair session
+works on `.beads`, which bd commits for itself. The task language goes where the
 agent may write into bd — `Bare`, `NewTask`, `EditTask`, `ResolveTask` and `Run`. `Bare` is in for
 the same reason it is in the commit half: "+ New agent" is exactly where somebody says "file tasks
 for this", and a bare session left out of it filed English issues under a Russian setting. The price
@@ -164,8 +166,9 @@ is that session opening on three language paragraphs before any work, taken know
 the shape `Run` has always had, since a lead is the other intent in which the conversation, the
 issues and the commits are all three true at once, so the cost is one already in the tree rather
 than a new one. `Run` carries a fourth on top of those, the report language below, and `Bare` does
-not: a bare session writes no batch file. `Setup` and `ResolveConflict`
-stay out because neither files an issue. The paragraph carries a caveat that is not optional,
+not: a bare session writes no batch file. `Setup`, `ResolveConflict` and `RepairTracker`
+stay out because none of the three files an issue — and the last of them could not if it wanted to,
+since bd is what is broken. The paragraph carries a caveat that is not optional,
 because what the setting must never move is a string some other piece of software matches on. The
 `##` section headings, since `bd create --validate` matches the wording of a heading and nothing
 else, so a translated `## Acceptance Criteria` is bd refusing the issue. And the markers a note

@@ -81,9 +81,11 @@ import {
   initTracker,
   isLockIssue,
   issueById,
+  repairTracker,
   searchSemantic,
   searchState,
   toUiStatus,
+  trackerFailure,
   trackerState,
   updateIssue
 } from '../stores/tracker.js'
@@ -1267,6 +1269,57 @@ const initHere = async () => {
     initing.value = false
   }
 }
+
+/* The deterministic door out of a failing tracker, and the same shape `initing`
+   above has: the empty state stays where it is and the button says what is
+   happening, because the sentence explaining the situation is the thing a
+   skeleton would replace.
+
+   The refusal is swallowed here and not rethrown, exactly as `initActive`
+   swallows `initBd`'s: the store has already put it in `trackerState.lastError`
+   for the toast, and health is still `error`, so the screen keeps the whole
+   notice with both buttons on it. Nothing removes the copy the repair took, on
+   either outcome — a migration is the one irreversible thing this app does to
+   somebody's tracker, and the way back has to outlive the attempt. */
+const repairing = ref(false)
+const repairHere = async () => {
+  repairing.value = true
+  try {
+    await repairTracker()
+  } catch {
+    /* the message already sits in trackerState.lastError */
+  } finally {
+    repairing.value = false
+  }
+}
+
+/* The other door, for the failure nothing here can classify — and there is
+   deliberately no classifier: bd offers no structured verdict about its own
+   database, so the app repairs without diagnosing and hands over the whole of
+   the failure when that was not enough.
+
+   The briefing is fetched at the moment of the press rather than assembled from
+   what the store happens to hold, and that is the point: the tracker is what is
+   broken, so the agent cannot ask it anything afterwards, and one answer from
+   the worker cannot describe two different moments the way two reads could. */
+const askAgentAboutTracker = async () => {
+  const path = activePath.value
+  if (!path) return
+  project.sideTab = 'agents'
+  project.activeTab = 'terminal'
+  try {
+    const failure = await trackerFailure()
+    await createSession(path, {
+      kind: 'repairTracker',
+      dir: failure.dir || path,
+      bdVersion: failure.bdVersion,
+      command: failure.command,
+      stderr: failure.stderr
+    })
+  } catch {
+    // already reported — see newAgent above
+  }
+}
 /* bd gives a new task the one status it has for them — open, which the board
    calls ready. So that column, and only it, carries the "+": a plus over any
    other column would promise a placement the tracker cannot make. */
@@ -1796,10 +1849,29 @@ const HEALTH_NOTICE = {
   error: {
     icon: 'triangle-alert',
     title: 'bd is failing',
+    /* Names the ordinary cause and what the button will do before it does
+       anything else. "See the console" used to stand here, which was an
+       instruction for whoever wrote the app rather than for whoever uses it —
+       and the diagnostic it pointed at is now on the screen, in the `detail`
+       slot below. The copy is mentioned because it is what makes pressing the
+       button a small decision: there is no confirmation dialog in front of it,
+       and the reason there is none is that nothing is lost either way. */
     description:
-      'The tracker command keeps returning errors — see the console for what it said. The board recovers on its own once it succeeds.'
+      'Most often the tracker was made by an older bd than this build ships. Repairing runs bd’s own migrations, and takes a copy of .beads beside it first.'
   }
 }
+
+/* What bd itself said, cut to the one line worth putting on the screen.
+
+   The last non-empty line rather than the first: a diagnostic ends with what
+   went wrong and opens with where it was noticed, and it is the end a person
+   can act on. The rest is not lost — the whole of the failure is what the
+   second button hands to an agent, which is the other half of this screen. */
+const bdSaid = computed(() => {
+  const message = trackerState.health.message ?? ''
+  const lines = message.split('\n').map((line) => line.trim()).filter(Boolean)
+  return lines[lines.length - 1] ?? ''
+})
 
 /* bd owns which columns exist; the settings own only their sequence, and the
    two meet in orderColumns. The stored order is per project, because the set of
@@ -3365,10 +3437,19 @@ const toastStackStyle = {
              and the busy button says it better than six grey lines. Every
              other switch shows the skeleton — there the board is what is
              being replaced. -->
-        <div v-else-if="trackerState.switching && !initing" :style="{ padding: 'var(--panel-pad)' }">
+        <div
+          v-else-if="trackerState.switching && !initing && !repairing"
+          :style="{ padding: 'var(--panel-pad)' }"
+        >
           <Skeleton :lines="6" :height="12" />
         </div>
         <EmptyState v-else-if="healthNotice" v-bind="healthNotice">
+          <!-- What bd said, under the sentence about it: the diagnostic used to
+               go to the console alone, which asked a person to open developer
+               tools to find out why their board was empty. -->
+          <template v-if="trackerState.health.state === 'error' && bdSaid" #detail>
+            {{ bdSaid }}
+          </template>
           <template v-if="trackerState.health.state === 'not-a-beads-repo'" #action>
             <Button variant="primary" size="sm" :disabled="initing" @click="initHere">
               {{ initing ? 'Initializing…' : 'Initialize bd' }}
@@ -3376,6 +3457,22 @@ const toastStackStyle = {
           </template>
           <template v-else-if="trackerState.health.state === 'no-project'" #action>
             <Button variant="primary" size="sm" @click="onAddProject">Add project…</Button>
+          </template>
+          <!-- The deterministic door and the open-ended one, in that order and
+               in that weighting: repairing costs four seconds and fixes the
+               failure this screen was built for, while an agent costs a run and
+               tokens, so it is the second button rather than the only one. It
+               is offered on any failure, since there is nothing here that
+               classifies one. -->
+          <template v-else-if="trackerState.health.state === 'error'" #action>
+            <div :style="{ display: 'flex', gap: 'var(--space-3)' }">
+              <Button variant="primary" size="sm" :disabled="repairing" @click="repairHere">
+                {{ repairing ? 'Repairing…' : 'Repair tracker' }}
+              </Button>
+              <Button variant="ghost" size="sm" :disabled="repairing" @click="askAgentAboutTracker">
+                Ask an agent
+              </Button>
+            </div>
           </template>
         </EmptyState>
         <KanbanBoard

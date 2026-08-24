@@ -20,8 +20,9 @@ one call costs about two seconds. Hence the shape of `src-tauri/src/tracker/`:
 
 | file | what it does |
 |---|---|
-| `model.rs` | `Issue`, `ColumnDef`, `Delta`, `Health`, `TrackerError` — the vocabulary the front end sees |
+| `model.rs` | `Issue`, `ColumnDef`, `Delta`, `Health`, `Repair`, `Failure`, `TrackerError` — the vocabulary the front end sees |
 | `bd.rs` | the only file that knows bd's CLI: arguments, spawning, parsing |
+| `backup.rs` | the copy taken before a migration: its name, and a recursive copy in `std::fs` |
 | `store.rs` | the in-memory snapshot and the delta computation |
 | `watcher.rs` | `notify` on `.beads/`, path filter, failure reporting |
 | `service.rs` | the worker: one owner of mutable state, a request queue, deltas and health events |
@@ -68,10 +69,43 @@ the event fires microseconds after start, before the webview can subscribe, so t
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
 
+### Repair: fixing without diagnosing
+
+Under `error` that empty state carries **what bd itself said** — the last non-empty line of
+`health.message`, in the `detail` slot `EmptyState` grew for it — and two buttons. "See the console"
+used to stand there instead, which was an instruction for whoever wrote the app addressed to whoever
+uses it, while the app held bd's own words and threw them away. `TrackerError::Command` now carries
+the argument list as well as the code, so that line names which of the six calls failed.
+
+**Repair tracker** copies `.beads` to `.beads.backup-<UTC>` beside it, runs `bd migrate` and then
+`bd migrate schema`, and reopens the folder — which is what brings the board back with nothing for
+the front end to ask for. Failing to take the copy **stops the repair**: the copy is the entire
+reason there is no confirmation dialog in front of the button, and `TrackerError::Backup` says in its
+own sentence that nothing was migrated. Nothing ever removes a copy — a migration is the one
+irreversible thing this app does to somebody's tracker.
+
+It is offered for **any** tracker failure, and that is a decision rather than laziness. bd offers no
+structured verdict about its own database: `bd doctor` answers "not yet supported in embedded mode",
+and `bd migrate --json`, `bd migrate schema --json` and `bd migrate --inspect` all ignore the flag
+and answer in prose with tick marks in it — measured on the pinned 1.1.2. So a health state meaning
+"this tracker is too old" could only be entered by grepping that prose, and a recognizer that quietly
+stops matching on the next bd release is exactly how the caught bug reached a person. Both migrations
+are idempotent by bd's own documentation, so running them against a tracker broken some other way
+costs about four seconds and changes nothing. Do not re-open this without new measurements; the
+rejected alternatives — a state of its own, `bd backup`, `bd export`, a `--dry-run` confirmation
+dialog — are recorded on smetana-j7o.
+
+**Ask an agent** is the second button, for the failure the migrations did not fix. It reads
+`tracker_failure` — the folder, `EXPECTED_BD_VERSION`, the bd command line that last failed and its
+stderr, as **one** answer — and starts an `Intent::RepairTracker` carrying all four. One call rather
+than four reads, and complete at the moment it is sent, because the tracker is what is broken: the
+agent cannot ask bd anything afterwards. That is the `ResolveConflict` shape and deliberately not the
+`ResolveTask` one.
+
 `tracker.js` also owns the two translations: bd's statuses to the design system's (`open → ready`,
 `in_progress → running`, `closed → done`; everything else, including custom statuses, passes through
 to `normalizeStatus` and gets a hash colour with a 2-letter code), and Rust's diagnostics to short
-English messages, with the raw text left in the console. `projects.js` owns the list of open
+English messages — the raw text is in the console, and under `error` it is on the screen as well. `projects.js` owns the list of open
 projects, which one is active, and moving between them — the front end holds the list's truth, bd
 holds the board's, so a switch reads the new project's layout with `settings_load` (only the layout:
 the list on disk is already the past by then) before it asks the tracker to point at the new

@@ -161,10 +161,58 @@ pub struct Health {
     pub message: Option<String>,
 }
 
+/// What a repair did. The copy first, because it is the thing a person may
+/// have to go and find afterwards, and it is an absolute path for that reason:
+/// a name relative to a project the app has since switched away from is not
+/// something anybody can act on.
+///
+/// `output` is bd's own words from both migrations, joined. It is not parsed
+/// anywhere and must not be: bd ignores `--json` on `migrate` and answers in
+/// prose with tick marks, which is exactly the thing that stops matching on the
+/// next release — see the design note on this task.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Repair {
+    pub backup: String,
+    pub output: String,
+    pub snapshot: Snapshot,
+}
+
+/// The whole of a tracker failure, as one answer, for the agent that is being
+/// asked to look at it.
+///
+/// Four facts rather than four questions, and the reason is the same one
+/// `Request::Current` records one variant along: the tracker is what is broken,
+/// so nothing can be asked again after the session starts, and a briefing
+/// assembled from two calls could describe two different moments.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Failure {
+    /// The project directory, or empty when no project is open.
+    pub dir: String,
+    /// The bd this build ships — `EXPECTED_BD_VERSION`, read from the one
+    /// constant rather than restated, so the briefing cannot name a version
+    /// the app does not have.
+    pub bd_version: String,
+    /// The bd command line that last failed, without the binary's own name,
+    /// and empty when nothing has failed that way. bd may have been refusing
+    /// long before the button was pressed, so this is remembered rather than
+    /// reconstructed.
+    pub command: String,
+    /// What bd printed to stderr on that failure, in full.
+    pub stderr: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TrackerError {
-    #[error("bd exited with code {code}: {stderr}")]
-    Command { code: i32, stderr: String },
+    #[error("bd {command} exited with code {code}: {stderr}")]
+    Command { command: String, code: i32, stderr: String },
+    /// The copy that has to be taken before a migration. Its message says what
+    /// did **not** happen as well as what did: this error is the whole reason
+    /// the Repair button has no confirmation dialog in front of it, so a person
+    /// reading it has to learn that their tracker was left alone.
+    #[error("could not copy .beads, so nothing was migrated: {0}")]
+    Backup(String),
     #[error("no JSON in bd's output")]
     NoJson,
     #[error("could not parse bd's output: {0}")]

@@ -128,6 +128,33 @@ pub fn init_args() -> Vec<String> {
     vec!["init".to_string(), "--non-interactive".to_string()]
 }
 
+/// `bd migrate` in the project's directory: bd's own words for it are "checks
+/// and updates database metadata to current version", and that is the half of
+/// a repair that actually fixes the caught bug — schema migrations bd runs by
+/// itself when it opens the store, so what reaches a person is metadata and a
+/// version.
+///
+/// **No `--json`.** It was measured on the bundled bd 1.1.2 and the flag is
+/// accepted and ignored: the output is prose with tick marks in it either way.
+/// Passing a flag that does nothing would suggest to the next reader that
+/// something here parses the answer, and nothing does — the output is shown to
+/// a person, never matched on.
+pub fn migrate_args() -> Vec<String> {
+    vec!["migrate".to_string()]
+}
+
+/// `bd migrate schema`, the second half. bd says of it that "schema migrations
+/// also run automatically on store open, so this subcommand is typically a
+/// no-op. It exists to make migration explicit and observable in CI, release
+/// gates, and recovery scenarios" — this is a recovery scenario, and its being
+/// a no-op most of the time is what makes the pair safe to run against a
+/// tracker that is failing for some entirely different reason.
+///
+/// No `--json` here either, for the reason above.
+pub fn migrate_schema_args() -> Vec<String> {
+    vec!["migrate".to_string(), "schema".to_string()]
+}
+
 /// A wrapper around the bundled bd binary. The only place that knows what the
 /// CLI arguments look like.
 #[derive(Clone)]
@@ -145,6 +172,12 @@ impl Bd {
     /// ("dolt auto-push failed", "beads.role not configured") go to stderr all
     /// the time and are not errors.
     async fn run(&self, args: Vec<String>) -> Result<String, TrackerError> {
+        // Kept before the move into `args()`, because a failure has to be able
+        // to say which call it was: the health line a person reads is this
+        // error's `Display`, and "bd exited with code 1" names none of the six
+        // things the worker asks bd for. It is also what the agent briefing
+        // carries as the failed command — see `Failure` in model.rs.
+        let command = args.join(" ");
         let output = self
             .app
             .shell()
@@ -158,6 +191,7 @@ impl Bd {
 
         if !output.status.success() {
             return Err(TrackerError::Command {
+                command,
                 code: output.status.code().unwrap_or(-1),
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
             });
@@ -215,6 +249,29 @@ impl Bd {
     /// the exit code matters — the worker re-reads the folder from scratch anyway.
     pub async fn init(&self) -> Result<(), TrackerError> {
         self.run(init_args()).await.map(|_| ())
+    }
+
+    /// bd's own two migrations, in order, against the folder as it stands.
+    ///
+    /// The output is joined and handed back rather than parsed, and the order
+    /// is the one bd's own documentation puts them in: metadata and version
+    /// first, then the schema. Both are idempotent by that documentation, which
+    /// is what lets this be offered for *any* tracker failure rather than for a
+    /// diagnosis nothing can make — `bd doctor` is unavailable in embedded mode
+    /// and `--json` is ignored by `migrate`, so the only recognizer available
+    /// would be a grep over prose with tick marks in it, and a recognizer that
+    /// silently stops matching on the next bd release is how this bug started.
+    ///
+    /// A non-zero exit stops the pair and leaves through the error, bd's own
+    /// stderr inside it: the second migration is not attempted over a first one
+    /// that failed, and the person is shown what bd said.
+    pub async fn repair(&self) -> Result<String, TrackerError> {
+        let mut out = self.run(migrate_args()).await?;
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&self.run(migrate_schema_args()).await?);
+        Ok(out)
     }
 
     pub async fn update(&self, id: &str, patch: &IssuePatch) -> Result<Issue, TrackerError> {
@@ -406,5 +463,21 @@ mod tests {
     #[test]
     fn initialization_asks_no_questions() {
         assert_eq!(init_args(), vec!["init".to_string(), "--non-interactive".to_string()]);
+    }
+
+    /// The bare migration, and `--json` is deliberately absent: bd 1.1.2 takes
+    /// the flag and answers in prose anyway, so a flag here would only tell the
+    /// next reader that something parses the answer.
+    #[test]
+    fn the_metadata_migration_is_bd_migrate_and_nothing_else() {
+        assert_eq!(migrate_args(), vec!["migrate".to_string()]);
+    }
+
+    /// `schema` is a subcommand and rides as its own argument — spelled
+    /// "migrate schema" in one string it would reach bd as a subcommand of that
+    /// name, which does not exist.
+    #[test]
+    fn the_schema_migration_is_a_subcommand_of_its_own() {
+        assert_eq!(migrate_schema_args(), vec!["migrate".to_string(), "schema".to_string()]);
     }
 }

@@ -293,6 +293,14 @@ const CAPTION = {
      not "Resolving a conflict": the identifiers beside it are what say which
      one, and a row 252px wide spends every character it has on them. */
   resolveConflict: 'Conflict',
+  /* The other caption about no issue at all — there is no id, no path and no
+     branch beside it, because the whole of what this session was given is a
+     briefing about a database. So the words carry it alone, and they name the
+     tracker rather than reading as a bare "Agent": a row that said only that
+     would be indistinguishable from the "+ New agent" beside it, on the one
+     screen where a person has just pressed a button and wants to see that
+     something is happening about it. */
+  repairTracker: 'Repairing the tracker',
   setup: 'Project setup'
 }
 
