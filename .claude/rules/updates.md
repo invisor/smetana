@@ -212,6 +212,18 @@ carries an Open button, System Settings → Privacy & Security → Open Anyway w
 password. README's `## First launch` section and the workflow's `releaseBody` are the two copies of
 that, kept saying the same thing, and the second is the one strangers read.
 
+What makes the bundle ad-hoc signed is one line — `bundle.macOS.signingIdentity` set to `"-"` in
+`src-tauri/tauri.conf.json` — and not the absence of a certificate, which is the trap: without that
+field `tauri-action` never calls `codesign` at all, and the release carries whatever the linker left
+on the arm64 executable, `adhoc, linker-signed`, `Info.plist` unbound, `Sealed Resources=none`.
+Nothing about the build says so. `codesign -dv --verbose=4` on the shipped `.app` is the only place
+it shows, and `spctl -a -vv` answers `code has no resources but signature indicates they must be
+present`. Gatekeeper reads that as a **broken** signature rather than an unknown developer, and a
+quarantined copy opens to "smetana is damaged and can't be opened" — a dialog with no Open button,
+and nothing appearing in Privacy & Security to press either, so both copies of the paragraph above
+describe steps that do not exist and the app cannot be started at all without `xattr`. v0.1.1
+shipped that way and is what the field was added for.
+
 It is once per machine rather than once per launch. What it does not cost is a repeat on every
 version: that step belongs to a copy somebody downloaded in a browser and opened by hand, and an
 update the plugin installs replaces the bundle in place with no such download and no such open.

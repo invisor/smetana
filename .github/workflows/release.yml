@@ -126,9 +126,21 @@ jobs:
       - name: Fetch the bd sidecar
         run: npm run fetch-bd
 
-      # The bundle is ad-hoc signed: there is no Apple Developer ID and no
-      # notarization, so a downloaded copy has to be let past Gatekeeper by hand
-      # once — releaseBody below says how. The minisign signature is a different
+      # The bundle is ad-hoc signed, and what makes it so is
+      # bundle.macOS.signingIdentity in src-tauri/tauri.conf.json rather than
+      # the absence of a certificate. Without that field tauri-action never
+      # calls codesign at all, and what ships is the signature the linker put on
+      # the arm64 executable by itself: adhoc and linker-signed, with the
+      # Info.plist unbound and no sealed resources. Gatekeeper does not read
+      # that as an unidentified developer, it reads it as a broken one, and a
+      # quarantined copy opens to "smetana is damaged and can't be opened" — a
+      # dialog carrying no Open button, with nothing appearing in Privacy &
+      # Security to press either, so every word of releaseBody below is
+      # unfollowable and the app cannot be started at all without xattr. v0.1.1
+      # shipped that way; the field is the whole fix.
+      # There is still no Apple Developer ID and no notarization, so a
+      # downloaded copy still has to be let past Gatekeeper by hand once —
+      # releaseBody below says how. The minisign signature is a different
       # thing entirely: Tauri's own, mandatory, and what an updater would verify.
       # Nothing verifies it yet — the app has no updater, and these artefacts are
       # produced ahead of the task that adds one.

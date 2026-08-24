@@ -43,6 +43,9 @@
       "resources/superpowers/**/*",
       "resources/smetana/**/*"
     ],
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

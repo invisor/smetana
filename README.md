@@ -145,6 +145,18 @@ Either way it is once per machine, not once per launch. It is **not** once per
 version, though, because there is no in-app updater: a new version means downloading
 the `.dmg` again and going through the same step for it. See Releases above.
 
+A dialog saying **"smetana" is damaged and can't be opened** is a different fault and
+not this one, and the two are easy to confuse because both follow a download. That one
+means the bundle reached the release carrying no signature of its own: the ad-hoc
+signature is `bundle.macOS.signingIdentity` in `src-tauri/tauri.conf.json`, and without
+that field `tauri-action` never runs `codesign`, leaving only what the linker put on the
+arm64 executable by itself — `codesign -dv` on such a copy says `adhoc, linker-signed`
+with `Sealed Resources=none`. Gatekeeper reads a broken signature rather than an
+unknown developer, so the dialog offers no Open button and Privacy & Security stays
+empty: nothing above works, and the only way in is `xattr -dr com.apple.quarantine` on
+a copy moved off the read-only disk image. v0.1.1 shipped that way and is the only
+release that did.
+
 ## Layout
 
 ```
