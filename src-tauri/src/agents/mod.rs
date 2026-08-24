@@ -195,6 +195,40 @@ pub enum Intent {
         /// Every path git left unmerged.
         files: Vec<String>,
     },
+    /// Look at a tracker the app could not repair by itself. Started from the
+    /// second button under the board's `error` empty state, beside the one
+    /// that runs bd's own migrations.
+    ///
+    /// It carries the whole of the failure, and that is deliberate in the way
+    /// `ResolveConflict` above is rather than the way `ResolveTask` is. A
+    /// parked task's questions stay in the issue and bd can be asked again;
+    /// here **bd is what is broken**, so there is nothing to ask again once the
+    /// session has started, and a briefing that is not complete at the moment
+    /// it is sent is never going to be completed.
+    ///
+    /// The `rename_all` on the enum renames the *variants*; a struct variant's
+    /// fields need their own, and this one has it so `bd_version` arrives as
+    /// `bdVersion` — the same word `tracker_failure` hands the front end, so
+    /// what comes back off that command goes straight into this intent with
+    /// nothing renamed on the way.
+    #[serde(rename_all = "camelCase")]
+    RepairTracker {
+        /// The project directory. The session's own directory is the project
+        /// too, but a prompt that leaves it unsaid would be one an agent has to
+        /// guess the subject of.
+        dir: String,
+        /// The bd this build ships, so the agent can tell "the database is
+        /// older than the binary" from "the binary is not what we think it
+        /// is". It comes from `tracker::service::EXPECTED_BD_VERSION` by way of
+        /// `tracker_failure`, never from a second copy of the number.
+        bd_version: String,
+        /// The bd command line that failed, without the binary's own name.
+        command: String,
+        /// What that command printed to stderr, in full and untranslated: it is
+        /// bd's own account of the trouble, and the one thing here nothing else
+        /// can reconstruct.
+        stderr: String,
+    },
     /// Work out what this project is made of and write
     /// `.smetana/project.toml`. Started from the dialog a person gets when
     /// they add a project, and from the project row afterwards.
@@ -269,6 +303,10 @@ impl Intent {
             Intent::ResolveConflict { repo, theirs, .. } => {
                 W::ResolveConflict { repo: repo.clone(), theirs: theirs.clone() }
             }
+            // Nothing of the failure comes along: the whole of it is a
+            // briefing, and there is no id, no path and no branch a row could
+            // draw. The caption alone says which work this is.
+            Intent::RepairTracker { .. } => W::RepairTracker,
             Intent::Setup => W::Setup,
             Intent::Run { .. } => W::Run,
         }

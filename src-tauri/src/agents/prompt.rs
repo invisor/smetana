@@ -288,6 +288,28 @@ const CONFLICT_FINISH: &str =
      like success and is not. If you truly cannot finish, stop and say so in this conversation, \
      leaving the conflict exactly where it is for me to look at.";
 
+/// What a session opens on when the app's own repair was not enough.
+///
+/// No skill is named, the way none is named for a conflict, and for the same
+/// reason: there is no process in the library for this and inventing one would
+/// start an agent on somebody else's checklist. What the prompt does carry is
+/// the two things the app measured and the agent cannot — that `bd doctor` is
+/// unavailable here, so there is no structured verdict to fetch, and that the
+/// two migrations have already been run, so repeating them is not the answer.
+///
+/// The copy is named as a thing to leave alone rather than left unmentioned:
+/// `.beads.backup-<UTC>` beside the tracker is the person's only way back, and
+/// "tidying up" a stray-looking directory is exactly the helpful act that would
+/// take it away.
+const REPAIR: &str =
+    "Smetana has already taken a copy of .beads beside it, as .beads.backup-<UTC>, and has \
+     already run `bd migrate` and `bd migrate schema` against the tracker. Neither was enough. \
+     Do not delete or move that copy — it is the only way back. Two things are worth knowing \
+     before you start: `bd doctor` is not supported for this database, which is embedded, so \
+     there is no structured verdict to fetch; and `bd migrate` ignores `--json`, so anything it \
+     tells you is prose meant for a person. Work out what is actually wrong, tell me what you \
+     find before you change anything, and do not touch the issues themselves.";
+
 /// What the agent is told to produce when a project has no configuration yet.
 /// The file's path is named here rather than left to the skill: a session that
 /// could not read the skill must still write to the right place.
@@ -381,10 +403,12 @@ fn task_language(language: &str) -> String {
 /// three things is the smaller evil than a setting that does not reach the
 /// place it is used from.
 ///
-/// `Setup` and `ResolveConflict` stay out. A setup session writes one toml
-/// file, a conflict session finishes a merge or a rebase git stopped on, and
-/// neither files an issue — telling either how to word one would be prose
-/// about something that is not going to happen.
+/// `Setup`, `ResolveConflict` and `RepairTracker` stay out. A setup session
+/// writes one toml file, a conflict session finishes a merge or a rebase git
+/// stopped on, a repair session is looking at the tracker's own database —
+/// none of the three files an issue, and the last of them could not if it
+/// wanted to, since bd is what is broken. Telling any of them how to word one
+/// would be prose about something that is not going to happen.
 fn writes_to_the_tracker(intent: &Intent) -> bool {
     matches!(
         intent,
@@ -451,12 +475,15 @@ fn commit_language(language: &str) -> String {
 /// person says "commit this", and a setting that missed it would miss the case
 /// it was asked for.
 ///
-/// The other three are out because they do not touch a repository at all:
-/// `NewTask`, `EditTask` and `ResolveTask` write into bd, and what `NewTask`
-/// puts on disk goes under `.smetana/`, which `runs::gitignore` keeps out of
-/// the repository. `Setup` writes one toml file in the same folder. Putting the
-/// paragraph in every intent instead would open a filing session with three
-/// paragraphs about language in front of the work.
+/// The rest are out because they do not touch a repository at all — the
+/// `matches!` below is the list, and a number written here would be wrong the
+/// next time somebody adds an intent, which is how this comment came to say
+/// "the other four" over five of them. `NewTask`, `EditTask` and `ResolveTask`
+/// write into bd, and what `NewTask` puts on disk goes under `.smetana/`, which
+/// `runs::gitignore` keeps out of the repository. `Setup` writes one toml file
+/// in the same folder. `RepairTracker` works on `.beads`, which bd owns and
+/// commits for itself. Putting the paragraph in every intent instead would open
+/// a filing session with three paragraphs about language in front of the work.
 fn commits_to_git(intent: &Intent) -> bool {
     matches!(intent, Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::Bare)
 }
@@ -598,6 +625,9 @@ fn body(
                 &plans,
                 text,
             ))
+        }
+        Intent::RepairTracker { dir, bd_version, command, stderr } => {
+            Some(repair_tracker(dir, bd_version, command, stderr))
         }
         Intent::Setup => Some(setup(delivery, skills, facts)),
         Intent::Run { settings, reports, batch, remove_worktrees } => {
@@ -867,6 +897,44 @@ fn resolve_conflict(
     }
     out.push('\n');
     out.push_str(CONFLICT_FINISH);
+    out
+}
+
+/// What a session opens on when it is sent at a tracker nothing here could fix.
+///
+/// Four things are named because nothing else can supply them, and this is the
+/// one prompt in the file that has to be complete at the instant it is sent:
+/// the folder, since a session's own directory is the project and the prompt
+/// would otherwise leave the subject unsaid; the bd this build ships, since
+/// "the database is older than the binary" and "the binary is not what we think
+/// it is" are two different faults and the version is what tells them apart;
+/// and the failed command with its stderr, because the tracker is what is
+/// broken — asking it again after the session starts is exactly what does not
+/// work here.
+///
+/// stderr goes in last and in a block of its own, after every instruction: it
+/// is the one part whose length nothing here controls, and an instruction
+/// written after it would be the part that gets skimmed.
+fn repair_tracker(dir: &str, bd_version: &str, command: &str, stderr: &str) -> String {
+    let mut out = String::new();
+    let _ = write!(out, "The bd tracker in {dir} is failing and Smetana could not repair it.\n\n");
+    let _ = write!(out, "The bundled bd is version {bd_version}. ");
+    // A failure that never reached a bd process — a spawn that did not start,
+    // a folder with no tracker — has no command to name, and the sentence still
+    // has to be true without one.
+    let _ = match command.trim().is_empty() {
+        true => write!(out, "There is no record of which bd command failed last.\n\n"),
+        false => write!(out, "The bd command that failed last was `bd {command}`.\n\n"),
+    };
+    out.push_str(REPAIR);
+    out.push_str("\n\nWhat bd said:\n\n");
+    // An empty stderr is said out loud rather than left as a heading with
+    // nothing under it: "bd failed and printed nothing" is itself a fact about
+    // the failure, and a blank block reads as a prompt that was cut short.
+    out.push_str(match stderr.trim().is_empty() {
+        true => "(nothing — bd failed without printing to stderr)",
+        false => stderr.trim(),
+    });
     out
 }
 
@@ -1590,6 +1658,17 @@ mod tests {
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
             conflict(crate::vcs::model::OpKind::Merge),
             conflict(crate::vcs::model::OpKind::Rebase),
+            repair(),
+            // The two holes in the repair briefing, walked as well: the whole
+            // sentence about the failed command disappears when nothing
+            // recorded one, and the prompt then ends on bd's own words being
+            // absent — both are places a sentence could be left hanging.
+            Intent::RepairTracker {
+                dir: "/p".into(),
+                bd_version: "1.1.2".into(),
+                command: String::new(),
+                stderr: String::new(),
+            },
             Intent::Setup,
             new_task(Stage::Auto),
             new_task(Stage::On),
@@ -1632,6 +1711,73 @@ mod tests {
         let intent =
             Intent::ResolveTask { id: "smetana-29j".into(), title: "Show the state".into() };
         build(&intent, delivery, ImageDelivery::InPrompt, &skills(), None, text, &english()).unwrap()
+    }
+
+    fn repair() -> Intent {
+        Intent::RepairTracker {
+            dir: "/p/backend".into(),
+            bd_version: "1.1.2".into(),
+            command: "list --all -n 0 --json".into(),
+            stderr: "failed to open store: schema version 41 is older than 53".into(),
+        }
+    }
+
+    fn repair_prompt(delivery: SkillDelivery) -> String {
+        build(&repair(), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_repair_prompt_names_the_folder_the_bd_version_the_command_and_what_bd_said() {
+        // All four, because the tracker is what is broken: an agent cannot ask
+        // bd afterwards for any of them, so a briefing incomplete at the moment
+        // it is sent stays incomplete. This is the `ResolveConflict` shape and
+        // deliberately not the `ResolveTask` one, where almost nothing is
+        // carried because the issue can be read again.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = repair_prompt(delivery);
+            assert!(text.contains("/p/backend"), "the folder: {text}");
+            assert!(text.contains("1.1.2"), "the bd this build ships: {text}");
+            assert!(text.contains("bd list --all -n 0 --json"), "the failed command: {text}");
+            assert!(
+                text.contains("schema version 41 is older than 53"),
+                "what bd said: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repair_prompt_says_what_the_app_already_tried_and_leaves_the_copy_alone() {
+        // The two migrations have been run by the time this session starts, so
+        // an agent told nothing would begin by running them again. And the copy
+        // beside `.beads` is the person's only way back from a migration, which
+        // makes tidying it away the one helpful act that cannot be undone.
+        let text = repair_prompt(SkillDelivery::PluginDir);
+        assert!(text.contains("`bd migrate` and `bd migrate schema`"), "{text}");
+        assert!(text.contains(".beads.backup-"), "{text}");
+        assert!(text.contains("Do not delete or move that copy"), "{text}");
+        // And the two measurements an agent would otherwise spend a while
+        // rediscovering.
+        assert!(text.contains("`bd doctor` is not supported"), "{text}");
+    }
+
+    /// A failure that never reached a bd process has no command and no stderr,
+    /// and the prompt still has to be a set of true sentences rather than one
+    /// with two holes in it.
+    #[test]
+    fn a_repair_prompt_with_nothing_recorded_says_so_rather_than_naming_an_empty_command() {
+        let intent = Intent::RepairTracker {
+            dir: "/p".into(),
+            bd_version: "1.1.2".into(),
+            command: String::new(),
+            stderr: String::new(),
+        };
+        let text =
+            build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english())
+                .unwrap();
+        assert!(text.contains("no record of which bd command failed"), "{text}");
+        assert!(!text.contains("`bd `"), "an empty command is not named: {text}");
+        assert!(text.contains("bd failed without printing to stderr"), "{text}");
     }
 
     fn conflict(op: crate::vcs::model::OpKind) -> Intent {
@@ -2315,6 +2461,7 @@ mod tests {
             Intent::Setup,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            repair(),
             new_task(Stage::Auto),
             new_task(Stage::On),
             new_task(Stage::Off),
@@ -2347,17 +2494,22 @@ mod tests {
 
     #[test]
     fn only_a_session_that_writes_to_bd_is_told_the_task_language() {
-        // Five. Four of them run `bd create` or `bd update` as the work they
-        // were opened for, and `Bare` is in because it is where a person says
-        // "file tasks for this" — the same reason `commits_to_git` has it, and
-        // the case the setting was asked for in the first place. It costs that
-        // one session a third paragraph about language, which is cheaper than
-        // a bare session filing English issues under a Russian setting.
+        // The ones that run `bd create` or `bd update` as the work they were
+        // opened for, plus `Bare` — in because it is where a person says "file
+        // tasks for this", the same reason `commits_to_git` has it, and the
+        // case the setting was asked for in the first place. It costs that one
+        // session a third paragraph about language, which is cheaper than a
+        // bare session filing English issues under a Russian setting. The
+        // `matches!` below is the list; no count is written here, because a
+        // count is wrong the next time an intent is added and nothing fails
+        // when it goes stale.
         //
-        // `Setup` and `ResolveConflict` stay out: one writes a toml file, the
-        // other finishes a merge or a rebase git stopped on, and neither files
-        // an issue — the paragraph there would be prose about something that
-        // will not happen.
+        // `Setup`, `ResolveConflict` and `RepairTracker` stay out: one writes a
+        // toml file, one finishes a merge or a rebase git stopped on, and one
+        // is looking at the tracker's own database — none of them files an
+        // issue, and the last could not if it wanted to, since bd is what is
+        // broken. The paragraph there would be prose about something that will
+        // not happen.
         let intents: Vec<Intent> = every_intent()
             .into_iter()
             .chain([conflict(crate::vcs::model::OpKind::Merge), conflict(crate::vcs::model::OpKind::Rebase)])
@@ -2385,12 +2537,17 @@ mod tests {
 
     #[test]
     fn only_a_session_that_touches_git_is_told_the_commit_language() {
-        // The three that make a commit with their own hands: a run's lead
+        // The ones that make a commit with their own hands: a run's lead
         // commits and merges all night, a conflict session finishes the merge
         // or the rebase git stopped on, and a bare session is where a person
-        // says "commit this". The other four write into bd or into
-        // `.smetana/`, and neither is a commit — telling them how to word one
-        // would be a paragraph about something that will not happen.
+        // says "commit this". The `matches!` below is the list, and no count is
+        // written here — the comment that did say one was already off by one
+        // before `RepairTracker` made it off by two.
+        //
+        // The rest write into bd, or into `.smetana/`, or into `.beads` which
+        // bd commits for itself, and none of those is a commit of this
+        // session's making — telling them how to word one would be a paragraph
+        // about something that will not happen.
         let intents: Vec<Intent> = every_intent()
             .into_iter()
             .chain([conflict(crate::vcs::model::OpKind::Merge), conflict(crate::vcs::model::OpKind::Rebase)])
