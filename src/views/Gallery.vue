@@ -3507,6 +3507,24 @@ const menuTargetStyle = {
         </div>
         <EmptyState title="No board yet" description="Connect a tracker to pull tasks, or create the first task locally." icon="columns-3" />
         <EmptyState tone="error" title="Tracker unreachable" description="bd exited 101." />
+        <!-- The `detail` slot: what the failing thing said, in mono under the
+             sentence about it, never wrapped. The line is deliberately longer
+             than the slot's own 420px cap, so what this entry shows is the
+             ellipsis — which is the whole of the feature and the part a caller
+             cannot see any other way. -->
+        <EmptyState
+          tone="error"
+          title="bd is failing"
+          description="The tracker cannot be read. Repairing takes a copy of .beads first."
+        >
+          <template #detail>bd list --all -n 0 --json exited with code 1: failed to open store: schema version 41 is older than 53</template>
+          <template #action>
+            <div :style="{ display: 'flex', gap: 'var(--space-3)' }">
+              <Button variant="primary" size="sm">Repair tracker</Button>
+              <Button variant="ghost" size="sm">Ask an agent</Button>
+            </div>
+          </template>
+        </EmptyState>
       </div>
       <div :style="{ position: 'relative', height: '220px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <Modal title="Discard worktree?" description="wt/bd-a1b2 has 3 uncommitted files and 1 agent still running.">

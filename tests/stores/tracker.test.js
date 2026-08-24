@@ -639,6 +639,131 @@ describe('health and probing folders', () => {
   })
 })
 
+describe('cutting a diagnostic to its last line', () => {
+  /* The end of a diagnostic is what went wrong; the start is where it was
+     noticed. Two callers want the same cut — the line under the board and the
+     toast a failed repair raises — which is why the rule is here and not in the
+     `.vue` file that draws it. */
+  it('takes the last line that says anything', () => {
+    expect(
+      tracker.lastDiagnosticLine('bd migrate exited with code 1:\n\nfailed to open store\n\n')
+    ).toBe('failed to open store')
+  })
+
+  it('a one-line diagnostic is its own last line, and nothing is empty-handed', () => {
+    expect(tracker.lastDiagnosticLine('bd list exited with code 1')).toBe(
+      'bd list exited with code 1'
+    )
+    expect(tracker.lastDiagnosticLine('')).toBe('')
+    expect(tracker.lastDiagnosticLine(null)).toBe('')
+  })
+
+  /* A rejection that never reached Rust is an `Error`, not the string Tauri
+     serializes a `TrackerError` into — and both end up in front of a person. */
+  it('an Error object is read as readily as the string Rust sends', () => {
+    expect(tracker.lastDiagnosticLine(new Error('the tracker worker is not running'))).toBe(
+      'Error: the tracker worker is not running'
+    )
+  })
+})
+
+describe('repairing a failing tracker', () => {
+  /* The board is what a repair is for, so the snapshot that comes back with it
+     is applied here rather than left to a resync the front end would have to
+     ask for. The worker has already reopened the folder by the time this
+     answers; a second sweep from this side would be the same directory read
+     twice, and the board would sit empty for the length of it. */
+  it('a repair that worked puts the board it came back with on the screen', async () => {
+    await start(snapshot({ generation: 3, issues: [issue({ id: 'bd-1' })] }))
+    ipc.on('tracker_repair', () => ({
+      backup: '/p/.beads.backup-20260825T123000Z',
+      output: '✓ Version matches\n✓ Schema already at v53',
+      snapshot: snapshot({ generation: 9, issues: [issue({ id: 'bd-2' })] })
+    }))
+
+    const result = await tracker.repairTracker()
+
+    expect(result.backup).toBe('/p/.beads.backup-20260825T123000Z')
+    expect(tracker.trackerState.issues.has('bd-2')).toBe(true)
+    // In full, the way a resync is: the issues bd could not read before are
+    // not still on the board beside the ones it can read now.
+    expect(tracker.trackerState.issues.has('bd-1')).toBe(false)
+    expect(tracker.trackerState.generation).toBe(9)
+    expect(tracker.trackerState.switching).toBe(false)
+    expect(tracker.trackerState.lastError).toBe(null)
+  })
+
+  /* The one write in this store whose refusal has to reach its caller: the
+     caller is a button reading "Repairing…", and a rejection swallowed here
+     would leave it saying so for the rest of the session. */
+  it('a repair that failed reaches the caller rather than being swallowed', async () => {
+    await start(snapshot({ generation: 3, issues: [issue({ id: 'bd-1' })] }))
+    ipc.fail('tracker_repair', new Error('bd migrate exited with code 1: cannot open store'))
+
+    await expect(tracker.repairTracker()).rejects.toThrow('cannot open store')
+
+    // And the board is left exactly as it was, with the failure remembered.
+    expect(tracker.trackerState.issues.has('bd-1')).toBe(true)
+    expect(tracker.trackerState.generation).toBe(3)
+    expect(tracker.trackerState.switching).toBe(false)
+    /* Its own caption, and not `write`'s. That one says "Nothing was written",
+       which is a claim this call cannot make: `bd migrate` failing part-way may
+       well have written, and the app has no way to know. */
+    expect(tracker.trackerState.lastError.title).toBe('Could not repair the tracker')
+    expect(tracker.trackerState.lastError.description).not.toContain('Nothing was written')
+  })
+
+  /* The answer to a press has to outlive the next sweep. A failed repair does
+     not reopen the folder, so the sixty-second sweep keeps running and its next
+     `bd list` failure replaces the health message — pointing the person at the
+     line under the board would point them at something that reverts under them
+     with no action of their own. So the toast carries the words. */
+  it('a failed repair keeps the failure\'s own words rather than pointing at the board', async () => {
+    await start()
+    ipc.fail(
+      'tracker_repair',
+      new Error('could not copy .beads, so nothing was migrated: No space left on device')
+    )
+
+    await expect(tracker.repairTracker()).rejects.toThrow('No space left on device')
+
+    expect(tracker.trackerState.lastError.description).toContain('No space left on device')
+    // And still the half that is always true, whatever went wrong.
+    expect(tracker.trackerState.lastError.description).toContain('nothing removes one')
+  })
+
+  /* The tabs have already moved by the time this is awaited, so a rejection
+     that went nowhere would be a button that takes somebody to the agents panel
+     and then does nothing at all. */
+  it('a briefing that could not be read is reported before it is rethrown', async () => {
+    await start()
+    ipc.fail('tracker_failure', new Error('the tracker worker is not running'))
+
+    await expect(tracker.trackerFailure()).rejects.toThrow('the tracker worker is not running')
+    expect(tracker.trackerState.lastError.title).toBe('Could not read the tracker')
+  })
+
+  /* One call and not four: the tracker is what is broken, so nothing can be
+     asked again once the agent has started, and two reads could describe two
+     different moments. */
+  it('the failure handed to an agent is one answer carrying all four facts', async () => {
+    await start()
+    ipc.on('tracker_failure', () => ({
+      dir: '/p',
+      bdVersion: '1.1.2',
+      command: 'list --all -n 0 --json',
+      stderr: 'failed to open store'
+    }))
+
+    await expect(tracker.trackerFailure()).resolves.toEqual({
+      dir: '/p',
+      bdVersion: '1.1.2',
+      command: 'list --all -n 0 --json',
+      stderr: 'failed to open store'
+    })
+  })
+})
+
 describe('the semantic tier', () => {
   it('hands the agent a query and keeps the ids it answered with', async () => {
     ipc.on('tracker_search_semantic', () => ['smetana-a1a', 'smetana-b2b'])

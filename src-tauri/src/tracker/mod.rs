@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod bd;
 pub mod commands;
 pub mod model;

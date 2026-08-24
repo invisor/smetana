@@ -109,6 +109,14 @@ pub enum SessionWork {
     /// are the agent's briefing, a row has nowhere to draw a dozen of them, and
     /// the list is out of date the moment the agent resolves the first one.
     ResolveConflict { repo: String, theirs: String },
+    /// A tracker the app's own repair could not fix, handed to an agent whole.
+    ///
+    /// It carries nothing, and there is nothing it could carry: the failure —
+    /// the folder, the bd version, the command and its stderr — is a briefing
+    /// for the agent, and the row it would be drawn in is 252px wide. The
+    /// project is already named by the panel the row sits in, so the caption
+    /// alone says what this session is for.
+    RepairTracker,
     Setup,
     /// One batch of a run. Which issues it has taken is not known here and
     /// cannot be: the agent claims them by running `bd update --claim` itself,
@@ -154,6 +162,7 @@ pub enum WorkKind {
     EditTask,
     ResolveTask,
     ResolveConflict,
+    RepairTracker,
     Setup,
     Run,
     Shell,
@@ -169,6 +178,7 @@ impl SessionWork {
             SessionWork::EditTask { .. } => WorkKind::EditTask,
             SessionWork::ResolveTask { .. } => WorkKind::ResolveTask,
             SessionWork::ResolveConflict { .. } => WorkKind::ResolveConflict,
+            SessionWork::RepairTracker => WorkKind::RepairTracker,
             SessionWork::Setup => WorkKind::Setup,
             SessionWork::Run => WorkKind::Run,
             SessionWork::Shell => WorkKind::Shell,
@@ -435,6 +445,7 @@ mod tests {
             WorkKind::ResolveConflict => {
                 SessionWork::ResolveConflict { repo: "/p".into(), theirs: "develop".into() }
             }
+            WorkKind::RepairTracker => SessionWork::RepairTracker,
             WorkKind::Setup => SessionWork::Setup,
             WorkKind::Run => SessionWork::Run,
             WorkKind::Shell => SessionWork::Shell,
@@ -459,6 +470,7 @@ mod tests {
             WorkKind::EditTask,
             WorkKind::ResolveTask,
             WorkKind::ResolveConflict,
+            WorkKind::RepairTracker,
             WorkKind::Setup,
             WorkKind::Run,
             WorkKind::Shell,

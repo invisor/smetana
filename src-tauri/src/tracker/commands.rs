@@ -1,7 +1,7 @@
 use tauri::State;
 use tokio::sync::oneshot;
 
-use super::model::{Health, Issue, IssuePatch, Snapshot, TrackerError};
+use super::model::{Failure, Health, Issue, IssuePatch, Repair, Snapshot, TrackerError};
 use super::search;
 use super::service::{Request, TrackerHandle};
 use crate::agents::oneshot::{self as agent_oneshot, OneshotError};
@@ -95,6 +95,37 @@ pub async fn tracker_set_project(
 #[tauri::command]
 pub async fn tracker_init(handle: State<'_, TrackerHandle>) -> Result<Snapshot, TrackerError> {
     ask(&handle, Request::InitTracker).await?
+}
+
+/// Copy `.beads` beside itself and run bd's own migrations over the original.
+///
+/// Offered on any tracker failure rather than on a recognized one: there is no
+/// verdict to recognize — `bd doctor` is not supported in embedded mode and
+/// `bd migrate` ignores `--json` — and a recognizer built out of a grep over
+/// prose is one that stops matching on the next bd release without saying so.
+/// Both migrations are idempotent by bd's own documentation, so running them
+/// against a tracker broken some other way costs a few seconds and changes
+/// nothing.
+///
+/// Success answers with the board as well as with the copy's path: the worker
+/// reopens the folder itself, so there is nothing for the front end to ask for
+/// afterwards.
+#[tauri::command]
+pub async fn tracker_repair(handle: State<'_, TrackerHandle>) -> Result<Repair, TrackerError> {
+    ask(&handle, Request::Repair).await?
+}
+
+/// The whole of the last tracker failure, in one answer: the folder, the bd
+/// this build ships, the bd command that failed and what it printed.
+///
+/// It exists for the second button on that screen — the one that hands the
+/// failure to an agent — and it is one call rather than four reads for the
+/// reason the intent it feeds is complete at send time: the tracker is what is
+/// broken, so nothing can be asked again once the session has started, and two
+/// calls could describe two different moments.
+#[tauri::command]
+pub async fn tracker_failure(handle: State<'_, TrackerHandle>) -> Result<Failure, TrackerError> {
+    ask(&handle, Request::Failure).await
 }
 
 /// Which issues a person meant, asked of the agent rather than of a substring.

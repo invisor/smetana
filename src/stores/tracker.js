@@ -169,11 +169,34 @@ function applyDelta(delta) {
   trackerState.generation = delta.generation
 }
 
+/* A diagnostic cut to the one line worth putting in front of somebody.
+
+   The last non-empty line rather than the first: a diagnostic ends with what
+   went wrong and opens with where it was noticed, and it is the end a person
+   can act on. Nothing is lost by the cut — the whole text is still in the
+   console, and the whole of the failure is what "Ask an agent" hands over.
+
+   Here rather than in the view because two callers want it and one of them is a
+   `.vue` file, which no test in this repository can reach: `views/DesktopApp.vue`
+   draws it under the board, and `repairTracker` below puts it in the toast a
+   failed repair raises. `String()` rather than a bare `.split`, because a
+   rejection that never reached Rust is an `Error` object rather than the string
+   Tauri serializes a `TrackerError` into. */
+export function lastDiagnosticLine(error) {
+  const lines = String(error ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  return lines[lines.length - 1] ?? ''
+}
+
 /* Back-end errors are diagnostics: their text speaks bd's language and is
    addressed to whoever fixes things, not to whoever works. The user is shown a
-   short explanation of what exactly did not work, and the full text stays in
-   the console. Reads and writes also stopped sharing one caption: a read error
-   under a "could not save" heading lied about what was happening. */
+   short explanation of what exactly did not work. Most of the full text stays
+   in the console and only there; the exception is a repair, whose refusal is an
+   answer to a press and carries its own words — see `repair` below. Reads and
+   writes also stopped sharing one caption: a read error under a "could not
+   save" heading lied about what was happening. */
 const ERRORS = {
   read: {
     title: 'Could not read the tracker',
@@ -182,6 +205,25 @@ const ERRORS = {
   write: {
     title: 'Could not save to the tracker',
     description: 'Nothing was written. The board shows what the tracker has.'
+  },
+  /* A third caption, because neither of the two above is true of a repair.
+     "Nothing was written" is the claim `write` makes, and this is the one call
+     in the app that irreversibly migrates a database: `bd migrate` failing
+     part-way may well have written, and the app has no way to know. So this
+     says only what is certain — that the copy, if one was taken, is still
+     there, since nothing anywhere removes one.
+
+     Its description is the **tail** of a sentence: `repairTracker` puts the
+     failure's own last line in front of it. That is not decoration. A failed
+     repair does not reopen the folder, so the sixty-second sweep keeps running
+     and its next `bd list` failure overwrites the health message — the line
+     under the board reverts, up to a minute later, with nobody having done
+     anything. "It is then what is true" holds for health, which is a live
+     reading, and not for the answer to a button somebody just pressed, which
+     has to outlive the next sweep. So the answer carries its own words. */
+  repair: {
+    title: 'Could not repair the tracker',
+    description: 'Any copy it took is left where it is — nothing removes one.'
   }
 }
 
@@ -254,6 +296,73 @@ export async function initBd() {
   }
 }
 
+/* Take a copy of `.beads` and run bd's own migrations over the original.
+
+   The board comes back with the answer and is rolled out here, exactly as
+   `initBd` above rolls out what `tracker_init` returns: the worker reopens the
+   folder itself once the migrations pass, so there is nothing left for the
+   front end to ask for and a resync from here would only be a second full
+   sweep of the same directory.
+
+   A refusal is reported and then rethrown rather than swallowed, and that is
+   the whole difference between this and `resync`. The caller is a button
+   somebody pressed: it has to stop reading "Repairing…", and what bd said has
+   to stay on the screen underneath — which it does, and it is now the
+   migration's own words rather than an older failure's, because the worker puts
+   a failed repair into health before it answers.
+
+   Its own `ERRORS` entry rather than `write`'s: that one promises nothing was
+   written, and this is the one call here that can have written and cannot
+   know. */
+export async function repairTracker() {
+  trackerState.switching = true
+  try {
+    const result = await invoke('tracker_repair')
+    applySnapshot(result.snapshot)
+    trackerState.lastError = null
+    return result
+  } catch (err) {
+    /* Set here rather than through `report`, and this is the one place in the
+       file that builds a caption instead of picking one: `ERRORS.repair`'s
+       description is the half that is always true, and the half that is about
+       this attempt has to be pinned now — see the note on that entry. The
+       console line is `report`'s job everywhere else, so it is kept by hand. */
+    console.error('[tracker] repair failed:', err)
+    const said = lastDiagnosticLine(err)
+    trackerState.lastError = {
+      ...ERRORS.repair,
+      description: said ? `${said} ${ERRORS.repair.description}` : ERRORS.repair.description
+    }
+    throw err
+  } finally {
+    trackerState.switching = false
+  }
+}
+
+/* The whole of the last tracker failure, for the session started to look at it.
+
+   One call rather than four reads of things the store already half knows, and
+   deliberately: bd is what is broken here, so nothing can be asked again once
+   the agent has started, and a briefing pieced together from `health.message`
+   and a path taken a moment later could describe two different moments. It is
+   also where the bd version comes from — the app has exactly one copy of that
+   number, and it is in Rust.
+
+   It reports its own refusal, unlike a bare `invoke`, and that is not
+   symmetry for its own sake. The caller has already moved the person to the
+   agents panel and the terminal by the time this is awaited, so a rejection
+   swallowed here is a button that takes somebody somewhere and then does
+   nothing, with no line anywhere saying why. `read` is the right half of the
+   pair — nothing is written by this call. */
+export async function trackerFailure() {
+  try {
+    return await invoke('tracker_failure')
+  } catch (err) {
+    report('read', err)
+    throw err
+  }
+}
+
 /* Whether these folders have a tracker is a question for the filesystem, not
    for bd. */
 export async function probeProjects(paths) {
@@ -265,9 +374,14 @@ export async function probeProjects(paths) {
   }
 }
 
-/* health's message is diagnostics: it speaks bd's language. What goes to the
-   interface is a short text derived from `state` alone, and the detail stays
-   where it is looked for while debugging. */
+/* health's message is diagnostics: it speaks bd's language. Most of what goes
+   to the interface is still a short text derived from `state` alone — the
+   caption and the sentence under it are `HEALTH_NOTICE` in `views/DesktopApp.vue`
+   — but the message itself is no longer kept from the screen. Under `error` the
+   view draws its last non-empty line in mono beneath that sentence (`bdSaid`),
+   and the whole of the failure goes to the agent that the second button on that
+   screen starts. The console line below stays: it is the only trace for the
+   states that draw no detail, and it carries the message unabridged. */
 function setHealth(health) {
   trackerState.health = health
   if (health.state !== 'ok') console.warn('[tracker] health:', health.state, health.message ?? '')

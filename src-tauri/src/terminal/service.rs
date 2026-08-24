@@ -589,7 +589,9 @@ fn handle(
                 // .gitignore; refusing to start the session over it would cost
                 // the whole feature, so this is logged and stepped over.
                 if let Err(err) = crate::runs::gitignore::ensure(Path::new(&project)) {
-                    eprintln!("[runs] could not add .smetana/ to .gitignore: {err}");
+                    // Not ".smetana/": `ensure` writes whatever of its own
+                    // list the file is missing, and that list has grown.
+                    eprintln!("[runs] could not amend .gitignore: {err}");
                 }
                 crate::runs::survey::render(&crate::runs::survey::run(Path::new(&project)))
             });
