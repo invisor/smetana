@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { basename, relativeTo } from '../src/paths.js'
+import { basename, dirname, relativeTo } from '../src/paths.js'
 
 describe('what a path is called', () => {
   it('is the last segment', () => {
@@ -58,5 +58,48 @@ describe('what a path is called from inside a folder', () => {
   it('nothing to compare against is null, not an accidental match', () => {
     expect(relativeTo(null, '/project/a.txt')).toBe(null)
     expect(relativeTo('/project', '')).toBe(null)
+  })
+})
+
+describe('what folder a path sits in', () => {
+  it('is everything above the last segment', () => {
+    expect(dirname('/Users/someone/Projects/smetana')).toBe('/Users/someone/Projects')
+    expect(dirname('/Users/someone/Projects/smetana/src/App.vue')).toBe(
+      '/Users/someone/Projects/smetana/src'
+    )
+  })
+
+  it('a trailing separator changes nothing', () => {
+    // The OS file dialog hands back one form and settings another.
+    expect(dirname('/Users/someone/Projects/smetana/')).toBe('/Users/someone/Projects')
+    expect(dirname('/Users/someone/Projects/smetana///')).toBe('/Users/someone/Projects')
+  })
+
+  it('splits on the Windows separator too, since WebView2 is a target webview', () => {
+    expect(dirname('C:\\Users\\someone\\smetana')).toBe('C:\\Users\\someone')
+    expect(dirname('C:\\Users\\someone\\smetana\\')).toBe('C:\\Users\\someone')
+  })
+
+  it('a folder directly under a root keeps the root, which is not the empty string', () => {
+    // '' as a defaultPath is not the root: the option would be there and name
+    // nowhere, where the folder above /smetana is /.
+    expect(dirname('/smetana')).toBe('/')
+    expect(dirname('C:\\smetana')).toBe('C:\\')
+  })
+
+  it('a root and a bare name have no folder above them, and say so', () => {
+    // `null` rather than a guess: the caller opens its dialog with no
+    // `defaultPath` at all, which is what the panel did before this existed.
+    expect(dirname('/')).toBe(null)
+    expect(dirname('///')).toBe(null)
+    expect(dirname('smetana')).toBe(null)
+  })
+
+  it('nothing at all is null rather than a throw', () => {
+    // `settings.activeProject` is null with no project open, and the folder
+    // picker asks this before it asks anything else.
+    expect(dirname('')).toBe(null)
+    expect(dirname(null)).toBe(null)
+    expect(dirname(undefined)).toBe(null)
   })
 })

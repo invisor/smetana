@@ -232,6 +232,55 @@ describe('addProject', () => {
     expect(ipc.calls('tracker_set_project')).toHaveLength(0)
   })
 
+  /* Without a `defaultPath` macOS opens the panel in Recents, which is every
+     application's files at once, and the previews it draws there are charged to
+     this unsandboxed app — four consent prompts from a development tool that
+     wants none of it. The starting point is the folder the current project sits
+     in, where a person's other projects usually are. */
+  it('the folder panel starts in the folder the current project sits in', async () => {
+    settings.settings.activeProject = '/Users/you/Projects/smetana'
+    ipc.on('plugin:dialog|open', null)
+
+    await projects.addProject()
+
+    expect(ipc.calls('plugin:dialog|open')[0].options.defaultPath).toBe('/Users/you/Projects')
+  })
+
+  it('with no project open the option is absent rather than empty', async () => {
+    ipc.on('plugin:dialog|open', null)
+
+    await projects.addProject()
+
+    expect(ipc.calls('plugin:dialog|open')[0].options.defaultPath).toBeUndefined()
+  })
+
+  /* The parent of what the panel handed back, not of the root it normalizes to:
+     that folder is the one that was on screen, and where the tracked root turns
+     out to be is a different question. */
+  it('the next open starts beside what was picked, not beside the tracked root', async () => {
+    settings.settings.activeProject = '/Users/you/Projects/smetana'
+    ipc.on('plugin:dialog|open', '/elsewhere/repository/src/stores')
+    ipc.on('project_root', '/elsewhere/repository')
+    await projects.addProject()
+
+    ipc.on('plugin:dialog|open', null)
+    await projects.addProject()
+
+    expect(ipc.calls('plugin:dialog|open')[1].options.defaultPath).toBe(
+      '/elsewhere/repository/src'
+    )
+  })
+
+  it('cancelling chooses nothing and therefore moves nothing', async () => {
+    settings.settings.activeProject = '/Users/you/Projects/smetana'
+    ipc.on('plugin:dialog|open', null)
+
+    await projects.addProject()
+    await projects.addProject()
+
+    expect(ipc.calls('plugin:dialog|open')[1].options.defaultPath).toBe('/Users/you/Projects')
+  })
+
   it('a failed dialog does not break the store', async () => {
     ipc.fail('plugin:dialog|open', new Error('the dialog did not open'))
 

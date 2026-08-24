@@ -16,7 +16,7 @@ import { flushPending, loadProjectLayout, settings } from './settings.js'
 import { confirmUnsaved, resetTabs, restoreTabs } from './tabs.js'
 import { loadSessions } from './terminals.js'
 import { initBd, probeProjects, setProject } from './tracker.js'
-import { basename } from '../paths.js'
+import { basename, dirname } from '../paths.js'
 
 /* Path → whether it holds a .beads. health says the same thing about the
    active project, but there is nowhere else to learn it about the other rows. */
@@ -159,6 +159,19 @@ async function projectRoot(path) {
   }
 }
 
+/* Where the folder panel opens, for the reason set out at length over
+   `pickImages` in attachments.js: with no `defaultPath` macOS starts it in
+   Recents, which is every application's files at once — the Photos library,
+   other applications' containers, network mounts — and an unsandboxed app is
+   charged for every preview the panel builds there. The same shape of answer,
+   with a different starting point: the folder of the last choice made here, and
+   before there is one, the folder the current project sits in, since a person's
+   projects usually sit next to each other.
+
+   Not `settings.json`, again: this resets to the project's parent when the app
+   restarts, and that is a reasonable place to start from. */
+let lastPickedDir = null
+
 /* Returns the added path on every success, and null on every cancellation —
    the picker closed with nothing chosen, a move was already under way, or the
    person declined to lose unsaved changes. The caller (DesktopApp's
@@ -168,12 +181,26 @@ export async function addProject() {
   if (moving) return null
   let picked = null
   try {
-    picked = await open({ directory: true, multiple: false, title: 'Add project' })
+    picked = await open({
+      directory: true,
+      multiple: false,
+      title: 'Add project',
+      /* `undefined` and not `null`: with no project open there is nothing to
+         take a parent of, and the option has to be absent rather than empty —
+         which puts the panel back exactly where it was before this. */
+      defaultPath: lastPickedDir ?? dirname(settings.activeProject) ?? undefined
+    })
   } catch (err) {
     console.error('[projects] picking a folder failed:', err)
     return null
   }
   if (!picked) return null
+  /* The folder the choice was made in, and deliberately the parent of what the
+     panel handed back rather than of the root `projectRoot` climbs to: that
+     folder is what was on screen, and where the tracked root turns out to be is
+     a different question. Only on a choice — a cancelled panel returns above
+     with the memory untouched. */
+  lastPickedDir = dirname(picked) ?? lastPickedDir
   const path = await projectRoot(picked)
   /* The dialog itself takes as long as it takes — a move may have started and
      finished while the person was picking a folder, so the flag is checked

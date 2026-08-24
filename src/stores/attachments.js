@@ -24,8 +24,10 @@
    no path travels from this file into it. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { downloadDir } from '@tauri-apps/api/path'
 import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { dirname } from '../paths.js'
 
 /* What the picker offers. The list is the same four formats `sniff` in
    `attachments.rs` recognises — a filter is a convenience, and Rust is the one
@@ -112,6 +114,47 @@ export async function importPaths(paths) {
   }
 }
 
+/* Where the panel opens, and why that is this store's business rather than the
+   panel's own. Handed no `defaultPath`, macOS opens where it was left last, and
+   with no such memory yet it opens in Recents — every application's files at
+   once: what lies inside the Photos library, inside the Music library, inside
+   other applications' containers and on network mounts. The panel draws its
+   sidebar, asks Spotlight and builds a QuickLook preview for every visible row,
+   and since this app is not sandboxed macOS charges each of those touches to the
+   responsible process, which is the app. The person gets four consent prompts in
+   a row from a development tool that wants none of it — the panel wanted it, in
+   the app's name.
+
+   Handing over the same fixed directory on every open would stop that and break
+   something better, because `defaultPath` overrides the panel's own memory: a
+   person who walked to another folder would be sent back to the start every
+   time. So the folder of the last choice is kept here and handed over instead,
+   and only the first open after the app starts falls back — to ~/Downloads,
+   which is the case this dialog is mostly about by `attachments/mod.rs`'s own
+   comment: a screenshot somebody throws away in a week. That folder is protected
+   too and the first open there may ask for it; that is accepted knowingly, since
+   the question names Downloads and follows the button the person just pressed,
+   unlike a question about their music.
+
+   Not in `settings.json`: falling back to a sensible directory when the app
+   restarts is an acceptable answer, and a field in the settings file is one more
+   thing to carry afterwards. */
+let lastPickedDir = null
+
+/* Never a reason for the picker not to open. With nothing to resolve, the
+   dialog is opened with no `defaultPath` at all, which is exactly what it did
+   before this — and it is the ordinary answer away from the app, where there is
+   no path plugin behind the transport: a browser under `npm run dev` and a test
+   both land here. */
+async function pickerDir() {
+  if (lastPickedDir) return lastPickedDir
+  try {
+    return await downloadDir()
+  } catch {
+    return undefined
+  }
+}
+
 /* The picker. Cancelling is not a failure and leaves everything as it was —
    including a refusal already on screen. Opening the picker is not a batch;
    `begin()` therefore belongs to the two outcomes that are, and not to the top
@@ -119,11 +162,16 @@ export async function importPaths(paths) {
    read why it was refused, click Attach, change their mind, and watch the
    explanation disappear with nothing having happened. */
 export async function pickImages() {
+  /* Resolved before the try, which is about the picker: a directory that could
+     not be worked out is not a picker that failed, and must not be reported as
+     one. */
+  const defaultPath = await pickerDir()
   let picked = null
   try {
     picked = await open({
       multiple: true,
       title: 'Attach images',
+      defaultPath,
       filters: [{ name: 'Images', extensions: EXTENSIONS }]
     })
   } catch (err) {
@@ -134,9 +182,18 @@ export async function pickImages() {
     return
   }
   if (!picked) return
+  const paths = Array.isArray(picked) ? picked : [picked]
+  /* Where the next open starts, remembered here and nowhere near the cancelled
+     branch above: a person who opened the panel, walked somewhere and thought
+     better of it has chosen nothing, and the panel's memory is the one thing
+     that should still be deciding then. Of a multiple selection it is the first
+     path: they are siblings in practice, and the first is the one that was
+     clicked. `?? lastPickedDir` is for the path with no folder above it, which
+     keeps the last real answer rather than dropping back to ~/Downloads. */
+  lastPickedDir = dirname(paths[0]) ?? lastPickedDir
   /* `importPaths` opens the batch — one `begin()`, in the one place that knows
      something is actually about to be attached. */
-  await importPaths(Array.isArray(picked) ? picked : [picked])
+  await importPaths(paths)
 }
 
 /* base64 in 32 KB slices. `String.fromCharCode(...bytes)` in one call is what

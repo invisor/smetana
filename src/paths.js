@@ -1,9 +1,9 @@
 /* The rules about a path that belong to no one part of this front end: what a
-   path is called, what it is called from inside a folder, and whether a row in
-   the tree is a path at all.
+   path is called, what folder it sits in, what it is called from inside a
+   folder, and whether a row in the tree is a path at all.
 
    What they have in common is the test for belonging here, and it is the test to
-   apply before adding a fourth: each is pure — no Vue, no Tauri, no DOM — and
+   apply before adding another: each is pure — no Vue, no Tauri, no DOM — and
    each is wanted by more than one part of the interface at once, so there is no
    "under" to file it beneath. A rule with a single consumer belongs next to that
    consumer instead.
@@ -33,6 +33,32 @@
    for the string that has nothing left after it — a bare `/` is called `/`,
    because a name is more use than an empty gap in a sentence. */
 export const basename = (path) => path.split(/[/\\]/).filter(Boolean).pop() ?? path
+
+/* What folder a path sits in, and `null` when it names no folder above it at
+   all — a bare name with no separator in it, or a root.
+
+   Both callers are a system file dialog's starting directory, in two stores at
+   once, which is what puts it here rather than beside either of them:
+   `defaultPath` overrides the panel's own memory of where it was last opened,
+   so a store that wants the panel to open where the last choice was made has to
+   work that folder out from the path the panel handed back.
+
+   `null` rather than a guess, for the reason `relativeTo` answers `null`: there
+   is no folder above a bare name, and the caller opens its dialog with no
+   `defaultPath` at all — which is the behaviour the panel already had.
+
+   Both separators again. A trailing one is dropped first so `/a/b` and `/a/b/`
+   answer alike, and a head left holding nothing but a root keeps its separator:
+   `''` is not the root and `C:` on its own is not a folder, so `/a` answers `/`
+   and `C:\a` answers `C:\`. */
+export function dirname(path) {
+  if (!path) return null
+  const trimmed = path.replace(/[/\\]+$/, '')
+  const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  if (cut < 0) return null
+  const head = trimmed.slice(0, cut)
+  return head === '' || head.endsWith(':') ? head + trimmed[cut] : head
+}
 
 /* What a path is called from inside a folder, and `null` when it is not inside
    it at all.
