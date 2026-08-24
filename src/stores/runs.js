@@ -22,7 +22,10 @@ import { sameScope } from '../components/run/runScopes.js'
 import { syncRunCards } from './notifications.js'
 /* The other half of what a finished run is announced with. The bell is the
    visual delivery and this is the audible one, for somebody who is not looking
-   at the screen at all. */
+   at the screen at all — and, unlike the bell, it is not about the project this
+   window happens to be pointed at. It is rung in the `run:state` listener at
+   the bottom of this file, above the check that keeps the list the active
+   project's. */
 import { chime } from '../chime.js'
 import { settings } from './settings.js'
 
@@ -52,10 +55,12 @@ export const runsState = reactive({
   browserTools: null
 })
 
-/* Every run token this window has already made a noise about. In memory only,
-   like `deliveredRuns` in `notifications.js` and for the same reason: a token
-   is issued once per app process and never reused, so nothing here has to
-   survive a restart — and a run does not either. */
+/* Every run token this window has already made a noise about, in every project
+   it has heard from. In memory only, like `deliveredRuns` in
+   `notifications.js` and for the same reason: a token is issued once per app
+   process and never reused, so nothing here has to survive a restart — and a
+   run does not either. One set is enough for every project at once, since a
+   token is unique across them as well as within one. */
 const chimedRuns = new Set()
 
 /* One run replaced or learned about. By token, which is the only name that is
@@ -68,37 +73,15 @@ function upsert(run) {
   if (at !== -1) runsState.runs[at] = run
   else runsState.runs = [...runsState.runs, run].sort((a, b) => a.token - b.token)
   /* A run reaching `stopped` is what puts its card in the bell, and this is the
-     one place a run's state ever changes. */
+     one place a run's state ever changes. Both are about the active project and
+     nothing else: the card is a button onto a document, and the tab it opens is
+     this window's.
+
+     The noise that goes with the same moment is deliberately *not* here any
+     more (smetana-0t0). It is not about the project on screen, so it is rung in
+     the `run:state` listener instead, above the check that decides what reaches
+     this function — see the reasoning there. */
   syncRunCards()
-  /* And the same moment is what makes the noise — the one somebody asleep in
-     another room is listening for. Once per token: the summary arrives seconds
-     after the ending and is another event about the same stopped run.
-
-     Here rather than in `loadRun`, deliberately. That function replaces the
-     whole list on every window focus and every project switch, so a chime there
-     would announce a run that stopped before lunch at the moment somebody came
-     back to the app. The cost is that a run stopping while this window is
-     pointed at another project is never announced at all — `run:state` is
-     filtered to the active project — and silence about another project's run is
-     the better failure of the two.
-
-     The sound is played whichever way the report was delivered, and it plays
-     when it was not delivered at all: the bell, the tab and the switch on the
-     General tab are three answers to one question and never two at once, but
-     this is about the run having ended rather than about the document.
-
-     The one thing that can silence it is `onlyWhenUnfocused`, handed over as
-     the option rather than asked here: whether the main window has focus is
-     `chime.js`'s question, and the rule it feeds is `shouldPlay` in
-     `sounds.js`. The token is still marked either way, so a run silenced
-     because somebody was watching does not ring later when the summary lands
-     and they have looked away. */
-  if (run?.state?.kind === 'stopped' && !chimedRuns.has(run.token)) {
-    chimedRuns.add(run.token)
-    chime(settings.notifications.runFinished, {
-      unlessFocused: settings.notifications.onlyWhenUnfocused
-    })
-  }
 }
 
 /* An offer to set the project up, not a warning: most projects are here, and
@@ -217,10 +200,10 @@ export async function loadBrowserTools(project) {
    configuration, a damaged one, or settings that do not go together. */
 export async function startRun(project, runSettings) {
   /* `runSettings` rather than `settings`: the module-scope `settings` above is
-     this app's preferences, which `upsert` reads the run sound off, and a
-     parameter of that name here would shadow it for anybody who later reached
-     for one inside this function. What arrives here is one run's configuration,
-     bound for Rust, and the two are not the same thing at all. */
+     this app's preferences, which the `run:state` listener reads the run sound
+     off, and a parameter of that name here would shadow it for anybody who
+     later reached for one inside this function. What arrives here is one run's
+     configuration, bound for Rust, and the two are not the same thing at all. */
   const run = await invoke('run_start', { project, settings: runSettings })
   if (runsState.project === project) {
     /* The new run takes over its scope's slot: a stopped run of the same
@@ -258,11 +241,54 @@ export async function stopRun(token) {
    would otherwise put its run under the new project's name. Per run the guard
    is the token: `upsert` lands the event on the run it names and no other,
    and the worker only ever emits for runs still in its map, so an ended run's
-   late report cannot come back through here. */
+   late report cannot come back through here.
+
+   One thing deliberately sits above that check, and it is the sound. */
 export async function initRuns() {
   await listen('run:state', (event) => {
     const run = event.payload
-    if (!run || run.project !== runsState.project) return
+    if (!run) return
+    /* The noise, before anything asks which project this is (smetana-0t0). The
+       worker emits `run:state` for every project it is running, and a sound is
+       the one delivery addressed to somebody who is not looking at the screen:
+       which project they happened to leave open says nothing about which
+       ending they want to be woken for. Two runs overnight in two projects is
+       the case, and it is the very rule the `needs-you` sound in
+       `terminals.js` already follows. What stays *below* the check is the list
+       and the cards derived from it — the bell and the report tab are about
+       what this window is looking at, and a card for another project's run
+       would be a button onto a document this window declines to open.
+
+       Once per token, since the summary arrives seconds after the ending and is
+       a second event about the same stopped run. The one set covers every
+       project for the reason given where it is declared.
+
+       Here rather than in `loadRun`, deliberately. That function replaces the
+       whole list on every window focus and every project switch, so a chime
+       there would announce a run that stopped before lunch at the moment
+       somebody came back to the app. Nothing is lost by ringing from this
+       listener alone: it is the only channel by which a run reaches `stopped`
+       in this window at all — `startRun` hands back a run just started,
+       `stopRun` one merely `stopping`, and `loadRun` is silent on purpose.
+
+       The sound is played whichever way the report was delivered, and it plays
+       when it was not delivered at all: the bell, the tab and the switch on the
+       General tab are three answers to one question and never two at once, but
+       this is about the run having ended rather than about the document.
+
+       The one thing that can silence it is `onlyWhenUnfocused`, handed over as
+       the option rather than asked here: whether the main window has focus is
+       `chime.js`'s question, and the rule it feeds is `shouldPlay` in
+       `sounds.js`. The token is still marked either way, so a run silenced
+       because somebody was watching does not ring later when the summary lands
+       and they have looked away. */
+    if (run.state?.kind === 'stopped' && !chimedRuns.has(run.token)) {
+      chimedRuns.add(run.token)
+      chime(settings.notifications.runFinished, {
+        unlessFocused: settings.notifications.onlyWhenUnfocused
+      })
+    }
+    if (run.project !== runsState.project) return
     upsert(run)
   })
 }
