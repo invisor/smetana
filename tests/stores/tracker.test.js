@@ -639,6 +639,34 @@ describe('health and probing folders', () => {
   })
 })
 
+describe('cutting a diagnostic to its last line', () => {
+  /* The end of a diagnostic is what went wrong; the start is where it was
+     noticed. Two callers want the same cut — the line under the board and the
+     toast a failed repair raises — which is why the rule is here and not in the
+     `.vue` file that draws it. */
+  it('takes the last line that says anything', () => {
+    expect(
+      tracker.lastDiagnosticLine('bd migrate exited with code 1:\n\nfailed to open store\n\n')
+    ).toBe('failed to open store')
+  })
+
+  it('a one-line diagnostic is its own last line, and nothing is empty-handed', () => {
+    expect(tracker.lastDiagnosticLine('bd list exited with code 1')).toBe(
+      'bd list exited with code 1'
+    )
+    expect(tracker.lastDiagnosticLine('')).toBe('')
+    expect(tracker.lastDiagnosticLine(null)).toBe('')
+  })
+
+  /* A rejection that never reached Rust is an `Error`, not the string Tauri
+     serializes a `TrackerError` into — and both end up in front of a person. */
+  it('an Error object is read as readily as the string Rust sends', () => {
+    expect(tracker.lastDiagnosticLine(new Error('the tracker worker is not running'))).toBe(
+      'Error: the tracker worker is not running'
+    )
+  })
+})
+
 describe('repairing a failing tracker', () => {
   /* The board is what a repair is for, so the snapshot that comes back with it
      is applied here rather than left to a resync the front end would have to
@@ -683,6 +711,25 @@ describe('repairing a failing tracker', () => {
        well have written, and the app has no way to know. */
     expect(tracker.trackerState.lastError.title).toBe('Could not repair the tracker')
     expect(tracker.trackerState.lastError.description).not.toContain('Nothing was written')
+  })
+
+  /* The answer to a press has to outlive the next sweep. A failed repair does
+     not reopen the folder, so the sixty-second sweep keeps running and its next
+     `bd list` failure replaces the health message — pointing the person at the
+     line under the board would point them at something that reverts under them
+     with no action of their own. So the toast carries the words. */
+  it('a failed repair keeps the failure\'s own words rather than pointing at the board', async () => {
+    await start()
+    ipc.fail(
+      'tracker_repair',
+      new Error('could not copy .beads, so nothing was migrated: No space left on device')
+    )
+
+    await expect(tracker.repairTracker()).rejects.toThrow('No space left on device')
+
+    expect(tracker.trackerState.lastError.description).toContain('No space left on device')
+    // And still the half that is always true, whatever went wrong.
+    expect(tracker.trackerState.lastError.description).toContain('nothing removes one')
   })
 
   /* The tabs have already moved by the time this is awaited, so a rejection

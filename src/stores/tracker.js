@@ -169,11 +169,34 @@ function applyDelta(delta) {
   trackerState.generation = delta.generation
 }
 
+/* A diagnostic cut to the one line worth putting in front of somebody.
+
+   The last non-empty line rather than the first: a diagnostic ends with what
+   went wrong and opens with where it was noticed, and it is the end a person
+   can act on. Nothing is lost by the cut — the whole text is still in the
+   console, and the whole of the failure is what "Ask an agent" hands over.
+
+   Here rather than in the view because two callers want it and one of them is a
+   `.vue` file, which no test in this repository can reach: `views/DesktopApp.vue`
+   draws it under the board, and `repairTracker` below puts it in the toast a
+   failed repair raises. `String()` rather than a bare `.split`, because a
+   rejection that never reached Rust is an `Error` object rather than the string
+   Tauri serializes a `TrackerError` into. */
+export function lastDiagnosticLine(error) {
+  const lines = String(error ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  return lines[lines.length - 1] ?? ''
+}
+
 /* Back-end errors are diagnostics: their text speaks bd's language and is
    addressed to whoever fixes things, not to whoever works. The user is shown a
-   short explanation of what exactly did not work, and the full text stays in
-   the console. Reads and writes also stopped sharing one caption: a read error
-   under a "could not save" heading lied about what was happening. */
+   short explanation of what exactly did not work. Most of the full text stays
+   in the console and only there; the exception is a repair, whose refusal is an
+   answer to a press and carries its own words — see `repair` below. Reads and
+   writes also stopped sharing one caption: a read error under a "could not
+   save" heading lied about what was happening. */
 const ERRORS = {
   read: {
     title: 'Could not read the tracker',
@@ -188,12 +211,19 @@ const ERRORS = {
      in the app that irreversibly migrates a database: `bd migrate` failing
      part-way may well have written, and the app has no way to know. So this
      says only what is certain — that the copy, if one was taken, is still
-     there, since nothing anywhere removes one — and points at the line under
-     the board, which now carries bd's own words about this very attempt. */
+     there, since nothing anywhere removes one.
+
+     Its description is the **tail** of a sentence: `repairTracker` puts the
+     failure's own last line in front of it. That is not decoration. A failed
+     repair does not reopen the folder, so the sixty-second sweep keeps running
+     and its next `bd list` failure overwrites the health message — the line
+     under the board reverts, up to a minute later, with nobody having done
+     anything. "It is then what is true" holds for health, which is a live
+     reading, and not for the answer to a button somebody just pressed, which
+     has to outlive the next sweep. So the answer carries its own words. */
   repair: {
     title: 'Could not repair the tracker',
-    description:
-      'What bd said is under the board. Any copy it took is left where it is — nothing removes one.'
+    description: 'Any copy it took is left where it is — nothing removes one.'
   }
 }
 
@@ -292,7 +322,17 @@ export async function repairTracker() {
     trackerState.lastError = null
     return result
   } catch (err) {
-    report('repair', err)
+    /* Set here rather than through `report`, and this is the one place in the
+       file that builds a caption instead of picking one: `ERRORS.repair`'s
+       description is the half that is always true, and the half that is about
+       this attempt has to be pinned now — see the note on that entry. The
+       console line is `report`'s job everywhere else, so it is kept by hand. */
+    console.error('[tracker] repair failed:', err)
+    const said = lastDiagnosticLine(err)
+    trackerState.lastError = {
+      ...ERRORS.repair,
+      description: said ? `${said} ${ERRORS.repair.description}` : ERRORS.repair.description
+    }
     throw err
   } finally {
     trackerState.switching = false

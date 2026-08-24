@@ -30,6 +30,10 @@ const titleStyle = computed(() => ({
   fontWeight: 'var(--weight-medium)'
 }))
 
+/* How wide that line is allowed to be. Above the note rather than below it,
+   so the note stays next to `detailStyle`, which is what it is about. */
+const DETAIL_W = '420px'
+
 /* The `detail` slot: one line of machine words under the sentence of human
    ones. It is a slot rather than a second string prop because what goes in it
    is never this component's to word — it is whatever the thing that failed
@@ -60,8 +64,6 @@ const titleStyle = computed(() => ({
 
    Muted rather than `--status-failed-fg`, even under `tone="error"`: the title
    above is already the loud part, and this stays information. */
-const DETAIL_W = '420px'
-
 const detailStyle = computed(() => ({
   fontFamily: 'var(--font-mono)',
   fontSize: 'var(--text-xs)',

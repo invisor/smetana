@@ -11,6 +11,7 @@
 //! `-i` on somebody's machine, and a copy waiting for an answer nobody can give
 //! would hang the worker for the rest of the process's life.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -39,43 +40,70 @@ pub fn backup_name(now: DateTime<Utc>) -> String {
 /// there is one at all.
 const PARTIAL: &str = ".partial";
 
+/// What one walk has already entered, and the one place it must never go.
+///
+/// Both exist for the same reason and neither can be dropped: symbolic links
+/// are **followed**, so the source is a graph rather than a tree and a walk
+/// over it has to remember where it has been.
+struct Walk {
+    /// The copy's own root, canonicalised. Never descended into — a link
+    /// pointing at an ancestor of the destination would otherwise have the walk
+    /// discovering the copy it is in the middle of making and copying that
+    /// too, which grows a new real directory on every pass and never ends. The
+    /// `seen` set alone does not stop it, because each of those directories is
+    /// genuinely one this walk has not met before.
+    stop: PathBuf,
+    /// Every source directory already copied, canonicalised. A second route to
+    /// one is skipped rather than copied again: the subtree is already in the
+    /// copy under whichever name got there first, so this de-duplicates and
+    /// never omits.
+    seen: HashSet<PathBuf>,
+}
+
 /// Copy a directory tree, creating what is missing on the way.
 ///
-/// **A symbolic link to a file is followed; a symbolic link to a directory is
-/// not.** The split is deliberate and the second half of it is what makes this
-/// walk terminate. Following a file link is the plain reading of "copy the
-/// tracker" — what is wanted is the bytes bd would read, and a link recreated
-/// into a folder that is about to be migrated would point back at the original.
-/// A *directory* link has no such argument and one pointing at an ancestor
-/// would recurse until the disk filled and the stack blew, which in Rust is an
-/// abort rather than a panic: the whole app would vanish, with no message, on a
-/// button press, over somebody's data. Nothing bd writes into `.beads` is a
-/// directory link, so skipping them costs nothing real and removes the only
-/// cycle this walk can have. The real tree below is finite, so no depth bound
-/// is needed on top.
+/// **Symbolic links are followed, both to files and to directories, and the
+/// walk is bounded by `Walk` instead.** Following them is what "copy the
+/// tracker" has to mean. The case that decides it is a directory link somebody
+/// put inside `.beads` themselves — a store, or part of one, kept on another
+/// volume — because then everything the database *is* sits on the far side of
+/// that link, and a copy that stepped over it would hold none of it.
 ///
-/// Anything that is neither a file nor a directory is skipped — a socket left
-/// in a database directory is not data, and refusing the whole copy over one
-/// would refuse the repair.
-fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+/// Note which link that is: it is **the person's, not bd's**. Nothing bd writes
+/// into `.beads` is a directory link, and reasoning from that was the mistake
+/// this comment replaces — it is true, and it is not the case that bites.
+///
+/// The two alternatives were both rejected, and one of them was in this file
+/// for a commit. **Skipping directory links** terminates and copies the wrong
+/// thing: that relocated store is then absent from the copy, `copy_beads` still
+/// answers `Ok`, and the app tells somebody their backup was taken by name and
+/// then migrates a database the backup does not contain. That is the same
+/// "looks complete and is not" property the `.partial` rename exists to
+/// prevent, with an affirmative claim on top. **Refusing outright** on a
+/// directory link would at least be honest, but it refuses the repair to
+/// exactly the people whose setup is legitimate, and a repair is what they came
+/// for. Following with a visited set loses neither.
+///
+/// A **broken** link is passed over. There are no bytes behind it, bd cannot
+/// read it either, and there is nothing a copy could carry. Anything that is
+/// neither a file nor a directory is passed over for the same reason — a socket
+/// left in a database directory is not data, and refusing the whole copy over
+/// one would refuse the repair.
+fn copy_tree(walk: &mut Walk, from: &Path, to: &Path) -> std::io::Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
-        let target = to.join(entry.file_name());
         let path = entry.path();
-        // `symlink_metadata` answers about the link itself, which is the only
-        // way to tell one from what it points at; `metadata` follows it.
-        if fs::symlink_metadata(&path)?.file_type().is_symlink() {
-            // A link to a file is copied for its bytes. A link to a directory,
-            // and a broken one, are both passed over — see above.
-            if fs::metadata(&path).is_ok_and(|m| m.is_file()) {
-                fs::copy(&path, &target)?;
-            }
-            continue;
-        }
-        let meta = entry.metadata()?;
+        let target = to.join(entry.file_name());
+        // `metadata` follows a link, which is the whole intent here; the error
+        // is a broken one, and it is the only thing skipped silently.
+        let Ok(meta) = fs::metadata(&path) else { continue };
         if meta.is_dir() {
-            copy_tree(&path, &target)?;
+            let real = fs::canonicalize(&path)?;
+            if real == walk.stop || !walk.seen.insert(real) {
+                continue;
+            }
+            copy_tree(walk, &path, &target)?;
         } else if meta.is_file() {
             fs::copy(&path, &target)?;
         }
@@ -119,7 +147,25 @@ pub fn copy_beads(dir: &Path, now: DateTime<Utc>) -> Result<PathBuf, TrackerErro
             return Err(TrackerError::Backup(format!("{} is already there", taken.display())));
         }
     }
-    copy_tree(&source, &partial).map_err(|e| {
+    // The destination has to exist before it can be canonicalised, and it has
+    // to be canonicalised before the walk starts, because the walk's one job
+    // besides copying is to never descend into it.
+    let mut walk = {
+        let start = || -> std::io::Result<Walk> {
+            fs::create_dir_all(&partial)?;
+            Ok(Walk {
+                stop: fs::canonicalize(&partial)?,
+                // The tracker's own directory counts as entered from the
+                // outset, so a link inside it pointing back at it is a repeat
+                // like any other.
+                seen: HashSet::from([fs::canonicalize(&source)?]),
+            })
+        };
+        start().map_err(|e| {
+            TrackerError::Backup(format!("could not make {}: {e}", partial.display()))
+        })?
+    };
+    copy_tree(&mut walk, &source, &partial).map_err(|e| {
         TrackerError::Backup(format!(
             "could not copy {} to {}: {e}",
             source.display(),
@@ -207,10 +253,38 @@ mod tests {
         assert_eq!(left.len(), 2, "the tracker and one copy, and nothing else: {left:?}");
     }
 
-    /// A directory symlink pointing at an ancestor is the one shape that made
-    /// this walk unbounded, and an unbounded one does not fail — it fills the
-    /// disk and then overflows the stack, which in Rust aborts the process. So
-    /// the test that matters is that the call *returns at all*.
+    /// The case that decides how directory links are treated: somebody moved
+    /// their Dolt store off the boot disk. Everything the database *is* sits on
+    /// the far side of that link, so a copy that passed over it would answer
+    /// `Ok` while holding none of the data — and the app would then say the
+    /// backup was taken and migrate.
+    #[cfg(unix)]
+    #[test]
+    fn a_relocated_store_is_copied_for_what_it_holds() {
+        let dir = temp_dir("relocated");
+        let elsewhere = temp_dir("relocated-volume");
+        write(&elsewhere.join("noms/chunk"), "the database");
+        fs::create_dir_all(dir.join(".beads")).expect("the tracker directory is made");
+        write(&dir.join(".beads/config.json"), "{}");
+        std::os::unix::fs::symlink(&elsewhere, dir.join(".beads/embeddeddolt"))
+            .expect("the store is relocated");
+
+        let copy = copy_beads(&dir, Utc::now()).expect("the copy is taken");
+
+        assert_eq!(fs::read_to_string(copy.join("embeddeddolt/noms/chunk")).unwrap(), "the database");
+        assert_eq!(fs::read_to_string(copy.join("config.json")).unwrap(), "{}");
+        let _ = fs::remove_dir_all(&elsewhere);
+    }
+
+    /// A directory link pointing at an ancestor is the shape that makes this
+    /// walk a graph rather than a tree, and an unbounded walk does not fail —
+    /// it fills the disk and then overflows the stack, which in Rust aborts the
+    /// process. So the test that matters is that the call *returns at all*.
+    ///
+    /// It is also the shape the `seen` set alone does not stop: following the
+    /// link reaches the directory the copy is being written into, and copying
+    /// that grows a new real directory on every pass, each one genuinely
+    /// unvisited. `Walk::stop` is what ends it.
     #[cfg(unix)]
     #[test]
     fn a_directory_link_pointing_upwards_does_not_send_the_walk_round_forever() {
@@ -221,11 +295,40 @@ mod tests {
         let copy = copy_beads(&dir, Utc::now()).expect("the copy is taken");
 
         assert!(copy.join("config.json").is_file(), "the real files are still copied");
-        assert!(!copy.join("up").exists(), "the directory link is passed over");
+        // The link is followed, so the folder it names is there — holding what
+        // the walk was allowed to take from it, which is neither the tracker it
+        // has already copied nor the copy it is making.
+        assert!(copy.join("up").is_dir(), "the link was followed rather than passed over");
+        assert!(!copy.join("up/.beads").exists(), "the tracker is not taken a second time");
+        let inner: Vec<String> = fs::read_dir(copy.join("up"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            inner.iter().all(|name| !name.starts_with(".beads.backup-")),
+            "the copy must not contain itself: {inner:?}"
+        );
     }
 
-    /// The other half of that split: a link to a *file* is followed for its
-    /// bytes, because what is wanted is what bd would read.
+    /// A link that points nowhere has no bytes behind it, so there is nothing a
+    /// copy could carry and nothing bd could read either.
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_link_is_passed_over_rather_than_failing_the_copy() {
+        let dir = temp_dir("broken");
+        write(&dir.join(".beads/config.json"), "{}");
+        std::os::unix::fs::symlink(dir.join("nowhere"), dir.join(".beads/dangling"))
+            .expect("the link is made");
+
+        let copy = copy_beads(&dir, Utc::now()).expect("the copy is taken");
+
+        assert!(copy.join("config.json").is_file());
+        assert!(!copy.join("dangling").exists());
+    }
+
+    /// The other half of "links are followed": a link to a file is copied for
+    /// its bytes and lands in the copy as a real file, not as a link back into
+    /// the original — which is the directory about to be migrated.
     #[cfg(unix)]
     #[test]
     fn a_file_link_is_copied_for_what_it_points_at() {
@@ -238,8 +341,6 @@ mod tests {
         let copy = copy_beads(&dir, Utc::now()).expect("the copy is taken");
 
         assert_eq!(fs::read_to_string(copy.join("linked.txt")).unwrap(), "bytes");
-        // And it is a real file in the copy, not a link back into the original,
-        // which is about to be migrated.
         assert!(!fs::symlink_metadata(copy.join("linked.txt")).unwrap().file_type().is_symlink());
     }
 

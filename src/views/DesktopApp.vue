@@ -81,6 +81,7 @@ import {
   initTracker,
   isLockIssue,
   issueById,
+  lastDiagnosticLine,
   repairTracker,
   searchSemantic,
   searchState,
@@ -1287,9 +1288,17 @@ const initHere = async () => {
    thing the press left behind — a directory beside `.beads`, holding a copy of
    a database, that nothing in this app will ever remove — would be something a
    person next met while wondering what it was. The toast is held until it is
-   dismissed rather than timed out like the file tree's: a path somebody may
-   want to copy is not a fact that has finished being useful after three
-   seconds. */
+   dismissed rather than timed out like the file tree's: where a copy of one's
+   tracker went is not a fact that has finished being useful after three
+   seconds.
+
+   **The name, not the path.** A `Toast` is 320px with an icon and a dismiss
+   button beside its text, and nothing in it or in `tokens/base.css` sets
+   `overflow-wrap` — so an absolute path is one unbreakable ~70-character word
+   that runs past the toast's own border, and the path is the entire reason
+   this toast exists. `.beads.backup-<UTC>` beside `.beads` locates the copy
+   completely, because it is always beside the `.beads` of the project that was
+   just repaired, and it breaks nowhere it has to. */
 const repairing = ref(false)
 const repairNote = ref(null)
 const repairHere = async () => {
@@ -1298,7 +1307,7 @@ const repairHere = async () => {
     const { backup } = await repairTracker()
     repairNote.value = {
       title: 'Tracker repaired',
-      description: `A copy of .beads was taken first, at ${backup}. Nothing removes it.`
+      description: `A copy of .beads was taken first, as ${basename(backup)} beside it. Nothing removes it.`
     }
   } catch {
     /* the message already sits in trackerState.lastError */
@@ -1888,17 +1897,11 @@ const HEALTH_NOTICE = {
   }
 }
 
-/* What bd itself said, cut to the one line worth putting on the screen.
-
-   The last non-empty line rather than the first: a diagnostic ends with what
-   went wrong and opens with where it was noticed, and it is the end a person
-   can act on. The rest is not lost — the whole of the failure is what the
-   second button hands to an agent, which is the other half of this screen. */
-const bdSaid = computed(() => {
-  const message = trackerState.health.message ?? ''
-  const lines = message.split('\n').map((line) => line.trim()).filter(Boolean)
-  return lines[lines.length - 1] ?? ''
-})
+/* What bd itself said, cut to the one line worth putting on the screen. The
+   rule is the store's (`lastDiagnosticLine`) because the toast a failed repair
+   raises wants the same cut, and a copy of it here would be a rule living in
+   the one kind of file no test in this repository can reach. */
+const bdSaid = computed(() => lastDiagnosticLine(trackerState.health.message ?? ''))
 
 /* bd owns which columns exist; the settings own only their sequence, and the
    two meet in orderColumns. The stored order is per project, because the set of
@@ -2551,6 +2554,11 @@ watch(activePath, (path) => {
   loadHead(path)
   loadConfig(path)
   loadRun(path)
+  /* Held until dismissed is right for a note naming a folder, and it is what
+     makes this line necessary: the folder it names is beside one project's
+     `.beads`, so left standing it would sit over the next project telling
+     somebody about a copy that is not in it. */
+  repairNote.value = null
 })
 
 /* The other half of the background fetch, and it is keyed on the repository the

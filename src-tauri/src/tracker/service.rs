@@ -528,13 +528,28 @@ async fn handle(
             };
             let backup = match taken {
                 Ok(Ok(path)) => path,
+                // Through health, exactly as a failed migration goes: the state
+                // does not move — `error` before, `error` after — but the
+                // message becomes this refusal, so the line under the board
+                // says why the copy could not be taken instead of quoting a
+                // `bd list` failure from before anybody pressed anything. This
+                // is the *likelier* of the two failure paths, and it is the one
+                // that was console-only: a full disk, a permission problem or a
+                // read-only volume is ordinary, while a failing `bd migrate` is
+                // not. `last_command_failure` is untouched, because
+                // `TrackerError::Backup` is not a `Command` and there is no bd
+                // call behind it to name — an agent asked about this hears the
+                // refusal through the health line the briefing always carries.
                 Ok(Err(e)) => {
+                    health.failed(&e);
                     let _ = reply.send(Err(e));
                     return false;
                 }
                 Err(e) => {
-                    let _ = reply
-                        .send(Err(TrackerError::Backup(format!("the copy did not finish: {e}"))));
+                    let failed =
+                        TrackerError::Backup(format!("the copy did not finish: {e}"));
+                    health.failed(&failed);
+                    let _ = reply.send(Err(failed));
                     return false;
                 }
             };
