@@ -129,14 +129,23 @@ throws over a noise is worse than a quiet one. Which sound each event makes is t
 section of `settings.json` (`.claude/rules/settings.md`), edited on the settings window's General
 tab.
 
-Three rules about where it fires, and all three are easy to break by accident. The run sound is played in
-`upsert` in `runs.js` — the one place a run's state ever changes — once per token, since the summary
-arrives seconds after the ending and is another event about the same stopped run; and **never from
-`loadRun`**, which replaces the list on every window focus and every project switch and would
-announce this morning's run this afternoon. The cost is named rather than hidden: a run stopping
-while the window is pointed at another project is not announced at all, because `run:state` is
-filtered to the active project, and silence about another project's run is the better failure of the
-two. The needs-you sound is played in the `terminal:state` listener in `terminals.js`, comparing the
+Three rules about where it fires, and all three are easy to break by accident. The run sound is
+played in the `run:state` listener in `runs.js` — the only channel by which a run reaches `stopped`
+in this window at all, since `startRun` hands back a run just started and `stopRun` one merely
+`stopping` — and it is rung **above** the check that keeps `runsState.runs` the active project's, so
+it plays **for every project** (smetana-0t0). That puts it beside the needs-you sound rather than
+apart from it, on the same argument: a sound is the one delivery addressed to somebody who is not
+looking at the screen, and which project they happened to leave open when they walked away says
+nothing about which ending they want to be woken for — two projects running overnight is the case
+both sounds exist for. It fires once per token, since the summary arrives seconds after the ending
+and is another event about the same stopped run, and **one set of tokens covers every project**,
+because a token is issued once per app process and is never two runs' whichever projects they are in.
+What stays *below* that project check is the visual half — the list, the bell cards `syncRunCards`
+derives from it, and the report tab — since each of those is a statement about what this window is
+looking at, and a card for another project's run would be a button onto a document `showReport`
+declines to open. And **never from `loadRun`**, which replaces the list on every window focus and
+every project switch and would announce this morning's run this afternoon. The needs-you sound is
+played in the `terminal:state` listener in `terminals.js`, comparing the
 mark already held with the state arriving and firing only on the transition *into* that state, so a
 session re-announcing the same wait costs nothing — for every project, since the marks cover every
 project and a person supervising two overnight is waiting on both; and **nothing on the first read

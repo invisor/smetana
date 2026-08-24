@@ -447,6 +447,75 @@ describe('the sound a finished run makes', () => {
     expect(chime).toHaveBeenCalledTimes(2)
   })
 
+  it("a run in a project this window is not looking at is announced all the same", async () => {
+    /* The sound is the one delivery addressed to somebody who is not looking at
+       the screen, so which project they left open cannot decide it — the same
+       rule the `needs-you` sound already follows. The list below it is the
+       other half: the run does not join it and makes no card in the bell,
+       because a card is a button onto a document this window would decline to
+       open. */
+    const { emit, ipc, stores, nextTick } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+    stores.settings.settings.notifications.runFinished = 'sound-4'
+
+    await emit('run:state', stopped({ token: 21, project: '/elsewhere' }))
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledWith('sound-4', { unlessFocused: true })
+    expect(stores.runs.runsState.runs).toEqual([])
+    expect(stores.notifications.notificationsState.items).toEqual([])
+  })
+
+  it("the summary about another project's run does not ring a second time", async () => {
+    // One set of tokens covers every project: a token is issued once per app
+    // process and never reused, here or anywhere else.
+    const { emit, ipc, stores, nextTick } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+
+    await emit('run:state', stopped({ token: 21, project: '/elsewhere' }))
+    await emit('run:state', stopped({ token: 21, project: '/elsewhere', summary: { tasks: null } }))
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledTimes(1)
+  })
+
+  it('two runs in two projects each sound for themselves', async () => {
+    const { emit, ipc, stores, nextTick } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+
+    await emit('run:state', stopped({ token: 21, project: '/elsewhere' }))
+    await emit('run:state', stopped({ token: 22 }))
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledTimes(2)
+    // And only the one belonging to this project is on screen.
+    expect(stores.runs.runsState.runs.map((r) => r.token)).toEqual([22])
+  })
+
+  it("the active project's run still sounds, lands in the list and reaches the bell", async () => {
+    /* The three deliveries that were one before the sound moved out of
+       `upsert`: the card comes from `syncRunCards`, which stays there. */
+    const { emit, ipc, stores, nextTick } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.initRuns()
+    await stores.runs.loadConfig('/p')
+
+    await emit('run:state', stopped({ summary: { seconds: 60, tasks: { closed: [], parked: [] } } }))
+    await nextTick()
+
+    expect(chime).toHaveBeenCalledTimes(1)
+    expect(stores.runs.runsState.runs.map((r) => r.token)).toEqual([RUN.token])
+    expect(stores.notifications.notificationsState.items.map((item) => item.id)).toEqual([
+      `run:${RUN.token}`
+    ])
+  })
+
   it('a run this window never saw stop is not announced when the list is reread', async () => {
     // `loadRun` replaces the list on every window focus and every project
     // switch: a sound from there would announce this morning's run this
