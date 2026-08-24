@@ -169,6 +169,72 @@ describe('images attached to a task that has not been filed', () => {
     expect(stores.attachments.attachmentsState.items).toHaveLength(2)
   })
 
+  /* Handed no `defaultPath`, macOS opens the panel where it was left last and,
+     with no such memory, in Recents — every application's files at once. The
+     panel builds a QuickLook preview for every row it draws there, and an
+     unsandboxed app is the process those touches are charged to, so a person
+     pressing Attach is asked to let a development tool at their photographs. */
+  describe('where the picker opens', () => {
+    const optionsOf = (ipc) => ipc.calls('plugin:dialog|open').map((call) => call.options)
+
+    it('the first open after the app starts is the download directory', async () => {
+      const { ipc, stores } = await loadStores()
+      ipc.on('plugin:path|resolve_directory', '/Users/you/Downloads')
+      ipc.on('plugin:dialog|open', null)
+
+      await stores.attachments.pickImages()
+
+      expect(optionsOf(ipc)[0].defaultPath).toBe('/Users/you/Downloads')
+    })
+
+    /* `defaultPath` overrides the panel's own memory, so handing over the same
+       directory every time would send a person who walked elsewhere back to the
+       start on every open — worse than the bug. The folder of the last choice
+       is what goes over instead, and of several picked at once it is the first:
+       they are siblings, and it is the one that was clicked. */
+    it('the next open starts where the last choice was made', async () => {
+      const { ipc, stores } = await loadStores()
+      ipc.on('plugin:path|resolve_directory', '/Users/you/Downloads')
+      ipc.on('attachment_import', ({ path }) => stored(path.split('/').pop()))
+      ipc.on('plugin:dialog|open', ['/Users/you/shots/one.png', '/Users/you/shots/two.png'])
+      await stores.attachments.pickImages()
+
+      ipc.on('plugin:dialog|open', null)
+      await stores.attachments.pickImages()
+
+      expect(optionsOf(ipc)[1].defaultPath).toBe('/Users/you/shots')
+    })
+
+    it('cancelling chooses nothing and therefore moves nothing', async () => {
+      const { ipc, stores } = await loadStores()
+      ipc.on('plugin:path|resolve_directory', '/Users/you/Downloads')
+      ipc.on('attachment_import', ({ path }) => stored(path.split('/').pop()))
+      ipc.on('plugin:dialog|open', ['/Users/you/shots/one.png'])
+      await stores.attachments.pickImages()
+
+      ipc.on('plugin:dialog|open', null)
+      await stores.attachments.pickImages()
+      await stores.attachments.pickImages()
+
+      expect(optionsOf(ipc)[2].defaultPath).toBe('/Users/you/shots')
+    })
+
+    /* `plugin:path|resolve_directory` is deliberately left unregistered here,
+       and that is the ordinary case rather than an exotic one: there is no path
+       plugin behind a browser under `npm run dev` either. A directory that
+       cannot be worked out is not a picker that failed. */
+    it('a directory that cannot be resolved leaves the option off and opens anyway', async () => {
+      const { ipc, stores } = await loadStores()
+      ipc.on('plugin:dialog|open', null)
+
+      await stores.attachments.pickImages()
+
+      expect(optionsOf(ipc)).toHaveLength(1)
+      expect(optionsOf(ipc)[0].defaultPath).toBeUndefined()
+      expect(stores.attachments.attachmentsState.lastError).toBe(null)
+    })
+  })
+
   /* The third route. A drop never reaches the webview — Tauri intercepts it and
      reports it against the window — so these arrive as real events through the
      same transport the tracker's deltas do, with no ordering guarantee about
