@@ -34,6 +34,18 @@ export const vcsState = reactive({
      call claims it before its first await and checks it after. */
   project: null,
   repos: [],
+  /* The folders one level below the project root that git can see and
+     `[project].repos` does not name — names and never paths, because there is
+     nothing in the app that can be done to one of them: the panel points at it
+     and offers the setup agent, which is the only thing here that writes that
+     file.
+
+     Empty is the ordinary answer and means nothing needs saying. It arrives
+     with `repos` in one call and is cleared everywhere `repos` is cleared, so a
+     read that failed never leaves a sentence standing on screen about a folder
+     nobody looked at. A project with no configuration always answers with
+     nothing, by construction — `vcs/repos.rs` says why. */
+  unlisted: [],
   /* The selected repository's absolute path, which is the argument every
      command in `vcs/` takes. */
   selected: null,
@@ -252,10 +264,15 @@ export async function loadRepos(project) {
   }
   vcsState.loading = true
   try {
-    const repos = await invoke('vcs_repos', { project })
+    /* `{ repos, unlisted }` and not a bare list: the two halves are read off
+       one directory listing in the same breath, and asking for them separately
+       would let a clone made between the two calls be in one answer and not the
+       other. */
+    const answer = await invoke('vcs_repos', { project })
     if (vcsState.project !== project) return
-    vcsState.repos = repos
-    await selectRepo(pickRepo(repos, settings.project.selectedRepo))
+    vcsState.repos = answer.repos ?? []
+    vcsState.unlisted = answer.unlisted ?? []
+    await selectRepo(pickRepo(vcsState.repos, settings.project.selectedRepo))
   } catch (err) {
     if (vcsState.project !== project) return
     /* `vcs_repos` answers with a list for anything it can read and cannot
@@ -267,6 +284,10 @@ export async function loadRepos(project) {
        text stays in the console. */
     console.error('[vcs] listing repositories failed:', err)
     vcsState.repos = []
+    /* With the list gone, so is what was said about the folders beside it: a
+       sentence naming a repository the configuration does not hold is a
+       statement about a directory that was read, and this one was not. */
+    vcsState.unlisted = []
     vcsState.tree = null
     /* With no repository left to be about, a branch list read a moment ago is
        one nothing on screen names. */
@@ -840,6 +861,9 @@ async function runFetch(repo, loud) {
 
 function reset() {
   vcsState.repos = []
+  /* With `repos` and for its reason: it is a statement about the project being
+     left, and the next one is not owed it. */
+  vcsState.unlisted = []
   vcsState.selected = null
   vcsState.tree = null
   vcsState.branches = []

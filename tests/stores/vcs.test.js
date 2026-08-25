@@ -9,6 +9,13 @@ import { pushAction } from '../../src/components/git/tracking.js'
    landing under the wrong project is visible in the assertion. */
 const repoIn = (project) => [{ name: '.', path: `${project}/.`, branch: 'main', detached: null }]
 
+/* `vcs_repos` answers with both halves at once — the repositories, and the
+   names of the ones on disk `[project].repos` does not hold. Almost every test
+   here is about the first half, so this wraps a list in the shape the command
+   actually returns and leaves the second empty, which is what a project set up
+   properly answers. */
+const answer = (repos, unlisted = []) => ({ repos, unlisted })
+
 const cleanTree = { branch: 'main', detached: null, changes: [] }
 
 /* Two repositories under one project — the workspace the discovery arm in
@@ -47,7 +54,7 @@ describe('the git panel store', () => {
     const old = new Promise((resolve) => {
       releaseOld = () => resolve(repoIn('/old'))
     })
-    ipc.on('vcs_repos', (args) => (args.project === '/old' ? old : repoIn('/new')))
+    ipc.on('vcs_repos', (args) => (args.project === '/old' ? old : answer(repoIn('/new'))))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', branchesOf('/new'))
     ipc.on('vcs_tracking', [])
@@ -64,6 +71,62 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.selected).toBe('/new/.')
   })
 
+  /* The second half of what `vcs_repos` answers: the folders on disk that
+     `[project].repos` does not name. It arrives with the list because it is
+     read off the same directory listing, and the panel is the only thing that
+     ever says a word about them. */
+  it('a repository the configuration does not name arrives beside the list', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', answer(repoIn('/p'), ['newrepo']))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+
+    await stores.vcs.loadRepos('/p')
+
+    expect(stores.vcs.vcsState.repos).toEqual(repoIn('/p'))
+    expect(stores.vcs.vcsState.unlisted).toEqual(['newrepo'])
+  })
+
+  /* A sentence naming a folder is a statement about a directory that was read.
+     A read that failed has not earned one, and leaving it standing would put
+     the panel's one remark about the project's contents over a list nothing
+     could be listed into. */
+  it('a listing that failed leaves no folder named on screen', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', answer(repoIn('/p'), ['newrepo']))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    await stores.vcs.loadRepos('/p')
+    expect(stores.vcs.vcsState.unlisted).toEqual(['newrepo'])
+
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.on('vcs_repos', () => Promise.reject(new Error('the transport gave way')))
+    await stores.vcs.refresh()
+
+    expect(stores.vcs.vcsState.repos).toEqual([])
+    expect(stores.vcs.vcsState.unlisted).toEqual([])
+    expect(stores.vcs.vcsState.error).not.toBeNull()
+  })
+
+  /* It goes with `repos` and for its reason: it is a statement about the
+     project being left, and a window with no project must not keep one. */
+  it('a window left with no project keeps no folder named either', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', answer(repoIn('/p'), ['newrepo']))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [])
+    await stores.vcs.loadRepos('/p')
+    expect(stores.vcs.vcsState.unlisted).toEqual(['newrepo'])
+
+    await stores.vcs.loadRepos(null)
+
+    expect(stores.vcs.vcsState.repos).toEqual([])
+    expect(stores.vcs.vcsState.unlisted).toEqual([])
+  })
+
   /* The guard is on a pair — the project *and* the selected repository — and
      this is its second half. Clicking between two repositories of one
      workspace races two `vcs_status` calls with no ordering guarantee, and
@@ -73,7 +136,7 @@ describe('the git panel store', () => {
      of the guard sees nothing wrong at all. */
   it('a slow status for a repository already left is dropped', async () => {
     const { stores, ipc, nextTick } = await loadStores()
-    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_repos', answer(siblings))
     /* The opening read answers at once for both, so the race below is the only
        one in the test: a deferred answer here would hang `loadRepos` itself on
        a call this case is not about. */
@@ -105,7 +168,7 @@ describe('the git panel store', () => {
      they are not looking at. */
   it('a slow branch list for a repository already left is dropped', async () => {
     const { stores, ipc, nextTick } = await loadStores()
-    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_repos', answer(siblings))
     ipc.on('vcs_status', (args) => treeOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
     ipc.on('vcs_branches', (args) => branchesOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
     ipc.on('vcs_tracking', [])
@@ -133,7 +196,7 @@ describe('the git panel store', () => {
      the branch list's mark, and the scope bar one store over. */
   const switching = (ipc, at = 'main') => {
     let branch = at
-    ipc.on('vcs_repos', () => [{ name: '.', path: '/p/.', branch, detached: null }])
+    ipc.on('vcs_repos', () => answer([{ name: '.', path: '/p/.', branch, detached: null }]))
     ipc.on('vcs_status', () => ({ branch, detached: null, changes: [] }))
     ipc.on('vcs_branches', () => [
       { name: 'main', current: branch === 'main' },
@@ -207,7 +270,7 @@ describe('the git panel store', () => {
   const cutting = (ipc, at = 'main') => {
     let branch = at
     const names = ['main', 'develop']
-    ipc.on('vcs_repos', () => [{ name: '.', path: '/p/.', branch, detached: null }])
+    ipc.on('vcs_repos', () => answer([{ name: '.', path: '/p/.', branch, detached: null }]))
     ipc.on('vcs_status', () => ({ branch, detached: null, changes: [] }))
     ipc.on('vcs_branches', () => names.map((name) => ({ name, current: name === branch })))
     ipc.on('vcs_tracking', [])
@@ -286,10 +349,12 @@ describe('the git panel store', () => {
        leave the repository a checkout is running in. Only admin's branch moves;
        backend is there to be switched to. */
     let adminBranch = 'main'
-    ipc.on('vcs_repos', () => [
-      { name: 'admin', path: '/p/admin', branch: adminBranch, detached: null },
-      { name: 'backend', path: '/p/backend', branch: 'main', detached: null }
-    ])
+    ipc.on('vcs_repos', () =>
+      answer([
+        { name: 'admin', path: '/p/admin', branch: adminBranch, detached: null },
+        { name: 'backend', path: '/p/backend', branch: 'main', detached: null }
+      ])
+    )
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', (args) =>
       args.repo === '/p/admin'
@@ -510,7 +575,7 @@ describe('the git panel store', () => {
 
   it('a failure leaves an error to draw, not a half-filled panel', async () => {
     const { stores, ipc, nextTick } = await loadStores()
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_branches', [])
     ipc.on('vcs_tracking', [])
     ipc.fail('vcs_status', 'no git on this machine')
@@ -533,7 +598,7 @@ describe('the git panel store', () => {
      what the panel says afterwards is what the tests below read. */
   const committing = (ipc) => {
     let dirty = true
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', () => ({
       branch: 'main',
       detached: null,
@@ -622,7 +687,7 @@ describe('the git panel store', () => {
      holding something a person typed. */
   it('each repository keeps its own draft', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_repos', answer(siblings))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [])
     ipc.on('vcs_tracking', [])
@@ -639,7 +704,7 @@ describe('the git panel store', () => {
 
   it('the drafts do not follow the person into another project', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', (args) => repoIn(args.project))
+    ipc.on('vcs_repos', (args) => answer(repoIn(args.project)))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [])
     ipc.on('vcs_tracking', [])
@@ -693,7 +758,7 @@ describe('the git panel store', () => {
      one keystroke away from being committed there. */
   it('a message arriving after the repository changed is dropped', async () => {
     const { stores, ipc, nextTick } = await loadStores()
-    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_repos', answer(siblings))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [])
     ipc.on('vcs_tracking', [])
@@ -714,7 +779,7 @@ describe('the git panel store', () => {
   it('a remembered repository that is no longer there is replaced by the first', async () => {
     const { stores, ipc } = await loadStores()
     stores.settings.settings.project.selectedRepo = '/p/gone'
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', branchesOf('/p'))
     ipc.on('vcs_tracking', [])
@@ -731,7 +796,7 @@ describe('the git panel store', () => {
      its hand and no consumer wants the order. */
   it('tracking is merged into the panel keyed by branch name', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }, { name: 'spike', current: false }])
     ipc.on('vcs_tracking', [
@@ -749,7 +814,7 @@ describe('the git panel store', () => {
      another repository's counts — and the mark is the thing a person acts on. */
   it('tracking for a repository already left is dropped', async () => {
     const { stores, ipc, nextTick } = await loadStores()
-    ipc.on('vcs_repos', siblings)
+    ipc.on('vcs_repos', answer(siblings))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [])
@@ -781,7 +846,7 @@ describe('the git panel store', () => {
      what is known. */
   it('a tracking read that failed leaves the panel unmarked and quiet', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', () => Promise.reject(new Error('no git')))
@@ -800,7 +865,7 @@ describe('the git panel store', () => {
     try {
       const { stores, ipc } = await loadStores()
       let fetches = 0
-      ipc.on('vcs_repos', repoIn('/p'))
+      ipc.on('vcs_repos', answer(repoIn('/p')))
       ipc.on('vcs_status', cleanTree)
       ipc.on('vcs_branches', [{ name: 'main', current: true }])
       ipc.on('vcs_tracking', [])
@@ -827,7 +892,7 @@ describe('the git panel store', () => {
   it('the background fetch does nothing when the setting is off', async () => {
     const { stores, ipc } = await loadStores()
     let fetches = 0
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [])
@@ -847,7 +912,7 @@ describe('the git panel store', () => {
      day without a red block in the sidebar. */
   it('a background fetch that failed says nothing on screen', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [])
@@ -866,7 +931,7 @@ describe('the git panel store', () => {
   it('the marks are read again once a fetch has landed', async () => {
     const { stores, ipc } = await loadStores()
     let fetched = false
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', () =>
@@ -892,7 +957,7 @@ describe('the git panel store', () => {
     const { stores, ipc } = await loadStores()
     let fetches = 0
     let land = null
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [])
@@ -926,7 +991,7 @@ describe('the git panel store', () => {
   it('a pressed check ignores both the setting and the throttle', async () => {
     const { stores, ipc } = await loadStores()
     let fetches = 0
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [])
@@ -948,7 +1013,7 @@ describe('the git panel store', () => {
   it('a pressed check reads the marks again', async () => {
     const { stores, ipc } = await loadStores()
     let fetched = false
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', () =>
@@ -970,7 +1035,7 @@ describe('the git panel store', () => {
      an answer they are waiting for rather than a machine's ordinary state. */
   it('a pressed check that failed says so in the panel', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [])
@@ -995,7 +1060,7 @@ describe('the git panel store', () => {
     const { stores, ipc } = await loadStores()
     let fetches = 0
     let land = null
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [])
@@ -1028,7 +1093,7 @@ describe('the git panel store', () => {
      is what decides whether the abort runs `git merge --abort`. */
   it('a pull that conflicted opens the conflict dialog as a merge', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [
@@ -1056,7 +1121,7 @@ describe('the git panel store', () => {
      the background fetch, and the difference is who asked. */
   it('a refused push lands in writeError with its op', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [
@@ -1078,7 +1143,7 @@ describe('the git panel store', () => {
   it('a branch with no upstream is pushed with set-upstream', async () => {
     const { stores, ipc } = await loadStores()
     let asked = null
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'spike', current: true }])
     ipc.on('vcs_tracking', [{ branch: 'spike', upstream: null, ahead: 0, behind: 0, gone: false }])
@@ -1100,7 +1165,7 @@ describe('the git panel store', () => {
   it('a branch with an upstream is pushed without set-upstream', async () => {
     const { stores, ipc } = await loadStores()
     let asked = null
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [
@@ -1125,7 +1190,7 @@ describe('the git panel store', () => {
   it('a branch whose upstream is gone is published rather than pushed', async () => {
     const { stores, ipc } = await loadStores()
     let asked = null
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     ipc.on('vcs_status', cleanTree)
     ipc.on('vcs_branches', [{ name: 'old', current: true }])
     ipc.on('vcs_tracking', [
@@ -1158,7 +1223,7 @@ describe('the git panel store', () => {
     for (const record of records) {
       const { stores, ipc } = await loadStores()
       let asked = null
-      ipc.on('vcs_repos', repoIn('/p'))
+      ipc.on('vcs_repos', answer(repoIn('/p')))
       ipc.on('vcs_status', cleanTree)
       ipc.on('vcs_branches', [{ name: 'main', current: true }])
       ipc.on('vcs_tracking', [record])
@@ -1182,7 +1247,7 @@ describe('the git panel store', () => {
 describe('the uncommitted file count in the scope bar', () => {
   const load = async (statusReply) => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_repos', repoIn('/p'))
+    ipc.on('vcs_repos', answer(repoIn('/p')))
     statusReply(ipc)
     ipc.on('vcs_branches', [{ name: 'main', current: true }])
     ipc.on('vcs_tracking', [])

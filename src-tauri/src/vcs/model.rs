@@ -72,6 +72,29 @@ pub struct Repo {
     pub detached: Option<String>,
 }
 
+/// What a project is made of, and what it is made of that it does not say so.
+///
+/// One answer rather than two commands, because the two halves are read from
+/// the same directory listing in the same breath: asking for them separately
+/// would let a clone made between the two calls be in one answer and not the
+/// other, and the panel draws them as one block.
+///
+/// `unlisted` is names and not `Repo`s, and that is the whole difference
+/// between the two fields: a repository in the list is one this app will act
+/// on — its branch is read, it can be selected, git is run in it — where an
+/// unlisted one is a folder the panel can only point at. Reading a branch for
+/// it would be answering a question nobody may ask.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRepos {
+    pub repos: Vec<Repo>,
+    /// Directories one level below the project root that git can see and
+    /// `[project].repos` does not name, in the listing's own order. Always
+    /// empty for a project with no configuration, by construction: everything
+    /// found there is already in `repos`.
+    pub unlisted: Vec<String>,
+}
+
 /// One local branch of a repository, as the panel lists it.
 ///
 /// Two fields and no more: an ahead/behind count, an upstream and a remote
