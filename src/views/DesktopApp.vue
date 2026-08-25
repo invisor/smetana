@@ -3184,6 +3184,7 @@ const toastStackStyle = {
               <GitPanel
                 v-else-if="project.sideTab === 'git'"
                 :repos="vcsState.repos"
+                :unlisted="vcsState.unlisted"
                 :selected="vcsState.selected"
                 :tree="vcsState.tree"
                 :branches="vcsState.branches"
@@ -3203,6 +3204,7 @@ const toastStackStyle = {
                 @toggle="toggleGitSection"
                 @toggle-folder="toggleBranchFolders"
                 @resize="resizeGitSection"
+                @setup="openSetup(activePath, true)"
                 @select="selectRepo"
                 @checkout="checkout"
                 @merge="merge"

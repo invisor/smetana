@@ -6,7 +6,9 @@
 
 use std::path::Path;
 
-use super::model::{Branch, ChangeKind, MergeOutcome, OpKind, Repo, Tracking, VcsError, WorkingTree};
+use super::model::{
+    Branch, ChangeKind, MergeOutcome, OpKind, ProjectRepos, Tracking, VcsError, WorkingTree,
+};
 use super::run::Attempt;
 use super::{model, repos, run};
 use crate::agents::oneshot::{self, OneshotError};
@@ -70,11 +72,14 @@ where
     })
 }
 
-/// The repositories of a project. Never a refusal: a folder that is not a
-/// repository, or holds none, is an empty list, which the panel draws as an
-/// empty state of its own.
+/// The repositories of a project, and the ones on disk it does not name.
+///
+/// Never a refusal: a folder that is not a repository, or holds none, is an
+/// empty list, which the panel draws as an empty state of its own. Both halves
+/// are empty in that case, which is what `ProjectRepos::default` means here —
+/// the second half is a statement about a list, and there is no list.
 #[tauri::command]
-pub async fn vcs_repos(project: String) -> Vec<Repo> {
+pub async fn vcs_repos(project: String) -> ProjectRepos {
     off_the_runtime_or_empty("vcs_repos", move || repos::discover(Path::new(&project))).await
 }
 

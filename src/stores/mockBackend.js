@@ -547,12 +547,19 @@ export function installMockBackend() {
        from a fixture — two repositories rather than one, since a project made
        of several is the case the repository list exists for and the case a
        single-repository machine can never show. */
+    /* Both halves of one answer, and the second is deliberately not empty: a
+       browser with nothing unlisted would draw the state every properly set up
+       project is in, which is the one state of this block that cannot be
+       checked by eye anywhere else. */
     if (command === 'vcs_repos') {
       const project = payload?.project ?? MOCK_PROJECTS[0]
-      return [
-        { name: '.', path: project, branch: 'feat/worktree-rename', detached: null },
-        { name: 'admin', path: `${project}/admin`, branch: null, detached: 'a1b2c3d' }
-      ]
+      return {
+        repos: [
+          { name: '.', path: project, branch: 'feat/worktree-rename', detached: null },
+          { name: 'admin', path: `${project}/admin`, branch: null, detached: 'a1b2c3d' }
+        ],
+        unlisted: ['newrepo']
+      }
     }
     /* The left-hand side of a diff. A browser has no git, so one fixture stands
        for every tracked file and the untracked one answers `null` — the two

@@ -2395,6 +2395,29 @@ const menuTargetStyle = {
             <GitPanel :repos="[]" :tree="null" />
           </Panel>
         </div>
+        <!-- The one thing this panel says about a repository it is **not**
+             drawing: a folder somebody cloned into the project, which a
+             configured `[project].repos` cannot grow to hold. What to check —
+             that the caption and the names are rows of exactly the height of
+             the repository rows above them, that the gear sits inside the row
+             in the compact density too, and that the block stays quiet enough
+             not to read as two more repositories. Every other frame here has
+             nothing unlisted, which is what the block looks like in a project
+             set up properly: nothing at all. -->
+        <div :style="{ display: 'flex', width: '252px', height: '260px', border: 'var(--border-w) solid var(--border)' }">
+          <Panel title="Projects" side="left" :collapsible="false" :style="{ flex: 1, minWidth: 0 }">
+            <template #actions>
+              <IconButton icon="refresh-cw" label="Refresh git" size="sm" />
+            </template>
+            <GitPanel
+              :repos="REPOS"
+              :unlisted="['newrepo', 'vendor-fork']"
+              selected="/Users/you/dev/smetana"
+              :tree="CLEAN_TREE"
+              :branches="[{ name: 'main', current: true }]"
+            />
+          </Panel>
+        </div>
         <!-- The one live frame: its folds, its section heights and its branch
              folders are held here the way the app holds them — the first two in
              `settings.layout` and the third under the project — so the
