@@ -64,10 +64,18 @@ const BROKEN_CONFIG_PROJECT = '/Users/you/dev/holiday-curb'
    The names are deliberately of several kinds rather than four `.rs` files:
    `src/catppuccinIcon.js` draws a row by its name, and a fixture of one kind would
    show one glyph — so the tree that used to prove FileTree renders now also
-   shows whether the whole vocabulary does. */
+   shows whether the whole vocabulary does.
+
+   `ignored` is what the real `files_list` answers after asking
+   `git check-ignore` about the folder it just read, and it is set here on a
+   folder, on everything inside that folder and on one file with ordinary
+   siblings — the three shapes the muted row has to be looked at in. Without it
+   the greying would be visible in `npm run tauri dev` alone, and this is a
+   colour that is defined once per theme. */
 export const MOCK_TREE = {
   '': [
     { name: 'src', path: 'src', kind: 'dir' },
+    { name: 'target', path: 'target', kind: 'dir', ignored: true },
     { name: '.gitignore', path: '.gitignore', kind: 'file' },
     { name: 'Cargo.toml', path: 'Cargo.toml', kind: 'file' },
     { name: 'LICENSE', path: 'LICENSE', kind: 'file' },
@@ -78,10 +86,16 @@ export const MOCK_TREE = {
     { name: 'agent.rs', path: 'src/agent.rs', kind: 'file' },
     { name: 'app-icon.png', path: 'src/app-icon.png', kind: 'file' },
     { name: 'bd-aarch64.tar.gz', path: 'src/bd-aarch64.tar.gz', kind: 'file' },
-    { name: 'scratch.rs', path: 'src/scratch.rs', kind: 'file' },
+    { name: 'scratch.rs', path: 'src/scratch.rs', kind: 'file', ignored: true },
     { name: 'tabs.rs', path: 'src/tabs.rs', kind: 'file' },
     { name: 'unknown-binary', path: 'src/unknown-binary', kind: 'file' },
     { name: 'worktree.rs', path: 'src/worktree.rs', kind: 'file' }
+  ],
+  /* Every entry inside an ignored folder is ignored in its own right: git
+     answers for each listing on its own and nothing is carried down by hand. */
+  target: [
+    { name: 'debug', path: 'target/debug', kind: 'dir', ignored: true },
+    { name: 'CACHEDIR.TAG', path: 'target/CACHEDIR.TAG', kind: 'file', ignored: true }
   ]
 }
 

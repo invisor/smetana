@@ -3,6 +3,7 @@
 //! No I/O here: everything that depends on the disk lives in `fs.rs`.
 //! That is why this file is the one carrying the tests — same as `settings/model.rs`.
 
+use std::collections::HashSet;
 use std::path::{Component, Path};
 
 use serde::Serialize;
@@ -35,6 +36,12 @@ pub struct Entry {
     pub name: String,
     pub path: String,
     pub kind: EntryKind,
+    /// Whether git ignores this entry — the tree's only reason to draw a row
+    /// muted, and the one field here that is not read off the directory.
+    /// `false` is what a folder outside any repository answers with, and it is
+    /// an answer rather than a failure: there is no `.gitignore` above such a
+    /// folder with any say over its children.
+    pub ignored: bool,
 }
 
 /// The contents of one directory. `truncated` is how many entries did not fit;
@@ -143,6 +150,30 @@ pub fn skip_in_tree(name: &str) -> bool {
     name == ".git"
 }
 
+/// The names out of a NUL-separated answer from git.
+///
+/// `git check-ignore -z` echoes back the pathnames it matched, each terminated
+/// by a NUL, so the split always ends in an empty piece — and a run that matched
+/// nothing writes nothing at all. Both come out as the empty set, which is also
+/// what the caller substitutes for a directory git could not be asked about, so
+/// there is one shape of answer here and not three.
+pub fn ignored_names(answer: &str) -> HashSet<String> {
+    answer.split('\0').filter(|name| !name.is_empty()).map(str::to_owned).collect()
+}
+
+/// Lay that set over a listing, by **name**: the question is asked with the
+/// working directory set to the folder being read, so what git echoes back is
+/// the bare names it was given rather than paths of any kind.
+///
+/// Assignment and not an `if`, because this is an overlay of one answer and not
+/// an accumulation of several — a name git did not return is a name git does not
+/// ignore, and saying so is the whole of what the front end draws from.
+pub fn mark_ignored(entries: &mut [Entry], ignored: &HashSet<String>) {
+    for entry in entries.iter_mut() {
+        entry.ignored = ignored.contains(&entry.name);
+    }
+}
+
 /// A leading zero byte is the common probe for binariness and the only one that
 /// does not get UTF-8 wrong.
 pub fn looks_binary(bytes: &[u8]) -> bool {
@@ -233,7 +264,7 @@ mod tests {
     use super::*;
 
     fn entry(name: &str, kind: EntryKind) -> Entry {
-        Entry { name: name.into(), path: name.into(), kind }
+        Entry { name: name.into(), path: name.into(), kind, ignored: false }
     }
 
     #[test]
@@ -269,6 +300,70 @@ mod tests {
         assert!(!skip_in_tree(".gitignore"));
         assert!(!skip_in_tree("node_modules"), "lazy reading makes it free");
         assert!(!skip_in_tree("src"));
+    }
+
+    #[test]
+    fn an_answer_with_nothing_in_it_names_nothing() {
+        assert!(ignored_names("").is_empty(), "git matched nothing and wrote nothing");
+        assert!(ignored_names("\0").is_empty(), "and a lone terminator is still nothing");
+    }
+
+    #[test]
+    fn one_matched_name_comes_back_as_one() {
+        let named = ignored_names("node_modules\0");
+        assert_eq!(named.len(), 1);
+        assert!(named.contains("node_modules"));
+    }
+
+    #[test]
+    fn several_matched_names_come_back_as_several() {
+        let named = ignored_names("node_modules\0dist\0.DS_Store\0");
+        assert_eq!(named.len(), 3);
+        assert!(named.contains("node_modules"));
+        assert!(named.contains("dist"));
+        assert!(named.contains(".DS_Store"));
+    }
+
+    #[test]
+    fn a_name_holding_a_space_survives_the_split() {
+        let named = ignored_names("my notes.log\0");
+        assert!(named.contains("my notes.log"), "only the NUL separates, so a space is a name");
+    }
+
+    #[test]
+    fn the_answer_is_laid_over_the_listing_by_name() {
+        let mut list = vec![
+            entry("node_modules", EntryKind::Dir),
+            entry("src", EntryKind::Dir),
+            entry("dist", EntryKind::Dir),
+            entry("package.json", EntryKind::File),
+        ];
+
+        mark_ignored(&mut list, &ignored_names("node_modules\0dist\0"));
+
+        let muted: Vec<&str> =
+            list.iter().filter(|e| e.ignored).map(|e| e.name.as_str()).collect();
+        assert_eq!(muted, vec!["node_modules", "dist"]);
+    }
+
+    #[test]
+    fn a_name_git_did_not_return_is_left_unmarked() {
+        let mut list = vec![entry("src", EntryKind::Dir), entry("README.md", EntryKind::File)];
+
+        mark_ignored(&mut list, &ignored_names("node_modules\0"));
+
+        assert!(list.iter().all(|e| !e.ignored), "an answer about another folder marks nothing");
+    }
+
+    /// The empty set is what a folder outside any repository answers with, and
+    /// the tree draws exactly what it draws today for it.
+    #[test]
+    fn an_empty_set_leaves_the_whole_listing_at_full_strength() {
+        let mut list = vec![entry("node_modules", EntryKind::Dir), entry("src", EntryKind::Dir)];
+
+        mark_ignored(&mut list, &HashSet::new());
+
+        assert!(list.iter().all(|e| !e.ignored));
     }
 
     #[test]

@@ -4,6 +4,11 @@
 //! costs about two seconds and someone has to own the snapshot; `read_dir`
 //! costs milliseconds and holds no state — a queue would be guarding something
 //! nobody contends for. The same reason settings have none.
+//!
+//! That still holds, and the cost it was written about no longer does: since the
+//! tree started drawing git-ignored rows muted, `list_dir` spawns git once per
+//! listing on top of the `read_dir` — see `mark_git_ignored` below, and the
+//! module header in `mod.rs` for what the focus sweep multiplies it by.
 
 use std::fs;
 use std::io::Write;
@@ -12,8 +17,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use super::model::{
-    looks_binary, reject_bad_name, reject_traversal, sort_entries, Entry, EntryKind, FileText,
-    FilesError, Listing, Stat, BINARY_SNIFF_BYTES, MAX_ENTRIES, MAX_FILE_BYTES,
+    ignored_names, looks_binary, mark_ignored, reject_bad_name, reject_traversal, sort_entries,
+    Entry, EntryKind, FileText, FilesError, Listing, Stat, BINARY_SNIFF_BYTES, MAX_ENTRIES,
+    MAX_FILE_BYTES,
 };
 
 /// An I/O error in terms the front end understands.
@@ -261,14 +267,90 @@ pub fn list_dir(root: &Path, rel: &str) -> Result<Listing, FilesError> {
             path: child_path(rel, &name),
             name,
             kind: if kind.is_dir() { EntryKind::Dir } else { EntryKind::File },
+            ignored: false,
         });
     }
 
     sort_entries(&mut entries);
     let truncated = entries.len().saturating_sub(MAX_ENTRIES);
     entries.truncate(MAX_ENTRIES);
+    mark_git_ignored(&full, &mut entries);
 
     Ok(Listing { dir: rel.to_owned(), entries, truncated })
+}
+
+/// Ask git which of these entries it ignores, and mark them. One call per
+/// listing, and the only process this module spawns.
+///
+/// **After the truncation above and deliberately not before it.** The ceiling
+/// exists so that one click on `node_modules` cannot wedge the render, and
+/// asking git about forty thousand names that are on their way to being thrown
+/// away would spend the whole of that saving.
+///
+/// **The working directory is the folder being listed** — the absolute path
+/// `resolve_within` has already vouched for. That is the entire multi-repository
+/// story: git walks up from there and finds whichever repository owns this
+/// folder, so a nested repository, a worktree, and a project holding several
+/// repositories side by side are all served right, and there is not a line here
+/// that knows which folder belongs to which. No `repos::discover`, no
+/// `project.toml`.
+///
+/// **Inheritance costs nothing**, which is why there is no flag to pass down:
+/// git answers for `.bin` inside an ignored `node_modules` on its own, so every
+/// listing answers for itself and expanding a folder deep inside an ignored one
+/// works with no state carried anywhere.
+///
+/// **git and not a matcher of our own.** The rules are more numerous than they
+/// look and this repository's own `.gitignore` shows nearly all of them in
+/// twenty lines: a re-inclusion under an excluded parent, where the outcome
+/// turns on the order of two lines; a pattern anchored to the repository root
+/// rather than matching a folder of that name at any depth; an ignore file at
+/// every level of the tree, plus `.git/info/exclude`, plus whatever a person
+/// keeps in a global `core.excludesFile`. A second implementation of all that
+/// would agree with git for a week and drift quietly afterwards, and the drift
+/// would surface as a row in the wrong colour with nothing to point at. git also
+/// gives one thing away free: `check-ignore` consults the index, so a file that
+/// matches a pattern and is tracked anyway — added with `git add -f` — is
+/// reported as **not** ignored and stays at full strength. That is what VS Code
+/// does and what a person expects, and it is not a property of the ignore files
+/// at all.
+///
+/// **Nothing here ever reaches a person.** `git check-ignore` exits 1 when
+/// nothing matched and 128 when the folder is in no repository at all, and both
+/// mean the same thing to the tree: no row is drawn muted. The first is what
+/// `git_maybe_fed`'s `absent` argument is for; the second arrives as an `Err`
+/// carrying git's own stderr, and so do no git on the machine and a read that
+/// hit `READ_CEILING`. Every one of them is swallowed here and written to
+/// stderr — a folder outside git is a perfectly ordinary state, and a toast
+/// saying so is noise about something that is not broken, which is the standing
+/// `git.rs` already takes for the branch in the scope bar. The worst outcome of
+/// any failure here is a tree that looks exactly as it looks today.
+fn mark_git_ignored(dir: &Path, entries: &mut [Entry]) {
+    // Not a shortcut: `git check-ignore --stdin` given nothing at all exits 128
+    // with "no path specified", which is a refusal on a directory that is
+    // perfectly readable and simply empty.
+    if entries.is_empty() {
+        return;
+    }
+    let mut question = String::new();
+    for entry in entries.iter() {
+        question.push_str(&entry.name);
+        question.push('\0');
+    }
+    let asked = crate::vcs::run::git_maybe_fed(
+        dir,
+        &["check-ignore", "-z", "--stdin"],
+        1,
+        question.as_bytes(),
+    );
+    match asked {
+        Ok(Some(answer)) => mark_ignored(entries, &ignored_names(&answer)),
+        // Exit 1: git was asked and nothing matched.
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!("[files] could not ask git about {}: {err}", dir.display());
+        }
+    }
 }
 
 pub fn read_text(root: &Path, rel: &str) -> Result<FileText, FilesError> {
@@ -1084,6 +1166,129 @@ mod tests {
             "x\n",
             "on a refusal the original file must be left untouched"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A repository holding every case the greying is about, made with **real
+    /// git**. Nothing else can answer these: a re-inclusion under an excluded
+    /// parent turns on the order of two lines, and a file that matches a
+    /// pattern and is tracked anyway is a fact about the index rather than
+    /// about any ignore file. The whole point of asking git is that these are
+    /// not ours to reimplement, so the tests have to run against it.
+    fn ignoring_repository(name: &str) -> PathBuf {
+        let root = scratch(name);
+        let git = |args: &[&str]| {
+            crate::vcs::run::git_write(&root, args).expect("git answered");
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+
+        fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join(".claude/rules")).unwrap();
+        fs::create_dir_all(root.join(".claude/settings")).unwrap();
+        fs::write(root.join("node_modules/.bin/vite"), "x").unwrap();
+        fs::write(root.join("src/main.js"), "x").unwrap();
+        fs::write(root.join(".claude/rules/a.md"), "x").unwrap();
+        fs::write(root.join(".claude/settings/b.json"), "x").unwrap();
+        fs::write(root.join("package.json"), "x").unwrap();
+        fs::write(root.join("keep.log"), "x").unwrap();
+        fs::write(
+            root.join(".gitignore"),
+            "node_modules/\n*.log\n.claude/*\n!.claude/rules/\n",
+        )
+        .unwrap();
+        // Tracked in spite of matching `*.log`, which is the whole of the
+        // `git add -f` case: it must come back at full strength.
+        git(&["add", "-f", "keep.log"]);
+        root
+    }
+
+    fn muted(listing: &Listing) -> Vec<&str> {
+        listing.entries.iter().filter(|e| e.ignored).map(|e| e.name.as_str()).collect()
+    }
+
+    #[test]
+    fn a_listing_carries_what_git_ignores_and_leaves_the_rest_alone() {
+        let root = ignoring_repository("ignored-root");
+
+        let listing = list_dir(&root, "").unwrap();
+
+        assert_eq!(muted(&listing), vec!["node_modules"]);
+        let full: Vec<&str> =
+            listing.entries.iter().filter(|e| !e.ignored).map(|e| e.name.as_str()).collect();
+        assert!(full.contains(&"src"));
+        assert!(full.contains(&"package.json"));
+        assert!(
+            full.contains(&"keep.log"),
+            "a file matching a pattern but tracked anyway is not ignored — git consults the index"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `.claude/*` followed by `!.claude/rules/`: the outcome turns on the
+    /// order of those two lines, and it comes out right here for no reason
+    /// other than that git is the one answering.
+    #[test]
+    fn a_re_inclusion_under_an_excluded_parent_comes_out_right() {
+        let root = ignoring_repository("ignored-reinclusion");
+
+        let listing = list_dir(&root, ".claude").unwrap();
+
+        assert_eq!(muted(&listing), vec!["settings"]);
+        let rules = listing.entries.iter().find(|e| e.name == "rules").expect("rules is listed");
+        assert!(!rules.ignored, "the re-inclusion puts it back at full strength");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// No flag is carried down the tree, and none has to be: git reports a name
+    /// inside an ignored folder as ignored in its own right, so expanding one
+    /// works with no state anywhere.
+    #[test]
+    fn every_listing_answers_for_itself_inside_an_ignored_folder() {
+        let root = ignoring_repository("ignored-inside");
+
+        let listing = list_dir(&root, "node_modules").unwrap();
+
+        assert_eq!(muted(&listing), vec![".bin"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// git exits 128 here — the folder is in no repository at all — and the
+    /// listing comes back whole with nothing marked and no error of any kind.
+    /// This is the ordinary state of a project somebody has not put under git,
+    /// and it is an answer rather than a failure.
+    #[test]
+    fn a_folder_in_no_repository_lists_with_nothing_muted_and_no_refusal() {
+        let root = scratch("ignored-no-repo");
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join("app.js"), "x").unwrap();
+        fs::write(root.join("notes.log"), "x").unwrap();
+
+        let listing = list_dir(&root, "").expect("a folder outside git still lists");
+
+        assert_eq!(listing.entries.len(), 3);
+        assert!(listing.entries.iter().all(|e| !e.ignored), "there is no .gitignore above it");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// An empty directory is the one shape that must not reach git at all:
+    /// `check-ignore --stdin` given nothing exits 128 with "no path specified",
+    /// which would be a refusal on a folder that is perfectly readable.
+    #[test]
+    fn an_empty_directory_inside_a_repository_is_never_asked_about() {
+        let root = ignoring_repository("ignored-empty");
+        fs::create_dir_all(root.join("src/empty")).unwrap();
+
+        let listing = list_dir(&root, "src/empty").expect("an empty folder lists");
+
+        assert!(listing.entries.is_empty());
 
         let _ = fs::remove_dir_all(&root);
     }

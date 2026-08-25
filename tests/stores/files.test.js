@@ -323,4 +323,61 @@ describe('treeNodes', () => {
   it('an unread root gives an empty tree rather than a throw', () => {
     expect(files.treeNodes(new Set())).toEqual([])
   })
+
+  /* The one value the tree's `git` prop is ever given in the product. The five
+     other kinds it understands — modified, added, deleted, untracked, conflict —
+     have no source, so `undefined` is the right answer for everything else and
+     not a hole waiting to be filled. */
+  it('an entry git ignores is marked, and everything else is left undefined', () => {
+    files.filesState.dirs.set(
+      '',
+      listing({
+        entries: [
+          entry({ name: 'node_modules', path: 'node_modules', kind: 'dir', ignored: true }),
+          entry({ name: 'src', path: 'src', kind: 'dir' }),
+          entry({ name: 'package.json', path: 'package.json' })
+        ]
+      })
+    )
+
+    const nodes = files.treeNodes(new Set())
+
+    expect(nodes.map((n) => n.git)).toEqual(['ignored', undefined, undefined])
+  })
+
+  /* Every listing answers for itself: git reports a name inside an ignored
+     folder as ignored on its own, so nothing has to be carried down the tree. */
+  it('the children of an ignored folder carry the mark themselves', () => {
+    files.filesState.dirs.set(
+      '',
+      listing({
+        entries: [entry({ name: 'node_modules', path: 'node_modules', kind: 'dir', ignored: true })]
+      })
+    )
+    files.filesState.dirs.set(
+      'node_modules',
+      listing({
+        dir: 'node_modules',
+        entries: [entry({ name: '.bin', path: 'node_modules/.bin', kind: 'dir', ignored: true })]
+      })
+    )
+
+    const nodes = files.treeNodes(new Set(['node_modules']))
+
+    expect(nodes[0].children[0].git).toBe('ignored')
+  })
+
+  /* A project outside git, and the truncation stub beside it: neither has an
+     `ignored` field at all, and both draw at full strength rather than throwing. */
+  it('an entry with no ignored field at all is drawn at full strength', () => {
+    files.filesState.dirs.set(
+      '',
+      listing({ entries: [{ name: 'src', path: 'src', kind: 'dir' }], truncated: 3 })
+    )
+
+    const nodes = files.treeNodes(new Set())
+
+    expect(nodes[0].git).toBe(undefined)
+    expect(nodes[1].git).toBe(undefined)
+  })
 })

@@ -60,6 +60,7 @@ export const entry = (over = {}) => ({
   name: 'a.txt',
   path: 'a.txt',
   kind: 'file',
+  ignored: false,
   ...over
 })
 
