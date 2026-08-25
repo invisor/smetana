@@ -19,12 +19,26 @@ thin commands over it — the reads (`files_list`, `files_read`, `files_stat`) a
 
 **A listing is a `read_dir` and one spawn of git**, and that second half is new: the module spawned
 nothing at all for most of its life. `list_dir` ends by asking `git check-ignore -z --stdin` which of
-the entries it just read are ignored, so the tree can draw those rows muted the way VS Code's
-explorer does, and that is a process of about 5-10 ms on top of a `read_dir` measured in fractions of
-one. The multiplier worth knowing is the **focus sweep**: `catchUp` in `DesktopApp.vue` re-lists every
-open folder when the window is focused, so a focus now costs one git spawn per expanded folder — a
-dozen at worst, tens of milliseconds altogether, all of it inside an async command and off the UI
-thread. Everything the header above says still holds; only the cost moved.
+the entries it just read are ignored, so the tree can draw those rows muted the way VS Code's explorer
+does. Everything the header above says still holds; only the cost moved.
+
+**The numbers are measured, not guessed** — Apple Silicon, macOS, warm cache, the call in the shape
+`mark_git_ignored` makes it. An ordinary listing of a couple of dozen names in this repository (index:
+508 files) is **7 ms median**; a full `MAX_ENTRIES` listing of 1000 names in a small repository is
+**16 ms**. **It is the index that scales it and not the listing**, because `check-ignore` consults the
+index — which is what buys the `git add -f` case below — so the cost follows the size of the
+repository: the same 1000-name listing against a 50 000-file index came to **0.5 s**. A wide folder in
+a monorepo is the worst case worth knowing, and what it costs is rows arriving a beat late.
+
+**Two multipliers, and together they are why `files_list` runs off the async runtime.** `catchUp` in
+`DesktopApp.vue` re-lists every open folder on window focus, and `refreshDirs` in `stores/files.js`
+fires them as a `Promise.all` — so a focus is N concurrent `files_list` calls, one git spawn each,
+against a runtime holding one worker per core. `files_list` therefore does its work in
+`spawn_blocking` and not in the body of its `async fn`, which is `vcs/commands.rs`'s rule stated in
+bold and naming this module as the victim: every IPC call in the app shares that runtime, so a git
+that is merely slow would take workers out of everything else on screen with nothing saying why. That
+rule did not apply here while a listing was a sub-millisecond `read_dir`; it applies now, and it is
+the one thing in this feature that is easy to leave out and expensive to leave out.
 
 Four decisions inside that one call, each of which is the whole reason it works. It is made **after**
 the `MAX_ENTRIES` truncation, because the ceiling exists so a click on `node_modules` cannot wedge the
@@ -43,12 +57,18 @@ for a week and drift afterwards, and the drift would surface as a row in the wro
 to point at.
 
 **Nothing about it can reach a person.** `check-ignore` exits 1 when nothing matched and 128 when the
-folder is in no repository at all, and both mean the same to the tree: no row drawn muted. The first
-is what `run::git_maybe_fed`'s `absent` argument takes; the second is an `Err`, and so are no git on
-the machine and a read that hit `READ_CEILING` — every one swallowed on the spot and written to
-stderr, no toast, nothing in `filesState.lastError`. A folder outside git is an ordinary state, the
-standing `git.rs` already takes for the branch in the scope bar, and the worst outcome of any failure
-here is the tree exactly as it looked before this existed.
+folder is in no repository at all, and both mean the same to the tree: no row drawn muted, no toast,
+nothing in `filesState.lastError`. A folder outside git is an ordinary state, the standing `git.rs`
+already takes for the branch in the scope bar, and the worst outcome of any failure here is the tree
+exactly as it looked before this existed.
+
+**Neither of those two reaches the log either.** Exit 1 is `run::git_maybe_fed`'s `absent` argument
+and never was an error. 128 arrives as `VcsError::Git { status: 128, .. }` and is matched by that
+code, because the alternative is a line per open folder on every window focus, forever, in every
+project nobody has put under git — and a channel that noisy says nothing when a real failure needs it.
+What that gives up is real and small: 128 is git's code for any fatal, so an unreadable index or a
+permissions problem is now as quiet as an ordinary folder. The failures that do **not** recur still
+speak — `VcsError::NoGit` and a read that hit `READ_CEILING` are logged to stderr.
 
 `run::git_maybe_fed` is `git_maybe` with bytes written to the child's standard input, and it exists
 for this one caller. `bounded` gives every other git call `/dev/null` there on purpose — git with an

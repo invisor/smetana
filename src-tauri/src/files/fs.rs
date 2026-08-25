@@ -7,8 +7,10 @@
 //!
 //! That still holds, and the cost it was written about no longer does: since the
 //! tree started drawing git-ignored rows muted, `list_dir` spawns git once per
-//! listing on top of the `read_dir` — see `mark_git_ignored` below, and the
-//! module header in `mod.rs` for what the focus sweep multiplies it by.
+//! listing on top of the `read_dir` — see `mark_git_ignored` below, the module
+//! header in `mod.rs` for the measured numbers and what the focus sweep
+//! multiplies them by, and `commands.rs` for why that spawn is waited on off the
+//! async runtime.
 
 use std::fs;
 use std::io::Write;
@@ -21,6 +23,7 @@ use super::model::{
     Entry, EntryKind, FileText, FilesError, Listing, Stat, BINARY_SNIFF_BYTES, MAX_ENTRIES,
     MAX_FILE_BYTES,
 };
+use crate::vcs::model::VcsError;
 
 /// An I/O error in terms the front end understands.
 fn io_error(path: &str, err: &std::io::Error) -> FilesError {
@@ -317,14 +320,25 @@ pub fn list_dir(root: &Path, rel: &str) -> Result<Listing, FilesError> {
 ///
 /// **Nothing here ever reaches a person.** `git check-ignore` exits 1 when
 /// nothing matched and 128 when the folder is in no repository at all, and both
-/// mean the same thing to the tree: no row is drawn muted. The first is what
-/// `git_maybe_fed`'s `absent` argument is for; the second arrives as an `Err`
-/// carrying git's own stderr, and so do no git on the machine and a read that
-/// hit `READ_CEILING`. Every one of them is swallowed here and written to
-/// stderr — a folder outside git is a perfectly ordinary state, and a toast
-/// saying so is noise about something that is not broken, which is the standing
-/// `git.rs` already takes for the branch in the scope bar. The worst outcome of
-/// any failure here is a tree that looks exactly as it looks today.
+/// mean the same thing to the tree: no row is drawn muted. Neither is a toast —
+/// a folder outside git is a perfectly ordinary state, and saying so on screen
+/// is noise about something that is not broken, which is the standing `git.rs`
+/// already takes for the branch in the scope bar. The worst outcome of any
+/// failure here is a tree that looks exactly as it looks today.
+///
+/// **Neither of the two is written to the log either, and 128 is the one worth
+/// arguing about.** Exit 1 is `git_maybe_fed`'s `absent` argument and never was
+/// an error. 128 comes back as `VcsError::Git { status: 128, .. }` and is
+/// matched here by that code, because the alternative is a line per open folder
+/// on **every window focus, forever**, in every project somebody has not put
+/// under git — `refreshDirs` re-lists them all — and a channel that noisy is
+/// worthless at the moment a real failure needs it. What that gives up is real
+/// and small: 128 is git's code for any fatal, so a genuinely broken repository
+/// — an unreadable index, a permissions problem — is now as quiet as an
+/// ordinary folder. It buys back the only diagnostic that recurs, and the
+/// failures that do not recur still speak: no git on the machine
+/// (`VcsError::NoGit`) and a read that hit `READ_CEILING` are logged, because
+/// neither is an ordinary state and neither repeats once per folder.
 fn mark_git_ignored(dir: &Path, entries: &mut [Entry]) {
     // Not a shortcut: `git check-ignore --stdin` given nothing at all exits 128
     // with "no path specified", which is a refusal on a directory that is
@@ -347,6 +361,10 @@ fn mark_git_ignored(dir: &Path, entries: &mut [Entry]) {
         Ok(Some(answer)) => mark_ignored(entries, &ignored_names(&answer)),
         // Exit 1: git was asked and nothing matched.
         Ok(None) => {}
+        // Exit 128: this folder is in no repository. The ordinary state of a
+        // project nobody has put under git, and an answer rather than a
+        // failure — see the note above for what staying quiet costs.
+        Err(VcsError::Git { status: 128, .. }) => {}
         Err(err) => {
             eprintln!("[files] could not ask git about {}: {err}", dir.display());
         }
@@ -1184,6 +1202,17 @@ mod tests {
         git(&["init", "--quiet"]);
         git(&["config", "user.email", "test@example.com"]);
         git(&["config", "user.name", "Test"]);
+        // The person's own `core.excludesFile` must not reach the assertions
+        // below. `.claude/` in a global ignore file is a common thing to have
+        // among people working on this project, and with one set these exact
+        // sets would fail on a tree that is perfectly correct — the test would
+        // be measuring the machine rather than the fixture. An empty file of
+        // our own, kept outside the repository so it never appears in a
+        // listing; a repository-local setting outranks the global one.
+        let excludes = std::env::temp_dir()
+            .join(format!("smetana-files-{}-no-global-excludes", std::process::id()));
+        fs::write(&excludes, "").expect("write an empty excludes file");
+        git(&["config", "core.excludesFile", excludes.to_str().expect("a UTF-8 temp path")]);
 
         fs::create_dir_all(root.join("node_modules/.bin")).unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
