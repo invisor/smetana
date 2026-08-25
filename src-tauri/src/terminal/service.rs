@@ -593,7 +593,22 @@ fn handle(
                     // list the file is missing, and that list has grown.
                     eprintln!("[runs] could not amend .gitignore: {err}");
                 }
-                crate::runs::survey::render(&crate::runs::survey::run(Path::new(&project)))
+                let root = Path::new(&project);
+                // Two blocks and not one: the scan says what this project is,
+                // and the browser facts say what the machine it will be worked
+                // on can do. Only `[live_check].mode = "browser"` reaches
+                // outside the repository for a tool, so it is the one part of
+                // the file the folder alone cannot answer.
+                //
+                // No busy project, deliberately: that is one run holding
+                // Playwright's single profile at this moment, and the question
+                // here is whether the tool is installed at all.
+                let mut facts = crate::runs::survey::render(&crate::runs::survey::run(root));
+                facts.push('\n');
+                facts.push_str(&crate::runs::browser::render(&crate::runs::browser::detect(
+                    root, None,
+                )));
+                facts
             });
             // Taken before the intent is handed to the launch, which consumes
             // it. Nothing else is kept from it: the rest is the agent's

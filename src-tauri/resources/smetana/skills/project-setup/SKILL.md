@@ -89,6 +89,43 @@ with a `command` when there is an end-to-end suite instead. `mode = "none"`
 when there is neither; the toggle in Smetana then says so rather than
 pretending.
 
+**If you write `mode = "browser"`, make sure this machine can drive one.** The
+prompt carries what Smetana found — a Playwright MCP server, Playwright's
+browsers, the Claude in Chrome extension — and it says at the end that it read
+them from its own environment. That is not your environment: this session runs
+under the person's login shell, so check for yourself before you believe a
+"not found". One command, not an investigation.
+
+**Offer to install something only when nothing at all can drive a browser —
+neither Playwright nor the extension.** Either tool is enough on its own, so a
+machine carrying only Claude in Chrome is equipped, and the two Playwright
+lines reading "not found" beside it are true and beside the point: Smetana's
+own run dialog counts that machine as ready. Playwright is the other way
+round — two lines and one tool, which counts only when both say found, because
+an MCP entry with no browsers downloaded drives nothing. The trigger is the
+outcome, not a line of the block.
+
+**When there is genuinely nothing, name the half that is missing and ask.** The
+two gaps are different work. No MCP server entry: write it where the harness
+this session is running under will actually read it. Under Claude Code that is
+`.mcp.json` at the project root — the smaller change, it stays inside the
+project you are setting up, and it travels with the repository to the next
+machine — or `~/.claude.json` if they want Playwright in every project. Under
+Codex it is `~/.codex/config.toml` and nowhere else: Codex reads no project
+`.mcp.json`, and one written there would leave Smetana reporting the server
+found while no run could use it. No browsers: `npx playwright install`.
+**Never install anything the person has not agreed to** — a download nobody
+asked for is not an exception to the rule that you ask about what the folder
+cannot answer.
+
+**If they say no, leave `mode = "browser"` as it is.** The mode describes the
+project, not the machine. Writing `none` instead would put a false statement
+about the project into a file every run reads from now on, and switch the live
+check off for good — including on the day they install Playwright, and on every
+other machine that ever opens this project. Smetana asks the machine question
+again each time the run dialog opens, and that is where an unanswerable
+`browser` mode shows up.
+
 ## Ask about what the folder cannot answer
 
 The scan cannot tell you which branch work should merge into, whether a red
