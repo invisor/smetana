@@ -17,6 +17,14 @@
    centre column; which repository it belongs to is the caller's business, since
    this component is handed the selection rather than holding it.
 
+   At the foot of the repository list is the one thing this panel says about a
+   repository it is **not** drawing: a folder somebody cloned into the project
+   from a terminal, which `[project].repos` cannot grow to hold on its own. What
+   is drawn there — nothing, one name, or several — is `unlistedRepos.js`, and
+   the way out is the `setup` event, the same dialog the project row's own menu
+   opens. This panel gains no verb of its own for it: that file is the setup
+   agent's to write.
+
    The writes a branch row offers — checkout, merge, rebase, new branch — leave
    as events and are drawn by `BranchList`. Three more leave from the Branches
    caption rather than from a row: Pull and Push are about the branch this
@@ -70,6 +78,7 @@ import ChangeList from './ChangeList.vue'
 import CommitBox from './CommitBox.vue'
 import EmptyState from '../core/EmptyState.vue'
 import Icon from '../core/Icon.vue'
+import IconButton from '../core/IconButton.vue'
 import RepoList from './RepoList.vue'
 import Resizer from '../shell/Resizer.vue'
 import SectionHeader from './SectionHeader.vue'
@@ -82,9 +91,16 @@ import {
   resolveDrag
 } from './sectionHeights.js'
 import { fetchAction, pullAction, pushAction } from './tracking.js'
+import { SETUP_LABEL, unlistedBlock } from './unlistedRepos.js'
 
 const props = defineProps({
   repos: { type: Array, default: () => [] },
+  /* The names of the repositories on disk that `.smetana/project.toml` does
+     not hold, as `vcsState.unlisted` carries them. Names and not rows: there
+     is nothing in this panel that can be done to one of them, and the block
+     drawn from them is the panel saying so rather than offering anything.
+     Empty is the ordinary answer, and it draws nothing at all. */
+  unlisted: { type: Array, default: () => [] },
   /* The selected repository's absolute path. */
   selected: { type: String, default: null },
   /* `{ branch, detached, changes }`, or null when it could not be read — never
@@ -150,6 +166,14 @@ const props = defineProps({
 })
 const emit = defineEmits([
   'select',
+  /* The way out of the state the block below names, and deliberately not a
+     verb of this panel's own: it opens the same setup dialog the project row's
+     menu opens, and the setup agent stays the only thing in this app that
+     writes `.smetana/project.toml`. It carries nothing, because there is
+     nothing to choose — the project is the caller's, and the dialog is always
+     the "setting up over an existing file" one, since a panel with something
+     unlisted to point at is a panel with a configuration that missed it. */
+  'setup',
   'checkout',
   'merge',
   'rebase',
@@ -230,6 +254,80 @@ const failureTitle = computed(() =>
    that is on its way. */
 const settled = computed(() => !props.loading || props.repos.length > 0)
 const changes = computed(() => props.tree?.changes ?? [])
+
+/* What this panel has to say about a folder in the project that
+   `.smetana/project.toml` does not name, or `null` for the ordinary case where
+   it has nothing to say and draws nothing at all. The rule is
+   `unlistedRepos.js`, pure and tested, of the `sectionHeights.js` family: what
+   is left here is the drawing.
+
+   Behind `settled` with the list itself, and for that same reason: the block is
+   a statement about a directory that was read, and it must not flash over a
+   list still on its way. A read that failed clears the names in the store, so
+   there is nothing to draw over a failure either. */
+const unlisted = computed(() => (settled.value ? unlistedBlock(props.unlisted) : null))
+
+/* Rows, both of them, and that is load-bearing rather than tidy: this section's
+   height is counted in rows and never in pixels (`sectionHeights.js`), and one
+   thing drawn here at some other height would put the measured row a fraction
+   away from the drawn ones for the whole of that arithmetic — so a drag would
+   stop short of a boundary and leave half a row under the fold.
+
+   The hairline is `SectionHeader`'s `divided`, for its reason one level down:
+   every row in this panel is `--row-h` and quiet, so with nothing between them
+   the block would read as two more repositories rather than as a remark about
+   the list above. It is drawn inside the height, which `box-sizing:border-box`
+   is what makes true. */
+const unlistedCaptionStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  height: 'var(--row-h)',
+  flexShrink: 0,
+  /* The gear would otherwise sit against the panel's own edge — the inset
+     `SectionHeader` gives a caption that carries controls. */
+  padding: '0 var(--space-3) 0 var(--space-5)',
+  borderTop: 'var(--border-w) solid var(--border-subtle)',
+  font: 'var(--weight-medium) var(--text-xs)/1 var(--font-sans)',
+  color: 'var(--text-muted)'
+}
+/* Prose in sans and the identifier in mono, which is why the caption arrives
+   from the rule in two pieces rather than as one sentence with a path buried in
+   it. Both shrink before the row does: a flex item refuses by default to go
+   below its own content, and the gear would be pushed off the end of a narrow
+   panel. */
+const unlistedFileStyle = {
+  flex: '0 1 auto',
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
+}
+/* A name is an identifier and is drawn as the repository rows above are drawn,
+   muted: these are folders the panel is pointing at rather than rows anything
+   can be done to, so nothing here hovers, selects or is pressed. */
+const unlistedRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-3)',
+  height: 'var(--row-h)',
+  flexShrink: 0,
+  padding: '0 var(--space-5)',
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
+  color: 'var(--text-muted)'
+}
+const unlistedNameStyle = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+}
+/* The glyph the repository rows carry, at the size `RepoList` draws it, and it
+   is here for the alignment rather than for the picture: without it the names
+   would start where the icons above them start and read as a differently
+   indented list of the same kind of thing. */
+const UNLISTED_MARK = 12
 
 /* Which write git declined, in its own words above git's. One block for the
    three of them, keyed on the `op` the refusal came with: a message reading
@@ -554,6 +652,40 @@ const onReset = (section) => emit('resize', { section, rows: null })
           :selected="selected"
           @select="$emit('select', $event)"
         />
+        <!-- The foot of the list, and only when there is something to say: a
+             repository somebody cloned into this project from a terminal, which
+             a configured `[project].repos` can never grow to hold. The panel
+             names it and points at the one door that fixes it — the setup
+             agent, which is the only thing in this app that writes that file.
+             With nothing unlisted this is not a caption, a row or an inset: the
+             panel is exactly what it was.
+
+             Inside the scroller with the rows rather than under it, because it
+             is about that list: a folder named below the fold of a section
+             somebody dragged short is a remark they can scroll to, where one
+             pinned outside would take a row from the list it is about. -->
+        <div v-if="unlisted" role="group" :aria-label="unlisted.summary">
+          <div :style="unlistedCaptionStyle">
+            <span>{{ unlisted.lead }}</span>
+            <span :style="unlistedFileStyle">{{ unlisted.file }}</span>
+            <span :style="{ flex: 1 }" />
+            <!-- The same verb the project row's right-click menu offers, in the
+                 same words and with the same glyph, since it opens the same
+                 dialog. `sm`, like every other control in this panel's rows:
+                 the default control height is taller than a row in the compact
+                 density. -->
+            <IconButton
+              icon="settings-2"
+              :label="SETUP_LABEL"
+              size="sm"
+              @click="emit('setup')"
+            />
+          </div>
+          <div v-for="name in unlisted.names" :key="name" :style="unlistedRowStyle">
+            <Icon name="folder-git-2" :size="UNLISTED_MARK" :style="{ flex: 'none' }" />
+            <span :style="unlistedNameStyle">{{ name }}</span>
+          </div>
+        </div>
       </div>
       <Resizer
         v-if="reposResizer"

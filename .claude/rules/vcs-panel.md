@@ -44,6 +44,27 @@ resolves to nothing readable is left out rather than shown broken, the rule `git
 Each row's branch comes from `git::head` — a file read, so the whole list costs **no process at
 all**.
 
+**A configured list cannot grow on its own, and the panel says so rather than staying quiet about
+it.** Somebody clones a repository into their project from a terminal, and for a project with a
+`[project].repos` it never appears — the refresh button re-reads the file and gets the same list,
+which is correct and stays. What was wrong was the silence, so `repos.rs` carries a second pure rule
+beside `names`: which folders in the listing the configuration does not name. `discover` reads the
+listing in **both** arms now and answers `ProjectRepos { repos, unlisted }`, which is the cost bought
+back deliberately — one `read_dir` plus a `.git` stat per entry on every window focus, exactly what
+every project *without* a configuration already pays. In the unconfigured arm the answer is empty by
+construction, never by a branch, which is what keeps it from being a second concept. `stores/vcs.js`
+holds it as `unlisted` and clears it everywhere `repos` is cleared — the error path and `reset()` —
+so a read that failed never leaves a sentence standing about a directory nobody looked at.
+`GitPanel` draws it at the foot of the repositories section, in `--row-h` rows so the arithmetic
+above is untouched: a caption, one muted mono name each, and the `settings-2` gear that opens the
+**same** setup dialog the project row's menu opens. Nothing / one name / several is
+`components/git/unlistedRepos.js`, pure and tested. **The panel gains no verb of its own**: writing
+`.smetana/project.toml` from here was rejected on the file's own contents — it is comments and prose
+throughout, and any round trip through `toml::to_string` destroys all of it — so the setup agent
+stays the only thing in this app that writes it. Merging the two arms was rejected too: the
+configured list is what `runs::commands::target_branches` merges into, and offering a repository runs
+know nothing about would trade one silence for a louder lie.
+
 `run.rs` builds the child's environment from `shell_env::path()`, exactly as `runs/preflight.rs` and
 `terminal/pty.rs` do, and for the reason recorded there. `GIT_OPTIONAL_LOCKS=0` on every call, reads
 and writes alike, so looking at a status never takes `index.lock` out from under an agent working in
