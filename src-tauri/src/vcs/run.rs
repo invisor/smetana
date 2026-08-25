@@ -34,7 +34,7 @@
 //! focus) and there is nobody for git to ask, so `git_network` refuses every
 //! prompt as well. That part is an environment rather than a ceiling.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread::JoinHandle;
@@ -159,6 +159,34 @@ pub fn git_maybe(repo: &Path, args: &[&str], absent: i32) -> Result<Option<Strin
     Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
+/// `git_maybe`, with bytes written to the child's standard input.
+///
+/// One caller and one reason: `git check-ignore -z --stdin` is how the file
+/// tree asks about a whole listing in a single process, and a listing is up to
+/// `files::model::MAX_ENTRIES` names. The same question as arguments is a
+/// command line that a directory of long names pushes past the 32 767
+/// characters `CreateProcess` accepts, so on Windows the call would begin
+/// failing on exactly the directories the question is most worth asking about.
+///
+/// Everything else is `git_maybe`'s, the exit code that counts as an answer
+/// included. A read by construction — `check-ignore` writes nothing — so
+/// `READ_CEILING`.
+pub fn git_maybe_fed(
+    repo: &Path,
+    args: &[&str],
+    absent: i32,
+    input: &[u8],
+) -> Result<Option<String>, VcsError> {
+    let out = bounded(local(repo, args), READ_CEILING, Capture::Keep, Feed::Bytes(input))?;
+    if out.status.code() == Some(absent) {
+        return Ok(None);
+    }
+    if !out.status.success() {
+        return Err(refusal(&out));
+    }
+    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
 /// What a call came to, for a caller that decides from something **other than
 /// the exit code** whether git refused.
 pub enum Attempt {
@@ -260,7 +288,7 @@ fn spawn_network(repo: &Path, args: &[&str]) -> Result<Output, VcsError> {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("SSH_ASKPASS_REQUIRE", "never")
         .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
-    bounded(command, NETWORK_TIMEOUT, Capture::Discard)
+    bounded(command, NETWORK_TIMEOUT, Capture::Discard, Feed::Nothing)
 }
 
 /// The child itself: the program, the arguments, the working directory and the
@@ -272,7 +300,7 @@ fn spawn(
     ceiling: Duration,
     stdout: Capture,
 ) -> Result<Output, VcsError> {
-    bounded(local(repo, args), ceiling, stdout)
+    bounded(local(repo, args), ceiling, stdout, Feed::Nothing)
 }
 
 /// The command every call in this file starts from, remote ones included.
@@ -300,6 +328,17 @@ enum Capture {
     Keep,
 }
 
+/// What the child reads on standard input.
+///
+/// `Nothing` is `/dev/null` and is what every call here but one wants — see
+/// `bounded` for why that is a ceiling rather than a default. `Bytes` is a pipe
+/// written and then closed, which is the only way to ask git a question longer
+/// than a command line may be.
+enum Feed<'a> {
+    Nothing,
+    Bytes(&'a [u8]),
+}
+
 /// Run a child with a ceiling on how long it may take, and come back with what
 /// it said.
 ///
@@ -321,9 +360,17 @@ enum Capture {
 /// output says so (`Capture::Discard`) and it is never opened at all, which is
 /// the cheaper half of the same rule rather than a different one.
 ///
-/// **Standard input is `/dev/null`**, and that is a ceiling of its own: git
-/// with an inherited stdin waits on the editor or the prompt it opened, and no
-/// terminal is attached to this process for anybody to answer it in.
+/// **Standard input is `/dev/null` unless a caller hands over bytes**, and that
+/// is a ceiling of its own: git with an *inherited* stdin waits on the editor or
+/// the prompt it opened, and no terminal is attached to this process for anybody
+/// to answer it in. `Feed::Bytes` is not that — it is a pipe this function owns,
+/// written whole and then dropped, and the drop is the end of file git is
+/// waiting for. It is written **after** both readers are running, for the reason
+/// they exist: a child blocked in `write` because nobody is draining its output
+/// would never get round to reading its input, and the two waits would hold each
+/// other until the deadline. A failed write is dropped on the floor — a git that
+/// closed the pipe early has an exit code, and the exit code is what the caller
+/// reads.
 ///
 /// **The child is stopped with its group, and then reaped** — `terminate`, which
 /// is where the care is.
@@ -343,11 +390,22 @@ enum Capture {
 /// rather than fixed: the fix is a channel with a timeout and a leaked thread,
 /// which is more machinery than the case has earned so far. What it must not
 /// cost is somebody's afternoon looking at the poll loop above.
-fn bounded(mut command: Command, timeout: Duration, stdout: Capture) -> Result<Output, VcsError> {
-    command.stdin(Stdio::null()).stderr(Stdio::piped()).stdout(match stdout {
-        Capture::Discard => Stdio::null(),
-        Capture::Keep => Stdio::piped(),
-    });
+fn bounded(
+    mut command: Command,
+    timeout: Duration,
+    stdout: Capture,
+    input: Feed<'_>,
+) -> Result<Output, VcsError> {
+    command
+        .stdin(match input {
+            Feed::Nothing => Stdio::null(),
+            Feed::Bytes(_) => Stdio::piped(),
+        })
+        .stderr(Stdio::piped())
+        .stdout(match stdout {
+            Capture::Discard => Stdio::null(),
+            Capture::Keep => Stdio::piped(),
+        });
     group_of_its_own(&mut command);
 
     // The only command that ever reaches this in the app is git, which is what
@@ -359,6 +417,13 @@ fn bounded(mut command: Command, timeout: Duration, stdout: Capture) -> Result<O
 
     let out = drain(child.stdout.take());
     let err = drain(child.stderr.take());
+
+    // Taken rather than borrowed, so the handle is dropped at the end of this
+    // block: that drop is the end of file, and without it git waits on a pipe
+    // nobody will write to again.
+    if let (Feed::Bytes(bytes), Some(mut pipe)) = (input, child.stdin.take()) {
+        let _ = pipe.write_all(bytes);
+    }
 
     let deadline = Instant::now() + timeout;
     // The poll starts short and backs off, which it did not have to while the
@@ -573,6 +638,7 @@ mod tests {
             script("yes 0123456789 | head -c 200000 1>&2"),
             Duration::from_secs(20),
             Capture::Discard,
+            Feed::Nothing,
         )
         .expect("the child finished inside its deadline");
 
@@ -590,6 +656,7 @@ mod tests {
             script("yes 0123456789 | head -c 200000"),
             Duration::from_secs(20),
             Capture::Keep,
+            Feed::Nothing,
         )
         .expect("the child finished inside its deadline");
 
@@ -605,11 +672,44 @@ mod tests {
             script("yes 0123456789 | head -c 200000"),
             Duration::from_secs(20),
             Capture::Discard,
+            Feed::Nothing,
         )
         .expect("the child finished inside its deadline");
 
         assert!(out.status.success());
         assert!(out.stdout.is_empty(), "nothing asked for it");
+    }
+
+    /// The two halves of `Feed::Bytes`: the child reads what it was handed, and
+    /// it reaches the end of the input at all. `cat` never exits on a pipe that
+    /// stays open, so a version that forgot to drop the handle would not come
+    /// back with the wrong bytes — it would sit here until the deadline.
+    #[test]
+    fn a_child_reads_what_it_was_fed_and_then_reaches_the_end_of_it() {
+        let out = bounded(
+            script("cat"),
+            Duration::from_secs(20),
+            Capture::Keep,
+            Feed::Bytes(b"one\0two\0"),
+        )
+        .expect("the child finished inside its deadline");
+
+        assert!(out.status.success(), "the pipe was closed, so cat saw end of file");
+        assert_eq!(out.stdout, b"one\0two\0", "every byte went through");
+    }
+
+    /// More than a pipe holds, in the other direction. The write happens after
+    /// both readers are running, so a child that echoes its input can never
+    /// block this thread by filling the output nobody is draining.
+    #[test]
+    fn a_feed_larger_than_a_pipe_does_not_deadlock_against_the_answer() {
+        let fed = vec![b'x'; 200_000];
+
+        let out = bounded(script("cat"), Duration::from_secs(20), Capture::Keep, Feed::Bytes(&fed))
+            .expect("the child finished inside its deadline");
+
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 200_000, "every byte came back");
     }
 
     /// `Child` has no reaping `Drop`, so a kill with no `wait` behind it leaves
@@ -621,7 +721,7 @@ mod tests {
         let pidfile = dir.join("pid");
         let command = script(&format!("echo $$ > {}; sleep 30", pidfile.display()));
 
-        let err = bounded(command, Duration::from_millis(400), Capture::Discard)
+        let err = bounded(command, Duration::from_millis(400), Capture::Discard, Feed::Nothing)
             .expect_err("the deadline fired");
         assert_eq!(err.kind(), "timeout", "this app stopped it, and git said nothing");
 
@@ -640,7 +740,7 @@ mod tests {
         let pidfile = dir.join("pid");
         let command = script(&format!("sleep 30 & echo $! > {}; wait", pidfile.display()));
 
-        let err = bounded(command, Duration::from_millis(400), Capture::Discard)
+        let err = bounded(command, Duration::from_millis(400), Capture::Discard, Feed::Nothing)
             .expect_err("the deadline fired");
         assert_eq!(err.kind(), "timeout");
 
@@ -673,7 +773,7 @@ mod tests {
             pidfile.display()
         ));
 
-        let err = bounded(command, Duration::from_millis(400), Capture::Discard)
+        let err = bounded(command, Duration::from_millis(400), Capture::Discard, Feed::Nothing)
             .expect_err("the deadline fired");
         assert_eq!(err.kind(), "timeout");
 

@@ -17,6 +17,76 @@ per directory, 2 MB per file) and carries most of the tests; `fs.rs` is the disk
 thin commands over it — the reads (`files_list`, `files_read`, `files_stat`) and the writes
 (`files_write`, `files_create`, `files_mkdir`, `files_trash`).
 
+**A listing is a `read_dir` and one spawn of git**, and that second half is new: the module spawned
+nothing at all for most of its life. `list_dir` ends by asking `git check-ignore -z --stdin` which of
+the entries it just read are ignored, so the tree can draw those rows muted the way VS Code's explorer
+does. Everything the header above says still holds; only the cost moved.
+
+**The numbers are measured, not guessed** — Apple Silicon, macOS, warm cache, the call in the shape
+`mark_git_ignored` makes it. An ordinary listing of a couple of dozen names in this repository (index:
+508 files) is **7 ms median**; a full `MAX_ENTRIES` listing of 1000 names in a small repository is
+**16 ms**. **It is the index that scales it and not the listing**, because `check-ignore` consults the
+index — which is what buys the `git add -f` case below — so the cost follows the size of the
+repository: the same 1000-name listing against a 50 000-file index came to **0.5 s**. A wide folder in
+a monorepo is the worst case worth knowing, and what it costs is rows arriving a beat late.
+
+**Two multipliers, and together they are why `files_list` runs off the async runtime.** `catchUp` in
+`DesktopApp.vue` re-lists every open folder on window focus, and `refreshDirs` in `stores/files.js`
+fires them as a `Promise.all` — so a focus is N concurrent `files_list` calls, one git spawn each,
+against a runtime holding one worker per core. `files_list` therefore does its work in
+`spawn_blocking` and not in the body of its `async fn`, which is `vcs/commands.rs`'s rule stated in
+bold and naming this module as the victim: every IPC call in the app shares that runtime, so a git
+that is merely slow would take workers out of everything else on screen with nothing saying why. That
+rule did not apply here while a listing was a sub-millisecond `read_dir`; it applies now, and it is
+the one thing in this feature that is easy to leave out and expensive to leave out.
+
+Four decisions inside that one call, each of which is the whole reason it works. It is made **after**
+the `MAX_ENTRIES` truncation, because the ceiling exists so a click on `node_modules` cannot wedge the
+render and asking git about forty thousand names on their way to the bin would spend the whole saving.
+The **working directory is the folder being listed** — the absolute path `resolve_within` has already
+vouched for — which is the entire multi-repository story: git walks up from there and finds whichever
+repository owns the folder, so a nested repository, a worktree and a project of several repositories
+side by side are all served right, with no line here knowing which folder is whose, no
+`repos::discover` and no `project.toml`. **Inheritance is free**: git reports `.bin` inside an ignored
+`node_modules` as ignored on its own, so every listing answers for itself and no flag is carried down
+the tree. And **git answers rather than a matcher of ours** — a re-inclusion under an excluded parent
+(`.claude/*` then `!.claude/rules/`), a pattern anchored to the repository root, an ignore file at
+every level plus `.git/info/exclude` plus a person's global `core.excludesFile`, and the index, which
+is what leaves a file added with `git add -f` at full strength. A second implementation would agree
+for a week and drift afterwards, and the drift would surface as a row in the wrong colour with nothing
+to point at.
+
+**Nothing about it can reach a person.** `check-ignore` exits 1 when nothing matched and 128 when the
+folder is in no repository at all, and both mean the same to the tree: no row drawn muted, no toast,
+nothing in `filesState.lastError`. A folder outside git is an ordinary state, the standing `git.rs`
+already takes for the branch in the scope bar, and the worst outcome of any failure here is the tree
+exactly as it looked before this existed.
+
+**Neither of those two reaches the log either.** Exit 1 is `run::git_maybe_fed`'s `absent` argument
+and never was an error. 128 arrives as `VcsError::Git { status: 128, .. }` and is matched by that
+code, because the alternative is a line per open folder on every window focus, forever, in every
+project nobody has put under git — and a channel that noisy says nothing when a real failure needs it.
+What that gives up is real and small: 128 is git's code for any fatal, so an unreadable index or a
+permissions problem is now as quiet as an ordinary folder. The failures that do **not** recur still
+speak — `VcsError::NoGit` and a read that hit `READ_CEILING` are logged to stderr.
+
+`run::git_maybe_fed` is `git_maybe` with bytes written to the child's standard input, and it exists
+for this one caller. `bounded` gives every other git call `/dev/null` there on purpose — git with an
+inherited stdin waits on the prompt it opened, and there is no terminal on this process to answer in —
+so the feed is a pipe that function owns, written **after** both output readers are running and then
+dropped, the drop being the end of file. The alternative was the same names as arguments, and it fails
+on Windows: a listing is up to `MAX_ENTRIES` names, which a directory of long names pushes past the
+32 767 characters `CreateProcess` accepts, precisely in the directories worth asking about.
+
+What fills the row is `Entry::ignored` through `treeNodes()` in `stores/files.js`, as
+`git: 'ignored'` — the **only** value `FileTreeRow`'s `git` prop is ever given in the product.
+It draws `--git-ignored` at `opacity: 0.7` with no status letter and no tooltip, since `GIT.ignored.l`
+is the empty string. The prop's five other kinds — modified, added, deleted, untracked, conflict —
+have no source and want a different one, a `git status` per repository with a freshness question this
+has none of. So does a muted file **tab** in the centre, which VS Code also draws and this does not:
+that is `stores/tabs.js`, outside the tree altogether. And there is no watcher on `.gitignore` — an
+edit reaches the tree on the next window focus or refresh, like every other change on disk here.
+
 Three rules in `fs.rs` are load-bearing. Every path is resolved with `resolve_within`, which
 canonicalizes and refuses anything that lands outside the root — without it a symlink inside the
 project would open the whole disk. A path that does not exist yet cannot be canonicalized at all, so

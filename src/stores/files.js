@@ -308,6 +308,12 @@ export function treeNodes(expandedSet) {
       path: entry.path,
       name: entry.name,
       kind: entry.kind,
+      /* The only value FileTreeRow's `git` prop is ever given in the product,
+         and it is undefined and never 'ignored' for everything else: the prop
+         also knows modified, added, deleted, untracked and conflict, which want
+         a different source — a `git status` per repository — and a freshness
+         question this one does not have. */
+      git: entry.ignored ? 'ignored' : undefined,
       children: entry.kind === 'dir' && expandedSet.has(entry.path) ? build(entry.path) : undefined
     }))
     if (listing.truncated > 0) {
