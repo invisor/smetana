@@ -39,6 +39,17 @@
 //! is what would close it, and that belongs with `shell_env` rather than here.
 //! The bug is invisible under `npm run tauri dev` for the same reason it is
 //! there — a binary started from a terminal already has the full environment.
+//!
+//! There is a second reader of these facts, and it is where that gap gets
+//! closed rather than only paid for. `render` puts them into the briefing a
+//! project-setup session starts with, beside `survey`'s scan of the folder, so
+//! an agent writing `[live_check].mode = "browser"` knows whether this machine
+//! can honour it — the alternative being a project that stands for months on a
+//! mode nothing here can carry out, discovered inside the check, at night. The
+//! wrong answer costs less there (an offer to install something already
+//! installed, rather than a feature removed), and the skill spends nothing on
+//! it: the session runs under the person's own login shell, so it is told to
+//! look for itself before it offers, and it sees what this process cannot.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -99,6 +110,69 @@ pub struct BrowserTools {
     /// papered over with a check that would be a guess.
     pub busy_project: Option<String>,
 }
+
+/// The same four facts as prose, for the briefing a setup session starts with.
+///
+/// Shaped after `survey::render`, and the two sit side by side in one prompt
+/// for the reason they are two functions: that one is prose about the folder,
+/// this is prose about the machine the folder will be worked on. It decides
+/// nothing — three fields, said one at a time — because a verdict carries the
+/// sentence explaining it, and that sentence is UI copy living on the front end
+/// where a test can reach it, exactly as `BrowserTools` says above.
+///
+/// **It keeps no list of its own.** What counts as a way of driving a browser
+/// is written once, in `BrowserTools`, and a second copy here is precisely the
+/// pair of files with nothing mechanical joining them that this project's own
+/// `[merge].hazards` exists to warn about. The struct pattern below is that
+/// joint: it names every field and has no `..`, so a fifth fact added to
+/// `BrowserTools` stops this file compiling rather than quietly going unsaid in
+/// every setup session from that day on.
+///
+/// `busy_project` is read and deliberately dropped. Busy-ness is one run
+/// holding Playwright's single persistent profile at this moment; it says
+/// nothing about whether the tool is installed, which is the only question a
+/// setup session is asking.
+pub fn render(tools: &BrowserTools) -> String {
+    let BrowserTools { playwright_mcp, playwright_browsers, extension, busy_project: _ } = tools;
+
+    let mut out = String::from("What this machine can drive a browser with:\n\n");
+    for (label, found, present, absent) in [
+        (
+            "Playwright MCP server",
+            *playwright_mcp,
+            "found in an agent's configuration",
+            "not found in any agent configuration",
+        ),
+        ("Playwright browsers", *playwright_browsers, "downloaded", "not downloaded"),
+        (
+            "Claude in Chrome extension",
+            *extension,
+            "found in a Chrome profile",
+            "not found in a Chrome profile",
+        ),
+    ] {
+        out.push_str("- ");
+        out.push_str(label);
+        out.push_str(": ");
+        out.push_str(if found { present } else { absent });
+        out.push('\n');
+    }
+    out.push_str(CAVEAT);
+    out
+}
+
+/// The last line of the block, and it is load-bearing rather than a hedge.
+///
+/// The gap at the top of this file arrives in a setup session as a "not found"
+/// for a tool that is sitting on the disk. Here it costs a question the person
+/// did not need rather than a feature taken away, and the `project-setup` skill
+/// closes it from the other side: the session runs under the person's real
+/// login shell, so it can see what this process could not, and it is told to
+/// look before it offers to install anything.
+const CAVEAT: &str = "\nThese were read from the app's own environment and may be incomplete: a bundled\n\
+                      app on macOS is handed launchd's environment rather than the login shell's, so\n\
+                      browsers kept under a PLAYWRIGHT_BROWSERS_PATH set in a shell profile read here\n\
+                      as absent. Check in this session before acting on a \"not found\".\n";
 
 /// Is this MCP server entry Playwright?
 ///
@@ -514,6 +588,48 @@ command = "node"
         // rule at the top of the file says what that means: "no", loudly.
         let home = PathBuf::from("/home/someone");
         assert_eq!(playwright_cache_dir(&home, Some(std::ffi::OsStr::new("0"))), None);
+    }
+
+    #[test]
+    fn a_machine_with_nothing_on_it_names_all_three_tools_as_missing() {
+        // What a setup session on a fresh laptop is told. Each tool is named
+        // apart from the others because the work of fixing them differs: an
+        // MCP entry is written into a configuration, browsers are downloaded,
+        // and the extension is installed in Chrome.
+        let text = render(&BrowserTools::default());
+        assert!(text.contains("Playwright MCP server: not found in any agent configuration"), "{text}");
+        assert!(text.contains("Playwright browsers: not downloaded"), "{text}");
+        assert!(
+            text.contains("Claude in Chrome extension: not found in a Chrome profile"),
+            "{text}"
+        );
+        // The caveat is the reason the agent is told to look for itself before
+        // offering to install anything, so it is here in every case.
+        assert!(text.contains("may be incomplete"), "{text}");
+        assert!(text.contains("PLAYWRIGHT_BROWSERS_PATH"), "{text}");
+    }
+
+    #[test]
+    fn a_machine_with_everything_on_it_reads_as_prose_rather_than_an_empty_list() {
+        // The failure this pins is a block that only ever says what is missing:
+        // on a machine that has everything it would come out as a heading with
+        // nothing under it, which reads as a prompt that was cut short.
+        let text = render(&BrowserTools {
+            playwright_mcp: true,
+            playwright_browsers: true,
+            extension: true,
+            busy_project: Some("/Users/someone/other".into()),
+        });
+        assert!(text.contains("Playwright MCP server: found in an agent's configuration"), "{text}");
+        assert!(text.contains("Playwright browsers: downloaded"), "{text}");
+        assert!(text.contains("Claude in Chrome extension: found in a Chrome profile"), "{text}");
+        // Not a bare "not found": the caveat's own last sentence carries that
+        // phrase in quotes, and the three lines are what this is about.
+        assert!(!text.contains(": not "), "nothing is missing on this machine: {text}");
+        // Busy-ness is another run holding the profile right now and has
+        // nothing to do with what is installed, so it stays out of the block —
+        // and out of the prompt of a session that will outlive that run.
+        assert!(!text.contains("/Users/someone/other"), "{text}");
     }
 
     #[test]
