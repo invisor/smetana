@@ -620,12 +620,17 @@ pub fn parse_name_status(out: &str) -> Vec<CompareChange> {
     while let Some(status) = fields.next() {
         let letter = status.chars().next().unwrap_or('M');
         let paired = matches!(letter, 'R' | 'C');
-        // A record cut short — a git that died mid-stream, killed or crashed
-        // after a letter and before the path it belongs to — ends the list
-        // rather than inventing the half that did not arrive. It is not
-        // truncation by a ceiling: `run.rs`'s three are all on time, and a call
-        // that outstays one comes back as `VcsError::Timeout` with no stdout at
-        // all rather than with part of it.
+        // A record cut short ends the list rather than inventing the half
+        // that did not arrive. The guard is a property of this parse and not a
+        // claim about where the fields came from — the function is pure and
+        // cannot see that — and what the one caller can actually hand it is
+        // narrower than it looks. A git that was killed or crashed exits
+        // non-zero, and `run::git_read` turns a non-zero exit into a refusal,
+        // so its partial stdout never reaches here; a call that outstays a
+        // ceiling comes back as `VcsError::Timeout` with no stdout at all. The
+        // one path that hands back part of a stream under a zero exit is
+        // `run::drain`, which swallows a failed `read_to_end` and returns the
+        // bytes it had.
         let Some(first) = fields.next() else { break };
         let (orig_path, path) = if paired {
             let Some(second) = fields.next() else { break };
@@ -1036,8 +1041,10 @@ mod tests {
         assert!(parse_name_status("").is_empty());
     }
 
-    /// A record cut off by a git that died mid-stream must not invent a path
-    /// from the half that arrived.
+    /// A record cut off part-way must not invent a path from the half that
+    /// arrived. The parse guards it whatever the stream came from; the one
+    /// path that can produce it is `run::drain` handing back the bytes it had
+    /// after a failed `read_to_end`, under a git that still exited zero.
     #[test]
     fn a_truncated_record_is_dropped() {
         let changes = parse_name_status("M\0src/a.js\0R100\0src/old.js\0");
