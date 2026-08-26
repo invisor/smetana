@@ -296,8 +296,9 @@ where an event is checked — a field that fails takes its previous value, not t
 because an event is not a response to anything and a malformed one must cost nothing. The settings
 window applies an edit locally *before* sending it, so a dropdown answers in the same frame and the
 announcement that follows is the correction when a value was refused. It also follows that this
-window cannot outlive the main one, so `close_settings_with_main` takes it down on the main window's
-`Destroyed`, which is also what lets the app still exit on its last window.
+window cannot outlive the main one, so `close_children_with_main` takes it — and the compare window
+beside it, the other child of the same parent — down on the main window's `Destroyed`, which is also
+what lets the app still exit on its last window.
 
 Appearance reaches the screen through the document root and nothing else (`views/useAppearance.js`).
 `theme: system` is not a third palette — it is the absence of a choice, so the word is stored as it

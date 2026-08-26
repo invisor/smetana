@@ -9,6 +9,7 @@ describe('branchMenuItems', () => {
   it('offers what a branch row can do, in the order the row learnt it', () => {
     expect(verbs(branchMenuItems()).map((it) => it.kind)).toEqual([
       'checkout',
+      'compare',
       'merge',
       'rebase',
       'new-branch'
@@ -24,7 +25,7 @@ describe('branchMenuItems', () => {
   it('keeps the two writes apart from the switch', () => {
     const items = branchMenuItems()
     const at = items.findIndex((it) => it.type === 'separator')
-    expect(items[at - 1].kind).toBe('checkout')
+    expect(items.slice(0, at).map((it) => it.kind)).toEqual(['checkout', 'compare'])
     expect(items[at + 1].kind).toBe('merge')
   })
 
@@ -33,25 +34,58 @@ describe('branchMenuItems', () => {
   it('names a glyph for every verb', () => {
     expect(verbs(branchMenuItems()).map((it) => it.icon)).toEqual([
       'git-branch',
+      'git-compare',
       'git-merge',
       'git-graph',
       'git-branch-plus'
     ])
   })
 
+  it('offers the comparison beside the switch', () => {
+    expect(verbs(branchMenuItems()).map((it) => it.kind)).toEqual([
+      'checkout',
+      'compare',
+      'merge',
+      'rebase',
+      'new-branch'
+    ])
+    expect(verbs(branchMenuItems()).map((it) => it.icon)).toEqual([
+      'git-branch',
+      'git-compare',
+      'git-merge',
+      'git-graph',
+      'git-branch-plus'
+    ])
+  })
+
+  /* It reads and writes nothing, so neither a run nor an operation in flight
+     has anything to refuse. */
+  it('offers the comparison while a run is going and while git is working', () => {
+    expect(disabledKinds(branchMenuItems({ allowed: false }))).not.toContain('compare')
+    expect(disabledKinds(branchMenuItems({ busy: true }))).not.toContain('compare')
+  })
+
+  /* There is nothing to compare a branch with itself. */
+  it('refuses the comparison on the branch already checked out', () => {
+    expect(disabledKinds(branchMenuItems({ current: true }))).toContain('compare')
+  })
+
   /* The one refusal that is about the row rather than about the moment: it
-     reaches the three verbs about moving between branches and stops there. A
-     branch cut from where you are standing is the ordinary case. */
+     reaches the three verbs about moving between branches, and the comparison
+     beside them since a branch has no difference from itself to draw, and stops
+     there. A branch cut from where you are standing is the ordinary case. */
   it('greys only the moving verbs on the branch already checked out', () => {
     const items = branchMenuItems({ current: true })
     expect(caption(items)).toBe('Already on this branch')
-    expect(disabledKinds(items)).toEqual(['checkout', 'merge', 'rebase'])
+    expect(disabledKinds(items)).toEqual(['checkout', 'compare', 'merge', 'rebase'])
   })
 
+  /* Every verb that writes, which since the comparison arrived is every verb
+     but that one — the caption above it says "not now" about the rest. */
   it('greys the whole menu while a run holds the repository', () => {
     const items = branchMenuItems({ allowed: false })
     expect(caption(items)).toBe('A run is going in this project')
-    expect(verbs(items).every((it) => it.disabled)).toBe(true)
+    expect(disabledKinds(items)).toEqual(['checkout', 'merge', 'rebase', 'new-branch'])
   })
 
   it('keeps the new branch live on the row nothing else can be done from', () => {
@@ -71,7 +105,7 @@ describe('branchMenuItems', () => {
   it('greys the whole menu while git is already working', () => {
     const items = branchMenuItems({ busy: true })
     expect(caption(items)).toBe('Git is working in this repository')
-    expect(verbs(items).every((it) => it.disabled)).toBe(true)
+    expect(disabledKinds(items)).toEqual(['checkout', 'merge', 'rebase', 'new-branch'])
   })
 
   /* A caption reaches exactly as far as the greying under it, so on the current

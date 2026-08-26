@@ -43,6 +43,38 @@ pub enum ChangeKind {
     Conflicted,
 }
 
+/// One file that differs between two revisions.
+///
+/// `Change`'s two flags are not here and that is deliberate: `staged` and
+/// `unstaged` are facts about a working tree, and between two commits they have
+/// no answer. Two fields that are always `false` are two fields somebody will
+/// one day read as one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareChange {
+    pub path: String,
+    /// Where a rename or a copy came from. `None` for everything else.
+    pub orig_path: Option<String>,
+    pub kind: ChangeKind,
+}
+
+/// What a branch differs from the current one by, as the compare window draws
+/// it.
+///
+/// `left` and `right` are **object names**, not the branch names they were
+/// asked for by, and every file read afterwards goes by them. HEAD can move
+/// while the window stands open — an agent committing into this very tree is
+/// the ordinary case in this app — and asking again by name would let the file
+/// list belong to one commit and the bytes on screen to another, with nothing
+/// on screen saying so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Comparison {
+    pub left: String,
+    pub right: String,
+    pub files: Vec<CompareChange>,
+}
+
 /// One repository's working tree as the panel draws it.
 ///
 /// `branch` and `detached` are kept apart for the reason `git::Head` keeps them
@@ -368,6 +400,23 @@ pub enum VcsError {
     /// reach the remote", "Git did not commit").
     #[error("Smetana stopped git after {0} seconds — it had not finished.")]
     Timeout(u64),
+    /// The branch was deleted while the window stood open. Its own variant
+    /// rather than git's 128: the window says which branch is gone, and git's
+    /// sentence about an ambiguous argument would name nothing a person could
+    /// act on.
+    #[error("No branch called {0} in this repository.")]
+    NoSuchBranch(String),
+    /// No commit in common, so there is no point they diverged from. Refused
+    /// rather than quietly answered with the direct comparison: a diff computed
+    /// from a base nobody asked for, drawn under a switch that says otherwise,
+    /// is the one failure worth avoiding here.
+    #[error("These two branches share no history, so there is no point they diverged from.")]
+    Unrelated,
+    /// A revision that is not an object name. Unreachable from the app — the
+    /// front end sends back a sha this module resolved — and therefore a fault
+    /// rather than a state worth a sentence of its own on screen.
+    #[error("not a revision: {0}")]
+    BadRevision(String),
     #[error("{0}")]
     Io(String),
 }
@@ -384,6 +433,9 @@ impl VcsError {
             Self::NotUtf8(_) => "notUtf8",
             Self::NoMessage => "noMessage",
             Self::Timeout(_) => "timeout",
+            Self::NoSuchBranch(_) => "noSuchBranch",
+            Self::Unrelated => "unrelated",
+            Self::BadRevision(_) => "badRevision",
             Self::Io(_) => "io",
         }
     }
@@ -542,6 +594,66 @@ fn kind_of(letter: char) -> ChangeKind {
         'T' => ChangeKind::TypeChanged,
         'U' => ChangeKind::Conflicted,
         '?' => ChangeKind::Untracked,
+        _ => ChangeKind::Modified,
+    }
+}
+
+/// `git diff --name-status -z` into rows.
+///
+/// The stream is NUL-separated fields rather than lines, which is what carries a
+/// path with a space, a quote or a newline in it through untouched — the default
+/// format quotes and escapes those, and unescaping git's quoting here would be
+/// the same mistake as parsing `git status`'s prose.
+///
+/// **A record is one field or three.** `R` and `C` carry a similarity score on
+/// the letter and are followed by two paths, from and to; every other letter is
+/// followed by one. Read as one field each, a single rename would put every
+/// record after it one field out of step.
+///
+/// An unrecognised letter is not an error — the file did change, and dropping it
+/// is the one thing this cannot honestly do. It is reported as modified, which
+/// is what "it is different" means with nothing more specific to say.
+pub fn parse_name_status(out: &str) -> Vec<CompareChange> {
+    let mut fields = out.split('\0').filter(|field| !field.is_empty());
+    let mut changes = Vec::new();
+
+    while let Some(status) = fields.next() {
+        let letter = status.chars().next().unwrap_or('M');
+        let paired = matches!(letter, 'R' | 'C');
+        // A record cut short ends the list rather than inventing the half
+        // that did not arrive. The guard is a property of this parse and not a
+        // claim about where the fields came from — the function is pure and
+        // cannot see that — and what the one caller can actually hand it is
+        // narrower than it looks. A git that was killed or crashed exits
+        // non-zero, and `run::git_read` turns a non-zero exit into a refusal,
+        // so its partial stdout never reaches here; a call that outstays a
+        // ceiling comes back as `VcsError::Timeout` with no stdout at all. The
+        // one path that hands back part of a stream under a zero exit is
+        // `run::drain`, which swallows a failed `read_to_end` and returns the
+        // bytes it had.
+        let Some(first) = fields.next() else { break };
+        let (orig_path, path) = if paired {
+            let Some(second) = fields.next() else { break };
+            (Some(first.to_owned()), second.to_owned())
+        } else {
+            (None, first.to_owned())
+        };
+        changes.push(CompareChange { path, orig_path, kind: name_status_kind(letter) });
+    }
+    changes
+}
+
+/// The letters `--name-status` uses. `U` is unmerged there, which cannot happen
+/// between two commits, so this table is deliberately shorter than `classify`'s
+/// — which is also why it is a second function beside `kind_of` rather than a
+/// call into it.
+fn name_status_kind(letter: char) -> ChangeKind {
+    match letter {
+        'A' => ChangeKind::Added,
+        'D' => ChangeKind::Deleted,
+        'R' => ChangeKind::Renamed,
+        'C' => ChangeKind::Copied,
+        'T' => ChangeKind::TypeChanged,
         _ => ChangeKind::Modified,
     }
 }
@@ -864,5 +976,79 @@ mod tests {
     fn parse_tracking_takes_no_record_from_an_empty_line() {
         assert!(parse_tracking("\n\n").is_empty());
         assert!(parse_tracking("").is_empty());
+    }
+
+    /// `-z` is the whole reason this is parseable: a path with a space, a quote
+    /// or a newline in it goes through untouched, where the default format
+    /// would quote and escape it.
+    #[test]
+    fn a_record_is_a_letter_and_a_path() {
+        let out = "M\0src/a.js\0A\0src/b.js\0D\0src/c.js\0";
+        let changes = parse_name_status(out);
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes[0].path, "src/a.js");
+        assert_eq!(changes[0].kind, ChangeKind::Modified);
+        assert_eq!(changes[0].orig_path, None);
+        assert_eq!(changes[1].kind, ChangeKind::Added);
+        assert_eq!(changes[2].kind, ChangeKind::Deleted);
+    }
+
+    /// A rename and a copy carry a score on the letter and **two** paths, in
+    /// that order: where it came from, then where it is now. Read as one field
+    /// each, they would put the list one record out of step from there on.
+    #[test]
+    fn a_rename_carries_both_of_its_paths() {
+        let out = "R100\0src/old.js\0src/new.js\0M\0src/a.js\0";
+        let changes = parse_name_status(out);
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0].kind, ChangeKind::Renamed);
+        assert_eq!(changes[0].orig_path.as_deref(), Some("src/old.js"));
+        assert_eq!(changes[0].path, "src/new.js");
+        assert_eq!(changes[1].path, "src/a.js");
+    }
+
+    #[test]
+    fn a_copy_carries_both_of_its_paths_too() {
+        let changes = parse_name_status("C75\0src/from.js\0src/to.js\0");
+        assert_eq!(changes[0].kind, ChangeKind::Copied);
+        assert_eq!(changes[0].orig_path.as_deref(), Some("src/from.js"));
+        assert_eq!(changes[0].path, "src/to.js");
+    }
+
+    #[test]
+    fn a_type_change_is_its_own_kind() {
+        let changes = parse_name_status("T\0link\0");
+        assert_eq!(changes[0].kind, ChangeKind::TypeChanged);
+    }
+
+    /// A letter this table has never heard of is not an error: the file did
+    /// change, and leaving it off the list is the one thing this cannot
+    /// honestly do. It is reported as modified, because "it is different" is
+    /// the whole of what can be said with nothing more specific to say it
+    /// with.
+    #[test]
+    fn an_unknown_letter_still_lists_the_file() {
+        let changes = parse_name_status("X\0src/odd.js\0");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "src/odd.js");
+        assert_eq!(changes[0].kind, ChangeKind::Modified);
+    }
+
+    /// Two commits with nothing between them, which is an ordinary answer and
+    /// not a failure.
+    #[test]
+    fn nothing_between_the_two_is_an_empty_list() {
+        assert!(parse_name_status("").is_empty());
+    }
+
+    /// A record cut off part-way must not invent a path from the half that
+    /// arrived. The parse guards it whatever the stream came from; the one
+    /// path that can produce it is `run::drain` handing back the bytes it had
+    /// after a failed `read_to_end`, under a git that still exited zero.
+    #[test]
+    fn a_truncated_record_is_dropped() {
+        let changes = parse_name_status("M\0src/a.js\0R100\0src/old.js\0");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "src/a.js");
     }
 }

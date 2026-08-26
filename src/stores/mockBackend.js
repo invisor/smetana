@@ -581,6 +581,32 @@ export function installMockBackend() {
     if (command === 'vcs_file_at_head') {
       return payload?.path === MOCK_UNTRACKED ? null : MOCK_FILE_AT_HEAD
     }
+    /* The branch comparison. A browser has no git, so one fixture stands for
+       both modes — the shas are made up and never leave this file, since the
+       only thing that reads them is `vcs_file_at_rev` below. */
+    if (command === 'vcs_compare') {
+      return {
+        left: '1111111111111111111111111111111111111111',
+        right: '2222222222222222222222222222222222222222',
+        files: [
+          { path: 'src/stores/vcs.js', origPath: null, kind: 'modified' },
+          { path: 'src/components/git/GitPanel.vue', origPath: null, kind: 'added' },
+          { path: 'src/views/desktopAppData.js', origPath: null, kind: 'deleted' },
+          {
+            path: 'src/components/git/RepoList.vue',
+            origPath: 'src/components/shell/RepoList.vue',
+            kind: 'renamed'
+          }
+        ]
+      }
+    }
+    /* Either side of a comparison. The added file has nothing on the left, which
+       is the second of this command's two answers and not a failure. */
+    if (command === 'vcs_file_at_rev') {
+      const added = payload?.path === 'src/components/git/GitPanel.vue'
+      if (added && payload?.rev?.startsWith('1')) return null
+      return MOCK_FILE_AT_HEAD
+    }
     /* One of each kind the panel draws, including a rename with its original
        path and a conflict — the loud row, which is the one worth being able to
        look at with no worker behind it. */

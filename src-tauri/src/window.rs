@@ -1,5 +1,5 @@
-//! The app's windows: the settings window, and the main window's geometry on
-//! disk.
+//! The app's windows: the settings window, the compare window, and the main
+//! window's geometry on disk.
 //!
 //! # The settings window
 //!
@@ -30,6 +30,14 @@
 //! is the OS's bargain and it is worth taking: it keeps the pairing a person
 //! arranged, and the window can still be dragged anywhere, including off the
 //! app entirely, which is the whole reason this is a window and not a modal.
+//!
+//! # The compare window
+//!
+//! The same shape as the settings window and for the same reasons — one per
+//! app, a child of the main window, the one bundle loaded with a `?view=` of
+//! its own — with one difference worth naming: what it is looking at travels as
+//! two parameters rather than one, and a window already open is re-aimed by an
+//! event instead of by a URL it will never load again.
 //!
 //! # The main window's geometry
 //!
@@ -96,6 +104,14 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 /// UI would come up as a page that cannot talk to anything.
 const SETTINGS_LABEL: &str = "settings";
 
+/// The compare window's label. One per app, exactly as the settings window is
+/// one per app, and for the same reason: two windows over the same question are
+/// two views of one thing with no way to tell which is which. It is also the
+/// name `capabilities/default.json` has to list — a window not named there
+/// reaches no core plugin at all, and the page would come up unable to talk to
+/// anything.
+const COMPARE_LABEL: &str = "compare";
+
 /// Which section a caller asked for, as a query parameter on the URL the window
 /// already loads — the mechanism `?view=` and `?theme=` are already built on.
 ///
@@ -113,6 +129,34 @@ fn tab_query(tab: Option<&str>) -> String {
             && name.chars().all(|c| c.is_ascii_lowercase() || c == '-')
     });
     plain.map(|name| format!("&tab={name}")).unwrap_or_default()
+}
+
+/// Which repository and which branch, as parameters on the URL the window
+/// already loads — the mechanism `?view=`, `?theme=` and `?tab=` are built on,
+/// and what keeps the window checkable in `npm run dev` with no Tauri behind it.
+///
+/// Both are percent-encoded rather than validated the way `tab_query` validates
+/// a section name: a section is a short identifier from a closed list, while a
+/// repository is an absolute path and a branch name may hold almost anything a
+/// ref allows. Dropping either would leave a window with nothing to compare.
+fn compare_query(repo: &str, branch: &str) -> String {
+    format!("&repo={}&branch={}", encode(repo), encode(branch))
+}
+
+/// Percent-encoding, unreserved characters kept. Written out rather than pulled
+/// in: two call sites, and a dependency for eighteen lines is a dependency to
+/// keep in step for eighteen lines.
+fn encode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// Opens the settings window on a section, or brings the open one forward.
@@ -146,8 +190,45 @@ pub fn settings_window_open(app: AppHandle, tab: Option<String>) -> Result<(), S
     .resizable(true);
 
     // No main window is not an error here, any more than it is in
-    // `close_settings_with_main`: there is simply nothing to stay in front of,
+    // `close_children_with_main`: there is simply nothing to stay in front of,
     // and a settings window with no parent is better than none at all.
+    if let Some(main) = app.get_webview_window("main") {
+        builder = builder.parent(&main).map_err(|err| err.to_string())?;
+    }
+
+    builder.build().map(|_| ()).map_err(|err| err.to_string())
+}
+
+/// Opens the compare window on a branch, or brings the open one forward.
+///
+/// The pair travels twice for the reason the settings window's section does: a
+/// window being built reads it off the URL, and an open one is focused rather
+/// than rebuilt, so it can only be re-aimed by an event — `compare:show`, on
+/// the channel the windows already speak over. Rebuilding it instead would
+/// throw away the file somebody is in the middle of reading.
+///
+/// Deliberately not `async`: a synchronous command runs on the main thread,
+/// which is where a window is created on every platform this app targets.
+#[tauri::command]
+pub fn compare_window_open(app: AppHandle, repo: String, branch: String) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(COMPARE_LABEL) {
+        let _ = window.unminimize();
+        return window.set_focus().map_err(|err| err.to_string());
+    }
+
+    let mut builder = WebviewWindowBuilder::new(
+        &app,
+        COMPARE_LABEL,
+        WebviewUrl::App(format!("index.html?view=compare{}", compare_query(&repo, &branch)).into()),
+    )
+    .title("Compare branches")
+    .inner_size(1040.0, 680.0)
+    .min_inner_size(640.0, 400.0)
+    .resizable(true);
+
+    // A child of the main window for the reason the settings window is one: a
+    // window whose whole purpose is to be looked at beside another one must not
+    // sink behind it on the first click into the board.
     if let Some(main) = app.get_webview_window("main") {
         builder = builder.parent(&main).map_err(|err| err.to_string())?;
     }
@@ -166,19 +247,22 @@ const SETTLE: Duration = Duration::from_millis(500);
 /// with it and `persist_geometry` saves with it — so the pair cannot come apart.
 const FLAGS: StateFlags = StateFlags::all();
 
-/// Takes the settings window down with the main one.
+/// Takes the app's other windows down with the main one.
 ///
 /// The settings window is a viewer, not an owner: every edit it makes travels to
 /// the main window, which is the only thing that writes `settings.json`. Left
 /// standing after that window is gone it would keep accepting choices and
 /// keeping none of them, with nothing on screen to say so — the one failure this
-/// codebase refuses everywhere else. Closing it is also what lets the app exit
-/// on the last window, the way it did before there was a second one.
+/// codebase refuses everywhere else. The compare window is the same shape one
+/// step further: it can only be re-aimed by an event from the app window, so
+/// after that window is gone it is a comparison nothing can ever change.
+/// Closing them is also what lets the app exit on the last window, the way it
+/// did before there was a second one.
 ///
 /// `Destroyed` rather than `CloseRequested`: the front end intercepts the close
 /// to flush its last write and destroys the window itself, so the request is
 /// preventable and the destruction is not.
-pub fn close_settings_with_main(app: &AppHandle) {
+pub fn close_children_with_main(app: &AppHandle) {
     let Some(main) = app.get_webview_window("main") else {
         return;
     };
@@ -187,8 +271,10 @@ pub fn close_settings_with_main(app: &AppHandle) {
         if !matches!(event, WindowEvent::Destroyed) {
             return;
         }
-        if let Some(settings) = app.get_webview_window(SETTINGS_LABEL) {
-            let _ = settings.close();
+        for label in [SETTINGS_LABEL, COMPARE_LABEL] {
+            if let Some(window) = app.get_webview_window(label) {
+                let _ = window.close();
+            }
         }
     });
 }
@@ -265,7 +351,7 @@ pub fn persist_geometry(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::tab_query;
+    use super::{compare_query, tab_query};
 
     #[test]
     fn a_section_rides_as_a_query_parameter() {
@@ -281,5 +367,23 @@ mod tests {
         for odd in ["", "Storage", "storage&view=gallery", "sto rage", "../etc", "a".repeat(33).as_str()] {
             assert_eq!(tab_query(Some(odd)), "", "{odd:?}");
         }
+    }
+
+    /// The repository is an absolute path and a branch name may hold a slash, a
+    /// space or anything else a ref allows, so both are percent-encoded into
+    /// the query string. Nothing a caller sends may add a parameter of its own.
+    #[test]
+    fn the_pair_rides_as_percent_encoded_parameters() {
+        assert_eq!(
+            compare_query("/Users/me/my repo", "feat/a&b"),
+            "&repo=%2FUsers%2Fme%2Fmy%20repo&branch=feat%2Fa%26b"
+        );
+    }
+
+    #[test]
+    fn nothing_in_a_name_can_escape_the_query_string() {
+        let query = compare_query("/tmp/r", "x&view=gallery#y=z?q");
+        assert_eq!(query.matches('&').count(), 2);
+        assert!(!query.contains("view=gallery"));
     }
 }

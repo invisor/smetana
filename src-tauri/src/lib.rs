@@ -127,8 +127,9 @@ pub fn run() {
       // being written along the way too, so that a run cut short without a
       // clean exit does not open at the size from the run before last.
       window::persist_geometry(app.handle());
-      // The settings window writes nothing itself — see `close_settings_with_main`.
-      window::close_settings_with_main(app.handle());
+      // Neither of the app's other windows owns anything — see
+      // `close_children_with_main`.
+      window::close_children_with_main(app.handle());
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
@@ -173,6 +174,8 @@ pub fn run() {
       vcs::commands::vcs_commit,
       vcs::commands::vcs_suggest_message,
       vcs::commands::vcs_file_at_head,
+      vcs::commands::vcs_file_at_rev,
+      vcs::commands::vcs_compare,
       runs::commands::project_config,
       runs::commands::browser_tools,
       runs::commands::run_start,
@@ -183,6 +186,7 @@ pub fn run() {
       settings::commands::settings_load,
       settings::commands::settings_save,
       window::settings_window_open,
+      window::compare_window_open,
       autostart::autostart_state,
       autostart::autostart_set,
       updates::updates_state,

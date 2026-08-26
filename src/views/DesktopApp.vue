@@ -118,6 +118,13 @@ import {
   switchTo
 } from '../stores/projects.js'
 import { gitState, loadBranches, loadHead } from '../stores/git.js'
+/* The compare window, which is a window rather than a panel: this view opens it
+   and hears nothing back. Its state lives in that window's own webview
+   (`stores/compare.js`), which is why nothing else of it is imported here. It
+   is opened on `vcsState.selected` — the repository whose branches the panel is
+   listing, which is the repository the row belongs to, so a project made of
+   several compares the one on screen. */
+import { openCompareWindow } from '../stores/compare.js'
 /* The Git panel's own state, beside git.js rather than inside it: that store is
    the branch in the scope bar and spawns no process, this one runs git. */
 import {
@@ -3207,6 +3214,7 @@ const toastStackStyle = {
                 @setup="openSetup(activePath, true)"
                 @select="selectRepo"
                 @checkout="checkout"
+                @compare="openCompareWindow(vcsState.selected, $event)"
                 @merge="merge"
                 @rebase="rebase"
                 @pull="pull"

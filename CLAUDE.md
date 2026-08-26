@@ -67,7 +67,7 @@ reads (`src/App.vue`):
 |---|---|---|
 | `theme` | `dark`, `light` | `dark` |
 | `density` | `comfortable`, `compact` | `comfortable` |
-| `view` | `gallery`, `settings` | the app |
+| `view` | `gallery`, `settings`, `compare` | the app |
 
 `?view=gallery` renders every exported component once (`src/views/Gallery.vue`) — the harness for
 catching a broken component. Check any component change in all four theme × density combinations,
@@ -80,7 +80,8 @@ and in a browser from `settings_load` — which is what makes the settings scree
 Tauri; the one thing it cannot do there is change anything for good. `?theme=`, `?density=` and
 `?tab=` are passed in as props rather than read there, so `App.vue` stays the one place that knows
 about the query string, and without that this window's own chrome could not be seen in compact or in
-the other theme at all.
+the other theme at all. `?view=compare` is the branch-compare window, a third OS window built and
+checked the same way; what it is for is in `.claude/rules/vcs-panel.md`.
 
 ## Architecture
 
@@ -115,7 +116,7 @@ preference, and a stored version had the run case highlighting a card the inspec
 
 `src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`,
 `src/stores/terminals.js`, `src/stores/git.js`, `src/stores/vcs.js`, `src/stores/runs.js`,
-`src/stores/attachments.js`, `src/stores/updates.js`
+`src/stores/attachments.js`, `src/stores/updates.js`, `src/stores/compare.js`
 and `src/stores/app.js` are the **only** files in `src/` that know Tauri exists — components see
 reactive stores and nothing else. `mockBackend.js` below is the last and the exception that proves
 it: it imports Tauri in order to stand in for the absence of one. `app.js` is the odd one, and it is

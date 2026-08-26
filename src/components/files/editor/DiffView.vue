@@ -6,19 +6,20 @@ import { editorExtensions } from './extensions.js'
 import { languageFor } from './languages.js'
 import { languageState, readOnlyState } from './compartments.js'
 
-/* One changed file, side by side: HEAD on the left, the working tree on the
-   right, both read-only.
+/* One changed file, side by side, both read-only. The diff tab is what this was
+   drawn for and what the captions default to — HEAD on the left, the working
+   tree on the right; the compare window names two revisions instead, which is
+   all the two caption props are.
 
    `MergeView` from @codemirror/merge is the same CodeMirror the editor beside
    it is built from, so everything it draws is themed in `editor/theme.js` —
    the documented exception, and the only place in this system where CSS rules
    are written.
 
-   Read-only in both panes and nothing else: editing a diff, resolving a
-   conflict in it, and comparing two arbitrary revisions are all deliberately
-   out. What the panel answers is one question — what has changed in this file
-   since the last commit — and a field somebody can type into would promise a
-   second one.
+   Read-only in both panes and nothing else: editing a diff and resolving a
+   conflict in it are both deliberately out. What this answers is one question —
+   how these two texts differ — and a field somebody can type into would promise
+   a second one.
 
    No `states.js` here, and that is the difference from `FileEditor.vue`: an
    editor keeps a caret, a selection and an undo history worth carrying across a
@@ -36,6 +37,13 @@ const props = defineProps({
      with no commit in it yet. The left side is empty either way; this is what
      lets the caption say which of the two empties it is. */
   missingAtHead: { type: Boolean, default: false },
+  /* What the two columns are called. The defaults are what this component drew
+     before there was anything but the diff tab, so that caller passes neither.
+     The compare window names two revisions instead — which is the whole reason
+     these are props: without them the two sides of a branch comparison would be
+     captioned "HEAD" and "Working tree", and both would be wrong. */
+  leftCaption: { type: String, default: 'HEAD' },
+  rightCaption: { type: String, default: 'Working tree' },
   /* A refusal, in words: binary, too large, not UTF-8, outside the project. The
      strip is drawn and the panes are not — a diff of what could not be read
      would be two empty columns saying nothing. */
@@ -169,8 +177,8 @@ onBeforeUnmount(() => {
     <div v-if="notice" :style="noticeStyle">{{ notice }}</div>
     <template v-else>
       <div :style="captionsStyle">
-        <span :style="captionStyle">{{ missingAtHead ? 'Not in HEAD' : 'HEAD' }}</span>
-        <span :style="captionStyle">Working tree</span>
+        <span :style="captionStyle">{{ missingAtHead ? `Not in ${leftCaption}` : leftCaption }}</span>
+        <span :style="captionStyle">{{ rightCaption }}</span>
       </div>
       <div ref="host" :style="hostStyle" />
     </template>
