@@ -3,6 +3,7 @@ paths:
   - "src-tauri/src/tracker/**"
   - "src-tauri/src/project.rs"
   - "src/stores/tracker.js"
+  - "src/views/folderAccess.js"
   - "src/stores/projects.js"
   - "src/components/shell/ProjectRail.vue"
   - "src/components/shell/ProjectTile.vue"
@@ -23,6 +24,7 @@ one call costs about two seconds. Hence the shape of `src-tauri/src/tracker/`:
 | `model.rs` | `Issue`, `ColumnDef`, `Delta`, `Health`, `Repair`, `Failure`, `TrackerError` — the vocabulary the front end sees |
 | `bd.rs` | the only file that knows bd's CLI: arguments, spawning, parsing |
 | `backup.rs` | the copy taken before a migration: its name, and a recursive copy in `std::fs` |
+| `access.rs` | whether the folder can be read at all, and the one repair for when it cannot |
 | `store.rs` | the in-memory snapshot and the delta computation |
 | `watcher.rs` | `notify` on `.beads/`, path filter, failure reporting |
 | `service.rs` | the worker: one owner of mutable state, a request queue, deltas and health events |
@@ -64,10 +66,73 @@ resolves to its root, so the list, the settings key and the worker all name the 
 allowed by `dialog:allow-open` in `capabilities/default.json`; the picked path is normalized once,
 by the `project_root` command, before it reaches the list.
 
-Health (`ok`, `no-project`, `not-a-beads-repo`, `bd-version-mismatch`, `error`) is both an event and a command:
+Health (`ok`, `no-project`, `not-a-beads-repo`, `bd-version-mismatch`, `folder-refused`, `error`) is
+both an event and a command:
 the event fires microseconds after start, before the webview can subscribe, so the worker also
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
+
+### A refused folder is not a broken tracker
+
+`folder-refused` exists because the two used to arrive as one state (smetana-8lq). A build opened on
+`error` — "bd is failing, most often the tracker was made by an older bd", with a button that runs a
+database migration — while the file tree beside it said the truth: no permission to read the folder.
+The cause was macOS TCC, the project sat under `~/Desktop`, and no prompt could appear because a
+stored refusal is the one thing macOS does not ask about twice. bd failed for exactly that reason and
+had no way to say so.
+
+`tracker/access.rs` is where the two are told apart, and it asks **the filesystem**, never bd's
+prose: `ErrorKind::PermissionDenied` on the project directory or its `.beads` is the fact, and bd's
+wording is bd's and moves between releases. `refusal` is checked in `open` before `has_tracker` —
+`has_tracker` is an `is_dir` and macOS lets a `stat` through while refusing the `read_dir`, so
+without that order the notice would offer `bd init` over a `.beads` nobody may open — and again in
+`HealthReporter::failed`, which is why that method takes the folder the call was made in.
+
+The repair is `tccutil reset <service> <identifier>` and a restart, and it is offered **only where
+macOS will actually ask again**. TCC prompts per protected place — Desktop, Documents, Downloads, a
+mounted volume — and everything else on the disk is governed by Full Disk Access, which it never
+prompts for at all. So `tcc_service` answers `Option`, `None` for anywhere outside those four, and
+nothing ever passes `SystemPolicyAllFiles` to `tccutil`: pressing there would clear a grant the
+person did give, with no dialog left to ask for it back, and a folder outside the four is as likely
+refused by an ordinary unix mode as by TCC.
+
+**A folder has two spellings and both are asked.** A path can be a symlink out of a protected folder
+or into one, and both are ordinary: with iCloud "Desktop & Documents Folders" on, `~/Desktop` is
+itself a link into `~/Library/Mobile Documents/…`, while a checked-out project can be a link the
+other way. So `service_for` asks the literal path first and the canonicalized one second — resolving
+`home` alongside `dir`, so both sides of every `starts_with` are spelled alike — and takes the first
+promptable service either names. Choosing one spelling cannot cover both cases, because they are
+symmetric; asking both is safe because *every* service either spelling can name is one macOS will
+prompt for again, so a wrong hit costs one dialog and nothing irreversible.
+
+`service_for` is the **only** place a folder is resolved, and that is the point of it: the read that
+draws the notice and the write that runs `tccutil` have to agree. They did not once, and both
+directions of the disagreement were this task's own defect in miniature — a button that refuses
+itself under a sentence promising a prompt, and a sentence sending somebody to grant Full Disk Access
+for a folder a Desktop dialog would have covered.
+`repair_for_agrees_with_what_reset_would_do` is that invariant as a test.
+
+`tracker_access_repair` is the read the front end asks before drawing anything, and it answers per
+**folder** rather than per build — `reset`, `full-disk-access`, `unavailable` — so the store asks it
+again on every project switch. The three sentences are `views/folderAccess.js`, tested there; only
+the first has a button. The identifier is read from `app.config().identifier` rather than written a
+third time beside `tauri.conf.json` and `runs/awake.rs`.
+
+Two things the reset shares with `updates_install`, and it is the same reasoning in both places
+(`.claude/rules/updates.md`). It is **gated on live runs anywhere**, refusing while any project holds
+one and refusing again if the run worker cannot be reached — or does not answer inside five seconds,
+since a worker that is alive and wedged is a third silence and silence is not permission — because a
+restart kills every PTY child
+and under a run those are the agents — and the run this would end is always somebody else's, since
+the project on screen cannot be read at all. And it calls `request_restart`, never `restart`, so the
+exit event fires and those children are killed rather than orphaned. Rust restarts the app itself: a
+reset only takes effect for a process that has not already been refused in this launch, so the
+restart is the second half of the repair rather than a courtesy — and the button says so, since
+there is no confirmation dialog.
+
+There is a second way into this state and it will keep happening while the bundle is ad-hoc signed: a
+grant is bound to the code requirement, which is then a cdhash that changes with every build, so an
+in-place update silently invalidates whatever was granted. The same reset undoes it.
 
 ### Repair: fixing without diagnosing
 
@@ -111,7 +176,9 @@ agent cannot ask bd anything afterwards. That is the `ResolveConflict` shape and
 `tracker.js` also owns the two translations: bd's statuses to the design system's (`open → ready`,
 `in_progress → running`, `closed → done`; everything else, including custom statuses, passes through
 to `normalizeStatus` and gets a hash colour with a 2-letter code), and Rust's diagnostics to short
-English messages — the raw text is in the console, and under `error` it is on the screen as well.
+English messages — the raw text is in the console, and under `error` and under `folder-refused` it
+is on the screen as well (there it is the path that could not be read, and bd said nothing about
+it).
 `projects.js` owns the list of open projects, which one is active, and moving between them — the
 front end holds the list's truth, bd holds the board's, so a switch reads the new project's layout
 with `settings_load` (only the layout: the list on disk is already the past by then) before it asks

@@ -83,6 +83,7 @@ import {
   issueById,
   lastDiagnosticLine,
   repairTracker,
+  resetFolderAccess,
   searchSemantic,
   searchState,
   toUiStatus,
@@ -189,6 +190,7 @@ import {
   resolveDrag
 } from './panelWidths.js'
 import { RAIL_EXPAND, headerLabel, nextFromHeader, nextFromRail } from './leftChrome.js'
+import { folderRefusedHasReset, folderRefusedNotice } from './folderAccess.js'
 import {
   basenameOf,
   createDir,
@@ -1361,6 +1363,40 @@ const askAgentAboutTracker = async () => {
        else and then does nothing. */
   }
 }
+
+/* The third door under the board, and the one that is not about bd at all: the
+   operating system has a stored refusal for this folder and nothing else will
+   get past it. `tccutil reset` makes macOS forget the decision; only a process
+   that has not already been refused in this launch is asked again, so Rust
+   restarts the app itself once the reset lands.
+
+   Which means success never comes back here — the window is on its way out
+   before the promise could settle — and the flag is therefore cleared in the
+   catch rather than in a `finally`. A `finally` would be the tidier shape and
+   the wrong one: it would put the button back to "Reset and restart" in the
+   last moments of a window that is closing, which reads as nothing having
+   happened.
+
+   The likeliest refusal is not a failure at all but the run gate: a restart
+   kills every PTY child, so Rust refuses while any run is going anywhere, and
+   that run is by definition in another project — this one's folder cannot be
+   read, so nothing here is running. The store puts Rust's sentence, which names
+   the projects, in front of the caption.
+
+   No confirmation dialog, like the repair beside it. What stands in for one is
+   the notice above the button, which says the app restarts. */
+const resettingAccess = ref(false)
+const resetAccessHere = async () => {
+  resettingAccess.value = true
+  try {
+    await resetFolderAccess()
+  } catch {
+    /* The caption is already in trackerState.lastError and draws as a toast.
+       The app is still standing, so the button has to come back. */
+    resettingAccess.value = false
+  }
+}
+
 /* bd gives a new task the one status it has for them — open, which the board
    calls ready. So that column, and only it, carries the "+": a plus over any
    other column would promise a placement the tracker cannot make. */
@@ -1872,10 +1908,10 @@ const askAgentToResolve = async (issue) => {
    The diagnostic text from Rust used to go to the console and nowhere else,
    which is the decision smetana-j7o overturned: a person whose board would not
    come up was told to open developer tools to find out why. It is here now, in
-   `bdSaid` below and the `detail` slot it feeds — the last non-empty line of
-   what bd said, in mono, under the sentence about it. The line is a hint and
-   not the payload: the whole of the failure, the failed command and the bd
-   version with it, is what "Ask an agent" hands over. */
+   `healthSaid` below and the `detail` slot it feeds — the last non-empty line
+   of the health message, in mono, under the sentence about it. The line is a
+   hint and not the payload: the whole of the failure, the failed command and
+   the bd version with it, is what "Ask an agent" hands over. */
 const HEALTH_NOTICE = {
   'no-project': {
     icon: 'folder-git-2',
@@ -1909,11 +1945,16 @@ const HEALTH_NOTICE = {
   }
 }
 
-/* What bd itself said, cut to the one line worth putting on the screen. The
-   rule is the store's (`lastDiagnosticLine`) because the toast a failed repair
-   raises wants the same cut, and a copy of it here would be a rule living in
-   the one kind of file no test in this repository can reach. */
-const bdSaid = computed(() => lastDiagnosticLine(trackerState.health.message ?? ''))
+/* Whatever the health line says, cut to the one line worth putting on the
+   screen. The rule is the store's (`lastDiagnosticLine`) because the toast a
+   failed repair raises wants the same cut, and a copy of it here would be a
+   rule living in the one kind of file no test in this repository can reach.
+
+   It was called `bdSaid` while `error` was the only state that drew it, and the
+   name stopped being true when `folder-refused` split off: there the line is a
+   path the app could not read and bd never said a word about it, since bd never
+   got that far. */
+const healthSaid = computed(() => lastDiagnosticLine(trackerState.health.message ?? ''))
 
 /* bd owns which columns exist; the settings own only their sequence, and the
    two meet in orderColumns. The stored order is per project, because the set of
@@ -2016,6 +2057,13 @@ watch(
 const healthNotice = computed(() => {
   if (trackerState.health.state === 'ok') return null
   if (boardColumns.value.some((column) => column.tasks.length)) return null
+  /* The one state whose notice is not a constant: what it says depends on
+     whether there is a button under it, and that depends on the platform. The
+     rule is `folderAccess.js`'s rather than a ternary here, because it is copy
+     and copy is the whole of this state — see the note there. */
+  if (trackerState.health.state === 'folder-refused') {
+    return folderRefusedNotice(trackerState.folderAccessRepair)
+  }
   return HEALTH_NOTICE[trackerState.health.state] ?? HEALTH_NOTICE.error
 })
 
@@ -3497,8 +3545,18 @@ const toastStackStyle = {
           <!-- What bd said, under the sentence about it: the diagnostic used to
                go to the console alone, which asked a person to open developer
                tools to find out why their board was empty. -->
-          <template v-if="trackerState.health.state === 'error' && bdSaid" #detail>
-            {{ bdSaid }}
+          <!-- And the same line under a refused folder, where it is the path
+               that was refused: "this folder" is one folder too few the moment
+               a project's own directory and its `.beads` can be refused apart. -->
+          <template
+            v-if="
+              (trackerState.health.state === 'error' ||
+                trackerState.health.state === 'folder-refused') &&
+              healthSaid
+            "
+            #detail
+          >
+            {{ healthSaid }}
           </template>
           <template v-if="trackerState.health.state === 'not-a-beads-repo'" #action>
             <Button variant="primary" size="sm" :disabled="initing" @click="initHere">
@@ -3523,6 +3581,22 @@ const toastStackStyle = {
                 Ask an agent
               </Button>
             </div>
+          </template>
+          <!-- One button and no "Ask an agent" beside it: an agent cannot reach
+               the permission database, and a folder this app may not read is a
+               folder an agent started in it could not read either. Drawn only
+               where there is something to press — elsewhere the sentence above
+               carries the whole of what to do. -->
+          <template
+            v-else-if="
+              trackerState.health.state === 'folder-refused' &&
+              folderRefusedHasReset(trackerState.folderAccessRepair)
+            "
+            #action
+          >
+            <Button variant="primary" size="sm" :disabled="resettingAccess" @click="resetAccessHere">
+              {{ resettingAccess ? 'Resetting…' : 'Reset and restart' }}
+            </Button>
           </template>
         </EmptyState>
         <KanbanBoard

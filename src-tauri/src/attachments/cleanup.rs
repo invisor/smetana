@@ -303,6 +303,9 @@ mod tests {
             HealthState::BdVersionMismatch,
             HealthState::NotABeadsRepo,
             HealthState::NoProject,
+            // A folder the operating system is refusing is the sharpest case of
+            // all: nothing in it can be read, so nothing in it may be deleted.
+            HealthState::FolderRefused,
         ] {
             assert!(
                 matches!(refusal(Some(project), &board), Some(AttachmentError::NoBoard)),

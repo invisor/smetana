@@ -149,6 +149,17 @@ pub enum HealthState {
     NoProject,
     NotABeadsRepo,
     BdVersionMismatch,
+    /// The operating system will not let this app read the project's folder.
+    ///
+    /// A state of its own rather than a sentence inside `Error`, and the
+    /// distinction is the whole of smetana-8lq: `Error` means bd could not do
+    /// its job, and the screen it draws offers a database migration for it. A
+    /// refused folder has nothing to do with bd's version or with anybody's
+    /// data — bd merely happened to be the first thing to trip over it — so it
+    /// needs its own sentence and its own button, and only a separate state can
+    /// carry them. `tracker::access` is where it is decided, from the
+    /// filesystem rather than from bd's wording.
+    FolderRefused,
     Error,
 }
 
@@ -241,6 +252,22 @@ pub enum TrackerError {
     Empty,
     #[error("no tracker in this folder: {0}")]
     NoTracker(String),
+    /// The one repair that is not about bd at all: undoing the operating
+    /// system's stored refusal of the project's folder. Its own variant because
+    /// every message above it speaks about bd or about `.beads`, and this
+    /// failure happened before either was reached.
+    #[error("could not reset the folder permission: {0}")]
+    Access(String),
+    /// The gate in front of that repair, and the same one `UpdateError::RunLive`
+    /// keeps in front of an install: both restart the app, and a restart kills
+    /// every PTY child, which under a run means the agents it is driving.
+    ///
+    /// `projects` is the list, joined, and it is the whole point of the variant
+    /// — the notice this refusal answers is drawn for the folder on screen,
+    /// while the run being ended may be in a project nobody is looking at, so a
+    /// refusal that could not name it would send somebody hunting.
+    #[error("a run is going in {projects}; resetting the permission restarts the app and would end it")]
+    RunLive { projects: String },
 }
 
 // Tauri requires a command's error to be serializable.

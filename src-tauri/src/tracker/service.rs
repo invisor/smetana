@@ -8,6 +8,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::project;
 
+use super::access;
 use super::backup;
 use super::bd::Bd;
 use super::model::{
@@ -153,11 +154,22 @@ impl HealthReporter {
     }
 
     /// A one-off failure of a bd call.
-    fn failed(&mut self, e: &TrackerError) {
+    ///
+    /// `dir` is the folder the call was made in, and it is what tells a broken
+    /// tracker apart from a folder the operating system is refusing to let this
+    /// app open — see `access::health_for_failure`, which is where the decision
+    /// is, and `HealthState::FolderRefused` for why the two must not arrive as
+    /// one state. `None` is for the one caller that has no folder yet:
+    /// `check_version` runs before anything is open.
+    ///
+    /// The remembered command is kept either way. It is an account of what bd
+    /// was asked and what it said, and that stays true of a refused folder —
+    /// bd failed there too, and for the same reason.
+    fn failed(&mut self, e: &TrackerError, dir: Option<&std::path::Path>) {
         if let TrackerError::Command { command, stderr, .. } = e {
             self.last_command_failure = Some((command.clone(), stderr.clone()));
         }
-        self.set(Health { state: HealthState::Error, message: Some(e.to_string()) });
+        self.set(access::health_for_failure(dir, e));
     }
 
     /// bd worked: clear the one-off failure, but not the persistent trouble.
@@ -251,7 +263,7 @@ async fn full_sync(
     let result = columns.and(issues);
     match &result {
         Ok(()) => health.recovered(),
-        Err(e) => health.failed(e),
+        Err(e) => health.failed(e, Some(bd.cwd())),
     }
     result
 }
@@ -263,7 +275,7 @@ async fn incremental_sync(app: &AppHandle, bd: &Bd, store: &mut Store, health: &
             emit_delta(app, store.apply_incremental(issues));
             health.recovered();
         }
-        Err(e) => health.failed(&e),
+        Err(e) => health.failed(&e, Some(bd.cwd())),
     }
 }
 
@@ -292,6 +304,24 @@ async fn open(
     };
 
     let bd = Bd::new(app.clone(), dir.clone());
+
+    // Before asking whether there is a tracker in here at all, because a folder
+    // the operating system is refusing answers "no" to every question about
+    // itself and the answer means nothing. `has_tracker` is an `is_dir`, and
+    // macOS lets a `stat` through while refusing the `read_dir` underneath — so
+    // without this the notice would offer "Initialize bd" over a folder that
+    // already has a `.beads` nobody is allowed to open, and pressing it would
+    // put a second tracker inside the first.
+    //
+    // `tracked: false`, for the reason it is false in a folder with no tracker:
+    // nothing here can be read and nothing may be written. So the sixty-second
+    // sweep leaves this folder alone until it is opened again — which is what
+    // the repair arranges, by restarting the app once macOS has forgotten the
+    // refusal.
+    if let Some(message) = access::refusal(&dir) {
+        health.degrade_project(HealthState::FolderRefused, message);
+        return Some(Project { dir, bd, _watcher: None, tracked: false });
+    }
 
     if !project::has_tracker(&dir) {
         health.degrade_project(
@@ -333,7 +363,10 @@ async fn check_version(app: &AppHandle, health: &mut HealthReporter) {
             HealthState::BdVersionMismatch,
             format!("expected bd version {EXPECTED_BD_VERSION}, got {other:?}"),
         ),
-        Err(e) => health.failed(&e),
+        // No folder is open yet: `bd --version` reads no tracker and is made
+        // from whatever directory the process started in, so there is nothing
+        // here for a refusal to be about.
+        Err(e) => health.failed(&e, None),
     }
 }
 
@@ -541,14 +574,14 @@ async fn handle(
                 // call behind it to name — an agent asked about this hears the
                 // refusal through the health line the briefing always carries.
                 Ok(Err(e)) => {
-                    health.failed(&e);
+                    health.failed(&e, Some(dir.as_path()));
                     let _ = reply.send(Err(e));
                     return false;
                 }
                 Err(e) => {
                     let failed =
                         TrackerError::Backup(format!("the copy did not finish: {e}"));
-                    health.failed(&failed);
+                    health.failed(&failed, Some(dir.as_path()));
                     let _ = reply.send(Err(failed));
                     return false;
                 }
@@ -577,7 +610,7 @@ async fn handle(
                 // The copy stays where it is — nothing in this app removes a
                 // person's data quietly.
                 Err(e) => {
-                    health.failed(&e);
+                    health.failed(&e, Some(dir.as_path()));
                     let _ = reply.send(Err(e));
                     return false;
                 }

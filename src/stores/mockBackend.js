@@ -289,6 +289,19 @@ export function installMockBackend() {
        here: with the state unavailable the About tab draws no control at all,
        so neither can be reached in the ordinary course. */
     if (command === 'updates_state') return null
+    /* What a refused folder needs. A read, so it answers — otherwise every
+       start of `npm run dev` would put a warning in the console about a
+       subsystem that is simply not there. `'unavailable'` is the honest answer
+       rather than a convenient one: a browser has no bundle for the operating
+       system to have refused and nothing to reset, so the notice draws its
+       sentence and no button, which is exactly what the app shows on a platform
+       without `tccutil`.
+
+       `tracker_access_reset` is deliberately absent and falls through to the
+       loud refusal at the bottom, like every other write. With this answering
+       `'unavailable'` nothing offers it, so it cannot be reached in the
+       ordinary course. */
+    if (command === 'tracker_access_repair') return 'unavailable'
     if (command === 'tracker_set_project') return snapshot
     if (command === 'tracker_probe') {
       return MOCK_PROJECTS.map((path) => ({ path, tracked: path !== UNTRACKED }))
