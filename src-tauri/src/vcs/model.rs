@@ -620,9 +620,12 @@ pub fn parse_name_status(out: &str) -> Vec<CompareChange> {
     while let Some(status) = fields.next() {
         let letter = status.chars().next().unwrap_or('M');
         let paired = matches!(letter, 'R' | 'C');
-        // A record cut short — by the ceiling in `run.rs`, or by a git that
-        // stopped mid-stream — ends the list rather than inventing the half
-        // that did not arrive.
+        // A record cut short — a git that died mid-stream, killed or crashed
+        // after a letter and before the path it belongs to — ends the list
+        // rather than inventing the half that did not arrive. It is not
+        // truncation by a ceiling: `run.rs`'s three are all on time, and a call
+        // that outstays one comes back as `VcsError::Timeout` with no stdout at
+        // all rather than with part of it.
         let Some(first) = fields.next() else { break };
         let (orig_path, path) = if paired {
             let Some(second) = fields.next() else { break };
@@ -1015,7 +1018,9 @@ mod tests {
 
     /// A letter this table has never heard of is not an error: the file did
     /// change, and leaving it off the list is the one thing this cannot
-    /// honestly do. `changeStatus.js` draws it as "Changed".
+    /// honestly do. It is reported as modified, because "it is different" is
+    /// the whole of what can be said with nothing more specific to say it
+    /// with.
     #[test]
     fn an_unknown_letter_still_lists_the_file() {
         let changes = parse_name_status("X\0src/odd.js\0");
@@ -1031,8 +1036,8 @@ mod tests {
         assert!(parse_name_status("").is_empty());
     }
 
-    /// A record cut off by the ceiling in `run.rs` must not invent a path from
-    /// the half that arrived.
+    /// A record cut off by a git that died mid-stream must not invent a path
+    /// from the half that arrived.
     #[test]
     fn a_truncated_record_is_dropped() {
         let changes = parse_name_status("M\0src/a.js\0R100\0src/old.js\0");
