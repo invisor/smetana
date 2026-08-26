@@ -164,10 +164,12 @@ pub fn move_to_trash(root: &Path, rel: &str) -> Result<(), FilesError> {
 /// prints nothing and leaves the link where it was, which in this very
 /// repository is every row under `node_modules/.bin`. It needs an Apple Events
 /// grant, which a signed and hardened bundle may only ask for with an
-/// `NSAppleEventsUsageDescription` in its Info.plist — `tauri.conf.json`
-/// declares no macOS bundle block at all, so the first delete in a shipped
-/// build is a prompt nobody wrote the words for, or a denial. And it is slow
-/// enough to measure in seconds against milliseconds.
+/// `NSAppleEventsUsageDescription` — a key this app declines to declare, and
+/// declines with somewhere to put it, since `src-tauri/Info.plist` is in the
+/// tree and carries the folder usage descriptions. So the first delete in a
+/// shipped build is a prompt nobody wrote the words for, or the denial that
+/// comes instead when there is nothing to prompt with. And it is slow enough
+/// to measure in seconds against milliseconds.
 ///
 /// `NsFileManager` is `trashItemAtURL`: no subprocess, no permission, removes a
 /// link as a link. What it costs is Finder's "Put Back" on some systems (a

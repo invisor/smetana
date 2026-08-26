@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the bundle's own Info.plist by convention: the Tauri CLI reads
+  `<tauri dir>/Info.plist` if it is there and merges it over the generated one,
+  so no line in `tauri.conf.json` points at this file and none should. The
+  place to re-check after a CLI upgrade is
+  `crates/tauri-cli/src/interface/rust.rs` in the Tauri repository, where
+  `tauri_dir.join("Info.plist")` is pushed onto the list handed to
+  `merge_plist`; checked against @tauri-apps/cli 2.11.4.
+
+  What it carries is the sentence macOS shows when it asks for one of the
+  protected folders. Without one the prompt names no reason at all, which is
+  the worst moment to say nothing: a refusal is stored, and the app cannot ask
+  a second time. Each sentence says what the folder is wanted for — the project
+  somebody opened — rather than what the app is.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Smetana reads and edits the files of the project you open in it — including one you keep on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Smetana reads and edits the files of the project you open in it — including one you keep in your Documents folder.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Smetana reads and edits the files of the project you open in it — including one you keep in your Downloads folder.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Smetana reads and edits the files of the project you open in it — including one you keep on a removable volume.</string>
+</dict>
+</plist>
