@@ -191,4 +191,36 @@ describe('the branch comparison', () => {
     expect(compare.compareState.work).toBe('')
     expect(ipc.calls('vcs_compare').at(-1).branch).toBe('other')
   })
+
+  /* The window's header is drawn from `branch` and its rows from `files`, and
+     `aim` writes the first before git has been asked for the second. The whole
+     of the defect is the moment in between, so the comparison is held open
+     here rather than answered. */
+  it('holds no list from the old pair while the new one is being compared', async () => {
+    const { compare, ipc } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+    await compare.select('src/a.js')
+
+    let release
+    ipc.on(
+      'vcs_compare',
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(COMPARISON)
+        })
+    )
+    const aimed = compare.aim('/tmp/r', 'other')
+
+    expect(compare.compareState.branch).toBe('other')
+    expect(compare.compareState.files).toEqual([])
+    expect(compare.compareState.left).toBe('')
+    expect(compare.compareState.right).toBe('')
+
+    /* And the answer still lands, so the assertions above are about the wait
+       rather than about a comparison that never happened. */
+    release()
+    await aimed
+    expect(compare.compareState.files).toEqual(COMPARISON.files)
+    expect(compare.compareState.left).toBe(LEFT)
+  })
 })

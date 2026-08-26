@@ -82,6 +82,16 @@ export async function aim(repo, branch) {
   compareState.head = ''
   compareState.work = ''
   compareState.fileError = null
+  /* The comparison itself goes with them, and for the reason the failure path
+     inside `refresh` empties it: the window draws its header from `branch` and
+     its rows from `files`, and this is the one place the two can come apart —
+     `branch` is the new pair the moment this line runs, while `vcs_compare` is
+     a git process that has not been asked yet. Left standing, the previous
+     pair's shas and rows would sit under the new branch's name with nothing
+     saying so; emptied, the window draws the loading state it already has. */
+  compareState.files = []
+  compareState.left = ''
+  compareState.right = ''
   await refresh()
 }
 
