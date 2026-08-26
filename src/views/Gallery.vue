@@ -21,6 +21,7 @@ import {
   Button,
   ChangeList,
   CommitBox,
+  CompareList,
   ChatMessage,
   Checkbox,
   ClaimedTasks,
@@ -745,6 +746,33 @@ const CHANGES = [
 ]
 
 const CLEAN_TREE = { branch: 'main', detached: null, changes: [] }
+
+/* What one branch differs from the current one by, in the shape `vcs_compare`
+   answers with — `CompareChange` and not `Change`: between two commits there is
+   no staged flag and no untracked file, and two fields that are always false
+   are two fields somebody would one day read as an answer.
+
+   Every kind `git diff --name-status` can report is here, including the rename
+   that carries the path it came from: that is the row with two paths on it, and
+   the one a parser reading a record as a single field puts every row after it
+   out of step. The long paths are deliberate, since what they say is whether
+   the file's own name survives the truncation. */
+const COMPARE_FILES = [
+  { path: 'src/stores/vcs.js', origPath: null, kind: 'modified' },
+  { path: 'src/components/git/CompareList.vue', origPath: null, kind: 'added' },
+  { path: 'src/views/desktopAppData.js', origPath: null, kind: 'deleted' },
+  { path: 'src/components/files/editor/languages.js', origPath: null, kind: 'typeChanged' },
+  {
+    path: 'src/components/git/RepoList.vue',
+    origPath: 'src/components/shell/RepoList.vue',
+    kind: 'renamed'
+  }
+]
+
+/* The switch is live here, which is the whole reason it is a ref: pressing a
+   position is what says the two labels fit the column and that the pair reads
+   as one control rather than as two buttons that happen to be adjacent. */
+const compareMode = ref('diverged')
 
 /* Branches in the order `git::by_recency` gives them and the panel draws them:
    what was worked on here most recently first, and the tail a fresh clone
@@ -2805,6 +2833,27 @@ const menuTargetStyle = {
              panel `branchMenu.js` builds. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" :busy="{ op: 'merge', branch: 'main' }" />
+        </div>
+        <!-- The compare window's left half, at the width that window gives it.
+             The switch above the rows is live: press either position and read
+             both labels in full. What to check on the rows is that the status
+             letter, the file icon and the name line up with the change list two
+             frames up — one file has to look the same in both — and that the
+             rename names where it came from on its own row. -->
+        <div :style="{ height: '260px', width: 'var(--panel-right-w)', border: 'var(--border-w) solid var(--border)' }">
+          <CompareList
+            :files="COMPARE_FILES"
+            :mode="compareMode"
+            selected="src/stores/vcs.js"
+            @update:mode="compareMode = $event"
+          />
+        </div>
+        <!-- Two branches with nothing between them, which is an ordinary answer
+             and its own sentence: the window says something else entirely when
+             the comparison could not be made at all, and the two must not read
+             as the same emptiness. -->
+        <div :style="{ height: '260px', width: 'var(--panel-right-w)', border: 'var(--border-w) solid var(--border)' }">
+          <CompareList :files="[]" />
         </div>
         <div :style="{ display: 'flex', width: '252px', height: '160px', border: 'var(--border-w) solid var(--border)' }">
           <GitPanel

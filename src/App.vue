@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, ref } from 'vue'
 import DesktopApp from './views/DesktopApp.vue'
 import SettingsWindow from './views/SettingsWindow.vue'
+import CompareWindow from './views/CompareWindow.vue'
 import { loadSettings, settings } from './stores/settings.js'
 import { effectiveTheme } from './appearance.js'
 import { usePrefersDark } from './views/useAppearance.js'
@@ -15,13 +16,15 @@ const Gallery = defineAsyncComponent(() => import('./views/Gallery.vue'))
    without adding chrome the design does not have. An override is never written
    back — one visit to the dev server must not repaint the app forever. */
 const params = new URLSearchParams(window.location.search)
-/* Three views over one bundle. `settings` is the second OS window (Rust opens
-   it as `index.html?view=settings`, see `src-tauri/src/window.rs`) and it is a
-   branch here rather than a build of its own for the same reason the gallery is:
-   one front end, one set of tokens, one place a component can break. */
+/* Four views over one bundle. `settings` and `compare` are the app's other two
+   OS windows (Rust opens them as `index.html?view=settings` and
+   `index.html?view=compare`, see `src-tauri/src/window.rs`) and both are
+   branches here rather than builds of their own for the same reason the gallery
+   is: one front end, one set of tokens, one place a component can break. */
 const view = params.get('view')
 const gallery = ref(view === 'gallery')
 const settingsWindow = ref(view === 'settings')
+const compareWindow = ref(view === 'compare')
 
 const override = (name, allowed) => (allowed.includes(params.get(name)) ? params.get(name) : null)
 const themeOverride = override('theme', ['dark', 'light'])
@@ -31,11 +34,19 @@ const densityOverride = override('density', ['comfortable', 'compact'])
    sections belongs to that window, and checking a name against it here would be
    the same closed list written out twice. */
 const settingsTab = params.get('tab')
+/* Which repository and which branch the compare window is aimed at —
+   `compare_window_open` percent-encoded both into the URL it built. Passed
+   through untouched, the way the section above is: what a repository path and a
+   branch name may hold is git's business and not this file's, and an already
+   open window is re-aimed by an event rather than by a URL. */
+const compareRepo = params.get('repo')
+const compareBranch = params.get('branch')
 
-/* The gallery is a component harness and the settings window holds no store of
-   its own: both render straight away. The app waits for the file — a few
-   milliseconds — rather than painting the default theme and flipping. */
-const standalone = gallery.value || settingsWindow.value
+/* The gallery is a component harness, and neither of the two other windows
+   holds this store: all three render straight away. The app waits for the
+   file — a few milliseconds — rather than painting the default theme and
+   flipping. */
+const standalone = gallery.value || settingsWindow.value || compareWindow.value
 const ready = ref(standalone)
 if (!standalone) {
   loadSettings().then(() => {
@@ -49,7 +60,7 @@ if (!standalone) {
    so this listener is not created there at all. Two `matchMedia` subscriptions
    in one window, one of them feeding a computed nothing renders, is a leak of
    the quiet kind. */
-const prefersDark = settingsWindow.value ? ref(false) : usePrefersDark()
+const prefersDark = settingsWindow.value || compareWindow.value ? ref(false) : usePrefersDark()
 const theme = computed(
   () =>
     themeOverride ??
@@ -72,6 +83,18 @@ const density = computed(
     :theme-override="themeOverride"
     :density-override="densityOverride"
     :initial-tab="settingsTab"
+  />
+  <!-- The compare window, on the pair its URL names. Its overrides go in for
+       the reason the settings window's do: it paints its own root from what the
+       app window announces, and without these two its chrome — the header, the
+       file list, the diff's captions — could not be looked at in compact or in
+       the other theme at all. -->
+  <CompareWindow
+    v-else-if="compareWindow"
+    :theme-override="themeOverride"
+    :density-override="densityOverride"
+    :repo="compareRepo"
+    :branch="compareBranch"
   />
   <Gallery v-else-if="gallery" :theme="theme" :density="density" />
   <DesktopApp v-else-if="ready" :theme="theme" :density="density" />
