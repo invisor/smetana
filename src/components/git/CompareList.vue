@@ -29,6 +29,7 @@
    all. That is `GitPanel`'s rule for its three sections, kept here. */
 import { computed, watch } from 'vue'
 import Button from '../core/Button.vue'
+import Tooltip from '../core/Tooltip.vue'
 import { useInteractive } from '../core/interactive.js'
 import { basename } from '../../paths.js'
 import { fileIconUrl } from '../../catppuccinIcon.js'
@@ -59,12 +60,32 @@ const props = defineProps({
 
 const emit = defineEmits(['select', 'update:mode'])
 
-/* Sentence case, like every other label in this app. The words are the design
-   document's own: the first names where the diff is measured from, the second
-   says the two trees are held against each other as they stand. */
+/* Sentence case, like every other label in this app, and one word each.
+   The design document's own words for the first position were "From where they
+   diverged", and the clause did not fit: at the column's shipped width a button
+   has about 132px for its text and that phrase measures 140 at the shipped font
+   alone, so it was drawn cut through the middle — the label centred inside a
+   button clipping it at both ends. Widening the column was the version thrown
+   away: the column is a person's to drag now, and any width bought here would
+   be lost again on the first drag.
+
+   What one word cannot carry is what the diff is measured *from*, and that is
+   exactly the question this switch exists to let somebody answer. So each
+   position keeps its sentence in a tooltip, the way a one-glyph `IconButton`
+   keeps its name in one, with no delay: this is a control somebody has hovered
+   on purpose at the top of a narrow panel, not a header crossed on the way to a
+   card. */
 const MODES = [
-  { value: 'diverged', label: 'From where they diverged' },
-  { value: 'direct', label: 'Direct' }
+  {
+    value: 'diverged',
+    label: 'Diverged',
+    help: 'From where the two branches parted: what this branch has added since the split, and what a pull request shows.'
+  },
+  {
+    value: 'direct',
+    label: 'Direct',
+    help: 'The two trees as they stand right now, which also draws what only the current branch touched, backwards.'
+  }
 ]
 
 const rootStyle = {
@@ -88,15 +109,17 @@ const switchStyle = {
 }
 
 /* Each position takes half the width whatever its label measures, so the pair
-   is a switch rather than two buttons that happen to be beside each other.
+   is a switch rather than two buttons that happen to be beside each other. It
+   sits on the `Tooltip` wrapping the button, since that is the flex item now.
 
    `minWidth: 0` is the load-bearing half and it was paid for: a flex item
    defaults to `min-width: auto` and refuses to shrink below its own content, so
-   in a column too narrow for "From where they diverged" the pair escaped the
-   panel sideways rather than staying in it. What is left in that case is a
-   label cut short inside its own button, which is a control that is too small
-   rather than a list drawn over. The window gives it a column wide enough that
-   neither happens. */
+   in a column too narrow for the pair they escaped the panel sideways rather
+   than staying in it. What is left in that case is a label cut short inside its
+   own button, which is a control that is too small rather than a list drawn
+   over. Neither is reachable any more: `compareWidth.js`'s `LIST_MIN` is the
+   width the wider of these two labels needs at the largest app font, and the
+   window will not draw the column narrower than that. */
 const positionStyle = { flex: '1 1 0', minWidth: 0, overflow: 'hidden' }
 
 const listStyle = { flex: 1, minHeight: 0, overflowY: 'auto' }
@@ -201,14 +224,20 @@ const empty = computed(() => props.settled && props.files.length === 0)
 <template>
   <div :style="rootStyle">
     <div :style="switchStyle" role="group" aria-label="What to compare">
-      <Button
+      <Tooltip
         v-for="position in MODES"
         :key="position.value"
-        size="sm"
-        :selected="mode === position.value"
+        :label="position.help"
+        side="bottom"
         :style="positionStyle"
-        @click="emit('update:mode', position.value)"
-      >{{ position.label }}</Button>
+      >
+        <Button
+          size="sm"
+          full-width
+          :selected="mode === position.value"
+          @click="emit('update:mode', position.value)"
+        >{{ position.label }}</Button>
+      </Tooltip>
     </div>
     <div :style="listStyle">
       <div

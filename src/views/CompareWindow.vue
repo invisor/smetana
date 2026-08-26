@@ -31,7 +31,9 @@ import CompareList from '../components/git/CompareList.vue'
 import DiffView from '../components/files/editor/DiffView.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import Icon from '../components/core/Icon.vue'
+import Resizer from '../components/shell/Resizer.vue'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
+import { LIST_DEFAULT, STEP, clampListWidth, resolveDrag } from './compareWidth.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
 import { readSharedSettings, watchSharedSettings } from '../stores/settings.js'
 import {
@@ -248,24 +250,49 @@ const shaStyle = { ...nameStyle, flex: 'none', color: 'var(--text-muted)' }
 
 const bodyStyle = { display: 'flex', flex: 1, minHeight: 0 }
 
-/* The file list at a panel's width and fixed there, because what is beside it
-   is a diff: two columns of code take every pixel they are given, and a list of
-   paths does not.
+/* ---- the list's width -------------------------------------------------- */
+/* `compareWidth.js` holds the rules and the reasons; what belongs here is the
+   part that needs a window and a pointer, and it is `DesktopApp`'s panel-width
+   section in miniature — one column instead of two, and nothing written to
+   disk.
 
-   The **wider** of the two panel widths, which is the one thing here that is
-   not simply the app's left column copied over. This list carries the mode
-   switch above it, and "From where they diverged" is a clause rather than a
-   word: at `--panel-left-w` the pair did not fit and left the panel sideways.
-   The right panel's width is the system's next size up, so the measure is still
-   the design system's rather than one invented here. */
-const listColumnStyle = {
+   The width is a `ref` and not a setting: the compare window keeps no geometry
+   of its own, so a list width that came back would be the only thing about this
+   window's shape that did. The viewport has to be reactive for the same reason
+   it does there — otherwise a narrowed window would leave the list sticking out
+   over the diff until somebody touched the separator — and a drag is measured
+   from a width snapshotted at `dragstart`, or each clamped move would quietly
+   become the new origin. */
+const listWidth = ref(LIST_DEFAULT)
+const viewport = ref(window.innerWidth)
+const onViewport = () => {
+  viewport.value = window.innerWidth
+}
+onMounted(() => window.addEventListener('resize', onViewport))
+onUnmounted(() => window.removeEventListener('resize', onViewport))
+
+let dragBase = LIST_DEFAULT
+const startDrag = () => {
+  dragBase = listWidth.value
+}
+const onDrag = (delta) => {
+  listWidth.value = resolveDrag({ base: dragBase, delta, viewport: viewport.value })
+}
+
+/* The file list, at a width the person may drag and the window then clamps
+   against itself. It used to be `--panel-right-w` and fixed there, on the
+   argument that a diff takes every pixel it is given and a list of paths does
+   not — which is true of the diff and was never true of the list: a path is as
+   long as somebody's tree is deep, and the one screen in this app that draws
+   nothing but paths was the one place the width could not be changed. */
+const listColumnStyle = computed(() => ({
   display: 'flex',
   flex: 'none',
-  width: 'var(--panel-right-w)',
+  width: `${clampListWidth(listWidth.value, viewport.value)}px`,
   minHeight: 0,
   background: 'var(--surface)',
   borderRight: 'var(--border-w) solid var(--border-subtle)'
-}
+}))
 
 /* `minWidth: 0` beside `minHeight: 0`, and both are load-bearing: a flex item
    defaults to `min-width: auto` and refuses to shrink below its own content, so
@@ -301,6 +328,15 @@ const paneStyle = {
           @update:mode="setMode"
         />
       </div>
+
+      <Resizer
+        label="Resize the file list"
+        :step="STEP"
+        @dragstart="startDrag"
+        @drag="onDrag"
+        @reset="listWidth = LIST_DEFAULT"
+      />
+
       <div :style="paneStyle">
         <!-- The comparison could not be made at all, which is a different
              emptiness from a pair of identical branches and says so in its own
