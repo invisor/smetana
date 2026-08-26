@@ -14,7 +14,12 @@
    whose main action is missing from its own menu reads as a place that cannot
    do it.
 
-   The fourth is the one thing here that is not about a branch that exists:
+   Beside the switch sits the one item that only reads: comparing this branch
+   with the one the repository is on, which opens a window and touches the
+   repository not at all. It is a verb about a different branch like the switch
+   above it, which is why it is in that group and not in the writes' one.
+
+   The last is the one thing here that is not about a branch that exists:
    cutting a new one from this row's commit. It is last and in a group of its
    own, because it is the only item that leaves the list longer than it found
    it.
@@ -28,13 +33,17 @@
    suffix is for a menu whose rows are refused for *different* reasons; neither
    of these two ever was.
 
-   **Two refusals of different reach**, which is the whole shape of this rule. A
-   run or an operation already going refuses everything, caption at the top. The
-   branch being the one already checked out refuses only the three verbs about
-   moving between branches — a new branch cut *from where you are standing* is
-   the ordinary case, not an edge one — so that caption heads those three and the
-   last group stays live below the separator. What says how far a caption reaches
-   is the greying under it: the live row is visibly not part of the group. */
+   **Three refusals of different reach**, which is the whole shape of this rule.
+   A run or an operation already going refuses everything that writes, caption at
+   the top. The branch being the one already checked out refuses the three verbs
+   about moving between branches and the comparison beside them — a new branch
+   cut *from where you are standing* is the ordinary case, not an edge one — so
+   that caption heads those four and the last group stays live below the
+   separator. The third reach is the narrowest and it arrived with the
+   comparison: that item reads and writes nothing, so `held` does not reach it at
+   all, and a caption saying "not now" can therefore stand over one row that is
+   still live. What says how far a caption reaches is the greying under it: the
+   live row is visibly not part of the group. */
 
 /* What refuses the whole menu, in order of what is worth saying. Both mean "not
    now" rather than "not this row", which is what puts either at the very top. */
@@ -58,6 +67,13 @@ export function branchMenuItems({ current = false, allowed = true, busy = false 
        names, word for word. They were already written for someone who cannot
        see the row, which is the same sentence a menu row needs. */
     { kind: 'checkout', label: 'Switch to this branch', icon: 'git-branch', disabled: moving },
+    /* It reads. A run in this project and an operation in this repository both
+       refuse everything that writes, and this writes nothing — so the caption
+       above may say "not now" while this row stays live under it, which is a
+       third reach in a file that had two. What still refuses it is the row
+       being the branch already checked out: a branch has no difference from
+       itself to draw. */
+    { kind: 'compare', label: 'Compare with the current branch', icon: 'git-compare', disabled: current },
     /* A separator, because the two below are not the same kind of act as the
        one above: switching branches is where you are, merging and rebasing
        change what the branch you are on contains. */
