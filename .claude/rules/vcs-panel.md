@@ -1,8 +1,11 @@
 ---
 paths:
   - "src-tauri/src/vcs/**"
+  - "src-tauri/src/window.rs"
   - "src/components/git/**"
   - "src/stores/vcs.js"
+  - "src/stores/compare.js"
+  - "src/views/CompareWindow.vue"
 ---
 
 # The Git panel: what only the binary can answer
@@ -739,3 +742,101 @@ answers `vcs_tracking` with one branch behind, one ahead, one level and one nobo
 rather than pretending a remote was reached — and, since the check reached the caption, the loud
 one as well: pressing it in `npm run dev` draws the refusal block, which is the only place that
 block's fetch title can be seen at all.
+
+## Comparing a branch with the one you are on
+
+The fifth item on a branch row opens a window — a window and not a modal, so it can be dragged out
+beside the board it is about and left there — listing the files one branch differs from the current
+one by, with the picked file's two sides drawn by the same `DiffView` the change list already opens a
+diff in. `vcs_compare` and `vcs_file_at_rev` in `commands.rs` are the whole of the back end,
+`stores/compare.js` holds what the window knows, and `components/git/CompareList.vue` inside
+`views/CompareWindow.vue` draw it. Nothing here writes: no staging, no cherry-picking, no
+conflict, and no working tree either — comparing branches is about commits, and what is uncommitted
+is the change list this panel already has.
+
+**"What has this branch changed" has two honest answers, and they disagree every time the current
+branch has moved since the two split.** *From where they diverged* is `git diff <merge-base>
+<branch>`, what a pull request shows and the ordinary reading of "what is new here". *Direct* is
+`git diff HEAD <branch>`, how the two trees stand against each other right now — which also draws
+every file only the current branch touched, backwards, as a change being undone. **Both are offered,
+on a two-position switch above the file list, and the diverged reading is the default**: neither is
+wrong, each is the wrong one half the time, and a product that picks silently makes the other half
+unexplainable to somebody who has no way to ask which it picked. The switch sits over the rows rather
+than in the window's chrome, because it changes what the list holds and a control that changes a list
+belongs with it. `Mode::parse` reads anything it does not recognise as the default rather than
+refusing it — a mode is a switch on a screen, not a state worth a sentence. The one thing it will not
+do is fall back quietly: two histories with no commit in common have no point they diverged from, and
+that is `VcsError::Unrelated` in its own words, because a diff computed from a base nobody asked for,
+drawn under a switch that says otherwise, is the one failure this window could actually mislead
+somebody with.
+
+**Both endpoints are resolved once and everything afterwards is read by sha.** `vcs_compare` answers
+`Comparison { left, right, files }` where the two are object names and never the names they were
+asked for by, and `vcs_file_at_rev` takes a revision rather than a branch. What asking a name twice
+would have cost is not a race worth ignoring here but the ordinary case in this app: an agent commits
+into this very tree while the window stands open, and the file list would then belong to one commit
+and the bytes on screen to another, with nothing anywhere saying so. It is the same rule
+`file_at_head` has always kept by handing `cat-file` an object name instead of `HEAD:<path>` a second
+time, one scope wider — and it is what `tests/stores/compare.test.js` pins from the other side, where
+a read whose `rev` is `'feature'` or `'HEAD'` is the assertion that fails.
+
+It settles the injection question for free as well. The front end never composes a revision of its
+own; it sends back a sha this module gave it. So `is_object_name` can be as narrow as hex and nothing
+else and lose nothing, and `VcsError::BadRevision` is a fault rather than a state worth drawing —
+unreachable from the app. Without it there is no `--` to hide behind in the middle of `{rev}:{path}`,
+and a leading dash would be read as a flag.
+
+**The right-hand side is resolved through the full `refs/heads/<branch>`; the left-hand side is the
+literal `HEAD`.** The prefix is what stops a name that arrived from the front end being read as a
+flag or as an ambiguous rev, and this list holds whatever a person has called a branch. The literal
+`HEAD` costs nothing and answers a detached checkout for free: a project opened at one compares
+against where it is standing, with no name to invent and no second case to write. `file_at_rev` is
+the generalised `file_at_head` rather than a copy of it, so the 2 MiB ceiling, the binary sniff and
+the UTF-8 refusal are written once — the property `file_at_head`'s own header always claimed, that a
+file the editor refuses above 2 MiB must not arrive through a second door.
+
+**One compare window per app, label `compare`, and not one per pair.** It is built exactly as the
+settings window is — a child of the main window so it cannot sink behind the board, the one bundle
+under `index.html?view=compare`, an open one focused and re-aimed rather than rebuilt — and it is why
+`close_settings_with_main` is `close_children_with_main` now and takes both labels down with the app
+window. A comparison left standing after that window is gone is one nothing can ever re-aim, and it
+would keep the app from exiting on its last window.
+
+A window per `(repo, branch)` pair, so two comparisons could stand side by side, was considered and
+dropped. Its labels are generated, and `src-tauri/capabilities/default.json` names windows literally
+— so that version needs a **glob** in `windows` where the file today lists three names, and **a
+window not named in that file reaches no core plugin at all**: it fails as a page that cannot talk to
+anything, rather than as an error somebody could read. Widening the app's permission surface with a
+pattern is a large change to make for a want nobody has expressed, and it diverges from the only
+precedent for a second window in this tree. If side-by-side comparisons ever are wanted, the glob is
+the change and this paragraph is where to start reading.
+
+The pair travels twice, for the reason the settings window's section does: a window being built reads
+it off the URL, an open one never sees a new URL, so the `compare:show` event is the only way to
+re-aim it — and both halves are needed for one press to work in both states. `compare_query`
+percent-encodes both rather than validating them the way `tab_query` validates a section name: a
+section is a short identifier from a closed list, while a repository is an absolute path and a branch
+name may hold almost anything a ref allows, and dropping either would leave a window with nothing to
+compare. Freshness is window focus and the mode switch, the answer the rest of this app gives, and
+there is no watcher.
+
+**The menu item is the third reach of refusal in `branchMenu.js`, and it is the narrowest of the
+three.** That file's header described two — the whole menu, refused while a run holds the project or
+git is mid-operation, and the three moving verbs, refused on the branch already checked out. This one
+reads and writes nothing at all, so `held` does not reach it: **the caption at the top may say "not
+now" while the row directly under it stays live and opens the window**. It is the same argument that
+keeps Fetch pressable under a run and leaves a folder heading undimmed beside greyed rows — a row
+refused for a reason that does not apply to it is the menu saying something untrue about itself. What
+still refuses it is the row being the branch already checked out, since a branch has no difference
+from itself to draw, so that caption now heads four rows rather than three.
+
+Two smaller decisions worth not re-opening. `CompareChange` is its own struct rather than the
+existing `Change`: `staged` and `unstaged` are facts about a working tree and have no answer between
+two commits, and two fields that are always `false` are two fields somebody will one day read as one.
+And `parse_name_status` reads a record as **one field or three** — `R` and `C` carry a similarity
+score on the letter and are followed by two paths, from and then to — because read as one field each,
+a single rename puts every record after it one field out of step, which is the defect `--porcelain=v2`
+already cost this module once. `DiffView`'s column captions became props for this window and default
+to what they were hardcoded as, so the diff tab passes neither and did not change; the store's
+`missingLeft` is bound to the prop's existing name `missingAtHead`, which means what it has always
+meant — the left side has no such file.
