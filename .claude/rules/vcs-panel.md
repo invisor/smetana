@@ -830,6 +830,34 @@ refused for a reason that does not apply to it is the menu saying something untr
 still refuses it is the row being the branch already checked out, since a branch has no difference
 from itself to draw, so that caption now heads four rows rather than three.
 
+**The file list is dragged by a `Resizer`, and its width lives for as long as the window does.** The
+rules are `src/views/compareWidth.js` — pure, no Vue and no DOM, for the reason `panelWidths.js` is
+pure — and they are that file in miniature: two panes rather than three columns, no rail to fold
+into, no neighbour in the sum, so a geometry object of five fields would be five constants nobody
+varies. What is kept from it is the split that matters — the width somebody dragged to is one number
+and the width drawn in the window there is now is another — and the rule that every delta is measured
+from a width snapshotted at `dragstart`, since clamping against the last frame makes each clamped
+move the new origin. Double click resets, arrow keys step, and there is no collapse: the list is this
+window's only navigation, and a folded one would leave a rail as the only way back to a second file.
+The width is **not** in `settings.json`, and that is the decision rather than an omission — this
+window keeps no geometry at all, since `compare_window_open` builds it at 1040×680 every time and
+only the main window's position is persisted, so a list width that came back would be the one thing
+about this window's shape that did.
+
+**The mode switch says `Diverged` and `Direct`, one word each, and the sentences moved into
+tooltips.** The design document's "From where they diverged" never fit: a button in this column has
+about 132px for its text and that clause measures 140 at the *shipped* font, so the switch shipped
+with its label cut through the middle — centred inside a button clipping it at both ends, which is
+what somebody photographed. Widening the column was the version thrown away, because the column is a
+person's to drag now and any width bought there is lost on the first drag. What one word cannot carry
+is what the diff is measured *from*, which is the whole question this switch exists to answer, so
+each position keeps its sentence in a `Tooltip` with no delay — the way a one-glyph `IconButton`
+keeps its name in one, and not `ColumnHeader`'s two-second wait, since this is a control somebody has
+hovered on purpose at the top of a narrow panel rather than a header crossed on the way to a card.
+`LIST_MIN` is the other half of the same fix and is a **measurement**: the width the wider label
+needs at `FONT_MAX` in the comfortable density, rounded up for a webview that is not the one it was
+measured in. Change either word and it has to be taken again.
+
 Two smaller decisions worth not re-opening. `CompareChange` is its own struct rather than the
 existing `Change`: `staged` and `unstaged` are facts about a working tree and have no answer between
 two commits, and two fields that are always `false` are two fields somebody will one day read as one.
