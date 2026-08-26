@@ -119,8 +119,9 @@ ordinary component cannot be the folder it sits in, whatever it is spelled like.
 is `DeleteMethod::Finder`, an `osascript` subprocess driving Finder over Apple Events, and it cannot
 delete a symbolic link at all: it exits 0, prints nothing, and leaves the link where it was — which
 in this repository is every row under `node_modules/.bin`. It also needs an Apple Events grant, and
-`tauri.conf.json` declares no macOS bundle block, so a signed and hardened build has no
-`NSAppleEventsUsageDescription` to ask with. `platform_trash` in `fs.rs` sets `NsFileManager`
+`NSAppleEventsUsageDescription` is a key this app declines to declare — declines with somewhere to
+put it, since `src-tauri/Info.plist` is in the tree and carries the folder usage descriptions — so a
+signed and hardened build has nothing to ask with. `platform_trash` in `fs.rs` sets `NsFileManager`
 instead, which is `trashItemAtURL`: no subprocess, no permission, a link removed as a link. The cost
 is Finder's "Put Back" on some systems, and dragging an entry out of the Trash is still the
 platform's ordinary means.
