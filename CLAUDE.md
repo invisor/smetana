@@ -67,7 +67,7 @@ reads (`src/App.vue`):
 |---|---|---|
 | `theme` | `dark`, `light` | `dark` |
 | `density` | `comfortable`, `compact` | `comfortable` |
-| `view` | `gallery`, `settings` | the app |
+| `view` | `gallery`, `settings`, `compare` | the app |
 
 `?view=gallery` renders every exported component once (`src/views/Gallery.vue`) — the harness for
 catching a broken component. Check any component change in all four theme × density combinations,
@@ -80,7 +80,8 @@ and in a browser from `settings_load` — which is what makes the settings scree
 Tauri; the one thing it cannot do there is change anything for good. `?theme=`, `?density=` and
 `?tab=` are passed in as props rather than read there, so `App.vue` stays the one place that knows
 about the query string, and without that this window's own chrome could not be seen in compact or in
-the other theme at all.
+the other theme at all. `?view=compare` is the branch-compare window, a third OS window built and
+checked the same way; what it is for is in `.claude/rules/vcs-panel.md`.
 
 ## Architecture
 
