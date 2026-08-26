@@ -173,6 +173,7 @@ pub fn run() {
       vcs::commands::vcs_commit,
       vcs::commands::vcs_suggest_message,
       vcs::commands::vcs_file_at_head,
+      vcs::commands::vcs_file_at_rev,
       runs::commands::project_config,
       runs::commands::browser_tools,
       runs::commands::run_start,

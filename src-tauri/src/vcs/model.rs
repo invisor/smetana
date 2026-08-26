@@ -368,6 +368,11 @@ pub enum VcsError {
     /// reach the remote", "Git did not commit").
     #[error("Smetana stopped git after {0} seconds — it had not finished.")]
     Timeout(u64),
+    /// A revision that is not an object name. Unreachable from the app — the
+    /// front end sends back a sha this module resolved — and therefore a fault
+    /// rather than a state worth a sentence of its own on screen.
+    #[error("not a revision: {0}")]
+    BadRevision(String),
     #[error("{0}")]
     Io(String),
 }
@@ -384,6 +389,7 @@ impl VcsError {
             Self::NotUtf8(_) => "notUtf8",
             Self::NoMessage => "noMessage",
             Self::Timeout(_) => "timeout",
+            Self::BadRevision(_) => "badRevision",
             Self::Io(_) => "io",
         }
     }

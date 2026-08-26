@@ -551,34 +551,57 @@ const NO_SUCH_OBJECT: i32 = 1;
 /// failure and must not read as one: the panel diffs such a file against an
 /// empty document, which is what it is.
 ///
-/// **Three calls and each is a machine-readable question.** `git show
-/// HEAD:<path>` was the obvious single call and cannot answer the first one: it
-/// exits 128 for an absent path and 128 for a folder that is not a repository
-/// alike, so telling the two apart would mean reading git's prose — which moves
-/// between versions, the reason `model.rs` parses `--porcelain=v2` and never
-/// `git status`. `rev-parse --verify --quiet` says the same thing in an exit
-/// code.
-///
-/// The two calls after it are given the **object name** rather than
-/// `HEAD:<path>` a second and a third time. HEAD can move while this is in
-/// flight — an agent committing in the same tree is the ordinary case here —
-/// and asking again by name would let the size belong to one blob and the bytes
-/// to another.
-///
-/// The ceiling and the binary sniff are `files/`'s own, and deliberately: this
-/// opens in the same editor, and a file it already refuses to open above 2 MiB
-/// must not arrive through a second door. The size is asked for before the
-/// bytes are, the way `files/fs.rs` reads the metadata before it reads the
-/// file.
+/// How it is read is `file_at_rev`'s, and that is where the three calls, the
+/// ceiling, the binary sniff and the UTF-8 refusal are written down — once,
+/// which is the point: this opens in the same editor, and a file that editor
+/// already refuses to open above 2 MiB must not arrive through a second door.
 #[tauri::command]
 pub async fn vcs_file_at_head(repo: String, path: String) -> Result<Option<String>, VcsError> {
     off_the_runtime(move || file_at_head(Path::new(&repo), path)).await
 }
 
-/// The command's whole body, off the runtime and synchronous — every line of it
-/// is a git call or a decision taken from one.
+/// One file as `HEAD` has it, for the diff against the working tree.
+///
+/// A thin caller over `file_at_rev` since the branch comparison arrived. The
+/// ceiling, the binary sniff and the UTF-8 refusal are written once for exactly
+/// the reason this function's own header has always claimed: a file the editor
+/// refuses above 2 MiB must not arrive through a second door.
 fn file_at_head(dir: &Path, path: String) -> Result<Option<String>, VcsError> {
-    let object = format!("HEAD:{path}");
+    file_at_rev(dir, "HEAD", path)
+}
+
+/// Whether a string is an object name, and therefore safe to hand git as a
+/// revision.
+///
+/// The front end never composes a revision of its own: it sends back a sha
+/// `vcs_compare` resolved for it. So this can be as narrow as hex and lose
+/// nothing, and what it buys is that no caller can smuggle a flag — `git
+/// rev-parse --verify --quiet -- output=…` would be read as one, and there is no
+/// `--` to hide behind in the middle of `{rev}:{path}`.
+fn is_object_name(rev: &str) -> bool {
+    !rev.is_empty() && rev.len() <= 64 && rev.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// One file as `rev` has it. `path` is relative to `repo`.
+///
+/// `Ok(None)` is a revision that does not have the file — an added or an
+/// untracked one, every file of a repository with no commit in it yet, and
+/// every file one side of a comparison added. That is not a failure and must
+/// not read as one: the caller diffs such a file against an empty document,
+/// which is what it is.
+///
+/// **Three calls and each is a machine-readable question.** `git show
+/// <rev>:<path>` was the obvious single call and cannot answer the first one: it
+/// exits 128 for an absent path and 128 for a folder that is not a repository
+/// alike, so telling the two apart would mean reading git's prose. `rev-parse
+/// --verify --quiet` says the same thing in an exit code.
+///
+/// The two calls after it are given the **object name** rather than
+/// `<rev>:<path>` a second and a third time, so the size cannot belong to one
+/// blob and the bytes to another. The size is asked for before the bytes are,
+/// the way `files/fs.rs` reads the metadata before it reads the file.
+fn file_at_rev(dir: &Path, rev: &str, path: String) -> Result<Option<String>, VcsError> {
+    let object = format!("{rev}:{path}");
     let Some(name) = run::git_maybe(
         dir,
         &["rev-parse", "--verify", "--quiet", &object],
@@ -611,6 +634,23 @@ fn file_at_head(dir: &Path, path: String) -> Result<Option<String>, VcsError> {
     String::from_utf8(bytes).map(Some).map_err(|_| VcsError::NotUtf8(path))
 }
 
+/// One file as a given revision has it, for the branch comparison's two panes.
+///
+/// The revision is an object name and nothing else — see `is_object_name`. It
+/// is one `vcs_compare` resolved, which is also what keeps the bytes on screen
+/// belonging to the commit the file list was read from.
+#[tauri::command]
+pub async fn vcs_file_at_rev(
+    repo: String,
+    rev: String,
+    path: String,
+) -> Result<Option<String>, VcsError> {
+    if !is_object_name(&rev) {
+        return Err(VcsError::BadRevision(rev));
+    }
+    off_the_runtime(move || file_at_rev(Path::new(&repo), &rev, path)).await
+}
+
 /// The one thing in this file worth pinning: the mapping above, over the layout
 /// that broke `git.rs` once already. Everything else here is an argument list
 /// handed to `run.rs`, which is the process table and carries no tests.
@@ -625,6 +665,24 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create the temp directory");
         dir
+    }
+
+    /// Real git in a scratch repository, for the tests below that are about
+    /// what git answers rather than about what we pass it. The identity is in
+    /// the environment rather than in the repository: a machine with no
+    /// `user.email` configured is an ordinary machine, and a test that failed
+    /// there would be reporting on the machine rather than on the code.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?}");
     }
 
     /// A project opened as a linked worktree offers the whole repository's
@@ -809,5 +867,52 @@ mod tests {
         assert_eq!(branches.iter().filter(|n| n.contains("spaces")).count(), 0, "{branches:?}");
 
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// The front end never invents a revision — it sends back a sha this module
+    /// gave it — so anything that is not an object name is refused before it
+    /// reaches git, where a leading dash would be read as a flag.
+    #[test]
+    fn only_an_object_name_is_a_revision() {
+        assert!(is_object_name("a1b2c3d"));
+        assert!(is_object_name(&"0".repeat(40)));
+        for bad in ["", "HEAD", "--output=/tmp/x", "main", "a1b2c3d^", &"a".repeat(65)] {
+            assert!(!is_object_name(bad), "{bad:?}");
+        }
+    }
+
+    /// The same file, asked for by sha and by HEAD, is the same file — which is
+    /// what says the two doors go through one implementation.
+    #[test]
+    fn a_file_reads_the_same_by_sha_as_by_head() {
+        let dir = scratch("file-at-rev");
+        git(&dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write the file");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "one"]);
+
+        let head = run::git_read(&dir, &["rev-parse", "HEAD"]).expect("resolve HEAD");
+        let sha = head.trim();
+
+        assert_eq!(file_at_rev(&dir, sha, "a.txt".into()).expect("read"), Some("one\n".into()));
+        assert_eq!(file_at_head(&dir, "a.txt".into()).expect("read"), Some("one\n".into()));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A revision that does not have the file is not a failure: it is exactly a
+    /// file added on the other side, and the empty pane is the truth.
+    #[test]
+    fn a_revision_without_the_file_answers_none() {
+        let dir = scratch("file-at-rev-absent");
+        git(&dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write the file");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "one"]);
+        let head = run::git_read(&dir, &["rev-parse", "HEAD"]).expect("resolve HEAD");
+
+        assert_eq!(file_at_rev(&dir, head.trim(), "gone.txt".into()).expect("read"), None);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
