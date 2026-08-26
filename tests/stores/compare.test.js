@@ -150,4 +150,38 @@ describe('the branch comparison', () => {
     expect(compare.compareState.error.kind).toBe('unrelated')
     expect(compare.compareState.files).toEqual([])
   })
+
+  /* Right-clicking the branch already on screen is the ordinary way to ask for
+     the list again. An open window is focused rather than rebuilt precisely so
+     that the file somebody is in the middle of reading survives it, so a
+     re-aim that threw the selection away would defeat the reason it is not
+     rebuilt. */
+  it('keeps the file being read when it is re-aimed at the same pair', async () => {
+    const { compare, ipc } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+    await compare.select('src/a.js')
+
+    await compare.aim('/tmp/r', 'feature')
+
+    expect(compare.compareState.selected).toBe('src/a.js')
+    expect(compare.compareState.head).toBe(`${LEFT}:src/a.js`)
+    expect(compare.compareState.work).toBe(`${RIGHT}:src/a.js`)
+    /* Still a read: the whole of what the gesture asks for is a fresh list. */
+    expect(ipc.calls('vcs_compare')).toHaveLength(2)
+  })
+
+  /* A different pair is a different question, and the file open on the old one
+     has no meaning under it. */
+  it('drops the file being read when it is re-aimed at another pair', async () => {
+    const { compare, ipc } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+    await compare.select('src/a.js')
+
+    await compare.aim('/tmp/r', 'other')
+
+    expect(compare.compareState.selected).toBe(null)
+    expect(compare.compareState.head).toBe('')
+    expect(compare.compareState.work).toBe('')
+    expect(ipc.calls('vcs_compare').at(-1).branch).toBe('other')
+  })
 })

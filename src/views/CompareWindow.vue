@@ -167,6 +167,18 @@ const refusal = computed(() => {
     : { title: 'These two branches could not be compared.', detail: error.message }
 })
 
+/* Whether this window has a pair to have compared at all.
+
+   `aimAt` above ignores a pair with a hole in it rather than aiming at half of
+   one, so a window opened as a bare `?view=compare` — which is how the dev
+   server reaches this screen — asks git nothing: the list is empty, nothing is
+   loading and nothing was refused. That is precisely the state the list reads
+   as "these two branches are identical", so without this the one screen this
+   project checks by eye would open on a claim about a comparison it never
+   made. The window is what knows whether it was ever aimed; the list is handed
+   an answer and should not have to guess whether there was a question. */
+const aimed = computed(() => Boolean(compareState.repo && compareState.branch))
+
 /* The refusal of the one file, in words, through the editor's own table: a file
    refused as binary in a tab has to be refused in the same words here, and the
    kinds are the same on both sides of the wire — `VcsError::kind` carries
@@ -278,7 +290,7 @@ const paneStyle = {
           :files="compareState.files"
           :selected="compareState.selected"
           :mode="compareState.mode"
-          :settled="!compareState.loading && !refusal"
+          :settled="aimed && !compareState.loading && !refusal"
           @select="select"
           @update:mode="setMode"
         />

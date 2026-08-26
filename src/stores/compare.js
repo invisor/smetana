@@ -61,8 +61,21 @@ let compareSeq = 0
 let fileSeq = 0
 
 /* What the window is looking at, read off its own query string on mount and
-   again whenever it is re-aimed. */
+   again whenever it is re-aimed.
+
+   **The same pair again is a refresh, not a new aim.** Right-clicking the
+   branch that is already on screen is the natural way to ask for the list
+   again, and it arrives here as a `compare:show` for the pair this window is
+   already looking at. Clearing the selection on that would throw away the file
+   somebody is in the middle of reading — which is the very thing
+   `compare_window_open` focuses an open window rather than rebuilding it in
+   order not to do. A different pair is a different question, and the file open
+   on the old one has no meaning under it, so that case clears as before. */
 export async function aim(repo, branch) {
+  if (repo === compareState.repo && branch === compareState.branch) {
+    await refresh()
+    return
+  }
   compareState.repo = repo
   compareState.branch = branch
   compareState.selected = null
