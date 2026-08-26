@@ -7,7 +7,8 @@
 use std::path::Path;
 
 use super::model::{
-    Branch, ChangeKind, MergeOutcome, OpKind, ProjectRepos, Tracking, VcsError, WorkingTree,
+    parse_name_status, Branch, ChangeKind, Comparison, MergeOutcome, OpKind, ProjectRepos, Tracking,
+    VcsError, WorkingTree,
 };
 use super::run::Attempt;
 use super::{model, repos, run};
@@ -651,6 +652,75 @@ pub async fn vcs_file_at_rev(
     off_the_runtime(move || file_at_rev(Path::new(&repo), &rev, path)).await
 }
 
+/// Which of the two readings of "what has this branch changed" is being asked
+/// for. The window carries both because neither is wrong and each is the wrong
+/// one half the time — see the design document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// `git diff <merge-base>..<branch>` — what the branch added since it
+    /// split. What a pull request shows.
+    Diverged,
+    /// `git diff HEAD <branch>` — how the two trees differ right now, which
+    /// also draws what the current branch added as a change being undone.
+    Direct,
+}
+
+impl Mode {
+    /// Anything unrecognised is the default the window opens in. A mode is a
+    /// switch on screen, not a state worth a refusal.
+    fn parse(name: &str) -> Self {
+        if name == "direct" { Mode::Direct } else { Mode::Diverged }
+    }
+}
+
+/// What differs between the current branch and another one.
+///
+/// The right-hand side is resolved through the **full `refs/heads/` prefix**,
+/// which is what stops a branch name being read as a flag or as an ambiguous
+/// rev — the name comes from the front end. The left-hand side is the literal
+/// `HEAD`, never a branch name, which costs nothing and answers a detached
+/// checkout for free: it compares against where the person is standing, with no
+/// name to invent.
+fn compare(dir: &Path, branch: &str, mode: Mode) -> Result<Comparison, VcsError> {
+    let reference = format!("refs/heads/{branch}");
+    let Some(right) =
+        run::git_maybe(dir, &["rev-parse", "--verify", "--quiet", &reference], NO_SUCH_OBJECT)?
+    else {
+        return Err(VcsError::NoSuchBranch(branch.to_owned()));
+    };
+    let right = right.trim().to_owned();
+
+    let left = match mode {
+        Mode::Direct => run::git_read(dir, &["rev-parse", "--verify", "HEAD"])?.trim().to_owned(),
+        Mode::Diverged => {
+            // `merge-base` exits 1 with nothing to say when the two share no
+            // history, which is the same clean "no such answer" shape
+            // `rev-parse --verify --quiet` uses above.
+            match run::git_maybe(dir, &["merge-base", "HEAD", &right], NO_SUCH_OBJECT)? {
+                Some(base) => base.trim().to_owned(),
+                None => return Err(VcsError::Unrelated),
+            }
+        }
+    };
+
+    let out = run::git_read(dir, &["diff", "--name-status", "-z", &left, &right])?;
+    Ok(Comparison { left, right, files: parse_name_status(&out) })
+}
+
+/// What a branch differs from the current one by, for the compare window.
+///
+/// Read-only from end to end, which is why nothing about a run or an operation
+/// in flight refuses it — see `branchMenu.js` for the other half of that rule.
+#[tauri::command]
+pub async fn vcs_compare(
+    repo: String,
+    branch: String,
+    mode: String,
+) -> Result<Comparison, VcsError> {
+    let mode = Mode::parse(&mode);
+    off_the_runtime(move || compare(Path::new(&repo), &branch, mode)).await
+}
+
 /// The one thing in this file worth pinning: the mapping above, over the layout
 /// that broke `git.rs` once already. Everything else here is an argument list
 /// handed to `run.rs`, which is the process table and carries no tests.
@@ -912,6 +982,101 @@ mod tests {
         let head = run::git_read(&dir, &["rev-parse", "HEAD"]).expect("resolve HEAD");
 
         assert_eq!(file_at_rev(&dir, head.trim(), "gone.txt".into()).expect("read"), None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The two readings of the same pair of branches, and the whole reason the
+    /// window carries a switch: a file only the current branch touched is
+    /// absent from one and present in the other.
+    #[test]
+    fn the_two_modes_disagree_where_the_current_branch_moved_on() {
+        let dir = scratch("compare-modes");
+        git(&dir, &["init", "-q", "-b", "main"]);
+        fs::write(dir.join("shared.txt"), "base\n").expect("write");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "base"]);
+
+        git(&dir, &["checkout", "-qb", "feature"]);
+        fs::write(dir.join("branch-only.txt"), "x\n").expect("write");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "on the branch"]);
+
+        git(&dir, &["checkout", "-q", "main"]);
+        fs::write(dir.join("main-only.txt"), "y\n").expect("write");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "on main"]);
+
+        let diverged = compare(&dir, "feature", Mode::Diverged).expect("compare");
+        let paths: Vec<&str> = diverged.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["branch-only.txt"]);
+
+        let direct = compare(&dir, "feature", Mode::Direct).expect("compare");
+        let mut paths: Vec<&str> = direct.files.iter().map(|f| f.path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(paths, vec!["branch-only.txt", "main-only.txt"]);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The endpoints come back resolved, because every file read afterwards is
+    /// by sha: HEAD may move while the window stands open — an agent committing
+    /// into this very tree is the ordinary case here.
+    #[test]
+    fn the_endpoints_come_back_as_object_names() {
+        let dir = scratch("compare-shas");
+        git(&dir, &["init", "-q", "-b", "main"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "one"]);
+        git(&dir, &["branch", "feature"]);
+
+        let out = compare(&dir, "feature", Mode::Diverged).expect("compare");
+        assert!(is_object_name(&out.left), "{:?}", out.left);
+        assert!(is_object_name(&out.right), "{:?}", out.right);
+        assert!(out.files.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A branch deleted while the window stood open. Its own refusal, and not
+    /// git's 128 with a sentence about an ambiguous argument.
+    #[test]
+    fn a_branch_that_is_gone_is_refused_by_name() {
+        let dir = scratch("compare-gone");
+        git(&dir, &["init", "-q", "-b", "main"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "one"]);
+
+        assert!(matches!(
+            compare(&dir, "never-existed", Mode::Diverged),
+            Err(VcsError::NoSuchBranch(_))
+        ));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Two histories with no commit in common. "From where they diverged" has
+    /// no answer, and it says so rather than quietly drawing the other mode's
+    /// diff under a switch that claims this one.
+    #[test]
+    fn unrelated_histories_refuse_the_diverged_mode_and_allow_the_direct_one() {
+        let dir = scratch("compare-unrelated");
+        git(&dir, &["init", "-q", "-b", "main"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "one"]);
+
+        git(&dir, &["checkout", "-q", "--orphan", "other"]);
+        git(&dir, &["rm", "-r", "-q", "-f", "."]);
+        fs::write(dir.join("b.txt"), "two\n").expect("write");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "two"]);
+        git(&dir, &["checkout", "-q", "main"]);
+
+        assert!(matches!(compare(&dir, "other", Mode::Diverged), Err(VcsError::Unrelated)));
+        assert!(compare(&dir, "other", Mode::Direct).is_ok());
 
         let _ = fs::remove_dir_all(&dir);
     }

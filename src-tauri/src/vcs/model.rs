@@ -58,6 +58,23 @@ pub struct CompareChange {
     pub kind: ChangeKind,
 }
 
+/// What a branch differs from the current one by, as the compare window draws
+/// it.
+///
+/// `left` and `right` are **object names**, not the branch names they were
+/// asked for by, and every file read afterwards goes by them. HEAD can move
+/// while the window stands open — an agent committing into this very tree is
+/// the ordinary case in this app — and asking again by name would let the file
+/// list belong to one commit and the bytes on screen to another, with nothing
+/// on screen saying so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Comparison {
+    pub left: String,
+    pub right: String,
+    pub files: Vec<CompareChange>,
+}
+
 /// One repository's working tree as the panel draws it.
 ///
 /// `branch` and `detached` are kept apart for the reason `git::Head` keeps them
@@ -383,6 +400,18 @@ pub enum VcsError {
     /// reach the remote", "Git did not commit").
     #[error("Smetana stopped git after {0} seconds — it had not finished.")]
     Timeout(u64),
+    /// The branch was deleted while the window stood open. Its own variant
+    /// rather than git's 128: the window says which branch is gone, and git's
+    /// sentence about an ambiguous argument would name nothing a person could
+    /// act on.
+    #[error("No branch called {0} in this repository.")]
+    NoSuchBranch(String),
+    /// No commit in common, so there is no point they diverged from. Refused
+    /// rather than quietly answered with the direct comparison: a diff computed
+    /// from a base nobody asked for, drawn under a switch that says otherwise,
+    /// is the one failure worth avoiding here.
+    #[error("These two branches share no history, so there is no point they diverged from.")]
+    Unrelated,
     /// A revision that is not an object name. Unreachable from the app — the
     /// front end sends back a sha this module resolved — and therefore a fault
     /// rather than a state worth a sentence of its own on screen.
@@ -404,6 +433,8 @@ impl VcsError {
             Self::NotUtf8(_) => "notUtf8",
             Self::NoMessage => "noMessage",
             Self::Timeout(_) => "timeout",
+            Self::NoSuchBranch(_) => "noSuchBranch",
+            Self::Unrelated => "unrelated",
             Self::BadRevision(_) => "badRevision",
             Self::Io(_) => "io",
         }
