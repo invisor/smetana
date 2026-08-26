@@ -88,10 +88,18 @@ export async function aim(repo, branch) {
      `branch` is the new pair the moment this line runs, while `vcs_compare` is
      a git process that has not been asked yet. Left standing, the previous
      pair's shas and rows would sit under the new branch's name with nothing
-     saying so; emptied, the window draws the loading state it already has. */
+     saying so; emptied, the window draws the loading state it already has.
+
+     The previous comparison's refusal goes with them, and it is the same
+     sentence problem one step further on: a refusal names the pair it is about
+     — `noSuchBranch` and `unrelated` both carry the branch in their words — so
+     left standing it would be drawn in the panel, under the new branch's name
+     in the header, for as long as git takes to answer about a pair it has not
+     been asked about yet. */
   compareState.files = []
   compareState.left = ''
   compareState.right = ''
+  compareState.error = null
   await refresh()
 }
 

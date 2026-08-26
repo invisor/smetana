@@ -223,4 +223,37 @@ describe('the branch comparison', () => {
     expect(compare.compareState.files).toEqual(COMPARISON.files)
     expect(compare.compareState.left).toBe(LEFT)
   })
+
+  /* The same moment, for the refusal rather than for the rows: a sentence about
+     the pair git would not compare, still in the panel while the header already
+     names the pair it has not been asked about yet. */
+  it('holds no refusal from the old pair while the new one is being compared', async () => {
+    const { compare, ipc } = await loadCompare()
+    ipc.fail('vcs_compare', {
+      kind: 'unrelated',
+      message: 'These two branches share no history.'
+    })
+    await compare.aim('/tmp/r', 'feature')
+    expect(compare.compareState.error.kind).toBe('unrelated')
+
+    let release
+    ipc.on(
+      'vcs_compare',
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(COMPARISON)
+        })
+    )
+    const aimed = compare.aim('/tmp/r', 'other')
+
+    expect(compare.compareState.branch).toBe('other')
+    expect(compare.compareState.error).toBe(null)
+
+    /* And the answer still lands, so the assertion above is about the wait
+       rather than about a comparison that never happened. */
+    release()
+    await aimed
+    expect(compare.compareState.error).toBe(null)
+    expect(compare.compareState.files).toEqual(COMPARISON.files)
+  })
 })
