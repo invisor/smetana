@@ -175,6 +175,12 @@ const emit = defineEmits([
      unlisted to point at is a panel with a configuration that missed it. */
   'setup',
   'checkout',
+  /* The one verb here that reads. It is deliberately absent from
+     `WRITE_REFUSED` below — that table names what git declined, and this asks
+     git for nothing this panel then has to draw: it goes nowhere near
+     `gitActions.js`, it cannot stop mid-tree, and what it opens is a window of
+     its own. */
+  'compare',
   'merge',
   'rebase',
   'new-branch',
@@ -843,6 +849,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
             :actions="actions"
             :busy="busy"
             @checkout="$emit('checkout', $event)"
+            @compare="$emit('compare', $event)"
             @merge="$emit('merge', $event)"
             @rebase="$emit('rebase', $event)"
             @new-branch="$emit('new-branch', $event)"

@@ -1,9 +1,10 @@
 <script setup>
-/* The local branches of one repository, which of them it is on, and the four
-   things that can be done from a row: switch to it, merge it into the current
-   branch, rebase the current branch onto it, cut a new branch from it.
+/* The local branches of one repository, which of them it is on, and the five
+   things that can be done from a row: switch to it, compare it with the current
+   branch, merge it into the current branch, rebase the current branch onto it,
+   cut a new branch from it.
 
-   **All four live in the row's right-click menu**, and the first of them is
+   **All five live in the row's right-click menu**, and the first of them is
    also the row's own click. Merging and rebasing used to be two buttons that
    appeared on the row under the pointer, which is a control per row per verb in
    a panel that also draws a file tree, a change list and a commit box; they are
@@ -19,11 +20,15 @@
    linked worktree offers the whole repository's list rather than the single
    branch it is itself on, which is `parse_commondir`'s doing one layer down.
 
-   The current branch is marked and is not a target for the first three:
+   The current branch is marked and is not a target for the first four:
    checking out, merging or rebasing onto the branch you are already on is a row
-   with nothing behind it. The fourth is live there like anywhere else — a
-   branch cut from where you are standing is the ordinary case, not an edge
-   one — which is why `branchMenu.js`'s refusals have two different reaches.
+   with nothing behind it, and a branch has no difference from itself to draw.
+   Cutting a new branch is live there like anywhere else — from where you are
+   standing is the ordinary case, not an edge one — which is why
+   `branchMenu.js`'s refusals have three different reaches. The comparison is
+   the third of them and the narrowest: it writes nothing, so a run in the
+   project and an operation in this repository both leave it alone, and the row
+   stays live under a caption saying everything else cannot be pressed.
 
    Whether any of it may be offered at all is `gitActions.js` and not this
    file's — a rule about the project's runs, pure and tested, where a `.vue`
@@ -115,7 +120,7 @@ const props = defineProps({
      spinner in the wrong place would name the wrong operation. */
   busy: { type: Object, default: null }
 })
-const emit = defineEmits(['checkout', 'merge', 'rebase', 'new-branch', 'toggle-folder'])
+const emit = defineEmits(['checkout', 'compare', 'merge', 'rebase', 'new-branch', 'toggle-folder'])
 
 /* Hover is per row and `useInteractive` tracks one control at a time, so an
    instance built inside `rowStyle` would be thrown away on every re-render.
@@ -176,10 +181,12 @@ const openMenu = (row, event) => {
 /* The branch is handed back with the pick rather than read from `menuFor`,
    which closing has already cleared — see `PointerMenu`'s header. Written out
    rather than emitted as `item.kind`: the kinds and the events happen to be the
-   same four words today, and a rule file free to add a fifth verb must not be
-   able to make this component emit something nobody declared. */
+   same five words today, and a rule file free to add a sixth verb must not be
+   able to make this component emit something nobody declared. The fifth arrived
+   exactly that way, which is this comment having been right. */
 const pick = (item, name) => {
   if (item.kind === 'checkout') emit('checkout', name)
+  else if (item.kind === 'compare') emit('compare', name)
   else if (item.kind === 'merge') emit('merge', name)
   else if (item.kind === 'rebase') emit('rebase', name)
   else if (item.kind === 'new-branch') emit('new-branch', name)
