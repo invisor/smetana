@@ -45,7 +45,8 @@ kinds of tab share the one list. A hint rather than a truth, exactly as the colu
 rule that reads it is `components/shell/tabOrder.js` (`.claude/rules/files-and-editor.md`).
 
 `layout.gitSections` is the other thing at the root that could plausibly have gone under a project and
-did not: how the Git panel's three sections are folded, and how tall two of them were dragged to. The
+did not: how the Git panel's three sections are folded, how tall two of them were dragged to, and how
+tall the commit box's message field was. The
 argument is `kanban`'s below — a habit of reading rather than a fact about one repository — and it
 also keeps five fields out of `ProjectState`, where each would have to be listed in the front end's
 `defaults()` or carry the previous project's value across a switch. The two heights are **counts of
@@ -55,6 +56,16 @@ a project of one repository draws one row instead of a reserved block of empty o
 `2..=40` is **forgotten rather than clamped**, the rule `min_priority` follows — forgetting hands the
 section back to its content, which is a real answer, where a number of ours would be an invention.
 The rule that reads all of it is `components/git/sectionHeights.js` (`.claude/rules/vcs-panel.md`).
+
+`commitRows` sits with them and is the exception to every sentence above, which is why it is worth
+naming rather than counting: it is a plain number and never `null`, because the field it sizes is a
+`<textarea>` with a shipped height of two rows rather than a content to follow — there is no "let it
+size itself" to hand it back to, so a count outside `1..=12` takes the default instead of being
+forgotten. Its rows are the field's own lines and not `--row-h`, which is the same argument one unit
+over: `rows` is what a `<textarea>` measures itself in, so a count follows the type wherever the type
+goes. Three places have to agree on the default — `COMMIT_ROWS_DEFAULT` in `model.rs`, `DEFAULT_ROWS`
+in `components/git/commitBox.js`, and the front end's `defaults()` — and the rule that reads it is
+`commitBox.js` (`.claude/rules/vcs-panel.md`).
 
 `branchFolders` went the other way and is **under the project**, right beside the file tree's
 `expanded` and for the same reason: which folders the Git panel's branch list has unfolded is about a

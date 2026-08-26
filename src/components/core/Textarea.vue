@@ -17,6 +17,16 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue'])
 
+/* The element itself, for a caller that has to measure this field rather than
+   only read it — `CommitBox` divides a drag's displacement by the line height
+   here to turn pixels into the `rows` above. Exposed the way `SectionHeader`
+   exposes its row, and for the same reason: `GitPanel` measures that one to
+   learn what a row costs, and neither measurement has anywhere else to come
+   from. It is a handle and not a second way in — nothing here writes through
+   it. */
+const el = ref(null)
+defineExpose({ el })
+
 const focus = ref(false)
 const borderColor = computed(() =>
   props.invalid ? 'var(--status-failed-fg)' : focus.value ? 'var(--focus-ring)' : 'var(--border)'
@@ -45,6 +55,7 @@ const style = computed(() => ({
 
 <template>
   <textarea
+    ref="el"
     :value="modelValue"
     :placeholder="placeholder"
     :rows="rows"

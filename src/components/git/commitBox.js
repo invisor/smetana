@@ -10,6 +10,73 @@
  * is how the panel starts contradicting itself.
  */
 
+/* ---- how tall the field is ---------------------------------------------- *
+ *
+ * In **rows**, and never in pixels, which is `sectionHeights.js`'s load-bearing
+ * decision one file over and holds here for the same reason with one addition
+ * of its own. A row follows the density and the app-wide font size, so a count
+ * survives both where a pixel height would have to be rewritten by each of them
+ * — and this field measures itself in rows already: `rows` is the browser's own
+ * attribute on a `<textarea>`, which `Textarea.vue` chose deliberately over a
+ * computed height, so a count is the unit the control actually speaks. The one
+ * pixel measurement lives at the edge, in the component, where a drag's
+ * displacement is divided by the field's own line height to arrive here in
+ * rows.
+ *
+ * The stored count and the drawn count are the same number here, and that is
+ * the difference from the sections beside it. Those clamp against the panel
+ * they are in now, because a section competes with its neighbours for one
+ * column of height. This field does not compete with anything: the box is
+ * sticky at the top of a scroller and the rows go under it, so a field somebody
+ * dragged tall in a tall window is a field that scrolls in a short one — which
+ * is what the whole section already does.
+ */
+
+/** Two rows, which is what this field was fixed at before it could be dragged.
+ *
+ * A message is a subject and, sometimes, a body; two rows is enough to see the
+ * subject and to know there is a second line, and it is what everybody's
+ * `settings.json` will read as until they drag it. */
+export const DEFAULT_ROWS = 2
+
+/** One row is still a field; nothing is a control that has disappeared. */
+export const MIN_ROWS = 1
+
+/** The ceiling, and it is about the panel rather than about messages.
+ *
+ * A commit message longer than this is an ordinary thing to write and is not
+ * being refused — the field scrolls, as it always has. What the ceiling
+ * protects is the section underneath: this box is sticky at the top of the
+ * change list, so past a dozen rows it stops being a field over a list and
+ * becomes a list nobody can see. `MAX_SECTION_ROWS` is 40 next door for a
+ * section that *is* the content; this one is not. */
+export const MAX_ROWS = 12
+
+/** Stored rows → the rows to draw. A number from a hand-edited file is worth
+ *  clamping rather than trusting; Rust forgets one outside the same range on
+ *  its way in, so this is the second of two guards and neither is the only one. */
+export function clampRows(want) {
+  const rows = Math.round(Number(want))
+  if (!Number.isFinite(rows)) return DEFAULT_ROWS
+  return Math.min(Math.max(rows, MIN_ROWS), MAX_ROWS)
+}
+
+/**
+ * Where a drag leaves the field, in rows.
+ *
+ * `base` is the count snapshotted at `dragstart` and `delta` the separator's
+ * displacement in rows since that same moment, never since the last frame:
+ * clamping against the previous frame would make each clamped move the new
+ * origin and the field would drift away from the pointer, which is the drift
+ * `Resizer`'s own contract warns about.
+ *
+ * The separator is **below** the field, so downwards grows it — the sign the
+ * repositories section takes and not the branches'.
+ */
+export function resolveDragRows({ base, delta }) {
+  return clampRows(base + delta)
+}
+
 /* Everything that has to be true at once. Written as one function rather than
    as a chain of `v-if`s in the template, because the same four facts decide the
    sentence below and the two must not be able to disagree — a dead button with

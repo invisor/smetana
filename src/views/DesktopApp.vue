@@ -605,7 +605,12 @@ const gitSections = computed(() => settings.layout.gitSections)
    visit can be holding open, so the press is resolved against what is drawn
    rather than against the stored flag, in `toggleGitSection` below. */
 const FOLD_KEY = { repos: 'reposOpen', branches: 'branchesOpen' }
-const ROWS_KEY = { repos: 'reposRows', branches: 'branchRows' }
+/* The commit box's field is in here beside the two sections, and it is a count
+   of rows for the same reason they are — it survives a change of density or of
+   the app-wide font size, which a pixel height would not. What it does not
+   share is `null`: those two mean "never dragged, follow the content" and this
+   one has a shipped height instead. */
+const ROWS_KEY = { repos: 'reposRows', branches: 'branchRows', commit: 'commitRows' }
 
 /* The one fold a visit to the tab is allowed to overrule, and the two fields
    that hold it — `changesFold.js` is the rule, this is the half of it that

@@ -433,8 +433,12 @@ pub async fn vcs_suggest_message(
         // `agents::prompt`, so the button and the run agree by construction
         // rather than by two people remembering to keep them in step.
         let language = crate::agents::language_name(&crate::settings::languages(&app).commit);
+        // Nothing to describe is this command's own refusal and never a
+        // question put to a model — `OneshotError::Nothing` carries the whole
+        // of why, and what it costs to get this one wrong.
         let prompt = describe(Path::new(&repo), language)
-            .map_err(|err| OneshotError::Git(err.to_string()))?;
+            .map_err(|err| OneshotError::Git(err.to_string()))?
+            .ok_or(OneshotError::Nothing)?;
         oneshot::ask(profile, &prompt)
     })
     .await
@@ -457,7 +461,16 @@ pub async fn vcs_suggest_message(
 /// `language` is the English name of the person's `commitLanguage`, already
 /// resolved by the caller — this function is git and text, and reading a
 /// settings file here would be a second road to the same answer.
-fn describe(repo: &Path, language: &str) -> Result<String, VcsError> {
+///
+/// `Ok(None)` is a tree with nothing uncommitted in it: no `--stat`, no
+/// untracked path, no patch. That is not a failure and is deliberately not
+/// phrased as one here — this function is git and text, so it answers what git
+/// said, and the sentence a person reads is the caller's
+/// (`OneshotError::Nothing`, which carries the reason it must not be sent on).
+/// What it must never do is build the prompt anyway: "write a commit message
+/// for the changes below", with nothing below it, is a question rather than an
+/// instruction, and what comes back is an answer to that question.
+fn describe(repo: &Path, language: &str) -> Result<Option<String>, VcsError> {
     let tree = working_tree(repo)?;
     let untracked: Vec<String> = tree
         .changes
@@ -471,7 +484,10 @@ fn describe(repo: &Path, language: &str) -> Result<String, VcsError> {
     } else {
         (String::new(), String::new())
     };
-    Ok(oneshot::commit_prompt(language, &stat, &untracked, &patch))
+    if stat.trim().is_empty() && untracked.is_empty() && patch.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(oneshot::commit_prompt(language, &stat, &untracked, &patch)))
 }
 
 /// A merge or a rebase, and the reading of what it left behind.
@@ -858,6 +874,43 @@ mod tests {
             tree.changes.iter().filter(|c| c.staged).map(|c| c.path.as_str()).collect();
         assert!(staged.is_empty(), "nothing should have been staged: {staged:?}");
         assert_eq!(tree.changes.len(), 1);
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **A clean tree is answered, not asked about.** The button is gated on the
+    /// front end's count of changes and that count is as fresh as the last
+    /// window focus, so pressing it against a tree an agent has since committed
+    /// is an ordinary way to arrive here — and a model handed "write a commit
+    /// message for the changes below" with nothing below it answers with a
+    /// sentence asking for them, in its own conversational language, which then
+    /// sits in the field looking like a message.
+    #[test]
+    fn a_clean_tree_has_nothing_to_describe_and_is_not_put_to_a_model() {
+        let repo = repository("describe-clean");
+        fs::write(repo.join("a.txt"), "one\n").expect("write a file");
+        run::git_write(&repo, &["add", "."]).expect("stage");
+        run::git_write(&repo, &["commit", "-m", "first"]).expect("commit");
+
+        assert_eq!(describe(&repo, "English").expect("read the tree"), None);
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// The other side of the same rule, and both halves are needed: a tree with
+    /// something in it still builds the prompt, and an untracked file alone is
+    /// enough — it appears in no diff at all, so a change set of nothing but new
+    /// files would otherwise read as an empty one.
+    #[test]
+    fn an_untracked_file_alone_is_something_to_describe() {
+        let repo = repository("describe-untracked");
+        fs::write(repo.join("a.txt"), "one\n").expect("write a file");
+        run::git_write(&repo, &["add", "."]).expect("stage");
+        run::git_write(&repo, &["commit", "-m", "first"]).expect("commit");
+        fs::write(repo.join("new.txt"), "two\n").expect("write the untracked file");
+
+        let prompt = describe(&repo, "English").expect("read the tree").expect("something to say");
+        assert!(prompt.contains("New files, not yet tracked by git:\nnew.txt"), "{prompt}");
 
         let _ = fs::remove_dir_all(&repo);
     }

@@ -65,6 +65,26 @@ pub enum OneshotError {
     /// for the reason `vcs/run.rs` records.
     #[error("{0}")]
     Git(String),
+    /// git answered, and there was nothing in the answer to describe.
+    ///
+    /// **Refused here rather than sent on, and the reason is what a harness does
+    /// with the question instead.** Asked to write a commit message for a change
+    /// set with no `--stat`, no untracked path and no patch under it, a model
+    /// does the only sensible thing: it says the changes are missing and asks
+    /// for them. That reply is prose, in whatever language the harness converses
+    /// in — which is *not* the person's `commitLanguage`, since that setting
+    /// moves the subject of a message and this is not one — and `clean` has no
+    /// way to tell a message from a sentence about not having one, so it lands
+    /// in the field looking like something to press Commit under.
+    ///
+    /// The front end gates the button on its own count of changes, and that
+    /// count is as fresh as the last window focus: an agent committing into the
+    /// same tree is the ordinary case in this app, so by the time the button is
+    /// pressed the tree it was drawn for may be gone. This is `commit_all`'s
+    /// rule one command over — refuse before the expensive half, in this app's
+    /// own words.
+    #[error("There is nothing uncommitted here to write a message about.")]
+    Nothing,
     /// The harness ran and exited non-zero. Its stderr where there is any —
     /// nobody but the person can tell an expired login from a broken flag.
     #[error("{0}")]
@@ -81,6 +101,7 @@ impl OneshotError {
             Self::NoAgent(_) => "noAgent",
             Self::Unsupported(_) => "unsupported",
             Self::Git(_) => "git",
+            Self::Nothing => "nothing",
             Self::Failed(_) => "failed",
             Self::Timeout(_) => "timeout",
             Self::Io(_) => "io",

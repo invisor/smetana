@@ -893,6 +893,12 @@ const headerFolds = ref({ withCount: true, bare: true, folded: false, withAction
 /* The live commit box's own draft. Empty to start with, since that is the
    state the button's refusal is drawn in. */
 const commitDraft = ref('')
+/* The field's height, so the separator under it actually moves something here.
+   In the app this lives in `settings.json`; a gallery frame holds its own, for
+   the reason every other live frame on this page does — the component is
+   presentational and a drag that changed nothing would be a control nobody
+   could check. */
+const commitRows = ref(2)
 
 /* More branches than the branch section's cap, which is the state this
    repository and most others are actually in — and the one that hid git's
@@ -2671,14 +2677,17 @@ const menuTargetStyle = {
         <!-- The commit box in its four states, at the panel's own width. Live
              first: type into it and the button comes alive with the count of
              what it would take, press the sparkle and the fixture message
-             arrives. -->
+             arrives, and drag the separator under the field to make it taller —
+             double click hands back the two rows it ships at. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <CommitBox
             v-model="commitDraft"
             :changes="CHANGES.length"
             branch="feat/worktree-rename"
+            :rows="commitRows"
             @commit="commitDraft = ''"
             @suggest="commitDraft = 'feat: add a commit box to the Git panel'"
+            @resize="commitRows = $event"
           />
         </div>
         <!-- Nothing written yet, which is the state it opens in: the button is

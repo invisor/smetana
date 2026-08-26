@@ -344,6 +344,20 @@ rather than the panel's "Git refused this operation" block, which would name a p
 asked. Its guard is the pair, project and repository, and that one earns its keep: an answer landing
 after a switch would drop one repository's commit message into another's field.
 
+**A tree with nothing in it is refused here rather than put to a model, and that refusal was paid
+for.** `describe` answers `Ok(None)` when the `--stat`, the untracked list and the patch are all
+empty, and the command turns it into `OneshotError::Nothing` — one more sentence under the field.
+Without it the prompt is built anyway, and "write a commit message for the changes below" with
+nothing below it is a question rather than an instruction: a harness answers it by saying the changes
+are missing and asking for them, in whatever language it converses in, and `clean` — which takes the
+first non-empty line and cannot tell a message from a sentence about not having one — puts that reply
+in the field looking like something to press Commit under. It was read as the `commitLanguage`
+setting failing, which it is not: that setting moves the *subject of a message*, the prompt carries
+it, and the reply was never a message. Reaching this state needs no mistake at all — the button is
+gated on the front end's count of changes, that count is as fresh as the last window focus, and an
+agent committing into the same tree is the ordinary case in this app. It is `commit_all`'s own rule
+one command over: refuse before the expensive half, in this app's words.
+
 What the harness can be asked is the harness's own business, so it rides on `Profile::oneshot_args`
 beside `usage_command`, and the front end never learns which agent is configured — the button is
 drawn for everybody and a harness with no non-interactive form says so in a sentence
@@ -352,6 +366,24 @@ carry their tests in `oneshot.rs`: the patch is cut at 48 K with the cut **annou
 told the whole diff was there when it was not will describe the half it saw as the whole change, and
 what comes back is taken as its first non-empty line with fences and quotation marks stripped —
 belt and braces, because the instruction asks for one bare line and models add the fence anyway.
+
+**The field is dragged taller by a `Resizer` under it, in rows.** Not the corner grip a browser
+draws: `Textarea` turns that off deliberately — it is a control this design system never drew, and it
+can be dragged out of whatever the field sits in — so the height is the same separator the side
+panels and this panel's own sections are dragged by. The count is `rows`, the `<textarea>`'s own
+attribute, which is the unit the control already measured itself in and which follows the density and
+the app-wide font size where a pixel height would not; the one pixel measurement is at the edge, in
+`CommitBox`, where the drag's displacement is divided by the field's line height read off the
+element. `Textarea` exposes that element the way `SectionHeader` exposes its row, and for the same
+reason: the measurement has nowhere else to come from. The rules are in `commitBox.js` beside the
+button's, and they clamp against nothing but their own floor and ceiling — a section competes with
+its neighbours for one column of height, this field competes with nothing, since the box is sticky at
+the top of a scroller and the rows go under it. The ceiling is 12 rather than a section's 40 for that
+same reason: past a dozen lines it stops being a field over a list and becomes a list nobody can see.
+It is stored as `layout.gitSections.commitRows`, beside the two section heights it is a sibling of,
+and it is the one of the three that is **not** nullable — those mean "never dragged, follow the
+content" and this field has a shipped height instead, so an absurd number in the file goes back to
+two rather than being forgotten.
 
 The layout is VS Code's, and each half of it is a decision rather than a copy. The **sparkle sits
 inside the field**, at its right edge, because that leaves the commit button the whole width and the

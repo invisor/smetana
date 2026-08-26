@@ -1,10 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import {
+  DEFAULT_ROWS,
+  MAX_ROWS,
+  MIN_ROWS,
   canCommit,
   canSuggest,
+  clampRows,
   commitHint,
   commitLabel,
-  messagePlaceholder
+  messagePlaceholder,
+  resolveDragRows
 } from '../../../src/components/git/commitBox.js'
 
 const ready = { message: 'fix: the thing', changes: 3, allowed: true, reason: null, busy: false }
@@ -113,5 +118,50 @@ describe('commitHint', () => {
 
   it('says nothing while git is working', () => {
     expect(commitHint({ ...ready, busy: true, message: '' })).toBe(null)
+  })
+})
+
+describe('clampRows', () => {
+  it('leaves a height inside the range alone', () => {
+    expect(clampRows(5)).toBe(5)
+  })
+
+  it('keeps a field there at all', () => {
+    expect(clampRows(0)).toBe(MIN_ROWS)
+    expect(clampRows(-4)).toBe(MIN_ROWS)
+  })
+
+  it('will not let the field bury the list under it', () => {
+    expect(clampRows(900)).toBe(MAX_ROWS)
+  })
+
+  /* A count is what a `<textarea>`'s `rows` takes, and half a row is not one. */
+  it('answers a whole number of rows', () => {
+    expect(clampRows(4.4)).toBe(4)
+    expect(clampRows(4.6)).toBe(5)
+  })
+
+  it('takes the shipped height for anything that is not a number', () => {
+    expect(clampRows('tall')).toBe(DEFAULT_ROWS)
+    expect(clampRows(undefined)).toBe(DEFAULT_ROWS)
+  })
+})
+
+describe('resolveDragRows', () => {
+  it('follows the pointer down and up', () => {
+    expect(resolveDragRows({ base: 2, delta: 3 })).toBe(5)
+    expect(resolveDragRows({ base: 5, delta: -2 })).toBe(3)
+  })
+
+  it('measures every delta from the height the drag began at', () => {
+    // Two moves of one gesture, the first past the floor. Both are answered
+    // against `base`, so pulling back hands the rows back rather than
+    // compounding what the clamp already swallowed.
+    expect(resolveDragRows({ base: 4, delta: -40 })).toBe(MIN_ROWS)
+    expect(resolveDragRows({ base: 4, delta: -1 })).toBe(3)
+  })
+
+  it('stops at the ceiling however far the pointer goes', () => {
+    expect(resolveDragRows({ base: 2, delta: 400 })).toBe(MAX_ROWS)
   })
 })

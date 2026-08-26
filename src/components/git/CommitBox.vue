@@ -24,14 +24,31 @@
 
    Cmd+Enter commits from the field, Ctrl+Enter beside it for the platforms
    without the first. A plain Enter deliberately does not: this is a `Textarea`,
-   and a message with a second line in it is an ordinary thing to write. */
-import { computed } from 'vue'
+   and a message with a second line in it is an ordinary thing to write.
+
+   **The field is dragged taller by the separator under it, and not by the
+   corner grip a browser draws.** `Textarea` turns that grip off on purpose —
+   it is a control this design system never drew, and it can be dragged out of
+   whatever the field sits in — so the height is this app's own `Resizer`,
+   the one the side panels and the sections of this very panel are dragged by,
+   and the count it moves is the `rows` the field already measured itself in. */
+import { computed, ref } from 'vue'
 import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
+import Resizer from '../shell/Resizer.vue'
 import Textarea from '../core/Textarea.vue'
 import Tooltip from '../core/Tooltip.vue'
-import { canCommit, canSuggest, commitHint, commitLabel, messagePlaceholder } from './commitBox.js'
+import {
+  DEFAULT_ROWS,
+  canCommit,
+  canSuggest,
+  clampRows,
+  commitHint,
+  commitLabel,
+  messagePlaceholder,
+  resolveDragRows
+} from './commitBox.js'
 
 const props = defineProps({
   /* The draft. Held by the store per repository rather than here, so switching
@@ -52,10 +69,16 @@ const props = defineProps({
   /* Whether the agent is being asked right now, and its refusal if it had one —
      `{ kind, message }`, drawn as it stands. */
   suggesting: { type: Boolean, default: false },
-  suggestError: { type: Object, default: null }
+  suggestError: { type: Object, default: null },
+  /* How tall the field is, in its own rows. Held outside this component for the
+     reason the draft is: it is a person's preference and belongs in
+     `settings.json`, beside the two section heights of this same panel, which
+     are counts of rows for the same reason. A caller that passes nothing gets
+     the two rows this field was fixed at before it could be dragged. */
+  rows: { type: Number, default: DEFAULT_ROWS }
 })
 
-const emit = defineEmits(['update:modelValue', 'commit', 'suggest'])
+const emit = defineEmits(['update:modelValue', 'commit', 'suggest', 'resize'])
 
 const working = computed(() => Boolean(props.busy))
 
@@ -92,6 +115,40 @@ const placeholder = computed(() => messagePlaceholder({ branch: props.branch, ma
 
 const submit = () => {
   if (ready.value) emit('commit')
+}
+
+/* A stored count is a hint and never the truth, the rule `columnOrder.js`
+   states: what is drawn is clamped here whatever the file said. */
+const drawnRows = computed(() => clampRows(props.rows))
+
+/* The drag, and the one pixel measurement in all of this.
+ *
+ * `rows` is a count and a pointer moves in pixels, so the two are bridged by
+ * the field's own line height — read off the element rather than computed from
+ * a token, because `--text-sm` and `--leading-normal` are a font size and a
+ * unitless factor and their product is the browser's to work out. Read at
+ * `dragstart` rather than held: the density and the app-wide font size both
+ * move it, and neither re-renders this component.
+ *
+ * A line height that cannot be read is a drag that does nothing, which is the
+ * right failure — a fallback number would move the field by the wrong amount
+ * and look like the drag not tracking the pointer. */
+const field = ref(null)
+let drag = null
+
+const onDragStart = () => {
+  const el = field.value?.el
+  const line = el ? Number.parseFloat(getComputedStyle(el).lineHeight) : Number.NaN
+  drag = Number.isFinite(line) && line > 0 ? { base: drawnRows.value, line } : null
+}
+
+const onDrag = (delta) => {
+  if (!drag) return
+  emit('resize', resolveDragRows({ base: drag.base, delta: delta / drag.line }))
+}
+
+const onDragEnd = () => {
+  drag = null
 }
 
 /* **Stuck to the top of the list rather than pinned above it**, and the
@@ -156,8 +213,9 @@ const errorStyle = {
          nothing. -->
     <div :style="fieldStyle">
       <Textarea
+        ref="field"
         :model-value="modelValue"
-        :rows="2"
+        :rows="drawnRows"
         :placeholder="placeholder"
         :style="fieldPadding"
         @update:model-value="emit('update:modelValue', $event)"
@@ -186,6 +244,19 @@ const errorStyle = {
         />
       </span>
     </div>
+    <!-- Under the field rather than over it, so downwards grows what it is
+         about — and between the field and the button rather than at the foot of
+         the box, since the button is not what it resizes. Double click gives
+         the field its shipped two rows back, the way a separator does
+         everywhere else in this app. -->
+    <Resizer
+      orientation="horizontal"
+      label="Resize the message field"
+      @dragstart="onDragStart"
+      @drag="onDrag"
+      @dragend="onDragEnd"
+      @reset="emit('resize', DEFAULT_ROWS)"
+    />
     <!-- The hint hangs on a wrapper rather than on the button: a disabled
          button takes no pointer events of its own, so a tooltip inside it would
          have nothing to open on in exactly the state that needs explaining. And
