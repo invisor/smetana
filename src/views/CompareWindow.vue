@@ -169,14 +169,20 @@ const refusal = computed(() => {
 
 /* Whether this window has a pair to have compared at all.
 
-   `aimAt` above ignores a pair with a hole in it rather than aiming at half of
-   one, so a window opened as a bare `?view=compare` — which is how the dev
-   server reaches this screen — asks git nothing: the list is empty, nothing is
-   loading and nothing was refused. That is precisely the state the list reads
-   as "these two branches are identical", so without this the one screen this
-   project checks by eye would open on a claim about a comparison it never
-   made. The window is what knows whether it was ever aimed; the list is handed
-   an answer and should not have to guess whether there was a question. */
+   **Not a convenience for the dev server: the app window flashed it too.**
+   `onMounted` above awaits three IPC round trips — the settings watch, the
+   `compare:show` watch and the settings read — before it reaches
+   `aimAt(props.repo, props.branch)`, so *every* compare window opened from the
+   branch menu spends that stretch aimed at nothing, with the list empty,
+   nothing loading and nothing refused. That is precisely the state the list
+   reads as "these two branches are identical", so the real app opened on a
+   claim about a comparison it had not made yet.
+
+   A bare `?view=compare` is the same state and never leaves it — `aimAt`
+   ignores a pair with a hole in it rather than aiming at half of one — which
+   is how the one screen this project checks by eye reaches it. The window is
+   what knows whether it was ever aimed; the list is handed an answer and
+   should not have to guess whether there was a question. */
 const aimed = computed(() => Boolean(compareState.repo && compareState.branch))
 
 /* The refusal of the one file, in words, through the editor's own table: a file
@@ -324,6 +330,18 @@ const paneStyle = {
           :left-caption="shortLeft"
           :right-caption="shortRight"
           :notice="fileNotice"
+        />
+        <!-- Nothing has been compared at all: a bare `?view=compare`, or the
+             moment before `onMounted` reaches `aimAt`. Its own sentence, like
+             every other emptiness in this window, because the one below
+             offers a choice out of a list that holds nothing and can hold
+             nothing: there is no comparison behind it to pick from. -->
+        <EmptyState
+          v-else-if="!aimed"
+          icon="git-compare"
+          title="Nothing is being compared."
+          description="Right-click a branch in the Git panel and choose Compare with the current branch."
+          :style="{ flex: 1, minWidth: 0 }"
         />
         <!-- Nothing picked yet, which is how the window opens. It says what to
              do rather than apologising for being empty. -->

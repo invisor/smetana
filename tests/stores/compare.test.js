@@ -168,6 +168,13 @@ describe('the branch comparison', () => {
     expect(compare.compareState.work).toBe(`${RIGHT}:src/a.js`)
     /* Still a read: the whole of what the gesture asks for is a fresh list. */
     expect(ipc.calls('vcs_compare')).toHaveLength(2)
+    /* And the open file is read again at the shas that fresh comparison
+       resolved, which is this store's central rule and the half the three
+       assertions above cannot see: the fixture answers the same text every
+       time and `head`/`work` already held it, so a re-aim that kept the
+       selection and never called `select` would satisfy every one of them.
+       Two reads per `select`, one per side, and `select` has run twice. */
+    expect(ipc.calls('vcs_file_at_rev')).toHaveLength(4)
   })
 
   /* A different pair is a different question, and the file open on the old one

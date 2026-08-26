@@ -47,9 +47,13 @@ const props = defineProps({
   mode: { type: String, default: 'diverged' },
   /* Whether the list is holding an answer. It has one reader — the empty
      sentence below, which must not claim two branches are identical while the
-     comparison is still being read, and must not claim it at all beside a
-     window saying the comparison could not be made. `GitPanel`'s `settled` is
-     the same guard against the same defect, under the same name. */
+     comparison is still being read, must not claim it at all beside a window
+     saying the comparison could not be made, and must not claim it on a window
+     that was never aimed at a pair, where the empty list is the absence of a
+     question rather than an answer to one. That third duty is the caller's to
+     know — a window with no pair says so itself, in its own words, beside this
+     list. `GitPanel`'s `settled` is the same guard against the same defect,
+     under the same name. */
   settled: { type: Boolean, default: true }
 })
 
