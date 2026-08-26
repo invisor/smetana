@@ -202,11 +202,25 @@ tauri-plugin-updater = "2.10.1"
 # next thing to want. If that never arrives, this is the line to delete.
 tauri-plugin-process = "2.3.1"
 
-# Only to signal a process group, in the two places a killed process would
-# otherwise leave what it started behind: a PTY session on the exit path
-# (`terminal/pty.rs`), where portable-pty's own `kill` is SIGKILL to the direct
-# child alone, and a declared preflight command a stop interrupts
-# (`runs/preflight.rs`). Nothing else in the tree touches libc, and Windows has
-# no equivalent to send, hence the target gate.
+# Process control the standard library does not expose, and it is described
+# here by subject rather than by call site on purpose: a comment that counts
+# the users or names the files reads as exhaustive, so the next person to reach
+# for libc trusts it instead of correcting it, and the version of this note
+# that named two callers was wrong about the tree it shipped in. What libc is
+# for here is signalling a process group, so that killing something does not
+# leave behind what it started; reading a process's own facts from the kernel,
+# so that a recovered pid can be told from a recycled one; and the descriptor
+# limit (`rlimit.rs`), which decides what every agent this app spawns inherits.
+#
+# Windows reaches none of it through this crate. Two of those subjects are
+# simply absent there — no process group to signal, and nothing rationing
+# descriptors to raise — while the third is only out of libc's reach rather
+# than out of the platform's: a process's start time exists on Windows and is
+# asked for by an API this dependency does not carry, so the answer there is
+# that the question goes unasked. That is why the gate is not a portability
+# shim but the honest shape of the subject, and why it would still be the right
+# gate if somebody ever went and got those facts another way. What is behind it
+# for the descriptor limit is a `raise()` with an empty body; the pure part of
+# that module still compiles, and is still tested, on every platform.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
