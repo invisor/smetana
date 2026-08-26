@@ -135,6 +135,12 @@ const defaults = () => ({
     gitSections: {
       reposRows: null,
       branchRows: null,
+      /* Not null beside the two above, and the difference is real rather than
+         an oversight: those mean "never dragged, follow the content", and the
+         commit box's field has a shipped height instead — `DEFAULT_ROWS` in
+         `components/git/commitBox.js`, and `COMMIT_ROWS_DEFAULT` in Rust, which
+         all three have to agree on. */
+      commitRows: 2,
       reposOpen: true,
       changesOpen: true,
       branchesOpen: true

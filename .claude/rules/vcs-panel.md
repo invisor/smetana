@@ -367,6 +367,24 @@ told the whole diff was there when it was not will describe the half it saw as t
 what comes back is taken as its first non-empty line with fences and quotation marks stripped —
 belt and braces, because the instruction asks for one bare line and models add the fence anyway.
 
+**The field is dragged taller by a `Resizer` under it, in rows.** Not the corner grip a browser
+draws: `Textarea` turns that off deliberately — it is a control this design system never drew, and it
+can be dragged out of whatever the field sits in — so the height is the same separator the side
+panels and this panel's own sections are dragged by. The count is `rows`, the `<textarea>`'s own
+attribute, which is the unit the control already measured itself in and which follows the density and
+the app-wide font size where a pixel height would not; the one pixel measurement is at the edge, in
+`CommitBox`, where the drag's displacement is divided by the field's line height read off the
+element. `Textarea` exposes that element the way `SectionHeader` exposes its row, and for the same
+reason: the measurement has nowhere else to come from. The rules are in `commitBox.js` beside the
+button's, and they clamp against nothing but their own floor and ceiling — a section competes with
+its neighbours for one column of height, this field competes with nothing, since the box is sticky at
+the top of a scroller and the rows go under it. The ceiling is 12 rather than a section's 40 for that
+same reason: past a dozen lines it stops being a field over a list and becomes a list nobody can see.
+It is stored as `layout.gitSections.commitRows`, beside the two section heights it is a sibling of,
+and it is the one of the three that is **not** nullable — those mean "never dragged, follow the
+content" and this field has a shipped height instead, so an absurd number in the file goes back to
+two rather than being forgotten.
+
 The layout is VS Code's, and each half of it is a decision rather than a copy. The **sparkle sits
 inside the field**, at its right edge, because that leaves the commit button the whole width and the
 whole width is what somebody aims at without looking — and because the two buttons are not the same

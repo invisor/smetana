@@ -423,11 +423,23 @@ pub struct Layout {
 /// follows its own content, so a project of one repository draws one row instead
 /// of a reserved block of empty ones. The rule that reads all of this is
 /// `src/components/git/sectionHeights.js`.
+///
+/// `commit_rows` is the third height and the one that is **not** an `Option`,
+/// which is the difference worth knowing before reading the three together. The
+/// commit box's field has a shipped height rather than a content to follow — it
+/// is a `<textarea>` and two rows is what it was fixed at before it could be
+/// dragged — so there is no state here that means "let it size itself", and an
+/// out-of-range number goes back to that default instead of being forgotten.
+/// Its rows are the field's own lines rather than `--row-h`, which is the same
+/// argument one unit over: `rows` is what a `<textarea>` measures itself in, so
+/// a count follows the type wherever the type goes. The rule that reads it is
+/// `src/components/git/commitBox.js`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct GitSections {
     pub repos_rows: Option<u32>,
     pub branch_rows: Option<u32>,
+    pub commit_rows: u32,
     pub repos_open: bool,
     pub changes_open: bool,
     pub branches_open: bool,
@@ -438,6 +450,7 @@ impl Default for GitSections {
         Self {
             repos_rows: None,
             branch_rows: None,
+            commit_rows: COMMIT_ROWS_DEFAULT,
             repos_open: true,
             changes_open: true,
             branches_open: true,
@@ -451,6 +464,17 @@ impl Default for GitSections {
 /// hand-edited file, not tightness.
 const MIN_SECTION_ROWS: u32 = 2;
 const MAX_SECTION_ROWS: u32 = 40;
+
+/// The commit box's field, in its own lines. Mirrored by `MIN_ROWS`, `MAX_ROWS`
+/// and `DEFAULT_ROWS` in `commitBox.js` — this is the guard on what a file may
+/// carry, and that one is what the panel draws; a value has to pass both.
+///
+/// The ceiling is lower than a section's 40 because it protects something else:
+/// this field is sticky at the top of the change list, so past a dozen lines it
+/// stops being a field over a list and becomes a list nobody can see.
+const MIN_COMMIT_ROWS: u32 = 1;
+const MAX_COMMIT_ROWS: u32 = 12;
+const COMMIT_ROWS_DEFAULT: u32 = 2;
 
 /// The defaults are repeated in the front end (`LEFT_DEFAULT`, `RIGHT_DEFAULT`
 /// in `panelWidths.js`): with no back end the app must still open looking the same.
@@ -1117,6 +1141,12 @@ impl GitSections {
     fn validate(&mut self) {
         forget_odd_rows(&mut self.repos_rows);
         forget_odd_rows(&mut self.branch_rows);
+        // Back to the shipped height rather than forgotten, since there is no
+        // "let it size itself" for this one to be handed back to — `in_range`'s
+        // rule and not `forget_odd_rows`'s, for a field that is not an Option.
+        if !(MIN_COMMIT_ROWS..=MAX_COMMIT_ROWS).contains(&self.commit_rows) {
+            self.commit_rows = COMMIT_ROWS_DEFAULT;
+        }
     }
 }
 
@@ -1813,6 +1843,10 @@ mod tests {
         assert!(git.repos_open && git.changes_open && git.branches_open);
         assert_eq!(git.repos_rows, None);
         assert_eq!(git.branch_rows, None);
+        // And the commit box at the height it was fixed at before it could be
+        // dragged, for the same reason: an update must not resize a field
+        // somebody never touched.
+        assert_eq!(git.commit_rows, COMMIT_ROWS_DEFAULT);
     }
 
     #[test]
@@ -1836,6 +1870,21 @@ mod tests {
 
         let tiny = settings_of(r#"{"version":1,"layout":{"gitSections":{"reposRows":1}}}"#);
         assert_eq!(tiny.layout.git_sections.repos_rows, None);
+    }
+
+    #[test]
+    fn a_dragged_message_field_survives_the_trip_and_an_absurd_one_goes_back_to_two() {
+        let settings = settings_of(r#"{"version":1,"layout":{"gitSections":{"commitRows":8}}}"#);
+        assert_eq!(settings.layout.git_sections.commit_rows, 8);
+
+        // Not forgotten the way a section's height is: there is no "follow the
+        // content" for a `<textarea>` to be handed back to, so the shipped
+        // height is the only honest answer.
+        let absurd = settings_of(r#"{"version":1,"layout":{"gitSections":{"commitRows":900}}}"#);
+        assert_eq!(absurd.layout.git_sections.commit_rows, COMMIT_ROWS_DEFAULT);
+
+        let none = settings_of(r#"{"version":1,"layout":{"gitSections":{"commitRows":0}}}"#);
+        assert_eq!(none.layout.git_sections.commit_rows, COMMIT_ROWS_DEFAULT);
     }
 
     #[test]

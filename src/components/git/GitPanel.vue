@@ -83,6 +83,7 @@ import RepoList from './RepoList.vue'
 import Resizer from '../shell/Resizer.vue'
 import SectionHeader from './SectionHeader.vue'
 import Tooltip from '../core/Tooltip.vue'
+import { DEFAULT_ROWS as COMMIT_ROWS } from './commitBox.js'
 import {
   BRANCH_ROWS,
   UNDRAGGED_ROWS,
@@ -160,6 +161,12 @@ const props = defineProps({
      settings — how tall somebody likes their branch list is a habit of reading
      rather than a fact about one repository.
 
+     `commitRows` rides in the same object, and it is the one count here that is
+     never null: the field it sizes has a shipped height rather than a content
+     to follow, so "never dragged" is two rows and not an absence. It travels
+     out on the same `resize` event under `section: 'commit'`, which is what
+     keeps one writer in `DesktopApp` instead of two.
+
      Read through `fold` below rather than directly, so a caller handing over
      part of it — every gallery frame does — still gets a whole panel. */
   sections: { type: Object, default: null }
@@ -206,7 +213,8 @@ const fold = computed(() => ({
   changesOpen: props.sections?.changesOpen ?? true,
   branchesOpen: props.sections?.branchesOpen ?? true,
   reposRows: props.sections?.reposRows ?? null,
-  branchRows: props.sections?.branchRows ?? null
+  branchRows: props.sections?.branchRows ?? null,
+  commitRows: props.sections?.commitRows ?? COMMIT_ROWS
 }))
 
 /* git's own stderr. Mono and left-aligned rather than an `EmptyState`'s centred
@@ -733,9 +741,11 @@ const onReset = (section) => emit('resize', { section, rows: null })
           :busy="busy"
           :suggesting="suggesting"
           :suggest-error="suggestError"
+          :rows="fold.commitRows"
           @update:model-value="$emit('message', $event)"
           @commit="$emit('commit')"
           @suggest="$emit('suggest')"
+          @resize="$emit('resize', { section: 'commit', rows: $event })"
         />
         <div v-if="failure" :style="failureStyle">
           <div :style="failureTitleStyle">{{ failureTitle }}</div>
