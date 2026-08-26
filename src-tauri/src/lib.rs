@@ -4,6 +4,7 @@ mod autostart;
 mod files;
 mod git;
 mod project;
+mod rlimit;
 mod runs;
 mod settings;
 mod shell_env;
@@ -17,6 +18,12 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // First, and before the builder rather than inside the setup hook: launchd
+  // hands a bundled app a soft descriptor limit of 256, every agent
+  // `terminal::pty` starts inherits it, and a limit raised after a child exists
+  // is of no use to that child. `rlimit` records what claude prints when it
+  // gets the inherited number, and why the hard limit is not the answer.
+  rlimit::raise();
   tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_opener::init())
