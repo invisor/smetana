@@ -17,6 +17,10 @@ beforeEach(async () => {
    completion. */
 const start = async (snap = snapshot()) => {
   ipc.on('tracker_health', { state: 'ok' })
+  /* Asked at init and again on every project switch, so every start has to
+     answer it. `'unavailable'` is the shape of a platform without `tccutil`;
+     the tests that care register their own before calling this. */
+  ipc.on('tracker_access_repair', 'unavailable')
   ipc.on('tracker_snapshot', snap)
   await tracker.initTracker()
 }
@@ -926,5 +930,146 @@ describe('the semantic tier', () => {
     await tracker.searchSemantic('   ')
 
     expect(ipc.calls('tracker_search_semantic')).toEqual([])
+  })
+})
+
+/* The folder the operating system refuses, which used to arrive as a failing bd
+   and send people into a database migration over a permission (smetana-8lq).
+   Rust decides the state from the filesystem and decides what can be done about
+   the folder; what the store owes is the state itself, the answer about the
+   folder kept current across a switch, and a caption that carries the refusal's
+   own words when the reset does not happen. */
+describe('a folder the system is refusing', () => {
+  /* Its own state and not `error`, all the way through: the view draws a
+     different sentence and a different button from it, and a message inside
+     `error` could not carry either. */
+  it('reaches the front end as a state of its own', async () => {
+    await start()
+
+    await emit('tracker:health', {
+      state: 'folder-refused',
+      message: 'no permission to read /Users/you/Desktop/Projects/smetana'
+    })
+
+    expect(tracker.trackerState.health.state).toBe('folder-refused')
+    // The path is the message, and the view puts it under the sentence: "this
+    // folder" is one folder too few once a project and its `.beads` can be
+    // refused apart.
+    expect(tracker.trackerState.health.message).toContain('Desktop/Projects/smetana')
+  })
+
+  it('learns at init what this project\'s folder needs', async () => {
+    ipc.on('tracker_health', { state: 'ok' })
+    ipc.on('tracker_access_repair', 'reset')
+    ipc.on('tracker_snapshot', snapshot())
+
+    await tracker.initTracker()
+
+    expect(tracker.trackerState.folderAccessRepair).toBe('reset')
+  })
+
+  /* The answer is about the folder, not about the build: one project sits under
+     `~/Desktop` and has a button, the next is somewhere only Full Disk Access
+     governs and must not. Kept stale across a switch, the second would be
+     offered a press that clears a grant macOS never asks for again. */
+  it('asks again on a project switch, because the answer is the folder\'s', async () => {
+    ipc.on('tracker_health', { state: 'ok' })
+    ipc.on('tracker_access_repair', 'reset')
+    ipc.on('tracker_snapshot', snapshot())
+    await tracker.initTracker()
+
+    ipc.on('tracker_set_project', snapshot())
+    ipc.on('tracker_access_repair', 'full-disk-access')
+    await tracker.setProject('/another')
+
+    expect(tracker.trackerState.folderAccessRepair).toBe('full-disk-access')
+  })
+
+  /* A switch whose board could not be read is exactly the case this answer is
+     for, so the question has to outlive the failure rather than be skipped by
+     it. */
+  it('asks again even when the new project\'s board could not be read', async () => {
+    await start()
+
+    ipc.fail('tracker_set_project', new Error('no permission to read /p'))
+    ipc.on('tracker_access_repair', 'reset')
+    await tracker.setProject('/p')
+
+    expect(tracker.trackerState.folderAccessRepair).toBe('reset')
+  })
+
+  /* `tccutil` is macOS's, and a button offered where nothing can be reset is
+     worse than the sentence alone — the sentence is written to work without
+     one. */
+  it('leaves the button off where the platform has no reset', async () => {
+    await start()
+
+    expect(tracker.trackerState.folderAccessRepair).toBe('unavailable')
+  })
+
+  /* Unanswered is not "yes". A question that never came back leaves the front
+     end on the side that offers nothing. */
+  it('an unanswered question offers nothing rather than guessing', async () => {
+    ipc.on('tracker_health', { state: 'ok' })
+    ipc.fail('tracker_access_repair', new Error('the tracker worker is not running'))
+    ipc.on('tracker_snapshot', snapshot())
+
+    await tracker.initTracker()
+
+    expect(tracker.trackerState.folderAccessRepair).toBe('unavailable')
+    // And no caption on screen for it: the notice still says what to do by
+    // hand, so there is nothing here a person could act on.
+    expect(tracker.trackerState.lastError).toBe(null)
+  })
+
+  /* The caller is a button reading "Resetting…" and the app is still standing,
+     so the refusal has to come back to it. */
+  it('a reset that failed reaches the caller with a caption of its own', async () => {
+    await start()
+    ipc.fail(
+      'tracker_access_reset',
+      new Error('could not reset the folder permission: could not run tccutil: No such file')
+    )
+
+    await expect(tracker.resetFolderAccess()).rejects.toThrow('tccutil')
+
+    /* Neither `read`'s caption nor `write`'s nor `repair`'s: this call never
+       reached bd and never opened `.beads`, so "the board may be out of date",
+       "nothing was written" and "any copy it took" are all about something
+       else. */
+    expect(tracker.trackerState.lastError.title).toBe('Could not reset the permission')
+    expect(tracker.trackerState.lastError.description).toContain('still being refused')
+  })
+
+  /* The likeliest refusal, and the one a constant caption would have thrown
+     away: a restart kills every PTY child, so Rust refuses while a run is going
+     — and that run is always in another project, since this one's folder cannot
+     be read. The window cannot see it, so the sentence naming it is the only
+     way a person learns which. */
+  it('a reset refused over a live run says which project holds it', async () => {
+    await start()
+    ipc.fail(
+      'tracker_access_reset',
+      'a run is going in /Users/you/Projects/notes; resetting the permission restarts the app and would end it'
+    )
+
+    await expect(tracker.resetFolderAccess()).rejects.toBeTruthy()
+
+    expect(tracker.trackerState.lastError.description).toContain('/Users/you/Projects/notes')
+    // And still the half that is always true, whatever refused it.
+    expect(tracker.trackerState.lastError.description).toContain('still being refused')
+  })
+
+  /* Nothing is passed in. The folder is the worker's own — the one bd was
+     failing in — because the front end's idea of the active project and the
+     worker's can differ for the length of a switch, and resetting a grant for
+     the wrong folder is not something anybody can undo from here. */
+  it('asks for the reset without naming a folder of its own', async () => {
+    await start()
+    ipc.on('tracker_access_reset', () => null)
+
+    await tracker.resetFolderAccess()
+
+    expect(ipc.calls('tracker_access_reset')).toEqual([{}])
   })
 })

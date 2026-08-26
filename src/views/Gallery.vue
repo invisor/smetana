@@ -96,6 +96,7 @@ import {
   updateNotification
 } from '../components/notifications/notifications.js'
 import { logLines } from './desktopAppData.js'
+import { folderRefusedNotice } from './folderAccess.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 /* The app's one link-opening path, bound to what the inspector raises. In
    a browser it is a new tab; in the app it is the person's own browser. */
@@ -3605,6 +3606,29 @@ const menuTargetStyle = {
               <Button variant="ghost" size="sm">Ask an agent</Button>
             </div>
           </template>
+        </EmptyState>
+        <!-- The other half of that pair, and the reason it is drawn beside it:
+             the two used to be one state, so a failing bd and a folder the
+             operating system refuses both said "bd is failing" and both offered
+             a database migration for it.
+
+             All three forms, because which one a person sees depends on where
+             their project is and what they are running, and none of the three is
+             reachable from the other two by looking. The copy is
+             `views/folderAccess.js`, kept in one place so these entries and the
+             app cannot come to say different things; only the first has a
+             button. The detail line is the path that was actually refused. -->
+        <EmptyState v-bind="folderRefusedNotice('reset')">
+          <template #detail>no permission to read /Users/you/Desktop/Projects/smetana</template>
+          <template #action>
+            <Button variant="primary" size="sm">Reset and restart</Button>
+          </template>
+        </EmptyState>
+        <EmptyState v-bind="folderRefusedNotice('full-disk-access')">
+          <template #detail>no permission to read /Users/you/Library/Mobile Documents/smetana</template>
+        </EmptyState>
+        <EmptyState v-bind="folderRefusedNotice('unavailable')">
+          <template #detail>no permission to read /home/you/projects/smetana/.beads</template>
         </EmptyState>
       </div>
       <div :style="{ position: 'relative', height: '220px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">

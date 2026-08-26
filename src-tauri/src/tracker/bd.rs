@@ -168,6 +168,15 @@ impl Bd {
         Self { app, cwd }
     }
 
+    /// The folder every call is made in. Read by the worker when a call fails,
+    /// to ask the filesystem whether that folder can be read at all — see
+    /// `access::health_for_failure`. Exposed rather than carried a second time
+    /// beside the `Bd`, so the folder bd was asked about and the folder that is
+    /// then probed cannot be two different folders.
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
+
     /// Only a non-zero exit code counts as an error. bd's warnings
     /// ("dolt auto-push failed", "beads.role not configured") go to stderr all
     /// the time and are not errors.

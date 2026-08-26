@@ -38,6 +38,7 @@ describe('the harness', () => {
   it('a delta arrives through a real emit over plugin:event', async () => {
     const { ipc, emit, stores } = await loadStores()
     ipc.on('tracker_health', { state: 'ok' })
+    ipc.on('tracker_access_repair', 'unavailable')
     ipc.on('tracker_snapshot', snapshot({ generation: 5, issues: [issue()] }))
 
     await stores.tracker.initTracker()

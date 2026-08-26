@@ -56,6 +56,18 @@ export const trackerState = reactive({
   columns: [],
   issues: new Map(),
   health: { state: 'ok' },
+  /* What can be done about a folder the operating system is refusing:
+     `'reset'`, `'full-disk-access'` or `'unavailable'`, Rust's `AccessRepair`.
+
+     A property of the **folder** and not of the build, so it is asked again on
+     every project switch: `~/Desktop/a` has a button and `~/code/b` has a
+     sentence about System Settings, in the same launch.
+
+     `'unavailable'` until Rust says otherwise, deliberately: it is the form that
+     offers nothing and claims nothing, and a button drawn where nothing can be
+     reset is worse than the sentence alone — which is written to hold up
+     without one (`views/folderAccess.js`). */
+  folderAccessRepair: 'unavailable',
   lastError: null
 })
 
@@ -224,6 +236,22 @@ const ERRORS = {
   repair: {
     title: 'Could not repair the tracker',
     description: 'Any copy it took is left where it is — nothing removes one.'
+  },
+  /* And a fourth, because none of the three above is about a permission. This
+     call never reaches bd and never touches `.beads`: it asks the operating
+     system to forget a stored refusal. So "the board may be out of date" and
+     "nothing was written" are both beside the point, and what a person needs to
+     know is that the folder is still refused and that nothing of theirs was
+     involved either way. */
+  access: {
+    title: 'Could not reset the permission',
+    /* The tail of a sentence, exactly as `repair` above is, and `resetFolderAccess`
+       pins the refusal's own last line in front of it. Here that matters more
+       than it does there, because the likeliest refusal is one this app wrote
+       itself and is the only thing that says what is in the way: a run going in
+       another project, which this window cannot see and could not otherwise
+       name. A constant caption would turn that into "something went wrong". */
+    description: 'The folder is still being refused. Nothing about the tracker or its data was touched.'
   }
 }
 
@@ -279,6 +307,10 @@ export async function setProject(path) {
   } finally {
     trackerState.switching = false
   }
+  /* After the switch and outside the try, because it is about the folder that
+     is open now whether or not its board could be read — and a folder whose
+     board could not be read is exactly the case this answer is for. */
+  await loadFolderAccessRepair()
 }
 
 /* bd init in the active project's directory. Success brings the board; a
@@ -363,6 +395,38 @@ export async function trackerFailure() {
   }
 }
 
+/* Ask the operating system to forget its stored refusal of the project's
+   folder, so that it asks the person again instead.
+
+   Nothing here is about bd, which is the whole reason the state that offers it
+   is not `error`: `.beads` is not opened, no migration runs, and there is no
+   snapshot to roll out afterwards. On success the app restarts — Rust does that
+   itself, as the second half of the repair — so this promise never settles: the
+   window is on its way out and the caller's "Resetting…" goes with it.
+
+   A refusal is reported and rethrown, the way `repairTracker` does it and for
+   the same reason: the caller is a button somebody pressed, and it has to stop
+   saying "Resetting…" when the app is still standing there. */
+export async function resetFolderAccess() {
+  try {
+    await invoke('tracker_access_reset')
+  } catch (err) {
+    /* Built rather than picked, the same way `repairTracker` builds its own and
+       for a sharper reason: every refusal this call can make is one Rust wrote
+       for a person to read — a run going somewhere else, a folder no promptable
+       permission governs, a `tccutil` that would not run — and the constant
+       alone would throw away the only half that says which. The console line is
+       `report`'s job everywhere else, so it is kept by hand. */
+    console.error('[tracker] resetting the folder permission failed:', err)
+    const said = lastDiagnosticLine(err)
+    trackerState.lastError = {
+      ...ERRORS.access,
+      description: said ? `${said} ${ERRORS.access.description}` : ERRORS.access.description
+    }
+    throw err
+  }
+}
+
 /* Whether these folders have a tracker is a question for the filesystem, not
    for bd. */
 export async function probeProjects(paths) {
@@ -374,17 +438,43 @@ export async function probeProjects(paths) {
   }
 }
 
-/* health's message is diagnostics: it speaks bd's language. Most of what goes
-   to the interface is still a short text derived from `state` alone — the
-   caption and the sentence under it are `HEALTH_NOTICE` in `views/DesktopApp.vue`
-   — but the message itself is no longer kept from the screen. Under `error` the
-   view draws its last non-empty line in mono beneath that sentence (`bdSaid`),
-   and the whole of the failure goes to the agent that the second button on that
-   screen starts. The console line below stays: it is the only trace for the
-   states that draw no detail, and it carries the message unabridged. */
+/* health's message is diagnostics: it speaks bd's language, except where it is
+   about the folder rather than about bd. Most of what goes to the interface is
+   still a short text derived from `state` alone — the caption and the sentence
+   under it are `HEALTH_NOTICE` in `views/DesktopApp.vue`, and
+   `views/folderAccess.js` for the one state whose sentence depends on which
+   folder it is about — but the message itself is no longer kept from the
+   screen. Under
+   `error` and under `folder-refused` the view draws its last non-empty line in
+   mono beneath that sentence (`healthSaid`), and the whole of the failure goes
+   to the agent that the second button on that screen starts. The console line
+   below stays: it is the only trace for the states that draw no detail, and it
+   carries the message unabridged. */
 function setHealth(health) {
   trackerState.health = health
   if (health.state !== 'ok') console.warn('[tracker] health:', health.state, health.message ?? '')
+}
+
+/* What can be done about this project's refused folder, asked of Rust.
+
+   Asked always rather than only when health says `folder-refused`: health can
+   move to that state at any moment, and a notice that had to wait for a round
+   trip before choosing between its three forms would draw the wrong one first.
+
+   Asked again on every project switch, because the answer is about the folder.
+   The three other things that reopen a folder — `bd init`, a repair, the
+   sixty-second sweep — cannot change the path, so they cannot change this.
+
+   A question that never came back leaves `'unavailable'`, which is the safe way
+   round and not an error worth a caption: the person still gets the notice, and
+   that form still tells them what to do. */
+async function loadFolderAccessRepair() {
+  try {
+    trackerState.folderAccessRepair = await invoke('tracker_access_repair')
+  } catch (err) {
+    trackerState.folderAccessRepair = 'unavailable'
+    console.warn('[tracker] could not ask what a refused folder needs:', err)
+  }
 }
 
 export async function initTracker() {
@@ -412,6 +502,8 @@ export async function initTracker() {
   } catch (err) {
     report('read', err)
   }
+
+  await loadFolderAccessRepair()
 
   /* The snapshot and the deltas travel by different routes: while the
      command's answer flies back to the webview, the watcher manages to send a
