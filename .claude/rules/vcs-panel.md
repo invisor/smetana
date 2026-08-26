@@ -344,6 +344,20 @@ rather than the panel's "Git refused this operation" block, which would name a p
 asked. Its guard is the pair, project and repository, and that one earns its keep: an answer landing
 after a switch would drop one repository's commit message into another's field.
 
+**A tree with nothing in it is refused here rather than put to a model, and that refusal was paid
+for.** `describe` answers `Ok(None)` when the `--stat`, the untracked list and the patch are all
+empty, and the command turns it into `OneshotError::Nothing` — one more sentence under the field.
+Without it the prompt is built anyway, and "write a commit message for the changes below" with
+nothing below it is a question rather than an instruction: a harness answers it by saying the changes
+are missing and asking for them, in whatever language it converses in, and `clean` — which takes the
+first non-empty line and cannot tell a message from a sentence about not having one — puts that reply
+in the field looking like something to press Commit under. It was read as the `commitLanguage`
+setting failing, which it is not: that setting moves the *subject of a message*, the prompt carries
+it, and the reply was never a message. Reaching this state needs no mistake at all — the button is
+gated on the front end's count of changes, that count is as fresh as the last window focus, and an
+agent committing into the same tree is the ordinary case in this app. It is `commit_all`'s own rule
+one command over: refuse before the expensive half, in this app's words.
+
 What the harness can be asked is the harness's own business, so it rides on `Profile::oneshot_args`
 beside `usage_command`, and the front end never learns which agent is configured — the button is
 drawn for everybody and a harness with no non-interactive form says so in a sentence
