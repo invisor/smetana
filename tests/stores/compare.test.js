@@ -1,0 +1,153 @@
+import { describe, expect, it } from 'vitest'
+import { loadStores } from '../support/stores.js'
+
+/* One comparison and one file, answered by the transport. The shas are the only
+   thing that matters about them: every read afterwards has to go by these and
+   never by the branch name. */
+const LEFT = '1111111111111111111111111111111111111111'
+const RIGHT = '2222222222222222222222222222222222222222'
+
+const COMPARISON = {
+  left: LEFT,
+  right: RIGHT,
+  files: [
+    { path: 'src/a.js', origPath: null, kind: 'modified' },
+    { path: 'src/added.js', origPath: null, kind: 'added' }
+  ]
+}
+
+/* A fresh graph with both of this window's commands answered. A file comes back
+   as `<rev>:<path>`, so an assertion can say which revision the text on screen
+   was read at — the whole subject of this file. `src/added.js` has nothing on
+   the left, which is the second of `vcs_file_at_rev`'s two answers and not a
+   failure. */
+async function loadCompare() {
+  const { stores, ipc } = await loadStores()
+  ipc.on('vcs_compare', COMPARISON)
+  ipc.on('vcs_file_at_rev', (args) =>
+    args.path === 'src/added.js' && args.rev === LEFT ? null : `${args.rev}:${args.path}`
+  )
+  return { compare: stores.compare, ipc }
+}
+
+describe('the branch comparison', () => {
+  it('reads a file at the two revisions the comparison resolved', async () => {
+    const { compare, ipc } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+    await compare.select('src/a.js')
+
+    const reads = ipc.calls('vcs_file_at_rev')
+    expect(reads.map((args) => args.rev)).toEqual([LEFT, RIGHT])
+    expect(reads.every((args) => args.repo === '/tmp/r')).toBe(true)
+    expect(compare.compareState.head).toBe(`${LEFT}:src/a.js`)
+    expect(compare.compareState.work).toBe(`${RIGHT}:src/a.js`)
+  })
+
+  /* The whole reason the shas travel back from Rust rather than the names: a
+     branch name asked twice can answer from two different commits. */
+  it('never asks for a file by branch name', async () => {
+    const { compare, ipc } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+    await compare.select('src/a.js')
+
+    const revs = ipc.calls('vcs_file_at_rev').map((args) => args.rev)
+    /* A read that never happened would satisfy the two refusals below without
+       saying anything, so the count comes first. */
+    expect(revs).toHaveLength(2)
+    expect(revs).not.toContain('feature')
+    expect(revs).not.toContain('HEAD')
+  })
+
+  /* The guard `loadDiff` keeps in `stores/tabs.js`, here for the same reason:
+     without it the last response wins rather than the last call, and one file's
+     text lands under another file's name. */
+  it('does not let a slow read land under the file picked after it', async () => {
+    const { compare, ipc } = await loadCompare()
+    const gate = []
+    ipc.on(
+      'vcs_file_at_rev',
+      (args) =>
+        new Promise((resolve) => {
+          gate.push(() => resolve(`${args.rev}:${args.path}`))
+        })
+    )
+    await compare.aim('/tmp/r', 'feature')
+
+    const first = compare.select('src/a.js')
+    const second = compare.select('src/added.js')
+    /* The first call's two reads answer last. */
+    gate.slice(2).forEach((release) => release())
+    gate.slice(0, 2).forEach((release) => release())
+    await Promise.all([first, second])
+
+    expect(compare.compareState.selected).toBe('src/added.js')
+    expect(compare.compareState.work).toBe(`${RIGHT}:src/added.js`)
+  })
+
+  it('re-runs the comparison when the mode changes', async () => {
+    const { compare, ipc } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+    await compare.setMode('direct')
+
+    expect(ipc.calls('vcs_compare').at(-1).mode).toBe('direct')
+    expect(compare.compareState.mode).toBe('direct')
+  })
+
+  it('opens on the diverged mode', async () => {
+    const { compare, ipc } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+    expect(ipc.calls('vcs_compare')[0].mode).toBe('diverged')
+  })
+
+  /* `null` is a revision that does not have the file, which is exactly a file
+     added on the other side. The empty pane is the truth, and the flag is what
+     lets the caption say which of the two empties it is. */
+  it('says an added file is missing on the left rather than failing', async () => {
+    const { compare } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+    await compare.select('src/added.js')
+
+    expect(compare.compareState.missingLeft).toBe(true)
+    expect(compare.compareState.head).toBe('')
+    expect(compare.compareState.fileError).toBe(null)
+  })
+
+  it("carries a refusal in Rust's own shape and wraps anything else", async () => {
+    const { compare, ipc } = await loadCompare()
+    await compare.aim('/tmp/r', 'feature')
+
+    ipc.fail('vcs_file_at_rev', { kind: 'binary', message: 'binary file: src/a.js' })
+    await compare.select('src/a.js')
+    expect(compare.compareState.fileError).toEqual({
+      kind: 'binary',
+      message: 'binary file: src/a.js'
+    })
+
+    ipc.fail('vcs_file_at_rev', new Error('the channel went away'))
+    await compare.select('src/a.js')
+    expect(compare.compareState.fileError.kind).toBe('io')
+  })
+
+  /* Two branches with nothing between them is an ordinary answer, and the list
+     being empty is not the same state as a refusal. */
+  it('keeps an empty comparison apart from a failed one', async () => {
+    const { compare, ipc } = await loadCompare()
+    ipc.on('vcs_compare', { left: LEFT, right: RIGHT, files: [] })
+    await compare.aim('/tmp/r', 'feature')
+
+    expect(compare.compareState.files).toEqual([])
+    expect(compare.compareState.error).toBe(null)
+  })
+
+  it("carries the comparison's own refusal", async () => {
+    const { compare, ipc } = await loadCompare()
+    ipc.fail('vcs_compare', {
+      kind: 'unrelated',
+      message: 'These two branches share no history.'
+    })
+    await compare.aim('/tmp/r', 'feature')
+
+    expect(compare.compareState.error.kind).toBe('unrelated')
+    expect(compare.compareState.files).toEqual([])
+  })
+})

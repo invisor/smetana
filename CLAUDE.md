@@ -115,7 +115,7 @@ preference, and a stored version had the run case highlighting a card the inspec
 
 `src/stores/tracker.js`, `src/stores/settings.js`, `src/stores/projects.js`, `src/stores/files.js`,
 `src/stores/terminals.js`, `src/stores/git.js`, `src/stores/vcs.js`, `src/stores/runs.js`,
-`src/stores/attachments.js`, `src/stores/updates.js`
+`src/stores/attachments.js`, `src/stores/updates.js`, `src/stores/compare.js`
 and `src/stores/app.js` are the **only** files in `src/` that know Tauri exists — components see
 reactive stores and nothing else. `mockBackend.js` below is the last and the exception that proves
 it: it imports Tauri in order to stand in for the absence of one. `app.js` is the odd one, and it is
