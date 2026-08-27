@@ -24,9 +24,13 @@
    the app for the sake of one call. */
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watchEffect } from 'vue'
 import EmptyState from '../components/core/EmptyState.vue'
+import DeleteTaskModal from '../components/kanban/DeleteTaskModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
+import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
+import ReadyTaskModal from '../components/kanban/ReadyTaskModal.vue'
 import RunModal from '../components/run/RunModal.vue'
+import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import { dialogWidth, isDialogKind } from './dialogRegistry.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
@@ -58,7 +62,11 @@ const props = defineProps({
 const COMPONENTS = {
   run: RunModal,
   'new-task': NewTaskModal,
-  'new-branch': NewBranchModal
+  'new-branch': NewBranchModal,
+  'promote-column': PromoteColumnModal,
+  'setup-project': SetupProjectModal,
+  'delete-task': DeleteTaskModal,
+  'ready-task': ReadyTaskModal
 }
 
 const component = computed(() => COMPONENTS[props.kind] ?? null)
