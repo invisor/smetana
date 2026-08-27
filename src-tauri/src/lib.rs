@@ -195,6 +195,7 @@ pub fn run() {
       settings::commands::settings_load,
       settings::commands::settings_save,
       window::settings_window_open,
+      window::window_chrome,
       window::compare_window_open,
       window::dialog_window_open,
       window::dialog_window_close,

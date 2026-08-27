@@ -5,6 +5,8 @@ import SettingsWindow from './views/SettingsWindow.vue'
 import CompareWindow from './views/CompareWindow.vue'
 import DialogWindow from './views/DialogWindow.vue'
 import { loadSettings, settings } from './stores/settings.js'
+import { readWindowChrome } from './stores/app.js'
+import { CHROME_NONE } from './components/shell/windowChrome.js'
 import { effectiveTheme } from './appearance.js'
 import { usePrefersDark } from './views/useAppearance.js'
 
@@ -53,14 +55,35 @@ const compareBranch = params.get('branch')
    list written out twice. */
 const dialogKind = params.get('kind')
 
+/* Which chrome the window around this page has, which the app window's scope
+   bar is the title bar of. Resolved here rather than in `DesktopApp.vue`, and
+   that is the whole reason it is in this file: it has to be known *before* the
+   bar's first paint. Asked for on mount instead, the bar drew one frame with no
+   inset and then jumped 78px — on macOS that is the project name under the
+   traffic lights on every cold start, which is the one thing this change is
+   most on the hook for.
+
+   The other four views never ask. They keep their own title bars — the dialog
+   windows deliberately so, since the OS frame there carries the dialog's own
+   name — so the answer would be true and useless, and `none` is what they are
+   drawn in anyway. */
+const windowChrome = ref(CHROME_NONE)
+
 /* The gallery is a component harness, and none of the three other windows holds
    this store: all four render straight away. The app waits for the file — a few
-   milliseconds — rather than painting the default theme and flipping. */
+   milliseconds — rather than painting the default theme and flipping, and the
+   chrome is awaited in the same breath because it is wanted at the same moment
+   and neither is worth a second wait. */
 const standalone =
   gallery.value || settingsWindow.value || compareWindow.value || dialogWindow.value
 const ready = ref(standalone)
 if (!standalone) {
-  loadSettings().then(() => {
+  Promise.all([
+    loadSettings(),
+    readWindowChrome().then((chrome) => {
+      windowChrome.value = chrome
+    })
+  ]).then(() => {
     ready.value = true
   })
 }
@@ -120,5 +143,10 @@ const density = computed(
     :density-override="densityOverride"
   />
   <Gallery v-else-if="gallery" :theme="theme" :density="density" />
-  <DesktopApp v-else-if="ready" :theme="theme" :density="density" />
+  <DesktopApp
+    v-else-if="ready"
+    :theme="theme"
+    :density="density"
+    :window-chrome="windowChrome"
+  />
 </template>

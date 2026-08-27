@@ -10,9 +10,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { usingMockBackend } from './mockBackend.js'
+import { CHROME_NONE, chromeFromPlatform } from '../components/shell/windowChrome.js'
 
 /* Which section the settings window should be showing. Not a setting and not
    part of the three-event contract in `settings.js` — nothing about it reaches
@@ -279,6 +281,100 @@ export async function readAgentUsage(agent = null) {
   } catch (err) {
     console.error('[app] the subscription allowance could not be read:', err)
     throw new Error(err && typeof err === 'object' && typeof err.message === 'string' ? err.message : String(err))
+  }
+}
+
+/* ---- the window this app is drawn in ------------------------------------ */
+/* The app window has no title bar of its own any more: the scope bar is it.
+   What is left over here is the small amount of that arrangement which needs a
+   window to ask, and it is here rather than in a component for the reason the
+   rest of this file exists — `@tauri-apps/api` is a store's import and nobody
+   else's. `components/shell/windowChrome.js` holds the rules; none of them are
+   repeated here. */
+
+/* Which chrome the window around us has. `none` on any failure, and the
+   commonest failure is the ordinary one: a browser, where the command does not
+   exist, there is no window and there is no title bar to move a bar into. The
+   name that comes back is one of `components/shell/windowChrome.js`'s three,
+   and that module decides what an unrecognised one means. */
+export async function readWindowChrome() {
+  try {
+    return chromeFromPlatform(await invoke('window_chrome'))
+  } catch (err) {
+    console.debug('[app] no window chrome to ask about (a browser):', err)
+    return CHROME_NONE
+  }
+}
+
+/* Whether the window is fullscreen, now and whenever it changes. There is no
+   fullscreen event of its own, so the resize is the signal and the window is
+   asked outright — the answer is a boolean and the question is cheap.
+
+   Returns the unsubscribe, or a function that does nothing when there is no
+   window at all: a caller must be able to clean up without knowing which. */
+export async function watchFullscreen(onChange) {
+  try {
+    const appWindow = getCurrentWindow()
+    onChange(await appWindow.isFullscreen())
+    return await appWindow.onResized(async () => {
+      try {
+        onChange(await appWindow.isFullscreen())
+      } catch (err) {
+        console.warn('[app] could not read the fullscreen state:', err)
+      }
+    })
+  } catch (err) {
+    console.debug('[app] no window to watch for fullscreen (a browser):', err)
+    return () => {}
+  }
+}
+
+export async function minimizeWindow() {
+  try {
+    await getCurrentWindow().minimize()
+  } catch (err) {
+    console.error('[app] minimizing the window failed:', err)
+  }
+}
+
+export async function toggleMaximizeWindow() {
+  try {
+    await getCurrentWindow().toggleMaximize()
+  } catch (err) {
+    console.error('[app] maximizing the window failed:', err)
+  }
+}
+
+/* `close()`, never `destroy()`. `stores/settings.js` intercepts
+   `onCloseRequested` to flush the pending write of `settings.json`, and a
+   button that destroyed the window instead would drop somebody's last change
+   with nothing on screen to say so.
+
+   It needs `core:window:allow-close` granted explicitly in
+   `capabilities/default.json`, beside the `allow-destroy` that same flush needs
+   on the far side of the interception. `core:default` does **not** carry it:
+   that is the nine plugin defaults, of which `core:window:default` is 28
+   entries holding neither. Nothing in either suite can catch the omission — the
+   front end's tests cannot read a capability file, Rust's cannot reach this
+   call, and the only two platforms that draw this button are the two CI never
+   builds — so the button would simply log the line below and leave a window
+   with no system close button of its own uncloseable. */
+export async function closeWindow() {
+  try {
+    await getCurrentWindow().close()
+  } catch (err) {
+    console.error('[app] closing the window failed:', err)
+  }
+}
+
+/* Which of the two the middle button is. Silent on failure and answering
+   `false`, unlike the three above: there is nothing a person asked for here to
+   report the failure of, and a browser reaches it on every check. */
+export async function isWindowMaximized() {
+  try {
+    return await getCurrentWindow().isMaximized()
+  } catch {
+    return false
   }
 }
 
