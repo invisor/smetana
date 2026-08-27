@@ -72,6 +72,42 @@ const DIALOG_PROPS = {
     branches: MOCK_BRANCHES,
     actions: { allowed: true, reason: null },
     busy: false
+  },
+  /* Every fixture carries a `title` beside what its dialog draws, because that
+     string is the OS frame's caption in the app and there is no frame in a
+     browser to notice it missing. It is the same sentence the component works
+     out for itself from the props below it — see the comment each of them
+     carries — and the app window announces it for the same reason this does. */
+  'delete-task': {
+    title: 'Delete bd-a1b2?',
+    id: 'bd-a1b2',
+    taskTitle: 'Rename worktree when the branch changes',
+    busy: false
+  },
+  /* The parked card of the mock board and its own `parked:` notes, so the
+     window in a browser quotes what the board behind it holds — two fixtures
+     disagreeing about one issue would be worse than one. */
+  'ready-task': {
+    title: 'Move bd-29j1 to ready with the question unanswered?',
+    id: 'bd-29j1',
+    taskTitle: 'Show the tracker state on a non-empty board too',
+    questions: [
+      'needs a decision on where the strip sits',
+      'still waiting on the design call'
+    ]
+  },
+  'promote-column': {
+    title: 'Move 12 tasks to ready?',
+    count: 12,
+    busy: false,
+    moved: 0,
+    failed: null
+  },
+  'setup-project': {
+    title: 'Set this project up?',
+    name: 'holiday-curb',
+    existing: false,
+    busy: false
   }
 }
 
