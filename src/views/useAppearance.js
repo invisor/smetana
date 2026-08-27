@@ -4,6 +4,7 @@
    window, and it is here rather than there so that file remains testable. */
 import { onUnmounted, ref } from 'vue'
 import { UI_FONT_DEFAULT, clampFont, fontVars } from '../appearance.js'
+import { CHROME_ATTRIBUTE, CHROME_NONE } from '../components/shell/windowChrome.js'
 
 /* Whether the machine is currently asking for a dark interface. A ref rather
    than a reading, and with a listener rather than a look at startup: a laptop
@@ -36,9 +37,16 @@ export function usePrefersDark() {
    the one thing that does not repaint itself — it watches this root's attributes
    and re-reads on any of them. A custom property written into the `style`
    attribute would have done the same job by accident; this says so on purpose. */
-export function paintRoot(el, { theme, density, uiFontSize, editorFontSize }) {
+export function paintRoot(el, { theme, density, uiFontSize, editorFontSize, windowChrome = CHROME_NONE }) {
   el.setAttribute('data-theme', theme)
   el.setAttribute('data-density', density)
+  /* The third attribute the root carries, and the only one that is a fact about
+     the machine rather than a choice about the look. `tokens/space.css` reads it
+     for the inset the traffic lights need and for the floor under the bar's
+     height. It defaults to `none`, which is what the settings window and the
+     compare window get: both keep their own title bars and call this same
+     function. */
+  el.setAttribute(CHROME_ATTRIBUTE, windowChrome)
   for (const [name, value] of Object.entries(fontVars(uiFontSize, editorFontSize))) {
     el.style.setProperty(name, value)
   }

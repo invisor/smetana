@@ -88,7 +88,8 @@ import {
   Toast,
   ToolCall,
   Tooltip,
-  UsageFooter
+  UsageFooter,
+  WindowControls
 } from '../components/index.js'
 import { gitActions } from '../components/git/gitActions.js'
 import {
@@ -2097,6 +2098,64 @@ const menuTargetStyle = {
           :agents-active="3"
           :notifications="1"
         />
+      </div>
+
+      <!-- The three states of the window's own chrome, which decide what this
+           bar has to do about the title bar it now is. In the app the state is
+           an attribute on the document root, written by `paintRoot` from what
+           Rust answers; a browser is always `none`, which is why the first of
+           these is every bar above and the other two need saying.
+
+           The attribute is put on a wrapper here rather than on the root, and
+           that is the whole trick that makes `traffic-lights` visible on a
+           machine that is not a Mac: the tokens are declared against
+           `[data-window-chrome=…]`, which matches any element, and custom
+           properties inherit. `data-density` rides along on the same wrapper
+           because the compact floor is a compound selector and needs both
+           attributes on one element to match. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
+        <!-- macOS: the real traffic lights are drawn by the system over the
+             left end of this bar, so the bar clears 78px for them. The repo
+             name has to start clear of the lights in every density and at every
+             font size — that is what this instance is here to show. -->
+        <div :data-density="density" data-window-chrome="traffic-lights">
+          <ScopeIndicator
+            repo="smetana"
+            branch="main"
+            window-chrome="traffic-lights"
+            :dirty-count="4"
+            :agents-active="2"
+            :notifications="1"
+          />
+        </div>
+        <!-- Windows and Linux: no decorations at all, so the bar draws the
+             three buttons itself, after the gear. -->
+        <ScopeIndicator
+          repo="smetana"
+          branch="main"
+          window-chrome="buttons"
+          :dirty-count="4"
+          :agents-active="2"
+          :notifications="1"
+        />
+        <!-- The same bar over a maximized window: the middle button alone
+             changes, to `copy` and "Restore". -->
+        <ScopeIndicator
+          repo="smetana"
+          branch="main"
+          window-chrome="buttons"
+          maximized
+          :dirty-count="4"
+          :agents-active="2"
+          :notifications="1"
+        />
+      </div>
+
+      <!-- The buttons on their own, both ways round, which is the only place
+           the two glyphs sit near enough to compare. -->
+      <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-5)' }">
+        <WindowControls />
+        <WindowControls maximized />
       </div>
 
       <!-- What the bar keeps of the search: a button saying the search exists

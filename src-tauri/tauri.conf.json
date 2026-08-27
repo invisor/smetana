@@ -13,6 +13,8 @@
     "windows": [
       {
         "title": "Smetana",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "width": 1440,
         "height": 900,
         "minWidth": 1024,

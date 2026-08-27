@@ -3,6 +3,8 @@ import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
+import WindowControls from './WindowControls.vue'
+import { CHROME_BUTTONS, CHROME_NONE, CHROME_STATES } from './windowChrome.js'
 
 /* The scope bar answers "where am I working" before anything else on screen:
    repo / worktree @ branch, then the two live counters. */
@@ -29,18 +31,36 @@ const props = defineProps({
   headline: { type: String, default: '' },
   /* The design system's attention vocabulary, so an agent waiting on somebody
      reads loud here as it does on a badge. `quiet` is the default. */
-  headlineLevel: { type: String, default: 'quiet' }
+  headlineLevel: { type: String, default: 'quiet' },
+  /* Which chrome the window around this bar has, from
+     `shell/windowChrome.js`. `none` is the default and is what a browser gets:
+     the gallery and the dev server draw this bar with no window behind it at
+     all, and a default of anything else would put a gap in it there. */
+  windowChrome: {
+    type: String,
+    default: CHROME_NONE,
+    validator: (value) => CHROME_STATES.includes(value)
+  },
+  /* Only ever read while `windowChrome` is `buttons`: which of the two the
+     middle button is. */
+  maximized: { type: Boolean, default: false }
 })
 
-defineEmits(['notifications', 'settings'])
+defineEmits(['notifications', 'settings', 'minimize', 'toggle-maximize', 'close'])
 
+/* Still a plain object, and deliberately: the left inset varies, but it varies
+   through a token the document root redefines, not through a prop. A computed
+   here would claim a reactive dependency this object does not have. */
 const barStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
   height: 'var(--scope-bar-h)',
   flex: '0 0 auto',
-  padding: '0 var(--space-5)',
+  /* The inset clears macOS's traffic lights, which are drawn over this bar
+     rather than beside it. `--title-bar-inset` is 0 in every other chrome, so
+     this is the one expression rather than a branch. */
+  padding: '0 var(--space-5) 0 calc(var(--space-5) + var(--title-bar-inset))',
   background: 'var(--scope-bar)',
   borderBottom: 'var(--border-w) solid var(--border)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
@@ -115,7 +135,11 @@ const badgeStyle = {
 </script>
 
 <template>
-  <div :style="barStyle">
+  <!-- The drag region is unconditional. Nothing in a browser listens for the
+       attribute, and Tauri starts a drag only from the element that actually
+       carries it, so the buttons, the search field and the run segments below —
+       which do not — keep working. -->
+  <div :style="barStyle" data-tauri-drag-region>
     <span :style="segStyle(true)">
       <Icon name="folder-git-2" :size="12" :style="{ color: 'var(--text-muted)' }" />
       <span :style="truncate">{{ repo }}</span>
@@ -151,7 +175,7 @@ const badgeStyle = {
          project and the buttons over there are about the window. -->
     <slot name="status" />
 
-    <span :style="{ flex: 1 }" />
+    <span :style="{ flex: 1 }" data-tauri-drag-region />
 
     <!-- The search field. A slot rather than props for the same reason
          `#status` above is one: this bar knows about a repository, a branch and
@@ -170,5 +194,16 @@ const badgeStyle = {
       <span v-if="notifications > 0" aria-hidden="true" :style="badgeStyle">{{ notifications }}</span>
     </span>
     <IconButton icon="settings" size="sm" label="Settings" @click="$emit('settings')" />
+
+    <!-- Only where the system has stopped drawing them. On macOS the real
+         traffic lights are over the other end of this bar and nothing belongs
+         here; in a browser there is no window to command at all. -->
+    <WindowControls
+      v-if="windowChrome === CHROME_BUTTONS"
+      :maximized="maximized"
+      @minimize="$emit('minimize')"
+      @toggle-maximize="$emit('toggle-maximize')"
+      @close="$emit('close')"
+    />
   </div>
 </template>

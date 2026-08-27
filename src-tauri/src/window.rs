@@ -1,5 +1,5 @@
-//! The app's windows: the settings window, the compare window, and the main
-//! window's geometry on disk.
+//! The app's windows: the settings window, the compare window, the dialog
+//! windows, and the main window's geometry on disk.
 //!
 //! # The settings window
 //!
@@ -38,6 +38,32 @@
 //! its own — with one difference worth naming: what it is looking at travels as
 //! two parameters rather than one, and a window already open is re-aimed by an
 //! event instead of by a URL it will never load again.
+//!
+//! # The dialog windows
+//!
+//! The same argument as the settings window's, applied to the dialogs a person
+//! decides something in: a modal cannot be dragged out of the main window's
+//! bounds, so the board it is a question about stays behind a scrim while they
+//! answer it. Each of them is a window on the same bundle under
+//! `?view=dialog&kind=<name>`, labelled `dialog-<kind>` so opening an open one
+//! brings it forward.
+//!
+//! Two things differ from the two windows above, and both follow from a dialog
+//! being the size of what it says. It is built hidden at a provisional height
+//! and shown only once the page has measured itself and called
+//! `dialog_window_size` — the same order the main window uses, and for the same
+//! reason. And it is not resizable: the height is content-driven and re-set on
+//! every change to the content, so a hand on the corner would be fighting the
+//! observer that keeps it honest.
+//!
+//! One thing travels the other way, and it is the only message this file sends:
+//! a dialog window destroyed by its own frame says so on the channel the
+//! dialog's own answers travel on, because the app window owns every bit of a
+//! dialog's state and would otherwise go on serving a window that is not there.
+//!
+//! The closed list of kinds is the front end's (`src/views/dialogRegistry.js`)
+//! and is deliberately not repeated here; what this side checks is the URL, in
+//! `kind_query`.
 //!
 //! # The main window's geometry
 //!
@@ -95,7 +121,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
 /// The settings window's label. It is also the name the capability in
@@ -111,6 +137,36 @@ const SETTINGS_LABEL: &str = "settings";
 /// reaches no core plugin at all, and the page would come up unable to talk to
 /// anything.
 const COMPARE_LABEL: &str = "compare";
+
+/// A dialog window's label is `dialog-<kind>`: one window per kind, so opening
+/// an open one brings it forward rather than making a second copy, exactly as
+/// the settings window's single label does that for it.
+///
+/// The prefix is also what `capabilities/default.json` matches with the glob
+/// `dialog-*`. A window not named there reaches no core plugin at all and comes
+/// up unable to talk to anything — which is what to suspect first if a dialog
+/// window opens blank.
+const DIALOG_PREFIX: &str = "dialog-";
+
+/// Which dialog, as a parameter on the URL the window already loads.
+///
+/// Validated exactly the way `tab_query` validates a section name, and for the
+/// same reason: this reaches a URL, so anything but a short plain identifier is
+/// dropped and nothing a caller sends can add a parameter of its own or escape
+/// the query string. Answering `None` rather than substituting a default is the
+/// difference from `tab_query`, which has a tab to fall back to — there is no
+/// sensible default dialog, and a window with no `kind` has nothing to draw.
+///
+/// The closed list of kinds lives in `src/views/dialogRegistry.js`, which owns
+/// them, and is deliberately not repeated here: that window already refuses a
+/// kind it does not know, and a second copy of the list in Rust would be one
+/// more pair to keep in step.
+fn kind_query(kind: &str) -> Option<String> {
+    let ok = !kind.is_empty()
+        && kind.len() <= 32
+        && kind.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+    ok.then(|| kind.to_string())
+}
 
 /// Which section a caller asked for, as a query parameter on the URL the window
 /// already loads — the mechanism `?view=` and `?theme=` are already built on.
@@ -236,6 +292,198 @@ pub fn compare_window_open(app: AppHandle, repo: String, branch: String) -> Resu
     builder.build().map(|_| ()).map_err(|err| err.to_string())
 }
 
+/// Opens a dialog window on one kind, or brings the open one forward.
+///
+/// The window is built **hidden and at a provisional height**. Its real height
+/// is whatever its content comes to, which nothing on this side can know: the
+/// page measures itself and calls `dialog_window_size` below, which sizes the
+/// window, centres it and shows it. That is the same order the main window uses
+/// — `"visible": false` in `tauri.conf.json`, shown once it is where it belongs
+/// — and for the same reason: a window shown first and sized afterwards is a
+/// visible jump.
+///
+/// Not resizable. The height is content-driven and re-set whenever the content
+/// changes, so a person dragging the corner would be fighting the observer that
+/// keeps it honest.
+///
+/// Deliberately not `async`: a synchronous command runs on the main thread,
+/// which is where a window is created on every platform this app targets.
+#[tauri::command]
+pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<(), String> {
+    let kind = kind_query(&kind).ok_or_else(|| format!("not a dialog kind: {kind}"))?;
+    let label = format!("{DIALOG_PREFIX}{kind}");
+
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.unminimize();
+        return window.set_focus().map_err(|err| err.to_string());
+    }
+
+    let mut builder = WebviewWindowBuilder::new(
+        &app,
+        &label,
+        WebviewUrl::App(format!("index.html?view=dialog&kind={kind}").into()),
+    )
+    // The title the OS frame draws is the dialog's own, and it arrives once the
+    // page knows it — the props travel by event, not by URL. Until then the
+    // frame carries the app's name rather than a placeholder somebody would see.
+    .title("Smetana")
+    .inner_size(width, PROVISIONAL_HEIGHT)
+    .resizable(false)
+    .visible(false);
+
+    // A child of the main window for the reason the settings and compare windows
+    // are children: a window whose whole purpose is to be looked at beside the
+    // board must not sink behind it on the first click into the board. No main
+    // window is not an error, any more than it is there.
+    if let Some(main) = app.get_webview_window("main") {
+        builder = builder.parent(&main).map_err(|err| err.to_string())?;
+    }
+
+    let window = builder.build().map_err(|err| err.to_string())?;
+
+    // A dialog window closed by its own frame is the dialog answering "close",
+    // and it says so on the channel the guest's own emits travel on. Without
+    // this the app window would go on serving a window that is not there: still
+    // announcing props to nobody, and — the part somebody would actually see —
+    // still counting the dialog as open, so the next project switch produced a
+    // toast explaining why a window they had closed themselves had closed.
+    //
+    // Answered from here rather than from the page, because a page being torn
+    // down is not reliably given the chance to say anything.
+    let app_handle = app.clone();
+    let channel = format!("dialog:result:{kind}");
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            let _ = app_handle.emit(&channel, serde_json::json!({ "name": "close" }));
+        }
+    });
+
+    Ok(())
+}
+
+/// The height a dialog window is built at, before it has measured itself. It is
+/// never seen: the window is hidden until `dialog_window_size` has given it the
+/// height its content came to. A window has to be built at *some* size, and this
+/// is a plausible one rather than a meaningful one.
+const PROVISIONAL_HEIGHT: f64 = 120.0;
+
+/// How much of a monitor a dialog window may take up in height. A dialog taller
+/// than the screen has nowhere to put its footer, and the footer is where the
+/// buttons are; past this the page scrolls its own body.
+const HEIGHT_CEILING: f64 = 0.9;
+
+/// Gives a dialog window the height its content came to, puts it over the main
+/// window, and shows it.
+///
+/// Called again whenever the content changes height — a validation line
+/// appearing under a field, a confirm turning into a progress report — so this
+/// is not only a first-paint path. The window is already visible by then and
+/// `show` is a no-op, which is why there is no branch for it.
+///
+/// **Placing it is a first-paint path, and only that.** Whether the window is
+/// still hidden is what says which call this is, and it decides the one thing
+/// that must not be repeated: a window put back over the main one every time its
+/// content changed height would jump out from under the hand of somebody who had
+/// dragged it onto their second monitor, on the character that made the branch
+/// name invalid. Being draggable anywhere is the whole reason these are windows.
+///
+/// The title arrives here rather than at build time because the props travel by
+/// event: at build time nothing knows what this dialog is called.
+#[tauri::command]
+pub fn dialog_window_size(
+    app: AppHandle,
+    kind: String,
+    height: f64,
+    title: String,
+) -> Result<(), String> {
+    let kind = kind_query(&kind).ok_or_else(|| format!("not a dialog kind: {kind}"))?;
+    let Some(window) = app.get_webview_window(&format!("{DIALOG_PREFIX}{kind}")) else {
+        // Closed between the measurement and the call. Not an error: the app
+        // window closes these on its own when their ground goes, and a race with
+        // that is an ordinary outcome.
+        return Ok(());
+    };
+
+    // Hidden means this is the first measurement, since the window is built
+    // hidden and the line at the end of this function is the only thing that
+    // ever shows one. A failure to ask is read as "already up", which is the
+    // answer that leaves a window where the person put it.
+    let first_paint = !window.is_visible().unwrap_or(true);
+
+    // The width is the window's own rather than the registry's: this side is
+    // told a height and nothing else, and re-sending a width would be a second
+    // opinion about a number only one side holds.
+    let scale = window.scale_factor().map_err(|err| err.to_string())?;
+    let width = window
+        .inner_size()
+        .map_err(|err| err.to_string())?
+        .to_logical::<f64>(scale)
+        .width;
+
+    let ceiling = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| {
+            monitor.size().to_logical::<f64>(monitor.scale_factor()).height * HEIGHT_CEILING
+        })
+        .unwrap_or(f64::MAX);
+
+    window
+        .set_size(tauri::LogicalSize::new(width, height.min(ceiling)))
+        .map_err(|err| err.to_string())?;
+    let _ = window.set_title(&title);
+    if first_paint {
+        center_over_main(&app, &window);
+    }
+    window.show().map_err(|err| err.to_string())
+}
+
+/// Puts a dialog window in the middle of the main window, and in the middle of
+/// the monitor when there is no main window to be in the middle of.
+///
+/// Over the main window rather than over the screen, because that is where the
+/// person is looking: they pressed something on the board a moment ago, and a
+/// dialog centred on a monitor the app happens not to fill would open away from
+/// the thing it is a question about.
+///
+/// All of it in physical pixels, which is what both sides already answer in —
+/// converting to logical here would be two conversions to keep in step for an
+/// arithmetic that does not need either.
+fn center_over_main(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let placed = app.get_webview_window("main").and_then(|main| {
+        let main_at = main.outer_position().ok()?;
+        let main_size = main.outer_size().ok()?;
+        let size = window.outer_size().ok()?;
+        let x = main_at.x + (main_size.width as i32 - size.width as i32) / 2;
+        let y = main_at.y + (main_size.height as i32 - size.height as i32) / 2;
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .ok()
+    });
+    // No main window, or a platform that would not say where it is. The middle
+    // of the screen is the ordinary place for a dialog and is where the two
+    // other windows of this app land without being asked.
+    if placed.is_none() {
+        let _ = window.center();
+    }
+}
+
+/// Closes one dialog window, if it is open.
+///
+/// The app window calls this when the ground a dialog stood on has gone — the
+/// project changed, the task was deleted, the column emptied. A window that is
+/// not there is the ordinary case, not a failure: the person may have closed it
+/// themselves a moment earlier.
+#[tauri::command]
+pub fn dialog_window_close(app: AppHandle, kind: String) -> Result<(), String> {
+    let kind = kind_query(&kind).ok_or_else(|| format!("not a dialog kind: {kind}"))?;
+    if let Some(window) = app.get_webview_window(&format!("{DIALOG_PREFIX}{kind}")) {
+        return window.close().map_err(|err| err.to_string());
+    }
+    Ok(())
+}
+
 /// How long we wait after the last movement. Less, and the write happens in the
 /// middle of a drag; more, and a window closed right after a resize goes back to
 /// relying on `Exit`.
@@ -276,6 +524,15 @@ pub fn close_children_with_main(app: &AppHandle) {
                 let _ = window.close();
             }
         }
+        // Every dialog window too, and for a sharper version of the same
+        // reason: a dialog window holds no state of its own and is fed entirely
+        // by the app window, so once that window is gone it is a question
+        // nothing can answer and a confirm nothing can carry out.
+        for (label, window) in app.webview_windows() {
+            if label.starts_with(DIALOG_PREFIX) {
+                let _ = window.close();
+            }
+        }
     });
 }
 
@@ -308,8 +565,41 @@ pub fn open_main_window(app: &AppHandle, restore: bool) {
             log::warn!("could not restore the window geometry: {err}");
         }
     }
+    // macOS is served by `titleBarStyle: "Overlay"` in the configuration, which
+    // keeps its real traffic lights over the bar the front end draws. No other
+    // platform has such a style, so there the decorations come off outright and
+    // `shell/WindowControls.vue` draws the three buttons instead.
+    //
+    // Here rather than in the configuration because `decorations` has no
+    // per-platform form there and would take macOS's with it. It is free of a
+    // flash for the reason the whole of this function exists: the window is
+    // created hidden and is shown below.
+    #[cfg(not(target_os = "macos"))]
+    if let Err(err) = window.set_decorations(false) {
+        log::warn!("could not drop the window decorations: {err}");
+    }
     if let Err(err) = window.show() {
         log::warn!("could not show the main window: {err}");
+    }
+}
+
+/// Which chrome the app window has, as one of the three names
+/// `src/components/shell/windowChrome.js` holds.
+///
+/// A compile-time fact rather than a runtime one, which is why it is decided
+/// here: the front end has no way to ask what it was built for, and a
+/// user-agent string is a guess. The third name, `none`, is never returned —
+/// it is what the store answers when this command cannot be reached at all,
+/// which is a browser.
+#[tauri::command]
+pub fn window_chrome() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "traffic-lights"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "buttons"
     }
 }
 
@@ -351,7 +641,27 @@ pub fn persist_geometry(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_query, tab_query};
+    use super::{compare_query, kind_query, tab_query, window_chrome};
+
+    /// The two words this command may answer with, named here in full because
+    /// they are a contract with `src/components/shell/windowChrome.js` and
+    /// nothing else pins them. That module answers `none` for a word it has not
+    /// heard of, deliberately — a browser is the ordinary way to reach it — so a
+    /// rename on either side does not fail, it silently costs the feature:
+    /// macOS draws the project name under the traffic lights, and Windows and
+    /// Linux lose all three buttons on a window that has no system ones.
+    #[test]
+    fn the_front_end_is_told_one_of_the_two_words_it_knows() {
+        assert!(
+            matches!(window_chrome(), "traffic-lights" | "buttons"),
+            "window_chrome answered {:?}, which components/shell/windowChrome.js reads as no chrome at all",
+            window_chrome()
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(window_chrome(), "traffic-lights");
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(window_chrome(), "buttons");
+    }
 
     #[test]
     fn a_section_rides_as_a_query_parameter() {
@@ -385,5 +695,23 @@ mod tests {
         let query = compare_query("/tmp/r", "x&view=gallery#y=z?q");
         assert_eq!(query.matches('&').count(), 2);
         assert!(!query.contains("view=gallery"));
+    }
+
+    #[test]
+    fn kind_query_keeps_a_plain_identifier() {
+        assert_eq!(kind_query("new-branch"), Some("new-branch".to_string()));
+    }
+
+    /// The same rule `tab_query` is held to, and for the same reason: this
+    /// reaches a URL. The difference is the answer to a name that fails it —
+    /// there is no sensible default dialog, so the whole call is refused rather
+    /// than falling back to one.
+    #[test]
+    fn kind_query_drops_anything_that_could_reach_the_url() {
+        assert_eq!(kind_query("new branch"), None);
+        assert_eq!(kind_query("new&theme=light"), None);
+        assert_eq!(kind_query("New-Branch"), None);
+        assert_eq!(kind_query(""), None);
+        assert_eq!(kind_query(&"a".repeat(33)), None);
     }
 }
