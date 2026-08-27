@@ -204,8 +204,20 @@ const tipStyle = computed(() => ({
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
-  /* A ceiling rather than `nowrap`. A fixed box with no width is already
-     shrink-to-fit, so a label that fits stays on one line exactly as it did;
+  /* Shrink-to-fit measured against the panel's own text rather than against
+     wherever it is standing. A fixed box with `left` set has `100vw - left` to
+     lay out in, so a panel already placed near the right edge — which only
+     happens once a label changes under an open panel, since `reveal` measures
+     at `left: 0` — would be measured wrapped, come out two lines tall and
+     narrower than its text, and be placed from a width it then re-flows away
+     from, ending up flush against the window with none of the margin the clamp
+     below keeps. `max-content` makes the natural size a property of the words
+     alone; the ceiling on the next line still caps a label longer than the
+     window. A keyword, not a measurement, so nothing here is a hardcoded
+     value. */
+  width: 'max-content',
+  /* A ceiling rather than `nowrap`. The panel is shrink-to-fit — that is what
+     the line above is for — so a label that fits stays on one line as it did;
      the ceiling only bites on one that does not, and the labels that do not are
      the ones this panel now carries — an absolute project path, a read-only
      reason, a run blocked by a sentence. `nowrap` drew those straight off the
