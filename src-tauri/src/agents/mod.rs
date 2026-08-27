@@ -167,6 +167,22 @@ pub enum Intent {
         id: String,
         title: String,
     },
+    /// Correct work that is already finished and merged. Started from the one
+    /// row a done card's menu offers, where the play and the edit used to be.
+    ///
+    /// It carries the id and the title and nothing else, for the reason
+    /// `ResolveTask` above spells out: the agent runs `bd show` itself, and a
+    /// description copied here would be the board as it stood when a menu
+    /// opened rather than as it stands when the session starts.
+    ///
+    /// Its own variant rather than an `EditTask`, and the difference is the
+    /// whole point of it: an edit changes an issue's prose, this changes the
+    /// code behind a closed one. Different prompt, different caption on the
+    /// row, and — unlike an edit — a commit at the end of it.
+    FixTask {
+        id: String,
+        title: String,
+    },
     /// Finish a merge or a rebase the Git panel started and git stopped on
     /// conflicts. Started from the modal that opens the moment it does — the
     /// same idiom as "Ask agent to edit" and "Answer questions", because the
@@ -296,6 +312,7 @@ impl Intent {
             },
             Intent::EditTask { id, .. } => W::EditTask { id: id.clone() },
             Intent::ResolveTask { id, .. } => W::ResolveTask { id: id.clone() },
+            Intent::FixTask { id, .. } => W::FixTask { id: id.clone() },
             // The repository and the branch being brought in are what a row can
             // draw; the conflicted paths are a briefing for the agent, exactly
             // as a draft's images are, and no row has anywhere to put a dozen
@@ -774,6 +791,22 @@ mod tests {
     }
 
     #[test]
+    fn a_fix_task_intent_deserializes_from_the_front_ends_json() {
+        // Copied from what `askAgentToFix` in `src/views/DesktopApp.vue` hands
+        // to `createSession`: the id and the title and nothing else, the shape
+        // an edit and a parked task's questions already travel in.
+        let json = r#"{"kind":"fixTask","id":"bd-1","title":"Some title"}"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::FixTask { id, title } => {
+                assert_eq!(id, "bd-1");
+                assert_eq!(title, "Some title");
+            }
+            other => panic!("expected FixTask, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_conflict_intent_deserializes_from_the_front_ends_json() {
         // Copied from what `resolveConflictWithAgent` in
         // `src/views/DesktopApp.vue` hands to `createSession`. `op` and not
@@ -836,6 +869,16 @@ mod tests {
             Intent::EditTask { id: "smetana-42".into(), title: "Some title".into() }.work(),
             W::EditTask { id: "smetana-42".into() },
             "the id is kept and the title is not — the row draws an identifier"
+        );
+    }
+
+    #[test]
+    fn a_fix_draws_the_issue_it_is_correcting() {
+        // The title stays behind, as it does for an edit: a row draws an
+        // identifier, and the right panel looks the issue up by this id.
+        assert_eq!(
+            Intent::FixTask { id: "smetana-42".into(), title: "Some title".into() }.work(),
+            crate::terminal::model::SessionWork::FixTask { id: "smetana-42".into() },
         );
     }
 

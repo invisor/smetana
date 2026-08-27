@@ -256,6 +256,35 @@ const EDIT: &str =
      outside this prompt says what the change is: do not guess at it, do not decide it yourself, \
      and change nothing about the issue until I have answered.";
 
+/// What a fix session is for. It opens after the issue's id and title, the way
+/// `EDIT` does, and there is deliberately no skill in the library behind it:
+/// what is wanted is narrow enough to say here, which is the same call
+/// `CONFLICT` makes.
+///
+/// Four things, and each is load-bearing. **Where the code is:** a done task's
+/// worktree may well be gone — whether a run removes one is a setting — so the
+/// work to read is the project's own tree, and an agent told nothing would go
+/// hunting for a branch. **Asking rather than guessing**, for the reason `EDIT`
+/// carries: the prompt rides as the session's first message, so there is no
+/// second half anybody types. **Finishing the job:** a correction left
+/// uncommitted in the working tree is one the next person finds by accident,
+/// and a closed issue with no note says nothing about having been reworked.
+/// **Handing back what is too big:** the whole point of the row this comes from
+/// is the fix too small to file, and Follow-up task is one row below it in the
+/// same menu.
+///
+/// The note it asks for carries no marker. `parked:` and `resolved:` are read
+/// by the app to tell an open question from an answered one
+/// (`components/kanban/parked.js`), and this note is neither.
+const FIX: &str =
+    "is closed and its work is already merged, and it may not actually be finished. Read the \
+     issue and the work behind it first, then ask me what is wrong with it, one question at a \
+     time. Nothing outside this prompt says what the fix is: do not guess at it, and change \
+     nothing until I have answered. Then make the correction, commit it, and leave a note on the \
+     issue saying what was put right. The issue stays closed — this is a correction to work \
+     already done rather than a reopening; if what I ask for turns out to be a piece of work in \
+     its own right, say so and we file it as a task instead.";
+
 /// What a conflict session is for, and the whole of it: there is no skill in
 /// the library for this and deliberately none added.
 ///
@@ -409,12 +438,16 @@ fn task_language(language: &str) -> String {
 /// none of the three files an issue, and the last of them could not if it
 /// wanted to, since bd is what is broken. Telling any of them how to word one
 /// would be prose about something that is not going to happen.
+///
+/// `FixTask` is in for one sentence of its prompt: it leaves a note on the
+/// issue saying what was put right, and a note is prose somebody reads.
 fn writes_to_the_tracker(intent: &Intent) -> bool {
     matches!(
         intent,
         Intent::NewTask { .. }
             | Intent::EditTask { .. }
             | Intent::ResolveTask { .. }
+            | Intent::FixTask { .. }
             | Intent::Run { .. }
             | Intent::Bare
     )
@@ -473,7 +506,10 @@ fn commit_language(language: &str) -> String {
 /// finishing one is a commit. `Bare` is in for the reason the conversation
 /// language is in every intent — the "+ New agent" session is exactly where a
 /// person says "commit this", and a setting that missed it would miss the case
-/// it was asked for.
+/// it was asked for. `FixTask` is the one about an issue that is nonetheless
+/// here: it corrects the code behind a closed task rather than the task's own
+/// prose, and its prompt asks for that correction to be committed — which is
+/// the whole difference between it and the `EditTask` in the paragraph below.
 ///
 /// The rest are out because they do not touch a repository at all — the
 /// `matches!` below is the list, and a number written here would be wrong the
@@ -485,7 +521,10 @@ fn commit_language(language: &str) -> String {
 /// commits for itself. Putting the paragraph in every intent instead would open
 /// a filing session with three paragraphs about language in front of the work.
 fn commits_to_git(intent: &Intent) -> bool {
-    matches!(intent, Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::Bare)
+    matches!(
+        intent,
+        Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::FixTask { .. } | Intent::Bare
+    )
 }
 
 /// The language a run's report is written in, and it moves the prose of the
@@ -605,6 +644,7 @@ fn body(
         Intent::ResolveTask { id, title } => {
             Some(resolve_task(id, title, delivery, skills, text.resolving))
         }
+        Intent::FixTask { id, title } => Some(format!("Issue {id} (\"{title}\") {FIX}")),
         Intent::ResolveConflict { repo, op, ours, theirs, files } => {
             Some(resolve_conflict(repo, *op, ours, theirs, files))
         }
@@ -1641,6 +1681,22 @@ mod tests {
     }
 
     #[test]
+    fn fixing_a_done_task_names_it_and_asks_what_is_wrong() {
+        let intent = Intent::FixTask { id: "smetana-7".into(), title: "x y".into() };
+        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english()).unwrap();
+        // The work is the whole of the prompt after the language paragraphs,
+        // the way an edit's is.
+        assert!(text.ends_with(&format!("Issue smetana-7 (\"x y\") {FIX}")), "{text}");
+        // The four things it has to say, each of them load-bearing: where the
+        // code is, that it asks rather than guesses, that it finishes the job,
+        // and that it hands back anything too big for a conversation.
+        assert!(text.contains("already merged"), "{text}");
+        assert!(text.contains("ask me what is wrong"), "{text}");
+        assert!(text.contains("commit it"), "{text}");
+        assert!(text.contains("stays closed"), "{text}");
+    }
+
+    #[test]
     fn no_prompt_stops_mid_sentence() {
         // Every prompt is submitted as the session's first message, not left in
         // a composer for somebody to finish: it rides as the agent's positional
@@ -1656,6 +1712,7 @@ mod tests {
             Intent::Bare,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            Intent::FixTask { id: "x-1".into(), title: "T".into() },
             conflict(crate::vcs::model::OpKind::Merge),
             conflict(crate::vcs::model::OpKind::Rebase),
             repair(),
@@ -2461,6 +2518,7 @@ mod tests {
             Intent::Setup,
             Intent::EditTask { id: "x-1".into(), title: "T".into() },
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
+            Intent::FixTask { id: "x-1".into(), title: "T".into() },
             repair(),
             new_task(Stage::Auto),
             new_task(Stage::On),
@@ -2523,6 +2581,7 @@ mod tests {
                     Intent::NewTask { .. }
                         | Intent::EditTask { .. }
                         | Intent::ResolveTask { .. }
+                        | Intent::FixTask { .. }
                         | Intent::Run { .. }
                         | Intent::Bare
                 );
@@ -2556,7 +2615,10 @@ mod tests {
             for intent in &intents {
                 let commits = matches!(
                     intent,
-                    Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::Bare
+                    Intent::Run { .. }
+                        | Intent::ResolveConflict { .. }
+                        | Intent::FixTask { .. }
+                        | Intent::Bare
                 );
                 assert_eq!(commits_to_git(intent), commits, "{intent:?}");
 

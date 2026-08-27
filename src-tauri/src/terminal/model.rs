@@ -99,6 +99,15 @@ pub enum SessionWork {
     /// the work and this is different work: an edit is a person's own change to
     /// an issue, this is a run's unanswered question being put to them.
     ResolveTask { id: String },
+    /// The closed issue whose finished work is being corrected. By id, like
+    /// the two above and for the same reason: a row draws an identifier, and
+    /// the right panel looks the issue itself up by this id.
+    ///
+    /// Its own variant rather than an `EditTask` for the reason the caption
+    /// gives: an edit changes what the task says, this changes what was built
+    /// for it, and a row that called both "Editing" would name the wrong one
+    /// over a session rewriting sources.
+    FixTask { id: String },
     /// A conflicted working tree the Git panel produced, and the merge or
     /// rebase that is to be finished in it. The only work in this list that is
     /// about a repository rather than about an issue, which is why it carries a
@@ -161,6 +170,7 @@ pub enum WorkKind {
     NewTask,
     EditTask,
     ResolveTask,
+    FixTask,
     ResolveConflict,
     RepairTracker,
     Setup,
@@ -177,6 +187,7 @@ impl SessionWork {
             SessionWork::NewTask { .. } => WorkKind::NewTask,
             SessionWork::EditTask { .. } => WorkKind::EditTask,
             SessionWork::ResolveTask { .. } => WorkKind::ResolveTask,
+            SessionWork::FixTask { .. } => WorkKind::FixTask,
             SessionWork::ResolveConflict { .. } => WorkKind::ResolveConflict,
             SessionWork::RepairTracker => WorkKind::RepairTracker,
             SessionWork::Setup => WorkKind::Setup,
@@ -326,6 +337,16 @@ mod tests {
     }
 
     #[test]
+    fn a_fix_names_its_issue_on_the_wire() {
+        // Read in `src/stores/terminals.js` exactly as an edit's is: `workOf`
+        // builds the same shape for the placeholder row, and `captionOf`
+        // reaches for `id` to put the issue beside "Fixing".
+        let json = serde_json::to_string(&SessionWork::FixTask { id: "smetana-42".into() })
+            .expect("serializes");
+        assert_eq!(json, r#"{"kind":"fixTask","id":"smetana-42"}"#);
+    }
+
+    #[test]
     fn a_draft_reaches_the_front_end_camel_cased_and_whole() {
         // `issueType`, not `issue_type`: the enum's own `rename_all` renames
         // variants only, so the variant carries a second one for its fields.
@@ -442,6 +463,7 @@ mod tests {
             }
             WorkKind::EditTask => SessionWork::EditTask { id: "smetana-42".into() },
             WorkKind::ResolveTask => SessionWork::ResolveTask { id: "smetana-42".into() },
+            WorkKind::FixTask => SessionWork::FixTask { id: "smetana-42".into() },
             WorkKind::ResolveConflict => {
                 SessionWork::ResolveConflict { repo: "/p".into(), theirs: "develop".into() }
             }
@@ -469,6 +491,7 @@ mod tests {
             WorkKind::NewTask,
             WorkKind::EditTask,
             WorkKind::ResolveTask,
+            WorkKind::FixTask,
             WorkKind::ResolveConflict,
             WorkKind::RepairTracker,
             WorkKind::Setup,
