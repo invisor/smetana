@@ -18,11 +18,12 @@
    that side has room, flips to the opposite one when it does not, and slides
    along the other axis to stay inside the window. This belongs back upstream.
 
-   The cost is a measurement, and it is paid once per hover: the panel is put
-   in the document hidden, measured at its natural size, then placed and
-   revealed. A tooltip left open while its trigger scrolls away will hang
-   where it was — hover ends the moment the pointer leaves, so the window for
-   that is a stray frame.
+   The cost is a measurement, paid once per hover — and once more each time the
+   label changes while the panel is up, since the panel's size changes with it:
+   the panel is put in the document hidden, measured at its natural size, then
+   placed and revealed. A tooltip left open while its trigger scrolls away will
+   hang where it was — hover ends the moment the pointer leaves, so the window
+   for that is a stray frame.
 
    Leaving the trigger's DOM also leaves its stacking context, which is why the
    panel sits at `--z-popover` rather than `--z-tooltip`: nesting used to settle
@@ -30,7 +31,7 @@
    would now go behind it. `--z-popover` is the scale's answer to that, added
    when `Dropdown` needed the same thing — the ordering is the design system's to
    state, not a local override's. */
-import { computed, nextTick, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps({
   label: { type: String, required: true },
@@ -98,7 +99,14 @@ async function reveal() {
   open.value = true
   at.value = null
   await nextTick()
+  place()
+}
 
+/* Where the panel goes, measured against where it is now. Split out of
+   `reveal` for the one caller below that has to place an already open panel
+   and must not touch whether it is open — a label that changes under a
+   stationary pointer is a different question from a hover starting. */
+function place() {
   const anchor = trigger.value?.getBoundingClientRect()
   const panel = tip.value?.getBoundingClientRect()
   // The pointer can leave again before this resolves, which unmounts the panel.
@@ -133,6 +141,22 @@ async function reveal() {
     left: clamp(left, EDGE, Math.max(EDGE, w - panel.width - EDGE))
   }
 }
+
+/* A label that changes while the panel is up is placed again, and that is the
+   whole of what this does: it never opens the panel and never closes it, so
+   the rule about when a tooltip appears stays where it was, in `show` and in
+   whatever ancestor relays into it. The measurement in `reveal` is taken once,
+   against the text the panel had then, and a wider one — `Copied` after
+   `Copy id` — would otherwise grow to one side and sit off-centre over the
+   thing it explains, or past the edge of the window near it. `post` so the
+   panel has already been redrawn with the new text when it is measured. */
+watch(
+  () => props.label,
+  () => {
+    if (open.value) place()
+  },
+  { flush: 'post' }
+)
 
 function hide() {
   cancel()
@@ -180,8 +204,20 @@ const tipStyle = computed(() => ({
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
-  /* A ceiling rather than `nowrap`. A fixed box with no width is already
-     shrink-to-fit, so a label that fits stays on one line exactly as it did;
+  /* Shrink-to-fit measured against the panel's own text rather than against
+     wherever it is standing. A fixed box with `left` set has `100vw - left` to
+     lay out in, so a panel already placed near the right edge — which only
+     happens once a label changes under an open panel, since `reveal` measures
+     at `left: 0` — would be measured wrapped, come out two lines tall and
+     narrower than its text, and be placed from a width it then re-flows away
+     from, ending up flush against the window with none of the margin the clamp
+     below keeps. `max-content` makes the natural size a property of the words
+     alone; the ceiling on the next line still caps a label longer than the
+     window. A keyword, not a measurement, so nothing here is a hardcoded
+     value. */
+  width: 'max-content',
+  /* A ceiling rather than `nowrap`. The panel is shrink-to-fit — that is what
+     the line above is for — so a label that fits stays on one line as it did;
      the ceiling only bites on one that does not, and the labels that do not are
      the ones this panel now carries — an absolute project path, a read-only
      reason, a run blocked by a sentence. `nowrap` drew those straight off the

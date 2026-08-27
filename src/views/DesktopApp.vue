@@ -1967,6 +1967,61 @@ const selectFromBoard = (id) => {
   rightFocus.value = null
 }
 
+/* Copying a task's id, for the card on the board and for the inspector's
+   header both. It lives here rather than in either component because exactly
+   one file under `src/components/` imports a store, and it is `TerminalView`:
+   the two of them raise `copy-id` and take back a word for their tooltip, and
+   neither knows a clipboard exists.
+
+   The confirmation is that tooltip rather than a toast, and this is the one
+   place in the app where a copy is answered without `sayFileMenu`. A toast
+   goes to the corner of the screen; what is being confirmed here is a click
+   somebody is still looking at, on a card among dozens of identical-looking
+   ones, and the answer belongs on the id itself. A refusal goes the same way,
+   so this feature has one channel rather than two.
+
+   One id at a time, deliberately: the state is a single id and a single
+   outcome, so copying a second one takes the confirmation off the first — two
+   cards both reading `Copied` would be a claim about a clipboard that only
+   holds one thing. */
+const COPIED_ID_MS = 1200
+const copiedTaskId = ref(null)
+/* '' | 'copied' | 'failed' */
+const taskIdCopyState = ref('')
+let copiedTaskTimer = null
+
+/* What each of the two components gets: its own outcome, and nothing for
+   anybody else's id. */
+const copyStateFor = (id) => (id != null && id === copiedTaskId.value ? taskIdCopyState.value : '')
+
+async function copyTaskId(id) {
+  clearTimeout(copiedTaskTimer)
+  /* Claimed before the await, and with no outcome yet: the write takes a
+     moment in the app, and until it answers the previous card must already
+     have stopped saying it was copied. */
+  copiedTaskId.value = id
+  taskIdCopyState.value = ''
+  const ok = await copyText(id)
+  // A second click, on this id or another, has taken the state over since.
+  if (copiedTaskId.value !== id) return
+  /* Again, and this is not the same clear as the one above. Two clicks on the
+     same id both get past that guard, and the second one's `setTimeout` would
+     overwrite the first's handle while the first timer went on running with
+     nothing pointing at it. It then fires 1.2 s after the *first* copy
+     resolved: soon enough to cut this confirmation short, and — since it puts
+     `copiedTaskId` back to null — soon enough to make a later copy's own guard
+     bail on it, so a copy that worked would say nothing at all. A double-click
+     is the most ordinary way there is to point at a word somebody wants. */
+  clearTimeout(copiedTaskTimer)
+  taskIdCopyState.value = ok ? 'copied' : 'failed'
+  copiedTaskTimer = setTimeout(() => {
+    copiedTaskId.value = null
+    taskIdCopyState.value = ''
+  }, COPIED_ID_MS)
+}
+
+onUnmounted(() => clearTimeout(copiedTaskTimer))
+
 /* The row the panel is following. It has to be a lookup rather than a stored
    row: `agentRows` is rebuilt on every state event, and a row held from the
    moment it was clicked would keep drawing a session's first second forever. */
@@ -3991,6 +4046,8 @@ const toastStackStyle = {
           :columns="drawnColumns"
           :filtered="orderedColumns.length > 0"
           :selected-id="highlightedTask"
+          :copied-id="copiedTaskId"
+          :copy-state="taskIdCopyState"
           :add-to="ADD_TO"
           :run-from="runOffered ? ADD_TO : null"
           :run-blocked-reason="runBlockedReason"
@@ -4000,6 +4057,7 @@ const toastStackStyle = {
           @run="openRun({ kind: 'queue' })"
           @promote="openPromote"
           @task-action="onTaskAction"
+          @copy-id="copyTaskId"
           @reorder="project.columnOrder = mergeOrder($event, projectColumns)"
         />
       </div>
@@ -4071,7 +4129,9 @@ const toastStackStyle = {
               v-if="inspectedIssue"
               :issue="inspectedIssue"
               :ui-status="toUiStatus(inspectedIssue.status)"
+              :copy-state="copyStateFor(inspectedIssue.id)"
               @open="openExternal"
+              @copy-id="copyTaskId"
             />
 
             <!-- Nothing picked on the board, which is where a project opens.

@@ -7,6 +7,7 @@ import DependencyBand from '../status/DependencyBand.vue'
 import DependencyMark from '../status/DependencyMark.vue'
 import Assignee from './Assignee.vue'
 import TypeBadge from './TypeBadge.vue'
+import { copyLabel } from './copyId.js'
 import { MENU_W, taskMenuItems } from './taskMenu.js'
 import { attentionLevel } from '../status/status.js'
 
@@ -51,14 +52,24 @@ const props = defineProps({
      row greys, for the reason the panel's own select used to: a bd call takes
      about two seconds and a live menu invites a second choice racing the
      first. */
-  busy: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false },
+  /* What happened to the last attempt to copy *this* card's id: `''` before
+     anything was asked, `'copied'` or `'failed'` after. It changes the text of
+     one tooltip and nothing else — no colour, no surface, no size. The copying
+     itself belongs to the view: exactly one file under `src/components/`
+     imports a store, and it is not this one. */
+  copyState: { type: String, default: '' }
 })
 
 /* One event for all four actions rather than four events forwarded three times
    each. The payload names what was asked for; the board is not the thing that
    carries it out, and a card that emitted `delete` would be describing a write
    it has no way to make. */
-defineEmits(['click', 'action'])
+defineEmits(['click', 'action', 'copy-id'])
+
+/* What the id's tooltip says, from `copyId.js` — the same three words the
+   inspector's id uses, in the one place a test can read them. */
+const idLabel = computed(() => copyLabel(props.copyState))
 
 const hover = ref(false)
 const level = computed(() => attentionLevel(props.status))
@@ -113,10 +124,15 @@ const style = computed(() => ({
   outlineOffset: '-1px'
 }))
 
+/* The pointer is the whole of what the id's new job changes about how it looks:
+   it stays the same muted mono it has always been, with no underline, no rule
+   and no hover colour. A copy is not a place to go and must not read as a
+   link. */
 const idStyle = {
   font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)',
   color: 'var(--text-muted)',
-  letterSpacing: 'var(--tracking-tight)'
+  letterSpacing: 'var(--tracking-tight)',
+  cursor: 'pointer'
 }
 const askStyle = {
   display: 'inline-flex', alignItems: 'center', gap: '3px', padding: '0 5px', height: '15px',
@@ -158,7 +174,16 @@ const titleStyle = {
     <DependencyBand :blocked-by="blockedBy" :blocks="blocks" />
     <div :style="{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }">
       <div :style="{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }">
-        <span :style="idStyle">{{ id }}</span>
+        <!-- `.stop`, so a click on the id is a question about the id and not a
+             visit to the task: the right-hand panel keeps showing whatever it
+             was showing. A click anywhere else on the card still selects it.
+             A span rather than a button, unlike the inspector's id: there is
+             one id there and dozens here, and a tab stop per card is a cost
+             everybody crossing the board with a keyboard pays for a
+             convenience only the pointer has. -->
+        <Tooltip :label="idLabel">
+          <span :style="idStyle" @click.stop="$emit('copy-id', id)">{{ id }}</span>
+        </Tooltip>
         <span :style="{ flex: 1 }" />
         <!-- Drawn whether or not the pointer is here, and on every card rather
              than only a runnable one. Acting on a task is what a person comes
