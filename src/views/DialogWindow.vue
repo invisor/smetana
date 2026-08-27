@@ -266,13 +266,37 @@ const root = ref(null)
 const measured = ref(0)
 let observer = null
 
-/* Height and title go over together, and a change to either sends both: the
-   title is what the frame draws, and it arrives by event like everything else,
-   so a dialog whose name changed with its height unchanged would otherwise keep
-   the frame it had. Nothing is sent before the first measurement — there is no
-   height to send, and this call is also what shows the window. */
+/* How much of the window reaches the page, which is the second number the
+   sizing call carries and the whole of smetana-s30.
+
+   A window is told a height and hands the page less than that: a title bar's
+   worth on macOS, a title bar and borders elsewhere, nothing at all where the
+   two agree. Neither end can work the difference out on its own — Rust knows
+   what it set, this side knows what arrived — so this number is sent beside the
+   height and Rust subtracts. `window::height_to_set` holds the argument, the
+   measurements, and why the difference is not `outer_size - inner_size`.
+
+   Read again on every resize, and that is what makes the arithmetic
+   self-correcting rather than a single shot that has to be right first time. A
+   size that lands wrong is a resize, and the resize is what sends the corrected
+   number; a size that lands right recomputes to itself, so `set_size` is handed
+   the size the window already has, no resize follows and it stops there. */
+const viewport = ref(window.innerHeight)
+const readViewport = () => {
+  viewport.value = window.innerHeight
+}
+window.addEventListener('resize', readViewport)
+
+/* Height, viewport and title go over together, and a change to any of them
+   sends all three: the title is what the frame draws, and it arrives by event
+   like everything else, so a dialog whose name changed with its height
+   unchanged would otherwise keep the frame it had. Nothing is sent before the
+   first measurement — there is no height to send, and this call is also what
+   shows the window. */
 watchEffect(() => {
-  if (told.value && measured.value > 0) sizeDialogWindow(props.kind, measured.value, title.value)
+  if (told.value && measured.value > 0) {
+    sizeDialogWindow(props.kind, measured.value, viewport.value, title.value)
+  }
 })
 
 const stops = []
@@ -323,6 +347,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   clearTimeout(stopWaiting)
+  window.removeEventListener('resize', readViewport)
   observer?.disconnect()
   for (const stop of stops) stop()
 })

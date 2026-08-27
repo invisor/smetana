@@ -389,11 +389,15 @@ const HEIGHT_CEILING: f64 = 0.9;
 ///
 /// The title arrives here rather than at build time because the props travel by
 /// event: at build time nothing knows what this dialog is called.
+///
+/// `viewport` is the second number the page sends, and `height_to_set` below is
+/// what it is for.
 #[tauri::command]
 pub fn dialog_window_size(
     app: AppHandle,
     kind: String,
     height: f64,
+    viewport: f64,
     title: String,
 ) -> Result<(), String> {
     let kind = kind_query(&kind).ok_or_else(|| format!("not a dialog kind: {kind}"))?;
@@ -414,11 +418,10 @@ pub fn dialog_window_size(
     // told a height and nothing else, and re-sending a width would be a second
     // opinion about a number only one side holds.
     let scale = window.scale_factor().map_err(|err| err.to_string())?;
-    let width = window
+    let inner = window
         .inner_size()
         .map_err(|err| err.to_string())?
-        .to_logical::<f64>(scale)
-        .width;
+        .to_logical::<f64>(scale);
 
     let ceiling = window
         .current_monitor()
@@ -430,13 +433,55 @@ pub fn dialog_window_size(
         .unwrap_or(f64::MAX);
 
     window
-        .set_size(tauri::LogicalSize::new(width, height.min(ceiling)))
+        .set_size(tauri::LogicalSize::new(
+            inner.width,
+            height_to_set(height, inner.height, viewport, ceiling),
+        ))
         .map_err(|err| err.to_string())?;
     let _ = window.set_title(&title);
     if first_paint {
         center_over_main(&app, &window);
     }
     window.show().map_err(|err| err.to_string())
+}
+
+/// The height to hand `set_size`, given the height the content came to.
+///
+/// The two numbers before the ceiling are the same measurement taken from the
+/// two ends of one window, and the difference between them is the whole of this
+/// function. `inner` is what the window answers when it is asked its inner size
+/// — the quantity `set_size` also speaks in, which is what makes subtracting
+/// one from the other legitimate. `viewport` is how much of that the page says
+/// reached it. What is left over is whatever the frame keeps for itself, and
+/// adding it back is what makes the window as tall as its content rather than
+/// that much shorter.
+///
+/// **Derived rather than named, because every way of naming it is wrong
+/// somewhere.** The overhead is a title bar on macOS and a title bar with
+/// borders on Windows and Linux; it moves with the system's appearance and with
+/// the OS version. Measured on the machine this bug was found on it came to 32
+/// logical points, where the screenshot it was reported from had suggested 26
+/// to 28 — a constant written from that screenshot would have been wrong by
+/// four points on the very machine that produced it.
+///
+/// **Not `outer_size - inner_size`, which was the first answer and is zero.**
+/// On macOS `inner_size` for a webview window is the webview's own view frame
+/// (`tauri-runtime-wry`), `outer_size` is the `NSWindow` frame, and the two
+/// answer the same number to the point: 471 logical against 471, with the page
+/// getting 439. `inner_position` against `outer_position` is zero for the same
+/// reason. Nothing the window says about itself carries the difference — only
+/// the page knows what it was given, which is why that number is sent.
+///
+/// The ceiling is applied last, to the size that is actually set: it is a
+/// statement about how much of the screen a window may take, not about how much
+/// its content wanted. Past it the page scrolls its own body, which is
+/// deliberate.
+fn height_to_set(content: f64, inner: f64, viewport: f64, ceiling: f64) -> f64 {
+    // Never below zero. A viewport larger than the inner size is not a thing a
+    // window should be able to say, and if one ever does, the answer that keeps
+    // the footer on screen is no correction rather than a negative one.
+    let overhead = (inner - viewport).max(0.0);
+    (content + overhead).min(ceiling)
 }
 
 /// Puts a dialog window in the middle of the main window, and in the middle of
@@ -641,7 +686,7 @@ pub fn persist_geometry(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_query, kind_query, tab_query, window_chrome};
+    use super::{compare_query, height_to_set, kind_query, tab_query, window_chrome};
 
     /// The two words this command may answer with, named here in full because
     /// they are a contract with `src/components/shell/windowChrome.js` and
@@ -713,5 +758,55 @@ mod tests {
         assert_eq!(kind_query("New-Branch"), None);
         assert_eq!(kind_query(""), None);
         assert_eq!(kind_query(&"a".repeat(33)), None);
+    }
+
+    /// The measurement this fix was written from, in the numbers it was taken
+    /// in: a run dialog whose content came to 471 logical points, in a window
+    /// answering 471 for its inner size while the page it holds reported 439.
+    /// Without the correction the window is set to 471 and the page is 32
+    /// points short of its own content — a scroll bar down the right edge and a
+    /// footer cut off by the bottom of the window, which is the bug.
+    #[test]
+    fn the_frame_keeps_a_share_and_it_is_added_back() {
+        assert_eq!(height_to_set(471.0, 471.0, 439.0, 1276.2), 503.0);
+    }
+
+    /// A window that hands the page all of its inner size is corrected by
+    /// nothing at all. This is the arithmetic's other end and the reason it
+    /// names no platform: where the two numbers agree there is no overhead to
+    /// add, and the same line does the right thing.
+    #[test]
+    fn a_window_that_keeps_nothing_is_left_alone() {
+        assert_eq!(height_to_set(471.0, 471.0, 471.0, 1276.2), 471.0);
+    }
+
+    /// The correction is the same whatever size the window happens to be when
+    /// the page speaks, which is what lets the first measurement — taken while
+    /// the window is still at its provisional height — land the window right in
+    /// one step rather than converging on it.
+    #[test]
+    fn the_overhead_does_not_depend_on_the_size_it_is_measured_at() {
+        assert_eq!(
+            height_to_set(471.0, 120.0, 88.0, 1276.2),
+            height_to_set(471.0, 471.0, 439.0, 1276.2)
+        );
+    }
+
+    /// The ceiling is about the window and is applied to the size that is set,
+    /// after the overhead rather than before it. Content taller than the screen
+    /// is an ordinary outcome: the page scrolls its own body and the footer is
+    /// reachable by scrolling.
+    #[test]
+    fn the_ceiling_holds_the_size_that_is_set() {
+        assert_eq!(height_to_set(2000.0, 471.0, 439.0, 900.0), 900.0);
+    }
+
+    /// A viewport larger than the window's inner size is not something a window
+    /// should be able to say. If one ever does, the window is left at its
+    /// content height rather than pulled below it — a short window is the bug
+    /// being fixed, and no arithmetic here may reintroduce it.
+    #[test]
+    fn an_impossible_viewport_cannot_shorten_the_window() {
+        assert_eq!(height_to_set(471.0, 439.0, 471.0, 1276.2), 471.0);
     }
 }
