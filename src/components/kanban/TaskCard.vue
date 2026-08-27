@@ -7,6 +7,7 @@ import DependencyBand from '../status/DependencyBand.vue'
 import DependencyMark from '../status/DependencyMark.vue'
 import Assignee from './Assignee.vue'
 import TypeBadge from './TypeBadge.vue'
+import { copyLabel } from './copyId.js'
 import { MENU_W, taskMenuItems } from './taskMenu.js'
 import { attentionLevel } from '../status/status.js'
 
@@ -66,11 +67,9 @@ const props = defineProps({
    it has no way to make. */
 defineEmits(['click', 'action', 'copy-id'])
 
-/* The three things the id's tooltip can say. Kept here rather than in a module
-   of its own: they are this card's words about its own id, and the inspector's
-   copy of them is three strings, not a rule. */
-const COPY_LABEL = { copied: 'Copied', failed: 'Could not copy' }
-const copyLabel = computed(() => COPY_LABEL[props.copyState] ?? 'Copy id')
+/* What the id's tooltip says, from `copyId.js` — the same three words the
+   inspector's id uses, in the one place a test can read them. */
+const idLabel = computed(() => copyLabel(props.copyState))
 
 const hover = ref(false)
 const level = computed(() => attentionLevel(props.status))
@@ -182,7 +181,7 @@ const titleStyle = {
              one id there and dozens here, and a tab stop per card is a cost
              everybody crossing the board with a keyboard pays for a
              convenience only the pointer has. -->
-        <Tooltip :label="copyLabel">
+        <Tooltip :label="idLabel">
           <span :style="idStyle" @click.stop="$emit('copy-id', id)">{{ id }}</span>
         </Tooltip>
         <span :style="{ flex: 1 }" />

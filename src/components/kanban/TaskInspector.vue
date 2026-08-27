@@ -21,6 +21,7 @@ import Markdown from './Markdown.vue'
 import Tooltip from '../core/Tooltip.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import TypeBadge from './TypeBadge.vue'
+import { copyLabel } from './copyId.js'
 import { priorityLabel } from './issueType.js'
 
 const props = defineProps({
@@ -40,10 +41,9 @@ const props = defineProps({
    `openExternal` — the app's one link-opening path — to this. */
 const emit = defineEmits(['open', 'copy-id'])
 
-/* The three things the id's tooltip can say, the same three the card carries.
-   Three strings rather than a rule, so each says its own. */
-const COPY_LABEL = { copied: 'Copied', failed: 'Could not copy' }
-const copyLabel = computed(() => COPY_LABEL[props.copyState] ?? 'Copy id')
+/* What the id's tooltip says, from `copyId.js` — the same three words the
+   card's id uses, in the one place a test can read them. */
+const idLabel = computed(() => copyLabel(props.copyState))
 
 /* bd hands dates over as RFC 3339 in UTC. The panel is narrow, so the year is
    worth the four characters only because an issue can be old — the alternative,
@@ -181,7 +181,7 @@ const divider = {
 <template>
   <div :style="body">
     <div :style="header">
-      <Tooltip :label="copyLabel">
+      <Tooltip :label="idLabel">
         <button type="button" :style="idStyle" @click="emit('copy-id', issue.id)">{{ issue.id }}</button>
       </Tooltip>
       <StatusBadge :status="uiStatus" size="sm" />
