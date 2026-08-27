@@ -141,14 +141,26 @@ const title = computed(() => incoming.value.title ?? 'Smetana')
 
 /* Whether this window has heard what it is drawing yet.
 
-   It gates the **first** `sizeDialogWindow` alone, and it gates it because that
-   one call does three things that cannot be taken back: it sizes the window, it
-   puts it over the main window, and it is the only thing that ever shows one.
-   The measurement is ready a frame after mount and the props are three IPC hops
+   It gates two things, and the second was learned from a dialog that lost its
+   settings. The first is the **first** `sizeDialogWindow`, because that one call
+   does three things that cannot be taken back: it sizes the window, it puts it
+   over the main window, and it is the only thing that ever shows one. The
+   measurement is ready a frame after mount and the props are three IPC hops
    behind it, so without this the window was placed at the height of a dialog
    with no content in it and captioned `Smetana` — the fallback above — and by
    the time the real title arrived the window was visible and its one placement
    was spent.
+
+   The second is **mounting the guest at all**, and the reason is that a guest
+   reads some of its props exactly once. `RunModal` fills its mode, its floor,
+   its parallelism and its two switches from `remembered` and from the project's
+   config in a watcher on `open`, which fires once, on mount — every one of them
+   is a choice a person made last time, and the branch field is the only one with
+   a late-fill watcher behind it. Mounted before the announcement, the window
+   opened on this component's own fallbacks and quietly threw away the whole
+   remembered run. Nothing draws until there is something to draw with, which is
+   free here: the window is hidden until the measurement below anyway, and the
+   measurement is gated on this same flag.
 
    The timeout is the other half, and it is what keeps the failure visible: a
    dialog nobody announces anything for is still a window somebody opened, and
@@ -312,7 +324,11 @@ const rootStyle = computed(() => ({
 
 <template>
   <div ref="root" :style="rootStyle">
-    <component :is="component" v-if="component" v-bind="{ ...guestProps, ...listeners }" />
+    <component
+      :is="component"
+      v-if="component && told"
+      v-bind="{ ...guestProps, ...listeners }"
+    />
     <!-- A kind with no component behind it. Drawn rather than left blank
          because the first measurement is what shows this window at all: an
          empty root measures nothing, nothing is sent, and the result is a
@@ -321,7 +337,7 @@ const rootStyle = computed(() => ({
          again focuses a window nobody can find. This is the one failure of the
          mechanism with no symptom of its own, and this is its symptom. -->
     <EmptyState
-      v-else
+      v-else-if="!component"
       icon="triangle-alert"
       tone="error"
       title="This dialog has nothing to draw"
