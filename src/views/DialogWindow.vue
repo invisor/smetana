@@ -80,15 +80,19 @@ provide('smDialogWindow', true)
    window would simply never be told. `stores/attachments.js` carries the whole
    argument in its own header.
 
-   Loaded lazily, and only for `new-task`. The other six dialogs have no images
-   in them, and a static import would evaluate this store — and hand it the
-   window's drag-drop event — in all seven, which is six subscriptions nobody
-   would ever read.
+   Loaded lazily, and only for `new-task`, which is a statement about ownership
+   before it is anything else: this file is the one place in `src/` that reaches
+   the list, and the shape says so where a reader is standing.
 
-   It buys no bytes, and the build says so out loud: `notifications.js` imports
-   the same file for `surveyStorage`, so it is in the one chunk whatever this
-   line does, and Vite prints a note to that effect on every build. The saving
-   is the evaluation and the listener, not the download. */
+   What it saves is small and worth knowing exactly, because the obvious guesses
+   are all wrong. It saves nothing in the shipped app: `notifications.js` imports
+   the same store for `surveyStorage`, so it lands in the one chunk whatever this
+   line does — Vite prints a note to that effect on every build — and the
+   `import()` compiles to a resolved promise over a namespace the chunk has
+   already evaluated. It does not save the subscription either: the call below is
+   already under a check on the kind. What it does save is `npm run dev`, where
+   modules are unbundled and six dialog windows skip a fetch and an evaluation
+   apiece. */
 const attachments = shallowRef(null)
 
 async function holdAttachments() {
@@ -184,8 +188,15 @@ const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope']
    branch inside the loop below so that the division is a thing somebody reads
    rather than a condition they have to work out — the app window has no handler
    for any of them, and one of these names appearing in `EMITS` would be a
-   button that draws normally and does nothing at all when pressed. */
-const HOSTED_EMITS = ['attach', 'files', 'remove']
+   button that draws normally and does nothing at all when pressed.
+
+   **For that one kind and no other.** These names belong to the images and to
+   nothing else in this host, but nothing reserves them: a later guest raising
+   an `attach` of its own would have it swallowed here as an inert no-op instead
+   of crossing to the app window — the same silent button, one list over. `kind`
+   comes off the URL and never changes for the life of a window, so the question
+   is settled once rather than watched. */
+const HOSTED_EMITS = props.kind === 'new-task' ? ['attach', 'files', 'remove'] : []
 
 const on = (name) => `on${name[0].toUpperCase()}${name.slice(1)}`
 const listeners = {

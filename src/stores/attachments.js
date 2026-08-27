@@ -288,6 +288,14 @@ export function removeAttachment(path) {
   attachmentsState.items = attachmentsState.items.filter((item) => item.path !== path)
 }
 
+/* Nothing in `src/` calls this any more, and that is a consequence of the move
+   rather than a leftover to tidy away. The app window used to empty the list
+   when it closed the dialog, because the dialog was a modal and the list
+   outlived it; the dialog is a window now and the whole store goes when the
+   window is destroyed, so there is no moment left at which somebody has to say
+   this. It stays exported, and its test with it, because a second collector in
+   one window is the one thing it would be needed for and the cost of keeping it
+   is a function nobody calls. */
 export function clearAttachments() {
   attachmentsState.items = []
   attachmentsState.lastError = null
