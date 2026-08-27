@@ -67,7 +67,7 @@ reads (`src/App.vue`):
 |---|---|---|
 | `theme` | `dark`, `light` | `dark` |
 | `density` | `comfortable`, `compact` | `comfortable` |
-| `view` | `gallery`, `settings`, `compare` | the app |
+| `view` | `gallery`, `settings`, `compare`, `dialog` | the app |
 
 `?view=gallery` renders every exported component once (`src/views/Gallery.vue`) — the harness for
 catching a broken component. Check any component change in all four theme × density combinations,
@@ -82,6 +82,9 @@ Tauri; the one thing it cannot do there is change anything for good. `?theme=`, 
 about the query string, and without that this window's own chrome could not be seen in compact or in
 the other theme at all. `?view=compare` is the branch-compare window, a third OS window built and
 checked the same way; what it is for is in `.claude/rules/vcs-panel.md`.
+`?view=dialog&kind=<name>` is the fourth, one window kind for every dialog of the app rather than one
+each — the closed list of kinds is `src/views/dialogRegistry.js` and the host is
+`src/views/DialogWindow.vue`, whose own headers carry the reasoning.
 
 ## Architecture
 

@@ -19,7 +19,6 @@ import { headline } from '../components/shell/headline.js'
 import { CHROME_NONE, CHROME_STATES, chromeInFullscreen } from '../components/shell/windowChrome.js'
 import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
-import NewBranchModal from '../components/git/NewBranchModal.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
 import {
@@ -102,17 +101,23 @@ import {
 import { initSettingsBridge, settings } from '../stores/settings.js'
 import {
   announceBoardColumns,
+  announceDialogProps,
+  closeDialogWindow,
   closeWindow,
   copyText,
   isWindowMaximized,
   minimizeWindow,
+  openDialogWindow,
   openExternal,
   openSettingsWindow,
   revealInFileManager,
   toggleMaximizeWindow,
   watchBoardHello,
+  watchDialogHello,
+  watchDialogResult,
   watchFullscreen
 } from '../stores/app.js'
+import { dialogWidth, stalenessMessage, stalenessOf } from './dialogRegistry.js'
 import { paintRoot } from './useAppearance.js'
 import {
   activePath,
@@ -617,22 +622,129 @@ const runBlockedReason = computed(() => scopeBusyReason({ kind: 'queue' }, runsS
    person started themselves never reaches it. */
 const gitWrites = computed(() => gitActions(runsState.runs))
 
+/* The app's dialogs are windows of their own, and this is the app window's half
+   of that: what it opens, what it keeps telling them, and what it does when the
+   ground one of them stands on goes.
+
+   Which dialogs there are, how wide each is and what each stands on is
+   `views/dialogRegistry.js`, which is pure and has the tests. What is here is
+   the wiring only.
+
+   Each open dialog is served rather than rendered: a `watchEffect` announces its
+   props now and again on every change, and that is what makes a live value —
+   `busy` while a run starts, a branch list that has just landed — reach a window
+   that is already up. Nothing about a window is stored in `settings.json`: a
+   dialog somebody has half filled in does not survive a project switch, and the
+   store is where the things that do survive live. */
+const openDialogs = new Map()
+
+/* Deliberately a plain `Map` and not a `reactive` one. Nothing draws from it —
+   the only reader is the watcher below, and it reads inside its callback rather
+   than in its source — so reactivity here would buy a proxy around a structure
+   holding stop functions and nothing else. */
+function serveDialog(kind, { ground, props: propsFor, onResult, forget = null }) {
+  /* Reopening a kind that is already open: the window is brought forward rather
+     than made twice, so the service has to be replaced rather than stacked, or
+     the same props would be announced by two watchers. */
+  if (openDialogs.has(kind)) stopServing(kind)
+
+  const service = { ground, forget, stops: [], closed: false }
+  /* A subscription that arrives after the dialog has already closed is stopped
+     on the spot rather than kept: the two `listen` calls are promises, and a
+     window closed inside that gap would otherwise leave a listener nobody holds
+     the way to stop. */
+  const collect = (stop) => {
+    if (service.closed) stop()
+    else service.stops.push(stop)
+  }
+
+  collect(watchEffect(() => announceDialogProps(kind, propsFor())))
+  const failed = (err) => console.warn('[app] the dialog window will not be answered:', err)
+  watchDialogHello(kind, () => announceDialogProps(kind, propsFor())).then(collect, failed)
+  watchDialogResult(kind, onResult).then(collect, failed)
+
+  openDialogs.set(kind, service)
+  openDialogWindow(kind, dialogWidth(kind))
+}
+
+/* Everything this window was doing for one dialog, undone — but nothing said to
+   the window itself. Split from `closeDialog` because the window closing is one
+   of the two ways this is reached: a person pressing the frame's own cross is
+   the window telling us, and asking it to close again would be an answer to a
+   question it already answered. */
+function stopServing(kind) {
+  const service = openDialogs.get(kind)
+  if (!service) return
+  service.closed = true
+  for (const stop of service.stops) stop()
+  openDialogs.delete(kind)
+  service.forget?.()
+}
+
+/* The app window closing a dialog window: the ground went, or the guest asked.
+   `closeDialogWindow` is safe to call on a window that is not there — the person
+   may have closed it a moment earlier — which is what lets this be the one path
+   for both. */
+function closeDialog(kind) {
+  stopServing(kind)
+  closeDialogWindow(kind)
+}
+
+/* Nothing of this window survives it. A dialog window is fed entirely from here,
+   so one left standing would be a question nothing can answer — Rust closes them
+   with the main window for that reason, and this is the same tidying on the
+   front end's side of the wire. */
+onUnmounted(() => {
+  for (const kind of [...openDialogs.keys()]) stopServing(kind)
+})
+
 /* Which branch the new-branch dialog was opened from, and null for closed. The
    branch is the state rather than a boolean beside it: what the dialog is about
    is entirely the row somebody right-clicked, and a flag with the name kept
    somewhere else is two things to clear instead of one.
 
-   It is deliberately not held in the store. Nothing about a dialog somebody has
-   half filled in survives a project switch, and the store is where the things
-   that do survive live. */
+   It is still here now that the dialog is a window, because it is what the
+   announcement is built out of: the window draws what this ref says, and the
+   ground the window stands on is that same branch. */
 const newBranchFrom = ref(null)
+
+/* Cutting a branch, in a window of its own rather than a modal over the board —
+   so the list of branches it is a question about stays readable beside it. The
+   verdict and `busy` are announced live, because a run can start while the
+   window is open and the button has to go dead when it does. */
+function openNewBranch(from) {
+  newBranchFrom.value = from
+  serveDialog('new-branch', {
+    /* The repository is captured here and is part of the ground, because
+       `createBranch` resolves it from `vcsState.selected` when Create is
+       pressed rather than when this window opened. With no scrim to stop them,
+       somebody can click another repository row in the panel while the window
+       stands — and `main` exists in both, so nothing about the branch name would
+       have noticed. The window closes instead, before Create can be pressed. */
+    ground: { project: activePath.value, repo: vcsState.selected, branch: from },
+    props: () => ({
+      title: 'New branch',
+      from: newBranchFrom.value,
+      branches: vcsState.branches,
+      actions: gitWrites.value,
+      busy: Boolean(vcsState.busy)
+    }),
+    forget: () => {
+      newBranchFrom.value = null
+    },
+    onResult: (name, payload) => {
+      if (name === 'close') closeDialog('new-branch')
+      if (name === 'create') cutBranch(payload)
+    }
+  })
+}
 
 /* The dialog closes first and git runs after, which is the shape of every write
    in this panel: the spinner lands on the row the branch is cut from, and a
    refusal is drawn where the panel draws the rest of git's refusals. A dialog
    held open over that spinner would be a second place saying the same thing. */
 const cutBranch = (ask) => {
-  newBranchFrom.value = null
+  closeDialog('new-branch')
   createBranch(ask)
 }
 
@@ -2323,6 +2435,48 @@ function sayFileMenu(toast) {
 
 onUnmounted(() => clearTimeout(fileMenuToastTimer))
 
+/* The ground watcher for every dialog window this view has open.
+
+   It lives down here rather than beside `serveDialog` because a `watch` runs
+   its source the moment it is created, and the source reads `projectColumns`
+   and this file's toast — both of which are declared above this line and below
+   that one.
+
+   A dialog window has no scrim, so the board can move underneath it. When what
+   a window stands on goes, the window goes with it, and the notice lands here
+   rather than there — the person is in this window, since this is where they did
+   the thing that moved the ground.
+
+   One watcher for every kind rather than one per dialog: the rule is the
+   registry's, and a kind added there is covered by this without a line changing
+   here. */
+watch(
+  () => ({
+    project: activePath.value,
+    /* The repository the Git panel has selected, and not the list of them. A
+       write in that panel resolves which repository it runs in at the moment it
+       is pressed, so what a dialog about a repository stands on is the selection
+       — see `stalenessOf`, which spends a paragraph on why. */
+    repo: vcsState.selected,
+    issues: new Set(trackerState.issues.keys()),
+    columns: new Set(projectColumns.value),
+    branches: new Set(vcsState.branches.map((branch) => branch.name))
+  }),
+  (world) => {
+    if (!openDialogs.size) return
+    for (const [kind, { ground }] of [...openDialogs]) {
+      const reason = stalenessOf(kind, ground, world)
+      if (!reason) continue
+      closeDialog(kind)
+      /* This view's one ad-hoc toast, whose name records the first thing that
+         used it rather than what it is for. Held rather than timed: the window
+         vanished while the person was looking somewhere else, so the sentence
+         explaining it has to still be there when they look back. */
+      sayFileMenu({ tone: 'info', title: stalenessMessage(kind, reason) })
+    }
+  }
+)
+
 /* Which agent a path lands in: the selected one, and only ever the selected
    one, when it is an agent that can be typed into.
 
@@ -3323,7 +3477,7 @@ const toastStackStyle = {
                 @pull="pull"
                 @push="push"
                 @fetch="fetchNow"
-                @new-branch="newBranchFrom = $event"
+                @new-branch="openNewBranch"
                 @message="setMessage"
                 @commit="commit"
                 @suggest="suggestMessage"
@@ -3494,21 +3648,9 @@ const toastStackStyle = {
              promises to show and has nothing to draw it with. Everything in it
              comes from the record the store made when git answered, including
              which repository — the panel's selection can have moved since. -->
-        <!-- Cutting a branch, from the row the menu was opened on. It lives here
-             beside the conflict dialog rather than inside `GitPanel` for the
-             reason that one does: a modal belongs to the window, and a panel
-             that is 252px wide and scrolls is no place to hang one from. The
-             verdict and `busy` go in live, because a run can start while the
-             dialog is open and the button has to go dead when it does. -->
-        <NewBranchModal
-          :open="newBranchFrom !== null"
-          :from="newBranchFrom"
-          :branches="vcsState.branches"
-          :actions="gitWrites"
-          :busy="Boolean(vcsState.busy)"
-          @close="newBranchFrom = null"
-          @create="cutBranch"
-        />
+        <!-- Cutting a branch is not here any more: it is a window of its own,
+             opened by `openNewBranch` above, so the list of branches it is a
+             question about can be read beside it instead of behind a scrim. -->
         <ConflictModal
           v-if="vcsState.conflict"
           :open="true"

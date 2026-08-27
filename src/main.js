@@ -7,9 +7,9 @@ import './styles/styles.css'
 // In a browser we swap the IPC for fixtures; under Tauri it does nothing.
 installMockBackend()
 
-/* No native right-click menu anywhere, in any of the four views — see
+/* No native right-click menu anywhere, in any of the five views — see
    `nativeMenu.js` for what the platform offers and why none of it belongs here.
-   This is the one place all four pass through, and all three OS windows with
+   This is the one place all five pass through, and all four OS windows with
    them.
  *
  * Unconditional, and not "only under Tauri": `npm run dev` and `?view=gallery`

@@ -30,6 +30,18 @@ import { branchNameError, canCreate } from './branchName.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
+  /* What this dialog is called, in one place rather than two.
+
+     It matters because this dialog is a window of its own: the OS frame's
+     caption is set from the same announcement that fills these props
+     (`views/DialogWindow.vue`), so a title hardcoded below would have been
+     silently overridden by the announced one arriving as a fall-through
+     attribute — agreeing today, and disagreeing the first time somebody renamed
+     one of them, with the frame and this dialog's own `aria-label` then saying
+     different things and nothing to say so.
+
+     The default is for a caller that has no opinion, which is the gallery. */
+  title: { type: String, default: 'New branch' },
   /* The branch the new one starts at — the row the menu was opened on. */
   from: { type: String, default: null },
   /* Every local branch, and only so a name already taken can be refused before
@@ -120,7 +132,7 @@ const hintStyle = computed(() => ({
 </script>
 
 <template>
-  <Modal :open="open" title="New branch" :closable="!busy" @close="$emit('close')">
+  <Modal :open="open" :title="title" :closable="!busy" @close="$emit('close')">
     <div :style="body">
       <!-- The start point, named. A detached HEAD reaches this dialog too — the
            row it came from is still a branch — so there is always something to

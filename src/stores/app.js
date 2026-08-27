@@ -1,6 +1,6 @@
-/* What the app knows about itself, and the two things it asks the desktop to
-   do for it: open its own settings window, and open a link somewhere that is
-   not this webview.
+/* What the app knows about itself, and what it asks the desktop to do for it:
+   open its own windows — the settings window, and a dialog in a window of its
+   own — and open a link somewhere that is not this webview.
 
    A store rather than three lines in a component, for the reason the rest of
    `stores/` exists: these are the only files in `src/` that know Tauri is there,
@@ -107,6 +107,111 @@ export async function watchBoardColumns(onColumns) {
     console.warn('[app] the app window was not asked which columns the board has:', err)
   })
   return stop
+}
+
+/* A dialog in a window of its own: opening one, closing one, sizing one, and
+   the two-way traffic that fills it.
+
+   Here for the reason the settings window's message is here: a window is a
+   window, not a setting, and this is the store that knows the desktop exists.
+   Which dialogs there are, how wide each one is and what each stands on is the
+   front end's own list (`views/dialogRegistry.js`) — this file carries the
+   messages and never the vocabulary, exactly as `settings:show` does.
+
+   The channels are per kind rather than one channel carrying a name, because
+   two dialog windows can be open at once — nothing stops somebody filing a task
+   while a run dialog stands open — and one channel would deliver each window
+   the other's props. */
+const propsChannel = (kind) => `dialog:props:${kind}`
+const helloChannel = (kind) => `dialog:hello:${kind}`
+const resultChannel = (kind) => `dialog:result:${kind}`
+
+/* Opens a dialog window, or brings the open one forward — the decision is
+   Rust's (`window::dialog_window_open`), because the window either exists or it
+   does not and only that side can tell. The width comes from the registry; the
+   height does not exist yet, and the window stays hidden until the page has
+   measured itself and called `sizeDialogWindow` below.
+
+   In a browser there is no window to make: the mock refuses, this says so once
+   in the console and the app window carries on. The dialog itself is still
+   reachable there, through `?view=dialog&kind=<name>`, which is how it is
+   checked by eye. */
+export async function openDialogWindow(kind, width) {
+  try {
+    await invoke('dialog_window_open', { kind, width })
+  } catch (err) {
+    console.error('[app] the dialog window did not open:', err)
+  }
+}
+
+/* Closing is a warning rather than an error, and the difference is what the two
+   failures cost. A window that did not open leaves a person pressing a menu
+   item with nothing to show for it; a window that did not close is on screen
+   and can be closed by hand. */
+export async function closeDialogWindow(kind) {
+  try {
+    await invoke('dialog_window_close', { kind })
+  } catch (err) {
+    console.warn('[app] the dialog window did not close:', err)
+  }
+}
+
+/* The measured height, and the title the OS frame draws. Rust does the sizing
+   rather than this side calling `setSize` itself, and that is not ceremony:
+   `core:default` grants neither `set_size` nor `show`, so doing it here would
+   mean publishing both to every window in the app for the sake of one call. */
+export async function sizeDialogWindow(kind, height, title) {
+  try {
+    await invoke('dialog_window_size', { kind, height, title })
+  } catch (err) {
+    console.warn('[app] the dialog window kept the size it had:', err)
+  }
+}
+
+/* The app window's half: these are the props now. Sent on every change and
+   again whenever a dialog window says hello — which is what makes a window
+   opened at any moment learn the state it missed, and what makes a live `busy`
+   or a growing `moved` reach a window that is already up. */
+export async function announceDialogProps(kind, props) {
+  try {
+    await emit(propsChannel(kind), props)
+  } catch (err) {
+    console.warn('[app] the dialog window was not told what to draw:', err)
+  }
+}
+
+export async function watchDialogHello(kind, onHello) {
+  return listen(helloChannel(kind), () => onHello())
+}
+
+/* What the guest emitted, back in the app window where the handlers are. The
+   name travels beside the payload because one channel carries every emit a
+   dialog has: splitting them per emit would be a channel per button. */
+export async function watchDialogResult(kind, onResult) {
+  return listen(resultChannel(kind), (event) =>
+    onResult(event.payload?.name ?? '', event.payload?.payload)
+  )
+}
+
+/* The dialog window's half. The hello goes after the subscription, never
+   before — the answer is an event too, and one sent first would be answered
+   into a window that is not listening yet. Not awaited, for the reason
+   `watchBoardColumns` records: the subscription already exists and has to reach
+   the caller whatever the hello does. */
+export async function watchDialogProps(kind, onProps) {
+  const stop = await listen(propsChannel(kind), (event) => onProps(event.payload ?? {}))
+  emit(helloChannel(kind), null).catch((err) => {
+    console.warn('[app] the app window was not asked what this dialog is about:', err)
+  })
+  return stop
+}
+
+export async function emitDialogResult(kind, name, payload) {
+  try {
+    await emit(resultChannel(kind), { name, payload })
+  } catch (err) {
+    console.error('[app] what the dialog answered did not reach the app window:', err)
+  }
 }
 
 /* Whether the app opens itself when the person signs in, and the press that
