@@ -2102,9 +2102,16 @@ const setTaskStatus = async (id, status) => {
   }
 }
 
-/* Deletion is irreversible, so the id it is tracked by is the id it was asked
-   for, not a bare boolean: the selection can move while bd is still working,
-   and a flag shared between issues would grey out the wrong one's dialog. */
+/* Which issue bd is being asked to delete, or null. An id and not a bare
+   boolean, matching `writingId` above: the selection can move while bd is still
+   working, and a flag shared between issues would answer for the wrong one.
+
+   It is read in `orderedColumns` beside `writingId` — one rule about a write in
+   flight on a card — and announced to the dialog as `busy`. Neither is visible
+   for a delete, and that is a fact about `deleteIssue` rather than about this
+   line: it removes the card in the same synchronous block that sets this, so
+   there is no card left to grey and no window left to tell. See `deleteTask`
+   below, which spends a paragraph on it. */
 const deletingId = ref(null)
 
 /* Which issue's deletion is being confirmed, or null. An id rather than a
@@ -2162,11 +2169,25 @@ const openDeleteTask = (id) => {
    toast is given a timer. That signal is worth having for the dialogs that use
    it honestly, and this is not one of them.
 
-   Nothing is lost by closing early. The spinner lands on the card, the way it
-   lands on the branch row a cut starts from: `deletingId` greys it while the
-   write is in flight (`orderedColumns`). And a refusal draws where every other
-   refusal from the tracker in this view draws — `trackerState.lastError`, as a
-   toast at the foot of this file. */
+   Nothing is lost by closing early, and there is no spinner anywhere in this
+   because there is nothing left to put one on. `deleteIssue` is optimistic in
+   the direction opposite to every other write in the store — its own header
+   says the card goes at once and comes back if bd refused — and the removal is
+   synchronous, in the same block as the line below, so no paint falls between
+   them. The card is simply gone from the board by the first frame after Delete
+   is pressed, and that is the feedback. The analogy to a cut branch does not
+   carry: a cut *adds* a row, and so leaves one to grey.
+
+   `deletingId` therefore has no observable consumer left. It is kept because it
+   is the flag the announced `busy` mirrors and because `orderedColumns` reads
+   it beside `writingId`, where the pair is one rule rather than two — not
+   because anything greys. On the refusal path the issue is put back and the
+   flag cleared in the same synchronous continuation, so it is unobservable
+   there too.
+
+   What a refusal does get is the place every other refusal from the tracker in
+   this view gets — `trackerState.lastError`, as a toast at the foot of this
+   file — and the card reappears under it. */
 const deleteTask = async (id) => {
   if (!id) return
   closeDialog('delete-task')
