@@ -101,8 +101,11 @@ import { logLines } from './desktopAppData.js'
 import { folderRefusedNotice } from './folderAccess.js'
 import { MOCK_TREE } from '../stores/mockBackend.js'
 /* The app's one link-opening path, bound to what the inspector raises. In
-   a browser it is a new tab; in the app it is the person's own browser. */
-import { openExternal } from '../stores/app.js'
+   a browser it is a new tab; in the app it is the person's own browser.
+   `copyText` is the other half of the same arrangement: a card's id and an
+   inspector's raise `copy-id` and know nothing about a clipboard, so the thing
+   drawing them has to answer — here as in `DesktopApp.vue`. */
+import { copyText, openExternal } from '../stores/app.js'
 import { fileIconUrl } from '../catppuccinIcon.js'
 import { documentTheme } from '../documentTheme.js'
 
@@ -1040,6 +1043,35 @@ const MARKDOWN_SAMPLE = [
   'Filed under smetana-29j.'
 ].join('\n')
 
+/* This page's own copy of what `DesktopApp.vue` keeps for the id somebody
+   clicked, in the small: a card and an inspector raise `copy-id` and take back
+   a `copyState`, and neither of them knows a clipboard exists, so the harness
+   has to answer them the way the app does. Without it the new prop and the new
+   emit would be drawn here and exercised nowhere, and the tooltip would sit on
+   `Copy id` for ever — which reads as a broken feature to whoever checks this
+   page by eye. One id and one outcome at a time, cleared after the same 1.2 s,
+   so copying one id here takes the confirmation off another exactly as it does
+   on the board. It reaches the boards below through the same two hops the app
+   uses, `copiedId` and `copyState`, so those are exercised too. */
+const copiedId = ref(null)
+const copyState = ref('')
+let copyTimer = null
+
+const copyStateFor = (id) => (id === copiedId.value ? copyState.value : '')
+
+async function copyId(id) {
+  clearTimeout(copyTimer)
+  copiedId.value = id
+  copyState.value = ''
+  const ok = await copyText(id)
+  if (copiedId.value !== id) return
+  copyState.value = ok ? 'copied' : 'failed'
+  copyTimer = setTimeout(() => {
+    copiedId.value = null
+    copyState.value = ''
+  }, 1200)
+}
+
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking
    at — a panel that reads as a form with blank rows is the defect this section
@@ -1634,6 +1666,8 @@ const menuTargetStyle = {
             needs-response
             runnable
             :blocks="5"
+            :copy-state="copyStateFor('bd-a1b2')"
+            @copy-id="copyId"
           />
         </div>
         <div :style="{ width: '212px' }">
@@ -1647,10 +1681,20 @@ const menuTargetStyle = {
             :blocked-by-ids="['bd-91ac', 'bd-4d2e']"
             spawned-from="bd-7f31"
             :assignee="{ kind: 'agent', name: 'claude-1' }"
+            :copy-state="copyStateFor('bd-3c9d')"
+            @copy-id="copyId"
           />
         </div>
         <div :style="{ width: '212px' }">
-          <TaskCard id="bd-12cd" title="Bump tauri to 2.1" status="done" bd-status="closed" type="chore" />
+          <TaskCard
+            id="bd-12cd"
+            title="Bump tauri to 2.1"
+            status="done"
+            bd-status="closed"
+            type="chore"
+            :copy-state="copyStateFor('bd-12cd')"
+            @copy-id="copyId"
+          />
         </div>
         <!-- A title with an identifier in it, which is the ordinary case on a
              board an agent files to and the case that has no spaces in it to
@@ -1664,6 +1708,8 @@ const menuTargetStyle = {
             status="ready"
             bd-status="open"
             type="bug"
+            :copy-state="copyStateFor('bd-ybh0')"
+            @copy-id="copyId"
           />
         </div>
         <!-- Runnable, and not runnable now: the menu's Run row stays where it
@@ -1679,6 +1725,8 @@ const menuTargetStyle = {
             type="task"
             runnable
             run-blocked-reason="a run over task smetana-hth is already going"
+            :copy-state="copyStateFor('bd-77e0')"
+            @copy-id="copyId"
           />
         </div>
         <!-- A write in flight on this issue: every row of its menu is greyed,
@@ -1692,6 +1740,8 @@ const menuTargetStyle = {
             type="task"
             runnable
             busy
+            :copy-state="copyStateFor('bd-5g1x')"
+            @copy-id="copyId"
           />
         </div>
       </div>
@@ -1705,11 +1755,14 @@ const menuTargetStyle = {
           add-to="ready"
           run-from="ready"
           promote-from="deferred"
+          :copied-id="copiedId"
+          :copy-state="copyState"
           @select="() => {}"
           @add="() => {}"
           @run="() => {}"
           @task-action="() => {}"
           @promote="() => {}"
+          @copy-id="copyId"
           @reorder="boardOrder = $event"
         />
       </div>
@@ -1725,10 +1778,13 @@ const menuTargetStyle = {
           run-from="ready"
           run-blocked-reason="a run over the queue is already going"
           :reorderable="false"
+          :copied-id="copiedId"
+          :copy-state="copyState"
           @select="() => {}"
           @add="() => {}"
           @run="() => {}"
           @task-action="() => {}"
+          @copy-id="copyId"
         />
       </div>
       <!-- A board with no columns to draw, in both of the opposite facts that
@@ -1971,10 +2027,22 @@ const menuTargetStyle = {
            did before markdown reached this panel. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start' }">
         <div :style="{ width: '320px' }">
-          <TaskInspector :issue="FULL_ISSUE" ui-status="running" @open="openExternal" />
+          <TaskInspector
+            :issue="FULL_ISSUE"
+            ui-status="running"
+            :copy-state="copyStateFor(FULL_ISSUE.id)"
+            @open="openExternal"
+            @copy-id="copyId"
+          />
         </div>
         <div :style="{ width: '320px' }">
-          <TaskInspector :issue="SPARSE_ISSUE" ui-status="ready" @open="openExternal" />
+          <TaskInspector
+            :issue="SPARSE_ISSUE"
+            ui-status="ready"
+            :copy-state="copyStateFor(SPARSE_ISSUE.id)"
+            @open="openExternal"
+            @copy-id="copyId"
+          />
         </div>
       </div>
       <!-- The other thing that stands in the inspector's slot: a task an agent
