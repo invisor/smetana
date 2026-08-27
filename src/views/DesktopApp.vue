@@ -1827,6 +1827,15 @@ async function copyTaskId(id) {
   const ok = await copyText(id)
   // A second click, on this id or another, has taken the state over since.
   if (copiedTaskId.value !== id) return
+  /* Again, and this is not the same clear as the one above. Two clicks on the
+     same id both get past that guard, and the second one's `setTimeout` would
+     overwrite the first's handle while the first timer went on running with
+     nothing pointing at it. It then fires 1.2 s after the *first* copy
+     resolved: soon enough to cut this confirmation short, and — since it puts
+     `copiedTaskId` back to null — soon enough to make a later copy's own guard
+     bail on it, so a copy that worked would say nothing at all. A double-click
+     is the most ordinary way there is to point at a word somebody wants. */
+  clearTimeout(copiedTaskTimer)
   taskIdCopyState.value = ok ? 'copied' : 'failed'
   copiedTaskTimer = setTimeout(() => {
     copiedTaskId.value = null

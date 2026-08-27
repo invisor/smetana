@@ -1057,7 +1057,7 @@ const copiedId = ref(null)
 const copyState = ref('')
 let copyTimer = null
 
-const copyStateFor = (id) => (id === copiedId.value ? copyState.value : '')
+const copyStateFor = (id) => (id != null && id === copiedId.value ? copyState.value : '')
 
 async function copyId(id) {
   clearTimeout(copyTimer)
@@ -1065,6 +1065,13 @@ async function copyId(id) {
   copyState.value = ''
   const ok = await copyText(id)
   if (copiedId.value !== id) return
+  /* The second clear, and it is not the first one over again: two clicks on
+     one id both get past the guard above, and without this the earlier click's
+     timer would be left running with nothing pointing at it — cutting this
+     confirmation short, and putting `copiedId` back to null under a later copy
+     that then says nothing at all. `DesktopApp.vue` carries the same line for
+     the same reason. */
+  clearTimeout(copyTimer)
   copyState.value = ok ? 'copied' : 'failed'
   copyTimer = setTimeout(() => {
     copiedId.value = null
