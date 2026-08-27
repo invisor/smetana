@@ -35,11 +35,9 @@ import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import Button from '../components/core/Button.vue'
-import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import RunBar from '../components/run/RunBar.vue'
-import RunModal from '../components/run/RunModal.vue'
 import ReportView from '../components/run/ReportView.vue'
 import { isReportPath, reportTabPath } from '../components/run/reportTab.js'
 import { deliveryFor } from '../components/run/reportDelivery.js'
@@ -163,14 +161,6 @@ import {
   vcsState
 } from '../stores/vcs.js'
 import {
-  attachFiles,
-  attachmentsState,
-  clearAttachments,
-  pickImages,
-  removeAttachment,
-  watchDrops
-} from '../stores/attachments.js'
-import {
   configError,
   initRuns,
   loadBrowserTools,
@@ -192,7 +182,7 @@ import { checkNewName } from '../components/files/newEntry.js'
 import { relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
-import { scopeBusyReason } from '../components/run/runScopes.js'
+import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
 import {
   LEFT_DEFAULT,
   PROJECT_RAIL,
@@ -525,12 +515,11 @@ async function newTerminal(cwd = null) {
 /* Which row does what. The rows themselves are `newTabMenu.js`'s — two callers
    and no test can reach a template, the same split every other menu in this app
    keeps. The third row opens no tab: it is a second door onto the new-task
-   dialog already mounted below, the same one the `+` above the `ready` column
-   opens, so it sets that flag and nothing else. */
+   dialog, the same window the `+` above the `ready` column opens. */
 const onNewTab = (item) => {
   if (item.kind === 'agent') newAgent()
   else if (item.kind === 'terminal') newTerminal()
-  else if (item.kind === 'task') newTaskOpen.value = true
+  else if (item.kind === 'task') openNewTask()
 }
 
 /* The project whose setup is being offered. Null when the dialog is closed —
@@ -891,7 +880,6 @@ const resolveConflictWithAgent = async () => {
   }
 }
 
-const runOpen = ref(false)
 const runScope = ref({ kind: 'queue' })
 const runError = ref('')
 const runStarting = ref(false)
@@ -908,7 +896,48 @@ const runStarting = ref(false)
 const openRun = async (scopeValue) => {
   runScope.value = scopeValue
   runError.value = ''
-  runOpen.value = true
+  /* A window of its own rather than a modal over the board, so the card, the
+     column or the queue this run is aimed at stays readable beside the question
+     about it. Everything below is announced live: the branch list lands after
+     the window is up (see the note above), the machine's answer about a browser
+     lands after that, and `busy` and the refusal arrive while the run is
+     starting — a window that had been handed its props once would show none of
+     it.
+
+     The ground is the project and nothing else, deliberately. A run aimed at a
+     task whose card somebody deletes meanwhile is a question about an id bd no
+     longer holds, and the worker refuses it in the same words it would use for
+     any other missing task — which is a better answer than a window vanishing
+     mid-sentence. The project moving is different in kind: every id on screen
+     belongs to another tracker after it. */
+  serveDialog('run', {
+    ground: { project: activePath.value },
+    props: () => ({
+      /* The frame's caption and the dialog's own heading, from one rule in
+         `runScopes.js`. `rescope` changes the scope under an open window, so
+         this is not a string settled at opening: the frame has to follow the
+         heading from "Run this task" to "Run these tasks". */
+      title: runTitle(runScope.value),
+      scope: runScope.value,
+      count: runCount.value,
+      partOf: runParent.value,
+      branches: gitState.branches,
+      defaultBranch: runConfig.value?.defaults?.target_branch ?? branchLabel.value,
+      defaultPriority: runConfig.value?.defaults?.min_priority ?? 2,
+      defaultParallel: runConfig.value?.defaults?.max_parallel_tasks ?? 3,
+      remembered: project.runSettings,
+      liveCheckAvailable: runConfig.value?.live_check?.mode !== 'none',
+      liveCheckBlocked: liveCheckBlocked.value,
+      configError: configErrorText.value,
+      error: runError.value,
+      busy: runStarting.value
+    }),
+    onResult: (name, payload) => {
+      if (name === 'close') closeDialog('run')
+      if (name === 'confirm') startTheRun(payload)
+      if (name === 'rescope') runTheEpicInstead()
+    }
+  })
   /* Both after the dialog is up, and both late for the same reason. What can
      drive a browser is four file reads and two directory listings plus a
      question to the run worker — cheap, and nobody needs it until they are
@@ -1003,7 +1032,7 @@ const startTheRun = async (chosen) => {
   try {
     await startRun(path, chosen)
     /* Answered, so it goes — whether or not any of the rest below applies. */
-    runOpen.value = false
+    closeDialog('run')
     /* Moving to another project can start while this is still in its await, on
        a click in the project list, and this file checks after every await for
        exactly that (see the comment over onMounted). `project` is the *active*
@@ -1627,17 +1656,54 @@ const resetAccessHere = async () => {
    calls ready. So that column, and only it, carries the "+": a plus over any
    other column would promise a placement the tracker cannot make. */
 const ADD_TO = 'ready'
-const newTaskOpen = ref(false)
 /* The issue the New task dialog was opened from, or null when it was opened
    from "+ New task". `{ id, title }` rather than the issue, and taken from the
    store at the moment the menu was used: the dialog draws the title, and the id
    is what rides to the agent.
 
-   A ref of its own rather than a field on some dialog-state object, because
-   `newTaskOpen` is already a bare ref and two halves of one dialog kept in two
-   shapes is the drift this file has elsewhere paid for. */
+   There is no `newTaskOpen` beside it any more: whether the dialog is open is
+   whether its window is being served, which `openDialogs` already knows, and a
+   flag kept beside that is two halves of one dialog free to disagree. */
 const followUpParent = ref(null)
 const creating = ref(false)
+
+/* Filing a task, in a window of its own. Three doors reach it — the "+" over
+   the ready column, the tab bar's menu, and a card's own "follow-up" — and the
+   parent is this function's argument rather than something a caller sets first.
+   That is not style: `serveDialog` replaces an open service before it starts
+   the new one, so anything the caller had just written into a ref that the old
+   service forgets on the way out would be wiped between the two.
+
+   The images are not announced and do not come back one by one: the store that
+   holds them lives in that window, because a file dropped on it is that
+   window's event and nothing here can hear it (`stores/attachments.js`). What
+   this window is handed, in `submit`, is the list of paths.
+
+   The ground carries the column as well as the project. There is exactly one —
+   bd files a new task as open, which the board draws as ready — so a board that
+   no longer has it is a board this dialog could not place a card on. */
+const openNewTask = (parent = null) => {
+  followUpParent.value = parent
+  serveDialog('new-task', {
+    ground: { project: activePath.value, column: ADD_TO },
+    props: () => ({
+      title: 'New task',
+      busy: creating.value,
+      status: ADD_TO,
+      parent: followUpParent.value
+    }),
+    /* The one moment this window can be sure the attachment folder may have
+       grown: the window that writes into it has just stopped being served. It
+       used to be a watcher over the store's own list, which this window no
+       longer holds — and `forget` covers every way out, the frame's own cross
+       and a project switch included. */
+    forget: () => measureStorage(activePath.value),
+    onResult: (name, payload) => {
+      if (name === 'close') closeNewTask()
+      if (name === 'submit') submitNewTask(payload)
+    }
+  })
+}
 
 /* Where the whole-column press stands. bd's own word, untranslated, because
    `deferred` is not one of the three statuses the tracker store renames and it
@@ -1913,32 +1979,17 @@ const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
   }
 }
 
-/* Closing is the one event that clears the attachments, and it covers both
-   cases that should: cancelling, and a session that actually started. A failed
-   create does not reach here, so nobody has to attach four screenshots again
-   because the agent was not installed.
+/* Closing covers both cases that should: cancelling, and a session that
+   actually started. A failed create does not reach here, so nobody has to type
+   their four sentences again because the agent was not installed — the window
+   stays up with the text and the thumbnails still in it.
 
-   The paths outlive this: the files stay in the app's data directory whether
-   the task was filed or not. Forgetting them here is all that happens, which is
-   the same bargain the store's own note describes. */
-const closeNewTask = () => {
-  newTaskOpen.value = false
-  clearAttachments()
-  /* The same event that clears the attachments clears this, and for the same
-     reason: it covers cancelling and a session that actually started, and a
-     failed create never reaches here — so the next "+ New task" is never
-     silently a follow-up to whatever a menu was last opened on. */
-  followUpParent.value = null
-}
-
-/* A drop is a window event, not the dialog's — Tauri intercepts file drops
-   before the webview sees them — so the subscription lives up here and asks
-   whether anything is collecting. */
-let stopDrops = null
-onMounted(() => {
-  stopDrops = watchDrops(() => newTaskOpen.value)
-})
-onUnmounted(() => stopDrops?.())
+   Nothing is cleared from this side any more. The text and the images were the
+   window's own state and go when the window does; the paths outlive both, since
+   the files stay in the app's data directory whether the task was filed or not.
+   `openNewTask` above is what makes sure the next one is never silently a
+   follow-up to whatever a menu was last opened on. */
+const closeNewTask = () => closeDialog('new-task')
 
 /* While the app was closed, the issue may have been closed and removed from
    the tracker. Restoring a selection that no longer exists is not on: the
@@ -2065,8 +2116,7 @@ const onTaskAction = ({ kind, id, value }) => {
        different task, and the agent reads the parent itself. */
     const issue = issueById(id)
     if (!issue) return
-    followUpParent.value = { id: issue.id, title: issue.title }
-    newTaskOpen.value = true
+    openNewTask({ id: issue.id, title: issue.title })
   }
 }
 
@@ -3106,23 +3156,6 @@ watch(stoppedRuns, () => {
   }
 })
 
-/* When the store is weighed: at start once the project is resolved, on a
-   switch (`projects.js`, after the new project's layout has landed), when focus
-   returns — the same sweep the file tree and the branch ride on — and after an
-   attachment is saved, which is the one moment the app knows for certain that
-   the number changed. No watcher over the app's own data directory: reading a
-   directory costs milliseconds and guards no state, the same reasoning `files/`
-   and `git.rs` are built on.
-
-   The list's length is what `attachmentsState.items` is watched for. Taking a
-   thumbnail back out never deletes anything, so a shrinking list is a
-   measurement that will find nothing changed — cheap, and cheaper than a second
-   signal to keep in step with the store. */
-watch(
-  () => attachmentsState.items.length,
-  () => measureStorage(activePath.value)
-)
-
 /* ---- styles ---------------------------------------------------------- */
 const rootStyle = {
   display: 'flex',
@@ -3619,20 +3652,6 @@ const toastStackStyle = {
             />
           </template>
         </TabBar>
-        <NewTaskModal
-          :open="newTaskOpen"
-          :busy="creating"
-          :status="ADD_TO"
-          :parent="followUpParent"
-          :attachments="attachmentsState.items"
-          :dragging="attachmentsState.dragging"
-          :error="attachmentsState.lastError ?? ''"
-          @close="closeNewTask"
-          @submit="submitNewTask"
-          @attach="pickImages"
-          @files="attachFiles"
-          @remove="removeAttachment"
-        />
         <PromoteColumnModal
           :open="promoteOpen"
           :count="promoteIds.length"
@@ -3641,25 +3660,6 @@ const toastStackStyle = {
           :failed="promoteFailed"
           @close="closePromote"
           @confirm="confirmPromote"
-        />
-        <RunModal
-          :open="runOpen"
-          :scope="runScope"
-          :count="runCount"
-          :part-of="runParent"
-          :branches="gitState.branches"
-          :default-branch="runConfig?.defaults?.target_branch ?? branchLabel"
-          :default-priority="runConfig?.defaults?.min_priority ?? 2"
-          :default-parallel="runConfig?.defaults?.max_parallel_tasks ?? 3"
-          :remembered="project.runSettings"
-          :live-check-available="runConfig?.live_check?.mode !== 'none'"
-          :live-check-blocked="liveCheckBlocked"
-          :config-error="configErrorText"
-          :error="runError"
-          :busy="runStarting"
-          @close="runOpen = false"
-          @confirm="startTheRun"
-          @rescope="runTheEpicInstead"
         />
         <SetupProjectModal
           :open="!!setupFor"
@@ -3876,7 +3876,7 @@ const toastStackStyle = {
           :run-blocked-reason="runBlockedReason"
           :promote-from="PROMOTE_FROM"
           @select="selectFromBoard"
-          @add="newTaskOpen = true"
+          @add="openNewTask()"
           @run="openRun({ kind: 'queue' })"
           @promote="openPromote"
           @task-action="onTaskAction"

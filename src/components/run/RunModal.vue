@@ -14,6 +14,7 @@ import BranchSelect from './BranchSelect.vue'
 import Switch from '../core/Switch.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { needsCutting, pickBranch } from './branchChoice.js'
+import { runTitle } from './runScopes.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -237,13 +238,11 @@ watch(soloAllowed, (allowed) => {
   if (!allowed && mode.value === 'solo') mode.value = 'auto'
 })
 
-const title = computed(() => {
-  if (props.scope?.kind === 'task') return 'Run this task'
-  /* Not "Run this epic": the scope takes an issue's children, and whether that
-     issue is typed as one is bd's business and often nobody's. */
-  if (props.scope?.kind === 'epic') return 'Run these tasks'
-  return 'Run the queue'
-})
+/* The rule is `runScopes.js`'s, not this file's, and it is there because this
+   dialog is a window now: the OS frame around it is captioned from the app
+   window's announcement, which composes the title from the same scope. A copy
+   here would be a frame and a heading free to disagree about one run. */
+const title = computed(() => runTitle(props.scope))
 
 /* "One other task of it is unfinished" reads as a fact about this run; a bare
    count next to a title reads as a badge. */

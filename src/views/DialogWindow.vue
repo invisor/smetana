@@ -25,6 +25,8 @@
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watchEffect } from 'vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
+import NewTaskModal from '../components/kanban/NewTaskModal.vue'
+import RunModal from '../components/run/RunModal.vue'
 import { dialogWidth, isDialogKind } from './dialogRegistry.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
@@ -54,6 +56,8 @@ const props = defineProps({
    module whose whole point is having neither Vue nor a DOM in it — and that
    module is the half a test can reach. */
 const COMPONENTS = {
+  run: RunModal,
+  'new-task': NewTaskModal,
   'new-branch': NewBranchModal
 }
 
@@ -65,6 +69,50 @@ const component = computed(() => COMPONENTS[props.kind] ?? null)
    the app window exactly as they were. */
 provide('smDialogWindow', true)
 
+/* The one store a dialog window holds, and it is held for one kind.
+
+   Everything else here is a view of what the app window owns, which is what
+   `SettingsWindow.vue` is and what the header above promises. Images are the
+   exception the design settled on, and the reason is not tidiness: Tauri
+   intercepts a file drop before any webview sees it and reports it against the
+   *window* it landed on. A person filing a task drops a screenshot on **this**
+   window, so this is the only process that can hear it — a list kept in the app
+   window would simply never be told. `stores/attachments.js` carries the whole
+   argument in its own header.
+
+   Loaded lazily, and only for `new-task`. The other six dialogs have no images
+   in them, and a static import would evaluate this store — and hand it the
+   window's drag-drop event — in all seven, which is six subscriptions nobody
+   would ever read.
+
+   It buys no bytes, and the build says so out loud: `notifications.js` imports
+   the same file for `surveyStorage`, so it is in the one chunk whatever this
+   line does, and Vite prints a note to that effect on every build. The saving
+   is the evaluation and the listener, not the download. */
+const attachments = shallowRef(null)
+
+async function holdAttachments() {
+  const store = await import('../stores/attachments.js')
+  attachments.value = store
+  /* Always accepting, unlike the app window's own call, which asked whether the
+     dialog was open. Here the window *is* the dialog: it exists because
+     somebody opened it and it is destroyed when they close it, so there is no
+     state in which a drop on it should be refused. The predicate that used to
+     keep this store's ears off a drop meant for a terminal is not needed either
+     — that subscription is the app window's webview and this is not it. */
+  stops.push(store.watchDrops(() => true))
+}
+
+/* The three emits a `new-task` guest raises about its images, answered here
+   rather than forwarded. They are the other half of the store living in this
+   window: sending them to the app window would be asking the one process that
+   cannot hear a drop to keep the list that a drop goes into. */
+const answerHere = {
+  attach: () => attachments.value?.pickImages(),
+  files: (files) => attachments.value?.attachFiles(files),
+  remove: (path) => attachments.value?.removeAttachment(path)
+}
+
 /* The props the app window is feeding this dialog. `open` is forced true: a
    window that exists is open, and that prop only ever meant "is the scrim
    up".
@@ -74,7 +122,21 @@ provide('smDialogWindow', true)
    a guest that declares no `title` prop passes it through to its `Modal`, which
    is the same string that `Modal` was already being given. */
 const incoming = shallowRef({})
-const guestProps = computed(() => ({ ...incoming.value, open: true }))
+const guestProps = computed(() => {
+  const announced = { ...incoming.value, open: true }
+  /* The images are this window's own state and are laid over the announcement
+     rather than taken from it — the app window has none of them to send. It
+     announces `busy`, `status`, `parent` and `title` for this kind and nothing
+     about pictures, so nothing is being overwritten here. */
+  const store = attachments.value
+  if (!store) return announced
+  return {
+    ...announced,
+    attachments: store.attachmentsState.items,
+    dragging: store.attachmentsState.dragging,
+    error: store.attachmentsState.lastError ?? ''
+  }
+})
 const title = computed(() => incoming.value.title ?? 'Smetana')
 
 /* Whether this window has heard what it is drawing yet.
@@ -98,28 +160,28 @@ const stopWaiting = setTimeout(() => {
   told.value = true
 }, FIRST_PAINT_WAIT)
 
-/* Every emit the seven guests have between them, forwarded by name. A list
-   rather than a wildcard because listeners need names, and because a name that
-   is not here is a message that would silently go nowhere. A name here that a
-   guest does not declare costs nothing: it falls through as an inert listener
-   for a DOM event that never fires. */
-const EMITS = [
-  'close',
-  'confirm',
-  'create',
-  'submit',
-  'resolve',
-  'rescope',
-  'attach',
-  'files',
-  'remove'
-]
-const listeners = Object.fromEntries(
-  EMITS.map((name) => [
-    `on${name[0].toUpperCase()}${name.slice(1)}`,
-    (payload) => emitDialogResult(props.kind, name, payload)
-  ])
-)
+/* Every emit the seven guests have between them that crosses back to the app
+   window, forwarded by name. A list rather than a wildcard because listeners
+   need names, and because a name that is not here is a message that would
+   silently go nowhere. A name here that a guest does not declare costs nothing:
+   it falls through as an inert listener for a DOM event that never fires. */
+const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope']
+
+/* And the three that deliberately do not travel: `new-task`'s images, answered
+   in this window by the store above. They are a separate list rather than a
+   branch inside the loop below so that the division is a thing somebody reads
+   rather than a condition they have to work out — the app window has no handler
+   for any of them, and one of these names appearing in `EMITS` would be a
+   button that draws normally and does nothing at all when pressed. */
+const HOSTED_EMITS = ['attach', 'files', 'remove']
+
+const on = (name) => `on${name[0].toUpperCase()}${name.slice(1)}`
+const listeners = {
+  ...Object.fromEntries(
+    EMITS.map((name) => [on(name), (payload) => emitDialogResult(props.kind, name, payload)])
+  ),
+  ...Object.fromEntries(HOSTED_EMITS.map((name) => [on(name), answerHere[name]]))
+}
 
 /* How this window is painted, in the shape the app's windows speak in. The
    defaults are the shipped ones, so it paints itself correctly in the moment
@@ -190,6 +252,15 @@ onMounted(async () => {
       measured.value = Math.ceil(entry.contentRect.height)
     })
     observer.observe(root.value)
+  }
+  /* Before the props are asked for, so a file dropped in the first moments of
+     this window has somewhere to go. It answers nothing about what is drawn, so
+     it is started rather than awaited: the subscription below must not wait
+     behind a dynamic import. */
+  if (props.kind === 'new-task') {
+    holdAttachments().catch((err) => {
+      console.warn('[dialog-window] the attachment store did not load:', err)
+    })
   }
   /* A kind this build has never heard of gets no subscription at all: there is
      nothing to draw and nothing to ask about. What is on screen in that case is
