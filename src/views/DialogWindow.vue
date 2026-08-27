@@ -192,8 +192,8 @@ onMounted(async () => {
     observer.observe(root.value)
   }
   /* A kind this build has never heard of gets no subscription at all: there is
-     nothing to draw and nothing to ask about. The window still paints itself,
-     so what is on screen is an empty dialog rather than a white page. */
+     nothing to draw and nothing to ask about. What is on screen in that case is
+     the template's own note at the foot of this file. */
   if (isDialogKind(props.kind)) {
     try {
       stops.push(
@@ -254,7 +254,13 @@ const rootStyle = computed(() => ({
       icon="triangle-alert"
       tone="error"
       title="This dialog has nothing to draw"
-      :description="`No component is registered for the dialog kind ${kind ?? '(none given)'}.`"
-    />
+      description="No component is registered for this dialog kind."
+    >
+      <!-- The kind itself goes in the `detail` slot rather than into the
+           sentence above: it is an identifier, and identifiers are drawn in
+           mono. That slot is what every other empty state in this tree puts its
+           diagnostic in. -->
+      <template #detail>{{ kind ?? '(no kind given)' }}</template>
+    </EmptyState>
   </div>
 </template>

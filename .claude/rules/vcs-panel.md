@@ -271,8 +271,18 @@ verdict and `busy` — so a run started while the window stands open still kills
 
 The one rule that had no equivalent in a modal: **a window with no scrim can be left standing over a
 board that moved underneath it**, so the app window closes it when the ground goes and says why in a
-toast of its own. For this dialog the ground is the project and the branch it was cut from; the rule
-is `src/views/dialogRegistry.js`, which is pure and has the tests.
+toast of its own. For this dialog the ground is the project, the repository the Git panel has
+selected, and the branch it was cut from; the rule is `src/views/dialogRegistry.js`, which is pure
+and has the tests.
+
+**The repository is in that list for a reason worth carrying to the next dialog grounded on one.**
+Every write in `stores/vcs.js` resolves which repository it runs in from `vcsState.selected` at the
+moment it is pressed, not when the window that asked for it opened — and with no scrim there is
+nothing stopping somebody clicking another repository row while the window stands. `main` exists in
+both, so no clause about branch names could have noticed, and Create would have cut the branch in the
+repository they had just switched to. It is checked by equality against the selected repository
+rather than by membership of the project's list, because a repository that is still perfectly present
+and merely no longer selected is the whole of the case.
 
 The panel it opens is `overlays/PointerMenu.vue`, which is `MenuButton` anchored to a point instead
 of to a trigger — teleported out of the document because every list here sits inside something with
