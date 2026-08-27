@@ -88,8 +88,9 @@
    the notifications panel's top offset, both of which want to agree with the
    bar and are therefore right to follow it, and agent/LogToolbar.vue, which
    wants the height and has nothing to do with any traffic light. That last one
-   costs nothing today because the log toolbar is drawn nowhere in the product —
-   it is exported from components/index.js and nothing renders it — so if it
+   costs nothing today because agent/LogView.vue draws the toolbar and the
+   gallery is the only thing that draws LogView — the product's log pane is
+   gone — and no gallery root carries data-window-chrome="traffic-lights". If it
    ever reaches the app window it will inherit a floor that is not about it.
 
    Both rules sit after the compact block so the compound selector reads last as
