@@ -308,8 +308,41 @@ pub fn open_main_window(app: &AppHandle, restore: bool) {
             log::warn!("could not restore the window geometry: {err}");
         }
     }
+    // macOS is served by `titleBarStyle: "Overlay"` in the configuration, which
+    // keeps its real traffic lights over the bar the front end draws. No other
+    // platform has such a style, so there the decorations come off outright and
+    // `shell/WindowControls.vue` draws the three buttons instead.
+    //
+    // Here rather than in the configuration because `decorations` has no
+    // per-platform form there and would take macOS's with it. It is free of a
+    // flash for the reason the whole of this function exists: the window is
+    // created hidden and is shown below.
+    #[cfg(not(target_os = "macos"))]
+    if let Err(err) = window.set_decorations(false) {
+        log::warn!("could not drop the window decorations: {err}");
+    }
     if let Err(err) = window.show() {
         log::warn!("could not show the main window: {err}");
+    }
+}
+
+/// Which chrome the app window has, as one of the three names
+/// `src/components/shell/windowChrome.js` holds.
+///
+/// A compile-time fact rather than a runtime one, which is why it is decided
+/// here: the front end has no way to ask what it was built for, and a
+/// user-agent string is a guess. The third name, `none`, is never returned —
+/// it is what the store answers when this command cannot be reached at all,
+/// which is a browser.
+#[tauri::command]
+pub fn window_chrome() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "traffic-lights"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "buttons"
     }
 }
 

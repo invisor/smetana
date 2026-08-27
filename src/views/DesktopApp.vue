@@ -16,6 +16,7 @@ import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import { headline } from '../components/shell/headline.js'
+import { CHROME_NONE, chromeInFullscreen } from '../components/shell/windowChrome.js'
 import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
@@ -101,11 +102,17 @@ import {
 import { initSettingsBridge, settings } from '../stores/settings.js'
 import {
   announceBoardColumns,
+  closeWindow,
   copyText,
+  isWindowMaximized,
+  minimizeWindow,
   openExternal,
   openSettingsWindow,
+  readWindowChrome,
   revealInFileManager,
-  watchBoardHello
+  toggleMaximizeWindow,
+  watchBoardHello,
+  watchFullscreen
 } from '../stores/app.js'
 import { paintRoot } from './useAppearance.js'
 import {
@@ -248,18 +255,51 @@ const props = defineProps({
   density: { type: String, default: 'comfortable' }
 })
 
-/* Both switches live on the document root: every token is defined against them.
-   So does the type scale, which the settings window's app-wide font size
-   rewrites there token by token — that way no component knows about it and the
-   editor and the terminal come along for free (see `useAppearance.js`). The
-   theme arrives already resolved: `system` is App.vue's to answer, since it is
-   the machine's answer and not a stored one. */
+/* The window's own chrome, which the scope bar is the title bar of now. Three
+   refs and not one, because they answer three different questions and only the
+   first is fixed for the life of the window: what the platform gave us, whether
+   the window is fullscreen right now, and whether it is maximized. */
+const windowChrome = ref(CHROME_NONE)
+const fullscreen = ref(false)
+const maximized = ref(false)
+
+/* What the bar actually draws: the window's chrome, minus the traffic lights
+   while a fullscreen window has moved them into its own auto-hiding bar. */
+const barChrome = computed(() => chromeInFullscreen(windowChrome.value, fullscreen.value))
+
+/* Held here and torn down synchronously, the way `stopBoardHello` below is: the
+   subscription is only reached after an await, by which point there is no
+   active component instance left for an `onUnmounted` inside the callback to
+   register against. */
+let stopFullscreen = null
+onMounted(async () => {
+  windowChrome.value = await readWindowChrome()
+  /* Nothing to watch in a browser, and asking would cost a second line in a
+     console this view keeps quiet on purpose: `none` is the answer precisely
+     when there is no window behind the page. */
+  if (windowChrome.value === CHROME_NONE) return
+  maximized.value = await isWindowMaximized()
+  stopFullscreen = await watchFullscreen(async (value) => {
+    fullscreen.value = value
+    maximized.value = await isWindowMaximized()
+  })
+})
+onUnmounted(() => stopFullscreen?.())
+
+/* Both switches live on the document root: every token is defined against them,
+   and the chrome above rides beside them for the same reason. So does the type
+   scale, which the settings window's app-wide font size rewrites there token by
+   token — that way no component knows about it and the editor and the terminal
+   come along for free (see `useAppearance.js`). The theme arrives already
+   resolved: `system` is App.vue's to answer, since it is the machine's answer
+   and not a stored one. */
 watchEffect(() =>
   paintRoot(document.documentElement, {
     theme: props.theme,
     density: props.density,
     uiFontSize: settings.appearance.uiFontSize,
-    editorFontSize: settings.editor.fontSize
+    editorFontSize: settings.editor.fontSize,
+    windowChrome: barChrome.value
   })
 )
 
@@ -3053,8 +3093,13 @@ const toastStackStyle = {
       :headline="scopeHeadline.text"
       :headline-level="scopeHeadline.level"
       :notifications="notificationsState.items.length"
+      :window-chrome="barChrome"
+      :maximized="maximized"
       @notifications="toggleNotifications"
       @settings="openSettingsWindow()"
+      @minimize="minimizeWindow"
+      @toggle-maximize="toggleMaximizeWindow"
+      @close="closeWindow"
     >
       <template #status>
         <!-- One segment per run, oldest first — a project holds several now,

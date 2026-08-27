@@ -34,6 +34,7 @@
   --tab-h:calc(32 * var(--ui-scale) * 1px);
   --titlebar-h:calc(36 * var(--ui-scale) * 1px);
   --scope-bar-h:calc(30 * var(--ui-scale) * 1px);
+  --title-bar-inset:0px; /* @kind spacing */
   --card-pad:10px;
   --panel-pad:12px;
   --log-line-h:18px;
@@ -59,4 +60,28 @@
   --panel-pad:8px;
   --log-line-h:15px;
   --tree-indent:11px;
+}
+
+/* The app window's bar is the title bar now, and two of its numbers stop being
+   the design system's alone. `--title-bar-inset` is the width macOS needs on
+   the left for its traffic lights: three 12px circles and their margins,
+   measured from the window edge. It is 0 everywhere else, so the bar can add it
+   unconditionally and pay nothing where there is nothing to clear.
+
+   The floor under the height is the other. The traffic lights are a fixed size
+   this app cannot scale, and below about 28px they no longer fit inside the bar
+   and spill onto whatever is under it — so while the bar is the title bar, its
+   height stops shrinking. Above --ui-scale 1.17 the floor stops applying at
+   all. Telling macOS to move the lights instead was the version thrown away:
+   the height changes at runtime with both density and font size, so it would
+   mean a command per change and a light that lags a setting by a frame.
+
+   Both rules sit after the compact block so the compound selector reads last as
+   well as strongest. */
+[data-window-chrome="traffic-lights"]{
+  --title-bar-inset:78px; /* @kind spacing */
+  --scope-bar-h:max(calc(30 * var(--ui-scale) * 1px), 28px);
+}
+[data-density="compact"][data-window-chrome="traffic-lights"]{
+  --scope-bar-h:max(calc(24 * var(--ui-scale) * 1px), 28px);
 }

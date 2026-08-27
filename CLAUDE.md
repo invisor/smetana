@@ -306,6 +306,11 @@ Both are attributes on `document.documentElement` (`data-theme`, `data-density`)
 colours under `[data-theme="dark"]`, and `tokens/space.css` redefines *only* the space scale and
 row/control heights under `[data-density="compact"]` — density never changes colour, radius or type.
 
+It carries a third attribute, `data-window-chrome` (`none`, `traffic-lights` or `buttons`, from
+`components/shell/windowChrome.js`), and it is a fact about the machine rather than a choice about
+the look: the app window's scope bar is its title bar now, so `tokens/space.css` reads it for the
+inset macOS's traffic lights need and for the floor under `--scope-bar-h`.
+
 The root carries one more thing in the same spirit, and it is a value rather than a switch:
 `--ui-scale`, the app-wide font size as a factor, which the type scale and the row and control
 heights are written in terms of. See the settings window above for why it lives in the stylesheet

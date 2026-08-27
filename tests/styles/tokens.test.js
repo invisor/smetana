@@ -59,6 +59,24 @@ const space = rules(read('space.css'))
 const comfortable = space.get(':root')
 const compact = space.get('[data-density="compact"]')
 
+/* The two blocks that apply while the scope bar *is* the window's title bar,
+   which is a state of the machine rather than a choice — `data-window-chrome`,
+   written on the root by `views/useAppearance.js`. They are read here because
+   the two checks above deliberately look at `:root` and the compact block and
+   nothing else, so a `--scope-bar-h` written in either of these without the
+   factor would fail nothing: the bar would simply stop growing with the
+   app-wide font size on macOS alone, in the app alone, where no test and no
+   gallery can see it. */
+const trafficLights = space.get('[data-window-chrome="traffic-lights"]')
+const compactTrafficLights = space.get('[data-density="compact"][data-window-chrome="traffic-lights"]')
+
+/* `max()` of the ordinary expression and a floor in plain pixels. The floor is
+   not scaled and must not be: it is the size of macOS's traffic lights, which
+   this app cannot scale either. */
+const FLOORED = /^max\(\s*(.+?)\s*,\s*\d+(\.\d+)?px\s*\)$/
+
+const baseOf = (value) => Number(value.match(/\d+(\.\d+)?/)[0])
+
 /* What a token has to be named to count as a box that holds text: a height —
    including the `-sm`/`-lg` variants of one — or one of the icon sizes. Derived
    from the name so a `--foo-h` added tomorrow is covered without anybody
@@ -171,6 +189,52 @@ describe('the app-wide font size reaches the stylesheet', () => {
     const base = Number(shipped.match(/\d+(\.\d+)?/)[0])
     expect(base, '--control-h-sm still states a size of its own').toBeGreaterThan(0)
     expect(RAIL_CONTROL_MAX).toBe(base)
+  })
+
+  it('keeps the factor under the floor the traffic lights put on the bar', () => {
+    /* The bar's height gains a lower bound while it is doubling as the title
+       bar, because below about 28px macOS's traffic lights no longer fit inside
+       it. A floor is all it gains: the expression underneath is still the
+       density's own number times `--ui-scale`, so raising the app-wide font
+       size still grows the bar. Dropping the factor to get past a `max()` would
+       be the silent failure this whole file exists to refuse. */
+    for (const [where, block, plain] of [
+      ['comfortable', trafficLights, comfortable],
+      ['compact', compactTrafficLights, compact]
+    ]) {
+      expect(block, `${where} still has a traffic-lights block`).toBeDefined()
+
+      const floored = block.get('--scope-bar-h')
+      expect(floored, `${where} traffic-lights still floors --scope-bar-h`).toMatch(FLOORED)
+      expect(floored.match(FLOORED)[1], `${where} traffic-lights must scale with --ui-scale`).toMatch(
+        EXPRESSION
+      )
+
+      /* And it is the *same* bar, not a second size invented under the floor:
+         at the shipped font size the two agree, so the only thing the floor
+         changes is what happens at the bottom of the range. */
+      expect(
+        baseOf(floored),
+        `${where} traffic-lights draws the same bar this density already draws`
+      ).toBe(baseOf(plain.get('--scope-bar-h')))
+    }
+  })
+
+  it('reserves the traffic lights no room where there are none', () => {
+    /* `ScopeIndicator` adds the inset unconditionally, which is only honest
+       because it is zero in the two states that have no lights to clear — a
+       browser, and a window whose decorations the system still draws. */
+    /* `0px` and never a bare `0`, which is the one thing about this token a
+       reader would talk themselves out of. `ScopeIndicator` spends it inside
+       `calc(var(--space-5) + var(--title-bar-inset))`, and a length plus a
+       unitless number is a type error in `calc()` — so a bare zero does not
+       come out as "no inset", it invalidates the whole `padding` shorthand and
+       every scope bar in the app loses all four of its paddings. It shipped
+       that way for the length of one gallery check: the traffic-lights bar was
+       the only one that looked right, because it was the only one whose inset
+       had a unit. */
+    expect(comfortable.get('--title-bar-inset')).toMatch(/^0[a-z]+$/)
+    expect(baseOf(trafficLights.get('--title-bar-inset'))).toBeGreaterThan(0)
   })
 
   it('leaves the space scale alone', () => {
