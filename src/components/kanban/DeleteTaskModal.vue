@@ -39,9 +39,9 @@ const props = defineProps({
 
 defineEmits(['close', 'confirm'])
 
-/* The same words the app window announces for the OS frame — see `openDelete`
-   in `DesktopApp.vue`, which has to say them too because nothing on the window's
-   side of the wire knows what this dialog is called. */
+/* The same words the app window announces for the OS frame — see
+   `openDeleteTask` in `DesktopApp.vue`, which has to say them too because
+   nothing on the window's side of the wire knows what this dialog is called. */
 const title = computed(() => `Delete ${props.id}?`)
 
 const DESCRIPTION =

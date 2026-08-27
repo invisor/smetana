@@ -34,8 +34,8 @@ const props = defineProps({
 
 defineEmits(['close', 'confirm', 'resolve'])
 
-/* The same words the app window announces for the OS frame — see `openReady` in
-   `DesktopApp.vue`. */
+/* The same words the app window announces for the OS frame — see
+   `openReadyTask` in `DesktopApp.vue`. */
 const title = computed(() => `Move ${props.id} to ready with the question unanswered?`)
 
 const description = computed(() =>

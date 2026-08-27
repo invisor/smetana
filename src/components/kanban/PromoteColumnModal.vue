@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
+import { promoteTitle, taskCount } from './promoteTitle.js'
 
 /* The confirm behind the deferred header's button. What it exists to say is the
    count: moving a whole column into the queue has no undo — putting a task back
@@ -30,22 +31,19 @@ const props = defineProps({
 
 defineEmits(['close', 'confirm'])
 
-const tasks = (n) => `${n} ${n === 1 ? 'task' : 'tasks'}`
-
-/* The question stops being a question once it has been answered: what is left
-   to say by then is what happened, and a title still asking whether to move
-   them reads as though nothing had. */
+/* The heading is `promoteTitle.js`'s and not this file's, because the OS frame
+   of the window this dialog is drawn in has to carry the same sentence and is
+   captioned from the other side of the wire (`DesktopApp.vue`, `openPromote`).
+   A rule written out in both places would go quietly wrong in the frame. */
 const title = computed(() =>
-  props.failed != null
-    ? `Moved ${props.moved} of ${props.count}`
-    : `Move ${tasks(props.count)} to ready?`
+  promoteTitle({ count: props.count, moved: props.moved, failed: props.failed })
 )
 
 /* Three things this can be saying, and only one of them at a time: what is
    about to happen, how far it has got, and what became of it. */
 const body = computed(() => {
   if (props.failed != null) {
-    return `${tasks(props.failed)} could not be moved. The board shows the ones that did — nothing was rolled back.`
+    return `${taskCount(props.failed)} could not be moved. The board shows the ones that did — nothing was rolled back.`
   }
   if (props.busy) return `Moved ${props.moved} of ${props.count}…`
   return 'They move to ready and nothing else happens — no run starts. There is no undo: putting one back is one issue at a time in the inspector.'

@@ -34,6 +34,7 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
+import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
 import Button from '../components/core/Button.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import RunBar from '../components/run/RunBar.vue'
@@ -1119,8 +1120,13 @@ const openSetup = (path, existing) => {
       existing: setupExisting.value,
       busy: settingUp.value
     }),
+    /* Both fields, because the comment over `setupExisting` promises they do
+       not drift and a reader will trust it. Nothing today opens this without
+       setting both — that is what the promise rests on — and a half-cleared
+       pair is exactly the state that would quietly break it. */
     forget: () => {
       setupFor.value = null
+      setupExisting.value = false
     },
     onResult: (name) => {
       if (name === 'close') closeSetup()
@@ -1703,16 +1709,32 @@ const openPromote = () => {
   /* A window of its own, and this is the one of the four where that is worth
      more than the room: the count climbs inside it for most of a minute while
      the board fills in behind, and with no scrim over the board both are
-     readable at once. The ground is the column — a project switch or a
-     `deferred` column bd no longer has and there is nothing left to move. */
+     readable at once.
+
+     The live ground is the project, and effectively only the project. The
+     column rides along because that is what this dialog is about, but the
+     clause behind it can only fire if bd's own status set stops holding
+     `deferred` — `boardColumns` seeds a bucket per declared column, so promoting
+     every last card out of it empties the column without removing it, and that
+     is deliberate: a window closing at the moment its work finished would read
+     as the work having failed. What could genuinely go out from under this
+     window is the set of ids it took, and the ground vocabulary has no word for
+     that (`views/dialogRegistry.js`). It is not a hole worth filling here: an id
+     that vanishes mid-run is one failed write among the others, counted and
+     reported below like the rest. */
   serveDialog('promote-column', {
     ground: { project: activePath.value, column: PROMOTE_FROM },
     props: () => ({
-      /* The frame's caption, and the same sentence `PromoteColumnModal`
-         works out for itself from the props under it — nothing on the
-         window's side of the wire knows what a dialog is called, so it is
-         said here too. Keep the two in step; the component owns the words. */
-      title: promoteTitle(),
+      /* The frame's caption. The rule is `kanban/promoteTitle.js`, which the
+         dialog itself draws its heading from: nothing on the window's side of
+         the wire knows what a dialog is called, so the sentence has to be said
+         from here too, and a pluralisation written out twice is the half that
+         would go quietly wrong. */
+      title: promoteTitle({
+        count: promoteIds.value.length,
+        moved: promoted.value,
+        failed: promoteFailed.value
+      }),
       count: promoteIds.value.length,
       busy: promoting.value,
       moved: promoted.value,
@@ -1728,15 +1750,6 @@ const openPromote = () => {
       if (name === 'confirm') confirmPromote()
     }
   })
-}
-
-/* What the OS frame says while this window is up: the question, and afterwards
-   what became of it — a caption still asking whether to move them would read as
-   though nothing had. */
-const promoteTitle = () => {
-  const count = promoteIds.value.length
-  if (promoteFailed.value != null) return `Moved ${promoted.value} of ${count}`
-  return `Move ${count} ${count === 1 ? 'task' : 'tasks'} to ready?`
 }
 
 /* Unconditional, where the modal refused while writing. The window's own frame
@@ -1764,15 +1777,24 @@ const closePromote = () => {
 const confirmPromote = async () => {
   if (promoting.value) return
   const path = activePath.value
+  const total = promoteIds.value.length
   promoting.value = true
   promoted.value = 0
   promoteFailed.value = null
+  /* Counted here as well as in the two refs beside them, and that is not
+     duplication for its own sake: this window's frame carries a cross the app
+     cannot disable, so somebody can close it while the loop runs, and closing
+     forgets the refs. The writes go on regardless — the `for…of` below holds
+     the array it started with — so the report has to be kept somewhere nothing
+     can clear. */
+  let moved = 0
   let failed = 0
   try {
     for (const id of promoteIds.value) {
       try {
         await updateIssue(id, { status: 'open' })
-        promoted.value += 1
+        moved += 1
+        promoted.value = moved
       } catch {
         // the message already sits in trackerState.lastError; the count is what
         // this dialog adds to it
@@ -1783,8 +1805,26 @@ const confirmPromote = async () => {
         return
       }
     }
-    promoteFailed.value = failed
-    if (!failed) closeDialog('promote-column')
+    /* The outcome, said in whichever of the two places is still there to say it
+       in. While the window stands, it says it itself: `failed` turns its title
+       into a report and its footer into one button. If the person closed it
+       mid-write, the app window says it instead — dropping it would leave a
+       promote of twelve with three refusals saying nothing at all about the
+       three, since `trackerState.lastError` keeps only the newest of them and
+       none of them carries a count. The count is the whole of what this dialog
+       is for, which is why the modal used to refuse to close over it. */
+    if (openDialogs.has('promote-column')) {
+      promoteFailed.value = failed
+      if (!failed) closeDialog('promote-column')
+      return
+    }
+    sayFileMenu({
+      tone: failed ? 'error' : 'success',
+      title: promoteTitle({ count: total, moved, failed }),
+      description: failed
+        ? `${taskCount(failed)} could not be moved. The board shows the ones that did — nothing was rolled back.`
+        : 'They are in ready. The window was closed while they were still moving.'
+    })
   } finally {
     promoting.value = false
   }
@@ -2093,6 +2133,10 @@ const openDeleteTask = (id) => {
          carried in from the menu that asked: the store holds the current
          title and a card's copy may be a delta behind. */
       taskTitle: confirmedIssue.value?.title ?? '',
+      /* Announced because it is the component's prop and this is a mirror of
+         what the app holds, not because it is ever seen here: `deleteTask`
+         closes this window before it sets the flag, for the reason written
+         over it. The state itself is looked at in `?view=gallery`. */
       busy: Boolean(deletingId.value)
     }),
     forget: () => {
@@ -2105,19 +2149,33 @@ const openDeleteTask = (id) => {
   })
 }
 
+/* The dialog closes first and bd runs after — `cutBranch` above records that
+   shape for every write behind a dialog in this view, and here it is
+   load-bearing rather than a habit.
+
+   `deleteIssue` takes the issue out of `trackerState.issues` **synchronously**,
+   before it awaits bd, so with the write first the ground watcher below would
+   run on the very microtask this function's `await` yields to and find the
+   window standing over an issue that has gone. It would close the window itself
+   and raise the notice meant for a board that moved under somebody — over the
+   deletion they had just asked for, and held on screen, since only a `success`
+   toast is given a timer. That signal is worth having for the dialogs that use
+   it honestly, and this is not one of them.
+
+   Nothing is lost by closing early. The spinner lands on the card, the way it
+   lands on the branch row a cut starts from: `deletingId` greys it while the
+   write is in flight (`orderedColumns`). And a refusal draws where every other
+   refusal from the tracker in this view draws — `trackerState.lastError`, as a
+   toast at the foot of this file. */
 const deleteTask = async (id) => {
   if (!id) return
+  closeDialog('delete-task')
   deletingId.value = id
   try {
     await deleteIssue(id)
     if (project.selectedTask === id) project.selectedTask = null
-    /* Closed from here rather than left to the ground watcher, which would
-       catch this too once the delta lands: a person who has just pressed
-       Delete does not need a toast telling them the task is gone. */
-    closeDialog('delete-task')
   } catch {
-    /* The message already sits in trackerState.lastError — and the dialog stays
-       open over it deliberately: closing it would hide the explanation. */
+    // the message already sits in trackerState.lastError and draws as a toast
   } finally {
     deletingId.value = null
   }
