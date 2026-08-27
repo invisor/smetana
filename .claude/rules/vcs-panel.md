@@ -260,6 +260,20 @@ somewhere nobody asked for. `switch` and not `checkout -b`, because `checkout` t
 this panel has already paid for that once (see `vcs_checkout`'s note about the missing `--`); it
 wants git 2.23 or newer.
 
+**New branch is not a modal any more: it is a window of its own** (`?view=dialog&kind=new-branch`,
+`window.rs`'s `dialog_window_open`), which is what lets somebody read the branch list it is a
+question about while they answer it. `DesktopApp.vue` no longer renders `NewBranchModal`; it opens
+the window and keeps announcing what that window should draw — `from`, the branch list, the write
+verdict and `busy` — so a run started while the window stands open still kills the Create button.
+`NewBranchModal.vue` itself is unchanged: the only component that learned anything is
+`overlays/Modal.vue`, which drops its scrim, header, border, radius and shadow when
+`inject('smDialogWindow')` says the OS frame is carrying them.
+
+The one rule that had no equivalent in a modal: **a window with no scrim can be left standing over a
+board that moved underneath it**, so the app window closes it when the ground goes and says why in a
+toast of its own. For this dialog the ground is the project and the branch it was cut from; the rule
+is `src/views/dialogRegistry.js`, which is pure and has the tests.
+
 The panel it opens is `overlays/PointerMenu.vue`, which is `MenuButton` anchored to a point instead
 of to a trigger — teleported out of the document because every list here sits inside something with
 `overflow`, flipped above the pointer when there is no room below, closed on a scroll anywhere

@@ -1,0 +1,222 @@
+<script setup>
+/* One dialog, in a window of its own.
+
+   A fifth branch in `App.vue` beside the app, the gallery, the settings window
+   and the compare window, and built the way those last two are: the same bundle
+   under a `?view=` of its own, so there is one front end, one set of tokens and
+   one place a component can break — and so this screen stays checkable in
+   `npm run dev` with no Tauri behind it (`?view=dialog&kind=new-branch`).
+
+   **This window holds no store.** It is a view of what the app window holds,
+   exactly as `SettingsWindow.vue` is: props arrive by event, the guest's emits
+   go back by event, and the app window remains the only thing that talks to bd,
+   to git or to a run. That is what lets the guest components stay
+   presentational and unrewritten — the only change any of them saw is that
+   `Modal.vue` now draws two frames instead of one.
+
+   The height is measured here rather than named anywhere. A dialog's height is
+   whatever its content comes to, and the content changes — a validation line, a
+   progress report — so a number in the registry would be wrong at the first
+   field somebody adds, and wrong again under a different `--ui-scale` or in
+   compact. The window is built hidden; the first measurement is what puts it on
+   screen. Rust does the sizing, because `core:default` grants neither
+   `set_size` nor `show` and adding them would publish both to every window in
+   the app for the sake of one call. */
+import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watchEffect } from 'vue'
+import NewBranchModal from '../components/git/NewBranchModal.vue'
+import { dialogWidth, isDialogKind } from './dialogRegistry.js'
+import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
+import { paintRoot, usePrefersDark } from './useAppearance.js'
+import { emitDialogResult, sizeDialogWindow, watchDialogProps } from '../stores/app.js'
+import { readSharedSettings, watchSharedSettings } from '../stores/settings.js'
+
+const props = defineProps({
+  /* Which dialog this window is, off `?kind=` — `dialog_window_open` put it
+     there and checked it on the way (`kind_query`). Read in `App.vue` with the
+     rest of the query string, so this file never sees a URL.
+
+     Optional rather than required, because a bare `?view=dialog` is reachable
+     by hand in the dev server and a missing parameter is an empty window, not a
+     warning in a console nobody is looking at. */
+  kind: { type: String, default: null },
+  /* The query string's two overrides, passed down for the reason the settings
+     and compare windows take theirs: they win over what the app window says,
+     for this run only and never written back, and without them this window's
+     own chrome could not be looked at in compact or in the other theme at
+     all. */
+  themeOverride: { type: String, default: null },
+  densityOverride: { type: String, default: null }
+})
+
+/* The one place a dialog kind becomes a component. It is here rather than in
+   `dialogRegistry.js` because importing a `.vue` file would pull Vue into a
+   module whose whole point is having neither Vue nor a DOM in it — and that
+   module is the half a test can reach. */
+const COMPONENTS = {
+  'new-branch': NewBranchModal
+}
+
+const component = computed(() => COMPONENTS[props.kind] ?? null)
+
+/* What `Modal.vue` reads to know it is drawing inside a window: no scrim, no
+   header of its own, no border, no radius, no shadow — the OS frame carries all
+   of it. Provided here and nowhere else, which is what leaves the gallery and
+   the app window exactly as they were. */
+provide('smDialogWindow', true)
+
+/* The props the app window is feeding this dialog. `open` is forced true: a
+   window that exists is open, and that prop only ever meant "is the scrim
+   up".
+
+   `title` travels with them because the OS frame draws it and nothing on this
+   side knows what this dialog is called. It reaches the guest too, harmlessly:
+   a guest that declares no `title` prop passes it through to its `Modal`, which
+   is the same string that `Modal` was already being given. */
+const incoming = shallowRef({})
+const guestProps = computed(() => ({ ...incoming.value, open: true }))
+const title = computed(() => incoming.value.title ?? 'Smetana')
+
+/* Every emit the seven guests have between them, forwarded by name. A list
+   rather than a wildcard because listeners need names, and because a name that
+   is not here is a message that would silently go nowhere. A name here that a
+   guest does not declare costs nothing: it falls through as an inert listener
+   for a DOM event that never fires. */
+const EMITS = [
+  'close',
+  'confirm',
+  'create',
+  'submit',
+  'resolve',
+  'rescope',
+  'attach',
+  'files',
+  'remove'
+]
+const listeners = Object.fromEntries(
+  EMITS.map((name) => [
+    `on${name[0].toUpperCase()}${name.slice(1)}`,
+    (payload) => emitDialogResult(props.kind, name, payload)
+  ])
+)
+
+/* How this window is painted, in the shape the app's windows speak in. The
+   defaults are the shipped ones, so it paints itself correctly in the moment
+   before the first answer arrives rather than flashing a light theme at
+   somebody working in the dark one — `CompareWindow` records the same reasoning
+   beside the same four fields. */
+const view = reactive({
+  theme: 'dark',
+  density: 'comfortable',
+  uiFontSize: UI_FONT_DEFAULT,
+  editorFontSize: EDITOR_FONT_DEFAULT
+})
+
+/* Whether the app window has spoken. The disk read below is the fall-back for
+   the moment before it does — and for `npm run dev`, where there is no app
+   window at all — so an answer from the file that lands second must not
+   overwrite the newer truth. */
+const heard = ref(false)
+
+const adopt = (state, fromApp) => {
+  if (!state) return
+  if (fromApp) heard.value = true
+  for (const field of Object.keys(view)) {
+    if (field in state && state[field] != null) view[field] = state[field]
+  }
+}
+
+/* This window paints itself: it is a separate webview with its own document
+   root, so the app window's attributes reach nothing here. `system` is resolved
+   against the machine and follows it live, which is the whole reason
+   `usePrefersDark` is a listener rather than a reading. */
+const prefersDark = usePrefersDark()
+watchEffect(() => {
+  paintRoot(document.documentElement, {
+    theme: props.themeOverride ?? effectiveTheme(view.theme, prefersDark.value),
+    density: props.densityOverride ?? view.density,
+    uiFontSize: view.uiFontSize,
+    editorFontSize: view.editorFontSize
+  })
+})
+
+/* The measurement. A `ResizeObserver` rather than a watcher on the props: what
+   decides the height is the rendered result, and only the box knows it — a
+   hint wrapping onto a second line changes nothing any prop could be watched
+   for.
+
+   Deliberately no `min-height` on the box below. A root as tall as the viewport
+   would measure the window rather than the content, and the window could then
+   grow and never shrink again. */
+const root = ref(null)
+const measured = ref(0)
+let observer = null
+
+/* Height and title go over together, and a change to either sends both: the
+   title is what the frame draws, and it arrives by event like everything else,
+   so a dialog whose name changed with its height unchanged would otherwise keep
+   the frame it had. Nothing is sent before the first measurement — there is no
+   height to send, and this call is also what shows the window. */
+watchEffect(() => {
+  if (measured.value > 0) sizeDialogWindow(props.kind, measured.value, title.value)
+})
+
+const stops = []
+
+onMounted(async () => {
+  if (root.value) {
+    observer = new ResizeObserver(([entry]) => {
+      measured.value = Math.ceil(entry.contentRect.height)
+    })
+    observer.observe(root.value)
+  }
+  /* A kind this build has never heard of gets no subscription at all: there is
+     nothing to draw and nothing to ask about. The window still paints itself,
+     so what is on screen is an empty dialog rather than a white page. */
+  if (isDialogKind(props.kind)) {
+    try {
+      stops.push(
+        await watchDialogProps(props.kind, (next) => {
+          incoming.value = next ?? {}
+        })
+      )
+    } catch (err) {
+      console.warn('[dialog-window] no app window to be told what to draw by:', err)
+    }
+  }
+  try {
+    stops.push(await watchSharedSettings((state) => adopt(state, true)))
+  } catch (err) {
+    console.warn('[dialog-window] no app window to follow:', err)
+  }
+  try {
+    const stored = await readSharedSettings()
+    if (!heard.value) adopt(stored, false)
+  } catch (err) {
+    console.warn('[dialog-window] the settings could not be read:', err)
+  }
+})
+
+onUnmounted(() => {
+  observer?.disconnect()
+  for (const stop of stops) stop()
+})
+
+/* The width is the registry's rather than the window's, and that is what makes
+   this screen checkable in a browser: in the window the two are the same number,
+   and in `npm run dev` this is what keeps the dialog the width it is in the app
+   instead of stretching across the tab. */
+const rootStyle = computed(() => ({
+  width: `${dialogWidth(props.kind)}px`,
+  maxWidth: '100%',
+  background: 'var(--surface-overlay)',
+  color: 'var(--text-primary)',
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--text-body-size)'
+}))
+</script>
+
+<template>
+  <div ref="root" :style="rootStyle">
+    <component :is="component" v-if="component" v-bind="{ ...guestProps, ...listeners }" />
+  </div>
+</template>

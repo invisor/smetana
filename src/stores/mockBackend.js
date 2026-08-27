@@ -233,6 +233,11 @@ export function installMockBackend() {
   })
   const snapshot = { generation: 1, columns, issues }
 
+  /* Whether the note about dialog windows has been said. Once per run of the
+     dev server: the three commands below are called far too often for a line
+     each to be worth reading. */
+  let saidAboutDialogWindows = false
+
   mockIPC((command, payload) => {
     if (command === 'tracker_snapshot' || command === 'tracker_resync') return snapshot
     if (command === 'tracker_health') return { state: 'ok' }
@@ -260,6 +265,30 @@ export function installMockBackend() {
        how it is checked by eye. */
     if (command === 'settings_window_open') {
       console.info('[mockBackend] a second window needs Tauri — open ?view=settings instead')
+      return null
+    }
+    /* The dialog windows, for the same reason and with the same answer. All
+       three are about a window and none of them is a write: opening one, closing
+       one and giving one the height its content came to. Every dialog is
+       reachable in a browser at `?view=dialog&kind=<name>`, which is how each is
+       checked by eye, and a refusal here would put an error in the console every
+       time somebody pressed the menu item that opens one — and, for the sizing,
+       once per measurement, which is on every keystroke that changes the height.
+
+       Said once rather than per call, which is what the counter is for: the
+       three are pressed and measured often enough that a line each would bury
+       whatever else the console was showing. */
+    if (
+      command === 'dialog_window_open' ||
+      command === 'dialog_window_close' ||
+      command === 'dialog_window_size'
+    ) {
+      if (!saidAboutDialogWindows) {
+        saidAboutDialogWindows = true
+        console.info(
+          '[mockBackend] a dialog window needs Tauri — open ?view=dialog&kind=<name> instead'
+        )
+      }
       return null
     }
     /* The login item. A read, so it answers — otherwise the General tab could

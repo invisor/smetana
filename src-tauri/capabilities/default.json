@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What all three windows may reach. Nothing is listed for the updater or for restarting, and the absence is a decision rather than an omission: the front end calls this app's own updates_state, updates_check and updates_install, never plugin:updater|* or plugin:process|*, so a grant would be required by nothing while publishing plugin:updater|download_and_install to the webview — the one route by which a page could replace the bundle without passing the run gate. src-tauri/src/updates.rs records it, the way src-tauri/src/autostart.rs records the same absence for autostart:default.",
+  "description": "What the app's windows may reach. The fourth entry is a glob rather than a label: every dialog of the app is a window of its own, labelled dialog-<kind> (src-tauri/src/window.rs), and Tauri matches this field by pattern, so one line covers all of them rather than one line per dialog. A window not named here reaches no core plugin at all and comes up unable to talk to anything, which is the first thing to suspect if a dialog window opens blank. Nothing is listed for the updater or for restarting, and the absence is a decision rather than an omission: the front end calls this app's own updates_state, updates_check and updates_install, never plugin:updater|* or plugin:process|*, so a grant would be required by nothing while publishing plugin:updater|download_and_install to the webview — the one route by which a page could replace the bundle without passing the run gate. src-tauri/src/updates.rs records it, the way src-tauri/src/autostart.rs records the same absence for autostart:default.",
   "windows": [
     "main",
     "settings",
-    "compare"
+    "compare",
+    "dialog-*"
   ],
   "permissions": [
     "core:default",
