@@ -1280,10 +1280,10 @@ watch(lastHandover, (handover) => {
 
    Each kind answers for itself, and three of them answer "nothing":
 
-   - an edit, and answering a parked task's questions, open their issue on the
-     board's own selection, which is what highlights the card: the panel and the
-     board are one selection, so these are the kinds that write
-     `project.selectedTask`;
+   - an edit, answering a parked task's questions, and fixing work behind a
+     closed one all open their issue on the board's own selection, which is what
+     highlights the card: the panel and the board are one selection, so these
+     are the kinds that write `project.selectedTask`;
    - a filing opens its draft. It does *not* clear the board's selection, and
      that restraint is the point: `selectedTask` is remembered per project in
      settings.json, so glancing at a filing agent would otherwise forget the
@@ -1302,7 +1302,7 @@ function selectAgent(id) {
   project.activeTab = 'terminal'
   const row = agentRows.value.find((candidate) => candidate.id === id)
   const work = row?.work
-  if (work?.kind === 'editTask' || work?.kind === 'resolveTask') {
+  if (work?.kind === 'editTask' || work?.kind === 'resolveTask' || work?.kind === 'fixTask') {
     project.selectedTask = work.id
     rightFocus.value = null
   } else if (work?.kind === 'newTask' || row?.claimed?.length) {
@@ -2344,6 +2344,13 @@ const onTaskAction = ({ kind, id, value }) => {
     if (issue) askAgentToEdit(issue)
     return
   }
+  if (kind === 'fix') {
+    /* From the store rather than from the menu's payload, the reason the status
+       branch above spells out: a card's copy may be a delta behind. */
+    const issue = issueById(id)
+    if (issue) askAgentToFix(issue)
+    return
+  }
   if (kind === 'follow-up') {
     /* From the store and not from the menu's payload, for the reason the status
        branch above spells out: a card's copy may be a delta behind, and the
@@ -2435,6 +2442,22 @@ const askAgentToResolve = async (issue) => {
   project.activeTab = 'terminal'
   try {
     await createSession(path, { kind: 'resolveTask', id: issue.id, title: issue.title })
+  } catch {
+    // already reported — see newAgent above
+  }
+}
+
+/* A session that corrects work already finished and merged. Started exactly the
+   way editing and answering are, and carrying the same two fields: the agent
+   reads the issue itself, and what is wrong with the work is what the person is
+   about to say in the terminal. */
+const askAgentToFix = async (issue) => {
+  const path = activePath.value
+  if (!path) return
+  project.sideTab = 'agents'
+  project.activeTab = 'terminal'
+  try {
+    await createSession(path, { kind: 'fixTask', id: issue.id, title: issue.title })
   } catch {
     // already reported — see newAgent above
   }
