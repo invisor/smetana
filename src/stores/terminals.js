@@ -257,6 +257,7 @@ function startClock() {
    switch, a run's settings. */
 const workOf = (intent) => {
   if (intent.kind === 'editTask') return { kind: 'editTask', id: intent.id }
+  if (intent.kind === 'fixTask') return { kind: 'fixTask', id: intent.id }
   if (intent.kind === 'resolveConflict') {
     return { kind: 'resolveConflict', repo: intent.repo, theirs: intent.theirs }
   }
@@ -289,6 +290,11 @@ const CAPTION = {
      "Answering smetana-8av" and the word "questions" would only push the id
      toward the ellipsis. */
   resolveTask: 'Answering',
+  /* The third caption about one named issue, and the one that is not about the
+     issue's own text: an edit changes what the task says, this changes what
+     was built for it. The id sits beside the word in mono, so the row reads
+     "Fixing smetana-8av". */
+  fixTask: 'Fixing',
   /* The one caption about a repository rather than an issue. "Conflict" and
      not "Resolving a conflict": the identifiers beside it are what say which
      one, and a row 252px wide spends every character it has on them. */
@@ -361,8 +367,9 @@ function claimedBy(sessionId) {
    a row that says "Agent" is still a row. */
 function captionOf(work, claimed) {
   const kind = work?.kind
-  // The two that are about one named issue, and so caption themselves with it.
-  if (kind === 'editTask' || kind === 'resolveTask') {
+  // The three that are about one named issue, and so caption themselves with
+  // it. What they are doing to it differs; that is the label's business.
+  if (kind === 'editTask' || kind === 'resolveTask' || kind === 'fixTask') {
     return { label: CAPTION[kind], tasks: [work.id] }
   }
   /* The two identifiers this one is about, in mono beside the word: which

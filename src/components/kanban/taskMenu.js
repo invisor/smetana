@@ -8,8 +8,15 @@
    It also owns `STATUSES`, which `TaskInspector` used to keep. The three a
    person is offered and the rule for appending a fourth now exist in one copy;
    two copies would have drifted the first time bd grew a status. */
-import { statusLabel } from '../status/status.js'
+import { normalizeStatus, statusLabel } from '../status/status.js'
 import { isParked, READY } from './parked.js'
+
+/* bd's own word for a finished task, and the front end's only copy of it
+   outside `UI_STATUS` in `stores/tracker.js` — the same across-the-boundary
+   copy `PARKED` in `parked.js` keeps, failing the same quiet way if bd ever
+   renames it: a done card would simply go back to offering the menu every
+   other card gets. */
+const CLOSED = 'closed'
 
 /* The three a person is given, and no more. bd has eleven statuses in this
    build and most of them are an agent's business: `in_progress` is claimed by
@@ -18,7 +25,7 @@ import { isParked, READY } from './parked.js'
 export const STATUSES = [
   { value: READY, label: 'Ready' },
   { value: 'pinned', label: 'Pinned' },
-  { value: 'closed', label: 'Done' }
+  { value: CLOSED, label: 'Done' }
 ]
 
 /* An issue may well hold a status outside those three — an agent moves it to
@@ -56,7 +63,10 @@ export const statusOptions = (bdStatus) => {
    that can carry a sentence. The longest label the menu can produce is the
    greyed Run row, which carries `scopeBusyReason`'s whole sentence — the reason
    moved out of the card's play tooltip, where it used to grow to fit, and into
-   the row itself.
+   the row itself. A done card does not draw that row at all any more, so the
+   measurement's binding case is the busy open card and nothing else; the
+   longest a done menu can get is "Follow-up task", which is nowhere near this
+   ceiling and buys no part of it.
 
    Measured through CoreText at `--text-sm` (12px) in the system sans, which is
    what `--font-sans` resolves to in the webview: "Run this — a run over task
@@ -103,11 +113,27 @@ export const MENU_W = 424
    joins with a dash rather than as a second sentence. */
 const runLabel = (reason) => (reason ? `Run this — ${reason}` : 'Run this')
 
+/* Whether this card sits in the Done column, which is the one place this menu
+   is a different menu.
+
+   Two words rather than one, and both are needed. `bdStatus` is bd's own
+   string, untranslated — `boardColumns` in `stores/tracker.js` puts it on the
+   card that way on purpose — so the tracker's finished task arrives here as
+   `closed` and `normalizeStatus` has nothing to translate it with: that
+   function slugifies, it does not know bd's vocabulary. The normalised form is
+   asked as well because a project whose done column is spelled some other way
+   that still comes to `done` is the same column to a person, and the design
+   system's own word for it is what `status.js` already reads everywhere else.
+   Asking only the second half would leave the actual product's every done card
+   on the ordinary menu, which is the thing this rule exists to change. */
+const isDone = (bdStatus) => bdStatus === CLOSED || normalizeStatus(bdStatus) === 'done'
+
 export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
   /* A write in flight greys everything: a bd call takes about two seconds, and
      a live menu for those two seconds invites a second choice racing the
      first. */
   const frozen = Boolean(busy)
+  const done = isDone(bdStatus)
 
   return [
     /* First, above the play, and only on a parked card. A parked task is one an
@@ -124,17 +150,38 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
           disabled: frozen
         }]
       : []),
-    {
-      kind: 'run',
-      label: runLabel(runBlockedReason),
-      icon: 'play',
-      /* Two different refusals, deliberately drawn the same. There is nothing
-         to run on a done or blocked card, and nothing to run *now* while the
-         scope is busy — but only the second has words, so the first is a bare
-         "Run this" rather than a sentence ending in a dangling dash. */
-      disabled: frozen || !runnable || Boolean(runBlockedReason)
-    },
-    {
+    /* The done card's own first verb, in the place the play held. The work
+       behind a closed task is merged and may still be wrong, and what is wanted
+       then is a small correction in conversation rather than a task filed for
+       five minutes of work — Follow-up task is one row below for when it turns
+       out to be more than that.
+
+       Absent everywhere else, and the two rows it replaces are absent here,
+       which is the same trade the resolve row above makes rather than two
+       different ones. The play is refused on a closed issue by `runnableTask`
+       in `DesktopApp`, so it was a row greyed for ever; the edit is about the
+       issue's own prose, which is not what a finished-but-wrong task needs. A
+       permanently dead row teaches a person to stop reading the menu.
+
+       `wrench` and not `bot`: the row is the action, not who performs it — the
+       same reason the edit row below dropped "Ask agent to" from its label. */
+    ...(done
+      ? [{ kind: 'fix', label: 'Fix this', icon: 'wrench', disabled: frozen }]
+      : []),
+    ...(done
+      ? []
+      : [{
+          kind: 'run',
+          label: runLabel(runBlockedReason),
+          icon: 'play',
+          /* Two different refusals, deliberately drawn the same. There is
+             nothing to run on a blocked card, and nothing to run *now* while
+             the scope is busy — but only the second has words, so the first is
+             a bare "Run this" rather than a sentence ending in a dangling
+             dash. */
+          disabled: frozen || !runnable || Boolean(runBlockedReason)
+        }]),
+    ...(done ? [] : [{
       /* The verb, and only the verb. The label used to spell out the mechanism
          — "Ask agent to edit", since nothing in this app edits an issue's text
          in place and an agent session opens on it — and it was the longest row
@@ -149,7 +196,7 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
       label: 'Edit',
       icon: 'square-pen',
       disabled: frozen
-    },
+    }]),
     {
       /* A new task that comes off this one: the case is a task already done
          over which clarifications have since arrived. The dialog it opens is
