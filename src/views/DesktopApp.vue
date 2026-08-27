@@ -52,6 +52,7 @@ import MenuButton from '../components/overlays/MenuButton.vue'
 import Toast from '../components/overlays/Toast.vue'
 import ProjectRail from '../components/shell/ProjectRail.vue'
 import { projectSummary } from '../components/shell/projectState.js'
+import UsageFooter from '../components/shell/UsageFooter.vue'
 import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
@@ -104,6 +105,7 @@ import {
   copyText,
   openExternal,
   openSettingsWindow,
+  readAgentUsage,
   revealInFileManager,
   watchBoardHello
 } from '../stores/app.js'
@@ -1274,6 +1276,68 @@ onUnmounted(() => {
   if (sweep) clearInterval(sweep)
   sweep = null
 })
+
+/* What is left of the agent's subscription, for the strip along the bottom of
+   this window.
+
+   The timer and the last answer live here rather than in a store of their own:
+   `app.js` deliberately holds no state, and this reading belongs to one window
+   and does not outlive it — which is that store's own argument about where the
+   question goes, applied to where the answer sits.
+
+   Ten minutes is `runs::usage::POLL`, chosen there because a session limit
+   resets in hours and a weekly one in days, so asking oftener only spends the
+   machine. There is no re-read when the window regains focus: a laptop that
+   slept shows a stale figure for up to one interval, and the timer is the whole
+   policy.
+
+   **The agent is named in the question** rather than left to Rust to read out
+   of `settings.json`, exactly as the settings window names it: this window owns
+   that field and the file is a debounce behind it, so a read that let Rust
+   consult the file could be answered about the agent somebody has just left.
+
+   A probe is somebody else's CLI with a sixty-second ceiling over it, so a tick
+   that lands while one is still out does nothing, and so does a second press on
+   the strip. The numbers already on screen stay where they are meanwhile —
+   unlike the settings block, which clears its rows before every read because a
+   block sitting there showing the previous answer would be claiming a reading
+   that is being replaced as it is read. The strip never labels its figure
+   fresh, so it claims nothing by keeping it, and blanking a permanent strip
+   every ten minutes is a flicker in the corner of somebody's eye.
+
+   A refusal clears the reading rather than keeping it: `invoke` failing is the
+   channel rather than an answer, and the strip has no line for that — two
+   dashes is what it has to say, and it is the true one. */
+const USAGE_EVERY_MS = 10 * 60 * 1000
+const usageReading = ref(null)
+const usageBusy = ref(false)
+let usagePoll = null
+
+const readUsage = async () => {
+  if (usageBusy.value) return
+  usageBusy.value = true
+  try {
+    usageReading.value = await readAgentUsage(settings.agent)
+  } catch {
+    usageReading.value = null
+  } finally {
+    usageBusy.value = false
+  }
+}
+
+onMounted(() => {
+  readUsage()
+  usagePoll = setInterval(readUsage, USAGE_EVERY_MS)
+})
+onUnmounted(() => {
+  if (usagePoll) clearInterval(usagePoll)
+  usagePoll = null
+})
+
+/* Whoever would answer has changed, so whatever is on the strip is about
+   somebody else. The settings window is where that edit is made, and it reaches
+   this window through the bridge above. */
+watch(() => settings.agent, () => readUsage())
 
 const initing = ref(false)
 const initHere = async () => {
@@ -3705,6 +3769,15 @@ const toastStackStyle = {
         </Panel>
       </div>
     </div>
+
+    <!-- The strip along the bottom, the sibling of the scope bar above: what is
+         left of the agent's subscription, which otherwise lives only on a tab
+         of a window somebody has to open on purpose. Outside the three columns
+         rather than inside the middle one — it is about the machine, not about
+         the board, and a strip that stopped at the board's edges would read as
+         a caption to the board. It is drawn in every state, this window's own
+         `footer` beside `AppShell`'s slot of the same name. -->
+    <UsageFooter :usage="usageReading" :busy="usageBusy" @refresh="readUsage" />
 
     <!-- The toasts live in one column: two fixed corners would overlap each
          other, and a tracker failure would hide a disk failure exactly when

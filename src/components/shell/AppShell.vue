@@ -75,5 +75,12 @@ const rightStyle = computed(() => ({
       />
       <div :style="rightStyle"><slot name="right" /></div>
     </div>
+    <!-- The mirror of `scope` above: a strip about the machine rather than
+         about the board, so it runs outside the three columns and their
+         resizers — one that stopped at the board's edges would read as a
+         caption to the board. Empty is the ordinary case and costs nothing:
+         the row above it is the only thing that flexes, so with no footer
+         nothing on screen moves. -->
+    <slot name="footer" />
   </div>
 </template>

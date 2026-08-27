@@ -44,6 +44,7 @@ export { default as ScopeIndicator } from './shell/ScopeIndicator.vue'
 export { default as Tab } from './shell/Tab.vue'
 export { default as TabBar } from './shell/TabBar.vue'
 export { default as TaskSearchButton } from './shell/TaskSearchButton.vue'
+export { default as UsageFooter } from './shell/UsageFooter.vue'
 export { NEW_TAB_ITEMS } from './shell/newTabMenu.js'
 
 // kanban

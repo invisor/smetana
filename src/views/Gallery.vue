@@ -87,7 +87,8 @@ import {
   TypeBadge,
   Toast,
   ToolCall,
-  Tooltip
+  Tooltip,
+  UsageFooter
 } from '../components/index.js'
 import { gitActions } from '../components/git/gitActions.js'
 import {
@@ -661,6 +662,43 @@ const tabs = computed(() => orderTabs(galleryTabs.value, galleryTabOrder.value))
    the language icons, the picture and the archive — the half of
    `src/catppuccinIcon.js`'s vocabulary a person is most likely to be looking
    at — visible nowhere in the gallery at all. */
+/* The four answers the footer strip has to draw, since a state is not a prop
+   somebody can flip on this page: a reading in the middle band, one with a half
+   the harness did not print, an agent that does not report this at all, and
+   nothing asked yet. The numbers are `claude.rs`'s own fixture output, so the
+   reset strings in the hint are shaped exactly as the parser hands them over —
+   the harness's words, timezone and all.
+
+   The pair that matters most is the second and the fourth: a `null` half draws
+   a dash while the other half draws its number, and a real `0` — which a fresh
+   week prints — draws as `0%` and never as a dash. */
+const galleryUsage = [
+  {
+    state: 'read',
+    agent: 'claude',
+    usage: {
+      sessionPct: 10,
+      sessionReset: 'Aug 7 at 8pm (Europe/Moscow)',
+      weekPct: 78,
+      weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)'
+    },
+    band: 'reduced'
+  },
+  {
+    state: 'read',
+    agent: 'claude',
+    usage: { sessionPct: 92, sessionReset: 'Aug 7 at 8pm (Europe/Moscow)', weekPct: null, weekReset: null },
+    band: 'pause'
+  },
+  { state: 'unsupported', agent: 'codex' },
+  {
+    state: 'read',
+    agent: 'claude',
+    usage: { sessionPct: 0, sessionReset: null, weekPct: 3, weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)' },
+    band: 'normal'
+  }
+]
+
 const galleryTree = MOCK_TREE[''].map((node) =>
   node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
 )
@@ -2196,7 +2234,27 @@ const menuTargetStyle = {
             <div :style="{ padding: 'var(--panel-pad)', fontSize: 'var(--text-sm)' }">Centre</div>
           </template>
           <template #right><Panel title="Task" side="right" collapsed /></template>
+          <!-- The shell's second bar slot, and the only place on this page
+               where the strip is seen where it actually lives: under the three
+               columns, across the whole shell, outside their resizers. -->
+          <template #footer><UsageFooter :usage="galleryUsage[0]" /></template>
         </AppShell>
+      </div>
+
+      <!-- The rest of what the strip has to draw, one under the other, since
+           the state is an answer from Rust rather than a control anybody can
+           reach from here. In order: a half the harness did not print, drawn as
+           a dash beside the half it did; an agent that does not report this at
+           all; a fresh week's real `0`, which is a number and not a dash;
+           nothing asked yet, which names nobody; and a probe on its way, which
+           keeps the last numbers and says so in the hint. Hover any of them —
+           the hint is the whole of the reset times and of what a run would do. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
+        <UsageFooter :usage="galleryUsage[1]" />
+        <UsageFooter :usage="galleryUsage[2]" />
+        <UsageFooter :usage="galleryUsage[3]" />
+        <UsageFooter />
+        <UsageFooter :usage="galleryUsage[0]" busy />
       </div>
     </section>
 
