@@ -27,4 +27,17 @@ describe('what the id says about being copied', () => {
     expect(copyLabel('COPIED')).toBe('Copy id')
     expect(copyLabel('pending')).toBe('Copy id')
   })
+
+  /* "Anything" includes the names every object inherits, which a plain object
+     literal would answer with a function or with its prototype — the fallback
+     is nullish-only, so an inherited key is never reached. Unreachable from the
+     three producers of this state, and pinned here because the sentence above
+     is stated about anything at all. */
+  it('holds for the names an object inherits, which it does not have', () => {
+    expect(copyLabel('constructor')).toBe('Copy id')
+    expect(copyLabel('__proto__')).toBe('Copy id')
+    expect(copyLabel('toString')).toBe('Copy id')
+    expect(copyLabel('valueOf')).toBe('Copy id')
+    expect(copyLabel('hasOwnProperty')).toBe('Copy id')
+  })
 })

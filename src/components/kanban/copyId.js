@@ -12,10 +12,20 @@
    Under `kanban/` rather than at the top of `src/`: it is a rule about one part
    of the interface, which is where this tree keeps that kind. No Vue and no DOM
    in it. */
-const LABEL = {
+/* Null-prototype, and that is the whole of why it is not a plain object
+   literal. The fallback below is `??`, which only catches nullish, so an
+   inherited key would be answered rather than fallen back on: over
+   `Object.prototype` this table returns a function for `constructor`,
+   `toString` and `valueOf`, and an object for `__proto__`. Nothing on screen
+   can reach it — the three producers of this state emit `''`, `'copied'` or
+   `'failed'` and nothing else — but the fallback is stated here as a contract
+   about *anything*, and a contract with four holes in it is worse than no
+   contract at all. Borrowing nothing from anywhere is what makes the sentence
+   below true. */
+const LABEL = Object.assign(Object.create(null), {
   copied: 'Copied',
   failed: 'Could not copy'
-}
+})
 
 /* `''` is the ordinary state and the one everything starts in: nothing has been
    asked yet, so the panel says what a click would do. Anything this file has
