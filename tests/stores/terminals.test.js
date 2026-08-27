@@ -277,6 +277,20 @@ describe('agent rows', () => {
     })
   })
 
+  /* The third work about one named issue, and the one that is not about the
+     issue's own text: an edit changes what the task says, this changes what
+     was built for it, so it cannot share the edit's caption. */
+  it('captions a fix with the issue it is correcting', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 3, work: { kind: 'fixTask', id: 'smetana-42' } }))
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Fixing',
+      tasks: ['smetana-42']
+    })
+  })
+
   /* A session the worker described with something this front end has never
      heard of is an ordinary outcome, not an error: it is still an agent, and a
      row that says so is worth more than a blank one. */
@@ -730,6 +744,43 @@ describe('starting a session', () => {
     expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
       label: 'Editing',
       tasks: ['smetana-42']
+    })
+  })
+
+  /* The same handover for a fix, and the reason to walk it a second time is
+     `workOf`: it mirrors `Intent::work` in Rust by hand, so a variant added
+     there and forgotten here would caption the placeholder as a bare agent for
+     the second before the session lands and then change under the reader. */
+  it("a start's placeholder names the issue a fix is about", async () => {
+    const { ipc, stores } = await ready()
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+
+    const started = stores.terminals.createSession('/p', {
+      kind: 'fixTask',
+      id: 'smetana-7',
+      title: 'x y'
+    })
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Fixing',
+      tasks: ['smetana-7'],
+      starting: true
+    })
+
+    // The title is the agent's briefing and stays out of the work; the id and
+    // the title both go to the worker.
+    expect(ipc.calls('terminal_create').at(-1).intent).toEqual({
+      kind: 'fixTask',
+      id: 'smetana-7',
+      title: 'x y'
+    })
+
+    answer(session({ id: 9, work: { kind: 'fixTask', id: 'smetana-7' } }))
+    await started
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Fixing',
+      tasks: ['smetana-7']
     })
   })
 
