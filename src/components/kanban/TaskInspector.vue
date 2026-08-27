@@ -18,6 +18,7 @@
    already are — none of which this file knows or needs to learn. */
 import { computed } from 'vue'
 import Markdown from './Markdown.vue'
+import Tooltip from '../core/Tooltip.vue'
 import StatusBadge from '../status/StatusBadge.vue'
 import TypeBadge from './TypeBadge.vue'
 import { priorityLabel } from './issueType.js'
@@ -26,13 +27,23 @@ const props = defineProps({
   /* The issue in bd's own shape, straight out of the tracker store. */
   issue: { type: Object, required: true },
   /* Statuses translated to the design system's vocabulary, for the badge. */
-  uiStatus: { type: String, required: true }
+  uiStatus: { type: String, required: true },
+  /* What happened to the last attempt to copy this issue's id: `''` before
+     anything was asked, `'copied'` or `'failed'` after. It changes the text of
+     one tooltip and nothing else. The copying is the view's — this panel
+     imports no store and acts on nothing. */
+  copyState: { type: String, default: '' }
 })
 
 /* A link inside one of the prose fields, raised rather than opened: no
    component in `src/components/` knows Tauri exists, so the view binds
    `openExternal` — the app's one link-opening path — to this. */
-const emit = defineEmits(['open'])
+const emit = defineEmits(['open', 'copy-id'])
+
+/* The three things the id's tooltip can say, the same three the card carries.
+   Three strings rather than a rule, so each says its own. */
+const COPY_LABEL = { copied: 'Copied', failed: 'Could not copy' }
+const copyLabel = computed(() => COPY_LABEL[props.copyState] ?? 'Copy id')
 
 /* bd hands dates over as RFC 3339 in UTC. The panel is narrow, so the year is
    worth the four characters only because an issue can be old — the alternative,
@@ -100,9 +111,16 @@ const body = { display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }
 
 const header = { display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }
 
+/* A button with no surface of its own: the id is drawn exactly as it was, and
+   the pointer is the only thing that changes. There is one id in this header,
+   so unlike the card's it is worth a tab stop — Enter and Space copy it. */
 const idStyle = {
   font: 'var(--weight-medium) var(--text-xs)/1 var(--font-mono)',
-  color: 'var(--text-muted)'
+  color: 'var(--text-muted)',
+  padding: 0,
+  border: 0,
+  background: 'transparent',
+  cursor: 'pointer'
 }
 
 const titleStyle = {
@@ -163,7 +181,9 @@ const divider = {
 <template>
   <div :style="body">
     <div :style="header">
-      <span :style="idStyle">{{ issue.id }}</span>
+      <Tooltip :label="copyLabel">
+        <button type="button" :style="idStyle" @click="emit('copy-id', issue.id)">{{ issue.id }}</button>
+      </Tooltip>
       <StatusBadge :status="uiStatus" size="sm" />
       <!-- The panel keeps the status badge the card gave up: nothing here says
            which column the issue is in. The type joins it rather than staying a

@@ -9,6 +9,11 @@ import { moveColumn, orderColumns } from './columnOrder.js'
 const props = defineProps({
   columns: { type: Array, default: () => [] },
   selectedId: { type: String, default: undefined },
+  /* Which card's id was last copied, and how that went. Passed straight
+     through to the column: the board has no more to say about it than it has
+     about which card is selected. */
+  copiedId: { type: String, default: undefined },
+  copyState: { type: String, default: '' },
   /* The status of the one column that accepts new issues — it alone has a "+".
      null: the board creates nothing. Which status that is, is the product's
      decision: there is no fixed set of columns here and there cannot be. */
@@ -58,7 +63,7 @@ const props = defineProps({
    from/to pair: the board is not the owner of the order and has no business
    describing a change to a list it does not keep. Whoever stores it applies the
    answer wholesale and hands it back through `columns`. */
-const emit = defineEmits(['select', 'add', 'reorder', 'run', 'task-action', 'promote'])
+const emit = defineEmits(['select', 'add', 'reorder', 'run', 'task-action', 'promote', 'copy-id'])
 
 const strip = ref(null)
 /* The order under the pointer, and only while the pointer holds it. Idle, this
@@ -249,6 +254,8 @@ const style = {
       :key="c.status"
       v-bind="c"
       :selected-id="selectedId"
+      :copied-id="copiedId"
+      :copy-state="copyState"
       :addable="c.status === addTo"
       :runnable="runFrom != null && c.status === runFrom"
       :run-blocked-reason="runBlockedReason"
@@ -260,6 +267,7 @@ const style = {
       @run="$emit('run', $event)"
       @promote="$emit('promote', $event)"
       @task-action="$emit('task-action', $event)"
+      @copy-id="$emit('copy-id', $event)"
       @grab="onGrab(c.status, $event)"
       @move="onMove(c.status, $event)"
     />

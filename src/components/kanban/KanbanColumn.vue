@@ -10,6 +10,12 @@ const props = defineProps({
   wipLimit: { type: Number, default: null },
   dropTarget: { type: Boolean, default: false },
   selectedId: { type: String, default: undefined },
+  /* Which card's id was last copied, and how that went — the same two hops as
+     `selectedId`, and paired for the same reason it is a single id: one
+     confirmation exists on the board at a time, so copying one id takes the
+     confirmation off whatever held it before. */
+  copiedId: { type: String, default: undefined },
+  copyState: { type: String, default: '' },
   addable: { type: Boolean, default: true },
   /* Passed through to the header, which is the handle; the gesture itself
      belongs to the board. */
@@ -32,7 +38,7 @@ const props = defineProps({
    the v-bind below — the board already decides everything else about a card
    that way, and adding a second channel for one flag would put the decision in
    two places. */
-defineEmits(['select', 'add', 'grab', 'move', 'run', 'task-action', 'promote'])
+defineEmits(['select', 'add', 'grab', 'move', 'run', 'task-action', 'promote', 'copy-id'])
 
 /* `moving` reaches the header and stops there. The column being dragged is not
    dimmed or lifted: it is where the pointer already is, and the eye needs it to
@@ -95,8 +101,10 @@ const emptyDescription = computed(() => `Nothing in ${String(props.status).repla
           :key="t.id"
           v-bind="t"
           :selected="t.id === selectedId"
+          :copy-state="t.id === copiedId ? copyState : ''"
           @click="$emit('select', t.id)"
           @action="$emit('task-action', $event)"
+          @copy-id="$emit('copy-id', $event)"
         />
       </template>
       <EmptyState v-else compact icon="minus" title="Empty" :description="emptyDescription" />
