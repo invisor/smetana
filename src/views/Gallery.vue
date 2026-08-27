@@ -1275,8 +1275,17 @@ const menuItems = [
    sentence is what `TaskCard`'s width was measured against. A shorter id here
    would let the width regress without the gallery showing it. */
 const CARD_MENU = taskMenuItems({
-  bdStatus: 'closed',
+  bdStatus: 'open',
   runnable: true,
+  runBlockedReason: '',
+  busy: false
+})
+/* The done card, which is the only shape of this menu with no play and no edit
+   on it at all: the work is merged, so what is offered is a correction to it
+   rather than a run over it. */
+const DONE_CARD_MENU = taskMenuItems({
+  bdStatus: 'closed',
+  runnable: false,
   runBlockedReason: '',
   busy: false
 })
@@ -3805,6 +3814,7 @@ const menuTargetStyle = {
           <MenuButton :items="CARD_MENU" :width="MENU_W" label="Actions for bd-a1b2" @select="() => {}" />
           <MenuButton :items="BUSY_CARD_MENU" :width="MENU_W" label="Actions for bd-77e0" @select="() => {}" />
           <MenuButton :items="PARKED_CARD_MENU" :width="MENU_W" label="Actions for bd-29j1" @select="() => {}" />
+          <MenuButton :items="DONE_CARD_MENU" :width="MENU_W" label="Actions for bd-5f01" @select="() => {}" />
         </div>
         <!-- And one at the component's own default, which is what a caller with
              short verbs gets: the width is the caller's business, so both ends

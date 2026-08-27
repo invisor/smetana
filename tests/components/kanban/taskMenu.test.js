@@ -163,4 +163,43 @@ describe('taskMenuItems', () => {
     expect(children[0]).toMatchObject({ value: 'open', disabled: false })
     expect(children.at(-1)).toMatchObject({ label: 'Parked', disabled: true, icon: 'check' })
   })
+
+  it('drops the run and the edit on a done card, and offers the fix instead', () => {
+    /* Neither removed row is a loss. The run is refused on a closed issue
+       anyway (`runnableTask` in DesktopApp), so it was a permanently greyed
+       row; the edit is about the issue's own text, which is not what somebody
+       wants from work that is finished and wrong. */
+    const items = taskMenuItems({ ...base, bdStatus: 'closed' })
+    expect(kinds(items)).toEqual(['fix', 'follow-up', 'move', 'delete'])
+    expect(find(items, 'fix')).toMatchObject({
+      label: 'Fix this',
+      icon: 'wrench',
+      disabled: false
+    })
+    expect(items.at(-2)).toEqual({ type: 'separator' })
+  })
+
+  it("reads the normalised status, not bd's own word for it", () => {
+    /* A project whose done column is spelled some other way still normalises
+       to `done`, and the menu it gets has to be the same one. */
+    expect(kinds(taskMenuItems({ ...base, bdStatus: 'Done' }))).toEqual([
+      'fix',
+      'follow-up',
+      'move',
+      'delete'
+    ])
+  })
+
+  it('offers the fix on a done card only', () => {
+    // A row dead on all but a handful of cards is one a person reads past,
+    // which is the trade the `resolve` row above it already makes.
+    for (const bdStatus of ['open', 'in_progress', 'parked', 'blocked', '']) {
+      expect(kinds(taskMenuItems({ ...base, bdStatus }))).not.toContain('fix')
+    }
+  })
+
+  it('greys the fix while a write is in flight, like every other row', () => {
+    const items = taskMenuItems({ ...base, bdStatus: 'closed', busy: true })
+    expect(find(items, 'fix').disabled).toBe(true)
+  })
 })
