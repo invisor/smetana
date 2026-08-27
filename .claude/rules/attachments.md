@@ -39,8 +39,21 @@ not import this store at all; what still reaches it from the app window is `surv
 `notifications.js`, which is a question about a folder and not about the list. Only the paths travel
 back, in `submit`.
 
-Nothing is heard twice as a result: `attachment_import` and `attachment_write` are commands rather
-than subscriptions, so there is no second observer and no second copy of the list.
+**No drop is heard twice, and the reason is the webviews rather than anything in this file.** The only
+other subscriber to a window's drag-drop event in the whole tree is `watchSessionDrops` in
+`terminals.js`, which types a dropped path into a live agent; it is subscribed from `TerminalView.vue`
+and therefore lives in the app window's webview, while this store now lives in the dialog's. Tauri
+delivers a drop only to the window it landed on, so the two never see the same event and need no
+arbiter — there is deliberately none. That is what makes `() => true` safe here, and it is safe **only
+for as long as this store stays out of the app window**: importing it into `DesktopApp.vue` again, or
+widening either side's acceptance, puts both subscribers back on one webview, where a single file is
+copied into a draft task *and* typed into somebody's running agent, with nothing on either side to
+catch it. `.claude/rules/terminal.md` carries the full argument, beside the hit test that settles
+which pane of the app window a drop belongs to.
+
+Nothing is *collected* twice either, which is the smaller half: `attachment_import` and
+`attachment_write` are commands rather than subscriptions, so the move added no second observer and
+no second copy of the list.
 
 **The bytes are copied, never pointed at.** They go into `app_data_dir()` and the path that reaches
 the agent is absolute, because the case this exists for is a screenshot in `~/Downloads` that a
