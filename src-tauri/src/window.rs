@@ -384,7 +384,27 @@ pub fn persist_geometry(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_query, tab_query};
+    use super::{compare_query, tab_query, window_chrome};
+
+    /// The two words this command may answer with, named here in full because
+    /// they are a contract with `src/components/shell/windowChrome.js` and
+    /// nothing else pins them. That module answers `none` for a word it has not
+    /// heard of, deliberately — a browser is the ordinary way to reach it — so a
+    /// rename on either side does not fail, it silently costs the feature:
+    /// macOS draws the project name under the traffic lights, and Windows and
+    /// Linux lose all three buttons on a window that has no system ones.
+    #[test]
+    fn the_front_end_is_told_one_of_the_two_words_it_knows() {
+        assert!(
+            matches!(window_chrome(), "traffic-lights" | "buttons"),
+            "window_chrome answered {:?}, which components/shell/windowChrome.js reads as no chrome at all",
+            window_chrome()
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(window_chrome(), "traffic-lights");
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(window_chrome(), "buttons");
+    }
 
     #[test]
     fn a_section_rides_as_a_query_parameter() {

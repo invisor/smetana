@@ -16,7 +16,7 @@ import Resizer from '../components/shell/Resizer.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import { headline } from '../components/shell/headline.js'
-import { CHROME_NONE, chromeInFullscreen } from '../components/shell/windowChrome.js'
+import { CHROME_NONE, CHROME_STATES, chromeInFullscreen } from '../components/shell/windowChrome.js'
 import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
@@ -108,7 +108,6 @@ import {
   minimizeWindow,
   openExternal,
   openSettingsWindow,
-  readWindowChrome,
   revealInFileManager,
   toggleMaximizeWindow,
   watchBoardHello,
@@ -252,20 +251,27 @@ import { keepOnly } from '../components/files/editor/states.js'
 
 const props = defineProps({
   theme: { type: String, default: 'dark' },
-  density: { type: String, default: 'comfortable' }
+  density: { type: String, default: 'comfortable' },
+  /* Which chrome the window around this view has, from
+     `components/shell/windowChrome.js`. A prop rather than a question asked
+     here, because it has to be settled before this view's first paint — see
+     `App.vue`, which resolves it in the same wait as the settings file. */
+  windowChrome: {
+    type: String,
+    default: CHROME_NONE,
+    validator: (value) => CHROME_STATES.includes(value)
+  }
 })
 
-/* The window's own chrome, which the scope bar is the title bar of now. Three
-   refs and not one, because they answer three different questions and only the
-   first is fixed for the life of the window: what the platform gave us, whether
-   the window is fullscreen right now, and whether it is maximized. */
-const windowChrome = ref(CHROME_NONE)
+/* The two halves of the window's state that do change while it is open. The
+   chrome itself does not — it is what the platform gave us, and it arrives as a
+   prop already settled. */
 const fullscreen = ref(false)
 const maximized = ref(false)
 
 /* What the bar actually draws: the window's chrome, minus the traffic lights
    while a fullscreen window has moved them into its own auto-hiding bar. */
-const barChrome = computed(() => chromeInFullscreen(windowChrome.value, fullscreen.value))
+const barChrome = computed(() => chromeInFullscreen(props.windowChrome, fullscreen.value))
 
 /* Held here and torn down synchronously, the way `stopBoardHello` below is: the
    subscription is only reached after an await, by which point there is no
@@ -273,11 +279,10 @@ const barChrome = computed(() => chromeInFullscreen(windowChrome.value, fullscre
    register against. */
 let stopFullscreen = null
 onMounted(async () => {
-  windowChrome.value = await readWindowChrome()
   /* Nothing to watch in a browser, and asking would cost a second line in a
      console this view keeps quiet on purpose: `none` is the answer precisely
      when there is no window behind the page. */
-  if (windowChrome.value === CHROME_NONE) return
+  if (props.windowChrome === CHROME_NONE) return
   maximized.value = await isWindowMaximized()
   stopFullscreen = await watchFullscreen(async (value) => {
     fullscreen.value = value

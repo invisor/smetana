@@ -66,7 +66,14 @@
    the design system's alone. `--title-bar-inset` is the width macOS needs on
    the left for its traffic lights: three 12px circles and their margins,
    measured from the window edge. It is 0 everywhere else, so the bar can add it
-   unconditionally and pay nothing where there is nothing to clear.
+   unconditionally and pay nothing where there is nothing to clear. It is not
+   related to --titlebar-h above, which is a row height belonging to a panel
+   header and is spelled without the hyphen; the two are near neighbours in this
+   file and nothing else.
+
+   0px and not 0: the bar spends it inside calc(), where a length plus a
+   unitless number is a type error that throws away the whole padding
+   declaration rather than resolving to no inset.
 
    The floor under the height is the other. The traffic lights are a fixed size
    this app cannot scale, and below about 28px they no longer fit inside the bar
@@ -75,6 +82,15 @@
    all. Telling macOS to move the lights instead was the version thrown away:
    the height changes at runtime with both density and font size, so it would
    mean a command per change and a light that lags a setting by a frame.
+
+   The floor rides the token rather than the bar, so it reaches everything drawn
+   at --scope-bar-h and not only the scope bar: the compare window's header and
+   the notifications panel's top offset, both of which want to agree with the
+   bar and are therefore right to follow it, and agent/LogToolbar.vue, which
+   wants the height and has nothing to do with any traffic light. That last one
+   costs nothing today because the log toolbar is drawn nowhere in the product —
+   it is exported from components/index.js and nothing renders it — so if it
+   ever reaches the app window it will inherit a floor that is not about it.
 
    Both rules sit after the compact block so the compound selector reads last as
    well as strongest. */

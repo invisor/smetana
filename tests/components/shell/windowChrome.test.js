@@ -97,4 +97,18 @@ describe('the vocabulary itself', () => {
     expect(CHROME_STATES).toEqual([CHROME_NONE, CHROME_TRAFFIC_LIGHTS, CHROME_BUTTONS])
     expect(CHROME_ATTRIBUTE).toBe('data-window-chrome')
   })
+
+  /* Spelled out rather than compared against themselves, because two of these
+     three are a contract with Rust: `window::window_chrome` answers one of them
+     over IPC, and `src-tauri/src/window.rs` names both in a test of its own.
+     Every other assertion in this file would pass with `CHROME_TRAFFIC_LIGHTS`
+     renamed to anything at all — `chromeFromPlatform` would then read Rust's
+     answer as a word it has not heard of and hand back `none`, which is a
+     legitimate value, so nothing would throw and the inset would simply stop
+     happening on the one platform that ships. */
+  it('spells the two words Rust answers with, and the third that only we say', () => {
+    expect(CHROME_TRAFFIC_LIGHTS).toBe('traffic-lights')
+    expect(CHROME_BUTTONS).toBe('buttons')
+    expect(CHROME_NONE).toBe('none')
+  })
 })

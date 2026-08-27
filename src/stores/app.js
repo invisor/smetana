@@ -243,7 +243,17 @@ export async function toggleMaximizeWindow() {
 /* `close()`, never `destroy()`. `stores/settings.js` intercepts
    `onCloseRequested` to flush the pending write of `settings.json`, and a
    button that destroyed the window instead would drop somebody's last change
-   with nothing on screen to say so. */
+   with nothing on screen to say so.
+
+   It needs `core:window:allow-close` granted explicitly in
+   `capabilities/default.json`, beside the `allow-destroy` that same flush needs
+   on the far side of the interception. `core:default` does **not** carry it:
+   that is the nine plugin defaults, of which `core:window:default` is 28
+   entries holding neither. Nothing in either suite can catch the omission — the
+   front end's tests cannot read a capability file, Rust's cannot reach this
+   call, and the only two platforms that draw this button are the two CI never
+   builds — so the button would simply log the line below and leave a window
+   with no system close button of its own uncloseable. */
 export async function closeWindow() {
   try {
     await getCurrentWindow().close()

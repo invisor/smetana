@@ -4,6 +4,8 @@ import DesktopApp from './views/DesktopApp.vue'
 import SettingsWindow from './views/SettingsWindow.vue'
 import CompareWindow from './views/CompareWindow.vue'
 import { loadSettings, settings } from './stores/settings.js'
+import { readWindowChrome } from './stores/app.js'
+import { CHROME_NONE } from './components/shell/windowChrome.js'
 import { effectiveTheme } from './appearance.js'
 import { usePrefersDark } from './views/useAppearance.js'
 
@@ -42,14 +44,33 @@ const settingsTab = params.get('tab')
 const compareRepo = params.get('repo')
 const compareBranch = params.get('branch')
 
+/* Which chrome the window around this page has, which the app window's scope
+   bar is the title bar of. Resolved here rather than in `DesktopApp.vue`, and
+   that is the whole reason it is in this file: it has to be known *before* the
+   bar's first paint. Asked for on mount instead, the bar drew one frame with no
+   inset and then jumped 78px — on macOS that is the project name under the
+   traffic lights on every cold start, which is the one thing this change is
+   most on the hook for.
+
+   The other three views never ask. They keep their own title bars, so the
+   answer would be true and useless, and `none` is what they are drawn in
+   anyway. */
+const windowChrome = ref(CHROME_NONE)
+
 /* The gallery is a component harness, and neither of the two other windows
    holds this store: all three render straight away. The app waits for the
    file — a few milliseconds — rather than painting the default theme and
-   flipping. */
+   flipping, and the chrome is awaited in the same breath because it is wanted
+   at the same moment and neither is worth a second wait. */
 const standalone = gallery.value || settingsWindow.value || compareWindow.value
 const ready = ref(standalone)
 if (!standalone) {
-  loadSettings().then(() => {
+  Promise.all([
+    loadSettings(),
+    readWindowChrome().then((chrome) => {
+      windowChrome.value = chrome
+    })
+  ]).then(() => {
     ready.value = true
   })
 }
@@ -97,5 +118,10 @@ const density = computed(
     :branch="compareBranch"
   />
   <Gallery v-else-if="gallery" :theme="theme" :density="density" />
-  <DesktopApp v-else-if="ready" :theme="theme" :density="density" />
+  <DesktopApp
+    v-else-if="ready"
+    :theme="theme"
+    :density="density"
+    :window-chrome="windowChrome"
+  />
 </template>
