@@ -2,6 +2,10 @@
 paths:
   - "src-tauri/src/attachments/**"
   - "src/stores/attachments.js"
+  # The store's only consumer in `src/` since the dialog became a window: the
+  # host loads it, subscribes it to that window's drops and answers the three
+  # image emits itself. Somebody editing the host has to see this rule.
+  - "src/views/DialogWindow.vue"
   - "src/components/kanban/AttachmentStrip.vue"
   - "src/components/settings/StorageSettings.vue"
   - "src/components/settings/storage.js"
@@ -20,9 +24,36 @@ disk and the vocabulary, `cleanup.rs` is the whole of the deleting rule with no 
 Three gestures put a picture in the list and they arrive as only two kinds of thing. A file already
 on disk arrives as a path and Rust copies it (`attachment_import`); the clipboard exists inside the
 page and nowhere this process can reach, so a paste arrives as bytes (`attachment_write`). Both
-answer with the same record, which leaves the strip one shape to draw. The list lives in the store
-rather than in the dialog because a drop is not the dialog's event to hear: Tauri intercepts file
-drops before the webview sees them and reports them against the *window*.
+answer with the same record, which leaves the strip one shape to draw.
+
+**The list belongs to the New task window, and the app window does not hold it.** Tauri intercepts a
+file drop before any webview sees it and reports it against the *window* it landed on, so where the
+list lives follows entirely from what the dialog is. While it was a modal over the board the drop was
+the app window's event and never the dialog's, and the store therefore sat outside the dialog, in the
+window that could hear one. The dialog is an OS window of its own now (`smetana-at3`), so the drop
+**is** its own event — and the only process that can hear it is the one somebody dropped the file on.
+That is why the store moved: `DialogWindow.vue` imports it, lazily and only for the `new-task` kind,
+subscribes `watchDrops` to that window with an `accepting` that is simply `true`, and answers the
+`attach`, `files` and `remove` emits on the spot instead of forwarding them. `DesktopApp.vue` does
+not import this store at all; what still reaches it from the app window is `surveyStorage`, through
+`notifications.js`, which is a question about a folder and not about the list. Only the paths travel
+back, in `submit`.
+
+**No drop is heard twice, and the reason is the webviews rather than anything in this file.** The only
+other subscriber to a window's drag-drop event in the whole tree is `watchSessionDrops` in
+`terminals.js`, which types a dropped path into a live agent; it is subscribed from `TerminalView.vue`
+and therefore lives in the app window's webview, while this store now lives in the dialog's. Tauri
+delivers a drop only to the window it landed on, so the two never see the same event and need no
+arbiter — there is deliberately none. That is what makes `() => true` safe here, and it is safe **only
+for as long as this store stays out of the app window**: importing it into `DesktopApp.vue` again, or
+widening either side's acceptance, puts both subscribers back on one webview, where a single file is
+copied into a draft task *and* typed into somebody's running agent, with nothing on either side to
+catch it. `.claude/rules/terminal.md` carries the full argument, beside the hit test that settles
+which pane of the app window a drop belongs to.
+
+Nothing is *collected* twice either, which is the smaller half: `attachment_import` and
+`attachment_write` are commands rather than subscriptions, so the move added no second observer and
+no second copy of the list.
 
 **The bytes are copied, never pointed at.** They go into `app_data_dir()` and the path that reaches
 the agent is absolute, because the case this exists for is a screenshot in `~/Downloads` that a

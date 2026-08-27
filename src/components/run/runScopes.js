@@ -48,3 +48,20 @@ export function scopeBusyReason(scope, runs) {
   )
   return busy ? `a run over ${scopeLabel(scope)} is already going` : ''
 }
+
+/* What the run dialog is called, off the same scope.
+
+   Here rather than in `RunModal.vue` alone, and that is what this task moved:
+   the dialog is a window now, so the title is drawn twice — once by the dialog's
+   own `Modal` and once by the OS frame around it, which the app window sizes
+   and captions from the announcement. Two copies of a three-line rule is two
+   places for it to drift, and the drift would be a frame and a heading naming
+   different things about one run.
+
+   Not "Run this epic" for the epic scope: the scope takes an issue's children,
+   and whether that issue is typed as one is bd's business and often nobody's. */
+export function runTitle(scope) {
+  if (scope?.kind === 'task') return 'Run this task'
+  if (scope?.kind === 'epic') return 'Run these tasks'
+  return 'Run the queue'
+}

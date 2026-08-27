@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sameScope, scopeBusyReason, scopeLabel } from '../../../src/components/run/runScopes.js'
+import { runTitle, sameScope, scopeBusyReason, scopeLabel } from '../../../src/components/run/runScopes.js'
 
 const run = (scope, stateKind = 'working') => ({
   token: 1,
@@ -85,5 +85,19 @@ describe('why a play is inactive', () => {
   it('no runs, or none at all, is an open board', () => {
     expect(scopeBusyReason({ kind: 'queue' }, [])).toBe('')
     expect(scopeBusyReason({ kind: 'queue' }, null)).toBe('')
+  })
+})
+
+describe('what the run dialog is called', () => {
+  it('names the one task, the children under an issue, and the queue', () => {
+    expect(runTitle({ kind: 'task', id: 'smetana-1' })).toBe('Run this task')
+    expect(runTitle({ kind: 'epic', id: 'smetana-1' })).toBe('Run these tasks')
+    expect(runTitle({ kind: 'queue' })).toBe('Run the queue')
+  })
+
+  it('reads a missing scope as the queue, which is what the dialog opens on', () => {
+    expect(runTitle(null)).toBe('Run the queue')
+    expect(runTitle(undefined)).toBe('Run the queue')
+    expect(runTitle({})).toBe('Run the queue')
   })
 })
