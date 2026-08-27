@@ -57,7 +57,6 @@ const barStyle = {
   gap: 'var(--space-4)',
   height: 'var(--scope-bar-h)',
   flex: '0 0 auto',
-  padding: '0 var(--space-5)',
   background: 'var(--scope-bar)',
   borderTop: 'var(--border-w) solid var(--border)',
   color: 'var(--text-secondary)',
@@ -67,7 +66,7 @@ const barStyle = {
 /* The hint is about the whole strip rather than about any one segment of it, so
    its trigger fills the bar instead of hugging the words, and the row inside it
    stretches rather than centring: what a person presses and what the hint opens
-   over are then the same shape, which is the height of the bar. */
+   over are then the same shape, which is the whole of the bar. */
 const fillStyle = {
   display: 'inline-flex',
   alignItems: 'stretch',
@@ -75,16 +74,29 @@ const fillStyle = {
   flex: '1 1 auto',
   minWidth: 0
 }
-/* The cursor is here and not on the bar, for the same reason: the bar's own
-   padding is outside the control, and a pointer over a strip that does not
-   answer a press would be the affordance lying about where the control is. */
+/* The row carries the padding, the cursor and the ring, and none of the three
+   is arbitrary. The padding is here rather than on the bar because the bar is
+   no longer the control: left there, it would be a gutter at each end of a
+   full-width strip that is neither pressable nor hoverable — and the left one
+   is the window's bottom-left corner, which is the easiest target on the whole
+   screen to hit. The cursor follows it for the same reason: an affordance over
+   ground that does not answer a press is the affordance lying about where the
+   control is.
+
+   The ring is pulled inside its own edge. `base.css` draws `:focus-visible`
+   with `outline-offset: 1px`, and this row's bottom edge is the window's, under
+   an ancestor that clips: the ring's bottom would be cut away entirely and its
+   top drawn into the board above, erasing the bar's own rule under it. Negative
+   offset is `AttachmentStrip.vue`'s answer to the same clipping ancestor. */
 const rowStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
   flex: '1 1 auto',
   minWidth: 0,
-  cursor: 'pointer'
+  padding: '0 var(--space-5)',
+  cursor: 'pointer',
+  outlineOffset: 'calc(var(--border-w-strong) * -1)'
 }
 /* `Icon` takes its size as an SVG attribute, which cannot be a custom property,
    so the token is handed over as CSS instead — the style wins over the

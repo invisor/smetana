@@ -170,12 +170,18 @@ describe('usageTooltip', () => {
     expect(tip).not.toMatch(/has not been read yet/)
   })
 
-  /* The refusal beats a reading still on screen and beats `busy` with it, the
-     way it does in the settings block: one attempt is described once, and the
-     refusal is the account of it. */
-  it('lets a refusal beat everything else that would have been said', () => {
+  /* What a refusal silences is the sentence about the reading — the band's line
+     and the busy line both — the way it does in the settings block: one attempt
+     is described once, and the refusal is the account of it. It deliberately
+     does **not** silence the reset strings: those are the harness's own words
+     about an allowance, still true whatever failed on the way to asking again.
+     The caller never reaches that state anyway, since `DesktopApp.vue` clears
+     the reading on a refusal, so what is pinned here is the precedence and not
+     a screen anybody sees. */
+  it('lets a refusal silence the note and the busy line, and keeps the reset strings', () => {
     const tip = usageTooltip(reading(BOTH), true, 'the worker is not answering')
     expect(tip).toMatch(/The allowance could not be read: the worker is not answering$/)
+    expect(tip).toMatch(/^Session resets Aug 7 at 8pm/)
     expect(tip).not.toMatch(/Reading what is left/)
     expect(tip).not.toMatch(/fewer tasks per batch/)
   })
