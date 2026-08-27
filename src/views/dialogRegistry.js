@@ -21,7 +21,7 @@
 const REGISTRY = {
   run: { width: 440, ground: ['project'] },
   'new-task': { width: 440, ground: ['project', 'column'] },
-  'new-branch': { width: 440, ground: ['project', 'branch'] },
+  'new-branch': { width: 440, ground: ['project', 'repo', 'branch'] },
   'promote-column': { width: 440, ground: ['project', 'column'] },
   'setup-project': { width: 440, ground: ['project'] },
   'delete-task': { width: 440, ground: ['project', 'issue'] },
@@ -59,6 +59,7 @@ const DIALOG_NOUN = {
 
 const REASON_CLAUSE = {
   project: 'the project changed',
+  repo: 'the Git panel moved to another repository',
   issue: 'the task it was about no longer exists',
   column: 'the column it was about is no longer on the board',
   branch: 'the branch it started from is gone'
@@ -72,7 +73,7 @@ export function stalenessMessage(kind, reason) {
 
 /* Which of the open dialog windows have lost their ground.
    `world` is what the app window holds right now:
-   `{ project, issues: Set, columns: Set, branches: Set }`. */
+   `{ project, repo, issues: Set, columns: Set, branches: Set }`. */
 export function staleDialogs(open, world) {
   return open
     .filter(({ kind, ground }) => Boolean(stalenessOf(kind, ground, world)))
@@ -87,6 +88,15 @@ export function staleDialogs(open, world) {
    invalidates every other kind of ground at once — the ids in a different
    tracker are a different vocabulary, not a smaller one.
 
+   The repository is checked the same way, by equality against the one the Git
+   panel has selected, and **not** by membership of the list of repositories the
+   project holds. The case this clause exists for is a repository that is still
+   perfectly present and simply no longer the selected one: the panel's writes
+   resolve which repository they run in at the moment they are pressed, so a
+   dialog left standing over a repository somebody has clicked away from would
+   cut its branch in the wrong one. A name like `main` exists in both, so no
+   clause about branches could have caught it.
+
    The other three are checked only when the ground actually names one. A field
    that is absent is not a field that went: a dialog standing on the project
    alone would otherwise be closed by every world whose set of columns happens
@@ -94,6 +104,7 @@ export function staleDialogs(open, world) {
 export function stalenessOf(kind, ground, world) {
   const needs = dialogGround(kind)
   if (needs.includes('project') && ground.project !== world.project) return 'project'
+  if (needs.includes('repo') && ground.repo !== world.repo) return 'repo'
   if (needs.includes('issue') && ground.issue != null && !world.issues.has(ground.issue)) {
     return 'issue'
   }

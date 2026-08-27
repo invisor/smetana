@@ -670,14 +670,19 @@ const newBranchFrom = ref(null)
 function openNewBranch(from) {
   newBranchFrom.value = from
   serveDialog('new-branch', {
-    ground: { project: activePath.value, branch: from },
+    /* The repository is captured here and is part of the ground, because
+       `createBranch` resolves it from `vcsState.selected` when Create is
+       pressed rather than when this window opened. With no scrim to stop them,
+       somebody can click another repository row in the panel while the window
+       stands — and `main` exists in both, so nothing about the branch name would
+       have noticed. The window closes instead, before Create can be pressed. */
+    ground: { project: activePath.value, repo: vcsState.selected, branch: from },
     props: () => ({
       title: 'New branch',
       from: newBranchFrom.value,
       branches: vcsState.branches,
       actions: gitWrites.value,
-      busy: Boolean(vcsState.busy),
-      closable: !vcsState.busy
+      busy: Boolean(vcsState.busy)
     }),
     forget: () => {
       newBranchFrom.value = null
@@ -2403,6 +2408,11 @@ onUnmounted(() => clearTimeout(fileMenuToastTimer))
 watch(
   () => ({
     project: activePath.value,
+    /* The repository the Git panel has selected, and not the list of them. A
+       write in that panel resolves which repository it runs in at the moment it
+       is pressed, so what a dialog about a repository stands on is the selection
+       — see `stalenessOf`, which spends a paragraph on why. */
+    repo: vcsState.selected,
     issues: new Set(trackerState.issues.keys()),
     columns: new Set(projectColumns.value),
     branches: new Set(vcsState.branches.map((branch) => branch.name))
@@ -2421,7 +2431,6 @@ watch(
     }
   }
 )
-
 
 /* Which agent a path lands in: the selected one, and only ever the selected
    one, when it is an agent that can be typed into.

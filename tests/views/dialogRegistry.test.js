@@ -39,6 +39,7 @@ describe('the dialog registry', () => {
 describe('ground that has gone', () => {
   const world = {
     project: '/repo',
+    repo: '/repo/app',
     issues: new Set(['smetana-1']),
     columns: new Set(['deferred']),
     branches: new Set(['main'])
@@ -68,8 +69,22 @@ describe('ground that has gone', () => {
   })
 
   it('closes a dialog whose starting branch is gone', () => {
-    const open = [{ kind: 'new-branch', ground: { project: '/repo', branch: 'gone' } }]
+    const open = [
+      { kind: 'new-branch', ground: { project: '/repo', repo: '/repo/app', branch: 'gone' } }
+    ]
     expect(staleDialogs(open, world)).toEqual(['new-branch'])
+  })
+
+  /* The repository is equality against the selected one and not membership of
+     the project's list: `main` exists in both repositories of a project, so a
+     dialog left standing over the one somebody clicked away from would cut its
+     branch in the other with every name check passing. */
+  it('closes a dialog whose repository is no longer the selected one', () => {
+    const open = [
+      { kind: 'new-branch', ground: { project: '/repo', repo: '/repo/docs', branch: 'main' } }
+    ]
+    expect(staleDialogs(open, world)).toEqual(['new-branch'])
+    expect(stalenessOf('new-branch', open[0].ground, world)).toBe('repo')
   })
 
   /* A kind whose ground names nothing beyond the project is not stale because
@@ -82,9 +97,10 @@ describe('ground that has gone', () => {
   })
 
   it('names the reason rather than only the verdict', () => {
-    expect(stalenessOf('new-branch', { project: '/repo', branch: 'main' }, world)).toBe(null)
-    expect(stalenessOf('new-branch', { project: '/repo', branch: 'gone' }, world)).toBe('branch')
-    expect(stalenessOf('new-branch', { project: '/other', branch: 'main' }, world)).toBe('project')
+    const standing = { project: '/repo', repo: '/repo/app', branch: 'main' }
+    expect(stalenessOf('new-branch', standing, world)).toBe(null)
+    expect(stalenessOf('new-branch', { ...standing, branch: 'gone' }, world)).toBe('branch')
+    expect(stalenessOf('new-branch', { ...standing, project: '/other' }, world)).toBe('project')
   })
 
   it('says why, naming the thing that went', () => {
@@ -94,6 +110,9 @@ describe('ground that has gone', () => {
     expect(stalenessMessage('run', 'project')).toBe('The run dialog closed: the project changed.')
     expect(stalenessMessage('new-branch', 'branch')).toBe(
       'The new branch dialog closed: the branch it started from is gone.'
+    )
+    expect(stalenessMessage('new-branch', 'repo')).toBe(
+      'The new branch dialog closed: the Git panel moved to another repository.'
     )
   })
 })

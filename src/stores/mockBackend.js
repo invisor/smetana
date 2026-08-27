@@ -9,6 +9,7 @@
    invented issue — otherwise a "write" in the browser would look like it worked
    while silently doing nothing. */
 import { mockIPC } from '@tauri-apps/api/mocks'
+import { emit, listen } from '@tauri-apps/api/event'
 import { columns as fixtureColumns } from '../views/desktopAppData.js'
 import { defaults as settingsDefaults } from './settings.js'
 import { MOCK_SESSION_OUTPUT } from './terminalFixture.js'
@@ -38,6 +39,40 @@ const COLUMN_CATEGORY = {
    the mock: see task-8-report.md. */
 const DEPENDENCY_EDGES = {
   'bd-77e1': ['bd-a1b2', 'bd-7f31']
+}
+
+/* The selected repository's branches. Hoisted out of the `vcs_branches` answer
+   because the dialog fixture below is drawn against the same list: a New branch
+   window in a browser offering branches the panel behind it does not have would
+   be two fixtures disagreeing about one repository. */
+const MOCK_BRANCHES = [
+  { name: 'develop', current: false },
+  { name: 'feat/worktree-rename', current: true },
+  { name: 'main', current: false },
+  { name: 'release/7', current: false }
+]
+
+/* What a dialog window is drawn with in a browser.
+
+   `?view=dialog&kind=<name>` is this project's only verification of these
+   components — there is no component test runner — and a dialog window holds no
+   store: everything it draws is announced to it by the app window. In a browser
+   there is no app window, so without this the screen the acceptance criteria
+   rest on rendered an empty form: "Cut from ." with no branch, no list to check
+   a name against and no title.
+
+   This is a hand-written shape standing in for what the app window would say,
+   the way `terminal_marks` and `vcs_compare` above stand in for a worker and for
+   git. Small on purpose: a fixture per kind, holding what that dialog draws and
+   nothing else. */
+const DIALOG_PROPS = {
+  'new-branch': {
+    title: 'New branch',
+    from: 'feat/worktree-rename',
+    branches: MOCK_BRANCHES,
+    actions: { allowed: true, reason: null },
+    busy: false
+  }
 }
 
 /* There are two projects in the browser so that the list in the panel has
@@ -697,12 +732,7 @@ export function installMockBackend() {
        conflict dialog reachable in a browser only through `?view=gallery`,
        where it has four frames of its own. */
     if (command === 'vcs_branches') {
-      return [
-        { name: 'develop', current: false },
-        { name: 'feat/worktree-rename', current: true },
-        { name: 'main', current: false },
-        { name: 'release/7', current: false }
-      ]
+      return MOCK_BRANCHES
     }
     /* Where those branches stand against their upstreams, which is the one read
        of this panel whose answer nothing on disk could give: it is a process,
@@ -876,6 +906,29 @@ export function installMockBackend() {
         'dev mode; writes to the tracker require the real Tauri backend (npm run tauri dev).'
     )
   }, { shouldMockEvents: true })
+
+  /* The app window's half of the dialog contract, for the one page a browser
+     has. A dialog window says hello after it has subscribed and is answered with
+     the props as they stand; here that answer is the fixture.
+
+     The hello is the only trigger worth having in a browser, and `invoke` is
+     deliberately not one: a browser runs one page, so `dialog_window_open` is
+     only ever called from the app view, where nothing is listening for a
+     dialog's props. Answering it too would be a line that can never fire.
+
+     Registered here rather than lazily because this runs before the app mounts,
+     which is what puts the listener in place before any window can say hello.
+     A kind with no fixture gets no listener at all — it simply draws with
+     nothing, exactly as it did before this existed. */
+  for (const [kind, fixture] of Object.entries(DIALOG_PROPS)) {
+    listen(`dialog:hello:${kind}`, () => {
+      emit(`dialog:props:${kind}`, fixture).catch((err) => {
+        console.warn('[mockBackend] the dialog fixture did not reach the window:', err)
+      })
+    }).catch((err) => {
+      console.warn('[mockBackend] no fixture will be offered for a dialog window:', err)
+    })
+  }
 
   return true
 }

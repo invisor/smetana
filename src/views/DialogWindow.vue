@@ -23,6 +23,7 @@
    `set_size` nor `show` and adding them would publish both to every window in
    the app for the sake of one call. */
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watchEffect } from 'vue'
+import EmptyState from '../components/core/EmptyState.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
 import { dialogWidth, isDialogKind } from './dialogRegistry.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
@@ -75,6 +76,27 @@ provide('smDialogWindow', true)
 const incoming = shallowRef({})
 const guestProps = computed(() => ({ ...incoming.value, open: true }))
 const title = computed(() => incoming.value.title ?? 'Smetana')
+
+/* Whether this window has heard what it is drawing yet.
+
+   It gates the **first** `sizeDialogWindow` alone, and it gates it because that
+   one call does three things that cannot be taken back: it sizes the window, it
+   puts it over the main window, and it is the only thing that ever shows one.
+   The measurement is ready a frame after mount and the props are three IPC hops
+   behind it, so without this the window was placed at the height of a dialog
+   with no content in it and captioned `Smetana` — the fallback above — and by
+   the time the real title arrived the window was visible and its one placement
+   was spent.
+
+   The timeout is the other half, and it is what keeps the failure visible: a
+   dialog nobody announces anything for is still a window somebody opened, and
+   one that never appeared at all would be the same silence as the missing
+   component below. It shows late and wrong rather than not at all. */
+const told = ref(false)
+const FIRST_PAINT_WAIT = 250
+const stopWaiting = setTimeout(() => {
+  told.value = true
+}, FIRST_PAINT_WAIT)
 
 /* Every emit the seven guests have between them, forwarded by name. A list
    rather than a wildcard because listeners need names, and because a name that
@@ -157,7 +179,7 @@ let observer = null
    the frame it had. Nothing is sent before the first measurement — there is no
    height to send, and this call is also what shows the window. */
 watchEffect(() => {
-  if (measured.value > 0) sizeDialogWindow(props.kind, measured.value, title.value)
+  if (told.value && measured.value > 0) sizeDialogWindow(props.kind, measured.value, title.value)
 })
 
 const stops = []
@@ -177,6 +199,7 @@ onMounted(async () => {
       stops.push(
         await watchDialogProps(props.kind, (next) => {
           incoming.value = next ?? {}
+          told.value = true
         })
       )
     } catch (err) {
@@ -197,6 +220,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  clearTimeout(stopWaiting)
   observer?.disconnect()
   for (const stop of stops) stop()
 })
@@ -218,5 +242,19 @@ const rootStyle = computed(() => ({
 <template>
   <div ref="root" :style="rootStyle">
     <component :is="component" v-if="component" v-bind="{ ...guestProps, ...listeners }" />
+    <!-- A kind with no component behind it. Drawn rather than left blank
+         because the first measurement is what shows this window at all: an
+         empty root measures nothing, nothing is sent, and the result is a
+         window that exists, holds the label and can never be seen or closed —
+         so pressing the menu item looks like nothing happening, and pressing it
+         again focuses a window nobody can find. This is the one failure of the
+         mechanism with no symptom of its own, and this is its symptom. -->
+    <EmptyState
+      v-else
+      icon="triangle-alert"
+      tone="error"
+      title="This dialog has nothing to draw"
+      :description="`No component is registered for the dialog kind ${kind ?? '(none given)'}.`"
+    />
   </div>
 </template>
