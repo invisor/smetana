@@ -156,13 +156,20 @@ export async function closeDialogWindow(kind) {
   }
 }
 
-/* The measured height, and the title the OS frame draws. Rust does the sizing
-   rather than this side calling `setSize` itself, and that is not ceremony:
-   `core:default` grants neither `set_size` nor `show`, so doing it here would
-   mean publishing both to every window in the app for the sake of one call. */
-export async function sizeDialogWindow(kind, height, title) {
+/* The measured height, how much of the window the page got, and the title the
+   OS frame draws. Rust does the sizing rather than this side calling `setSize`
+   itself, and that is not ceremony: `core:default` grants neither `set_size`
+   nor `show`, so doing it here would mean publishing both to every window in
+   the app for the sake of one call.
+
+   `viewport` travels beside the height because neither side can work out the
+   overhead alone — Rust knows what it set the window to, the page knows what
+   arrived — and the difference is a title bar, or a title bar with borders, or
+   nothing at all, depending on the machine. `window::height_to_set` carries the
+   whole argument and the measurements behind it. */
+export async function sizeDialogWindow(kind, height, viewport, title) {
   try {
-    await invoke('dialog_window_size', { kind, height, title })
+    await invoke('dialog_window_size', { kind, height, viewport, title })
   } catch (err) {
     console.warn('[app] the dialog window kept the size it had:', err)
   }
