@@ -88,6 +88,7 @@ import {
   Toast,
   ToolCall,
   Tooltip,
+  UsageFooter,
   WindowControls
 } from '../components/index.js'
 import { gitActions } from '../components/git/gitActions.js'
@@ -666,6 +667,47 @@ const galleryTree = MOCK_TREE[''].map((node) =>
   node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
 )
 const galleryTreeExpanded = { src: true }
+
+/* Four of the answers the footer strip has to draw, since a state is not a prop
+   somebody can flip on this page: a reading in the middle band with both halves
+   in it; one in the top band with a half the harness did not print; an agent
+   that does not report this at all; and a fresh week, whose session figure is a
+   real `0`. The fifth case — nothing asked yet — needs no fixture at all and is
+   the propless strip in the template below.
+
+   The numbers are `claude.rs`'s own fixture output, so the reset strings in the
+   hint are shaped exactly as the parser hands them over — the harness's words,
+   timezone and all.
+
+   The pair that matters most is the second and the fourth, and they are the two
+   directions of one rule: a `null` half draws a dash while the other half draws
+   its number, and a real `0` draws as `0%` and never as a dash. */
+const galleryUsage = [
+  {
+    state: 'read',
+    agent: 'claude',
+    usage: {
+      sessionPct: 10,
+      sessionReset: 'Aug 7 at 8pm (Europe/Moscow)',
+      weekPct: 78,
+      weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)'
+    },
+    band: 'reduced'
+  },
+  {
+    state: 'read',
+    agent: 'claude',
+    usage: { sessionPct: 92, sessionReset: 'Aug 7 at 8pm (Europe/Moscow)', weekPct: null, weekReset: null },
+    band: 'pause'
+  },
+  { state: 'unsupported', agent: 'codex' },
+  {
+    state: 'read',
+    agent: 'claude',
+    usage: { sessionPct: 0, sessionReset: null, weekPct: 3, weekReset: 'Aug 11 at 5:59pm (Europe/Moscow)' },
+    band: 'normal'
+  }
+]
 
 /* Four projects for the rail, one of them without a bd tracker and one whose
    name has no separator in it — `smetana` is the case `monogram` answers by
@@ -2255,7 +2297,30 @@ const menuTargetStyle = {
             <div :style="{ padding: 'var(--panel-pad)', fontSize: 'var(--text-sm)' }">Centre</div>
           </template>
           <template #right><Panel title="Task" side="right" collapsed /></template>
+          <!-- The shell's second bar slot, and the only place on this page
+               where the strip is seen where it actually lives: under the three
+               columns, across the whole shell, outside their resizers. -->
+          <template #footer><UsageFooter :usage="galleryUsage[0]" /></template>
         </AppShell>
+      </div>
+
+      <!-- The rest of what the strip has to draw, one under the other, since
+           the state is an answer from Rust rather than a control anybody can
+           reach from here. In order: a half the harness did not print, drawn as
+           a dash beside the half it did; an agent that does not report this at
+           all; a fresh week's real `0`, which is a number and not a dash;
+           nothing asked yet, which names nobody; a probe on its way, which keeps
+           the last numbers and says so in the hint; and `invoke` refusing, which
+           is the channel rather than an answer and says which. Hover any of
+           them — the hint is the whole of the reset times, of what a run would
+           do, and of why there is nothing to read. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
+        <UsageFooter :usage="galleryUsage[1]" />
+        <UsageFooter :usage="galleryUsage[2]" />
+        <UsageFooter :usage="galleryUsage[3]" />
+        <UsageFooter />
+        <UsageFooter :usage="galleryUsage[0]" busy />
+        <UsageFooter error="the worker is not answering" />
       </div>
     </section>
 
