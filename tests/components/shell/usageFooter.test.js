@@ -158,6 +158,28 @@ describe('usageTooltip', () => {
       .toMatch(/could not be read/)
   })
 
+  /* `invoke` refusing is the channel rather than an answer — the command is
+     infallible in Rust — so it is a fifth reason there is nothing on the strip,
+     and the one the caller has no other line for. What it must not draw is the
+     sentence for an attempt that never happened: the reading is cleared by a
+     refusal, and "not read yet" over one that happened and failed sends
+     somebody looking in the wrong place. */
+  it('says the reading failed, not that nobody has asked, when invoke refuses', () => {
+    const tip = usageTooltip(null, false, 'the worker is not answering')
+    expect(tip).toBe('The allowance could not be read: the worker is not answering')
+    expect(tip).not.toMatch(/has not been read yet/)
+  })
+
+  /* The refusal beats a reading still on screen and beats `busy` with it, the
+     way it does in the settings block: one attempt is described once, and the
+     refusal is the account of it. */
+  it('lets a refusal beat everything else that would have been said', () => {
+    const tip = usageTooltip(reading(BOTH), true, 'the worker is not answering')
+    expect(tip).toMatch(/The allowance could not be read: the worker is not answering$/)
+    expect(tip).not.toMatch(/Reading what is left/)
+    expect(tip).not.toMatch(/fewer tasks per batch/)
+  })
+
   /* A probe on its way is admitted to in the hint and nowhere else: the numbers
      on the strip stay where they are, which is the one deliberate difference
      from the settings block. */

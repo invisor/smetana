@@ -1305,21 +1305,26 @@ onUnmounted(() => {
    fresh, so it claims nothing by keeping it, and blanking a permanent strip
    every ten minutes is a flicker in the corner of somebody's eye.
 
-   A refusal clears the reading rather than keeping it: `invoke` failing is the
-   channel rather than an answer, and the strip has no line for that — two
-   dashes is what it has to say, and it is the true one. */
+   A refusal clears the reading and is kept beside it: `invoke` failing is the
+   channel rather than an answer, so two dashes is all the strip can show — but
+   the hint has to say the reading failed rather than that nobody has asked yet,
+   which is the sentence an empty reading alone would draw over an attempt that
+   happened. */
 const USAGE_EVERY_MS = 10 * 60 * 1000
 const usageReading = ref(null)
 const usageBusy = ref(false)
+const usageError = ref(null)
 let usagePoll = null
 
 const readUsage = async () => {
   if (usageBusy.value) return
   usageBusy.value = true
+  usageError.value = null
   try {
     usageReading.value = await readAgentUsage(settings.agent)
-  } catch {
+  } catch (err) {
     usageReading.value = null
+    usageError.value = err.message
   } finally {
     usageBusy.value = false
   }
@@ -3078,11 +3083,17 @@ const notificationsBoxStyle = {
 }
 
 /* The column of toasts in the corner. When empty it takes up nothing and
-   intercepts nothing: with no children its size is zero. */
+   intercepts nothing: with no children its size is zero.
+
+   The bottom is measured from the usage strip rather than from the window,
+   which is the mirror of what `notificationsBoxStyle` above does with the scope
+   bar: the strip is 30px tall against a 16px inset, so a toast measured from
+   the window would rest on the bar instead of floating over the working area,
+   and in compact both numbers shrink together. */
 const toastStackStyle = {
   position: 'fixed',
   right: 'var(--space-6)',
-  bottom: 'var(--space-6)',
+  bottom: 'calc(var(--scope-bar-h) + var(--space-6))',
   zIndex: 'var(--z-toast)',
   display: 'flex',
   flexDirection: 'column',
@@ -3777,7 +3788,12 @@ const toastStackStyle = {
          the board, and a strip that stopped at the board's edges would read as
          a caption to the board. It is drawn in every state, this window's own
          `footer` beside `AppShell`'s slot of the same name. -->
-    <UsageFooter :usage="usageReading" :busy="usageBusy" @refresh="readUsage" />
+    <UsageFooter
+      :usage="usageReading"
+      :busy="usageBusy"
+      :error="usageError"
+      @refresh="readUsage"
+    />
 
     <!-- The toasts live in one column: two fixed corners would overlap each
          other, and a tracker failure would hide a disk failure exactly when

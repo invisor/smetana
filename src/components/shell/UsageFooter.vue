@@ -28,7 +28,12 @@ const props = defineProps({
      fresh, so it claims nothing by keeping it. Blanking a permanent strip every
      ten minutes is a flicker in the corner of somebody's eye. All `busy` does
      here is put a sentence in the hint. */
-  busy: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false },
+  /* What the last read was refused with, in one readable line. Not the same
+     thing as an allowance that could not be read — that is an answer and has
+     its own sentence; this is the channel failing, and the strip has one place
+     to say so. */
+  error: { type: String, default: null }
 })
 
 /* Somebody asking for the reading sooner than the owner's timer would. The
@@ -39,7 +44,7 @@ defineEmits(['refresh'])
 
 const label = computed(() => usageAgentLabel(props.usage))
 const segments = computed(() => usageSegments(props.usage))
-const tip = computed(() => usageTooltip(props.usage, props.busy))
+const tip = computed(() => usageTooltip(props.usage, props.busy, props.error))
 
 /* The scope bar's ground, the scope bar's height and the scope bar's type, with
    a rule on top where that one has a rule underneath. **No token of its own:**
@@ -56,25 +61,30 @@ const barStyle = {
   background: 'var(--scope-bar)',
   borderTop: 'var(--border-w) solid var(--border)',
   color: 'var(--text-secondary)',
-  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
-  cursor: 'pointer'
+  font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
 }
 
 /* The hint is about the whole strip rather than about any one segment of it, so
-   its trigger fills the bar instead of hugging the words. */
+   its trigger fills the bar instead of hugging the words, and the row inside it
+   stretches rather than centring: what a person presses and what the hint opens
+   over are then the same shape, which is the height of the bar. */
 const fillStyle = {
   display: 'inline-flex',
-  alignItems: 'center',
+  alignItems: 'stretch',
   alignSelf: 'stretch',
   flex: '1 1 auto',
   minWidth: 0
 }
+/* The cursor is here and not on the bar, for the same reason: the bar's own
+   padding is outside the control, and a pointer over a strip that does not
+   answer a press would be the affordance lying about where the control is. */
 const rowStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
   flex: '1 1 auto',
-  minWidth: 0
+  minWidth: 0,
+  cursor: 'pointer'
 }
 /* `Icon` takes its size as an SVG attribute, which cannot be a custom property,
    so the token is handed over as CSS instead — the style wins over the
@@ -102,24 +112,35 @@ const segStyle = { whiteSpace: 'nowrap', flex: '0 0 auto' }
 </script>
 
 <template>
-  <!-- The whole strip is the control: a press asks the harness again, sooner
-       than the owner's timer would. Its accessible name is the row it draws,
-       which is what somebody would have called it anyway. -->
-  <div
-    :style="barStyle"
-    role="button"
-    tabindex="0"
-    @click="$emit('refresh')"
-    @keydown.enter.prevent="$emit('refresh')"
-    @keydown.space.prevent="$emit('refresh')"
-  >
+  <!-- The bar carries the ground, the height and the rule, and nothing else:
+       the control is the row inside it. -->
+  <div :style="barStyle">
     <!-- Empty is a real answer from `usageTooltip` — a reading in a band this
          build cannot name, printing no reset times, leaves nothing true to say —
          and a hint opening on an empty panel would be worse than none. So the
          trigger is a plain span in that case, and the strip is drawn once
          either way rather than twice under a `v-if`. -->
     <component :is="tip ? Tooltip : 'span'" :label="tip || undefined" :style="fillStyle">
-      <span :style="rowStyle">
+      <!-- The control sits **inside** the tooltip's trigger, which is the
+           nesting every other control in the tree uses (`core/IconButton.vue`).
+           It is not a detail of taste: `Tooltip` opens on `focusin`, which
+           bubbles up from whatever took the focus, so a focusable element
+           outside it never puts the trigger on the event's path — the hint
+           would open on a hover and never on a keyboard, and this hint is the
+           strip's only channel for the reset times, for what a run would do,
+           and for why there is no reading at all.
+
+           A press asks the harness again, sooner than the owner's timer would.
+           The accessible name is the row it draws, which is what somebody would
+           have called it anyway. -->
+      <span
+        :style="rowStyle"
+        role="button"
+        tabindex="0"
+        @click="$emit('refresh')"
+        @keydown.enter.prevent="$emit('refresh')"
+        @keydown.space.prevent="$emit('refresh')"
+      >
         <Icon name="bot" :style="glyphStyle" />
         <span :style="truncate">{{ label }}</span>
         <span v-for="segment in segments" :key="segment.name" :style="segStyle">

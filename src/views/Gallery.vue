@@ -662,16 +662,25 @@ const tabs = computed(() => orderTabs(galleryTabs.value, galleryTabOrder.value))
    the language icons, the picture and the archive — the half of
    `src/catppuccinIcon.js`'s vocabulary a person is most likely to be looking
    at — visible nowhere in the gallery at all. */
-/* The four answers the footer strip has to draw, since a state is not a prop
-   somebody can flip on this page: a reading in the middle band, one with a half
-   the harness did not print, an agent that does not report this at all, and
-   nothing asked yet. The numbers are `claude.rs`'s own fixture output, so the
-   reset strings in the hint are shaped exactly as the parser hands them over —
-   the harness's words, timezone and all.
+const galleryTree = MOCK_TREE[''].map((node) =>
+  node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
+)
+const galleryTreeExpanded = { src: true }
 
-   The pair that matters most is the second and the fourth: a `null` half draws
-   a dash while the other half draws its number, and a real `0` — which a fresh
-   week prints — draws as `0%` and never as a dash. */
+/* Four of the answers the footer strip has to draw, since a state is not a prop
+   somebody can flip on this page: a reading in the middle band with both halves
+   in it; one in the top band with a half the harness did not print; an agent
+   that does not report this at all; and a fresh week, whose session figure is a
+   real `0`. The fifth case — nothing asked yet — needs no fixture at all and is
+   the propless strip in the template below.
+
+   The numbers are `claude.rs`'s own fixture output, so the reset strings in the
+   hint are shaped exactly as the parser hands them over — the harness's words,
+   timezone and all.
+
+   The pair that matters most is the second and the fourth, and they are the two
+   directions of one rule: a `null` half draws a dash while the other half draws
+   its number, and a real `0` draws as `0%` and never as a dash. */
 const galleryUsage = [
   {
     state: 'read',
@@ -698,11 +707,6 @@ const galleryUsage = [
     band: 'normal'
   }
 ]
-
-const galleryTree = MOCK_TREE[''].map((node) =>
-  node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
-)
-const galleryTreeExpanded = { src: true }
 
 /* Four projects for the rail, one of them without a bd tracker and one whose
    name has no separator in it — `smetana` is the case `monogram` answers by
@@ -2246,15 +2250,18 @@ const menuTargetStyle = {
            reach from here. In order: a half the harness did not print, drawn as
            a dash beside the half it did; an agent that does not report this at
            all; a fresh week's real `0`, which is a number and not a dash;
-           nothing asked yet, which names nobody; and a probe on its way, which
-           keeps the last numbers and says so in the hint. Hover any of them —
-           the hint is the whole of the reset times and of what a run would do. -->
+           nothing asked yet, which names nobody; a probe on its way, which keeps
+           the last numbers and says so in the hint; and `invoke` refusing, which
+           is the channel rather than an answer and says which. Hover any of
+           them — the hint is the whole of the reset times, of what a run would
+           do, and of why there is nothing to read. -->
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
         <UsageFooter :usage="galleryUsage[1]" />
         <UsageFooter :usage="galleryUsage[2]" />
         <UsageFooter :usage="galleryUsage[3]" />
         <UsageFooter />
         <UsageFooter :usage="galleryUsage[0]" busy />
+        <UsageFooter error="the worker is not answering" />
       </div>
     </section>
 

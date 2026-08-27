@@ -114,15 +114,26 @@ function resetLine(name, resets) {
    labels its figure fresh, so it claims nothing by keeping it — and the hint is
    where a reading under way is admitted to.
 
+   `error` is the channel rather than the answer: the command is infallible in
+   Rust, so a refusal is `invoke` itself failing, and it beats everything else
+   the same way it does in the settings block. It is threaded into `usageNote`,
+   which deliberately says nothing at all under one — the honest sentence for
+   that moment would be "not read yet", which the refusal directly contradicts —
+   and the line it does not say is added here instead. The settings block draws
+   the same two as a note and a red line beneath it; this strip has one channel,
+   so they are one line, in the vocabulary the block already uses and with the
+   refusal itself on the end rather than a guess about somebody's login.
+
    Empty is a real answer, and the caller has to be ready for it: a reading in a
    band this build cannot name, printing no reset times, leaves nothing true to
    say. A hint that opened on an empty panel would be worse than none. */
-export function usageTooltip(answer, busy = false) {
+export function usageTooltip(answer, busy = false, error = null) {
   const usage = answer?.state === READ ? answer.usage : null
   return [
     resetLine('Session', usage?.sessionReset),
     resetLine('Week', usage?.weekReset),
-    usageNote(answer, busy)
+    usageNote(answer, busy, error),
+    error ? `The allowance could not be read: ${error}` : null
   ]
     .filter(Boolean)
     .join(' · ')
