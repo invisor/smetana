@@ -41,6 +41,19 @@ const DEPENDENCY_EDGES = {
   'bd-77e1': ['bd-a1b2', 'bd-7f31']
 }
 
+/* What a run may merge into. Hoisted out of the `target_branches` answer for
+   the reason the panel's own list below is hoisted out of `vcs_branches`: the
+   run window's fixture is drawn against the same list, and one of them is short
+   of a repository — the browser is the only place that lower group and its
+   notes can be seen at all, since there is no Rust worker here to walk
+   anybody's repositories. */
+const MOCK_TARGET_BRANCHES = [
+  { name: 'main', missing_in: [] },
+  { name: 'staging', missing_in: [] },
+  { name: 'feature/runs-project-config', missing_in: [] },
+  { name: 'release/7', missing_in: ['admin', 'extension'] }
+]
+
 /* The selected repository's branches. Hoisted out of the `vcs_branches` answer
    because the dialog fixture below is drawn against the same list: a New branch
    window in a browser offering branches the panel behind it does not have would
@@ -66,11 +79,97 @@ const MOCK_BRANCHES = [
    git. Small on purpose: a fixture per kind, holding what that dialog draws and
    nothing else. */
 const DIALOG_PROPS = {
+  /* The queue's run, which is the one the play in the column header starts and
+     the only scope with a priority floor on screen. `branches` is the
+     `target_branches` answer below rather than the panel's list: the field is
+     filled from the run store's own read, and a window offering branches the
+     board behind it could not merge into would be two fixtures disagreeing
+     about one project.
+
+     Three of these deliberately disagree with `RunModal`'s own fallbacks —
+     Crew rather than Autopilot, P3 rather than P2, four at once rather than
+     three. Those three fields are filled once, when the dialog opens, out of
+     what the app window announced, so a fixture that happened to match the
+     fallbacks would draw the same screen whether the announcement arrived or
+     never came at all. Here it is the difference that is being checked.
+
+     `configError` is '' and `liveCheckBlocked` is '' deliberately — a browser is
+     where the ordinary state of this dialog is looked at, and both of the loud
+     ones already have a project of their own in `?view=gallery`. */
+  run: {
+    title: 'Run the queue',
+    scope: { kind: 'queue' },
+    count: 12,
+    partOf: null,
+    branches: MOCK_TARGET_BRANCHES,
+    defaultBranch: 'main',
+    defaultPriority: 2,
+    defaultParallel: 4,
+    remembered: {
+      mode: 'supervised',
+      targetBranch: 'main',
+      minPriority: 3,
+      liveCheck: true,
+      fileFindings: true
+    },
+    liveCheckAvailable: true,
+    liveCheckBlocked: '',
+    configError: '',
+    error: '',
+    busy: false
+  },
+  /* Filing a task. The images are deliberately absent: that list is the
+     window's own store and not something the app window announces, and in a
+     browser there is nothing to put in it — a drop needs Tauri and the picker
+     is a write. The strip draws its empty state, which is the honest picture of
+     this window before anybody attaches anything. */
+  'new-task': {
+    title: 'New task',
+    busy: false,
+    status: 'ready',
+    parent: null
+  },
   'new-branch': {
     title: 'New branch',
     from: 'feat/worktree-rename',
     branches: MOCK_BRANCHES,
     actions: { allowed: true, reason: null },
+    busy: false
+  },
+  /* Every fixture carries a `title` beside what its dialog draws, because that
+     string is the OS frame's caption in the app and there is no frame in a
+     browser to notice it missing. It is the same sentence the component works
+     out for itself from the props below it — see the comment each of them
+     carries — and the app window announces it for the same reason this does. */
+  'delete-task': {
+    title: 'Delete bd-a1b2?',
+    id: 'bd-a1b2',
+    taskTitle: 'Rename worktree when the branch changes',
+    busy: false
+  },
+  /* The parked card of the mock board and its own `parked:` notes, so the
+     window in a browser quotes what the board behind it holds — two fixtures
+     disagreeing about one issue would be worse than one. */
+  'ready-task': {
+    title: 'Move bd-29j1 to ready with the question unanswered?',
+    id: 'bd-29j1',
+    taskTitle: 'Show the tracker state on a non-empty board too',
+    questions: [
+      'needs a decision on where the strip sits',
+      'still waiting on the design call'
+    ]
+  },
+  'promote-column': {
+    title: 'Move 12 tasks to ready?',
+    count: 12,
+    busy: false,
+    moved: 0,
+    failed: null
+  },
+  'setup-project': {
+    title: 'Set this project up?',
+    name: 'holiday-curb',
+    existing: false,
     busy: false
   }
 }
@@ -506,18 +605,10 @@ export function installMockBackend() {
         busy_project: null
       }
     }
-    /* Enough branches for the dialog's field to be worth looking at, and one of
-       them short of a repository — the browser is the only place the lower
-       group and its notes can be seen at all, since there is no Rust worker
-       here to walk anybody's repositories. */
-    if (command === 'target_branches') {
-      return [
-        { name: 'main', missing_in: [] },
-        { name: 'staging', missing_in: [] },
-        { name: 'feature/runs-project-config', missing_in: [] },
-        { name: 'release/7', missing_in: ['admin', 'extension'] }
-      ]
-    }
+    /* Enough branches for the dialog's field to be worth looking at. The list
+       is at the top of this file, where the run window's own fixture reads it
+       too. */
+    if (command === 'target_branches') return MOCK_TARGET_BRANCHES
     /* What the Agents tab says about the subscription. A read, so it answers:
        without it `?view=settings&tab=agents` opens on the loud refusal at the
        bottom of this file and the block can never be looked at in a browser at

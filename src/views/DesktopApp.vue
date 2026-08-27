@@ -34,12 +34,9 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
+import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
 import Button from '../components/core/Button.vue'
-import NewTaskModal from '../components/kanban/NewTaskModal.vue'
-import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
-import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import RunBar from '../components/run/RunBar.vue'
-import RunModal from '../components/run/RunModal.vue'
 import ReportView from '../components/run/ReportView.vue'
 import { isReportPath, reportTabPath } from '../components/run/reportTab.js'
 import { deliveryFor } from '../components/run/reportDelivery.js'
@@ -163,14 +160,6 @@ import {
   vcsState
 } from '../stores/vcs.js'
 import {
-  attachFiles,
-  attachmentsState,
-  clearAttachments,
-  pickImages,
-  removeAttachment,
-  watchDrops
-} from '../stores/attachments.js'
-import {
   configError,
   initRuns,
   loadBrowserTools,
@@ -192,7 +181,7 @@ import { checkNewName } from '../components/files/newEntry.js'
 import { relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
-import { scopeBusyReason } from '../components/run/runScopes.js'
+import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
 import {
   LEFT_DEFAULT,
   PROJECT_RAIL,
@@ -525,12 +514,11 @@ async function newTerminal(cwd = null) {
 /* Which row does what. The rows themselves are `newTabMenu.js`'s — two callers
    and no test can reach a template, the same split every other menu in this app
    keeps. The third row opens no tab: it is a second door onto the new-task
-   dialog already mounted below, the same one the `+` above the `ready` column
-   opens, so it sets that flag and nothing else. */
+   dialog, the same window the `+` above the `ready` column opens. */
 const onNewTab = (item) => {
   if (item.kind === 'agent') newAgent()
   else if (item.kind === 'terminal') newTerminal()
-  else if (item.kind === 'task') newTaskOpen.value = true
+  else if (item.kind === 'task') openNewTask()
 }
 
 /* The project whose setup is being offered. Null when the dialog is closed —
@@ -647,8 +635,16 @@ const openDialogs = new Map()
 function serveDialog(kind, { ground, props: propsFor, onResult, forget = null }) {
   /* Reopening a kind that is already open: the window is brought forward rather
      than made twice, so the service has to be replaced rather than stacked, or
-     the same props would be announced by two watchers. */
-  if (openDialogs.has(kind)) stopServing(kind)
+     the same props would be announced by two watchers.
+
+     The old service's state is deliberately **not** forgotten on the way
+     through. Every caller here sets what its dialog is about and then opens —
+     the branch a cut starts from, the issue a delete names, the ids a promote
+     took — so a `forget` here would clear the very thing the line above it just
+     wrote, and the window that came forward would be about nothing: "Cut from"
+     with no branch, `Delete undefined?`, a count of zero. The state belongs to
+     whichever opening is current, and that is this one. */
+  if (openDialogs.has(kind)) stopServing(kind, { forget: false })
 
   const service = { ground, forget, stops: [], closed: false }
   /* A subscription that arrives after the dialog has already closed is stopped
@@ -674,13 +670,13 @@ function serveDialog(kind, { ground, props: propsFor, onResult, forget = null })
    of the two ways this is reached: a person pressing the frame's own cross is
    the window telling us, and asking it to close again would be an answer to a
    question it already answered. */
-function stopServing(kind) {
+function stopServing(kind, { forget = true } = {}) {
   const service = openDialogs.get(kind)
   if (!service) return
   service.closed = true
   for (const stop of service.stops) stop()
   openDialogs.delete(kind)
-  service.forget?.()
+  if (forget) service.forget?.()
 }
 
 /* The app window closing a dialog window: the ground went, or the guest asked.
@@ -891,7 +887,6 @@ const resolveConflictWithAgent = async () => {
   }
 }
 
-const runOpen = ref(false)
 const runScope = ref({ kind: 'queue' })
 const runError = ref('')
 const runStarting = ref(false)
@@ -908,7 +903,48 @@ const runStarting = ref(false)
 const openRun = async (scopeValue) => {
   runScope.value = scopeValue
   runError.value = ''
-  runOpen.value = true
+  /* A window of its own rather than a modal over the board, so the card, the
+     column or the queue this run is aimed at stays readable beside the question
+     about it. Everything below is announced live: the branch list lands after
+     the window is up (see the note above), the machine's answer about a browser
+     lands after that, and `busy` and the refusal arrive while the run is
+     starting — a window that had been handed its props once would show none of
+     it.
+
+     The ground is the project and nothing else, deliberately. A run aimed at a
+     task whose card somebody deletes meanwhile is a question about an id bd no
+     longer holds, and the worker refuses it in the same words it would use for
+     any other missing task — which is a better answer than a window vanishing
+     mid-sentence. The project moving is different in kind: every id on screen
+     belongs to another tracker after it. */
+  serveDialog('run', {
+    ground: { project: activePath.value },
+    props: () => ({
+      /* The frame's caption and the dialog's own heading, from one rule in
+         `runScopes.js`. `rescope` changes the scope under an open window, so
+         this is not a string settled at opening: the frame has to follow the
+         heading from "Run this task" to "Run these tasks". */
+      title: runTitle(runScope.value),
+      scope: runScope.value,
+      count: runCount.value,
+      partOf: runParent.value,
+      branches: gitState.branches,
+      defaultBranch: runConfig.value?.defaults?.target_branch ?? branchLabel.value,
+      defaultPriority: runConfig.value?.defaults?.min_priority ?? 2,
+      defaultParallel: runConfig.value?.defaults?.max_parallel_tasks ?? 3,
+      remembered: project.runSettings,
+      liveCheckAvailable: runConfig.value?.live_check?.mode !== 'none',
+      liveCheckBlocked: liveCheckBlocked.value,
+      configError: configErrorText.value,
+      error: runError.value,
+      busy: runStarting.value
+    }),
+    onResult: (name, payload) => {
+      if (name === 'close') closeDialog('run')
+      if (name === 'confirm') startTheRun(payload)
+      if (name === 'rescope') runTheEpicInstead()
+    }
+  })
   /* Both after the dialog is up, and both late for the same reason. What can
      drive a browser is four file reads and two directory listings plus a
      question to the run worker — cheap, and nobody needs it until they are
@@ -1003,7 +1039,7 @@ const startTheRun = async (chosen) => {
   try {
     await startRun(path, chosen)
     /* Answered, so it goes — whether or not any of the rest below applies. */
-    runOpen.value = false
+    closeDialog('run')
     /* Moving to another project can start while this is still in its await, on
        a click in the project list, and this file checks after every await for
        exactly that (see the comment over onMounted). `project` is the *active*
@@ -1095,10 +1131,41 @@ const settingUp = ref(false)
 const openSetup = (path, existing) => {
   setupFor.value = path
   setupExisting.value = existing
+  /* The path this is about is the ground, and it is the active project on both
+     routes in: adding a project makes it active before this is reached, and the
+     row menu's setup item is dead on any row that is not the active one
+     (`shell/projectMenu.js`). Written as the path rather than as `activePath`
+     so that a third route opening this over another project fails loudly — the
+     window would close on the spot — instead of quietly setting up the wrong
+     folder. */
+  serveDialog('setup-project', {
+    ground: { project: path },
+    props: () => ({
+      /* The frame's caption, in `SetupProjectModal`'s own words. It owns
+         them; this repeats them because the frame is drawn by the OS and
+         nothing on the window's side knows what this dialog is called. */
+      title: setupExisting.value ? 'Set this project up again?' : 'Set this project up?',
+      name: setupFor.value ? basenameOf(setupFor.value) : '',
+      existing: setupExisting.value,
+      busy: settingUp.value
+    }),
+    /* Both fields, because the comment over `setupExisting` promises they do
+       not drift and a reader will trust it. Nothing today opens this without
+       setting both — that is what the promise rests on — and a half-cleared
+       pair is exactly the state that would quietly break it. */
+    forget: () => {
+      setupFor.value = null
+      setupExisting.value = false
+    },
+    onResult: (name) => {
+      if (name === 'close') closeSetup()
+      if (name === 'confirm') startSetup()
+    }
+  })
 }
 
 const closeSetup = () => {
-  setupFor.value = null
+  closeDialog('setup-project')
 }
 
 /* Adding a project is a read until this point: the dialog is where it becomes
@@ -1627,17 +1694,54 @@ const resetAccessHere = async () => {
    calls ready. So that column, and only it, carries the "+": a plus over any
    other column would promise a placement the tracker cannot make. */
 const ADD_TO = 'ready'
-const newTaskOpen = ref(false)
 /* The issue the New task dialog was opened from, or null when it was opened
    from "+ New task". `{ id, title }` rather than the issue, and taken from the
    store at the moment the menu was used: the dialog draws the title, and the id
    is what rides to the agent.
 
-   A ref of its own rather than a field on some dialog-state object, because
-   `newTaskOpen` is already a bare ref and two halves of one dialog kept in two
-   shapes is the drift this file has elsewhere paid for. */
+   There is no `newTaskOpen` beside it any more: whether the dialog is open is
+   whether its window is being served, which `openDialogs` already knows, and a
+   flag kept beside that is two halves of one dialog free to disagree. */
 const followUpParent = ref(null)
 const creating = ref(false)
+
+/* Filing a task, in a window of its own. Three doors reach it — the "+" over
+   the ready column, the tab bar's menu, and a card's own "follow-up" — and the
+   parent is this function's argument rather than something a caller sets first.
+   That is not style: `serveDialog` replaces an open service before it starts
+   the new one, so anything the caller had just written into a ref that the old
+   service forgets on the way out would be wiped between the two.
+
+   The images are not announced and do not come back one by one: the store that
+   holds them lives in that window, because a file dropped on it is that
+   window's event and nothing here can hear it (`stores/attachments.js`). What
+   this window is handed, in `submit`, is the list of paths.
+
+   The ground carries the column as well as the project. There is exactly one —
+   bd files a new task as open, which the board draws as ready — so a board that
+   no longer has it is a board this dialog could not place a card on. */
+const openNewTask = (parent = null) => {
+  followUpParent.value = parent
+  serveDialog('new-task', {
+    ground: { project: activePath.value, column: ADD_TO },
+    props: () => ({
+      title: 'New task',
+      busy: creating.value,
+      status: ADD_TO,
+      parent: followUpParent.value
+    }),
+    /* The one moment this window can be sure the attachment folder may have
+       grown: the window that writes into it has just stopped being served. It
+       used to be a watcher over the store's own list, which this window no
+       longer holds — and `forget` covers every way out, the frame's own cross
+       and a project switch included. */
+    forget: () => measureStorage(activePath.value),
+    onResult: (name, payload) => {
+      if (name === 'close') closeNewTask()
+      if (name === 'submit') submitNewTask(payload)
+    }
+  })
+}
 
 /* Where the whole-column press stands. bd's own word, untranslated, because
    `deferred` is not one of the three statuses the tracker store renames and it
@@ -1648,7 +1752,6 @@ const creating = ref(false)
    doing it, in one gesture instead of twelve — which is why it moves issues and
    starts nothing: a run still takes only what is already open. */
 const PROMOTE_FROM = 'deferred'
-const promoteOpen = ref(false)
 const promoting = ref(false)
 /* The set as it was at the moment of the press, not a live reading of the
    column: the dialog names a count, and what confirming moves has to be the
@@ -1669,12 +1772,59 @@ const openPromote = () => {
   promoteIds.value = ids
   promoted.value = 0
   promoteFailed.value = null
-  promoteOpen.value = true
+  /* A window of its own, and this is the one of the four where that is worth
+     more than the room: the count climbs inside it for most of a minute while
+     the board fills in behind, and with no scrim over the board both are
+     readable at once.
+
+     The live ground is the project, and effectively only the project. The
+     column rides along because that is what this dialog is about, but the
+     clause behind it can only fire if bd's own status set stops holding
+     `deferred` — `boardColumns` seeds a bucket per declared column, so promoting
+     every last card out of it empties the column without removing it, and that
+     is deliberate: a window closing at the moment its work finished would read
+     as the work having failed. What could genuinely go out from under this
+     window is the set of ids it took, and the ground vocabulary has no word for
+     that (`views/dialogRegistry.js`). It is not a hole worth filling here: an id
+     that vanishes mid-run is one failed write among the others, counted and
+     reported below like the rest. */
+  serveDialog('promote-column', {
+    ground: { project: activePath.value, column: PROMOTE_FROM },
+    props: () => ({
+      /* The frame's caption. The rule is `kanban/promoteTitle.js`, which the
+         dialog itself draws its heading from: nothing on the window's side of
+         the wire knows what a dialog is called, so the sentence has to be said
+         from here too, and a pluralisation written out twice is the half that
+         would go quietly wrong. */
+      title: promoteTitle({
+        count: promoteIds.value.length,
+        moved: promoted.value,
+        failed: promoteFailed.value
+      }),
+      count: promoteIds.value.length,
+      busy: promoting.value,
+      moved: promoted.value,
+      failed: promoteFailed.value
+    }),
+    forget: () => {
+      promoteIds.value = []
+      promoted.value = 0
+      promoteFailed.value = null
+    },
+    onResult: (name) => {
+      if (name === 'close') closePromote()
+      if (name === 'confirm') confirmPromote()
+    }
+  })
 }
 
+/* Unconditional, where the modal refused while writing. The window's own frame
+   carries a cross the app cannot disable, and by the time this is reached the
+   window is already gone — refusing here would leave this view serving props to
+   nothing. The writes already asked for run on to the end regardless; nothing
+   was ever rolled back. */
 const closePromote = () => {
-  if (promoting.value) return
-  promoteOpen.value = false
+  closeDialog('promote-column')
 }
 
 /* One bd call per issue, in sequence — the worker serializes them anyway, and
@@ -1693,27 +1843,54 @@ const closePromote = () => {
 const confirmPromote = async () => {
   if (promoting.value) return
   const path = activePath.value
+  const total = promoteIds.value.length
   promoting.value = true
   promoted.value = 0
   promoteFailed.value = null
+  /* Counted here as well as in the two refs beside them, and that is not
+     duplication for its own sake: this window's frame carries a cross the app
+     cannot disable, so somebody can close it while the loop runs, and closing
+     forgets the refs. The writes go on regardless — the `for…of` below holds
+     the array it started with — so the report has to be kept somewhere nothing
+     can clear. */
+  let moved = 0
   let failed = 0
   try {
     for (const id of promoteIds.value) {
       try {
         await updateIssue(id, { status: 'open' })
-        promoted.value += 1
+        moved += 1
+        promoted.value = moved
       } catch {
         // the message already sits in trackerState.lastError; the count is what
         // this dialog adds to it
         failed += 1
       }
       if (activePath.value !== path) {
-        promoteOpen.value = false
+        closeDialog('promote-column')
         return
       }
     }
-    promoteFailed.value = failed
-    if (!failed) promoteOpen.value = false
+    /* The outcome, said in whichever of the two places is still there to say it
+       in. While the window stands, it says it itself: `failed` turns its title
+       into a report and its footer into one button. If the person closed it
+       mid-write, the app window says it instead — dropping it would leave a
+       promote of twelve with three refusals saying nothing at all about the
+       three, since `trackerState.lastError` keeps only the newest of them and
+       none of them carries a count. The count is the whole of what this dialog
+       is for, which is why the modal used to refuse to close over it. */
+    if (openDialogs.has('promote-column')) {
+      promoteFailed.value = failed
+      if (!failed) closeDialog('promote-column')
+      return
+    }
+    sayFileMenu({
+      tone: failed ? 'error' : 'success',
+      title: promoteTitle({ count: total, moved, failed }),
+      description: failed
+        ? `${taskCount(failed)} could not be moved. The board shows the ones that did — nothing was rolled back.`
+        : 'They are in ready. The window was closed while they were still moving.'
+    })
   } finally {
     promoting.value = false
   }
@@ -1968,32 +2145,17 @@ const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
   }
 }
 
-/* Closing is the one event that clears the attachments, and it covers both
-   cases that should: cancelling, and a session that actually started. A failed
-   create does not reach here, so nobody has to attach four screenshots again
-   because the agent was not installed.
+/* Closing covers both cases that should: cancelling, and a session that
+   actually started. A failed create does not reach here, so nobody has to type
+   their four sentences again because the agent was not installed — the window
+   stays up with the text and the thumbnails still in it.
 
-   The paths outlive this: the files stay in the app's data directory whether
-   the task was filed or not. Forgetting them here is all that happens, which is
-   the same bargain the store's own note describes. */
-const closeNewTask = () => {
-  newTaskOpen.value = false
-  clearAttachments()
-  /* The same event that clears the attachments clears this, and for the same
-     reason: it covers cancelling and a session that actually started, and a
-     failed create never reaches here — so the next "+ New task" is never
-     silently a follow-up to whatever a menu was last opened on. */
-  followUpParent.value = null
-}
-
-/* A drop is a window event, not the dialog's — Tauri intercepts file drops
-   before the webview sees them — so the subscription lives up here and asks
-   whether anything is collecting. */
-let stopDrops = null
-onMounted(() => {
-  stopDrops = watchDrops(() => newTaskOpen.value)
-})
-onUnmounted(() => stopDrops?.())
+   Nothing is cleared from this side any more. The text and the images were the
+   window's own state and go when the window does; the paths outlive both, since
+   the files stay in the app's data directory whether the task was filed or not.
+   `openNewTask` above is what makes sure the next one is never silently a
+   follow-up to whatever a menu was last opened on. */
+const closeNewTask = () => closeDialog('new-task')
 
 /* While the app was closed, the issue may have been closed and removed from
    the tracker. Restoring a selection that no longer exists is not on: the
@@ -2046,30 +2208,101 @@ const setTaskStatus = async (id, status) => {
   }
 }
 
-/* Deletion is irreversible, so the id it is tracked by is the id it was asked
-   for, not a bare boolean: the selection can move while bd is still working,
-   and a flag shared between issues would grey out the wrong one's dialog. */
+/* Which issue bd is being asked to delete, or null. An id and not a bare
+   boolean, matching `writingId` above: the selection can move while bd is still
+   working, and a flag shared between issues would answer for the wrong one.
+
+   It is read in `orderedColumns` beside `writingId` — one rule about a write in
+   flight on a card — and announced to the dialog as `busy`. Neither is visible
+   for a delete, and that is a fact about `deleteIssue` rather than about this
+   line: it removes the card in the same synchronous block that sets this, so
+   there is no card left to grey and no window left to tell. See `deleteTask`
+   below, which spends a paragraph on it. */
 const deletingId = ref(null)
 
 /* Which issue's deletion is being confirmed, or null. An id rather than a
    boolean for the same reason: the dialog names the issue, and the board can
-   change under it. The dialog itself lives here rather than in the panel: at
-   view level there is no `overflow` box to be clipped by, so it needs no
-   `Teleport` either. */
+   change under it. */
 const confirmingDelete = ref(null)
 const confirmedIssue = computed(() =>
   confirmingDelete.value ? issueById(confirmingDelete.value) : null
 )
 
+/* The confirm, in a window of its own. Its ground is the issue, which is the
+   whole point of standing this one outside the app window: with no scrim, bd
+   can delete the task from a terminal while somebody is reading about deleting
+   it, and the window goes with it rather than offering a button that would now
+   fail. */
+const openDeleteTask = (id) => {
+  confirmingDelete.value = id
+  serveDialog('delete-task', {
+    ground: { project: activePath.value, issue: id },
+    props: () => ({
+      /* The frame's caption, in `DeleteTaskModal`'s own words — see the
+         comment beside its `title`. */
+      title: `Delete ${confirmingDelete.value}?`,
+      id: confirmingDelete.value ?? '',
+      /* Read from the store by id at the moment it is announced, never
+         carried in from the menu that asked: the store holds the current
+         title and a card's copy may be a delta behind. */
+      taskTitle: confirmedIssue.value?.title ?? '',
+      /* Announced because it is the component's prop and this is a mirror of
+         what the app holds, not because it is ever seen here: `deleteTask`
+         closes this window before it sets the flag, for the reason written
+         over it. The state itself is looked at in `?view=gallery`. */
+      busy: Boolean(deletingId.value)
+    }),
+    forget: () => {
+      confirmingDelete.value = null
+    },
+    onResult: (name) => {
+      if (name === 'close') closeDialog('delete-task')
+      if (name === 'confirm') deleteTask(confirmingDelete.value)
+    }
+  })
+}
+
+/* The dialog closes first and bd runs after — `cutBranch` above records that
+   shape for every write behind a dialog in this view, and here it is
+   load-bearing rather than a habit.
+
+   `deleteIssue` takes the issue out of `trackerState.issues` **synchronously**,
+   before it awaits bd, so with the write first the ground watcher below would
+   run on the very microtask this function's `await` yields to and find the
+   window standing over an issue that has gone. It would close the window itself
+   and raise the notice meant for a board that moved under somebody — over the
+   deletion they had just asked for, and held on screen, since only a `success`
+   toast is given a timer. That signal is worth having for the dialogs that use
+   it honestly, and this is not one of them.
+
+   Nothing is lost by closing early, and there is no spinner anywhere in this
+   because there is nothing left to put one on. `deleteIssue` is optimistic in
+   the direction opposite to every other write in the store — its own header
+   says the card goes at once and comes back if bd refused — and the removal is
+   synchronous, in the same block as the line below, so no paint falls between
+   them. The card is simply gone from the board by the first frame after Delete
+   is pressed, and that is the feedback. The analogy to a cut branch does not
+   carry: a cut *adds* a row, and so leaves one to grey.
+
+   `deletingId` therefore has no observable consumer left. It is kept because it
+   is the flag the announced `busy` mirrors and because `orderedColumns` reads
+   it beside `writingId`, where the pair is one rule rather than two — not
+   because anything greys. On the refusal path the issue is put back and the
+   flag cleared in the same synchronous continuation, so it is unobservable
+   there too.
+
+   What a refusal does get is the place every other refusal from the tracker in
+   this view gets — `trackerState.lastError`, as a toast at the foot of this
+   file — and the card reappears under it. */
 const deleteTask = async (id) => {
+  if (!id) return
+  closeDialog('delete-task')
   deletingId.value = id
   try {
     await deleteIssue(id)
     if (project.selectedTask === id) project.selectedTask = null
-    confirmingDelete.value = null
   } catch {
-    /* The message already sits in trackerState.lastError — and the dialog stays
-       open over it deliberately: closing it would hide the explanation. */
+    // the message already sits in trackerState.lastError and draws as a toast
   } finally {
     deletingId.value = null
   }
@@ -2092,13 +2325,13 @@ const onTaskAction = ({ kind, id, value }) => {
        one layer up in `boardColumns`. */
     const issue = issueById(id)
     if (needsReadyWarning(issue?.status, value)) {
-      confirmingReady.value = id
+      openReadyTask(id)
       return
     }
     return setTaskStatus(id, value)
   }
   if (kind === 'delete') {
-    confirmingDelete.value = id
+    openDeleteTask(id)
     return
   }
   if (kind === 'resolve') {
@@ -2120,8 +2353,7 @@ const onTaskAction = ({ kind, id, value }) => {
        different task, and the agent reads the parent itself. */
     const issue = issueById(id)
     if (!issue) return
-    followUpParent.value = { id: issue.id, title: issue.title }
-    newTaskOpen.value = true
+    openNewTask({ id: issue.id, title: issue.title })
   }
 }
 
@@ -2138,15 +2370,44 @@ const readyIssue = computed(() =>
    in prose rather than drawing an empty list. */
 const readyQuestions = computed(() => openQuestions(readyIssue.value?.notes))
 
+/* The warning, in a window of its own. Its ground is the issue, like the
+   delete's: the questions it quotes are the issue's own notes, and an issue that
+   has gone leaves the window quoting a card nobody can reach. Three doors, and
+   the third — `resolve` — is the one this view had to teach the host to forward
+   by name; the other two every dialog has. */
+const openReadyTask = (id) => {
+  confirmingReady.value = id
+  serveDialog('ready-task', {
+    ground: { project: activePath.value, issue: id },
+    props: () => ({
+      /* The frame's caption, in `ReadyTaskModal`'s own words. */
+      title: `Move ${confirmingReady.value} to ready with the question unanswered?`,
+      id: confirmingReady.value ?? '',
+      taskTitle: readyIssue.value?.title ?? '',
+      /* Live, not a copy taken at the press: an agent can answer a question
+         while the window stands, and the list is the content of this dialog. */
+      questions: readyQuestions.value
+    }),
+    forget: () => {
+      confirmingReady.value = null
+    },
+    onResult: (name) => {
+      if (name === 'close') closeDialog('ready-task')
+      if (name === 'confirm') moveToReadyAnyway()
+      if (name === 'resolve') resolveFromDialog()
+    }
+  })
+}
+
 const moveToReadyAnyway = () => {
   const id = confirmingReady.value
-  confirmingReady.value = null
+  closeDialog('ready-task')
   if (id) setTaskStatus(id, READY)
 }
 
 const resolveFromDialog = () => {
   const issue = readyIssue.value
-  confirmingReady.value = null
+  closeDialog('ready-task')
   if (issue) askAgentToResolve(issue)
 }
 
@@ -3161,23 +3422,6 @@ watch(stoppedRuns, () => {
   }
 })
 
-/* When the store is weighed: at start once the project is resolved, on a
-   switch (`projects.js`, after the new project's layout has landed), when focus
-   returns — the same sweep the file tree and the branch ride on — and after an
-   attachment is saved, which is the one moment the app knows for certain that
-   the number changed. No watcher over the app's own data directory: reading a
-   directory costs milliseconds and guards no state, the same reasoning `files/`
-   and `git.rs` are built on.
-
-   The list's length is what `attachmentsState.items` is watched for. Taking a
-   thumbnail back out never deletes anything, so a shrinking list is a
-   measurement that will find nothing changed — cheap, and cheaper than a second
-   signal to keep in step with the store. */
-watch(
-  () => attachmentsState.items.length,
-  () => measureStorage(activePath.value)
-)
-
 /* ---- styles ---------------------------------------------------------- */
 const rootStyle = {
   display: 'flex',
@@ -3291,41 +3535,6 @@ const inspectorBody = {
   padding: 'var(--panel-pad)',
   minWidth: 0
 }
-/* The issue's title inside the delete dialog, in the same words the panel's
-   own dialog drew it in — this is what a person reads to check they are about
-   to delete the thing they meant. */
-const deleteTitleStyle = {
-  font: 'var(--weight-medium) var(--text-md)/var(--leading-snug) var(--font-sans)',
-  color: 'var(--text-primary)',
-  textWrap: 'pretty'
-}
-/* The parked questions, quoted verbatim in the Ready dialog. Prose rather than
-   a table for the reason the inspector's own notes section carries: a note is
-   somebody's sentence, and a row would promise a field it is not. The triangle
-   beside each is `status/status.js`'s glyph for parked, so the dialog and the
-   card the person came from say the same thing the same way. */
-const questionListStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 'var(--space-3)',
-  marginTop: 'var(--space-4)'
-}
-const questionStyle = {
-  display: 'flex',
-  gap: 'var(--space-4)',
-  alignItems: 'flex-start',
-  fontSize: 'var(--text-sm)',
-  lineHeight: 'var(--leading-normal)',
-  color: 'var(--text-primary)',
-  overflowWrap: 'anywhere'
-}
-const questionGlyphStyle = {
-  flex: 'none',
-  display: 'flex',
-  marginTop: '2px',
-  color: 'var(--attn-loud)'
-}
-
 /* Where the bell's panel sits: under the bar, against the right edge, clear of
    the gear by the same gutter the bar's own padding uses. Above everything, at
    the popover level, since it is opened over whatever is on screen. */
@@ -3674,113 +3883,24 @@ const toastStackStyle = {
             />
           </template>
         </TabBar>
-        <NewTaskModal
-          :open="newTaskOpen"
-          :busy="creating"
-          :status="ADD_TO"
-          :parent="followUpParent"
-          :attachments="attachmentsState.items"
-          :dragging="attachmentsState.dragging"
-          :error="attachmentsState.lastError ?? ''"
-          @close="closeNewTask"
-          @submit="submitNewTask"
-          @attach="pickImages"
-          @files="attachFiles"
-          @remove="removeAttachment"
-        />
-        <PromoteColumnModal
-          :open="promoteOpen"
-          :count="promoteIds.length"
-          :busy="promoting"
-          :moved="promoted"
-          :failed="promoteFailed"
-          @close="closePromote"
-          @confirm="confirmPromote"
-        />
-        <RunModal
-          :open="runOpen"
-          :scope="runScope"
-          :count="runCount"
-          :part-of="runParent"
-          :branches="gitState.branches"
-          :default-branch="runConfig?.defaults?.target_branch ?? branchLabel"
-          :default-priority="runConfig?.defaults?.min_priority ?? 2"
-          :default-parallel="runConfig?.defaults?.max_parallel_tasks ?? 3"
-          :remembered="project.runSettings"
-          :live-check-available="runConfig?.live_check?.mode !== 'none'"
-          :live-check-blocked="liveCheckBlocked"
-          :config-error="configErrorText"
-          :error="runError"
-          :busy="runStarting"
-          @close="runOpen = false"
-          @confirm="startTheRun"
-          @rescope="runTheEpicInstead"
-        />
-        <SetupProjectModal
-          :open="!!setupFor"
-          :name="setupFor ? basenameOf(setupFor) : ''"
-          :existing="setupExisting"
-          :busy="settingUp"
-          @close="closeSetup"
-          @confirm="startSetup"
-        />
-        <!-- Delete, asked for from a card's own menu. It used to live inside
-             TaskInspector and had to be teleported out of Panel's scroll
-             container to be drawn at all; here there is no `overflow` box over
-             it, so it is written plainly like every other dialog in this view.
-             The issue is read from the store by id rather than held, so the
-             dialog names what the board holds now. -->
-        <Modal
-          :open="!!confirmedIssue"
-          :closable="!deletingId"
-          :title="`Delete ${confirmedIssue?.id}?`"
-          description="bd deletes the issue outright and rewrites references to it in whatever was linked to it. Anything that depended on this issue is left without the dependency. There is no undo."
-          @close="confirmingDelete = null"
-        >
-          <div :style="deleteTitleStyle">{{ confirmedIssue?.title }}</div>
-          <template #footer>
-            <Button variant="ghost" :disabled="!!deletingId" @click="confirmingDelete = null">Cancel</Button>
-            <Button variant="danger" :disabled="!!deletingId" @click="deleteTask(confirmedIssue.id)">
-              {{ deletingId ? 'Deleting…' : 'Delete' }}
-            </Button>
-          </template>
-        </Modal>
-        <!-- Parked, on its way back to Ready. The questions themselves are
-             quoted rather than summarised: this is the one moment somebody
-             decides whether they matter, and a dialog that only said "there are
-             questions" would send them to the card to find out. Three ways out
-             and the recommended one last, where every other dialog here puts
-             the action it expects. -->
-        <Modal
-          :open="!!readyIssue"
-          :title="`Move ${readyIssue?.id} to ready with the question unanswered?`"
-          :description="readyQuestions.length
-            ? 'An agent parked this because it could not settle something on its own. Moving it to ready puts it back in the queue, and whoever takes it next meets the same question.'
-            : 'An agent parked this and left no note saying why. Moving it to ready puts it back in the queue, and whatever stopped the last agent is still there.'"
-          @close="confirmingReady = null"
-        >
-          <div :style="deleteTitleStyle">{{ readyIssue?.title }}</div>
-          <div v-if="readyQuestions.length" :style="questionListStyle">
-            <div v-for="(question, i) in readyQuestions" :key="i" :style="questionStyle">
-              <span :style="questionGlyphStyle"><Icon name="triangle-alert" :size="14" /></span>
-              <span>{{ question }}</span>
-            </div>
-          </div>
-          <template #footer>
-            <Button variant="ghost" @click="confirmingReady = null">Cancel</Button>
-            <Button variant="secondary" @click="moveToReadyAnyway">Move anyway</Button>
-            <Button variant="primary" @click="resolveFromDialog">Answer questions</Button>
-          </template>
-        </Modal>
         <!-- A merge or a rebase that stopped on conflicts. It has no dismiss
              and takes no `close`: the two doors are the only ways out, because
              a conflicted tree behind a closed dialog is a state the panel
              promises to show and has nothing to draw it with. Everything in it
              comes from the record the store made when git answered, including
              which repository — the panel's selection can have moved since. -->
-        <!-- Cutting a branch is not here any more: it is a window of its own,
-             opened by `openNewBranch` above, so the list of branches it is a
-             question about can be read beside it instead of behind a scrim. -->
+        <!-- Seven dialogs are not here any more: each is a window of its own,
+             opened above by `openRun`, `openNewTask`, `openNewBranch`,
+             `openPromote`, `openSetup`, `openDeleteTask` and `openReadyTask` —
+             the whole of `REGISTRY` in `dialogRegistry.js`, which is what
+             finishes the epic this comment was first written in the middle of.
+             What each of them is a question about — a list of branches, the
+             board filling in behind a promote, the card somebody is about to
+             delete — can be read beside it now instead of from behind a scrim.
+             Two remain, and both are here rather than overlooked: the conflict
+             above and "Save changes?" below exist in order to block, and a
+             window somebody can push aside and click past is the one thing
+             neither may be. -->
         <ConflictModal
           v-if="vcsState.conflict"
           :open="true"
@@ -3933,7 +4053,7 @@ const toastStackStyle = {
           :run-blocked-reason="runBlockedReason"
           :promote-from="PROMOTE_FROM"
           @select="selectFromBoard"
-          @add="newTaskOpen = true"
+          @add="openNewTask()"
           @run="openRun({ kind: 'queue' })"
           @promote="openPromote"
           @task-action="onTaskAction"

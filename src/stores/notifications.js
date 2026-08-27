@@ -97,10 +97,16 @@ const storageCard = () => notificationsState.items.find((item) => item.source ==
    about it if there is anything new to say.
 
    Called when the project is resolved at start, when it changes, when the window
-   takes focus, and after an attachment is saved — the same answer the file tree
-   and the branch give, and for the same reason: a watcher over the app's own
-   data directory would be a second watcher subsystem with its own lifecycle for
-   a number that costs milliseconds to read.
+   takes focus, and when the New task window closes — the same answer the file
+   tree and the branch give, and for the same reason: a watcher over the app's
+   own data directory would be a second watcher subsystem with its own lifecycle
+   for a number that costs milliseconds to read.
+
+   That last caller used to be a watcher on the attachment list's own length,
+   and it moved because the list did: images belong to the New task window now
+   (`attachments.js` says why), so the app window cannot see one arrive and the
+   window closing is the nearest moment it can be sure of. Focus returning
+   catches whatever falls between.
 
    Two guards on the answer, and both are the same guard `git.js` and
    `terminals.js` carry: this can be in flight while somebody switches project,

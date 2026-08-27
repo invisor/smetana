@@ -30,6 +30,7 @@ import {
   CommandPalette,
   ConflictModal,
   ContextMenu,
+  DeleteTaskModal,
   DependencyMark,
   DiffView,
   Dropdown,
@@ -63,6 +64,7 @@ import {
   ProjectRail,
   ProjectTile,
   PromoteColumnModal,
+  ReadyTaskModal,
   RepoList,
   ScopeIndicator,
   SectionHeader,
@@ -838,6 +840,15 @@ const BRANCHES = [
    written out here: a frame quoting a sentence by hand is a copy that goes on
    reading well long after the rule stopped saying it. */
 const RUN_GOING = gitActions([{ token: 1, state: { kind: 'running' } }])
+
+/* What an agent left behind when it parked a task, quoted by `ReadyTaskModal`.
+   Two of them and the second one long, because the list is the content of that
+   dialog and one short line would show neither the gap between rows nor a
+   question wrapping under its own triangle. */
+const PARKED_QUESTIONS = [
+  'needs a decision on where the strip sits',
+  'still waiting on the design call about whether a second run may take a task another run has already claimed and abandoned'
+]
 
 /* The Git panel's folds and section heights, kept here so one frame is live:
    the app holds them in `settings.layout` and this stands in for it, which is
@@ -1883,6 +1894,53 @@ const menuTargetStyle = {
       </div>
       <div :style="{ position: 'relative', height: '260px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <PromoteColumnModal :open="true" :count="12" :moved="9" :failed="3" @close="() => {}" @confirm="() => {}" />
+      </div>
+      <!-- Deleting a task, in both of its states: the question, and the second
+           or two while bd is answering it, where every way out is dead
+           including the cross — a delete that failed has a message to show, and
+           it belongs over the dialog that asked. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DeleteTaskModal
+          :open="true"
+          id="smetana-a1b2"
+          task-title="stale board: say so over the cards rather than in place of them"
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DeleteTaskModal
+          :open="true"
+          id="smetana-a1b2"
+          task-title="stale board: say so over the cards rather than in place of them"
+          busy
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- A parked task on its way back to Ready. Both wordings are here, and
+           the empty one is not the tidy case: a task parked by hand carries no
+           note, so the dialog has to be worth reading with nothing to quote. -->
+      <div :style="{ position: 'relative', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ReadyTaskModal
+          :open="true"
+          id="smetana-3uv"
+          task-title="done column: cards ordered by the date they were closed, freshest first"
+          :questions="PARKED_QUESTIONS"
+          @close="() => {}"
+          @confirm="() => {}"
+          @resolve="() => {}"
+        />
+      </div>
+      <div :style="{ position: 'relative', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ReadyTaskModal
+          :open="true"
+          id="smetana-3uv"
+          task-title="done column: cards ordered by the date they were closed, freshest first"
+          @close="() => {}"
+          @confirm="() => {}"
+          @resolve="() => {}"
+        />
       </div>
       <!-- Both strips stand in a frame, and the frame is not decoration here.
            A thumbnail opens the image viewer, which covers the nearest

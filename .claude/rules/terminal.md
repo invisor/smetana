@@ -207,13 +207,25 @@ which is an ordinary mode and gets one debug line. It converts the event's *phys
 
 **Whose drop it is is a hit test, not layout arithmetic.** `TerminalView.vue` asks
 `document.elementFromPoint` at that point and takes the drop only if what is drawn there is inside its
-own xterm host. The same question settles the argument with the new task dialog for free: with that
-modal open the point lands on its scrim, so the panel refuses of its own accord and the two subscribers
-on the one window event never need to know about each other — which is why there is no dispatcher
-between them, and why a future overlay is separated by the same property rather than by a list of
-exceptions. The pane's own drop response is a sibling of the host and carries `pointerEvents: 'none'`
-for exactly this reason: taking pointer events would make the response itself the answer to the hit
-test, and it would switch off the instant it appeared.
+own xterm host. The pane's own drop response is a sibling of the host and carries
+`pointerEvents: 'none'` for exactly this reason: taking pointer events would make the response itself
+the answer to the hit test, and it would switch off the instant it appeared.
+
+There used to be a second subscriber to argue with — the attachment store, listening on this same
+window for a file dropped onto the new task dialog — and the scrim of that modal was what kept the
+two apart: with it open the point landed on the scrim, so the panel refused of its own accord. **That
+mechanism is gone, and what replaced it is stronger.** The new task dialog is an OS window of its own
+now (`smetana-at3`), Tauri delivers a drop only to the window it landed on, and the two subscriptions
+are in different webviews: `watchSessionDrops` has one caller, `TerminalView.vue`, which is only ever
+drawn inside `DesktopApp.vue`, and `watchDrops` has one caller, `DialogWindow.vue`. `App.vue` gives a
+webview exactly one view, and `dialog_window_open` always builds a separate window, so no page can
+carry both. The attachment store accordingly accepts every drop it hears (`() => true`); the hit test
+above is now the panel's own business alone — which pane of this window, not which feature.
+
+The lesson to carry forward is the property rather than the scrim: two subscribers to one window
+event are kept apart by never being on one window, and an overlay added inside *this* one has no such
+separation and would need the hit test to settle it. There is still no dispatcher between them, and
+none is wanted.
 
 The response — a frame and one line of caption over the terminal — is drawn only while a live session
 is behind the panel. `send` already drops what is written to a session still coming up, so there is

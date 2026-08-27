@@ -10,9 +10,26 @@
    answer with the same record, so nothing above this file has to know which
    gesture produced a thumbnail.
 
-   The list is here rather than inside the dialog because a drop is not the
-   dialog's event to hear: Tauri intercepts file drops before the webview sees
-   them, and what comes back is a window-level event with absolute paths in it.
+   **The list belongs to the New task window.** `DialogWindow.vue` loads this
+   file lazily, for the one dialog kind that has images in it, and that window
+   is the only thing anywhere that reads `attachmentsState` or subscribes to a
+   drop. The app window no longer does either: `DesktopApp.vue` stopped
+   importing this file altogether, and what still reaches it from over there is
+   `surveyStorage` alone, through `notifications.js` — a question about a
+   folder, which has nothing to do with the list.
+
+   That reads backwards against what stood here before, and the reason it does
+   is that the dialog changed shape. Tauri intercepts a file drop before the
+   webview sees it and reports it against the *window*, so while the dialog was
+   a modal over the board the drop was the app window's event and never the
+   dialog's — hence a list outside it. The dialog is a window of its own now, so
+   the drop is exactly its own event to hear, and the only window that can hear
+   it is the one somebody dropped the file on. The store moved because of it.
+
+   Nothing is heard twice as a result: `attachment_import` and `attachment_write`
+   are commands rather than subscriptions, so there is no second observer and no
+   second copy of the list. What travels back to the app window, in `submit`, is
+   a list of paths.
 
    Taking a thumbnail out forgets the path and leaves the file, and so does
    closing the dialog — nothing about handling a picture here ever deletes one.
@@ -58,7 +75,7 @@ export const attachmentsState = reactive({
      the dialog rather than as a toast: the dialog is on top of everything, and
      the refusal is about the thing the person just handed over. */
   lastError: null,
-  /* Something is being dragged over the window while the dialog is open. */
+  /* Something is being dragged over this window, which is the dialog. */
   dragging: false
 })
 
@@ -271,6 +288,14 @@ export function removeAttachment(path) {
   attachmentsState.items = attachmentsState.items.filter((item) => item.path !== path)
 }
 
+/* Nothing in `src/` calls this any more, and that is a consequence of the move
+   rather than a leftover to tidy away. The app window used to empty the list
+   when it closed the dialog, because the dialog was a modal and the list
+   outlived it; the dialog is a window now and the whole store goes when the
+   window is destroyed, so there is no moment left at which somebody has to say
+   this. It stays exported, and its test with it, because a second collector in
+   one window is the one thing it would be needed for and the cost of keeping it
+   is a function nobody calls. */
 export function clearAttachments() {
   attachmentsState.items = []
   attachmentsState.lastError = null
@@ -280,14 +305,18 @@ export function clearAttachments() {
 /* Drops on the window.
 
    The webview never sees a file drop: Tauri handles it and reports it here,
-   against the window rather than against an element. So while the dialog is
-   open the whole window is the drop target, and narrowing that to the
-   dialog's rectangle would mean doing its layout arithmetic here in order to
-   refuse a gesture nobody makes with a modal on the screen.
+   against the window rather than against an element. The whole window is
+   therefore the drop target, and now that the window is the dialog that is the
+   answer rather than an approximation of one — narrowing it to the dialog's
+   rectangle would mean doing its layout arithmetic here to refuse a gesture
+   nobody can make.
 
    `accepting` is a function rather than a flag this store keeps: whether
    anything is collecting images is the view's business, and asking it is what
-   keeps a drop from landing in a list nobody is looking at.
+   keeps a drop from landing in a list nobody is looking at. The dialog window
+   answers `true` and always will — a window that exists is a dialog that is
+   open — and it keeps the question because the caller is the one that knows
+   that, not this file.
 
    In a browser there is no webview to ask, and getCurrentWebview throws
    before the subscription — a normal mode, the same one settings.js reads a
