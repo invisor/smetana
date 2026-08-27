@@ -24,7 +24,11 @@
    the app for the sake of one call. */
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watchEffect } from 'vue'
 import EmptyState from '../components/core/EmptyState.vue'
+import DeleteTaskModal from '../components/kanban/DeleteTaskModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
+import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
+import ReadyTaskModal from '../components/kanban/ReadyTaskModal.vue'
+import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import { dialogWidth, isDialogKind } from './dialogRegistry.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
@@ -54,7 +58,11 @@ const props = defineProps({
    module whose whole point is having neither Vue nor a DOM in it — and that
    module is the half a test can reach. */
 const COMPONENTS = {
-  'new-branch': NewBranchModal
+  'delete-task': DeleteTaskModal,
+  'new-branch': NewBranchModal,
+  'promote-column': PromoteColumnModal,
+  'ready-task': ReadyTaskModal,
+  'setup-project': SetupProjectModal
 }
 
 const component = computed(() => COMPONENTS[props.kind] ?? null)
