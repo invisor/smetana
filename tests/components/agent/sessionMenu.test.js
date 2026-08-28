@@ -204,10 +204,13 @@ describe('what the menu button says about a copy', () => {
     expect(menuButtonIcon('pending')).toBe('ellipsis')
   })
 
-  /* The same 1.2 s the board's id copy holds for. Two confirmations in one app
-     that faded at different speeds would be two features where there is one. */
-  it('holds as long as the board\'s own copy confirmation', () => {
-    expect(COPIED_MS).toBe(1200)
+  /* Re-exported from `kanban/copyId.js` rather than declared here: the number
+     itself is pinned in that module's own test, and what is checked here is
+     that a component drawing a session row gets the same one — a second
+     declaration is exactly what this line exists to make impossible. */
+  it('holds as long as every other copy confirmation in the app', async () => {
+    const { COPIED_MS: owned } = await import('../../../src/components/kanban/copyId.js')
+    expect(COPIED_MS).toBe(owned)
   })
 })
 

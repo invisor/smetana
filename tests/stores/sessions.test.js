@@ -185,13 +185,18 @@ describe('the sessions a project has on disk', () => {
   })
 })
 
-describe('opening a transcript, and the directory it ran in', () => {
-  it('asks the worker to hand the path to the desktop', async () => {
+describe('the three verbs that ask the desktop', () => {
+  it('asks the worker to hand each path over, by its own command', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('sessions_open', null)
+    ipc.on('sessions_open_log', null).on('sessions_open_cwd', null).on('sessions_reveal', null)
 
-    expect(await stores.sessions.openSessionPath('/p/a.jsonl')).toBe(null)
-    expect(ipc.calls('sessions_open')).toEqual([{ path: '/p/a.jsonl' }])
+    expect(await stores.sessions.openSessionLog('/p/a.jsonl')).toBe(null)
+    expect(await stores.sessions.openSessionDirectory('/dev/p')).toBe(null)
+    expect(await stores.sessions.revealSessionLog('/p/a.jsonl')).toBe(null)
+
+    expect(ipc.calls('sessions_open_log')).toEqual([{ path: '/p/a.jsonl' }])
+    expect(ipc.calls('sessions_open_cwd')).toEqual([{ path: '/dev/p' }])
+    expect(ipc.calls('sessions_reveal')).toEqual([{ path: '/p/a.jsonl' }])
   })
 
   /* The list is read when the tab is opened and never watched, so a row whose
@@ -202,10 +207,23 @@ describe('opening a transcript, and the directory it ran in', () => {
   it('hands back the refusal as words rather than swallowing it', async () => {
     const { ipc, stores } = await loadStores()
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    ipc.fail('sessions_open', 'The file is no longer on disk.')
+    ipc.fail('sessions_open_log', 'The transcript is no longer on disk.')
 
-    expect(await stores.sessions.openSessionPath('/p/gone.jsonl')).toBe(
-      'The file is no longer on disk.'
+    expect(await stores.sessions.openSessionLog('/p/gone.jsonl')).toBe(
+      'The transcript is no longer on disk.'
+    )
+  })
+
+  /* The whole of the reveal's reason for being a command of ours: it has to be
+     able to say *this*, and `revealInFileManager` in `app.js` answers a boolean
+     whose only sentence is about a browser having no file manager. */
+  it('lets the reveal say the transcript has gone, which a boolean could not', async () => {
+    const { ipc, stores } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('sessions_reveal', 'The transcript is no longer on disk.')
+
+    expect(await stores.sessions.revealSessionLog('/p/gone.jsonl')).toBe(
+      'The transcript is no longer on disk.'
     )
   })
 
@@ -215,23 +233,29 @@ describe('opening a transcript, and the directory it ran in', () => {
   it('turns an error object into a sentence too', async () => {
     const { ipc, stores } = await loadStores()
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    ipc.fail('sessions_open', new Error('the command is not implemented'))
+    ipc.fail('sessions_open_log', new Error('the command is not implemented'))
 
-    expect(await stores.sessions.openSessionPath('/p/a.jsonl')).toBe(
+    expect(await stores.sessions.openSessionLog('/p/a.jsonl')).toBe(
       'the command is not implemented'
     )
   })
 
   /* A session with no working directory recorded has nothing to open, and the
-     command is not asked at all: a call with an empty path would be answered by
-     Rust with a sentence about a path that is not there, which is true and
-     slower. */
-  it('does not ask about a path there is none of', async () => {
+     command is not asked at all. Each verb says which thing is missing, which
+     is the same distinction the worker keeps on the other side of the wire. */
+  it('does not ask about a path there is none of, and names what is missing', async () => {
     const { ipc, stores } = await loadStores()
-    ipc.on('sessions_open', null)
+    ipc.on('sessions_open_log', null).on('sessions_open_cwd', null).on('sessions_reveal', null)
 
-    expect(await stores.sessions.openSessionPath(null)).toBe('There is no path to open.')
-    expect(ipc.calls('sessions_open')).toEqual([])
+    expect(await stores.sessions.openSessionLog(null)).toBe('There is no transcript to open.')
+    expect(await stores.sessions.openSessionDirectory(null)).toBe(
+      'This session recorded no working directory.'
+    )
+    expect(await stores.sessions.revealSessionLog('')).toBe('There is no transcript to show.')
+
+    expect(ipc.calls('sessions_open_log')).toEqual([])
+    expect(ipc.calls('sessions_open_cwd')).toEqual([])
+    expect(ipc.calls('sessions_reveal')).toEqual([])
   })
 })
 

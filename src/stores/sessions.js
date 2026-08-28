@@ -134,33 +134,61 @@ function refusalText(err) {
   return 'Something went wrong and nothing was said about it.'
 }
 
-/* A session's transcript, or the directory it ran in, handed to the desktop.
+/* One guarded verb of the worker's, and whatever it refused with.
+ *
+ * Written once for the three: they differ only in the command name, and three
+ * copies of the same try/catch would be three places for the console line and
+ * the fall-back sentence to drift apart.
+ *
+ * Answered with `null` when it worked and with a sentence when it did not,
+ * rather than throwing. Every caller puts the failure on the screen either way,
+ * and a `try` around one line at each call site is a shape that goes wrong the
+ * first time somebody adds a fourth. */
+async function askWorker(command, path, missing) {
+  if (!path) return missing
+  try {
+    await invoke(command, { path })
+    return null
+  } catch (err) {
+    console.error(`[sessions] ${command} was refused:`, err)
+    return refusalText(err)
+  }
+}
+
+/* A session's transcript, handed to whatever the desktop has registered for it.
  *
  * Here rather than in `app.js`, which is where `openExternal` and
  * `revealInFileManager` live, and the line between the two is what the desktop
  * is being asked about. Those two are asks with no subject — any URL, any path
- * — and go through the opener plugin from this side of the wire. This one is a
- * command of ours, because the plugin's `open_path` is refused by its own scope
- * check unless a capability entry allows the path, and the only entry wide
- * enough for both a transcript under `~/.claude/projects` and the arbitrary
- * folder a session ran in is one that allows every path on the machine.
- * `sessions/act.rs` carries the whole argument; what it means here is that the
- * guard lives in Rust and speaks the sessions vocabulary, so the call belongs
- * to this store.
+ * — and go through the opener plugin from this side of the wire. These three
+ * are commands of ours, because the plugin's `open_path` is refused by its own
+ * scope check unless a capability entry allows the path, and the only entry
+ * wide enough for both a transcript under `~/.claude/projects` and the
+ * arbitrary folder a session ran in is one that allows every path on the
+ * machine. `sessions/act.rs` carries the whole argument; what it means here is
+ * that the guard lives in Rust and speaks the sessions vocabulary, so the calls
+ * belong to this store. */
+export async function openSessionLog(path) {
+  return askWorker('sessions_open_log', path, 'There is no transcript to open.')
+}
+
+export async function openSessionDirectory(path) {
+  return askWorker('sessions_open_cwd', path, 'This session recorded no working directory.')
+}
+
+/* Showing the transcript in the platform's file manager.
  *
- * Answered with `null` when it worked and with a sentence when it did not,
- * rather than throwing: every caller puts the failure on the screen either way,
- * and a `try` around one line at each call site is a shape that goes wrong once
- * somebody adds a second call site. */
-export async function openSessionPath(path) {
-  if (!path) return 'There is no path to open.'
-  try {
-    await invoke('sessions_open', { path })
-    return null
-  } catch (err) {
-    console.error('[sessions] the open was refused:', err)
-    return refusalText(err)
-  }
+ * **Not `revealInFileManager` in `app.js`, and this one is not about a
+ * capability.** That function is the file tree's: it answers a boolean, so it
+ * cannot say *why*, and the single sentence its callers have for a `false` is
+ * about a browser having no file manager to ask. In the built app the
+ * commonest way this fails is a transcript that has gone since the list was
+ * read — the plugin canonicalises the path before showing anything — and that
+ * person would have been told to go and install the desktop app they are
+ * already running. A command of ours answers with the same words the other
+ * three do. */
+export async function revealSessionLog(path) {
+  return askWorker('sessions_reveal', path, 'There is no transcript to show.')
 }
 
 /* One transcript, deleted, and the row taken out of the list.

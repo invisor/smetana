@@ -17,17 +17,27 @@
    also the answer for somebody who would rather paste it into their own
    terminal than have this app spawn anything. */
 import { fileManagerName } from '../files/fileMenu.js'
+import { COPIED_MS } from '../kanban/copyId.js'
 import { formatBytes } from '../settings/storage.js'
 
-/* Borrowed rather than written again, both of them, and each for the reason the
+/* Borrowed rather than written again, all three, and each for the reason the
    hazards list gives for pairs: `fileManagerName` is already this app's answer
-   to what the platform calls Finder, and `formatBytes` is already its answer to
-   how many bytes read as a size. A second copy of either would be free to drift
+   to what the platform calls Finder, `formatBytes` is already its answer to how
+   many bytes read as a size, and `COPIED_MS` is already its answer to how long
+   a copy says it worked for. A second copy of either would be free to drift
    into a different word for the same thing with every suite green — the file
    tree's menu saying "Reveal in Finder" while this one said "Reveal in
    Explorer" on the same machine, or a dialog calling 1024 bytes a kilobyte
-   under a Storage tab that calls it a KiB. Neither import pulls Vue or Tauri in:
-   both modules are the same pure family this one belongs to. */
+   under a Storage tab that calls it a KiB, or a session's confirmation fading
+   at a different speed from a task id's two panels away. None of the three
+   imports pulls Vue or Tauri in: all four modules are the same pure family.
+
+   `COPIED_MS` is re-exported rather than merely used, so that a component
+   drawing a session row has one place to import its rule from and does not have
+   to know that half of it is the board's. It is one name for one number either
+   way — the re-export cannot drift, which is the whole difference between this
+   and the three copies it replaced. */
+export { COPIED_MS }
 
 /* How wide the menu may get. A ceiling and not a width — `ContextMenu` draws
    itself as wide as its widest row and clips there with an ellipsis, and a menu
@@ -190,12 +200,6 @@ export function menuButtonIcon(state) {
   if (state === 'failed') return 'x'
   return 'ellipsis'
 }
-
-/* How long the confirmation stands. `COPIED_ID_MS` in `DesktopApp.vue` to the
-   millisecond, and deliberately: two copy confirmations in one app that faded
-   at different speeds would be two features where there is one. It is here
-   rather than there because this is the half a test can read. */
-export const COPIED_MS = 1200
 
 /* The caption of the window that asks before a transcript is deleted.
 

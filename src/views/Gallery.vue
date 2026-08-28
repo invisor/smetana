@@ -1237,7 +1237,13 @@ const MARKDOWN_SAMPLE = [
    page by eye. One id and one outcome at a time, cleared after the same 1.2 s,
    so copying one id here takes the confirmation off another exactly as it does
    on the board. It reaches the boards below through the same two hops the app
-   uses, `copiedId` and `copyState`, so those are exercised too. */
+   uses, `copiedId` and `copyState`, so those are exercised too.
+
+   The duration is imported and no longer a bare `1200` written out here. That
+   was the half of this pair the hazards list warns about: this page is the only
+   verification this project has for anything under `src/components/`, so a
+   duration that moved in the app alone would leave the harness confirming a copy
+   at a speed the product no longer uses. */
 const copiedId = ref(null)
 const copyState = ref('')
 let copyTimer = null
@@ -1261,7 +1267,7 @@ async function copyId(id) {
   copyTimer = setTimeout(() => {
     copiedId.value = null
     copyState.value = ''
-  }, 1200)
+  }, COPIED_MS)
 }
 
 /* Two issues in bd's own shape: one that has everything the inspector can

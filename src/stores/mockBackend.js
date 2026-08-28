@@ -1137,12 +1137,13 @@ export function installMockBackend() {
     if (command === 'sessions_list') {
       return mockSessions(payload?.project ?? MOCK_PROJECTS[0])
     }
-    /* `sessions_open` and `sessions_delete` are deliberately not answered
-       here either, and for a plainer reason than the two below: a browser has
-       no desktop to open a file with and no business unlinking one. The loud
-       rejection reaches the row's menu as the sentence a refusal would have
-       carried, which is what a person pressing either item in `npm run dev`
-       should be told.
+    /* The session row's four verbs that leave this window — `sessions_open_log`,
+       `sessions_open_cwd`, `sessions_reveal` and `sessions_delete` — are
+       deliberately not answered here either, and for a plainer reason than the
+       two below: a browser has no desktop to open a file with, no file manager
+       to show one in, and no business unlinking one. The loud rejection reaches
+       the row's menu as the sentence a refusal would have carried, which is what
+       a person pressing any of them in `npm run dev` should be told.
 
        Everything that *starts* something — `terminal_create` and
        `terminal_shell` — is deliberately not answered here and falls through to

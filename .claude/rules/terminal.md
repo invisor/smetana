@@ -602,19 +602,45 @@ stands in for them, and is also the answer for somebody who would rather paste `
 the policy and this follows it to the millisecond: a copy is the one action with nothing on screen to
 show for it, so the confirmation belongs on the control somebody is still looking at. What differs is
 where it can land — the menu closes on the way out, so the trigger it hung from is what is left, and
-it draws a tick and names what was copied for 1.2 s.
+it draws a tick and names what was copied. How long for is `COPIED_MS`, which lives in
+`kanban/copyId.js` beside the rest of that vocabulary and is imported by everything that confirms a
+copy: it was written out three times over — the view, the gallery and the session menu — and the
+gallery is the only verification this project has for anything under `src/components/`, so a duration
+that moved in the app alone would have left the harness measuring the wrong thing.
 
-**Open log, Reveal log and Open working directory are three verbs and two mechanisms, and the split
-is an ACL decision.** Reveal is `revealItemInDir` through the opener plugin, which takes no scope and
-which `capabilities/default.json` already grants. The other two are `sessions_open`, a command of
-ours, because the plugin's `open_path` is refused by its own scope check unless a capability entry
-allows the path — and the only entry wide enough for both a transcript under `~/.claude/projects` and
-the arbitrary folder a session ran in is one that allows every path on the machine. That is the same
-refusal `src-tauri/src/updates.rs` records for the updater plugin: a permission is published to every
-window in the app, so the narrow thing to publish is a command that names its own rule.
-`sessions::model::is_transcript` is that rule, it is pure and it is pinned by tests — the extension,
-membership of the root by path *components* rather than by string prefix, and no `..` in it, since
-`Path::starts_with` is lexical and would otherwise wave through a path that walks straight back out.
+**Open log, Reveal log and Open working directory are three commands of ours, not the opener
+plugin's, and they are three rather than one on purpose.** The plugin's `open_path` is refused by its
+own scope check unless a capability entry allows the path, and the only entry wide enough for both a
+transcript under `~/.claude/projects` and the arbitrary folder a session ran in is one that allows
+every path on the machine — the same refusal `src-tauri/src/updates.rs` records for the updater
+plugin, since a permission is published to every window in the app. So the narrow thing to publish is
+a command that names its own rule, and each of the three names a different one:
+
+- a transcript is `sessions::model::is_transcript` — the extension, membership of the root by path
+  *components* rather than by string prefix, and no `..` in it, since `Path::starts_with` is lexical
+  and would otherwise wave through a path that walks straight back out — plus being a *file*, so a
+  directory named `x.jsonl` cannot take the transcript branch;
+- a working directory must exist, be a directory, and **have no extension**. That last clause is not
+  tidiness: on macOS `open_path` goes to `/usr/bin/open`, and a directory with an extension is how
+  that platform spells an application — `.app`, `.bundle`, `.pkg` are all folders and all *launched*.
+  A session's working directory never carries one. Nothing a person did not choose can reach the
+  command today, so this is a hardening; it is written down because the file promises every verb in
+  it names its own rule, and the directory branch had none.
+
+**Reveal is ours for a different reason, and it is a sentence rather than a permission.**
+`revealItemInDir` needs no scope and this app already grants it, so `stores/app.js` could and did
+call it — that is still the file tree's route and stays. What that function cannot do is say *why*:
+it answers a boolean shared with the tree, whose one failure message is about a browser having no
+file manager. `reveal_item_in_dir` canonicalises the path before showing anything, so a transcript
+that has gone since the list was read — the commonest failure there is in the built app — reached a
+person as advice to install the desktop app they were already running. `sessions_reveal` answers with
+the same words the other three do.
+
+The nouns in those words are the callers', not the guard's: `The transcript is no longer on disk`
+against `The working directory is no longer on disk`, because the two send somebody to different
+places. And a `stat` that failed for any other reason — permissions, a volume that went away — says
+so instead of claiming the file is gone, which would be a statement about a person's history rather
+than about the machine.
 
 **Delete unlinks the file and does not trash it**, which makes it the only thing in this app that
 destroys a file the app did not make. A cross-platform trash is a dependency rather than a line of

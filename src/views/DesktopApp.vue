@@ -35,6 +35,10 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
+/* The one duration every copy confirmation in this window holds for — the
+   board's id and a session row's menu both. `kanban/copyId.js` owns it because
+   that is where the rest of the copy vocabulary already lived. */
+import { COPIED_MS } from '../components/kanban/copyId.js'
 import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
 import Button from '../components/core/Button.vue'
 import RunBar from '../components/run/RunBar.vue'
@@ -59,7 +63,6 @@ import { CommandPalette, TaskSearchButton, TerminalView } from '../components/in
 import AgentList from '../components/agent/AgentList.vue'
 import SessionRow from '../components/agent/SessionRow.vue'
 import {
-  COPIED_MS,
   DELETE_SESSION_TITLE,
   copyNoun as copyVerbNoun,
   copyPayload,
@@ -72,7 +75,9 @@ import {
   deleteSessionTranscript,
   initSessions,
   loadSessionHistory,
-  openSessionPath,
+  openSessionDirectory,
+  openSessionLog,
+  revealSessionLog,
   sessionsState
 } from '../stores/sessions.js'
 import {
@@ -2038,8 +2043,11 @@ const selectFromBoard = (id) => {
    One id at a time, deliberately: the state is a single id and a single
    outcome, so copying a second one takes the confirmation off the first — two
    cards both reading `Copied` would be a claim about a clipboard that only
-   holds one thing. */
-const COPIED_ID_MS = 1200
+   holds one thing.
+
+   How long it stands is `COPIED_MS`, imported rather than written here: it used
+   to be a `COPIED_ID_MS` of this file's own, and the session row's menu made it
+   the second copy of one number. */
 const copiedTaskId = ref(null)
 /* '' | 'copied' | 'failed' */
 const taskIdCopyState = ref('')
@@ -2072,7 +2080,7 @@ async function copyTaskId(id) {
   copiedTaskTimer = setTimeout(() => {
     copiedTaskId.value = null
     taskIdCopyState.value = ''
-  }, COPIED_ID_MS)
+  }, COPIED_MS)
 }
 
 onUnmounted(() => clearTimeout(copiedTaskTimer))
@@ -2111,8 +2119,9 @@ watch(() => sessionsState.project, () => {
 /* Copying one of the three things a session row offers — its resume command,
    its id, the path to its transcript — and saying so afterwards.
 
-   `copyTaskId` above is the policy, followed here to the millisecond and for
-   its own stated reason: a copy is the one action with nothing on screen to
+   `copyTaskId` above is the policy, followed here to the millisecond — the same
+   `COPIED_MS`, since there is only one of it now — and for its own stated
+   reason: a copy is the one action with nothing on screen to
    show for it, so the answer belongs on the control somebody is still looking
    at rather than in the corner of the screen. What differs is where it lands.
    A task's id is a control of its own; a session's copy is picked from a menu
@@ -2253,35 +2262,27 @@ async function deleteSession(session) {
    file that has gone, and a menu item that did nothing and said nothing would
    read as a broken app rather than as a stale row. */
 const onSessionAction = async ({ kind, session }) => {
+  /* Three verbs and one shape: a sentence from the worker, or null. Written
+     here rather than three times over so that the four rows below stay a list
+     of what each verb is, which is the half a person reads this chain for. */
+  const say = (failure, title) => {
+    if (failure) sayFileMenu({ tone: 'error', title, description: failure })
+  }
   if (isCopyKind(kind)) {
     await copyFromSession(kind, session)
   } else if (kind === 'open-log') {
-    const failure = await openSessionPath(session?.path)
-    if (failure) {
-      sayFileMenu({ tone: 'error', title: 'Could not open the log', description: failure })
-    }
+    say(await openSessionLog(session?.path), 'Could not open the log')
   } else if (kind === 'open-cwd') {
-    const failure = await openSessionPath(session?.cwd)
-    if (failure) {
-      sayFileMenu({
-        tone: 'error',
-        title: 'Could not open the working directory',
-        description: failure
-      })
-    }
+    say(await openSessionDirectory(session?.cwd), 'Could not open the working directory')
   } else if (kind === 'reveal-log') {
-    /* The one verb here that is still the opener plugin's, because it is the
-       one the app already had a capability for and `revealItemInDir` takes no
-       scope at all. `app.js` answers `false` in a browser rather than throwing,
-       which is what the sentence below is about. */
-    const ok = await revealInFileManager(session?.path)
-    if (!ok) {
-      sayFileMenu({
-        tone: 'error',
-        title: 'Could not show it',
-        description: 'This one needs the desktop app — a browser has no file manager to ask.'
-      })
-    }
+    /* Deliberately **not** `revealInFileManager`, which every other reveal in
+       this window uses. That one is the file tree's: it answers a boolean, so
+       the only sentence its callers have for a refusal is the one about a
+       browser having no file manager — and in the built app the commonest way
+       this fails is a transcript that has gone since the list was read, which
+       that sentence would have described as a missing desktop app. The store's
+       own verb answers with words. */
+    say(await revealSessionLog(session?.path), 'Could not show the log')
   } else if (kind === 'delete') {
     openDeleteSession(session)
   }
