@@ -599,6 +599,18 @@ mod tests {
         with_images(brainstorm, Vec::new())
     }
 
+    #[test]
+    fn this_harness_says_it_cannot_pick_a_recorded_session_up() {
+        // Codex has its own argument grammar and this app does not get to guess
+        // it, so the profile keeps `resume_args`'s default rather than a flag
+        // that looks like Claude Code's. The refusal is what
+        // `terminal::service` turns into `TerminalError::NoResume`, and it is
+        // what stops a resume from starting a *fresh* Codex in the worktree
+        // under a card promising the conversation somebody left.
+        use crate::agents::Profile;
+        assert_eq!(Codex.resume_args("9f1c0a2e"), None);
+    }
+
     fn with_images(brainstorm: Stage, images: Vec<String>) -> Intent {
         staged(brainstorm, Stage::Off, Stage::Off, images)
     }

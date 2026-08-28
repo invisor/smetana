@@ -399,10 +399,16 @@ function mockSessions(project) {
   const at = (ms) => new Date(Date.now() - ms).toISOString()
   const stem = (cwd) => cwd.replace(/[/.]/g, '-')
   const worktree = `${project}/.worktrees/smetana-oln-sessions-tab-disk-history`
+  /* `cwdExists` is what the Resume row is greyed from, and it is `false` on the
+     worktree row on purpose: a worktree is removed once its task is merged and
+     the transcript stays behind, so on a real machine a good number of rows are
+     in exactly that state and it is the one the browser could otherwise never
+     show. The rest are directories that are still there. */
   const rows = [
     {
       id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
       cwd: project,
+      cwdExists: true,
       branch: 'main',
       title: 'Talk to me in Russian: everything you say in this project, and keep the commit messages in Russian too',
       lastRole: 'assistant',
@@ -417,6 +423,7 @@ function mockSessions(project) {
     {
       id: '3a7e5b10-1c2d-4e3f-9a8b-7c6d5e4f3a2b',
       cwd: project,
+      cwdExists: true,
       branch: 'develop',
       title: 'Why does the scope bar count dirty files it cannot see',
       lastRole: 'user',
@@ -430,6 +437,9 @@ function mockSessions(project) {
     {
       id: '5d2f8c41-9b0a-4c1d-8e7f-6a5b4c3d2e1f',
       cwd: worktree,
+      /* The worktree has been merged and removed; the transcript is still
+         here, and the row says so by refusing the resume. */
+      cwdExists: false,
       branch: 'feature/smetana-oln-sessions-tab-disk-history',
       title: 'Implement the front-end half of the sessions tab',
       lastRole: 'assistant',
@@ -444,6 +454,7 @@ function mockSessions(project) {
     {
       id: 'c81b0e39-4a5f-4b6c-9d0e-1f2a3b4c5d6e',
       cwd: `${project}/src-tauri`,
+      cwdExists: true,
       /* A session started outside a repository, which is an ordinary thing:
          the transcript records no branch and the row simply has one piece
          fewer. */
@@ -463,6 +474,7 @@ function mockSessions(project) {
          way to see either. */
       id: 'e4a90d77-2b3c-4d5e-8f90-1a2b3c4d5e6f',
       cwd: project,
+      cwdExists: true,
       branch: 'main',
       title: null,
       lastRole: null,
@@ -476,6 +488,7 @@ function mockSessions(project) {
     {
       id: '7b6a5948-3c2d-4e1f-9a0b-8c7d6e5f4a3b',
       cwd: project,
+      cwdExists: true,
       branch: 'staging',
       title: 'Port the branch list to the design system',
       lastRole: 'assistant',

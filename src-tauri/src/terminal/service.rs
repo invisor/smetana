@@ -531,6 +531,47 @@ fn shell_cwd(root: &Path, rel: Option<&str>) -> Result<PathBuf, TerminalError> {
     Ok(full)
 }
 
+/// Where a resumed session starts: the directory the recorded session ran in.
+///
+/// **Not the project root, and never a fallback to it.** `claude --resume`
+/// resolves a session id against the directory it is run in, so the same id
+/// somewhere else is a session Claude Code has never heard of; and a worktree
+/// session started at the root would be an agent reading a tree its own
+/// transcript never mentions. A directory that has gone — a worktree removed
+/// after the merge, with the transcript left behind, which is the ordinary case
+/// on any machine that has done a few tasks — is a refusal, not a substitution.
+///
+/// Three clauses, and the third is the one that is not obvious. The path
+/// arrives from the front end, so it is checked rather than trusted: it has to
+/// lie inside the project, by `sessions::model::belongs_to` — the very rule
+/// that decided this session was this project's when the list was read, asked
+/// again here rather than spelled out a second time — it must hold no `..`,
+/// because `Path::starts_with` is lexical and would otherwise wave through
+/// `<project>/../../elsewhere`, and it has to be a directory that is there now.
+///
+/// `also` is the project's canonical path when it has one, and it is here for
+/// the reason `sessions::read::list_in` carries it: `/tmp` on macOS is
+/// `/private/tmp`, so a transcript records whichever spelling Claude Code was
+/// started with while the front end holds whichever the project was opened
+/// with. Comparing against both is cheaper than refusing a session the list
+/// itself was happy to draw.
+fn resume_cwd(root: &Path, also: Option<&Path>, cwd: &str) -> Result<PathBuf, TerminalError> {
+    let bad = || TerminalError::BadCwd(cwd.to_owned());
+    if cwd.is_empty() {
+        return Err(bad());
+    }
+    let path = PathBuf::from(cwd);
+    if path.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return Err(bad());
+    }
+    let ours = crate::sessions::model::belongs_to(cwd, root)
+        || also.is_some_and(|other| crate::sessions::model::belongs_to(cwd, other));
+    if !ours || !path.is_dir() {
+        return Err(bad());
+    }
+    Ok(path)
+}
+
 /// Everything the worker does synchronously. `ShutDown` is handled by the
 /// loop instead — see there.
 fn handle(
@@ -577,6 +618,36 @@ fn handle(
                 let _ = tx.send(Err(TerminalError::NoAgent(agents::IDS.join(", "))));
                 return;
             };
+            // A resume is refused here or nowhere: the front end greys the row
+            // when the project's agent cannot be told to do it, but the front
+            // end is not what this guard is for — a request that arrives all
+            // the same must not become a *fresh* agent in the worktree, under a
+            // card promising the conversation somebody left. `pick` may also
+            // have substituted another harness for the configured one, which is
+            // exactly the case nothing on screen can see.
+            if let agents::Intent::ResumeSession { id, .. } = &intent {
+                if profile.resume_args(id).is_none() {
+                    let _ = tx.send(Err(TerminalError::NoResume(profile.id().to_owned())));
+                    return;
+                }
+            }
+            // The session's own directory, and only for a resume: every other
+            // intent runs at the project root. Before the id is spent, since
+            // nothing is spawned when this refuses.
+            let dir = match &intent {
+                agents::Intent::ResumeSession { cwd, .. } => {
+                    let root = PathBuf::from(&project);
+                    let real = root.canonicalize().ok().filter(|real| *real != root);
+                    match resume_cwd(&root, real.as_deref(), cwd) {
+                        Ok(dir) => dir,
+                        Err(err) => {
+                            let _ = tx.send(Err(err));
+                            return;
+                        }
+                    }
+                }
+                _ => PathBuf::from(&project),
+            };
             let id = *next_id;
             *next_id += 1;
             // Only a Setup session pays for the walk, and it happens here
@@ -616,7 +687,7 @@ fn handle(
             let work = intent.work();
             let launch = agents::Launch {
                 profile,
-                cwd: PathBuf::from(&project),
+                cwd: dir.clone(),
                 intent,
                 skills: agents::library::resolve(app),
                 facts,
@@ -649,7 +720,13 @@ fn handle(
                     // the name that was asked for: `pick` falls back to an
                     // installed agent, and the row in the panel is where that
                     // becomes visible.
-                    let session = Session::new(id, profile.id(), &project, &project, work);
+                    // `cwd` and `project` differ for a resumed session and
+                    // for nothing else here — the same divergence a shell
+                    // opened from a folder in the tree has, one arm down. The
+                    // project is what the panel, the rail and `List` read; the
+                    // directory is where the agent actually is.
+                    let session =
+                        Session::new(id, profile.id(), &dir.to_string_lossy(), &project, work);
                     let live = Live {
                         session: session.clone(),
                         profile: Some(profile),
@@ -955,5 +1032,98 @@ mod tests {
     fn the_empty_path_is_the_root() {
         let root = scratch("empty");
         assert_eq!(shell_cwd(&root, Some("")).unwrap(), root);
+    }
+
+    /* ---- where a resumed session starts ---------------------------------- */
+
+    /// The case the feature is named after: a session out of a worktree comes
+    /// back in that worktree and nowhere else.
+    #[test]
+    fn a_worktree_session_resumes_in_its_own_worktree() {
+        let root = scratch("resume-worktree");
+        let worktree = root.join(".worktrees/smetana-0cj");
+        std::fs::create_dir_all(&worktree).unwrap();
+        assert_eq!(
+            resume_cwd(&root, None, &worktree.to_string_lossy()).unwrap(),
+            worktree
+        );
+    }
+
+    /// A session out of the project root is an ordinary session too, and the
+    /// rule is the same one: the directory the transcript recorded.
+    #[test]
+    fn a_root_session_resumes_at_the_root() {
+        let root = scratch("resume-root");
+        assert_eq!(resume_cwd(&root, None, &root.to_string_lossy()).unwrap(), root);
+    }
+
+    /// **The refusal this feature exists to make.** A worktree is removed once
+    /// its task is merged and the transcript stays behind, so a directory that
+    /// is gone is the ordinary case rather than an exotic one — and starting
+    /// the agent at the project root instead would be an agent reading a tree
+    /// its own transcript never mentions.
+    #[test]
+    fn a_worktree_that_has_been_removed_is_refused_rather_than_replaced() {
+        let root = scratch("resume-gone");
+        let gone = root.join(".worktrees/smetana-merged-long-ago");
+        let answer = resume_cwd(&root, None, &gone.to_string_lossy());
+        assert!(matches!(answer, Err(TerminalError::BadCwd(_))), "{answer:?}");
+    }
+
+    #[test]
+    fn a_directory_outside_the_project_is_refused() {
+        let root = scratch("resume-outside");
+        let sibling = root.parent().unwrap().join("somebody-elses-project");
+        std::fs::create_dir_all(&sibling).unwrap();
+        for cwd in [sibling.to_string_lossy().into_owned(), "/etc".to_owned(), String::new()] {
+            assert!(
+                matches!(resume_cwd(&root, None, &cwd), Err(TerminalError::BadCwd(_))),
+                "{cwd} is not a directory this project may be resumed in"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&sibling);
+    }
+
+    /// `belongs_to` is `Path::starts_with`, which is lexical: without the `..`
+    /// clause this path is "inside" the project and names somewhere else
+    /// entirely. The transcript's own `cwd` never looks like this — which is
+    /// exactly why the guard is written for the request that did not come from
+    /// one.
+    #[test]
+    fn a_path_that_walks_back_out_of_the_project_is_refused() {
+        let root = scratch("resume-escape");
+        let escape = format!("{}/../..", root.display());
+        assert!(matches!(resume_cwd(&root, None, &escape), Err(TerminalError::BadCwd(_))));
+    }
+
+    /// A file is not a working directory. `Pty::spawn` handed one would fail
+    /// inside the child, where the only thing left to show a person is a spawn
+    /// error about an agent.
+    #[test]
+    fn a_file_is_not_a_directory_to_resume_in() {
+        let root = scratch("resume-file");
+        let file = root.join("transcript.jsonl");
+        std::fs::write(&file, "{}\n").unwrap();
+        assert!(matches!(
+            resume_cwd(&root, None, &file.to_string_lossy()),
+            Err(TerminalError::BadCwd(_))
+        ));
+    }
+
+    /// The two spellings of one path, which is what `also` is for: `/tmp` on
+    /// macOS is `/private/tmp`, so the project can be held under one name while
+    /// the transcript recorded the other. `sessions::read::list_in` compares
+    /// against both for the same reason, and a resume that refused what the
+    /// list was happy to draw would be the two disagreeing about one session.
+    #[test]
+    fn the_projects_other_spelling_is_accepted_too() {
+        let real = scratch("resume-symlink");
+        let other = real.parent().unwrap().join("resume-symlink-alias");
+        let cwd = real.join("src");
+        std::fs::create_dir_all(&cwd).unwrap();
+        // The project as the front end holds it is `other`; the transcript
+        // recorded a path under `real`.
+        assert!(matches!(resume_cwd(&other, None, &cwd.to_string_lossy()), Err(_)));
+        assert_eq!(resume_cwd(&other, Some(&real), &cwd.to_string_lossy()).unwrap(), cwd);
     }
 }

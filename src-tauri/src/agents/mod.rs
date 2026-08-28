@@ -245,6 +245,35 @@ pub enum Intent {
         /// can reconstruct.
         stderr: String,
     },
+    /// Pick a Claude Code session up again from its transcript on disk, by the
+    /// id that transcript is named after. Started from a card in the Sessions
+    /// tab, which is the one place in this app that knows those files exist.
+    ///
+    /// It is an ordinary agent and goes through the one road every other
+    /// session takes — `terminal_create`, a profile's `command`, `Pty::spawn` —
+    /// because a second way to start an agent is the place two ways silently
+    /// diverge. What is different is only what is added to the command line
+    /// (`Profile::resume_args`) and where it runs.
+    ///
+    /// `cwd` is why this variant carries a path at all, and it is the whole
+    /// point of the feature: `claude --resume` resolves an id against the
+    /// directory it is run in, so the same id in another folder is a session
+    /// Claude Code has never heard of — and a worktree session resumed at the
+    /// project root would be an agent that thinks it is in another tree.
+    /// `terminal::service` checks it before anything is spawned; nothing here
+    /// may assume it is still on disk.
+    ///
+    /// `title` is the first thing the person typed in that session, already
+    /// clipped by `sessions::model::CLIP`, and it is here for the row rather
+    /// than for the agent: a resumed session has no tracker work, so without it
+    /// the row in the agents panel would either say nothing about which
+    /// conversation this is or pass itself off as a claimed task. `None` for a
+    /// transcript with no human message in it, which is an ordinary outcome.
+    ResumeSession {
+        id: String,
+        cwd: String,
+        title: Option<String>,
+    },
     /// Work out what this project is made of and write
     /// `.smetana/project.toml`. Started from the dialog a person gets when
     /// they add a project, and from the project row afterwards.
@@ -324,6 +353,12 @@ impl Intent {
             // briefing, and there is no id, no path and no branch a row could
             // draw. The caption alone says which work this is.
             Intent::RepairTracker { .. } => W::RepairTracker,
+            // The title comes along and the id and the directory do not: the
+            // row draws the conversation somebody recognises, and a
+            // 36-character UUID and an absolute path are the briefing that got
+            // the session started. The card in the Sessions tab is where both
+            // of those are already written out.
+            Intent::ResumeSession { title, .. } => W::ResumeSession { title: title.clone() },
             Intent::Setup => W::Setup,
             Intent::Run { .. } => W::Run,
         }
@@ -449,6 +484,27 @@ pub trait Profile: Sync {
     /// simply cannot be asked, and the panel draws no button rather than one
     /// that fails every time it is pressed.
     fn oneshot_args(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+
+    /// How this harness is told to pick a recorded session up again by its id,
+    /// as the arguments that go in front of everything else on its command
+    /// line, or `None` where it cannot be told at all.
+    ///
+    /// A capability and its arguments in one answer, the shape `usage_command`
+    /// and `oneshot_args` already keep, and for the same reason: a profile that
+    /// said "yes" without saying how would leave the caller inventing somebody
+    /// else's argument grammar. The default is `None`, and it is a working
+    /// answer rather than a gap — a harness that cannot be asked is refused
+    /// before anything is spawned (`TerminalError::NoResume`), which is the
+    /// only honest outcome: starting the agent anyway would put a fresh session
+    /// in the worktree while the person is looking at a card promising the
+    /// conversation they left.
+    ///
+    /// Owned strings rather than `&'static [&'static str]`, unlike its
+    /// neighbours: the id is the argument, so there is nothing static to hand
+    /// back.
+    fn resume_args(&self, _session: &str) -> Option<Vec<String>> {
         None
     }
 

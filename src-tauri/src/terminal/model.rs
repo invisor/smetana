@@ -126,6 +126,21 @@ pub enum SessionWork {
     /// project is already named by the panel the row sits in, so the caption
     /// alone says what this session is for.
     RepairTracker,
+    /// A Claude Code session read off disk and started again, and the one work
+    /// in this list with nothing of this app's behind it: no issue, no
+    /// repository, no run — the conversation existed before this window did.
+    ///
+    /// It carries the session's title and neither its id nor its working
+    /// directory, and that is the same reading `NewTask` takes of a draft: what
+    /// crosses this boundary is what gets drawn. A row is 252px wide, the id is
+    /// a 36-character UUID and the directory is an absolute path, while the
+    /// title is the sentence somebody recognises the conversation by. Both of
+    /// the others are already on the card in the Sessions tab, in full.
+    ///
+    /// `None` is a transcript with no human message in it — a session opened
+    /// and abandoned — and the row then says what it is and nothing more,
+    /// rather than inventing a name for it.
+    ResumeSession { title: Option<String> },
     Setup,
     /// One batch of a run. Which issues it has taken is not known here and
     /// cannot be: the agent claims them by running `bd update --claim` itself,
@@ -173,6 +188,7 @@ pub enum WorkKind {
     FixTask,
     ResolveConflict,
     RepairTracker,
+    ResumeSession,
     Setup,
     Run,
     Shell,
@@ -190,6 +206,7 @@ impl SessionWork {
             SessionWork::FixTask { .. } => WorkKind::FixTask,
             SessionWork::ResolveConflict { .. } => WorkKind::ResolveConflict,
             SessionWork::RepairTracker => WorkKind::RepairTracker,
+            SessionWork::ResumeSession { .. } => WorkKind::ResumeSession,
             SessionWork::Setup => WorkKind::Setup,
             SessionWork::Run => WorkKind::Run,
             SessionWork::Shell => WorkKind::Shell,
@@ -278,6 +295,18 @@ pub enum TerminalError {
     /// tried to be — the request was refused before any process existed.
     #[error("that folder cannot be a working directory: {0}")]
     BadCwd(String),
+    /// A recorded session asked to be picked up again by a harness that cannot
+    /// be told to do it — `Profile::resume_args` answered `None`.
+    ///
+    /// Its own variant for the same reason `BadCwd` is one: nothing was
+    /// spawned. Starting the agent anyway is the outcome this refusal exists to
+    /// prevent — a fresh session in the worktree, under a card promising the
+    /// conversation somebody left. The front end greys the row before anybody
+    /// can press it (`resumeAvailability` in
+    /// `src/components/agent/sessionMenu.js`); this is the guard standing next
+    /// to the spawn, where a rule about spawning belongs.
+    #[error("{0} cannot pick a recorded session up by its id")]
+    NoResume(String),
 }
 
 impl Session {
@@ -344,6 +373,29 @@ mod tests {
         let json = serde_json::to_string(&SessionWork::FixTask { id: "smetana-42".into() })
             .expect("serializes");
         assert_eq!(json, r#"{"kind":"fixTask","id":"smetana-42"}"#);
+    }
+
+    #[test]
+    fn a_resumed_session_names_the_conversation_and_nothing_else() {
+        // `captionOf` in `src/stores/terminals.js` reads `title` to put the
+        // conversation beside "Resumed session", and `workOf` builds this same
+        // shape for the second the start ticket is on screen. A rename here
+        // goes quiet on the other side: the row keeps drawing and stops saying
+        // which session it is.
+        let json =
+            serde_json::to_string(&SessionWork::ResumeSession { title: Some("Move it".into()) })
+                .expect("serializes");
+        assert_eq!(json, r#"{"kind":"resumeSession","title":"Move it"}"#);
+    }
+
+    #[test]
+    fn a_resumed_session_nobody_typed_in_carries_no_title() {
+        // A transcript with no human message in it is an ordinary outcome, and
+        // absence travels as `null` rather than as an invented name — the same
+        // reading `SessionSummary::title` takes one module over.
+        let json = serde_json::to_string(&SessionWork::ResumeSession { title: None })
+            .expect("serializes");
+        assert_eq!(json, r#"{"kind":"resumeSession","title":null}"#);
     }
 
     #[test]
@@ -468,6 +520,9 @@ mod tests {
                 SessionWork::ResolveConflict { repo: "/p".into(), theirs: "develop".into() }
             }
             WorkKind::RepairTracker => SessionWork::RepairTracker,
+            WorkKind::ResumeSession => {
+                SessionWork::ResumeSession { title: Some("Move the card to done".into()) }
+            }
             WorkKind::Setup => SessionWork::Setup,
             WorkKind::Run => SessionWork::Run,
             WorkKind::Shell => SessionWork::Shell,
@@ -494,6 +549,7 @@ mod tests {
             WorkKind::FixTask,
             WorkKind::ResolveConflict,
             WorkKind::RepairTracker,
+            WorkKind::ResumeSession,
             WorkKind::Setup,
             WorkKind::Run,
             WorkKind::Shell,

@@ -30,6 +30,7 @@
    because the stores live in the view: one file under `src/components/` imports
    a store and it is `TerminalView`, and this is not going to be the second. */
 import { computed } from 'vue'
+import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import MenuButton from '../overlays/MenuButton.vue'
@@ -44,9 +45,13 @@ import {
   sessionTitle
 } from './sessionRow.js'
 import {
+  RESUME_KIND,
+  RESUME_LABEL,
   SESSION_MENU_W,
   menuButtonIcon,
   menuButtonLabel,
+  resumeAvailability,
+  resumeReasonLine,
   sessionMenuItems
 } from './sessionMenu.js'
 
@@ -109,7 +114,17 @@ const props = defineProps({
   /* And which of the three copying verbs it was, so the sentence can name it.
      Two props rather than one object: whoever draws this holds two refs, and a
      composite would be rebuilt on every unrelated render of the list. */
-  copyNoun: { type: String, default: '' }
+  copyNoun: { type: String, default: '' },
+  /* Which coding agent this project is set to, which decides whether the resume
+     can be offered at all: `--resume <id>` is Claude Code's grammar, and
+     `resumeAvailability` is the rule.
+
+     A prop rather than a store read, for the reason every other fact on this
+     row is one: a component here knows nothing about `settings.json`. The
+     default matches `AgentSettings.vue`'s, so a row drawn on its own — a
+     gallery entry, a future one-off — offers the verb rather than a dead
+     button nobody can explain. */
+  agent: { type: String, default: 'claude' }
 })
 
 const emit = defineEmits(['toggle', 'action'])
@@ -240,6 +255,28 @@ const bodyStyle = {
   borderTop: 'var(--border-w) solid var(--border-subtle)'
 }
 
+/* The controls the card carries under its head, in a row of their own: the
+   verbs that *start* something, which is what makes them buttons rather than
+   rows of the menu alone. Orca puts them there and the reason survives the
+   port — a card is opened to decide what to do with the session, and the thing
+   most often done with one is picking it up again.
+
+   One button today and the box is a row all the same: the second launching
+   verb, Continue in a new session, is an open question rather than a decision
+   nobody made, and when it is settled it drops in beside this one without the
+   card being rearranged. `flex: 1` on the child, so one fills the width and two
+   would share it.
+
+   The reason sits under the row rather than beside the button: a disabled
+   control that says nothing is a control somebody presses twice. */
+const actionsStyle = { display: 'flex', gap: 'var(--space-3)' }
+const actionStyle = { flex: 1 }
+const reasonStyle = {
+  marginTop: 'var(--space-2)',
+  font: 'var(--weight-regular) var(--text-2xs)/var(--leading-normal) var(--font-sans)',
+  color: 'var(--text-muted)'
+}
+
 /* The caption over the first prompt. The small-caps idiom every other caption
    in this system uses — `ContextMenu`'s labels, the inspector's field headings
    — with the glyph in front of it doing what the glyph on Orca's own block
@@ -297,8 +334,14 @@ const last = computed(() => lastMessageLine(props.session))
 const meta = computed(() => sessionMeta(props.session, props.now))
 const prompt = computed(() => firstPrompt(props.session))
 const details = computed(() => sessionDetails(props.session))
+const resume = computed(() => resumeAvailability(props.session, { agent: props.agent }))
+const resumeReason = computed(() => resumeReasonLine(resume.value.reason))
 const items = computed(() =>
-  sessionMenuItems({ busy: props.busy, userAgent: navigator.userAgent })
+  sessionMenuItems({
+    busy: props.busy,
+    userAgent: navigator.userAgent,
+    resume: resume.value
+  })
 )
 
 /* `navigator.userAgent` is read here rather than in `sessionMenu.js`, which is
@@ -402,6 +445,24 @@ const toggle = () => emit('toggle', props.session.id)
          the two paths. Nothing else — an opened card is not a transcript
          viewer, and reading the conversation is what Open log is for. -->
     <div v-if="expanded" :style="bodyStyle">
+      <!-- The launching verb, drawn as a control rather than only as a row of
+           the menu: it is the thing a card is most often opened to do. It
+           raises the very `action` the menu row raises, with the same `kind`,
+           so the two doors onto it cannot come to mean different things. -->
+      <div>
+        <div :style="actionsStyle">
+          <Button
+            :style="actionStyle"
+            icon="play"
+            :disabled="!resume.available"
+            full-width
+            @click="emit('action', { kind: RESUME_KIND, session })"
+          >
+            {{ RESUME_LABEL }}
+          </Button>
+        </div>
+        <div v-if="resumeReason" :style="reasonStyle">{{ resumeReason }}</div>
+      </div>
       <div>
         <div :style="captionStyle">
           <Icon name="message-square" :size="12" />

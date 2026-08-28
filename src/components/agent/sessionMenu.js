@@ -10,12 +10,17 @@
    where a row renamed on one side draws perfectly and does nothing at all when
    pressed. The test pins this side.
 
-   Two of the nine verbs Orca offers on a session are deliberately absent:
-   Resume in worktree and Continue in a new session. Those are not about the
-   file at all — they bring a live agent back — and they are a task of their
-   own. Copy resume command is the one that stands in for them here, and it is
-   also the answer for somebody who would rather paste it into their own
-   terminal than have this app spawn anything. */
+   Eight of the nine verbs Orca offers on a session are here. The first of them
+   is not about the file at all — Resume in worktree brings a live agent back,
+   through the same `terminal_create` every other agent in this app is started
+   by — and Copy resume command stays beside it for somebody who would rather
+   paste `cd … && claude --resume …` into their own terminal than have this app
+   spawn anything.
+
+   The ninth, Continue in a new session, is deliberately still absent, and it is
+   an open question rather than an omission: what a *new* session starting from
+   the same place receives as input is not settled anywhere in this project, and
+   a row that guessed would be a row doing something nobody chose. */
 import { fileManagerName } from '../files/fileMenu.js'
 import { COPIED_MS } from '../kanban/copyId.js'
 import { formatBytes } from '../settings/storage.js'
@@ -44,26 +49,144 @@ export { COPIED_MS }
    row has no tooltip and no `title`, so whatever does not fit is gone with no
    way back.
 
-   Measured against the longest label this file can produce, which is
-   `Reveal log in file manager` — the Linux and BSD fall-back, longer than
-   either "Finder" or "Explorer". `ContextMenu` spends 70px on chrome before the
-   label (see `MENU_W` in `kanban/taskMenu.js`, which works the number out), so
-   240 leaves 170px for a 26-character label at `--text-sm`. Nowhere near
-   `taskMenu.js`'s 424: nothing here interpolates a sentence, and every row is a
-   verb of two or three words. */
-export const SESSION_MENU_W = 240
+   The longest label this file can produce is the greyed Resume row, which
+   carries its own reason: `Resume in worktree — this agent cannot resume by id`,
+   against `Reveal log in file manager` for the longest of the plain verbs. That
+   is the same shape `taskMenu.js`'s Run row has and the reason the number moved
+   from 240 — a row that says *why* it cannot be pressed is worth more than a
+   narrow panel, and it is the only row here that ever carries a sentence.
 
-/* The seven rows, in Orca's own order and grouping less the two launching verbs
-   that are not this task's.
+   Measured in the webview at `--text-sm` in `--font-sans`, by cloning a drawn
+   row's own label span: 324px for that sentence and 155px for the reveal.
+   `ContextMenu` spends 70px on chrome before the label — `MENU_W` in
+   `kanban/taskMenu.js` itemises where those pixels go, and the measurement
+   above confirms it, the panel coming out at exactly label + 70. So the
+   binding row wants 394px, and 440 leaves 370: about a seventh of headroom for
+   Segoe UI and Noto Sans, whose metrics nothing here can see, which is the
+   share `taskMenu.js` left itself for the same reason.
 
-   Four groups: the one that hands a command over, the three that open something
-   somewhere else, the two that copy, and the one that destroys. Delete is
-   separated from the rest and drawn in `--status-failed-fg` — `ContextMenu`
-   reads `tone: 'danger'` and reaches for that token itself, which is why no hex
-   appears here or there.
+   Not `taskMenu.js`'s `MENU_W` imported: two menus, two different binding rows,
+   and one number serving both would move this panel every time a task's Run
+   reason was reworded. */
+export const SESSION_MENU_W = 440
 
-   The glyphs. `terminal` for the resume command, because what is copied is a
-   line for a shell and nothing else in this app means that. `external-link` for
+/* ---- the one verb that starts something ---------------------------------- */
+
+/* What the row is called. Orca's own name for it, in this system's sentence
+   case: the session it brings back is usually one out of a worktree, and that
+   is the whole point of it — the agent comes up in the directory its transcript
+   was written in. */
+export const RESUME_LABEL = 'Resume in worktree'
+
+/* And what the row raises when it is pressed. A constant rather than a literal
+   because this one verb is drawn twice — the menu row here and the button in
+   the opened card — and the two have to raise the same `action` or the card's
+   press would fall through `onSessionAction` doing nothing at all. The other
+   seven kinds stay literals: they are written once here and matched once in
+   `DesktopApp.vue`, which is the seam this whole family has and the test pins. */
+export const RESUME_KIND = 'resume'
+
+/* Why it cannot be pressed, as lowercase fragments: the menu joins one onto the
+   label with a dash the way `taskMenu.js`'s Run row does, and the opened card
+   sets the same fragment as a sentence of its own. One wording, two frames —
+   the alternative was two copies free to drift into two different accounts of
+   one refusal. */
+const RESUME_REASON = {
+  agent: 'this agent cannot resume by id',
+  noDirectory: 'no working directory recorded',
+  gone: 'the working directory is gone'
+}
+
+/* The agent ids that can pick a recorded session up by its id.
+
+   **The second copy of a fact Rust owns**, and the first is `Profile::resume_args`
+   — `agents/claude.rs` answers with `--resume <id>` and `agents/codex.rs` keeps
+   the default `None`, because that harness's argument grammar is its own and
+   this app does not get to guess it. Nothing mechanical joins the two: a
+   profile that learned to resume and was not added here goes on drawing a
+   greyed row, and one added here that Rust cannot serve is refused at the spawn
+   with `TerminalError::NoResume` rather than starting a fresh agent. Both
+   failures are quiet, and the second is the one with a sentence behind it,
+   which is why the list may be wrong here and never there.
+
+   Written out rather than asked over the wire because the answer has to be
+   known while the row is being *drawn* — a menu greyed a round trip later is a
+   menu somebody has already pressed. `usageFooter.js` keeps the other
+   front-end table keyed by these same ids and records the same thing about
+   where the truth lives. */
+const RESUMES_BY_ID = ['claude']
+
+/* Whether this session can be brought back as a live agent right now, and the
+   reason when it cannot.
+
+   Three refusals, in the order they are asked. The agent first, because it is a
+   fact about the whole project rather than about this row — if the configured
+   harness cannot resume at all, every card says the same thing and there is
+   nothing about any one session left to explain. Then the two about the session
+   itself: a transcript that recorded no working directory, and one whose
+   directory has gone. The second of those is the ordinary case rather than an
+   exotic one — a worktree is removed once its task is merged and the transcript
+   stays behind.
+
+   `agent` is the configured id, not whatever actually starts: `agents::pick`
+   substitutes an installed harness for a configured one that is not on `PATH`,
+   and nothing on screen ever learns what it picked. So a project set to an
+   agent that cannot resume greys the row even in the case where the
+   substitution would have made it work — the honest reading of what the app was
+   told, and the alternative is a row that promises on a guess.
+
+   `cwdExists` has to be exactly `false` to refuse. A record that does not carry
+   the field at all is one this front end cannot answer for — a hand-written
+   fixture, a worker older than the field — and offering the verb is the softer
+   way to be wrong: the spawn's own guard refuses a directory that is not there
+   and says so in words, while greying the row would take a working session away
+   with no way to find out why. */
+export function resumeAvailability(session, { agent = '' } = {}) {
+  const refuse = (reason) => ({ available: false, reason })
+  if (!RESUMES_BY_ID.includes(agent)) return refuse(RESUME_REASON.agent)
+  if (!session?.id || !session?.cwd) return refuse(RESUME_REASON.noDirectory)
+  if (session.cwdExists === false) return refuse(RESUME_REASON.gone)
+  return { available: true, reason: null }
+}
+
+/* The menu row's label, with the reason joined onto it when there is one.
+
+   `taskMenu.js`'s `runLabel` is the precedent and this is the same trade: the
+   reason used to live in a tooltip that grew to fit, and a menu row has neither
+   a tooltip nor a `title`, so it goes in the label and the ceiling above is
+   measured against it. The fragment is lowercase, which is why it joins with a
+   dash rather than as a second sentence. */
+export function resumeMenuLabel(reason) {
+  return reason ? `${RESUME_LABEL} — ${reason}` : RESUME_LABEL
+}
+
+/* And the same fragment as a line of its own, for the opened card, where the
+   button is a control rather than a row of words and the reason has to stand
+   under it.
+
+   The capital and the stop are added here rather than kept in a second table:
+   one wording for one refusal, set two ways. Nothing at all when there is no
+   reason — the card draws no line rather than an empty one. */
+export function resumeReasonLine(reason) {
+  if (!reason) return ''
+  return `${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`
+}
+
+/* The eight rows, in Orca's own order and grouping less the one launching verb
+   this project has not settled.
+
+   Five groups: the one that starts an agent, the one that hands a command over,
+   the three that open something somewhere else, the two that copy, and the one
+   that destroys. Delete is separated from the rest and drawn in
+   `--status-failed-fg` — `ContextMenu` reads `tone: 'danger'` and reaches for
+   that token itself, which is why no hex appears here or there.
+
+   The glyphs. `play` for the resume, which is the mark this app already uses
+   for the one other row that sets an agent working — a task card's Run. Its
+   neighbour `terminal` is the resume *command*, because what that one copies is
+   a line for a shell and nothing else in this app means that; the two rows sit
+   in different groups for the same reason they draw different glyphs, one
+   starting something here and the other handing it over. `external-link` for
    Open log, because the file leaves this window entirely — it goes to whatever
    the desktop has registered for it — and that glyph is already the About tab's
    mark for the same promise. `folder-open` for Reveal, taken from the file
@@ -76,10 +199,26 @@ export const SESSION_MENU_W = 240
 
    `busy` greys the lot while a delete is in flight, the same freeze
    `taskMenu.js` applies for a bd write: a live menu during that second invites
-   a second choice racing the first. */
-export function sessionMenuItems({ busy = false, userAgent = '' } = {}) {
+   a second choice racing the first.
+
+   `resume` is `resumeAvailability`'s answer, computed by whoever draws the row
+   — this file stays pure and knows nothing about which agent a project is set
+   to. Its default is "yes, with no reason", so a caller that has not asked
+   still gets a live row rather than a dead one it cannot explain. */
+export function sessionMenuItems({
+  busy = false,
+  userAgent = '',
+  resume = { available: true, reason: null }
+} = {}) {
   const frozen = Boolean(busy)
   return [
+    {
+      kind: RESUME_KIND,
+      label: resumeMenuLabel(resume?.reason),
+      icon: 'play',
+      disabled: frozen || resume?.available === false
+    },
+    { type: 'separator' },
     { kind: 'copy-resume', label: 'Copy resume command', icon: 'terminal', disabled: frozen },
     { type: 'separator' },
     { kind: 'open-log', label: 'Open log', icon: 'external-link', disabled: frozen },

@@ -261,6 +261,12 @@ const workOf = (intent) => {
   if (intent.kind === 'resolveConflict') {
     return { kind: 'resolveConflict', repo: intent.repo, theirs: intent.theirs }
   }
+  /* The title alone, exactly as `Intent::work` sends it on: the id and the
+     directory are the agent's briefing, and the row draws the conversation
+     somebody recognises. */
+  if (intent.kind === 'resumeSession') {
+    return { kind: 'resumeSession', title: intent.title ?? null }
+  }
   if (intent.kind === 'newTask') {
     return {
       kind: 'newTask',
@@ -307,6 +313,13 @@ const CAPTION = {
      screen where a person has just pressed a button and wants to see that
      something is happening about it. */
   repairTracker: 'Repairing the tracker',
+  /* A conversation that existed before this window did, picked up again from
+     its transcript. It says what it is first and names the session second (see
+     `captionOf`), because the one thing this row must not do is read as work
+     taken off the board: there is no issue behind it, nothing claimed it, and a
+     row that merely showed a sentence would be indistinguishable from a filing
+     agent's draft. */
+  resumeSession: 'Resumed session',
   setup: 'Project setup'
 }
 
@@ -378,6 +391,17 @@ function captionOf(work, claimed) {
      branch that was being brought in. */
   if (kind === 'resolveConflict') {
     return { label: CAPTION[kind], tasks: [basename(work.repo ?? ''), work.theirs].filter(Boolean) }
+  }
+  /* The one caption that carries prose beside its own words rather than
+     identifiers, which is why the session's title goes in the *label*: `tasks`
+     is set in mono, and a person's own sentence in a monospaced face would read
+     as an id. The id this row does not draw is deliberate — a 36-character UUID
+     tells nobody which conversation this is, and the card in the Sessions tab
+     has it in full. A resumed session with no title says what it is and stops
+     there. */
+  if (kind === 'resumeSession') {
+    const title = work.title ? String(work.title) : ''
+    return { label: title ? `${CAPTION.resumeSession}: ${title}` : CAPTION.resumeSession, tasks: [] }
   }
   if (kind === 'run' && claimed.length) return { label: null, tasks: claimed }
   return { label: CAPTION[kind] ?? CAPTION.bare, tasks: [] }
