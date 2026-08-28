@@ -8,26 +8,38 @@
 //! whole command as well.
 //!
 //! **One pass forward, one window back.** Everything a row needs is in one of
-//! three places: at the head (`cwd`, `gitBranch`, the first thing the person
-//! typed), at the tail (the last thing anybody said, the model), or is a count
-//! over the lines. The forward pass does the head and the counts together and
-//! is the only thing here that touches every byte; the tail is a seek.
+//! three places: at the head (`cwd`, `gitBranch`, the session's title), at the
+//! tail (the last thing anybody said, the model), or is a count over the
+//! lines. The forward pass does the head and the counts together and is the
+//! only thing here that touches every byte; the tail is a seek.
 //!
 //! **What that costs, measured rather than guessed** (Apple Silicon, macOS,
-//! release build, warm cache, against this project's own history): 294
-//! sessions across three folders, 291 MB of transcript, in **340–640 ms** —
+//! release build, warm cache, against this project's own history): 299
+//! sessions across three folders, 301 MB of transcript, in **330–355 ms** —
 //! one linear read of every file that belongs plus a seek per file. The counts
 //! are what make it linear, and they are the reason `commands.rs` puts the
 //! whole thing on the blocking pool. A file that turns out to belong to
 //! another project costs only its first few records: the forward pass gives up
-//! at the line that says so.
+//! at the line that says so. `bench_listing_the_real_projects_folder` at the
+//! bottom of this file is where those numbers come from, and how to take them
+//! again.
+//!
+//! Taking the title from the `ai-title` record rather than from the person's
+//! first words cost **nothing measurable**: 332–354 ms before, 338–355 ms
+//! after, over five timed runs each side of the change, which is the same
+//! number twice. It could not cost much — the record is inside the head budget
+//! the pass was reading anyway, and [`HEAD_LINES`] carries the measurement
+//! that says so. What it bought, on the same 299 sessions: **122 distinct
+//! titles became 214**, and the one phrase that titled **142** of them now
+//! titles 60.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::model::{
-    belongs_to, folder_could_hold, human_text, spoken_text, Record, SessionSummary,
+    belongs_to, folder_could_hold, generated_title, human_text, spoken_text, Record,
+    SessionSummary,
 };
 
 /// The most of one line that is ever held. A tool result carrying a file is a
@@ -49,7 +61,24 @@ const TAIL_WINDOW: u64 = 256 * 1024;
 /// the first hundred records; the budget is generous against a session that
 /// opens with an unusual amount of injected context, and it is what stops the
 /// head half of the pass from turning into a parse of the whole file.
+///
+/// It is also the budget the generated title has to fall inside, and that was
+/// measured rather than hoped for. The `ai-title` record sits deep in *bytes* —
+/// 29 to 47 KB into a file for the middle nine tenths of them, and 699 KB into
+/// the worst — which sounds far and is not, because those bytes are a handful
+/// of enormous injected records. Counted in **lines**, which is what this
+/// budget is in, the record is at index 7 to 88 across the 211 transcripts here
+/// that have one, median 15, and **not one of them is past line 500**: the
+/// furthest is inside a fifth of the budget. So the title costs no extra
+/// reading at all — it is found by the pass that was already going to visit
+/// those lines. A file that ever did carry one past this line falls back to the
+/// person's first words, which is the answer this gave for every file before
+/// the record existed.
 const HEAD_LINES: usize = 500;
+
+/// The record that carries the generated title, as a substring, so that the
+/// head pass can skip parsing every line that is not one.
+const AI_TITLE: &str = "\"type\":\"ai-title\"";
 
 /// The substrings the counting pass looks for, before any JSON parse.
 ///
@@ -116,7 +145,13 @@ fn next_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::Result<O
 struct Facts {
     cwd: Option<String>,
     branch: Option<String>,
-    title: Option<String>,
+    /// Claude Code's own one-line title for the session, when the transcript
+    /// carries one. It wins over `human_title`; see [`summarise`].
+    generated_title: Option<String>,
+    /// The first thing the person actually typed — the title of a transcript
+    /// with no generated one, and the only title there was before that record
+    /// existed.
+    human_title: Option<String>,
     model: Option<String>,
     messages: u32,
     sidechains: u32,
@@ -146,33 +181,45 @@ fn scan_forward(file: File, project: &Path, also: Option<&Path>) -> Option<Facts
         // The head half. A line is parsed only while something it could carry
         // is still missing, and only when a substring says it might carry it:
         // parsing every line of the head would be the thing this file exists to
-        // avoid, on a smaller scale.
-        let wants = (facts.cwd.is_none() && text.contains("\"cwd\""))
-            || (facts.title.is_none() && is_user)
-            || (facts.model.is_none() && is_assistant);
-        if index < HEAD_LINES && !line.truncated && wants {
-            if let Ok(record) = serde_json::from_str::<Record>(&text) {
-                if facts.cwd.is_none() {
-                    if let Some(cwd) = record.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
-                        let ours = belongs_to(cwd, project)
-                            || also.is_some_and(|other| belongs_to(cwd, other));
-                        if !ours {
-                            return None;
+        // avoid, on a smaller scale. The question is asked inside the budget
+        // and not before it, so that a file of ten thousand lines is scanned
+        // for these substrings over its first five hundred and no further.
+        if index < HEAD_LINES && !line.truncated {
+            let wants = (facts.cwd.is_none() && text.contains("\"cwd\""))
+                || (facts.generated_title.is_none() && text.contains(AI_TITLE))
+                || (facts.human_title.is_none() && is_user)
+                || (facts.model.is_none() && is_assistant);
+            if wants {
+                if let Ok(record) = serde_json::from_str::<Record>(&text) {
+                    if facts.cwd.is_none() {
+                        if let Some(cwd) = record.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
+                            let ours = belongs_to(cwd, project)
+                                || also.is_some_and(|other| belongs_to(cwd, other));
+                            if !ours {
+                                return None;
+                            }
+                            facts.cwd = Some(cwd.to_owned());
+                            facts.branch =
+                                record.git_branch.clone().filter(|branch| !branch.is_empty());
                         }
-                        facts.cwd = Some(cwd.to_owned());
-                        facts.branch =
-                            record.git_branch.clone().filter(|branch| !branch.is_empty());
                     }
-                }
-                if facts.title.is_none() {
-                    facts.title = human_text(&record);
-                }
-                if facts.model.is_none() {
-                    facts.model = record
-                        .message
-                        .as_ref()
-                        .and_then(|message| message.model.clone())
-                        .filter(|model| !model.is_empty());
+                    // Both titles are collected, and the choice between them is
+                    // made once at the end: the generated one usually arrives
+                    // several records *after* the person's first words, so
+                    // stopping at the human title would be stopping too early.
+                    if facts.generated_title.is_none() {
+                        facts.generated_title = generated_title(&record);
+                    }
+                    if facts.human_title.is_none() {
+                        facts.human_title = human_text(&record);
+                    }
+                    if facts.model.is_none() {
+                        facts.model = record
+                            .message
+                            .as_ref()
+                            .and_then(|message| message.model.clone())
+                            .filter(|model| !model.is_empty());
+                    }
                 }
             }
         }
@@ -308,7 +355,11 @@ fn summarise(
         path: path.to_string_lossy().into_owned(),
         cwd: facts.cwd.unwrap_or_default(),
         branch: facts.branch,
-        title: facts.title,
+        /* The title rule, in one line: Claude Code's own one-liner when the
+           transcript has one, and the first thing the person typed when it does
+           not. `generated_title` has already refused an empty one, so an
+           `ai-title` record saying nothing falls through here too. */
+        title: facts.generated_title.or(facts.human_title),
         last_role: tail.role,
         last_text: tail.text,
         messages: facts.messages,
@@ -420,6 +471,14 @@ mod tests {
         format!(
             r#"{{"parentUuid":"u1","isSidechain":false,"type":"assistant","cwd":"{}","gitBranch":"main","message":{{"role":"assistant","model":"claude-opus-5","content":[{{"type":"text","text":{}}}]}},"uuid":"a1"}}"#,
             cwd.display(),
+            serde_json::to_string(text).unwrap()
+        )
+    }
+
+    /// The record Claude Code writes when it has named the session itself.
+    fn ai_title_line(text: &str) -> String {
+        format!(
+            r#"{{"type":"ai-title","aiTitle":{},"sessionId":"s1"}}"#,
             serde_json::to_string(text).unwrap()
         )
     }
@@ -567,6 +626,90 @@ mod tests {
             listed[0].title.as_deref(),
             Some("Talk to me in Russian: everything you say")
         );
+    }
+
+    #[test]
+    fn the_title_is_the_generated_one_when_the_transcript_carries_one() {
+        // The record arrives after the person's first words, the way it does on
+        // disk, so this is also the check that the pass does not stop at the
+        // human title it found first.
+        let root = temp_dir("generated-root");
+        let project = temp_dir("generated-project");
+        write_session(
+            &root,
+            &project,
+            "generated",
+            &[
+                user_line(&project, "main", "Talk to me in Russian: everything you say"),
+                assistant_line(&project, "Understood."),
+                ai_title_line("Task menu in DONE"),
+            ],
+        );
+
+        assert_eq!(list_in(&root, &project)[0].title.as_deref(), Some("Task menu in DONE"));
+    }
+
+    #[test]
+    fn a_transcript_with_no_generated_title_is_still_titled_by_the_person() {
+        let root = temp_dir("ungenerated-root");
+        let project = temp_dir("ungenerated-project");
+        ordinary_session(&root, &project, "plain");
+
+        assert_eq!(list_in(&root, &project)[0].title.as_deref(), Some("Move the card to done"));
+    }
+
+    #[test]
+    fn a_generated_title_of_nothing_falls_back_to_the_person() {
+        let root = temp_dir("blank-title-root");
+        let project = temp_dir("blank-title-project");
+        write_session(
+            &root,
+            &project,
+            "blank",
+            &[
+                ai_title_line("   "),
+                user_line(&project, "main", "Move the card to done"),
+                assistant_line(&project, "Moved it."),
+            ],
+        );
+
+        assert_eq!(list_in(&root, &project)[0].title.as_deref(), Some("Move the card to done"));
+    }
+
+    #[test]
+    fn a_generated_title_past_the_head_budget_is_not_chased_and_the_person_titles_it() {
+        // Which way the budget falls, made mechanical. Nothing on disk here
+        // does this — the furthest generated title measured sits at line 88 —
+        // but the rule has to have an answer, and it is the answer this gave
+        // for every file before that record existed.
+        //
+        // Past the budget in lines and, with the four enormous records under
+        // it, past anything that could be held: a version of this that went
+        // looking for the title by reading on would be holding megabytes. What
+        // bounds the memory is MAX_LINE and TAIL_WINDOW, never the file's size.
+        let root = temp_dir("late-title-root");
+        let project = temp_dir("late-title-project");
+        let filler = "x".repeat(4 * 1024 * 1024);
+        let bulk = format!(
+            r#"{{"type":"system","subtype":"note","cwd":"{}","note":"{filler}"}}"#,
+            project.display()
+        );
+        let small = r#"{"type":"mode","mode":"normal"}"#.to_owned();
+        let mut lines = vec![user_line(&project, "main", "Move the card to done")];
+        lines.extend(std::iter::repeat(small).take(HEAD_LINES + 5));
+        lines.extend(std::iter::repeat(bulk).take(4));
+        lines.push(ai_title_line("Task menu in DONE"));
+        lines.push(assistant_line(&project, "Moved it."));
+        let path = write_session(&root, &project, "late", &lines);
+        assert!(
+            std::fs::metadata(&path).unwrap().len() > 16 * 1024 * 1024,
+            "the fixture has to be bigger than anything held in memory"
+        );
+
+        let listed = list_in(&root, &project);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].title.as_deref(), Some("Move the card to done"));
+        assert_eq!(listed[0].last_text.as_deref(), Some("Moved it."));
     }
 
     #[test]
@@ -761,6 +904,63 @@ mod tests {
         write_session(&root, &project, "placeless", &lines);
 
         assert!(list_in(&root, &project).is_empty());
+    }
+
+    /// Not a rule but a stopwatch: where the timing in the module header comes
+    /// from, kept so the next person can take the number again rather than
+    /// trust this one.
+    ///
+    /// Ignored, because it reads a real `~/.claude/projects` that a checkout
+    /// has no right to assume exists, and because the answer is a duration and
+    /// not a pass or a fail. The project to list is named by the environment
+    /// rather than written here — a path out of one machine's home directory
+    /// is not a fact about this repository:
+    ///
+    /// ```text
+    /// SMETANA_SESSIONS_BENCH=/path/to/project \
+    ///   cargo test --release --manifest-path src-tauri/Cargo.toml \
+    ///   -- --ignored --nocapture bench_listing
+    /// ```
+    #[test]
+    #[ignore = "a measurement over the real ~/.claude/projects, not a pass or a fail"]
+    fn bench_listing_the_real_projects_folder() {
+        let Some(project) = std::env::var_os("SMETANA_SESSIONS_BENCH") else {
+            println!("SMETANA_SESSIONS_BENCH is not set; nothing measured");
+            return;
+        };
+        let project = PathBuf::from(project);
+        let root = projects_root().expect("a HOME to look under");
+        // One run to warm the page cache, then five timed, because the number
+        // the header carries is what the tab costs on a machine that has just
+        // been using it — a cold first read measures the disk, not this code.
+        let warm = list_in(&root, &project);
+        let bytes: u64 = warm.iter().map(|session| session.size).sum();
+        let mut times = Vec::new();
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let listed = list_in(&root, &project);
+            times.push(started.elapsed());
+            assert_eq!(listed.len(), warm.len(), "the same disk answers the same way twice");
+        }
+        times.sort();
+        // What the list reads like, and not only what it cost: a title repeated
+        // down the column is a column nobody can tell apart, which is the whole
+        // reason the rule changed.
+        let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let titled = warm.iter().filter(|session| session.title.is_some()).count();
+        for title in warm.iter().filter_map(|session| session.title.as_deref()) {
+            *seen.entry(title).or_default() += 1;
+        }
+        println!(
+            "{} sessions, {:.0} MB, {} titled, {} distinct, commonest repeated {} times, {:?}..{:?}",
+            warm.len(),
+            bytes as f64 / 1_000_000.0,
+            titled,
+            seen.len(),
+            seen.values().max().copied().unwrap_or(0),
+            times.first().unwrap(),
+            times.last().unwrap()
+        );
     }
 
     #[test]

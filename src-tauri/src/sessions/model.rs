@@ -76,6 +76,10 @@ pub struct Record {
     /// [`human_text`].
     #[serde(default)]
     pub origin: Option<Origin>,
+    /// The whole of an `ai-title` record: a one-line title Claude Code
+    /// generated for the session. See [`generated_title`].
+    #[serde(default)]
+    pub ai_title: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -221,6 +225,26 @@ pub fn human_text(record: &Record) -> Option<String> {
     }
     let content = record.message.as_ref()?.content.as_ref()?;
     let text = one_line(&strip_envelopes(&message_text(content)));
+    (!text.is_empty()).then_some(text)
+}
+
+/// The title Claude Code generated for this session, or `None` when this record
+/// is not one.
+///
+/// Claude Code writes a whole record for it — `{"type":"ai-title","aiTitle":…}`
+/// — and rewrites it as the conversation moves on, so a transcript holds
+/// several. On this machine every one of the 211 files that has one holds the
+/// same text in all of them, so the first is the answer and nothing has to be
+/// read to the end to find a later one.
+///
+/// Empty is not a title. An `aiTitle` of `""`, or of spaces, is a record that
+/// exists and says nothing, and the caller falls back to [`human_text`] for it
+/// exactly as it does for a file with no such record at all.
+pub fn generated_title(record: &Record) -> Option<String> {
+    if record.kind.as_deref() != Some("ai-title") {
+        return None;
+    }
+    let text = one_line(record.ai_title.as_deref()?);
     (!text.is_empty()).then_some(text)
 }
 
@@ -405,6 +429,31 @@ mod tests {
     fn the_first_thing_a_person_typed_survives_all_of_it() {
         let record = user(serde_json::json!("Talk to me in Russian:\n  everything"));
         assert_eq!(human_text(&record).as_deref(), Some("Talk to me in Russian: everything"));
+    }
+
+    #[test]
+    fn a_generated_title_record_gives_up_its_one_line() {
+        let record: Record = serde_json::from_str(
+            r#"{"type":"ai-title","aiTitle":"Task menu in DONE","sessionId":"x"}"#,
+        )
+        .expect("an ai-title record");
+        assert_eq!(generated_title(&record).as_deref(), Some("Task menu in DONE"));
+    }
+
+    #[test]
+    fn a_generated_title_of_nothing_but_spaces_is_no_title_at_all() {
+        let blank: Record =
+            serde_json::from_str(r#"{"type":"ai-title","aiTitle":"   "}"#).expect("a record");
+        assert_eq!(generated_title(&blank), None);
+        let empty: Record =
+            serde_json::from_str(r#"{"type":"ai-title","aiTitle":""}"#).expect("a record");
+        assert_eq!(generated_title(&empty), None);
+    }
+
+    #[test]
+    fn only_an_ai_title_record_carries_a_generated_title() {
+        let record = user(serde_json::json!("Move the card"));
+        assert_eq!(generated_title(&record), None);
     }
 
     #[test]
