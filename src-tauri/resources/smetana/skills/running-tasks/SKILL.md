@@ -257,8 +257,11 @@ on its own. **This runs before you take any new work.**
 
    **The evidence is that file and those worktrees, and there is nothing else.** For a
    claim: the `writer` of the record that names its actor, read as above. For the merge
-   lock in step 3: that batch's own `group`, read the same way. For whether there is
-   anything to resume: the worktrees under the slug. **A live `claude` process somewhere
+   lock in step 3: that batch's own `group` — the same mechanic over a different identity,
+   which is why step 3 writes the test out instead of pointing back here. A group pid holds
+   the agent the batch started, never the app, so the recipe above run over one would call
+   every living batch dead. For whether there is anything to resume: the worktrees under
+   the slug. **A live `claude` process somewhere
    in the process table is not evidence in either direction** — nor is its age, nor that
    it started around when your run did, nor anything `ps | grep claude` or `pgrep -f
    claude` can be made to say. The app runs a person's own sessions and other projects'
@@ -295,12 +298,24 @@ on its own. **This runs before you take any new work.**
      even be the one you are a batch of — and the session that took the lock is not there
      any more. This is the answer that is easy to misread as "another lead mid-merge",
      and it is not one: a lead mid-merge has a process. **A batch's liveness is the pid
-     of its `group`, and this is the only place that field is read.** A task claim's
-     liveness stays the `writer`, because what a claim needs to know is whether the run
-     that took it still exists to finish it, and a live app with one dead batch has
-     others; what the lock needs to know is whether the session holding it is still
-     merging, and only that session's own group answers that. One file, two questions,
-     two fields — and the reason they are not the same field.
+     of its `group`, and this is the only place that field is read.** Ask about that one
+     pid and no other:
+
+     ```bash
+     ps -p <group.pid> -o pid=,comm=          # the batch the lock's assignee names
+     ```
+
+     Nothing there → that batch is gone and the lock is abandoned. Something there whose
+     name is plainly not what the same record's `group.command` says → the pid has been
+     reused since, and the lock is abandoned too. Anything else — a process that
+     plausibly is the one the record describes → **the batch is alive, and the lock is
+     not yours to touch.**
+
+     A task claim's liveness stays the `writer`, because what a claim needs to know is
+     whether the run that took it still exists to finish it, and a live app with one dead
+     batch has others; what the lock needs to know is whether the session holding it is
+     still merging, and only that session's own group answers that. One file, two
+     questions, two fields — and the reason they are not the same field.
    - **Anything else** — a live group, a batch whose `group` the file does not record, an
      actor the file names nowhere, no file at all, a file you cannot read. Leave it, and
      let `merging`'s 60 minutes have it when Phase 2 gets there. A holder you cannot show
@@ -308,8 +323,31 @@ on its own. **This runs before you take any new work.**
      lock can be held by a lead somebody started by hand in a terminal, whose actor this
      file was never going to name.
 
+   **What you compare a group pid against is the agent, not the app**, and the difference
+   is the whole of that middle branch. A batch's group is the session the run started, so
+   its recorded `command` is `claude` or a login shell and is never Smetana: run step 2's
+   writer recipe over a group pid instead and every live batch on the machine reads as
+   dead, the lock a lead is holding mid-merge is broken under them, and two leads move the
+   target branch at once — the half-merged target the lock exists to prevent, and a worse
+   night than the hour this step was written to save. So the name you compare against is
+   the file's own `group.command` for that batch, and never a notion of what an agent is
+   called.
+
+   **A `claude` under that pid is evidence; a `claude` you went looking for is not.** The
+   prohibition in step 2 is untouched, because what it forbids is starting at the process
+   table and reasoning towards a batch: any of them could be a person's own session, and
+   which one it is cannot be recovered from a name or a start time. Here the file hands
+   you one pid, and the only question asked is what is under it. Where the record carries
+   no `group` at all, there is no pid to ask about and the answer is the third bullet,
+   not this one.
+
    Abandoned → break it now, in `merging`'s order, and do not wait out the hour: the hour
-   is for a holder who might still be working.
+   is for a holder who might still be working. **Take the two facts the report needs off
+   the JSON you already have before the first write** — the assignee, and the claim's age
+   from `updated_at`. That field, and emphatically not `started_at`, which bd stamps once
+   in an issue's life and never moves again, so every holder reads as days old by it
+   (smetana-qtw). The break's own first write moves `updated_at` to now, so an age not
+   taken here cannot be worked out afterwards by anybody.
 
    ```bash
    bd update <lock-id> --status open --assignee ""
@@ -630,9 +668,10 @@ So, after the report above and before you hand back, write the file the prompt n
   park, a STOP, a queue with nothing in it, a gate that stayed red — if the lock is
   yours at that moment, release it (`bd update <lock-id> --status open --assignee ""`)
   before you write the report, and say in the report that you did. Nothing releases it
-  for you: the app writes to the tracker nowhere at all, and the only other way in is an
-  hour on somebody else's clock. A batch that ended holding `smetana-js4` cost the board
-  its merge phase for as long as it took a person to notice (smetana-0u7).
+  for you: the app writes to the tracker nowhere at all, and the only other ways in are a
+  later batch showing this one dead, and an hour on somebody else's clock. A batch that
+  ended holding `smetana-js4` cost the board its merge phase for as long as it took a
+  person to notice (smetana-0u7).
 - **Never abort the whole batch for one task.** Park it, or ask, and move on.
 - **Never promote a `deferred` task, and never claim one.** Only a person does that.
 - **Only mechanical conflicts resolve themselves.** Anything needing a judgement about

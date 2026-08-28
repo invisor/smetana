@@ -99,12 +99,14 @@ exist buys nothing. The evidence is the app's own run registry, `.smetana/runs.j
 the project folder — `running-tasks` Phase R reads it in full and carries the whole
 reading; the short of it is that a `smetana-run-<n>` assignee is a batch of one of that
 file's records, and it is dead when the record's `writer` process is gone, and dead too
-when the writer is alive but that batch's own `group` pid holds no process. Those are the
-only two readings. A holder the file names nowhere, a batch with no `group` recorded, no
-file, or a file you cannot read is **not** shown dead — it may be a lead somebody started
-by hand in a terminal — and it waits out the hour like any other. And a live `claude`
-process somewhere in the process table is not evidence about this lock in either
-direction: not its age, not its start time, not what `ps | grep` makes of its name. The
+when the writer is alive but that batch's own `group` pid holds nothing, or holds a
+process plainly not the one that batch's own `group.command` records — that name is the
+agent's, never the app's. Those are the only two readings. A holder the file names
+nowhere, a batch with no `group` recorded, no file, or a file you cannot read is **not**
+shown dead — it may be a lead somebody started by hand in a terminal — and it waits out
+the hour like any other. And a live `claude` process somewhere in the process table is
+not evidence about this lock in either direction: not its age, not its start time, not
+what `ps | grep` makes of its name — the pid this file names is the only one asked. The
 break is the same two commands and the same report line as the stale case; a dead holder
 is a second reason to reach for them, not a second mechanism.
 
