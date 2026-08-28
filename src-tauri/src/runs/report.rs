@@ -396,7 +396,7 @@ fn held(out: &mut String, held: &[Leftover]) {
         out.push_str(&escape(&item.id));
         out.push_str("</code>");
         if item.lock {
-            out.push_str(" the merge lock");
+            out.push_str(", the merge lock");
         }
         out.push_str(" (");
         out.push_str(&escape(&item.status));
@@ -886,7 +886,7 @@ mod tests {
         let html = render(&report(600, None, &[killed]));
 
         assert!(html.contains("still held on the board"), "{html}");
-        assert!(html.contains("<code>smetana-js4</code> the merge lock (in_progress)"), "{html}");
+        assert!(html.contains("<code>smetana-js4</code>, the merge lock (in_progress)"), "{html}");
         assert!(html.contains("<code>smetana-42v</code> (ready_to_merge)"), "{html}");
         assert!(html.contains(".held{margin:0;color:var(--attn-loud)}"), "drawn loud: {html}");
     }
@@ -1395,7 +1395,6 @@ mod tests {
         );
         assert!(html.contains("left no account of itself"), "{html}");
     }
-
 
     #[test]
     fn the_header_and_footer_are_the_documents_only_uppercase_labels() {

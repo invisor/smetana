@@ -251,10 +251,11 @@ clock, so *which* tasks moved and *how long* the run took are its to work out. I
 *done* — nothing comes back from a session but an exit code, the same missing channel `claimedBy`
 reconstructs around and `SessionWork::Run` refuses to invent — so the lead is asked for it: one JSON
 file per batch at `.smetana/runs/<token>/batch-<n>.json`, named in the `Run` prompt and in
-`running-tasks`. That exit code is small, but it is the app's own and it is always there, so it is
-written down beside the lead's account rather than thrown away — see the two halves of a batch below. And it cannot see per-task time: a batch may hold several tasks with no signal at
-either end of one of them, so a task gets a duration of its own **only when its batch held exactly
-one**, where the two are the same number and nothing is inferred.
+`running-tasks`. What comes back is small and sometimes not even a code, but the *ending* is always
+there and it is the app's own, so it is written down beside the lead's account rather than thrown
+away — see the two halves of a batch below. And it cannot see per-task time: a batch may hold
+several tasks with no signal at either end of one of them, so a task gets a duration of its own
+**only when its batch held exactly one**, where the two are the same number and nothing is inferred.
 
 Attribution is a **board diff**, not an actor match: a task is this run's when it is `closed` now and
 was not `closed` at the baseline, the first board read inside the loop, after the preflight.
@@ -295,9 +296,12 @@ being ended by the run, and nothing in the document drew it before.
 `ready_to_merge` under that actor, with ids. Only for a batch that left no account — a lead that
 answered has already said where it left things, and a second resync per batch is not worth a line
 nobody needed. It is wider than `claimed_by` on purpose, since this is a record rather than a parking
-list. **Named, never acted on**: the boundary above holds without exception, so nothing here releases
-a lock or parks a claim, and the line exists precisely because the alternative is the *next* run
-discovering the lock by failing to take it.
+list. **Named, never acted on**: the recovery boundary below holds, so nothing here releases a lock
+or rewrites a status, and the line exists precisely because the alternative is the *next* run
+discovering the lock by failing to take it. That boundary is about *recovery* and is not a claim
+that the loop never writes to bd: `park_claims` does, on the unanswered path, seconds after this
+very reading — one batch's `in_progress` claims to `parked` with the question as the note, and the
+only bd write `drive` makes.
 
 **Every ending the loop task reaches goes through one `finish(...)` in `service.rs`, and that
 consolidation is the feature.** A dozen exits into `RunState::Stopped` is how the next ending
