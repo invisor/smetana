@@ -377,9 +377,17 @@ record that still names something running, trimmed to the batches actually still
 would leave a live agent, still claiming under its actor, named nowhere, and a `kill -9` a minute
 later orphans exactly the process this file exists to reclaim. Conditioning on the stop reason
 instead would have been a `match` somebody has to remember to extend. `smetana:merging`'s 60-minute
-lock staleness rule is untouched by all this and cannot be replaced by the registry: the file names
-runs this app started on this machine, while the lock can be held by a lead somebody started by hand
-in a terminal.
+lock staleness rule cannot be replaced by the registry and is not: the file names runs this app
+started on this machine, while the lock can be held by a lead somebody started by hand in a terminal,
+whose actor appears nowhere here. What the registry does add, since smetana-0u7, is a **second ground
+for breaking the lock beside the hour** — a holder this file shows dead is broken at once, because an
+hour spent waiting on a process that does not exist buys nobody anything — and one field read for
+that and for nothing else. **A batch's liveness is its own `group`, not its record's `writer`.** A
+batch killed mid-merge under an app that is still up leaves a lock no one will ever release, and the
+writer being alive says only that the app is; the `writer` stays the signal for a task claim, where
+the question is whether the run still exists to finish what it took. Both readings are the skills' to
+make and not this side's: the app writes to bd nowhere, so the lock is released by
+`smetana:running-tasks` Phase R or by nobody.
 
 On the front end, `runs.js` is deliberately small — a file read with no worker behind it, freshness
 from switching projects, from window focus, and from any of the project's sessions starting or
