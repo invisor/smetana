@@ -35,10 +35,10 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
-/* The one duration every copy confirmation in this window holds for — the
-   board's id and a session row's menu both. `kanban/copyId.js` owns it because
-   that is where the rest of the copy vocabulary already lived. */
-import { COPIED_MS } from '../components/kanban/copyId.js'
+/* The whole of what happens on screen after a copy — the board's id and a
+   session row's menu both, one policy and one duration for the two of them, and
+   the same one the gallery answers with. */
+import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
 import Button from '../components/core/Button.vue'
 import RunBar from '../components/run/RunBar.vue'
@@ -2045,45 +2045,26 @@ const selectFromBoard = (id) => {
    cards both reading `Copied` would be a claim about a clipboard that only
    holds one thing.
 
-   How long it stands is `COPIED_MS`, imported rather than written here: it used
-   to be a `COPIED_ID_MS` of this file's own, and the session row's menu made it
-   the second copy of one number. */
-const copiedTaskId = ref(null)
-/* '' | 'copied' | 'failed' */
-const taskIdCopyState = ref('')
-let copiedTaskTimer = null
+   All of which is `useCopyFeedback` now and not written out here: how long the
+   confirmation stands, which press owns it when two race, and the second clear
+   that keeps a stranded timer from putting out the later one. That policy had
+   been written out four times over — twice here and twice in the gallery — and
+   had already cost once, when the stranded timer sat in both copies of it and
+   had to be found and fixed in each. Two lines of wiring is what is left: which
+   id is being claimed, and what text goes on the clipboard. */
+const {
+  target: copiedTaskId,
+  state: taskIdCopyState,
+  /* What each of the two components gets: its own outcome, and nothing for
+     anybody else's id. */
+  stateFor: copyStateFor,
+  copy: copyIdFeedback
+} = useCopyFeedback(copyText)
 
-/* What each of the two components gets: its own outcome, and nothing for
-   anybody else's id. */
-const copyStateFor = (id) => (id != null && id === copiedTaskId.value ? taskIdCopyState.value : '')
-
-async function copyTaskId(id) {
-  clearTimeout(copiedTaskTimer)
-  /* Claimed before the await, and with no outcome yet: the write takes a
-     moment in the app, and until it answers the previous card must already
-     have stopped saying it was copied. */
-  copiedTaskId.value = id
-  taskIdCopyState.value = ''
-  const ok = await copyText(id)
-  // A second click, on this id or another, has taken the state over since.
-  if (copiedTaskId.value !== id) return
-  /* Again, and this is not the same clear as the one above. Two clicks on the
-     same id both get past that guard, and the second one's `setTimeout` would
-     overwrite the first's handle while the first timer went on running with
-     nothing pointing at it. It then fires 1.2 s after the *first* copy
-     resolved: soon enough to cut this confirmation short, and — since it puts
-     `copiedTaskId` back to null — soon enough to make a later copy's own guard
-     bail on it, so a copy that worked would say nothing at all. A double-click
-     is the most ordinary way there is to point at a word somebody wants. */
-  clearTimeout(copiedTaskTimer)
-  taskIdCopyState.value = ok ? 'copied' : 'failed'
-  copiedTaskTimer = setTimeout(() => {
-    copiedTaskId.value = null
-    taskIdCopyState.value = ''
-  }, COPIED_MS)
-}
-
-onUnmounted(() => clearTimeout(copiedTaskTimer))
+/* The id is both the thing claimed and the thing written — a card is told apart
+   by exactly what it puts on the clipboard, which is what makes this the
+   simpler of this window's two callers. */
+const copyTaskId = (id) => copyIdFeedback(id, id)
 
 /* ---- the Sessions tab's cards, and the menu on one ----------------------- */
 
@@ -2119,11 +2100,11 @@ watch(() => sessionsState.project, () => {
 /* Copying one of the three things a session row offers — its resume command,
    its id, the path to its transcript — and saying so afterwards.
 
-   `copyTaskId` above is the policy, followed here to the millisecond — the same
-   `COPIED_MS`, since there is only one of it now — and for its own stated
-   reason: a copy is the one action with nothing on screen to
-   show for it, so the answer belongs on the control somebody is still looking
-   at rather than in the corner of the screen. What differs is where it lands.
+   The same policy as the id above, which is now the same code as the id above,
+   and for its own stated reason: a copy is the one action with nothing on
+   screen to show for it, so the answer belongs on the control somebody is
+   still looking at rather than in the corner of the screen. What differs is
+   where it lands.
    A task's id is a control of its own; a session's copy is picked from a menu
    that closes on the way out, so the trigger the menu hung from is what is left
    to answer on — it draws a tick and names what was copied, then goes back to
@@ -2132,46 +2113,19 @@ watch(() => sessionsState.project, () => {
    One session at a time, deliberately, exactly as one id at a time up there:
    two rows both claiming to have been copied would be a claim about a clipboard
    that holds one thing. */
-const copiedSessionId = ref(null)
-/* '' | 'copied' | 'failed' */
-const sessionCopyState = ref('')
-/* Which of the three it was, for the sentence. */
-const sessionCopyNoun = ref('')
-let sessionCopyTimer = null
+const {
+  stateFor: sessionCopyStateFor,
+  /* Which of the three it was, for the sentence. */
+  nounFor: sessionCopyNounFor,
+  copy: sessionCopyFeedback
+} = useCopyFeedback(copyText)
 
-const sessionCopyStateFor = (id) =>
-  id != null && id === copiedSessionId.value ? sessionCopyState.value : ''
-const sessionCopyNounFor = (id) =>
-  id != null && id === copiedSessionId.value ? sessionCopyNoun.value : ''
-
-async function copyFromSession(kind, session) {
-  const id = session?.id ?? null
-  const text = copyPayload(kind, session)
-  clearTimeout(sessionCopyTimer)
-  /* Claimed before the await and with no outcome yet, so the previous row has
-     already stopped saying it was copied by the time this one answers. */
-  copiedSessionId.value = id
-  sessionCopyState.value = ''
-  sessionCopyNoun.value = copyVerbNoun(kind)
-  /* Nothing to copy is a refusal rather than a copy of the empty string: a
-     clipboard emptied by a press is worse than one left alone, and the button
-     says which it was. */
-  const ok = text ? await copyText(text) : false
-  // A second press, on this session or another, has taken the state over since.
-  if (copiedSessionId.value !== id) return
-  /* Again, and not the same clear as the one above — `copyTaskId` spends a
-     paragraph on why two presses on one row both get past that guard and would
-     otherwise leave a stranded timer that cuts the second confirmation short. */
-  clearTimeout(sessionCopyTimer)
-  sessionCopyState.value = ok ? 'copied' : 'failed'
-  sessionCopyTimer = setTimeout(() => {
-    copiedSessionId.value = null
-    sessionCopyState.value = ''
-    sessionCopyNoun.value = ''
-  }, COPIED_MS)
-}
-
-onUnmounted(() => clearTimeout(sessionCopyTimer))
+/* Three verbs into one call: which row is claimed, what the verb puts on the
+   clipboard — `''` when there is nothing, which the composable answers as a
+   refusal rather than as an emptied clipboard — and what to call it in the
+   sentence. */
+const copyFromSession = (kind, session) =>
+  sessionCopyFeedback(session?.id ?? null, copyPayload(kind, session), copyVerbNoun(kind))
 
 /* Which transcript is being deleted, by path — the field the row's menu is
    greyed from. A path and not a boolean, so a second row's menu is live while
