@@ -6,6 +6,7 @@ mod git;
 mod project;
 mod rlimit;
 mod runs;
+mod sessions;
 mod settings;
 mod shell_env;
 mod terminal;
@@ -192,6 +193,7 @@ pub fn run() {
       runs::commands::run_state,
       runs::commands::target_branches,
       runs::commands::agent_usage,
+      sessions::commands::sessions_list,
       settings::commands::settings_load,
       settings::commands::settings_save,
       window::settings_window_open,

@@ -57,6 +57,11 @@ import Tooltip from '../components/core/Tooltip.vue'
 import IconButton from '../components/core/IconButton.vue'
 import { CommandPalette, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
+import SessionRow from '../components/agent/SessionRow.vue'
+/* The right column's Sessions tab, and a different subject from the store
+   below it: this one is Claude Code's own transcripts on disk, that one is the
+   live PTY sessions of this run of the app. The two lists never mix. */
+import { initSessions, loadSessionHistory, sessionsState } from '../stores/sessions.js'
 import {
   agentCounts,
   agentRows,
@@ -456,6 +461,9 @@ const RIGHT_TABS = [
 onMounted(initTracker)
 onMounted(adoptInitialProject)
 onMounted(initTerminals)
+/* Starts the clock the session rows' "18h ago" is measured against, and nothing
+   else: the list itself is read when the tab is opened, not here. */
+onMounted(initSessions)
 // The run's own event can fire before the webview is listening, which is what
 // the loadRun calls beside every loadConfig are for.
 onMounted(initRuns)
@@ -3283,6 +3291,28 @@ watch(activePath, (path) => {
   repairNote.value = null
 })
 
+/* The Sessions tab reads the disk when it is opened, and again whenever the
+   project changes under it. Deliberately both, and deliberately nothing else.
+
+   Reading on the tab rather than on the project is what keeps the cost off
+   everybody who never opens it: this is a walk of `~/.claude/projects`, which
+   is hundreds of files and hundreds of megabytes for one project. There is no
+   watcher for the same reason, and the store carries the whole of that
+   argument.
+
+   A project switch while the tab is closed leaves the store holding the list of
+   the project somebody has left, and that is safe rather than overlooked: the
+   store empties a list belonging to another project the moment this one is
+   asked about, so the stale rows can never reach the screen — the tab cannot be
+   drawn without this watcher having fired. */
+watch(
+  [activePath, () => project.rightTab],
+  ([path, tab]) => {
+    if (tab === 'sessions') loadSessionHistory(path)
+  },
+  { immediate: true }
+)
+
 /* The other half of the background fetch, and it is keyed on the repository the
    Git panel settled on rather than on the project path beside it.
 
@@ -4193,23 +4223,38 @@ const toastStackStyle = {
                 />
               </div>
 
-              <!-- The Sessions tab: the same list, the same component and the
-                   same handlers the left column's Agents tab passes, on
-                   purpose. Both can be on screen at once, and "which agents are
-                   working" is one sentence of this product rather than two — a
-                   second drawing of it is exactly how two halves come apart
-                   where a person can watch it happen. The order is the store's
-                   and is not reversed here for the same reason: one screen
-                   showing one list in two orders is worse than a list whose
-                   newest row is at the bottom. Its own empty state is the whole
-                   of what a freshly started app shows here. -->
-              <AgentList
-                v-else
-                :rows="agentRows"
-                :active-id="terminalState.activeId"
-                @select="selectAgent"
-                @remove="removeSession"
-              />
+              <!-- The Sessions tab: this project's Claude Code sessions as they
+                   are on disk, newest first, and none of the live agents of
+                   this run of the app — those are the left column's Agents tab
+                   and stay there. The tab used to draw that same live list,
+                   which made a freshly launched app show an empty column while
+                   the machine held hundreds of transcripts of work done in this
+                   project; the premise that no history existed was simply
+                   wrong.
+
+                   A session here is a conversation that is over, so the row is
+                   not `AgentList`'s: there is no state to watch, no timer and
+                   nothing to remove — a title, what was last said, and how much
+                   of it there was. -->
+              <div v-else>
+                <SessionRow
+                  v-for="session in sessionsState.sessions"
+                  :key="session.id"
+                  :session="session"
+                  :now="sessionsState.now"
+                />
+                <!-- Said in words rather than left blank, and not while the
+                     read is still out: this sentence is a claim about what is
+                     on the disk, and making it before anybody has looked would
+                     be a claim nobody checked. -->
+                <EmptyState
+                  v-if="!sessionsState.sessions.length && !sessionsState.loading"
+                  compact
+                  icon="terminal"
+                  title="No sessions yet"
+                  description="Claude Code sessions run in this project will appear here."
+                />
+              </div>
             </div>
           </div>
         </Panel>

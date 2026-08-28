@@ -347,6 +347,120 @@ function fixtureIssues() {
   })
 }
 
+/* The Sessions tab's fixture: Claude Code transcripts as the worker reports
+   them, field for field with the real `sessions_list`. Six rows, each one a
+   case the row has to draw and none of them a repeat of another: a session with
+   subagents and one without, a long title that has to ellipsise, a session out
+   of a worktree on a branch of its own, one with no branch at all, one nobody
+   has titled because the transcript holds no human message, and one so recent
+   the time label is not measured in hours.
+
+   Built per call rather than written out as constants, and the times are
+   offsets from now: a fixture with dates in it reads "2y ago" a year after
+   somebody types it, and the label the design is about — `18h ago` — could then
+   never be seen in a browser at all. The paths are this project's own
+   convention (`~/.claude/projects/<cwd with separators replaced>`), so what the
+   hover string shows is the shape a person will meet in the app.
+
+   The order is deliberately not sorted here. The store sorts newest first, and
+   a fixture that arrived already sorted would make a browser look correct with
+   that sort deleted. */
+const MINUTE_MS = 60 * 1000
+const HOUR_MS = 60 * MINUTE_MS
+const DAY_MS = 24 * HOUR_MS
+
+function mockSessions(project) {
+  const at = (ms) => new Date(Date.now() - ms).toISOString()
+  const stem = (cwd) => cwd.replace(/[/.]/g, '-')
+  const worktree = `${project}/.worktrees/smetana-oln-sessions-tab-disk-history`
+  const rows = [
+    {
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      cwd: project,
+      branch: 'main',
+      title: 'Talk to me in Russian: everything you say in this project, and keep the commit messages in Russian too',
+      lastRole: 'assistant',
+      lastText:
+        'Done. The three columns are drawn from the tracker now, and the fixture that used to stand in for the log pane is gone with it.',
+      messages: 48,
+      subagents: 3,
+      model: 'claude-opus-5',
+      modifiedAt: at(18 * HOUR_MS)
+    },
+    {
+      id: '3a7e5b10-1c2d-4e3f-9a8b-7c6d5e4f3a2b',
+      cwd: project,
+      branch: 'develop',
+      title: 'Why does the scope bar count dirty files it cannot see',
+      lastRole: 'user',
+      lastText: 'Leave it for now, file it as a task instead.',
+      messages: 12,
+      subagents: 0,
+      model: 'claude-opus-5',
+      modifiedAt: at(4 * MINUTE_MS)
+    },
+    {
+      id: '5d2f8c41-9b0a-4c1d-8e7f-6a5b4c3d2e1f',
+      cwd: worktree,
+      branch: 'feature/smetana-oln-sessions-tab-disk-history',
+      title: 'Implement the front-end half of the sessions tab',
+      lastRole: 'assistant',
+      lastText:
+        'Both gates are green. The row draws in all four theme and density combinations; what is left is the pass over the gallery.',
+      messages: 214,
+      subagents: 1,
+      model: 'claude-opus-5',
+      modifiedAt: at(2 * DAY_MS)
+    },
+    {
+      id: 'c81b0e39-4a5f-4b6c-9d0e-1f2a3b4c5d6e',
+      cwd: `${project}/src-tauri`,
+      /* A session started outside a repository, which is an ordinary thing:
+         the transcript records no branch and the row simply has one piece
+         fewer. */
+      branch: null,
+      title: 'Check whether the sidecar digest matches the pinned release',
+      lastRole: 'user',
+      lastText: 'It does. Nothing to do.',
+      messages: 6,
+      subagents: 0,
+      model: 'claude-sonnet-4-5',
+      modifiedAt: at(9 * DAY_MS)
+    },
+    {
+      /* Nothing to title it with and nothing said in it: a transcript opened
+         and abandoned. Both fallbacks of the row at once, which is the only
+         way to see either. */
+      id: 'e4a90d77-2b3c-4d5e-8f90-1a2b3c4d5e6f',
+      cwd: project,
+      branch: 'main',
+      title: null,
+      lastRole: null,
+      lastText: null,
+      messages: 0,
+      subagents: 0,
+      model: null,
+      modifiedAt: at(40 * DAY_MS)
+    },
+    {
+      id: '7b6a5948-3c2d-4e1f-9a0b-8c7d6e5f4a3b',
+      cwd: project,
+      branch: 'staging',
+      title: 'Port the branch list to the design system',
+      lastRole: 'assistant',
+      lastText: 'The rebase glyph is git-graph; lucide ships no rebase mark and that is the one about the shape of the history.',
+      messages: 97,
+      subagents: 12,
+      model: 'claude-opus-5',
+      modifiedAt: at(400 * DAY_MS)
+    }
+  ]
+  return rows.map((row) => ({
+    ...row,
+    path: `/Users/you/.claude/projects/${stem(row.cwd)}/${row.id}.jsonl`
+  }))
+}
+
 /* Whether the fixtures are what is answering. `window.__TAURI_INTERNALS__` is
    **not** the way to ask that question from anywhere else in the app: `mockIPC`
    sets that very property itself (`mocks.js` calls `mockInternals`), so it is
@@ -982,6 +1096,15 @@ export function installMockBackend() {
     /* Detach and resize change nothing on disk and have nothing to lie
        about. */
     if (command === 'terminal_detach' || command === 'terminal_resize') return null
+    /* The right column's Sessions tab: Claude Code's own transcripts, which in
+       the app are read off `~/.claude/projects` by the worker. A browser has no
+       worker and no home directory to walk, and the tab is one of two in a
+       panel a person opens on purpose — without an answer here it would log a
+       failure on every open of `npm run dev`, which is one of this project's
+       two verifications. */
+    if (command === 'sessions_list') {
+      return mockSessions(payload?.project ?? MOCK_PROJECTS[0])
+    }
     /* Everything that *starts* something — `terminal_create` and
        `terminal_shell` — is deliberately not answered here and falls through to
        the rejection below. There is no PTY in a browser, and a session handed
