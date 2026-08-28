@@ -32,7 +32,23 @@ const props = defineProps({
   /* Milliseconds, the store's ticking clock. Its own default is what keeps a
      row drawable in isolation — a gallery entry, a future one-off — without
      the label going blank. */
-  now: { type: Number, default: () => Date.now() }
+  now: { type: Number, default: () => Date.now() },
+  /* Whether this row carries the rule that separates it from the one above.
+
+     The container decides, and it has to: an inline-style component has no
+     `:last-child` to suppress anything with, so a rule drawn unconditionally is
+     drawn under the last row too — which in the app left a full-width
+     separator with four hundred pixels of empty panel under it, separating
+     nothing, and in the gallery landed on the frame's own border as a two-pixel
+     band of two different colours.
+
+     Drawn **above** rather than below for the same reason, and it is the whole
+     of the fix: a rule above every row but the first cannot end a list, whereas
+     a rule below every row but the last needs the container to know where the
+     end is — one more thing for two callers to agree about, and they would come
+     to disagree. Off by default, so a row drawn alone anywhere is a row with no
+     rule on it. */
+  separated: { type: Boolean, default: false }
 })
 
 /* Hover only, and no press: a row is a place rather than a button, the same
@@ -43,14 +59,15 @@ const { hover, handlers } = useInteractive()
 
 /* Three lines with room between them, so the row is padded rather than held at
    `--row-h`: that token is the height of a single-line row and this is not one.
-   The rule underneath separates a session from the next; without it two
-   wrapped last-messages read as one paragraph. */
+   The rule separates a session from the one above it; without it two wrapped
+   last-messages read as one paragraph. See `separated` for why it is above and
+   why it is the container's decision. */
 const rowStyle = computed(() => ({
   display: 'flex',
   flexDirection: 'column',
   gap: 'var(--space-2)',
   padding: 'var(--space-4) var(--space-5)',
-  borderBottom: 'var(--border-w) solid var(--border-subtle)',
+  borderTop: props.separated ? 'var(--border-w) solid var(--border-subtle)' : undefined,
   background: hover.value ? 'var(--surface-hover)' : 'transparent',
   cursor: 'default',
   transition: 'var(--transition-control)'
@@ -68,12 +85,29 @@ const titleStyle = {
   whiteSpace: 'nowrap'
 }
 
+/* The wrapper the clamped box hangs in, and it is load-bearing rather than a
+   spare div.
+
+   `display: -webkit-box` is **blockified when the box is a flex item**: a
+   direct child of the row above computes as `flow-root`, not as
+   `-webkit-box` — measured. Chromium honours `-webkit-line-clamp` on such a
+   box anyway, so a dev browser draws the two lines and hides the defect
+   completely; WebKit has historically applied the clamp only to a real
+   `-webkit-box`, and this app ships in WKWebView, WebKitGTK and WebView2 with
+   `safari15` as the build target. Where the clamp is dropped, nothing is
+   clipped either — the height is auto, so `overflow: hidden` has nothing to cut
+   — and the row grows to whatever the last message was. This wrapper takes the
+   flex item's place so the box inside it computes as written.
+
+   Do not simplify it away. The check is the computed `display` on the inner
+   element: it has to read `-webkit-box`. */
+const lastBox = { minWidth: 0 }
+
 /* The last thing said, over about two lines. The clamp is the only way to hold
    a box at a number of lines rather than a height, and a height in tokens would
    be wrong in one of the two densities anyway — `2` here is a count of lines,
    not a measurement, of a piece with the unitless `flex` and `opacity` values
-   elsewhere in this system. `-webkit-line-clamp` is in every one of the three
-   webviews this app is built for. */
+   elsewhere in this system. */
 const lastStyle = {
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)',
   color: 'var(--text-secondary)',
@@ -99,6 +133,17 @@ const sansPart = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-sans
    sans. The project's rule, and the reason the pieces arrive tagged rather
    than joined into one string. */
 const monoPart = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)' }
+
+/* One piece of the meta line **with the separator that precedes it inside the
+   same box**, which is what stops a middot being left at the end of a wrapped
+   line with nothing after it. The wrapping happens between these boxes and
+   never inside one, so a separator always arrives with the piece it announces.
+   `sessionRow.js` decides which pieces have one; this only draws it.
+
+   A flex box rather than a nowrap inline one: the two children are laid out
+   with the same gap the line uses, and a branch name too long for the column
+   still wraps inside its own piece instead of pushing the line sideways. */
+const partBox = { display: 'flex', alignItems: 'baseline', gap: 'var(--space-2)', minWidth: 0 }
 /* The separator is the one every other list in this app uses for the same job
    (`shell/projectState.js`, `settings/usage.js`). It is a piece of the same
    muted line rather than a mark of its own: the gap around it is what makes it
@@ -118,12 +163,16 @@ const meta = computed(() => sessionMeta(props.session, props.now))
        somebody asks about one row rather than something they scan for. -->
   <div :style="rowStyle" v-bind="handlers" :title="session.cwd">
     <div :style="titleStyle">{{ title }}</div>
-    <div v-if="last" :style="lastStyle">{{ last }}</div>
+    <!-- The wrapper is what keeps the clamp a clamp off Chromium; `lastBox`
+         carries the whole of that argument. -->
+    <div v-if="last" :style="lastBox">
+      <div :style="lastStyle">{{ last }}</div>
+    </div>
     <div :style="metaStyle">
-      <template v-for="(part, index) in meta" :key="index">
-        <span v-if="index" :style="dotStyle">·</span>
+      <div v-for="(part, index) in meta" :key="index" :style="partBox">
+        <span v-if="part.lead" :style="dotStyle">{{ part.lead }}</span>
         <span :style="part.mono ? monoPart : sansPart">{{ part.text }}</span>
-      </template>
+      </div>
     </div>
   </div>
 </template>

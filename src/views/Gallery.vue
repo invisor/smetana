@@ -768,15 +768,17 @@ const agentRows = [
    dates written against it: the row's time label is relative, so a fixture
    dated from the machine's clock would draw a different string every time
    somebody opened this page and there would be nothing to check it against.
-   Here `18h ago`, `4m ago`, `2d ago`, `3w ago` and `1y ago` are on screen at
-   once, which is the whole ladder except its two ends.
+   Read down the column and the labels are `4m ago`, `18h ago`, `2d ago`,
+   `3w ago`, `5w ago`, `1y ago` — every rung of the ladder except `just now`,
+   which is the one rung nothing here can hold still: a fixture that drew it
+   would have to be dated within a minute of this constant, and it would say
+   the same thing as a four-minute-old one about everything else on the row.
 
    Six rows and no two of them the same case: subagents and none, a title long
-   enough to ellipsise, a session out of a worktree, one with no branch, one
+   enough to ellipsise, a session out of a worktree, one with no branch, and one
    with neither title nor last message — the row's two fallbacks, which appear
-   nowhere else — and one recent enough to be `just now`. Newest first, as the
-   store sorts them: this page draws rows rather than the store, so the order
-   is written out here by hand. */
+   nowhere else. Newest first, as the store sorts them: this page draws rows
+   rather than the store, so the order is written out here by hand. */
 const GALLERY_SESSION_NOW = Date.parse('2026-08-28T12:00:00Z')
 const galleryAt = (ms) => new Date(GALLERY_SESSION_NOW - ms).toISOString()
 const GALLERY_SESSIONS = [
@@ -791,7 +793,7 @@ const GALLERY_SESSIONS = [
     messages: 1,
     subagents: 0,
     model: 'claude-opus-5',
-    modifiedAt: galleryAt(20 * 1000)
+    modifiedAt: galleryAt(4 * 60 * 1000)
   },
   {
     id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
@@ -2794,14 +2796,19 @@ const menuTargetStyle = {
            the column and carry their own rule between them, and inset rows
            would draw the separator somewhere it never appears.
 
-           The frame's border is the panel edge the top row's rule has to sit
-           against; without it the first and last rules float. -->
+           The frame stands for the panel this list sits in — where the column
+           ends is not this component's business, and without a frame the rows
+           would float in the page with nothing to say where the list stops.
+           Nothing of it doubles a rule any more: the separator belongs to the
+           row below it, so the first row draws none against the frame's top
+           edge and the last draws none against its bottom one. -->
       <div :style="{ width: '340px', border: 'var(--border-w) solid var(--border)' }">
         <SessionRow
-          v-for="session in GALLERY_SESSIONS"
+          v-for="(session, index) in GALLERY_SESSIONS"
           :key="session.id"
           :session="session"
           :now="GALLERY_SESSION_NOW"
+          :separated="index > 0"
         />
       </div>
       <!-- What the tab draws for a project whose disk holds no transcript at

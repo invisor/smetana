@@ -116,6 +116,21 @@ export function relativeTime(iso, now) {
   return `${Math.floor(secs / YEAR)}y ago`
 }
 
+/* The separator between two pieces of the meta line. The same middot every
+   other list in this app puts between two facts about one thing —
+   `shell/projectState.js`, `settings/usage.js`, `shell/usageFooter.js`.
+
+   Every one of those joins it into a single string, spaces and all, and the
+   reason is not tidiness: a separator that is a box of its own can be left at
+   the end of a wrapped line, pointing at nothing, which is exactly what this
+   line did at 340px — `1y ago ·` with the branch on the row below. This line
+   cannot be one string, because it is set in two families and a string has one;
+   so the property those files get for free is stated here instead. **A
+   separator belongs to the piece that follows it and travels with it**, which
+   is what `lead` below is, and it is why nothing in this module ever emits a
+   separator on its own. */
+export const META_SEPARATOR = '·'
+
 /* The row's third line, in pieces rather than as one string.
 
    `mono` is carried per piece because the line holds two vocabularies at once:
@@ -123,6 +138,11 @@ export function relativeTime(iso, now) {
    the counts and the time are prose about them and go in sans. That is the
    project's rule rather than this row's taste, and joining the pieces here
    would put the decision in the component, where no test can see it.
+
+   `lead` is the separator this piece brings with it — null for the first piece
+   and `META_SEPARATOR` for every other. The component draws it inside the same
+   box as the text, so the two cannot be broken apart by a line ending between
+   them.
 
    The order is the one Orca reads left to right — what it is, how much of it,
    when — with the branch last because it is the piece a person looks for
@@ -143,5 +163,7 @@ export function sessionMeta(session, now) {
     when ? { text: when, mono: false } : null,
     session?.branch ? { text: session.branch, mono: true } : null
   ]
-  return pieces.filter(Boolean)
+  return pieces
+    .filter(Boolean)
+    .map((piece, index) => ({ ...piece, lead: index === 0 ? null : META_SEPARATOR }))
 }

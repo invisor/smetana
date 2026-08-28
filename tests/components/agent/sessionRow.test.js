@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  META_SEPARATOR,
   lastMessageLine,
   messageLabel,
   oneLine,
@@ -197,5 +198,41 @@ describe('the row\'s meta line', () => {
      third line would read as one that failed to draw. */
   it('a session nothing is known about still counts its messages', () => {
     expect(sessionMeta({}, NOW).map((part) => part.text)).toEqual(['0 msgs'])
+  })
+
+  /* The line wraps at 340px, and a separator that is a box of its own can be
+     left at the end of a wrapped line pointing at nothing — which is what it
+     did: `1y ago ·` with the branch on the row below. Every other list in this
+     app joins the middot into the string it precedes; this one cannot, because
+     it is set in two families, so the property is stated here instead. */
+  it('a separator belongs to the piece that follows it', () => {
+    const parts = sessionMeta(full, NOW)
+
+    expect(parts[0].lead).toBe(null)
+    expect(parts.slice(1).every((part) => part.lead === META_SEPARATOR)).toBe(true)
+  })
+
+  it('no piece is a separator on its own, so no line can end in one', () => {
+    const parts = sessionMeta(full, NOW)
+
+    expect(parts.every((part) => part.text && part.text !== META_SEPARATOR)).toBe(true)
+  })
+
+  /* Whichever pieces the worker could answer, the first of them is the one
+     without a separator — the lead is a position in the line, not a property of
+     the model id that usually opens it. */
+  it('the piece that opens the line has no separator whatever it is', () => {
+    const parts = sessionMeta({ model: null, messages: 6, branch: 'main', modifiedAt: ago(DAY) }, NOW)
+
+    expect(parts[0].text).toBe('6 msgs')
+    expect(parts[0].lead).toBe(null)
+  })
+
+  /* The separator travels with the piece; it must not travel with the piece's
+     family. A mono piece keeps its mono and keeps its lead. */
+  it('a separator does not disturb which family its piece is set in', () => {
+    const branch = sessionMeta(full, NOW).at(-1)
+
+    expect(branch).toEqual({ text: 'main', mono: true, lead: META_SEPARATOR })
   })
 })

@@ -4237,11 +4237,17 @@ const toastStackStyle = {
                    nothing to remove — a title, what was last said, and how much
                    of it there was. -->
               <div v-else>
+                <!-- The rule between two rows belongs to the lower of them,
+                     which is why the index is here at all: an inline-style
+                     component has no `:last-child`, so a list that let every
+                     row draw its own rule ended in one with four hundred pixels
+                     of empty panel under it. -->
                 <SessionRow
-                  v-for="session in sessionsState.sessions"
+                  v-for="(session, index) in sessionsState.sessions"
                   :key="session.id"
                   :session="session"
                   :now="sessionsState.now"
+                  :separated="index > 0"
                 />
                 <!-- Said in words rather than left blank, and not while the
                      read is still out: this sentence is a claim about what is
