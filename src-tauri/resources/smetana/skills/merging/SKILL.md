@@ -38,8 +38,9 @@ app's own queue.
 release it after the last — on every way out.** A single task merged on its own is a
 batch of one. A gate that went red, a task that parked, a STOP that ends the phase:
 whatever ends this batch's merging, the release below is the last thing done on the way
-out. The one exit that cannot release — the run being killed — is what the staleness
-rule exists for.
+out. The one exit that cannot release — the run being killed — is what the two grounds
+for breaking a lock below exist for: an hour on the clock, and a holder that can be shown
+dead.
 
 Find it by its label:
 
@@ -90,6 +91,22 @@ Break it — release, then claim:
 bd update <lock-id> --status open --assignee ""
 bd update <lock-id> --claim
 ```
+
+**A holder that can be shown dead is the second ground, and it does not wait out the
+hour.** The hour is written for a lead who is alive and slow; a lead that is gone leaves
+a claim nobody will ever release, and an hour spent waiting on a process that does not
+exist buys nothing. The evidence is the app's own run registry, `.smetana/runs.json` in
+the project folder — `running-tasks` Phase R reads it in full and carries the whole
+reading; the short of it is that a `smetana-run-<n>` assignee is a batch of one of that
+file's records, and it is dead when the record's `writer` process is gone, and dead too
+when the writer is alive but that batch's own `group` pid holds no process. Those are the
+only two readings. A holder the file names nowhere, a batch with no `group` recorded, no
+file, or a file you cannot read is **not** shown dead — it may be a lead somebody started
+by hand in a terminal — and it waits out the hour like any other. And a live `claude`
+process somewhere in the process table is not evidence about this lock in either
+direction: not its age, not its start time, not what `ps | grep` makes of its name. The
+break is the same two commands and the same report line as the stale case; a dead holder
+is a second reason to reach for them, not a second mechanism.
 
 **Nothing is ever written to the lock issue but the claim and the release** — no notes,
 no labels, no re-titling, no closing, nothing. `updated_at` moves on *any* write, so one

@@ -191,12 +191,18 @@ on its own. **This runs before you take any new work.**
    In the same breath, make sure the merge lock exists — look for it, create it only
    when it is not there: `bd list -l smetana-lock --json` answering nothing → create it
    exactly as `merging`'s lock section says. Idempotent the same way the statuses are:
-   an existing lock is left alone, held or free — a held one is another lead
-   mid-merge, not a problem to fix here.
+   an existing lock is never re-created and never written to here, held or free. Who is
+   holding it, and whether that holder is still alive, is step 3's question; this step
+   only makes sure there is one lock to ask it about.
 2. `bd list --status in_progress --json`. Anything carrying the `smetana-lock` label
-   never enters recovery: a held lock is another lead mid-merge or a stale claim, both
-   `merging`'s lock section's business — and parking it would leave it unclaimable for
-   everybody. **An issue on this list is not provably an
+   never enters recovery, and above all is **never parked**: a parked lock is
+   unclaimable by everybody for good, and nothing but a person gets it back. That is the
+   whole of what this step has to say about it. Who holds it and whether that holder is
+   alive is a different question with a different answer, and it is step 3's — handing it
+   to `merging` and walking on was this step's own defect, since `merging` knows one way
+   to take a lock off somebody, an hour on the clock, and that rule is written for a lead
+   sitting and waiting rather than for a run that has already ended holding it
+   (smetana-0u7). **An issue on this list is not provably an
    orphan.** The assignee is the evidence — `bd show <id>` carries it, and every run
    claims under its own actor — so a `smetana-run-<id>` that is not this run's own
    (yours is `$BEADS_ACTOR` in your environment) may be a killed run's leftovers, or a
@@ -248,8 +254,94 @@ on its own. **This runs before you take any new work.**
      task — the tree may already hold partial work; it is not starting over. Then the
      review loop, same five-pass ceiling. Clean → `ready_to_merge`. Not clean after the
      fifth → park, with what the reviewer still objects to.
-3. Leave anything already at `ready_to_merge` alone. Phase 2 takes it.
-4. Only when nothing you may recover is left at `in_progress`, go on to Phase 0. Phase 2 then merges the
+
+   **The evidence is that file and those worktrees, and there is nothing else.** For a
+   claim: the `writer` of the record that names its actor, read as above. For the merge
+   lock in step 3: that batch's own `group`, read the same way. For whether there is
+   anything to resume: the worktrees under the slug. **A live `claude` process somewhere
+   in the process table is not evidence in either direction** — nor is its age, nor that
+   it started around when your run did, nor anything `ps | grep claude` or `pgrep -f
+   claude` can be made to say. The app runs a person's own sessions and other projects'
+   sessions in the same process table as yours, so a start time that lines up with a
+   batch's is a fact about one machine having one evening and not about who holds a
+   claim. This is written as a prohibition and not only as a rule because the paragraphs
+   above were already true and were read: a batch found a live `claude`, decided it must
+   be the run it was looking for, and undid a correct decision on the strength of a
+   stranger's terminal (smetana-0u7).
+
+   **Undoing your own park takes evidence off that same list.** A park this phase wrote
+   is a decision made on the registry, and only the registry takes it back — the record
+   you misread, the pid you looked up wrong. An explanation you have thought of since is
+   not evidence. The note matters as much as the status: `resolved:` is
+   `resolving-questions`' word for "a person answered this", so writing one over a
+   `parked:` line puts an answer in the trail that nobody gave, and the task walks back
+   into the queue with its question still unasked. That is what happened to
+   `smetana-0cj`, parked correctly for having no worktree to resume and unparked a
+   minute later under a `resolved:` note, on the strength of that same foreign process
+   (smetana-0u7).
+3. **The merge lock, and whether anybody is still holding it.** One issue, one line:
+
+   ```bash
+   bd list -l smetana-lock --json
+   ```
+
+   Open with no assignee → free, nothing to do here; Phase 2 claims it when it gets
+   there. Held → the holder decides it, and there are three answers rather than two.
+   Look the assignee up in the same `.smetana/runs.json` you read in step 2:
+
+   - **A batch of a record whose `writer` is dead.** The app that started it is gone, and
+     every batch under it with it. The lock is abandoned.
+   - **A batch of a live record whose own `group` is dead.** The app is up — the run may
+     even be the one you are a batch of — and the session that took the lock is not there
+     any more. This is the answer that is easy to misread as "another lead mid-merge",
+     and it is not one: a lead mid-merge has a process. **A batch's liveness is the pid
+     of its `group`, and this is the only place that field is read.** A task claim's
+     liveness stays the `writer`, because what a claim needs to know is whether the run
+     that took it still exists to finish it, and a live app with one dead batch has
+     others; what the lock needs to know is whether the session holding it is still
+     merging, and only that session's own group answers that. One file, two questions,
+     two fields — and the reason they are not the same field.
+   - **Anything else** — a live group, a batch whose `group` the file does not record, an
+     actor the file names nowhere, no file at all, a file you cannot read. Leave it, and
+     let `merging`'s 60 minutes have it when Phase 2 gets there. A holder you cannot show
+     dead is waited for, exactly as a claim you cannot show dead is left in place: the
+     lock can be held by a lead somebody started by hand in a terminal, whose actor this
+     file was never going to name.
+
+   Abandoned → break it now, in `merging`'s order, and do not wait out the hour: the hour
+   is for a holder who might still be working.
+
+   ```bash
+   bd update <lock-id> --status open --assignee ""
+   bd update <lock-id> --claim
+   ```
+
+   The claim is what proves the break landed as yours rather than as a third lead's, and
+   it is the whole of what it is for here. Refused → somebody else got there first, that
+   claim is fresh, and it is theirs; leave the lock alone and do not break it again.
+   Accepted → **release it straight back**, `bd update <lock-id> --status open --assignee
+   ""`, because you are not merging in this phase and Phase 2 claims it for itself. A
+   lock carried through Phase 1 would hold every other lead out for the length of a
+   delegation and then age past `merging`'s 60 minutes into somebody's break while you
+   are alive, which is the confusion the field exists to prevent.
+
+   Nothing else is ever written to the lock issue — no note about the break, not here and
+   not anywhere: `updated_at` is how every waiting lead reads a claim's age, and any
+   other write resets it. **The break goes in the report**, with the actor it was taken
+   from and how old the claim was, the same two facts `merging` asks for.
+4. Leave anything already at `ready_to_merge` alone — Phase 2 takes it, and Phase 2 is
+   reached whether or not Phase 0 finds anything new. **A task at `ready_to_merge` beside
+   a lock step 3 found held is a merge phase that died in the middle of itself**, and it
+   is this batch's to finish: somebody had already taken the lock and moved that task, so
+   what is in front of you is the second half of one merge rather than an idle board.
+   Carry it to Phase 2 even when the ready queue is empty, and never report it as an
+   absence of work. That report is the defect this reading exists for — the night
+   `smetana-run-6` died four seconds after taking `smetana-js4` and moving `smetana-42v`
+   to `ready_to_merge`, the batch after it passed this step, found nothing ready, said
+   there was no free work on the board at all, and ended the run; the task sat merged and
+   not merged, and the lock sat claimed by a process that no longer existed, until a
+   person untangled both by hand (smetana-0u7).
+5. Only when nothing you may recover is left at `in_progress`, go on to Phase 0. Phase 2 then merges the
    recovered orphans and this run's new survivors together, in one ordered pass. An orphan
    a killed run had already merged fast-forwards to a no-op — that is the expected signal,
    not an error.
@@ -260,8 +352,11 @@ on its own. **This runs before you take any new work.**
    given.
 2. **Priority floor.** `bd ready` has no maximum-priority filter, so apply it yourself:
    `bd ready --json -n 50`, drop everything worse than the floor, take what you need from
-   what survives. Nothing survives → say "no ready work above <floor>" and stop. That is
-   an outcome.
+   what survives. Nothing survives → say "no ready work above <floor>". That is an
+   outcome, and it ends this phase rather than the batch: **an empty ready queue is not
+   an empty board.** Anything Phase R left at `ready_to_merge` is still owed a merge, so
+   go on to Phase 2 with it and stop after that. Stopping here instead is how a run ends
+   over a task that was reviewed, merged into nothing and left behind (smetana-0u7).
 3. **How many at once** — the number the run gave you, whatever it is: it is this run's
    choice and it wins over `[defaults].max_parallel_tasks`, upwards as well as down. Were
    you given none, the config's number is the answer.
@@ -313,7 +408,8 @@ together. Follow `merging` per task, with your mode's policy wherever it says to
 **The whole phase runs under the merge lock.** Claim it per `merging`'s lock section
 before the first task, and release it after the last — on every ending of this phase,
 a batch that parked everything included. Two runs merging into one branch serialize on
-that claim; waiting for it, and breaking a stale one, are report lines, never silence.
+that claim; waiting for it, and breaking one — stale by the clock, or abandoned by a
+holder that can be shown dead — are report lines, never silence.
 
 1. **Order** — topological over the survivors (`bd dep tree <id>`), tie-broken by
    priority and then by id. A cycle among them → park every task in it.
@@ -487,6 +583,9 @@ through it.
   promote (`bd update <id> --status open`)". None → say so.
 - **Waiting on a person's eye** — every human check card you filed: its id, its title and
   the task it is about, one line each. None → say so.
+- **The merge lock** — whether this batch waited for it and roughly how long, whether it
+  broke one and off which actor and how old that claim was, and that it was released.
+  Nothing happened to it → one word saying so.
 - **Digested** — the count, and the root ids to read.
 - **What is left for a person** — the list `merging` ends with: pushing, reinstalling
   dependencies where they changed, applying anything a regenerated artefact needs
@@ -527,6 +626,13 @@ So, after the report above and before you hand back, write the file the prompt n
 ## The rules that hold everywhere in this run
 
 - **Never push.** A run merges into a local branch and says so.
+- **Never end holding the merge lock.** Whatever ends this batch — the last merge, a
+  park, a STOP, a queue with nothing in it, a gate that stayed red — if the lock is
+  yours at that moment, release it (`bd update <lock-id> --status open --assignee ""`)
+  before you write the report, and say in the report that you did. Nothing releases it
+  for you: the app writes to the tracker nowhere at all, and the only other way in is an
+  hour on somebody else's clock. A batch that ended holding `smetana-js4` cost the board
+  its merge phase for as long as it took a person to notice (smetana-0u7).
 - **Never abort the whole batch for one task.** Park it, or ask, and move on.
 - **Never promote a `deferred` task, and never claim one.** Only a person does that.
 - **Only mechanical conflicts resolve themselves.** Anything needing a judgement about
