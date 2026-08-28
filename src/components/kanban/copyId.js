@@ -1,5 +1,5 @@
 /* What the tooltip on a task's id says, for the whole of the three-value
-   vocabulary the copying speaks in.
+   vocabulary the copying speaks in — and how long the app says any of it for.
 
    Out of the two components that draw an id — the card on the board and the
    inspector's header — because it was written twice over and the two copies
@@ -11,7 +11,15 @@
 
    Under `kanban/` rather than at the top of `src/`: it is a rule about one part
    of the interface, which is where this tree keeps that kind. No Vue and no DOM
-   in it. */
+   in it.
+
+   `COPIED_MS` below is the one thing here a second part of the interface reads,
+   and it is here rather than beside that one for the ordinary reason: this file
+   is where the copy confirmation's vocabulary already lived, and the duration is
+   the rest of the same policy. A session row's menu
+   (`components/agent/sessionMenu.js`) imports it, which is a reach across two
+   groups and is the smaller of the two costs — the other was the number written
+   out three times, in this file's two consumers and in the gallery. */
 /* Null-prototype, and that is the whole of why it is not a plain object
    literal. The fallback below is `??`, which only catches nullish, so an
    inherited key would be answered rather than fallen back on: over
@@ -34,3 +42,20 @@ const LABEL = Object.assign(Object.create(null), {
 export function copyLabel(state) {
   return LABEL[state] ?? 'Copy id'
 }
+
+/* How long a confirmation stands before the control goes back to inviting the
+   press again.
+
+   **One number for every copy in the app**, and it was three until this line
+   existed: `COPIED_ID_MS` in `views/DesktopApp.vue`, a bare `1200` in
+   `views/Gallery.vue`, and a third in the session menu's own rule. Nothing
+   mechanical joined them, and the gallery is this project's only verification of
+   anything under `src/components/` — so a duration that moved in the app alone
+   would leave the harness confirming a copy at a speed the product no longer
+   uses, and the next person checking this by eye measuring the wrong thing.
+
+   Long enough to be read without being looked for, short enough that a second
+   copy a moment later is not waiting on the first. It is a duration rather than
+   a token because nothing in `tokens/motion.css` is about how long a *sentence*
+   stays on screen — those are transitions, and this is a dwell. */
+export const COPIED_MS = 1200

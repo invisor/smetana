@@ -25,7 +25,7 @@ defineEmits(['close'])
    system's now. What stays is the description, the body and the footer, because
    those are the dialog.
 
-   `inject` rather than a prop, and that is what keeps the seven guests
+   `inject` rather than a prop, and that is what keeps the eight guests
    unrewritten: none of them has to pass a flag through to say where it is
    being drawn. */
 const inWindow = inject('smDialogWindow', false)

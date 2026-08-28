@@ -577,8 +577,91 @@ scope, and every row is measured against it. That is the same arrangement `termi
 agent's elapsed time, and the same reason it is lazy — the test harness rebuilds the module graph per
 test, and an interval nobody clears would outlive every test that started one.
 
-Deliberately not built, and each of them discussed: expanding a card, a menu on it, resuming a
-session, searching, grouping by project, and telling a "talking" session from a "coding" one. The
-last is the interesting one — coding happens in a worktree, and both the path and the branch carry a
-task id — but the signal is not absolute (98 of 275 root sessions sat on `develop`, `staging` or a
-`feature/…` branch), and the instruction was to show all of them and sort it out later.
+### A card opens, and carries a menu over its transcript file
+
+The row is a card now: a chevron and a menu button on its right, the card opening onto the whole of
+the first prompt and the two paths, and nothing else — an opened card is deliberately **not** a
+transcript viewer, because reading the conversation is what Open log is for.
+
+**Which cards are open is held by whoever draws the list, and is written down nowhere.** Several may
+be open at once, which is what somebody opens a second one for; `settings.json` is where the things
+that survive a restart live, and opening a card is a gesture inside one look at a list. The flag is a
+prop rather than a `ref` inside `SessionRow.vue` for a second reason as well: a gallery cannot show
+an opened card at all if the component keeps the state, and `?view=gallery` is the only verification
+this project has for anything under `src/components/`.
+
+`components/agent/sessionMenu.js` is the menu's whole rule, beside `sessionRow.js` and outside the
+component for the same reason. Seven verbs in Orca's own order and grouping — Copy resume command;
+Open log, Reveal log, Open working directory; Copy session id, Copy log path; Delete — and the two
+launching ones Orca has beside them, Resume in worktree and Continue in a new session, are a task of
+their own: those bring a live agent back and are not about the file. Copy resume command is what
+stands in for them, and is also the answer for somebody who would rather paste `cd … && claude
+--resume …` into their own terminal than have this app spawn anything.
+
+**The three copying verbs answer on the row's menu button, not in a toast.** `kanban/copyId.js` is
+the policy and this follows it to the millisecond: a copy is the one action with nothing on screen to
+show for it, so the confirmation belongs on the control somebody is still looking at. What differs is
+where it can land — the menu closes on the way out, so the trigger it hung from is what is left, and
+it draws a tick and names what was copied. How long for is `COPIED_MS`, which lives in
+`kanban/copyId.js` beside the rest of that vocabulary and is imported by everything that confirms a
+copy: it was written out three times over — the view, the gallery and the session menu — and the
+gallery is the only verification this project has for anything under `src/components/`, so a duration
+that moved in the app alone would have left the harness measuring the wrong thing.
+
+**Open log, Reveal log and Open working directory are three commands of ours, not the opener
+plugin's, and they are three rather than one on purpose.** The plugin's `open_path` is refused by its
+own scope check unless a capability entry allows the path, and the only entry wide enough for both a
+transcript under `~/.claude/projects` and the arbitrary folder a session ran in is one that allows
+every path on the machine — the same refusal `src-tauri/src/updates.rs` records for the updater
+plugin, since a permission is published to every window in the app. So the narrow thing to publish is
+a command that names its own rule, and each of the three names a different one:
+
+- a transcript is `sessions::model::is_transcript` — the extension, membership of the root by path
+  *components* rather than by string prefix, and no `..` in it, since `Path::starts_with` is lexical
+  and would otherwise wave through a path that walks straight back out — plus being a *file*, so a
+  directory named `x.jsonl` cannot take the transcript branch;
+- a working directory must exist, be a directory, and **have no extension**. That last clause is not
+  tidiness: on macOS `open_path` goes to `/usr/bin/open`, and a directory with an extension is how
+  that platform spells an application — `.app`, `.bundle`, `.pkg` are all folders and all *launched*.
+  A session's working directory never carries one. Nothing a person did not choose can reach the
+  command today, so this is a hardening; it is written down because the file promises every verb in
+  it names its own rule, and the directory branch had none.
+
+**Reveal is ours for a different reason, and it is a sentence rather than a permission.**
+`revealItemInDir` needs no scope and this app already grants it, so `stores/app.js` could and did
+call it — that is still the file tree's route and stays. What that function cannot do is say *why*:
+it answers a boolean shared with the tree, whose one failure message is about a browser having no
+file manager. `reveal_item_in_dir` canonicalises the path before showing anything, so a transcript
+that has gone since the list was read — the commonest failure there is in the built app — reached a
+person as advice to install the desktop app they were already running. `sessions_reveal` answers with
+the same words the other three do.
+
+The nouns in those words are the callers', not the guard's: `The transcript is no longer on disk`
+against `The working directory is no longer on disk`, because the two send somebody to different
+places. And a `stat` that failed for any other reason — permissions, a volume that went away — says
+so instead of claiming the file is gone, which would be a statement about a person's history rather
+than about the machine.
+
+**Delete unlinks the file and does not trash it**, which makes it the only thing in this app that
+destroys a file the app did not make. A cross-platform trash is a dependency rather than a line of
+code — `files/fs.rs` carries one for the project's own files and a page of platform caveats with it —
+and it was weighed against the confirmation dialog, which had to exist either way and covers the same
+risk. That dialog is a window of its own (`delete-session` in `views/dialogRegistry.js`) and names
+the session id, the log path and the size, which is why `SessionSummary` carries a `size` no row
+draws. Its ground is the project alone: the other sorts of ground are sets the app window watches,
+and there is no set of sessions to watch, so a transcript that goes while the window stands open is
+answered by the delete itself saying so rather than by the window vanishing.
+
+**Every one of the seven says something when it cannot be done.** The list is read when the tab is
+opened and never watched, so a transcript deleted from somewhere else — or a worktree removed after
+the session that ran in it — leaves a row whose every verb is about a file that has gone. That is the
+one place this subsystem's "nothing here is an error" contract is deliberately reversed:
+`sessions/act.rs` answers with a sentence written for a person, and `DesktopApp.vue` puts it in the
+toast corner. A menu item that did nothing and said nothing would read as a broken app rather than as
+a stale row.
+
+Still deliberately not built, and each of them discussed: resuming a session from inside the app,
+searching, grouping by project, and telling a "talking" session from a "coding" one. The last is the
+interesting one — coding happens in a worktree, and both the path and the branch carry a task id —
+but the signal is not absolute (98 of 275 root sessions sat on `develop`, `staging` or a `feature/…`
+branch), and the instruction was to show all of them and sort it out later.

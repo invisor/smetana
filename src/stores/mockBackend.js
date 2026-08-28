@@ -171,6 +171,27 @@ const DIALOG_PROPS = {
     name: 'holiday-curb',
     existing: false,
     busy: false
+  },
+  /* Deleting a Claude Code transcript. The record is the first row of
+     `mockSessions` above, so what this window says in a browser is what the
+     Sessions tab behind it holds — the same rule the `ready-task` fixture keeps
+     about the board's parked card, and for the same reason.
+
+     The caption is `DELETE_SESSION_TITLE` in `components/agent/sessionMenu.js`,
+     which the component and the app window's announcement both call. This
+     literal is the one copy that stands apart from it, as every fixture here
+     does, and it is what `?view=dialog&kind=delete-session` draws. */
+  'delete-session': {
+    title: 'Delete this session?',
+    session: {
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      path: '/Users/you/.claude/projects/-Users-you-dev-smetana/9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60.jsonl',
+      cwd: '/Users/you/dev/smetana',
+      title:
+        'Talk to me in Russian: everything you say in this project, and keep the commit messages in Russian too',
+      size: 2_884_016
+    },
+    busy: false
   }
 }
 
@@ -364,7 +385,12 @@ function fixtureIssues() {
 
    The order is deliberately not sorted here. The store sorts newest first, and
    a fixture that arrived already sorted would make a browser look correct with
-   that sort deleted. */
+   that sort deleted.
+
+   `size` is the one field no row draws: it is the confirmation before a delete
+   that names it, and the numbers here are chosen to be that dialog's own cases
+   — the 16 MB transcript this subsystem was measured against, an ordinary few
+   hundred kilobytes, and the zero-byte one nobody said anything in. */
 const MINUTE_MS = 60 * 1000
 const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
@@ -385,7 +411,8 @@ function mockSessions(project) {
       messages: 48,
       subagents: 3,
       model: 'claude-opus-5',
-      modifiedAt: at(18 * HOUR_MS)
+      modifiedAt: at(18 * HOUR_MS),
+      size: 2_884_016
     },
     {
       id: '3a7e5b10-1c2d-4e3f-9a8b-7c6d5e4f3a2b',
@@ -397,7 +424,8 @@ function mockSessions(project) {
       messages: 12,
       subagents: 0,
       model: 'claude-opus-5',
-      modifiedAt: at(4 * MINUTE_MS)
+      modifiedAt: at(4 * MINUTE_MS),
+      size: 148_392
     },
     {
       id: '5d2f8c41-9b0a-4c1d-8e7f-6a5b4c3d2e1f',
@@ -410,7 +438,8 @@ function mockSessions(project) {
       messages: 214,
       subagents: 1,
       model: 'claude-opus-5',
-      modifiedAt: at(2 * DAY_MS)
+      modifiedAt: at(2 * DAY_MS),
+      size: 16_402_771
     },
     {
       id: 'c81b0e39-4a5f-4b6c-9d0e-1f2a3b4c5d6e',
@@ -425,7 +454,8 @@ function mockSessions(project) {
       messages: 6,
       subagents: 0,
       model: 'claude-sonnet-4-5',
-      modifiedAt: at(9 * DAY_MS)
+      modifiedAt: at(9 * DAY_MS),
+      size: 41_508
     },
     {
       /* Nothing to title it with and nothing said in it: a transcript opened
@@ -440,7 +470,8 @@ function mockSessions(project) {
       messages: 0,
       subagents: 0,
       model: null,
-      modifiedAt: at(40 * DAY_MS)
+      modifiedAt: at(40 * DAY_MS),
+      size: 0
     },
     {
       id: '7b6a5948-3c2d-4e1f-9a0b-8c7d6e5f4a3b',
@@ -452,7 +483,8 @@ function mockSessions(project) {
       messages: 97,
       subagents: 12,
       model: 'claude-opus-5',
-      modifiedAt: at(400 * DAY_MS)
+      modifiedAt: at(400 * DAY_MS),
+      size: 7_115_240
     }
   ]
   return rows.map((row) => ({
@@ -1105,7 +1137,15 @@ export function installMockBackend() {
     if (command === 'sessions_list') {
       return mockSessions(payload?.project ?? MOCK_PROJECTS[0])
     }
-    /* Everything that *starts* something — `terminal_create` and
+    /* The session row's four verbs that leave this window — `sessions_open_log`,
+       `sessions_open_cwd`, `sessions_reveal` and `sessions_delete` — are
+       deliberately not answered here either, and for a plainer reason than the
+       two below: a browser has no desktop to open a file with, no file manager
+       to show one in, and no business unlinking one. The loud rejection reaches
+       the row's menu as the sentence a refusal would have carried, which is what
+       a person pressing any of them in `npm run dev` should be told.
+
+       Everything that *starts* something — `terminal_create` and
        `terminal_shell` — is deliberately not answered here and falls through to
        the rejection below. There is no PTY in a browser, and a session handed
        back with nothing behind it would put a row in the agents panel or a tab

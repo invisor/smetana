@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  FIRST_PROMPT_HEADING,
   META_SEPARATOR,
+  NO_FIRST_PROMPT,
+  firstPrompt,
   lastMessageLine,
   messageLabel,
   oneLine,
   relativeTime,
+  sessionDetails,
   sessionMeta,
   sessionTitle,
   subagentLabel
@@ -234,5 +238,67 @@ describe('the row\'s meta line', () => {
     const branch = sessionMeta(full, NOW).at(-1)
 
     expect(branch).toEqual({ text: 'main', mono: true, lead: META_SEPARATOR })
+  })
+})
+
+describe('what an opened card carries', () => {
+  /* The first prompt and the title come from one record — `human_text` in the
+     worker walks past the hooks, the skill bodies and the slash-command echoes
+     to find the one thing the person actually typed. What differs is the
+     setting: the title is one line with an ellipsis so the list can be scanned,
+     and this wraps to as many lines as it takes because the card was opened on
+     purpose. */
+  it('shows the whole of what the person opened with', () => {
+    expect(firstPrompt({ title: 'Why does the scope bar count dirty files' })).toBe(
+      'Why does the scope bar count dirty files'
+    )
+  })
+
+  /* Collapsed the same way the title is, and for the same reason: a message
+     that arrived with its own line breaks would otherwise decide for itself how
+     tall the card is. The worker has already done this on the way over; the
+     guard is against a record that arrives unclipped. */
+  it('collapses whatever line breaks arrived with it', () => {
+    expect(firstPrompt({ title: 'Talk to me in Russian:\n\n   everything' })).toBe(
+      'Talk to me in Russian: everything'
+    )
+  })
+
+  /* A transcript with no human message in it is an ordinary outcome — a
+     session opened and abandoned — so the component has a sentence to draw
+     rather than an empty frame under a caption, which would read as a block
+     that failed. */
+  it('answers with nothing for a session nobody said anything in', () => {
+    expect(firstPrompt({ title: null })).toBe(null)
+    expect(firstPrompt({ title: '   ' })).toBe(null)
+    expect(firstPrompt(null)).toBe(null)
+    expect(NO_FIRST_PROMPT).toBe('Nothing was typed in this session.')
+  })
+
+  /* Sentence case here and uppercase on screen: the letters are the
+     stylesheet's business and the words are this module's, which is what every
+     small caption in this system does. */
+  it('captions the block in sentence case', () => {
+    expect(FIRST_PROMPT_HEADING).toBe('First prompt')
+  })
+
+  it('names the transcript and the directory the session ran in', () => {
+    expect(
+      sessionDetails({ path: '/Users/you/.claude/projects/-p/a.jsonl', cwd: '/Users/you/dev/p' })
+    ).toEqual([
+      { label: 'Log', value: '/Users/you/.claude/projects/-p/a.jsonl' },
+      { label: 'Working directory', value: '/Users/you/dev/p' }
+    ])
+  })
+
+  /* Left out entirely rather than drawn as an empty value — the same reading
+     `sessionMeta` takes of a session with no branch. A label over a blank line
+     says less than one line fewer. */
+  it('leaves out a fact the record does not carry', () => {
+    expect(sessionDetails({ path: '/p/a.jsonl', cwd: '' })).toEqual([
+      { label: 'Log', value: '/p/a.jsonl' }
+    ])
+    expect(sessionDetails({})).toEqual([])
+    expect(sessionDetails(null)).toEqual([])
   })
 })

@@ -10,14 +10,16 @@
 //! they are, in the left column.
 //!
 //! `model.rs` is the vocabulary and every rule that can be decided from text,
-//! `read.rs` is the disk, `commands.rs` is one thin command over it. There is
+//! `read.rs` is the disk, `act.rs` is the two verbs a session row's menu has
+//! that touch a file rather than read one, and `commands.rs` is the thin layer
+//! over both. There is
 //! no worker, no queue and no watcher, which is the shape `git.rs` and `files/`
 //! already have and for the same reason: the list is read when the tab is
 //! opened and when the project changes, and a watcher over a folder that is
 //! 844 MB and written by every live session would be a subsystem bought for a
 //! read that takes a fraction of a second.
 //!
-//! **Nothing here is an error.** A machine with no `~/.claude/projects`, a
+//! **Nothing that reads is an error.** A machine with no `~/.claude/projects`, a
 //! folder that cannot be read, a file that cannot be opened, a line that is not
 //! JSON, a record type Claude Code invented last week — every one of them means
 //! "there is nothing to show for that", which is why the command hands back a
@@ -56,6 +58,14 @@
 //! `read::subagents` does have to know about, because otherwise the count is
 //! zero for every session written by a current Claude Code.
 
+//! `act.rs` is the deliberate exception to that, and its own header says why:
+//! everything in it is a verb somebody pressed, so each answers with a sentence
+//! when it cannot be done. The list stays silent; the menu does not. Which
+//! verbs there are is that file's business and is deliberately not counted
+//! here — the count has moved once already, and two headers of one module
+//! disagreeing is worse than one of them saying less.
+
+pub mod act;
 pub mod commands;
 pub mod model;
 pub mod read;

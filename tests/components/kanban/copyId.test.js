@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { copyLabel } from '../../../src/components/kanban/copyId.js'
+import { COPIED_MS, copyLabel } from '../../../src/components/kanban/copyId.js'
 
 describe('what the id says about being copied', () => {
   /* Three strings, and they are three of this feature's acceptance criteria.
@@ -39,5 +39,17 @@ describe('what the id says about being copied', () => {
     expect(copyLabel('toString')).toBe('Copy id')
     expect(copyLabel('valueOf')).toBe('Copy id')
     expect(copyLabel('hasOwnProperty')).toBe('Copy id')
+  })
+})
+
+describe('how long a copy says it worked for', () => {
+  /* One number for every copy in the app, and it was three before this module
+     took it: a `COPIED_ID_MS` in `views/DesktopApp.vue`, a bare `1200` in
+     `views/Gallery.vue`, and a third in the session menu's rule. The gallery is
+     this project's only verification of anything under `src/components/`, so a
+     duration that moved in the app alone would leave the harness confirming a
+     copy at a speed the product no longer uses. */
+  it('is one number, long enough to read and short enough not to queue', () => {
+    expect(COPIED_MS).toBe(1200)
   })
 })

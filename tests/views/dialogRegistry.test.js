@@ -10,8 +10,9 @@ import {
 } from '../../src/views/dialogRegistry.js'
 
 describe('the dialog registry', () => {
-  it('holds the seven kinds that became windows', () => {
+  it('holds the eight kinds that became windows', () => {
     expect([...DIALOG_KINDS].sort()).toEqual([
+      'delete-session',
       'delete-task',
       'new-branch',
       'new-task',

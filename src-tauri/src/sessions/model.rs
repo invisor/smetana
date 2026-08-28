@@ -6,7 +6,7 @@
 //! testable at all — the disk half is `read.rs`, and it carries its own tests
 //! over temporary directories.
 
-use std::path::Path;
+use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,13 @@ pub struct SessionSummary {
     pub subagents: u32,
     pub model: Option<String>,
     pub modified_at: String,
+    /// The transcript's size in bytes, and the one field here that nothing on
+    /// the row draws. It exists for the confirmation before a delete, which
+    /// names what is about to go — the id, the path and how big it is. A
+    /// dialog that asked the disk for it at the moment it opened would be a
+    /// second read of a file the list has already `stat`ed, and one that could
+    /// answer nothing at all if the file had gone in between.
+    pub size: u64,
 }
 
 /// One line of a transcript, in as much detail as a row needs.
@@ -281,6 +288,36 @@ pub fn folder_could_hold(folder: &str, project: &Path) -> bool {
     matches!(folder.get(expected.len()), None | Some('-'))
 }
 
+/// Whether a path names a transcript this app is allowed to act on.
+///
+/// The Sessions tab is the one place in this app that reaches outside the
+/// project a person opened: a transcript lives under `~/.claude/projects`, it
+/// is not in anybody's repository, and the menu on a session row opens it,
+/// shows it and — with a confirmation — deletes it. The path travels from the
+/// front end, so this is the whole of what stands between that menu and any
+/// other file on the machine, and it is stated here, pure, where a test can
+/// read it.
+///
+/// Three conditions, and each is load-bearing:
+///
+/// - the extension is `jsonl`, which is what Claude Code writes and the only
+///   thing the list ever offers;
+/// - the path lies under the projects root, compared by **components** rather
+///   than by string prefix, so `~/.claude/projects-backup/x.jsonl` is not under
+///   `~/.claude/projects`;
+/// - no component is `..`. `Path::starts_with` is lexical, so without this
+///   `<root>/../../etc/passwd.jsonl` would satisfy the clause above while
+///   naming something entirely elsewhere. Canonicalising instead was the
+///   rejected alternative: it resolves symlinks, and a transcript folder
+///   somebody has symlinked onto another disk is an ordinary thing that would
+///   then stop being deletable — the failure this guard exists for is a path
+///   that walks *out*, and a `..` cannot be anything else here.
+pub fn is_transcript(path: &Path, root: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "jsonl")
+        && path.starts_with(root)
+        && !path.components().any(|part| matches!(part, Component::ParentDir))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +465,38 @@ mod tests {
         assert!(!folder_could_hold("-home-me-frontend", project));
         assert!(!folder_could_hold("-home-me-smetanaXbackend", project));
         assert!(!folder_could_hold("-home-me", project));
+    }
+
+    #[test]
+    fn a_transcript_under_the_projects_root_is_one_this_app_may_act_on() {
+        let root = Path::new("/home/me/.claude/projects");
+        assert!(is_transcript(Path::new("/home/me/.claude/projects/-p/abc.jsonl"), root));
+        assert!(is_transcript(Path::new("/home/me/.claude/projects/-p/abc/subagents/a.jsonl"), root));
+    }
+
+    #[test]
+    fn nothing_outside_the_projects_root_is_a_transcript() {
+        let root = Path::new("/home/me/.claude/projects");
+        // A sibling folder whose name merely starts the same.
+        assert!(!is_transcript(Path::new("/home/me/.claude/projects-backup/a.jsonl"), root));
+        // Somewhere else entirely.
+        assert!(!is_transcript(Path::new("/home/me/dev/smetana/src/main.js"), root));
+        // Under the root, and not a transcript.
+        assert!(!is_transcript(Path::new("/home/me/.claude/projects/-p/notes.md"), root));
+        // No extension at all.
+        assert!(!is_transcript(Path::new("/home/me/.claude/projects/-p"), root));
+    }
+
+    /// `Path::starts_with` is lexical, so a path that walks back out of the
+    /// root passes it. This is the case the guard's third clause exists for and
+    /// the one that would cost somebody a file they never named.
+    #[test]
+    fn a_path_that_walks_back_out_of_the_root_is_refused() {
+        let root = Path::new("/home/me/.claude/projects");
+        assert!(!is_transcript(
+            Path::new("/home/me/.claude/projects/../../../tmp/anything.jsonl"),
+            root
+        ));
     }
 
     #[test]

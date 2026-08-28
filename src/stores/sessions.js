@@ -115,3 +115,114 @@ export async function loadSessionHistory(project) {
     if (sessionsState.project === project) sessionsState.loading = false
   }
 }
+
+/* ---- the verbs a session row's menu has that are not the clipboard ------- */
+
+/* Whatever a command refused with, as a sentence.
+ *
+ * Every command in this section rejects with a `String` written for a person —
+ * `sessions/act.rs` composes them and its header says why they are sentences
+ * rather than codes. Named as a section rather than listed by name: the list
+ * has grown once already, and names written out here go stale silently, while
+ * a `grep` for one answers from this comment instead of from the places that
+ * matter.
+ *
+ * What arrives at this side of the wire is that string for a refusal Rust
+ * made, and something else entirely when the call itself failed: a browser's
+ * mock rejects with an `Error`, and a channel that broke rejects with whatever
+ * Tauri felt like. So the string is taken when there is one and the rest is
+ * turned into words, because the caller puts this straight on the screen and
+ * `[object Object]` is not an explanation. */
+function refusalText(err) {
+  if (typeof err === 'string' && err) return err
+  if (err && typeof err.message === 'string' && err.message) return err.message
+  return 'Something went wrong and nothing was said about it.'
+}
+
+/* One guarded verb of the worker's, and whatever it refused with.
+ *
+ * Written once for the three: they differ only in the command name, and three
+ * copies of the same try/catch would be three places for the console line and
+ * the fall-back sentence to drift apart.
+ *
+ * Answered with `null` when it worked and with a sentence when it did not,
+ * rather than throwing. Every caller puts the failure on the screen either way,
+ * and a `try` around one line at each call site is a shape that goes wrong the
+ * first time somebody adds a fourth. */
+async function askWorker(command, path, missing) {
+  if (!path) return missing
+  try {
+    await invoke(command, { path })
+    return null
+  } catch (err) {
+    console.error(`[sessions] ${command} was refused:`, err)
+    return refusalText(err)
+  }
+}
+
+/* A session's transcript, handed to whatever the desktop has registered for it.
+ *
+ * Here rather than in `app.js`, which is where `openExternal` and
+ * `revealInFileManager` live, and the line between the two is what the desktop
+ * is being asked about. Those two are asks with no subject — any URL, any path
+ * — and go through the opener plugin from this side of the wire. These three
+ * are commands of ours, because the plugin's `open_path` is refused by its own
+ * scope check unless a capability entry allows the path, and the only entry
+ * wide enough for both a transcript under `~/.claude/projects` and the
+ * arbitrary folder a session ran in is one that allows every path on the
+ * machine. `sessions/act.rs` carries the whole argument; what it means here is
+ * that the guard lives in Rust and speaks the sessions vocabulary, so the calls
+ * belong to this store. */
+export async function openSessionLog(path) {
+  return askWorker('sessions_open_log', path, 'There is no transcript to open.')
+}
+
+export async function openSessionDirectory(path) {
+  return askWorker('sessions_open_cwd', path, 'This session recorded no working directory.')
+}
+
+/* Showing the transcript in the platform's file manager.
+ *
+ * **Not `revealInFileManager` in `app.js`, and this one is not about a
+ * capability.** That function is the file tree's: it answers a boolean, so it
+ * cannot say *why*, and the single sentence its callers have for a `false` is
+ * about a browser having no file manager to ask. In the built app the
+ * commonest way this fails is a transcript that has gone since the list was
+ * read — the plugin canonicalises the path before showing anything — and that
+ * person would have been told to go and install the desktop app they are
+ * already running. A command of ours answers with the same words the other
+ * three do. */
+export async function revealSessionLog(path) {
+  return askWorker('sessions_reveal', path, 'There is no transcript to show.')
+}
+
+/* One transcript, deleted, and the row taken out of the list.
+ *
+ * The confirmation is the caller's — a dialog window of its own, which names
+ * the id, the path and the size — and this function is deliberately not where
+ * it is asked: a store that put a question on the screen would be a store that
+ * draws. What is here is the write and the one consequence of it that this list
+ * owns.
+ *
+ * The row goes only on a success. A refusal leaves the list exactly as it was,
+ * including the ordinary refusal — a transcript that had already gone — and
+ * that is the honest reading rather than a tidy one: this store has not read
+ * the disk since the tab was opened, so the only thing it can say about that
+ * row is what the command just told it, and the sentence is what says it. The
+ * list is read again when the tab is next opened.
+ *
+ * Spliced rather than filtered into a new array so that nothing else about the
+ * list moves — a fresh array would be a new identity for every row and would
+ * take every open card in the column with it. */
+export async function deleteSessionTranscript(path) {
+  if (!path) return 'There is no transcript to delete.'
+  try {
+    await invoke('sessions_delete', { path })
+  } catch (err) {
+    console.error('[sessions] the delete was refused:', err)
+    return refusalText(err)
+  }
+  const at = sessionsState.sessions.findIndex((session) => session.path === path)
+  if (at >= 0) sessionsState.sessions.splice(at, 1)
+  return null
+}
