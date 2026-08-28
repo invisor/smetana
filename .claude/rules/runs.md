@@ -386,8 +386,9 @@ that and for nothing else. **A batch's liveness is its own `group`, not its reco
 batch killed mid-merge under an app that is still up leaves a lock no one will ever release, and the
 writer being alive says only that the app is; the `writer` stays the signal for a task claim, where
 the question is whether the run still exists to finish what it took. Both readings are the skills' to
-make and not this side's: the app writes to bd nowhere, so the lock is released by
-`smetana:running-tasks` Phase R or by nobody.
+make and not this side's: the app never releases the lock — the one bd write the loop
+makes is `park_claims` on the unanswered path, which parks a claim rather than freeing one — so the
+lock is released by `smetana:running-tasks` Phase R or by nobody.
 
 On the front end, `runs.js` is deliberately small — a file read with no worker behind it, freshness
 from switching projects, from window focus, and from any of the project's sessions starting or
