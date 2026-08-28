@@ -502,7 +502,7 @@ h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}
 .body code{font-size:12px;color:var(--text-primary)}
 .unknown{margin:0;color:var(--text-muted)}
 .outcome{margin:0;color:var(--text-secondary)}
-.held{margin:0;color:var(--attn-loud)}
+.held{margin:0;color:var(--status-needs-you-fg)}
 .held code{font-size:12px}
 .notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;
 padding:16px;color:var(--text-muted);margin:0}

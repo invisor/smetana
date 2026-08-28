@@ -643,7 +643,7 @@ h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}\
 .body code{font-size:12px;color:var(--text-primary)}\
 .unknown{margin:0;color:var(--text-muted)}\
 .outcome{margin:0;color:var(--text-secondary)}\
-.held{margin:0;color:var(--attn-loud)}\
+.held{margin:0;color:var(--status-needs-you-fg)}\
 .held code{font-size:12px}\
 .notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;\
 padding:16px;color:var(--text-muted);margin:0}\
@@ -888,7 +888,10 @@ mod tests {
         assert!(html.contains("still held on the board"), "{html}");
         assert!(html.contains("<code>smetana-js4</code>, the merge lock (in_progress)"), "{html}");
         assert!(html.contains("<code>smetana-42v</code> (ready_to_merge)"), "{html}");
-        assert!(html.contains(".held{margin:0;color:var(--attn-loud)}"), "drawn loud: {html}");
+        assert!(
+            html.contains(".held{margin:0;color:var(--status-needs-you-fg)}"),
+            "drawn loud, and at a contrast a person can read a sentence at: {html}"
+        );
     }
 
     #[test]
