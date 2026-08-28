@@ -770,9 +770,11 @@ const agentRows = [
    somebody opened this page and there would be nothing to check it against.
    Read down the column and the labels are `4m ago`, `18h ago`, `2d ago`,
    `3w ago`, `5w ago`, `1y ago` — every rung of the ladder except `just now`,
-   which is the one rung nothing here can hold still: a fixture that drew it
-   would have to be dated within a minute of this constant, and it would say
-   the same thing as a four-minute-old one about everything else on the row.
+   and that one is left out for want of a slot rather than for want of a way to
+   hold it still: the clock above is a constant precisely so any of them can be
+   drawn on demand, and a `just now` row would say the same as the four-minute
+   one about every other thing on it — and a slot here is a case, as the next
+   paragraph spends all six of them.
 
    Six rows and no two of them the same case: subagents and none, a title long
    enough to ellipsise, a session out of a worktree, one with no branch, and one

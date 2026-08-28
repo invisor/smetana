@@ -85,29 +85,15 @@ const titleStyle = {
   whiteSpace: 'nowrap'
 }
 
-/* The wrapper the clamped box hangs in, and it is load-bearing rather than a
-   spare div.
-
-   `display: -webkit-box` is **blockified when the box is a flex item**: a
-   direct child of the row above computes as `flow-root`, not as
-   `-webkit-box` — measured. Chromium honours `-webkit-line-clamp` on such a
-   box anyway, so a dev browser draws the two lines and hides the defect
-   completely; WebKit has historically applied the clamp only to a real
-   `-webkit-box`, and this app ships in WKWebView, WebKitGTK and WebView2 with
-   `safari15` as the build target. Where the clamp is dropped, nothing is
-   clipped either — the height is auto, so `overflow: hidden` has nothing to cut
-   — and the row grows to whatever the last message was. This wrapper takes the
-   flex item's place so the box inside it computes as written.
-
-   Do not simplify it away. The check is the computed `display` on the inner
-   element: it has to read `-webkit-box`. */
-const lastBox = { minWidth: 0 }
-
 /* The last thing said, over about two lines. The clamp is the only way to hold
    a box at a number of lines rather than a height, and a height in tokens would
    be wrong in one of the two densities anyway — `2` here is a count of lines,
    not a measurement, of a piece with the unitless `flex` and `opacity` values
-   elsewhere in this system. */
+   elsewhere in this system.
+
+   This box must never be a flex item, or the clamp is blockified away. The
+   wrapper that keeps it from being one, and the whole of why, are in the
+   template beside it. */
 const lastStyle = {
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-sans)',
   color: 'var(--text-secondary)',
@@ -144,10 +130,11 @@ const monoPart = { font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono
    with the same gap the line uses, and a branch name too long for the column
    still wraps inside its own piece instead of pushing the line sideways. */
 const partBox = { display: 'flex', alignItems: 'baseline', gap: 'var(--space-2)', minWidth: 0 }
-/* The separator is the one every other list in this app uses for the same job
-   (`shell/projectState.js`, `settings/usage.js`). It is a piece of the same
-   muted line rather than a mark of its own: the gap around it is what makes it
-   read as punctuation. */
+/* How the separator is set, which is the only part of it that is this file's:
+   the glyph, the precedents for it and the rule that it travels with the piece
+   after it are `META_SEPARATOR`'s, a file over. Sans and muted like the counts
+   beside it, deliberately not a mark of its own — the gap on either side is
+   what makes it read as punctuation. */
 const dotStyle = sansPart
 
 const title = computed(() => sessionTitle(props.session))
@@ -163,9 +150,37 @@ const meta = computed(() => sessionMeta(props.session, props.now))
        somebody asks about one row rather than something they scan for. -->
   <div :style="rowStyle" v-bind="handlers" :title="session.cwd">
     <div :style="titleStyle">{{ title }}</div>
-    <!-- The wrapper is what keeps the clamp a clamp off Chromium; `lastBox`
-         carries the whole of that argument. -->
-    <div v-if="last" :style="lastBox">
+    <!-- The wrapper the clamped box hangs in, and it is load-bearing rather
+         than a spare div. It carries no styles at all, deliberately: what it is
+         for is being the flex item, so that the box inside it is not one.
+
+         `display: -webkit-box` is blockified when the box is a flex item, and a
+         blockified box is no longer a `-webkit-box`. Chromium honours
+         `-webkit-line-clamp` on one anyway, so a dev browser draws two lines
+         and hides the defect completely; WebKit has historically applied the
+         clamp only to a real `-webkit-box`, and this app ships in WKWebView,
+         WebKitGTK and WebView2 with `safari15` as the build target. Where the
+         clamp is dropped nothing is clipped either — the height is auto, so
+         `overflow: hidden` has nothing to cut — and the row grows to whatever
+         the last message was, on every screen except the one anybody here can
+         check.
+
+         Do not simplify the wrapper away, and do not try to check it by reading
+         the computed `display`. That check was written here first and it does
+         not work: Chromium reports `flow-root` for any element carrying
+         `-webkit-line-clamp` at all, flex item or not, and it does not report
+         flex blockification in computed style either. So the reading is
+         `flow-root` while the fix is in place, and somebody trusting it would
+         take a correct row for a regression and put the box back where it
+         started.
+
+         What can be checked is the shape and the result. The shape: the clamped
+         element's parent is this wrapper, and the wrapper is the flex child of
+         the row — the box must never be a direct child of the column in
+         `rowStyle`. The result: a long last message stands exactly two lines
+         tall and ends in a real ellipsis, measured at 33.0px against a 16.5px
+         line — the number for the shipped size, not a constant to assert. -->
+    <div v-if="last">
       <div :style="lastStyle">{{ last }}</div>
     </div>
     <div :style="metaStyle">
