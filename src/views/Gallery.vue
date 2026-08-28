@@ -501,6 +501,9 @@ h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}
 .body{margin:0;color:var(--text-secondary)}
 .body code{font-size:12px;color:var(--text-primary)}
 .unknown{margin:0;color:var(--text-muted)}
+.outcome{margin:0;color:var(--text-secondary)}
+.held{margin:0;color:var(--status-needs-you-fg)}
+.held code{font-size:12px}
 .notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;
 padding:16px;color:var(--text-muted);margin:0}
 .total{border-top:1px solid var(--border-strong);padding-top:12px;display:flex;align-items:baseline;gap:8px}
@@ -539,10 +542,16 @@ font-size:18px;font-weight:500;color:var(--text-primary)}
 <div class="list">
 <div class="card card-batch"><div class="head"><span class="batch-label">batch 1</span>
 <span class="right">1h 12m</span></div>
-<p class="body">Nothing odd, though <code>bd list</code> was slow to answer.</p></div>
+<p class="body">Nothing odd, though <code>bd list</code> was slow to answer.</p>
+<p class="outcome">The run saw its session exit cleanly.</p></div>
 <div class="card card-batch"><div class="head"><span class="batch-label">batch 2</span>
 <span class="right">28m</span></div>
-<p class="unknown">This batch left no account of itself.</p></div>
+<p class="unknown">This batch left no account of itself.</p>
+<p class="outcome">The run saw its session end with no exit code at all, which is what a signalled
+process leaves.</p>
+<p class="held">When this batch ended, its actor still held on the board:
+<code>smetana-js4</code>, the merge lock (in_progress), <code>smetana-42v</code>
+(ready_to_merge).</p></div>
 </div>
 <p class="notice">This document carries a script that would paint the whole page red and replace
 everything on it with the words THE SANDBOX FAILED. If that is what you are looking at,

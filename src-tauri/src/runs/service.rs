@@ -47,7 +47,7 @@ use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::recovery;
 use super::registry::Proc;
-use super::report::{self, BatchLine};
+use super::report::{self, BatchLine, BatchOutcome};
 use super::summary::{self, Baseline, RunSummary};
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
@@ -819,11 +819,27 @@ async fn drive(
         // Read here rather than at the ending, so that a batch's account is
         // taken while it is the freshest thing on disk and every way out of the
         // match below is covered by one read instead of three.
-        account.batches.push(read_batch(
+        //
+        // Both halves of the record are taken in the same breath, and that is
+        // the shape smetana-pmj asked for: the agent's file, which a killed
+        // agent never wrote, and the ending this loop is holding in `outcome`,
+        // which it knows in every case. Before the match rather than inside its
+        // arms, because every arm ends the batch and three copies of this is how
+        // one of them would come to be missing it.
+        let mut record = read_batch(
             &account.reports,
             batch_no,
             batch_started.elapsed().as_secs(),
-        ));
+            outcome_of(&outcome),
+        );
+        // Only for a batch that said nothing: an account is a lead telling
+        // somebody where it left the board, and a second board read behind a
+        // lead that already answered would cost every run a resync for a line
+        // nobody needed.
+        if !record.reported {
+            record.left_behind = held_by(&tracker, session).await;
+        }
+        account.batches.push(record);
 
         let exit = match outcome {
             // The work is done and the session is still alive with a person in
@@ -995,18 +1011,76 @@ async fn finish(
     say(run);
 }
 
-/// One batch's own account of itself, as the lead left it.
+/// One batch's record: the account the lead left, and the ending this loop saw.
 ///
 /// A missing file and a damaged one are the same ordinary outcome — a batch
 /// that was killed, crashed or cancelled leaves nothing — and neither is an
 /// error: the batch's tasks still appear in the document from the board, and
 /// the document says that batch left no account of itself.
-fn read_batch(dir: &Path, n: u32, seconds: u64) -> BatchLine {
+///
+/// `outcome` is passed in rather than looked up, because it is not on disk and
+/// never could be: an agent that was killed writes nothing by definition, which
+/// is exactly why a document resting on the file alone went silent in the one
+/// case somebody opens it for (smetana-pmj). `left_behind` starts empty and is
+/// filled by the caller, which is the only side that can ask the board.
+fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchLine {
     let parsed = match std::fs::read_to_string(dir.join(format!("batch-{n}.json"))) {
         Ok(text) => report::parse_batch(&text),
         Err(_) => report::ParsedBatch { tasks: vec![], notes: None, reported_ok: false },
     };
-    BatchLine { n, seconds, tasks: parsed.tasks, notes: parsed.notes, reported: parsed.reported_ok }
+    BatchLine {
+        n,
+        seconds,
+        tasks: parsed.tasks,
+        notes: parsed.notes,
+        reported: parsed.reported_ok,
+        outcome,
+        left_behind: vec![],
+    }
+}
+
+/// The loop's own ending for a batch, in the vocabulary the document draws.
+///
+/// The one place `Batch` and `Exit` are translated, and it adds nothing to
+/// either: the only judgement in it is that a zero code is a clean exit and any
+/// other number is not, which is the same reading the loop makes a few lines
+/// below when it decides whether to count a crash. Kept beside that decision
+/// rather than in `report.rs`, so the renderer stays pure over its own types and
+/// knows nothing of the terminal.
+fn outcome_of(batch: &Batch) -> BatchOutcome {
+    match batch {
+        Batch::Ended(Exit::Code(0)) => BatchOutcome::Exited,
+        Batch::Ended(Exit::Code(code)) => BatchOutcome::Failed { code: *code },
+        Batch::Ended(Exit::NoCode) => BatchOutcome::NoCode,
+        Batch::Ended(Exit::Removed) => BatchOutcome::Removed,
+        Batch::HandedBack => BatchOutcome::HandedBack,
+        Batch::Unanswered { question } => BatchOutcome::Unanswered { question: question.clone() },
+    }
+}
+
+/// What this batch's actor was still holding when the batch ended: the merge
+/// lock, work left `in_progress`, work left `ready_to_merge`.
+///
+/// Read through `fresh_board` for the reason `park_claims` reads through it —
+/// the claims being looked for are the *agent's* own bd writes, which reach this
+/// process through the watcher, and a claim made moments before the session died
+/// may not have landed in the cached snapshot. The cost is one resync per
+/// accountless batch, at a moment when the batch is already over.
+///
+/// **Read only.** Nothing here releases a lock, parks a claim or writes a note:
+/// the app writes to the tracker nowhere as part of recovery (`recovery.rs`),
+/// and `running-tasks` Phase R is what clears this up with the worktrees in
+/// front of it. Naming what was read in the run's own document does not cross
+/// that line — and it is the difference between somebody learning about an
+/// abandoned lock now and the next run learning about it by failing.
+///
+/// An unreadable board answers with nothing rather than an error: the batch's
+/// record is still worth writing, and a report is not the place a tracker outage
+/// is reported.
+async fn held_by(tracker: &TrackerHandle, session: u64) -> Vec<queue::Leftover> {
+    let actor = crate::terminal::model::run_actor(session);
+    let Some(issues) = fresh_board(tracker).await else { return vec![] };
+    queue::left_behind(&issues, &actor)
 }
 
 /// Has this batch handed its work back — the question that ends a batch in a
@@ -1993,6 +2067,54 @@ mod tests {
         clear_account(&dir, 1); // nothing there is an ordinary outcome, not an error
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batchs_record_carries_the_ending_the_loop_saw_even_with_no_file_to_read() {
+        // smetana-pmj. The account is the agent's and a killed agent writes
+        // none; the ending is the loop's and it always has one. Reading them
+        // together is what stops the document going silent in the one case
+        // somebody opens it for.
+        let dir = std::env::temp_dir().join(format!("smetana-outcome-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory to write into");
+
+        let killed = read_batch(&dir, 1, 90, BatchOutcome::NoCode);
+        assert!(!killed.reported, "nothing on disk is still no account");
+        assert_eq!(killed.outcome, BatchOutcome::NoCode, "and the run's own half is there anyway");
+        assert!(killed.left_behind.is_empty(), "the board is the caller's to ask about");
+
+        std::fs::write(dir.join("batch-2.json"), "{\"tasks\": [], \"notes\": \"fine\"}")
+            .expect("an account");
+        let spoke = read_batch(&dir, 2, 90, BatchOutcome::Exited);
+        assert!(spoke.reported, "a file that parses is an account");
+        assert_eq!(spoke.outcome, BatchOutcome::Exited, "and the two halves stand together");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_ending_the_loop_can_reach_has_a_word_of_its_own() {
+        // The one translation between what the loop holds and what the document
+        // draws, and the only judgement in it is the split between a zero code
+        // and any other number — the same reading the loop makes when it decides
+        // whether to count a crash. `Exit::Removed` is a person's doing and
+        // `NoCode` is a signal, and the document has to be able to tell somebody
+        // which of the two took their night.
+        assert_eq!(outcome_of(&Batch::Ended(Exit::Code(0))), BatchOutcome::Exited);
+        assert_eq!(
+            outcome_of(&Batch::Ended(Exit::Code(137))),
+            BatchOutcome::Failed { code: 137 },
+            "the number travels: a 137 and a 1 send somebody to different places"
+        );
+        assert_eq!(outcome_of(&Batch::Ended(Exit::NoCode)), BatchOutcome::NoCode);
+        assert_eq!(outcome_of(&Batch::Ended(Exit::Removed)), BatchOutcome::Removed);
+        assert_eq!(outcome_of(&Batch::HandedBack), BatchOutcome::HandedBack);
+        assert_eq!(
+            outcome_of(&Batch::Unanswered { question: "Trust this folder?".into() }),
+            BatchOutcome::Unanswered { question: "Trust this folder?".into() },
+            "the question is the whole of what the run knows about why"
+        );
     }
 
     #[test]

@@ -251,9 +251,11 @@ clock, so *which* tasks moved and *how long* the run took are its to work out. I
 *done* — nothing comes back from a session but an exit code, the same missing channel `claimedBy`
 reconstructs around and `SessionWork::Run` refuses to invent — so the lead is asked for it: one JSON
 file per batch at `.smetana/runs/<token>/batch-<n>.json`, named in the `Run` prompt and in
-`running-tasks`. And it cannot see per-task time: a batch may hold several tasks with no signal at
-either end of one of them, so a task gets a duration of its own **only when its batch held exactly
-one**, where the two are the same number and nothing is inferred.
+`running-tasks`. What comes back is small and sometimes not even a code, but the *ending* is always
+there and it is the app's own, so it is written down beside the lead's account rather than thrown
+away — see the two halves of a batch below. And it cannot see per-task time: a batch may hold
+several tasks with no signal at either end of one of them, so a task gets a duration of its own
+**only when its batch held exactly one**, where the two are the same number and nothing is inferred.
 
 Attribution is a **board diff**, not an actor match: a task is this run's when it is `closed` now and
 was not `closed` at the baseline, the first board read inside the loop, after the preflight.
@@ -271,6 +273,35 @@ and it is **never** rendered as "0 closed, 0 parked", the same rule `projectByte
 `cleanup::refusal` keep. A batch that left no file, or an unparseable one, is likewise named in the
 document as having left no account of itself rather than drawn as an empty row, while its tasks still
 appear from the board.
+
+**A batch in the document carries two halves, and only one of them is the agent's** (smetana-pmj).
+The other is `report::BatchOutcome`: what the loop saw end the batch, drawn under every batch card
+whether or not a file was written. It has to be, because the two fail together — an agent killed
+mid-merge writes nothing by definition, so a document resting on the file alone goes silent in
+exactly the case somebody opens it for. That is not hypothetical: a batch died at 22:01 holding the
+merge lock and its whole record was the one sentence about the missing account, and the minute was
+reconstructed afterwards from `log show`, a transcript under `~/.claude/projects/` and a file in
+`/private/tmp`, none of which the app can see and none of which survives a reboot. The phrase itself
+stays and stays about the *account* — the agent really did write nothing — it simply stops being the
+whole entry.
+
+The vocabulary is deliberately not a new one: `service::outcome_of` reads out `Batch` and `Exit`,
+which the loop is already holding, so a clean exit, a code, a signal with no code, a session somebody
+removed, work handed back and a batch the run ended at an unanswered question are six words the app
+already had and had never said out loud. The split a person wants first is between falling over and
+being ended by the run, and nothing in the document drew it before.
+
+**And the report names what a silent batch left on the board**, through `queue::left_behind` over a
+`fresh_board` read: the merge lock if its actor still holds it, and anything left `in_progress` or
+`ready_to_merge` under that actor, with ids. Only for a batch that left no account — a lead that
+answered has already said where it left things, and a second resync per batch is not worth a line
+nobody needed. It is wider than `claimed_by` on purpose, since this is a record rather than a parking
+list. **Named, never acted on**: the recovery boundary below holds, so nothing here releases a lock
+or rewrites a status, and the line exists precisely because the alternative is the *next* run
+discovering the lock by failing to take it. That boundary is about *recovery* and is not a claim
+that the loop never writes to bd: `park_claims` does, on the unanswered path, seconds after this
+very reading — one batch's `in_progress` claims to `parked` with the question as the note, and the
+only bd write `drive` makes.
 
 **Every ending the loop task reaches goes through one `finish(...)` in `service.rs`, and that
 consolidation is the feature.** A dozen exits into `RunState::Stopped` is how the next ending
@@ -355,8 +386,9 @@ that and for nothing else. **A batch's liveness is its own `group`, not its reco
 batch killed mid-merge under an app that is still up leaves a lock no one will ever release, and the
 writer being alive says only that the app is; the `writer` stays the signal for a task claim, where
 the question is whether the run still exists to finish what it took. Both readings are the skills' to
-make and not this side's: the app writes to bd nowhere, so the lock is released by
-`smetana:running-tasks` Phase R or by nobody.
+make and not this side's: the app never releases the lock — the one bd write the loop
+makes is `park_claims` on the unanswered path, which parks a claim rather than freeing one — so the
+lock is released by `smetana:running-tasks` Phase R or by nobody.
 
 On the front end, `runs.js` is deliberately small — a file read with no worker behind it, freshness
 from switching projects, from window focus, and from any of the project's sessions starting or
