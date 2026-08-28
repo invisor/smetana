@@ -68,6 +68,7 @@ import {
   RepoList,
   ScopeIndicator,
   SectionHeader,
+  SegmentedTabs,
   ReportView,
   Select,
   RunBar,
@@ -1533,6 +1534,32 @@ const headStyle = {
 }
 const rowStyle = { display: 'flex', alignItems: 'center', gap: 'var(--space-5)', flexWrap: 'wrap' }
 
+/* Both tab rows the app draws with this one component: the left column's three
+   and the right column's two. Both are here rather than one of them, because
+   the segments divide the row between them — three of them is where the type
+   comes closest to the segment's edges, and two is where the fill is widest —
+   and the row is drawn at a panel's own width, since a segment stretched across
+   the page would be the one thing this component never does in the app. */
+const GALLERY_SIDE_TABS = [
+  { id: 'files', label: 'Files' },
+  { id: 'git', label: 'Git' },
+  { id: 'agents', label: 'Agents' }
+]
+const GALLERY_RIGHT_TABS = [
+  { id: 'task', label: 'Task' },
+  { id: 'sessions', label: 'Sessions' }
+]
+const gallerySideTab = ref('git')
+const galleryRightTab = ref('sessions')
+/* The panel this row lives under, minus nothing: the border is what shows that
+   the row's own rule sits on the panel's edge rather than floating over it. */
+const segmentedFrameStyle = {
+  width: '236px',
+  border: 'var(--border-w) solid var(--border)',
+  borderRadius: 'var(--radius-2)',
+  background: 'var(--surface)'
+}
+
 /* `PointerMenu` draws nothing at all until a secondary click gives it a point
    to hang off, so unlike every other component here it needs somewhere to be
    clicked. The box is the frame; the menu is what opens over it, at the
@@ -2421,6 +2448,21 @@ const menuTargetStyle = {
           <MenuButton icon="plus" label="New agent, terminal or task" :items="NEW_TAB_ITEMS" :width="180" />
         </template>
       </TabBar>
+
+      <!-- The other tab row, and the one that is not a tab row of files: the
+           segmented strip under a side panel's header, drawn here at the width
+           a panel gives it. Live rather than fixed, since the fill under the
+           active segment and the fill under the pointer are the whole of what
+           it draws — press one, and hover the other. -->
+      <div :style="rowStyle">
+        <div :style="segmentedFrameStyle">
+          <SegmentedTabs v-model="gallerySideTab" :tabs="GALLERY_SIDE_TABS" />
+        </div>
+        <div :style="segmentedFrameStyle">
+          <SegmentedTabs v-model="galleryRightTab" :tabs="GALLERY_RIGHT_TABS" />
+        </div>
+      </div>
+
       <!-- Taller than the other boxes on this page, and the file tree is why:
            at 160px the shell showed five rows of it, so half the tree's glyph
            vocabulary sat below a fold in the one place it can be checked. -->

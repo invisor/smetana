@@ -270,6 +270,31 @@ describe('a project\'s layout', () => {
     expect(settings.settings.project.recentTasks).toEqual([])
   })
 
+  it("remembers the right column's tab, and clears it for a project that has none", async () => {
+    /* The tab the right column was left on, stored beside `sideTab` and read
+       the same way — the whole point of the field is that a restart brings it
+       back. The second half is what listing it in the defaults buys: a project
+       with no `rightTab` of its own has to open on Task, and a key missing from
+       the defaults object is a key the defaults layer cannot clear, so the
+       previous project's Sessions would stand under the next project's board.
+
+       Written out of the store as well as into it, since a value that only ever
+       arrives is a value no restart can preserve. */
+    ipc.on('settings_load', { project: { rightTab: 'sessions' } })
+    ipc.on('settings_save', null)
+    await settings.loadSettings()
+    expect(settings.settings.project.rightTab).toBe('sessions')
+
+    settings.settings.project.selectedTask = 'smetana-l56'
+    await settings.flushPending()
+    expect(ipc.calls('settings_save').at(-1).settings.project.rightTab).toBe('sessions')
+
+    ipc.on('settings_load', { project: {} })
+    await settings.loadProjectLayout('/new')
+
+    expect(settings.settings.project.rightTab).toBe('task')
+  })
+
   it('a section is merged in place: the reference to the object stays the same', async () => {
     ipc.on('settings_load', {})
     await settings.loadSettings()

@@ -30,6 +30,12 @@ const DENSITIES: [&str; 2] = ["comfortable", "compact"];
 /// here silently becomes "files" on its way to disk, and after a restart a
 /// person sees something other than what they left.
 const SIDE_TABS: [&str; 3] = ["files", "git", "agents"];
+/// The right column's own tab row, and the same doubling one column over: the
+/// two tabs are listed again in `src/views/DesktopApp.vue` (the `RIGHT_TABS`
+/// constant), with the same obligation `SIDE_TABS` carries. `task` is the whole
+/// of what that panel drew before there was a row over it, so it is the one a
+/// damaged value comes back as.
+const RIGHT_TABS: [&str; 2] = ["task", "sessions"];
 /// The centre has no closed list of tabs and never will: file tabs come from
 /// the project. So we check sanity rather than membership.
 const MAX_ID_LEN: usize = 200;
@@ -506,6 +512,15 @@ impl Default for Layout {
 #[serde(default, rename_all = "camelCase")]
 pub struct ProjectState {
     pub side_tab: String,
+    /// Which of the right column's two tabs is showing: the task, or the
+    /// sessions running in this project. Per project on `side_tab`'s argument
+    /// exactly — which half of that panel somebody wants open is a habit they
+    /// have in one repository and not in another.
+    ///
+    /// Only the tab is stored. What the `task` tab is *filled* with stays
+    /// derived on the front end (`rightPanel` in `DesktopApp.vue`), for the
+    /// reason `selected_task` records one field up.
+    pub right_tab: String,
     pub active_tab: String,
     pub selected_task: Option<String>,
     /// The last three tasks somebody looked at in this project, newest first.
@@ -603,6 +618,7 @@ impl Default for ProjectState {
     fn default() -> Self {
         Self {
             side_tab: "files".into(),
+            right_tab: "task".into(),
             active_tab: "kanban".into(),
             selected_task: None,
             recent_tasks: Vec::new(),
@@ -1172,6 +1188,7 @@ fn in_range(value: &mut u32, fallback: u32) {
 impl ProjectState {
     fn validate(&mut self) {
         one_of(&mut self.side_tab, &SIDE_TABS, "files");
+        one_of(&mut self.right_tab, &RIGHT_TABS, "task");
         forget_if_junk(&mut self.selected_task, MAX_ID_LEN);
         // Ids, so the identifier ceiling — and the same cleaning every other
         // list here gets: empty and duplicate entries out, the length capped at
@@ -1906,6 +1923,27 @@ mod tests {
         let state = &settings.projects["/p"];
         assert_eq!(state.side_tab, "files");
         assert_eq!(state.active_tab, "terminal", "a tab outside the closed list stays");
+    }
+
+    #[test]
+    fn unknown_right_tab_falls_back_to_task() {
+        // The same rule one column over, and the same reason to pin it: the
+        // right column's row is a closed list written out twice, and a value
+        // off it must lose itself here rather than reach the panel.
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"rightTab":"tarot","sideTab":"git"}}}"#);
+        let state = &settings.projects["/p"];
+        assert_eq!(state.right_tab, "task");
+        assert_eq!(state.side_tab, "git", "one damaged field does not take its neighbour");
+    }
+
+    #[test]
+    fn a_stored_sessions_right_tab_survives_the_load() {
+        // The other half: the tab a person left the panel on comes back, which
+        // is the whole point of storing it. A file written before the field
+        // existed has none, and takes the default beside it.
+        let settings = settings_of(r#"{"version":1,"projects":{"/p":{"rightTab":"sessions"},"/old":{"sideTab":"git"}}}"#);
+        assert_eq!(settings.projects["/p"].right_tab, "sessions");
+        assert_eq!(settings.projects["/old"].right_tab, "task");
     }
 
     #[test]
