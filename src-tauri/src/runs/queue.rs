@@ -212,6 +212,45 @@ pub fn claimed_by(issues: &[Issue], actor: &str) -> Vec<String> {
         .collect()
 }
 
+/// One thing a batch's actor was still holding on the board when the batch
+/// ended. Read only, and named in the run's document — the app writes to the
+/// tracker nowhere as part of recovery (`recovery.rs`), so this is evidence for
+/// a person and never a step taken on their behalf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Leftover {
+    pub id: String,
+    /// The board's own word: `in_progress` or `ready_to_merge`. Carried rather
+    /// than reduced to a flag, because the two mean opposite things to whoever
+    /// picks the work up — one is unfinished, the other is finished and unmerged.
+    pub status: String,
+    /// The merge lock, which is coordination rather than work and is excluded
+    /// from every count in this file for that reason. It is exactly the thing
+    /// worth naming here, though: a lock left claimed by a dead actor stops the
+    /// *next* run rather than this one, and until smetana-pmj nothing said so.
+    pub lock: bool,
+}
+
+/// What a batch's actor still holds: `in_progress` and `ready_to_merge` under
+/// its own bd actor, the merge lock among them.
+///
+/// Wider than `claimed_by` in both directions it is wider in, and each is
+/// deliberate. `ready_to_merge` is here because this is a record rather than a
+/// parking list — reviewed work nobody merged is precisely what a killed batch
+/// strands — and the lock is here because it is the one leftover that costs
+/// somebody else their night.
+///
+/// Nothing is filtered by scope: an actor's claim is the actor's claim, and a
+/// task that fell outside this run's scope while it was being held is a stranger
+/// finding to hide.
+pub fn left_behind(issues: &[Issue], actor: &str) -> Vec<Leftover> {
+    issues
+        .iter()
+        .filter(|i| i.assignee.as_deref() == Some(actor))
+        .filter(|i| matches!(i.status.as_str(), IN_PROGRESS | READY_TO_MERGE))
+        .map(|i| Leftover { id: i.id.clone(), status: i.status.clone(), lock: is_lock(i) })
+        .collect()
+}
+
 /// The note a parked task carries, in the wording the `running-tasks` skill
 /// already uses for the lead's own parking (`parked: <one concrete line>`), so
 /// a person scanning notes reads one vocabulary whoever did the parking. The
@@ -690,6 +729,52 @@ mod tests {
         owner_only.owner = Some(actor.into());
 
         assert!(claimed_by(&[owner_only], actor).is_empty());
+    }
+
+    #[test]
+    fn what_a_batch_left_holding_is_wider_than_what_it_would_have_parked() {
+        // The record the report draws, and it is deliberately not the parking
+        // list: `ready_to_merge` is reviewed work nobody merged, which parking
+        // refuses to touch and a person reading a report has to know about, and
+        // the merge lock is the leftover that costs the *next* run its night
+        // rather than this one — the whole of smetana-pmj.
+        let actor = "smetana-run-6";
+        let owner = "merazent@gmail.com";
+        let mut mine = issue("mine", "in_progress");
+        mine.assignee = Some(actor.into());
+        mine.owner = Some(owner.into());
+        let mut merged = issue("merged", "ready_to_merge");
+        merged.assignee = Some(actor.into());
+        let mut lock = issue("lock", "in_progress");
+        lock.assignee = Some(actor.into());
+        lock.labels = vec![LOCK_LABEL.into()];
+        let mut theirs = issue("theirs", "in_progress");
+        theirs.assignee = Some("smetana-run-7".into());
+        let mut done = issue("done", "closed");
+        done.assignee = Some(actor.into());
+        let mut parked = issue("parked", "parked");
+        parked.assignee = Some(actor.into());
+
+        let board = vec![mine, merged, lock, theirs, done, parked];
+        assert_eq!(
+            left_behind(&board, actor),
+            vec![
+                Leftover { id: "mine".into(), status: "in_progress".into(), lock: false },
+                Leftover { id: "merged".into(), status: "ready_to_merge".into(), lock: false },
+                Leftover { id: "lock".into(), status: "in_progress".into(), lock: true },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_batch_that_left_the_board_clean_left_nothing_to_name() {
+        // The ordinary ending, and the one that must stay silent: a line saying
+        // an actor held nothing would be printed under every batch in every
+        // report, and a line that is always there is a line nobody reads.
+        let actor = "smetana-run-6";
+        let mut closed = issue("closed", "closed");
+        closed.assignee = Some(actor.into());
+        assert!(left_behind(&[closed, issue("open", "open")], actor).is_empty());
     }
 
     #[test]

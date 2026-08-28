@@ -20,6 +20,7 @@
 
 use serde::Deserialize;
 
+use crate::runs::queue::Leftover;
 use crate::runs::summary::{TaskLine, Tasks};
 
 /// One task as the batch's own file describes it. `did` is free text an agent
@@ -31,10 +32,51 @@ pub struct BatchTask {
     pub did: Option<String>,
 }
 
-/// What one batch contributed. `reported` is false when the batch left no file
-/// or left one that could not be read — a batch that was killed, crashed or
-/// cancelled. The distinction is drawn rather than smoothed over: an empty row
-/// reads as "nothing was done", which is a different claim.
+/// How a batch ended **as the run itself saw it** — the half of the record that
+/// does not depend on an agent having written anything, and the half that was
+/// missing until smetana-pmj.
+///
+/// The vocabulary is not this file's invention and deliberately adds nothing to
+/// what the loop already holds: `service::Batch` and `terminal::model::Exit`,
+/// read out. `service::outcome_of` is the one place the two are translated, and
+/// the split a person wants first is the one between "it fell over on its own"
+/// and "the run ended it", which no code path said out loud before.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchOutcome {
+    /// `Exit::Code(0)`: the session's process ended of its own accord, well.
+    Exited,
+    /// `Exit::Code(n)`, `n != 0`. The number is carried: a 137 and a 1 send
+    /// somebody to different places.
+    Failed { code: i32 },
+    /// `Exit::NoCode`: the process is gone and no code ever arrived, which in
+    /// practice means it was signalled. This is the shape of the night
+    /// smetana-pmj was filed about.
+    NoCode,
+    /// `Exit::Removed`: somebody took the session out of the agents panel while
+    /// the run was waiting on it. A person's doing, not a failure.
+    Removed,
+    /// `Batch::HandedBack`: the lead wrote its account and gave the work back,
+    /// in a mode whose session stays alive with a person in it.
+    HandedBack,
+    /// `Batch::Unanswered`: the session stopped to ask, in a run with nobody in
+    /// it to answer, and the run ended the batch. The question travels with it —
+    /// it is the whole of what the run knows about why.
+    Unanswered { question: String },
+}
+
+/// What one batch contributed, from both sides.
+///
+/// `reported` is false when the batch left no file or left one that could not be
+/// read — a batch that was killed, crashed or cancelled. The distinction is
+/// drawn rather than smoothed over: an empty row reads as "nothing was done",
+/// which is a different claim.
+///
+/// `outcome` is the other side of the same record and is always known, which is
+/// the point of it: a killed agent writes no file by definition, so a document
+/// resting on the file alone goes silent in exactly the case somebody opens it
+/// for. `left_behind` is filled only for a batch that left no account — see
+/// `service::held_by` — because that is the only case where nobody has said what
+/// state the board was left in.
 #[derive(Debug, Clone)]
 pub struct BatchLine {
     pub n: u32,
@@ -42,6 +84,8 @@ pub struct BatchLine {
     pub tasks: Vec<BatchTask>,
     pub notes: Option<String>,
     pub reported: bool,
+    pub outcome: BatchOutcome,
+    pub left_behind: Vec<Leftover>,
 }
 
 /// What `parse_batch` answers: the file's contents, and whether it was readable
@@ -248,18 +292,26 @@ pub fn render(report: &RunReport) -> String {
             out.push_str("</span><span class=\"right\">");
             out.push_str(&human(b.seconds));
             out.push_str("</span></div>");
+            // The agent's own half first, and then the run's, always. The
+            // phrase below is still about the *account* — a killed agent really
+            // did write nothing — and it is no longer the whole record of the
+            // batch, which is what left the night of smetana-pmj to `log show`.
             if !b.reported {
-                out.push_str("<p class=\"unknown\">This batch left no account of itself.</p></div>");
-                continue;
-            }
-            match &b.notes {
-                Some(notes) => {
-                    out.push_str("<p class=\"body\">");
-                    out.push_str(&prose(notes));
-                    out.push_str("</p>");
+                out.push_str("<p class=\"unknown\">This batch left no account of itself.</p>");
+            } else {
+                match &b.notes {
+                    Some(notes) => {
+                        out.push_str("<p class=\"body\">");
+                        out.push_str(&prose(notes));
+                        out.push_str("</p>");
+                    }
+                    None => {
+                        out.push_str("<p class=\"unknown\">No notes on the batch as a whole.</p>");
+                    }
                 }
-                None => out.push_str("<p class=\"unknown\">No notes on the batch as a whole.</p>"),
             }
+            outcome(&mut out, &b.outcome);
+            held(&mut out, &b.left_behind);
             out.push_str("</div>");
         }
         out.push_str("</div>");
@@ -270,6 +322,92 @@ pub fn render(report: &RunReport) -> String {
     out.push_str(&human(report.seconds));
     out.push_str("</span></div></div></body></html>");
     out
+}
+
+/// What the run saw end the batch, in a sentence, under every batch card and
+/// whether or not the agent left a file.
+///
+/// It says "the run saw" rather than stating the ending flat, and that is the
+/// honest form: this is one party's account of a process it was watching from
+/// outside, and *why* the process went is beyond it — the night this was written
+/// for had a session ending tidily, atexit handlers and all, for a reason
+/// nothing in this app could have named. What the app can promise is that it
+/// wrote down what it saw.
+fn outcome(out: &mut String, outcome: &BatchOutcome) {
+    out.push_str("<p class=\"outcome\">");
+    match outcome {
+        BatchOutcome::Exited => out.push_str("The run saw its session exit cleanly."),
+        BatchOutcome::Failed { code } => {
+            out.push_str("The run saw its session exit with code ");
+            out.push_str(&code.to_string());
+            out.push('.');
+        }
+        // Said in words rather than as an absent number: "no exit code" alone
+        // reads as something the app failed to look up, when it is a fact about
+        // the process.
+        BatchOutcome::NoCode => out.push_str(
+            "The run saw its session end with no exit code at all, which is what a \
+             signalled process leaves.",
+        ),
+        BatchOutcome::Removed => {
+            out.push_str("Somebody removed this session from the agents panel while the run was \
+                          waiting on it.");
+        }
+        BatchOutcome::HandedBack => out.push_str(
+            "The lead handed the work back, and its session was left running with the \
+             conversation open.",
+        ),
+        // The question is a harness's own text reaching a document a person
+        // opens, so it goes through `escape` like everything else. `prose` is
+        // not used: nobody was asked to type backticks into a dialog.
+        BatchOutcome::Unanswered { question } => {
+            out.push_str(
+                "The run ended this batch at a question it had nobody to answer: &ldquo;",
+            );
+            out.push_str(&escape(question));
+            out.push_str("&rdquo;");
+        }
+    }
+    out.push_str("</p>");
+}
+
+/// What this batch's actor was still holding on the board when the batch ended —
+/// a claimed merge lock, work left `in_progress`, work left `ready_to_merge`.
+///
+/// Drawn only when there is something to draw: a line saying an actor held
+/// nothing would stand under every batch of every report, and a line that is
+/// always there is one nobody reads.
+///
+/// **Named, never acted on.** The app writes to the tracker nowhere as part of
+/// recovery (`recovery.rs`), so nothing here releases a lock or parks a claim;
+/// `running-tasks` Phase R does that with the worktrees in front of it. Without
+/// the line, a lock a dead batch is still holding is discovered by the *next*
+/// run failing to take it.
+fn held(out: &mut String, held: &[Leftover]) {
+    if held.is_empty() {
+        return;
+    }
+    out.push_str("<p class=\"held\">When this batch ended, its actor still held on the board: ");
+    for (nth, item) in held.iter().enumerate() {
+        if nth > 0 {
+            out.push_str(", ");
+        }
+        out.push_str("<code>");
+        out.push_str(&escape(&item.id));
+        out.push_str("</code>");
+        if item.lock {
+            out.push_str(" the merge lock");
+        }
+        out.push_str(" (");
+        out.push_str(&escape(&item.status));
+        out.push(')');
+    }
+    // The list and nothing after it. A closing sentence about the app having
+    // cleared none of it was written and taken out again: the run *does* park a
+    // stuck batch's claims after an unanswered question, moments after this
+    // reading, so the reassurance would have been false in one of the six
+    // endings and there is nothing in the document to tell the reader which.
+    out.push_str(".</p>");
 }
 
 /// One cell of the summary strip. `extra` carries the hue that says what the
@@ -504,6 +642,9 @@ h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}\
 .body{margin:0;color:var(--text-secondary)}\
 .body code{font-size:12px;color:var(--text-primary)}\
 .unknown{margin:0;color:var(--text-muted)}\
+.outcome{margin:0;color:var(--text-secondary)}\
+.held{margin:0;color:var(--attn-loud)}\
+.held code{font-size:12px}\
 .notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;\
 padding:16px;color:var(--text-muted);margin:0}\
 .total{border-top:1px solid var(--border-strong);padding-top:12px;display:flex;\
@@ -561,7 +702,17 @@ mod tests {
     }
 
     fn batch(n: u32) -> BatchLine {
-        BatchLine { n, seconds: 600, tasks: vec![], notes: None, reported: true }
+        BatchLine {
+            n,
+            seconds: 600,
+            tasks: vec![],
+            notes: None,
+            reported: true,
+            // The ordinary ending, so a test about anything else is not also a
+            // test about a crash.
+            outcome: BatchOutcome::Exited,
+            left_behind: vec![],
+        }
     }
 
     fn report<'a>(seconds: u64, tasks: Option<&'a Tasks>, batches: &'a [BatchLine]) -> RunReport<'a> {
@@ -638,6 +789,115 @@ mod tests {
         let html = render(&report(600, Some(&tasks), &[quiet]));
         assert!(html.contains("left no account of itself"));
         assert!(html.contains("a-1"), "and the board still says which task moved");
+    }
+
+    /// The whole outcome vocabulary, each with the words the document is
+    /// expected to carry for it. Written out once and used by both tests below,
+    /// so "every ending is named" cannot quietly become "the endings somebody
+    /// remembered to list twice".
+    fn vocabulary() -> Vec<(BatchOutcome, &'static str)> {
+        vec![
+            (BatchOutcome::Exited, "exit cleanly"),
+            (BatchOutcome::Failed { code: 137 }, "exit with code 137"),
+            (BatchOutcome::NoCode, "no exit code at all"),
+            (BatchOutcome::Removed, "removed this session from the agents panel"),
+            (BatchOutcome::HandedBack, "handed the work back"),
+            (
+                BatchOutcome::Unanswered { question: "Do you trust this folder?".into() },
+                "Do you trust this folder?",
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_batch_that_left_no_account_still_says_how_the_run_saw_it_end() {
+        // smetana-pmj, and the case the whole change exists for: a batch whose
+        // agent was killed before it could write a word. The run knew what it
+        // saw and wrote none of it, so one sentence — about the *agent's*
+        // silence — was the entire record of a batch that died holding the
+        // merge lock.
+        for (outcome, words) in vocabulary() {
+            let mut quiet = batch(1);
+            quiet.reported = false;
+            quiet.outcome = outcome.clone();
+            let html = render(&report(600, None, &[quiet]));
+
+            assert!(
+                html.contains("left no account of itself"),
+                "the phrase stays, and stays about the agent: {outcome:?}"
+            );
+            assert!(
+                html.contains(words),
+                "and the run's own half stands beside it for {outcome:?}: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_batch_carries_the_runs_own_ending_whether_it_wrote_a_file_or_not() {
+        // Independent of the account file in both directions. A batch that did
+        // leave one is told the same thing about itself — the two halves are a
+        // pair, not a fallback, and a reader comparing "the lead says it merged
+        // three" against "the session exited with code 1" is exactly the reading
+        // this is for.
+        for (outcome, words) in vocabulary() {
+            let mut spoke = batch(1);
+            spoke.notes = Some("nothing odd".into());
+            spoke.outcome = outcome.clone();
+            let html = render(&report(600, None, &[spoke]));
+
+            assert!(html.contains("nothing odd"), "the lead's own words stay: {outcome:?}");
+            assert!(html.contains(words), "beside the run's: {html}");
+            assert!(
+                !html.contains("left no account of itself"),
+                "and nothing says it was silent when it was not"
+            );
+        }
+    }
+
+    #[test]
+    fn the_question_that_ended_a_batch_is_escaped_like_every_other_borrowed_text() {
+        // A harness wrote this and a person opens it. It goes through `escape`
+        // rather than `prose`: nobody was asked to type backticks into a dialog.
+        let mut killed = batch(1);
+        killed.reported = false;
+        killed.outcome =
+            BatchOutcome::Unanswered { question: "Trust <script>alert(1)</script>?".into() };
+        let html = render(&report(600, None, &[killed]));
+
+        assert!(!html.contains("<script"), "{html}");
+        assert!(html.contains("Trust &lt;script&gt;"), "{html}");
+    }
+
+    #[test]
+    fn a_batch_that_died_holding_the_board_says_what_it_was_holding() {
+        // The line that would have saved the night: a batch killed mid-merge
+        // leaves a claimed lock behind, and the next run discovers it by
+        // failing to take it. Ids, because a person has to be able to go and
+        // look — and the lock is called what it is, since it is the one leftover
+        // that costs somebody else their run rather than this one.
+        let mut killed = batch(1);
+        killed.reported = false;
+        killed.outcome = BatchOutcome::NoCode;
+        killed.left_behind = vec![
+            Leftover { id: "smetana-js4".into(), status: "in_progress".into(), lock: true },
+            Leftover { id: "smetana-42v".into(), status: "ready_to_merge".into(), lock: false },
+        ];
+        let html = render(&report(600, None, &[killed]));
+
+        assert!(html.contains("still held on the board"), "{html}");
+        assert!(html.contains("<code>smetana-js4</code> the merge lock (in_progress)"), "{html}");
+        assert!(html.contains("<code>smetana-42v</code> (ready_to_merge)"), "{html}");
+        assert!(html.contains(".held{margin:0;color:var(--attn-loud)}"), "drawn loud: {html}");
+    }
+
+    #[test]
+    fn a_batch_that_left_the_board_clean_draws_no_line_about_it() {
+        // A line under every batch saying an actor held nothing is a line
+        // nobody reads, and the one that matters would then be a line in a
+        // column of them.
+        let html = render(&report(600, None, &[batch(1)]));
+        assert!(!html.contains("still held on the board"), "{html}");
     }
 
     #[test]
@@ -882,6 +1142,8 @@ mod tests {
             tasks: ids.iter().map(|id| BatchTask { id: (*id).into(), did: None }).collect(),
             notes: None,
             reported: true,
+            outcome: BatchOutcome::Exited,
+            left_behind: vec![],
         }
     }
 
@@ -1133,6 +1395,7 @@ mod tests {
         );
         assert!(html.contains("left no account of itself"), "{html}");
     }
+
 
     #[test]
     fn the_header_and_footer_are_the_documents_only_uppercase_labels() {

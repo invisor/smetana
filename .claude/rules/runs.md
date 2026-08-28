@@ -251,7 +251,8 @@ clock, so *which* tasks moved and *how long* the run took are its to work out. I
 *done* — nothing comes back from a session but an exit code, the same missing channel `claimedBy`
 reconstructs around and `SessionWork::Run` refuses to invent — so the lead is asked for it: one JSON
 file per batch at `.smetana/runs/<token>/batch-<n>.json`, named in the `Run` prompt and in
-`running-tasks`. And it cannot see per-task time: a batch may hold several tasks with no signal at
+`running-tasks`. That exit code is small, but it is the app's own and it is always there, so it is
+written down beside the lead's account rather than thrown away — see the two halves of a batch below. And it cannot see per-task time: a batch may hold several tasks with no signal at
 either end of one of them, so a task gets a duration of its own **only when its batch held exactly
 one**, where the two are the same number and nothing is inferred.
 
@@ -271,6 +272,32 @@ and it is **never** rendered as "0 closed, 0 parked", the same rule `projectByte
 `cleanup::refusal` keep. A batch that left no file, or an unparseable one, is likewise named in the
 document as having left no account of itself rather than drawn as an empty row, while its tasks still
 appear from the board.
+
+**A batch in the document carries two halves, and only one of them is the agent's** (smetana-pmj).
+The other is `report::BatchOutcome`: what the loop saw end the batch, drawn under every batch card
+whether or not a file was written. It has to be, because the two fail together — an agent killed
+mid-merge writes nothing by definition, so a document resting on the file alone goes silent in
+exactly the case somebody opens it for. That is not hypothetical: a batch died at 22:01 holding the
+merge lock and its whole record was the one sentence about the missing account, and the minute was
+reconstructed afterwards from `log show`, a transcript under `~/.claude/projects/` and a file in
+`/private/tmp`, none of which the app can see and none of which survives a reboot. The phrase itself
+stays and stays about the *account* — the agent really did write nothing — it simply stops being the
+whole entry.
+
+The vocabulary is deliberately not a new one: `service::outcome_of` reads out `Batch` and `Exit`,
+which the loop is already holding, so a clean exit, a code, a signal with no code, a session somebody
+removed, work handed back and a batch the run ended at an unanswered question are six words the app
+already had and had never said out loud. The split a person wants first is between falling over and
+being ended by the run, and nothing in the document drew it before.
+
+**And the report names what a silent batch left on the board**, through `queue::left_behind` over a
+`fresh_board` read: the merge lock if its actor still holds it, and anything left `in_progress` or
+`ready_to_merge` under that actor, with ids. Only for a batch that left no account — a lead that
+answered has already said where it left things, and a second resync per batch is not worth a line
+nobody needed. It is wider than `claimed_by` on purpose, since this is a record rather than a parking
+list. **Named, never acted on**: the boundary above holds without exception, so nothing here releases
+a lock or parks a claim, and the line exists precisely because the alternative is the *next* run
+discovering the lock by failing to take it.
 
 **Every ending the loop task reaches goes through one `finish(...)` in `service.rs`, and that
 consolidation is the feature.** A dozen exits into `RunState::Stopped` is how the next ending
