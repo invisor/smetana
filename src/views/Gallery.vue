@@ -70,6 +70,7 @@ import {
   SectionHeader,
   SegmentedTabs,
   ReportView,
+  SessionRow,
   Select,
   RunBar,
   SettingsGroup,
@@ -760,6 +761,111 @@ const agentRows = [
      It lasts about a second in the app, which is exactly why it belongs here —
      the only place it can be looked at for longer than that. */
   { id: 'start-1', label: 'Creating a task', tasks: [], state: 'running', elapsed: 'starting', starting: true }
+]
+
+/* The right column's Sessions tab: Claude Code's own transcripts, as
+   `sessions_list` hands them over. A fixed clock rather than `Date.now()`, and
+   dates written against it: the row's time label is relative, so a fixture
+   dated from the machine's clock would draw a different string every time
+   somebody opened this page and there would be nothing to check it against.
+   Read down the column and the labels are `4m ago`, `18h ago`, `2d ago`,
+   `3w ago`, `5w ago`, `1y ago` — every rung of the ladder except `just now`,
+   and that one is left out for want of a slot rather than for want of a way to
+   hold it still: the clock above is a constant precisely so any of them can be
+   drawn on demand, and a `just now` row would say the same as the four-minute
+   one about every other thing on it — and a slot here is a case, as the next
+   paragraph spends all six of them.
+
+   Six rows and no two of them the same case: subagents and none, a title long
+   enough to ellipsise, a session out of a worktree, one with no branch, and one
+   with neither title nor last message — the row's two fallbacks, which appear
+   nowhere else. Newest first, as the store sorts them: this page draws rows
+   rather than the store, so the order is written out here by hand. */
+const GALLERY_SESSION_NOW = Date.parse('2026-08-28T12:00:00Z')
+const galleryAt = (ms) => new Date(GALLERY_SESSION_NOW - ms).toISOString()
+const GALLERY_SESSIONS = [
+  {
+    id: '3a7e5b10-1c2d-4e3f-9a8b-7c6d5e4f3a2b',
+    path: '/Users/you/.claude/projects/-Users-you-dev-smetana/3a7e5b10.jsonl',
+    cwd: '/Users/you/dev/smetana',
+    branch: 'develop',
+    title: 'Why does the scope bar count dirty files it cannot see',
+    lastRole: 'user',
+    lastText: 'Leave it for now, file it as a task instead.',
+    messages: 1,
+    subagents: 0,
+    model: 'claude-opus-5',
+    modifiedAt: galleryAt(4 * 60 * 1000)
+  },
+  {
+    id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+    path: '/Users/you/.claude/projects/-Users-you-dev-smetana/9f1c0a2e.jsonl',
+    cwd: '/Users/you/dev/smetana',
+    branch: 'main',
+    title:
+      'Talk to me in Russian: everything you say in this project, and keep the commit messages in Russian too',
+    lastRole: 'assistant',
+    lastText:
+      'Done. The three columns are drawn from the tracker now, and the fixture that used to stand in for the log pane is gone with it.',
+    messages: 48,
+    subagents: 3,
+    model: 'claude-opus-5',
+    modifiedAt: galleryAt(18 * 60 * 60 * 1000)
+  },
+  {
+    id: '5d2f8c41-9b0a-4c1d-8e7f-6a5b4c3d2e1f',
+    path: '/Users/you/.claude/projects/-Users-you-dev-smetana--worktrees-smetana-oln/5d2f8c41.jsonl',
+    cwd: '/Users/you/dev/smetana/.worktrees/smetana-oln-sessions-tab-disk-history',
+    branch: 'feature/smetana-oln-sessions-tab-disk-history',
+    title: 'Implement the front-end half of the sessions tab',
+    lastRole: 'assistant',
+    lastText:
+      'Both gates are green. The row draws in all four theme and density combinations; what is left is the pass over the gallery.',
+    messages: 214,
+    subagents: 1,
+    model: 'claude-opus-5',
+    modifiedAt: galleryAt(2 * 24 * 60 * 60 * 1000)
+  },
+  {
+    id: 'c81b0e39-4a5f-4b6c-9d0e-1f2a3b4c5d6e',
+    path: '/Users/you/.claude/projects/-Users-you-dev-smetana-src-tauri/c81b0e39.jsonl',
+    cwd: '/Users/you/dev/smetana/src-tauri',
+    branch: null,
+    title: 'Check whether the sidecar digest matches the pinned release',
+    lastRole: 'user',
+    lastText: 'It does. Nothing to do.',
+    messages: 6,
+    subagents: 0,
+    model: 'claude-sonnet-4-5',
+    modifiedAt: galleryAt(21 * 24 * 60 * 60 * 1000)
+  },
+  {
+    id: 'e4a90d77-2b3c-4d5e-8f90-1a2b3c4d5e6f',
+    path: '/Users/you/.claude/projects/-Users-you-dev-smetana/e4a90d77.jsonl',
+    cwd: '/Users/you/dev/smetana',
+    branch: 'main',
+    title: null,
+    lastRole: null,
+    lastText: null,
+    messages: 0,
+    subagents: 0,
+    model: null,
+    modifiedAt: galleryAt(40 * 24 * 60 * 60 * 1000)
+  },
+  {
+    id: '7b6a5948-3c2d-4e1f-9a0b-8c7d6e5f4a3b',
+    path: '/Users/you/.claude/projects/-Users-you-dev-smetana/7b6a5948.jsonl',
+    cwd: '/Users/you/dev/smetana',
+    branch: 'staging',
+    title: 'Port the branch list to the design system',
+    lastRole: 'assistant',
+    lastText:
+      'The rebase glyph is git-graph; lucide ships no rebase mark and that is the one about the shape of the history.',
+    messages: 97,
+    subagents: 12,
+    model: 'claude-opus-5',
+    modifiedAt: galleryAt(400 * 24 * 60 * 60 * 1000)
+  }
 ]
 
 /* The Git panel's three states, in the shape `src-tauri/src/vcs/` answers with.
@@ -2681,6 +2787,42 @@ const menuTargetStyle = {
            with looks like. -->
       <div :style="{ width: '340px', padding: '0 var(--panel-pad)' }">
         <ClaimedTasks :tasks="CLAIMED" selected-id="smetana-9je" @select="() => {}" />
+      </div>
+    </section>
+
+    <section :style="sectionStyle">
+      <div :style="headStyle">Sessions</div>
+      <!-- The right column's Sessions tab, at the 340px that column ships at,
+           so a title that ellipsises here ellipsises in the app. No padding
+           around it, unlike ClaimedTasks above: these rows run to the edges of
+           the column and carry their own rule between them, and inset rows
+           would draw the separator somewhere it never appears.
+
+           The frame stands for the panel this list sits in — where the column
+           ends is not this component's business, and without a frame the rows
+           would float in the page with nothing to say where the list stops.
+           Nothing of it doubles a rule any more: the separator belongs to the
+           row below it, so the first row draws none against the frame's top
+           edge and the last draws none against its bottom one. -->
+      <div :style="{ width: '340px', border: 'var(--border-w) solid var(--border)' }">
+        <SessionRow
+          v-for="(session, index) in GALLERY_SESSIONS"
+          :key="session.id"
+          :session="session"
+          :now="GALLERY_SESSION_NOW"
+          :separated="index > 0"
+        />
+      </div>
+      <!-- What the tab draws for a project whose disk holds no transcript at
+           all — a missing `~/.claude/projects` among them, which is an ordinary
+           outcome rather than a failure and must not read as one. -->
+      <div :style="{ width: '340px', border: 'var(--border-w) solid var(--border)' }">
+        <EmptyState
+          compact
+          icon="terminal"
+          title="No sessions yet"
+          description="Claude Code sessions run in this project will appear here."
+        />
       </div>
     </section>
 

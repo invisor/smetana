@@ -75,6 +75,7 @@ export { default as CodeBlock } from './agent/CodeBlock.vue'
 export { default as LogLine } from './agent/LogLine.vue'
 export { default as LogToolbar } from './agent/LogToolbar.vue'
 export { default as LogView } from './agent/LogView.vue'
+export { default as SessionRow } from './agent/SessionRow.vue'
 export { default as ToolCall } from './agent/ToolCall.vue'
 export { parseAnsi } from './agent/ansi.js'
 

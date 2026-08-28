@@ -5,6 +5,12 @@ paths:
   - "src/components/terminal/**"
   - "src/components/agent/**"
   - "src/stores/terminals.js"
+  # The other list of sessions, and the one that is not this app's: Claude
+  # Code's transcripts on disk. It is filed here because the mistake it exists
+  # to prevent is confusing the two, and that mistake is made while reading
+  # either half.
+  - "src/stores/sessions.js"
+  - "src-tauri/src/sessions/**"
   # Half of the tab row is derived from the sessions this file is about — the
   # Agent tab and one tab per shell — so the rule has to load for whoever is
   # editing that half, not only for whoever is editing the worker.
@@ -517,3 +523,62 @@ message naming what was looked for, rather than the
 generic "nothing was created": it is the one failure in that list a person can act on, and since a
 task is now filed by an agent, it is the difference between a missing convenience and no way to put a
 card on the board. The names in it come from the error's own text, because Rust holds the only copy.
+
+## The other list of sessions: the ones on disk
+
+Everything above is about sessions **this app started**: they live in `terminalState`, they end when
+the window does, and they are drawn in the left column's Agents tab. The right column's Sessions tab
+is a different subject with an unfortunately similar name — the Claude Code transcripts already on
+the disk, which nothing here created and which outlive every run of this app.
+
+The tab used to draw `agentRows`, the same live list as the left column, and that was a considered
+decision (smetana-l56) resting on a premise that turned out to be false: that no history of sessions
+existed anywhere. It does. Claude Code writes one `.jsonl` per session under
+`~/.claude/projects/<working directory with the separators replaced>/`, and for this project alone
+the machine that question was asked on held 293 of them across the root and two worktrees. So a
+freshly launched app showed an empty column beside a disk holding a year of work, and the column that
+was full showed the same list twice.
+
+**Which sessions are this project's is decided by `cwd` inside the file, never by the directory's
+name.** The replacement of separators is not reversible — a `-` in a folder's name is
+indistinguishable from one that stands for a `/` — so the directory name is a cheap prefilter and
+nothing more. Everything whose working directory lies inside the project folder counts: the root, a
+worktree under `.worktrees/`, a subdirectory such as `src-tauri`. Sessions of other projects do not
+appear at all; there are no Workspace / Project / All switches, because the person who asked for this
+removed them explicitly.
+
+**No transcript is read whole, and that is a constraint rather than an optimisation.** 844 MB for one
+project, the largest file 16 MB, and the tab has to open at once. What a row needs is at the start of
+the file (`cwd`, `gitBranch`, the first human message), at the end of it (the last message), or is a
+count of lines with a substring check before any JSON is parsed. The last-activity time is the file's
+mtime, which is free and says the same thing as the final record's timestamp.
+
+`src/stores/sessions.js` is the front end's half: one command, `sessions_list`, and the store carries
+the rules the panel rests on — the list is emptied the moment another project is asked about, the
+last *call* wins rather than the last answer, newest first. **There is no error state to draw**, by
+contract: a missing `~/.claude/projects`, a directory that cannot be read and a corrupt line all come
+back as fewer rows. An empty list is an ordinary outcome and gets an `EmptyState` in words.
+
+The list is read when the tab is opened and when the project changes, and **there is deliberately no
+watcher**. Watching a directory that size, written to by every live session, is a subsystem with its
+own lifecycle and its own error reporting; the read itself takes a fraction of a second. A refresh
+button is the cheap answer if freshness is ever wanted, and it is not built yet.
+
+`components/agent/SessionRow.vue` draws one of them and is deliberately **not** `AgentList`: a live
+agent has a state, a timer, claimed work and a remove button, while a session on disk has a title, a
+last message, a count and a time. The two lists can be on screen at once, and they are two subjects
+rather than one sentence said twice. Everything a row says lives in `components/agent/sessionRow.js`,
+outside the component, for the reason `dropPaths.js` does.
+
+The time is relative — `18h ago` — and the objection recorded in `kanban/TaskInspector.vue` (that
+such a label turns into a lie the moment the app is left open overnight) is answered rather than
+ignored: the store ticks a `now` on an interval, started from `initSessions()` and never at module
+scope, and every row is measured against it. That is the same arrangement `terminals.js` uses for an
+agent's elapsed time, and the same reason it is lazy — the test harness rebuilds the module graph per
+test, and an interval nobody clears would outlive every test that started one.
+
+Deliberately not built, and each of them discussed: expanding a card, a menu on it, resuming a
+session, searching, grouping by project, and telling a "talking" session from a "coding" one. The
+last is the interesting one — coding happens in a worktree, and both the path and the branch carry a
+task id — but the signal is not absolute (98 of 275 root sessions sat on `develop`, `staging` or a
+`feature/…` branch), and the instruction was to show all of them and sort it out later.
