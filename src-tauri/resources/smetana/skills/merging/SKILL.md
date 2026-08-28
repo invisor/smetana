@@ -101,14 +101,16 @@ reading; the short of it is that a `smetana-run-<n>` assignee is a batch of one 
 file's records, and it is dead when the record's `writer` process is gone, and dead too
 when the writer is alive but that batch's own `group` pid holds nothing, or holds a
 process plainly not the one that batch's own `group.command` records — that name is the
-agent's, never the app's. Those are the only two readings. A holder the file names
-nowhere, a batch with no `group` recorded, no file, or a file you cannot read is **not**
-shown dead — it may be a lead somebody started by hand in a terminal — and it waits out
-the hour like any other. And a live `claude` process somewhere in the process table is
-not evidence about this lock in either direction: not its age, not its start time, not
-what `ps | grep` makes of its name — the pid this file names is the only one asked. The
-break is the same two commands and the same report line as the stale case; a dead holder
-is a second reason to reach for them, not a second mechanism.
+agent's, never the app's, and it is judged rather than string-compared, since `ps -o
+comm=` prints a full path on macOS against the kernel's short name in the file, so a path
+ending in the recorded name is a match. Those are the only two readings. A holder the
+file names nowhere, a batch with no `group` recorded, no file, or a file you cannot read
+is **not** shown dead — it may be a lead somebody started by hand in a terminal — and it
+waits out the hour like any other. And a live `claude` process somewhere in the process
+table is not evidence about this lock in either direction: not its age, not its start
+time, not what `ps | grep` makes of its name — the pid this file names is the only one
+asked. The break is the same two commands and the same report line as the stale case; a
+dead holder is a second reason to reach for them, not a second mechanism.
 
 **Nothing is ever written to the lock issue but the claim and the release** — no notes,
 no labels, no re-titling, no closing, nothing. `updated_at` moves on *any* write, so one

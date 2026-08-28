@@ -311,6 +311,14 @@ on its own. **This runs before you take any new work.**
      plausibly is the one the record describes → **the batch is alive, and the lock is
      not yours to touch.**
 
+     **Judge that name, do not string-compare it**, exactly as step 2 says of the
+     writer's, and for the same reason: the file holds the kernel's short name, capped at
+     sixteen bytes, while `ps -o comm=` prints the full executable path on macOS and the
+     short name on Linux. So a path ending in the recorded name is a match, and only a
+     plainly different program is reuse. Compared literally on macOS, every live batch
+     reads as a reused pid — the same lock broken under the same mid-merge lead, reached
+     by the one step of this branch that looks like a string equality and is not.
+
      A task claim's liveness stays the `writer`, because what a claim needs to know is
      whether the run that took it still exists to finish it, and a live app with one dead
      batch has others; what the lock needs to know is whether the session holding it is
