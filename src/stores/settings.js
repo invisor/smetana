@@ -169,6 +169,14 @@ const defaults = () => ({
   activeProject: null,
   project: {
     sideTab: 'files',
+    /* Which of the right column's two tabs is open — the task, or the sessions
+       running in this project. Per project the way `sideTab` is, and listed
+       here for the reason `runSettings` below spells out: a key missing from
+       this object is a key the defaults layer cannot clear, so a project left
+       on Sessions would put every project opened after it on Sessions too.
+       `RIGHT_TABS` in `DesktopApp.vue` and in `settings/model.rs` is the closed
+       list the value has to come off. */
+    rightTab: 'task',
     activeTab: 'kanban',
     selectedTask: null,
     /* The last three tasks somebody looked at here, newest first. Listed rather

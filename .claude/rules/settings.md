@@ -30,9 +30,9 @@ the board is drawn, `git`, what the app does to a person's repositories without 
 about a newer version by itself, and `notifications`,
 which sound each of the two announcements makes and whether a finished run shows its report. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
-absolute path to its content state (side tab, active tab, selected task, `recentTasks`, selected
-path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`, `columnOrder`,
-`tabOrder`, `runSettings`, `storageWarnedMib`, `usedAt`).
+absolute path to its content state (side tab, right tab, active tab, selected task, `recentTasks`,
+selected path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`,
+`columnOrder`, `tabOrder`, `runSettings`, `storageWarnedMib`, `usedAt`).
 
 `tabOrder` sits beside `openTabs` rather than replacing it, and the two answer different questions:
 that one is the **set of files to open again** — the dirty marks, the focus sweep and the closing of
@@ -526,6 +526,25 @@ purpose and stays empty.
 
 The side-tab set is a closed list written out twice, in `model.rs` and in `views/DesktopApp.vue`.
 Changing one without the other is silent: the value survives the session and comes back as Files.
+
+`rightTab` is the same shape one column over and carries the same obligation — `RIGHT_TABS` in both
+files, `task` and `sessions`, defaulting to `task`, which is the whole of what that panel drew before
+it had a row of tabs at all. Only the *tab* is stored: what the `task` tab is filled with stays
+derived on the front end (`rightPanel` in `DesktopApp.vue`), for the reason `selectedTask` carries —
+a panel choice that wrote to a remembered field would turn a glance into an edit of a preference.
+
+The tab moves by itself only **towards** `task`, never to `sessions`: an agent that needs an answer
+already has the bell, the scope bar and the left column, and taking the panel out from under somebody
+reading a task is not on that list. Three things move it, and only one of them is a watch. A draft or
+a run's claimed list arriving in the column is the watch, on `rightPanel`. A card picked on the board
+or in the command palette (`selectFromBoard`) and an agent row whose work is an issue
+(`selectAgent`) each write the field where the click is handled instead, because both open their
+issue on the board's own selection and so leave `rightPanel` on `'board'` with nothing for a watch to
+fire on — and without the second of those, two rows of one session list would answer the same click
+oppositely. A watch on `selectedTask` covering all three is the version that was thrown away:
+`loadProjectLayout` writes that field in the same tick as the `rightTab` beside it, so the watch
+would overwrite the remembered tab a microtask after restoring it and the setting would never survive
+a restart.
 
 Window size and position are still not *values* in this file — `tauri-plugin-window-state` keeps
 them, in its own store — but **whether they are put back is**, and that is the whole of

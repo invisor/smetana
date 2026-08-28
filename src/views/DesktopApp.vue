@@ -13,6 +13,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } f
 import ScopeIndicator from '../components/shell/ScopeIndicator.vue'
 import Panel from '../components/shell/Panel.vue'
 import Resizer from '../components/shell/Resizer.vue'
+import SegmentedTabs from '../components/shell/SegmentedTabs.vue'
 import TabBar from '../components/shell/TabBar.vue'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import { headline } from '../components/shell/headline.js'
@@ -438,7 +439,20 @@ const SIDE_TABS = [
   { id: 'git', label: 'Git' },
   { id: 'agents', label: 'Agents' }
 ]
-const hoveredSideTab = ref(null)
+
+/* The right column's own two: the task the person is looking at, and the agent
+   sessions running in this project. Both halves of one panel rather than two
+   panels, since a column has room for one thing at a time and which of the two
+   somebody wants is a choice they make rather than a state to derive.
+
+   The same doubling `SIDE_TABS` carries, and the same warning: these two ids
+   are the closed list in `src-tauri/src/settings/model.rs` (`RIGHT_TABS`) as
+   well. A third tab added only here would work all session and come back as
+   Task after a restart, with no error anywhere. */
+const RIGHT_TABS = [
+  { id: 'task', label: 'Task' },
+  { id: 'sessions', label: 'Sessions' }
+]
 onMounted(initTracker)
 onMounted(adoptInitialProject)
 onMounted(initTerminals)
@@ -1305,6 +1319,15 @@ function selectAgent(id) {
   if (work?.kind === 'editTask' || work?.kind === 'resolveTask' || work?.kind === 'fixTask') {
     project.selectedTask = work.id
     rightFocus.value = null
+    /* Written here rather than left to the watch on `rightPanel`, and this is
+       the one branch that has to: it opens an issue on the board's own
+       selection, so `rightPanel` never leaves `'board'` and the watch has
+       nothing to fire on. The filing and claimed branch below moves the panel
+       by moving `rightPanel`, and without this line two rows of one session
+       list would answer the same click oppositely — the row above showing its
+       work at once, this one showing nothing at all while quietly changing a
+       remembered preference under somebody standing on Sessions. */
+    project.rightTab = 'task'
   } else if (work?.kind === 'newTask' || row?.claimed?.length) {
     rightFocus.value = id
   }
@@ -1961,10 +1984,21 @@ watch(
 /* A click on a card is an explicit request to see that card, and it takes the
    right column back from whatever an agent's row put in it. Without this,
    picking a filing agent would leave the draft standing over every card clicked
-   afterwards, with no way back to the board but another agent. */
+   afterwards, with no way back to the board but another agent.
+
+   It takes the column back from the Sessions tab for the same reason: somebody
+   standing on Sessions would otherwise press a card and see nothing move, the
+   panel answering them one tab away. One of the three places that move that tab
+   — the branch in `selectAgent` above and the watch on `rightPanel` below are
+   the others — and the reason all three are spelled out separately rather than
+   collapsed into one watch on `selectedTask` is that `loadProjectLayout` writes
+   that field too, when a project is opened, in the same tick as the `rightTab`
+   beside it. Such a watch would restore a remembered Sessions and overwrite it
+   a microtask later with Task, and the tab would never survive a restart. */
 const selectFromBoard = (id) => {
   project.selectedTask = id
   rightFocus.value = null
+  project.rightTab = 'task'
 }
 
 /* Copying a task's id, for the card on the board and for the inspector's
@@ -2074,6 +2108,27 @@ const rightPanel = computed(() => {
   if (agentDraft.value) return 'draft'
   if (claimedTasks.value.length) return 'claimed'
   return 'board'
+})
+
+/* The third place that moves the tab, and the only one of the three that is a
+   watch: a draft, or a run's claimed list, arriving in this column has to be
+   seen, and somebody standing on Sessions would be looking at the wrong tab for
+   it. A watch works here because this is the one case that *does* move
+   `rightPanel` — the two branches that open an issue on the board's own
+   selection leave it reading `'board'`, which is why they write the tab
+   themselves.
+
+   Safe as a watch where `selectedTask` is not, and for a plain reason: nothing
+   this reads comes off the disk. `rightPanel` is derived from live sessions,
+   which do not survive a restart, so opening a project cannot move it and the
+   remembered tab is left alone.
+
+   One direction only. Nothing anywhere switches somebody **to** Sessions: an
+   agent that needs an answer already has the bell, the scope bar and the left
+   column, and taking the panel out from under a person reading a task is not on
+   that list. */
+watch(rightPanel, (panel) => {
+  if (panel !== 'board') project.rightTab = 'task'
 })
 
 /* The one answer to "which card is the person looking at", read by the board
@@ -3473,59 +3528,24 @@ const leftStyle = computed(() => ({
   display: 'flex',
   minWidth: 0
 }))
-/* Panel scrolls its slot as one block; the worktree line above and the tab row
-   below have to stay put, so only what is between them scrolls. */
-const sidebarStyle = {
+/* Panel scrolls its slot as one block, and both side columns need more than
+   that: a tab row at the top and, in the left column, the worktree line under
+   the foot, with only what is between them scrolling. Shared by the two since
+   the right column grew a row of its own — the same four lines under both, so
+   the two rows sit at the same height and stay there. */
+const tabbedColumnStyle = {
   display: 'flex',
   flexDirection: 'column',
   height: '100%',
   minHeight: 0
 }
-/* The sidebar's own tab row: micro type, because these are section names and
-   not open files. It sits directly under the panel header now, at the top of
-   what it scopes rather than at the far end of it, and it is drawn as three
-   segments instead of three full-height tabs.
+/* The tab row itself is `components/shell/SegmentedTabs.vue` now, and both side
+   columns draw theirs with it. It moved out of this file whole — the two style
+   objects that used to stand here, the roles, the roving tabindex and the focus
+   ring — when the right column grew a row of its own: two copies of that, a
+   thousand lines apart in one file and obliged to match, is the pair that
+   drifts where nobody is looking. */
 
-   The inset rule and the raised fill the foot row used are gone with the
-   position: a rule under a tab was that row's answer to sitting against the
-   column's edge, and a segmented row marks its active segment by fill. The
-   focus ring stays — it was kept explicitly at the design review, and these are
-   the one control in the new left column that has one. */
-const sideTabBar = {
-  display: 'flex',
-  alignItems: 'stretch',
-  gap: 'var(--space-1)',
-  flex: '0 0 auto',
-  padding: 'var(--space-2) var(--space-3)',
-  borderBottom: 'var(--border-w) solid var(--border-subtle)'
-}
-const sideTabStyle = (tab) => {
-  const active = project.sideTab === tab.id
-  return {
-    flex: 1,
-    minWidth: 0,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    /* The handoff draws a 22px segment; this is `--control-h-sm`, which is 24
-       comfortable and 20 compact. The token rather than the number, because a
-       literal would be the one height in the left column that neither density
-       nor the app-wide font size reaches — and 22 is inside the two anyway. */
-    height: 'var(--control-h-sm)',
-    borderRadius: 'var(--radius-2)',
-    font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-mono)',
-    letterSpacing: 'var(--tracking-caps)',
-    textTransform: 'uppercase',
-    color: active ? 'var(--text-primary)' : 'var(--text-muted)',
-    background: active
-      ? 'var(--surface-selected)'
-      : hoveredSideTab.value === tab.id
-        ? 'var(--surface-hover)'
-        : 'transparent',
-    cursor: 'default',
-    transition: 'var(--transition-control)'
-  }
-}
 /* The mark and the button that clears it are one hover target, tied together by
    a gap narrower than the header's own: the triangle is what a person sees
    without touching anything, the gear is what they press. The tooltip wraps the
@@ -3769,25 +3789,11 @@ const toastStackStyle = {
               @click="refreshGit"
             />
           </template>
-          <div :style="sidebarStyle">
-            <!-- Above what it scopes rather than at the foot of the column. The
-                 roving tabindex, the roles and the focus ring are the ones the
-                 foot row had; only the position and the fill changed. -->
-            <div role="tablist" :style="sideTabBar">
-              <div
-                v-for="t in SIDE_TABS"
-                :key="t.id"
-                role="tab"
-                :aria-selected="project.sideTab === t.id"
-                :tabindex="project.sideTab === t.id ? 0 : -1"
-                :style="sideTabStyle(t)"
-                @click="project.sideTab = t.id"
-                @mouseenter="hoveredSideTab = t.id"
-                @mouseleave="hoveredSideTab = null"
-              >
-                {{ t.label }}
-              </div>
-            </div>
+          <div :style="tabbedColumnStyle">
+            <!-- Above what it scopes rather than at the foot of the column,
+                 and the same component the right column draws its own row
+                 with. -->
+            <SegmentedTabs v-model="project.sideTab" :tabs="SIDE_TABS" />
             <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
               <!-- `filesState.root` and not `activePath`: every path this
                    panel produces is relative to that root and its menu's verbs
@@ -4096,7 +4102,7 @@ const toastStackStyle = {
       <!-- right: the task that is waiting on you, and everything known about it -->
       <div :style="rightStyle">
         <Panel
-          title="Task &amp; details"
+          title="Task &amp; sessions"
           side="right"
           :collapsed="layout.rightCollapsed"
           :style="{ flex: 1, minWidth: 0 }"
@@ -4113,12 +4119,16 @@ const toastStackStyle = {
                Drawn whenever there is an issue in the panel — from the board or
                from a run's claimed list — and absent over a draft and over the
                empty state, where there is no issue and nothing to act on. The
+               tab is the third condition, and it is the same sentence one level
+               up: on Sessions there is no card in this column at all, and a
+               menu offering to act on one nobody can see is worse than no menu.
+               The
                menu is wider than this column ever gets, which costs nothing:
                `MenuButton` is fixed-position, right-aligned to the trigger and
                clamped to the window, so it opens leftwards over the board. -->
           <template #actions>
             <MenuButton
-              v-if="inspectedIssue"
+              v-if="project.rightTab === 'task' && inspectedIssue"
               :items="inspectedMenu"
               :label="`Actions for ${inspectedIssue.id}`"
               :width="MENU_W"
@@ -4128,49 +4138,79 @@ const toastStackStyle = {
             />
           </template>
 
-          <div :style="inspectorBody">
-            <!-- A task still being filed: the person's own words, read-only,
-                 with no issue behind them. Alone in the column — there is no
-                 card selected on the board while this is up. -->
-            <DraftInspector v-if="rightPanel === 'draft'" :draft="agentDraft" />
+          <!-- Panel scrolls its slot as one block, and the tab row has to stay
+               put over what it scopes — so the row and a scrolling box under it
+               are this column's own, exactly as the left column builds them. -->
+          <div :style="tabbedColumnStyle">
+            <SegmentedTabs v-model="project.rightTab" :tabs="RIGHT_TABS" />
+            <div :style="{ flex: 1, minHeight: 0, overflow: 'auto' }">
+              <!-- The Task tab: what this column drew before there was a row
+                   over it, unchanged. Which of the four is on screen is still
+                   derived rather than stored — only the tab above is
+                   remembered, never what the tab is filled with. -->
+              <div v-if="project.rightTab === 'task'" :style="inspectorBody">
+                <!-- A task still being filed: the person's own words, read-only,
+                     with no issue behind them. Alone in the column — there is no
+                     card selected on the board while this is up. -->
+                <DraftInspector v-if="rightPanel === 'draft'" :draft="agentDraft" />
 
-            <!-- What a run has taken, and the card for whichever of them is
-                 picked. The list stays above the card: the choice between them
-                 is the point, and a card that replaced the list would take the
-                 way back with it. -->
-            <ClaimedTasks
-              v-else-if="rightPanel === 'claimed'"
-              :tasks="claimedTasks"
-              :selected-id="highlightedTask"
-              @select="project.selectedTask = $event"
-            />
+                <!-- What a run has taken, and the card for whichever of them is
+                     picked. The list stays above the card: the choice between them
+                     is the point, and a card that replaced the list would take the
+                     way back with it. -->
+                <ClaimedTasks
+                  v-else-if="rightPanel === 'claimed'"
+                  :tasks="claimedTasks"
+                  :selected-id="highlightedTask"
+                  @select="project.selectedTask = $event"
+                />
 
-            <!-- A link in one of the issue's prose fields goes to the person's
-                 own browser: the panel raises it, and this is where the app's
-                 one link-opening path is bound to it. -->
-            <TaskInspector
-              v-if="inspectedIssue"
-              :issue="inspectedIssue"
-              :ui-status="toUiStatus(inspectedIssue.status)"
-              :copy-state="copyStateFor(inspectedIssue.id)"
-              @open="openExternal"
-              @copy-id="copyTaskId"
-            />
+                <!-- A link in one of the issue's prose fields goes to the person's
+                     own browser: the panel raises it, and this is where the app's
+                     one link-opening path is bound to it. -->
+                <TaskInspector
+                  v-if="inspectedIssue"
+                  :issue="inspectedIssue"
+                  :ui-status="toUiStatus(inspectedIssue.status)"
+                  :copy-state="copyStateFor(inspectedIssue.id)"
+                  @open="openExternal"
+                  @copy-id="copyTaskId"
+                />
 
-            <!-- Nothing picked on the board, which is where a project opens.
-                 The app's own answer to "nothing here" rather than a blank
-                 column: a silent panel beside a full board reads as a
-                 rendering failure. Only the board case — under a run's
-                 claimed list the list itself is the content, and an empty
-                 state beneath it would say the panel was empty when it is
-                 not. -->
-            <EmptyState
-              v-else-if="rightPanel === 'board'"
-              compact
-              icon="inbox"
-              title="No task selected"
-              description="Pick a card on the board to see it here."
-            />
+                <!-- Nothing picked on the board, which is where a project opens.
+                     The app's own answer to "nothing here" rather than a blank
+                     column: a silent panel beside a full board reads as a
+                     rendering failure. Only the board case — under a run's
+                     claimed list the list itself is the content, and an empty
+                     state beneath it would say the panel was empty when it is
+                     not. -->
+                <EmptyState
+                  v-else-if="rightPanel === 'board'"
+                  compact
+                  icon="inbox"
+                  title="No task selected"
+                  description="Pick a card on the board to see it here."
+                />
+              </div>
+
+              <!-- The Sessions tab: the same list, the same component and the
+                   same handlers the left column's Agents tab passes, on
+                   purpose. Both can be on screen at once, and "which agents are
+                   working" is one sentence of this product rather than two — a
+                   second drawing of it is exactly how two halves come apart
+                   where a person can watch it happen. The order is the store's
+                   and is not reversed here for the same reason: one screen
+                   showing one list in two orders is worse than a list whose
+                   newest row is at the bottom. Its own empty state is the whole
+                   of what a freshly started app shows here. -->
+              <AgentList
+                v-else
+                :rows="agentRows"
+                :active-id="terminalState.activeId"
+                @select="selectAgent"
+                @remove="removeSession"
+              />
+            </div>
           </div>
         </Panel>
       </div>
