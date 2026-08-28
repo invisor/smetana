@@ -7,6 +7,12 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
 import { fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
+import {
+  COPIED_MS,
+  copyNoun as copyVerbNoun,
+  copyPayload,
+  isCopyKind
+} from '../components/agent/sessionMenu.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import { orderTabs } from '../components/shell/tabOrder.js'
 import {
@@ -30,6 +36,7 @@ import {
   CommandPalette,
   ConflictModal,
   ContextMenu,
+  DeleteSessionModal,
   DeleteTaskModal,
   DependencyMark,
   DiffView,
@@ -795,7 +802,8 @@ const GALLERY_SESSIONS = [
     messages: 1,
     subagents: 0,
     model: 'claude-opus-5',
-    modifiedAt: galleryAt(4 * 60 * 1000)
+    modifiedAt: galleryAt(4 * 60 * 1000),
+    size: 148_392
   },
   {
     id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
@@ -810,7 +818,8 @@ const GALLERY_SESSIONS = [
     messages: 48,
     subagents: 3,
     model: 'claude-opus-5',
-    modifiedAt: galleryAt(18 * 60 * 60 * 1000)
+    modifiedAt: galleryAt(18 * 60 * 60 * 1000),
+    size: 2_884_016
   },
   {
     id: '5d2f8c41-9b0a-4c1d-8e7f-6a5b4c3d2e1f',
@@ -824,7 +833,8 @@ const GALLERY_SESSIONS = [
     messages: 214,
     subagents: 1,
     model: 'claude-opus-5',
-    modifiedAt: galleryAt(2 * 24 * 60 * 60 * 1000)
+    modifiedAt: galleryAt(2 * 24 * 60 * 60 * 1000),
+    size: 16_402_771
   },
   {
     id: 'c81b0e39-4a5f-4b6c-9d0e-1f2a3b4c5d6e',
@@ -837,7 +847,8 @@ const GALLERY_SESSIONS = [
     messages: 6,
     subagents: 0,
     model: 'claude-sonnet-4-5',
-    modifiedAt: galleryAt(21 * 24 * 60 * 60 * 1000)
+    modifiedAt: galleryAt(21 * 24 * 60 * 60 * 1000),
+    size: 41_508
   },
   {
     id: 'e4a90d77-2b3c-4d5e-8f90-1a2b3c4d5e6f',
@@ -850,7 +861,8 @@ const GALLERY_SESSIONS = [
     messages: 0,
     subagents: 0,
     model: null,
-    modifiedAt: galleryAt(40 * 24 * 60 * 60 * 1000)
+    modifiedAt: galleryAt(40 * 24 * 60 * 60 * 1000),
+    size: 0
   },
   {
     id: '7b6a5948-3c2d-4e1f-9a0b-8c7d6e5f4a3b',
@@ -864,9 +876,64 @@ const GALLERY_SESSIONS = [
     messages: 97,
     subagents: 12,
     model: 'claude-opus-5',
-    modifiedAt: galleryAt(400 * 24 * 60 * 60 * 1000)
+    modifiedAt: galleryAt(400 * 24 * 60 * 60 * 1000),
+    size: 7_115_240
   }
 ]
+
+/* This page's own half of what the Sessions tab holds for a card, in the small,
+   and it is here for the reason the `copyId` harness above is: the component
+   takes `expanded`, `copyState` and `copyNoun` as props and raises `toggle` and
+   `action`, so a page that drew it with none of them would exercise exactly the
+   collapsed half of it and leave the opened card — which is most of this task —
+   verified nowhere. The one verification this project has for anything under
+   `src/components/` is this page.
+
+   The second row starts open, so the opened card is on screen without anybody
+   having to find and press a chevron in four theme and density combinations.
+
+   `action` is answered with the same copy policy the app keeps — one session
+   and one outcome at a time, cleared after the same 1.2 s — and with nothing at
+   all for the four verbs that reach a desktop or a disk: a gallery has neither,
+   and the menu opening, walking and closing is what there is to check here. */
+const openSessions = ref([GALLERY_SESSIONS[1].id])
+
+const toggleSession = (id) => {
+  const at = openSessions.value.indexOf(id)
+  if (at >= 0) openSessions.value.splice(at, 1)
+  else openSessions.value.push(id)
+}
+
+const copiedSessionId = ref(null)
+const sessionCopyState = ref('')
+const sessionCopyNoun = ref('')
+let sessionCopyTimer = null
+
+const sessionCopyStateFor = (id) =>
+  id != null && id === copiedSessionId.value ? sessionCopyState.value : ''
+const sessionCopyNounFor = (id) =>
+  id != null && id === copiedSessionId.value ? sessionCopyNoun.value : ''
+
+const onSessionAction = async ({ kind, session }) => {
+  if (!isCopyKind(kind)) return
+  clearTimeout(sessionCopyTimer)
+  copiedSessionId.value = session.id
+  sessionCopyState.value = ''
+  sessionCopyNoun.value = copyVerbNoun(kind)
+  const text = copyPayload(kind, session)
+  const ok = text ? await copyText(text) : false
+  if (copiedSessionId.value !== session.id) return
+  /* The second clear, for the reason `copyId` above spells out: two presses on
+     one row both get past the guard, and the first one's timer would otherwise
+     go on running with nothing pointing at it. */
+  clearTimeout(sessionCopyTimer)
+  sessionCopyState.value = ok ? 'copied' : 'failed'
+  sessionCopyTimer = setTimeout(() => {
+    copiedSessionId.value = null
+    sessionCopyState.value = ''
+    sessionCopyNoun.value = ''
+  }, COPIED_MS)
+}
 
 /* The Git panel's three states, in the shape `src-tauri/src/vcs/` answers with.
    Two repositories rather than one, since a project made of several is what the
@@ -2060,6 +2127,29 @@ const menuTargetStyle = {
           @confirm="() => {}"
         />
       </div>
+      <!-- Deleting a Claude Code transcript, which is the one thing in this app
+           that unlinks a file the app did not make. Both states again, and the
+           record is the 16 MB session out of a worktree: the size is half of
+           what a person checks before pressing this, and a dialog drawn over a
+           small one would never show what a long path and a large number do to
+           the layout. -->
+      <div :style="{ position: 'relative', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DeleteSessionModal
+          :open="true"
+          :session="GALLERY_SESSIONS[2]"
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <div :style="{ position: 'relative', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DeleteSessionModal
+          :open="true"
+          :session="GALLERY_SESSIONS[2]"
+          busy
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
       <!-- A parked task on its way back to Ready. Both wordings are here, and
            the empty one is not the tidy case: a task parked by hand carries no
            note, so the dialog has to be worth reading with nothing to quote. -->
@@ -2811,6 +2901,28 @@ const menuTargetStyle = {
           :session="session"
           :now="GALLERY_SESSION_NOW"
           :separated="index > 0"
+          :expanded="openSessions.includes(session.id)"
+          :copy-state="sessionCopyStateFor(session.id)"
+          :copy-noun="sessionCopyNounFor(session.id)"
+          @toggle="toggleSession"
+          @action="onSessionAction"
+        />
+      </div>
+      <!-- The two states of an opened card the list above cannot show at once.
+           The first is a session nobody said anything in: its prompt block
+           carries the sentence that stands in for a first prompt, which is the
+           only place that string appears. The second is a card whose menu is
+           frozen while a delete runs against it — every row greyed, which is
+           the state the app draws for the moment between Delete and the row
+           leaving the list. -->
+      <div :style="{ width: '340px', border: 'var(--border-w) solid var(--border)' }">
+        <SessionRow :session="GALLERY_SESSIONS[4]" :now="GALLERY_SESSION_NOW" expanded />
+        <SessionRow
+          :session="GALLERY_SESSIONS[3]"
+          :now="GALLERY_SESSION_NOW"
+          separated
+          expanded
+          busy
         />
       </div>
       <!-- What the tab draws for a project whose disk holds no transcript at

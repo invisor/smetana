@@ -17,6 +17,11 @@ const session = (id, over = {}) => ({
   subagents: 0,
   model: 'claude-opus-5',
   modifiedAt: '2026-08-28T12:00:00Z',
+  /* The one field no row draws: the delete confirmation names it. Here so that
+     this fourth hand-written copy of `SessionSummary` stays the shape the
+     worker sends — it is the copy that fails loudly, which is the whole reason
+     it is written out. */
+  size: 148_392,
   ...over
 })
 
@@ -177,5 +182,133 @@ describe('the sessions a project has on disk', () => {
     answer([session('a')])
     await reading
     expect(stores.sessions.sessionsState.loading).toBe(false)
+  })
+})
+
+describe('opening a transcript, and the directory it ran in', () => {
+  it('asks the worker to hand the path to the desktop', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('sessions_open', null)
+
+    expect(await stores.sessions.openSessionPath('/p/a.jsonl')).toBe(null)
+    expect(ipc.calls('sessions_open')).toEqual([{ path: '/p/a.jsonl' }])
+  })
+
+  /* The list is read when the tab is opened and never watched, so a row whose
+     file has since gone is the ordinary case rather than an exotic one. What
+     the caller needs back is the sentence, because it goes straight on the
+     screen — a silent refusal is the one outcome the acceptance criteria rule
+     out. */
+  it('hands back the refusal as words rather than swallowing it', async () => {
+    const { ipc, stores } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('sessions_open', 'The file is no longer on disk.')
+
+    expect(await stores.sessions.openSessionPath('/p/gone.jsonl')).toBe(
+      'The file is no longer on disk.'
+    )
+  })
+
+  /* A channel that broke rejects with an `Error` rather than with Rust's
+     string — a browser's mock is exactly that — and `[object Object]` on a
+     toast explains nothing. */
+  it('turns an error object into a sentence too', async () => {
+    const { ipc, stores } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('sessions_open', new Error('the command is not implemented'))
+
+    expect(await stores.sessions.openSessionPath('/p/a.jsonl')).toBe(
+      'the command is not implemented'
+    )
+  })
+
+  /* A session with no working directory recorded has nothing to open, and the
+     command is not asked at all: a call with an empty path would be answered by
+     Rust with a sentence about a path that is not there, which is true and
+     slower. */
+  it('does not ask about a path there is none of', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('sessions_open', null)
+
+    expect(await stores.sessions.openSessionPath(null)).toBe('There is no path to open.')
+    expect(ipc.calls('sessions_open')).toEqual([])
+  })
+})
+
+describe('deleting a transcript', () => {
+  /* The whole of the destructive half: the file goes and the row goes with it.
+     The row leaving is this store's own consequence — nothing re-reads the disk
+     — so it is checked here rather than assumed. */
+  it('deletes the file and takes the row out of the list', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('sessions_list', [session('a'), session('b')])
+    await stores.sessions.loadSessionHistory('/p')
+    ipc.on('sessions_delete', null)
+
+    const failure = await stores.sessions.deleteSessionTranscript(
+      '/Users/you/.claude/projects/-p/a.jsonl'
+    )
+
+    expect(failure).toBe(null)
+    expect(ipc.calls('sessions_delete')).toEqual([
+      { path: '/Users/you/.claude/projects/-p/a.jsonl' }
+    ])
+    expect(stores.sessions.sessionsState.sessions.map((row) => row.id)).toEqual(['b'])
+  })
+
+  /* The other half of the same criterion: the answer was no, so nothing was
+     asked and the file is where it was. The refusal is drawn from a dialog this
+     store never sees, which is exactly why the check here is that the store
+     makes no call of its own. */
+  it('asks nothing at all until somebody confirms', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('sessions_list', [session('a')])
+    await stores.sessions.loadSessionHistory('/p')
+    ipc.on('sessions_delete', null)
+
+    expect(ipc.calls('sessions_delete')).toEqual([])
+    expect(stores.sessions.sessionsState.sessions.map((row) => row.id)).toEqual(['a'])
+  })
+
+  /* A delete the worker refused — the ordinary reason being a transcript that
+     had already gone — leaves the list untouched and answers with the sentence.
+     Taking the row out anyway would be this store claiming to know something
+     about a disk it has not read since the tab was opened. */
+  it('leaves the row alone when the delete was refused, and says why', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('sessions_list', [session('a')])
+    await stores.sessions.loadSessionHistory('/p')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('sessions_delete', 'The transcript is no longer on disk.')
+
+    const failure = await stores.sessions.deleteSessionTranscript(
+      '/Users/you/.claude/projects/-p/a.jsonl'
+    )
+
+    expect(failure).toBe('The transcript is no longer on disk.')
+    expect(stores.sessions.sessionsState.sessions.map((row) => row.id)).toEqual(['a'])
+  })
+
+  /* A path this list does not hold is deleted all the same — the command is
+     the authority on what is on disk — and nothing is spliced out from under
+     the rows that are there. */
+  it('takes nothing out of the list for a path the list does not hold', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('sessions_list', [session('a')])
+    await stores.sessions.loadSessionHistory('/p')
+    ipc.on('sessions_delete', null)
+
+    expect(await stores.sessions.deleteSessionTranscript('/elsewhere/x.jsonl')).toBe(null)
+    expect(stores.sessions.sessionsState.sessions.map((row) => row.id)).toEqual(['a'])
+  })
+
+  it('does not ask about a transcript there is no path for', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('sessions_delete', null)
+
+    expect(await stores.sessions.deleteSessionTranscript('')).toBe(
+      'There is no transcript to delete.'
+    )
+    expect(ipc.calls('sessions_delete')).toEqual([])
   })
 })

@@ -314,6 +314,9 @@ fn summarise(
         messages: facts.messages,
         model: tail.model.or(facts.model),
         modified_at: modified_at(&meta),
+        /* The `stat` this function has already done, read a second time for
+           nothing extra. See `SessionSummary::size` for who wants it. */
+        size: meta.len(),
     })
 }
 
@@ -362,7 +365,7 @@ pub fn list_in(root: &Path, project: &Path) -> Vec<SessionSummary> {
 
 /// Where Claude Code keeps its transcripts. `HOME` rather than a crate, the way
 /// `agents::library`, `runs::browser` and `tracker::access` already read it.
-fn projects_root() -> Option<PathBuf> {
+pub(super) fn projects_root() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|home| !home.as_os_str().is_empty())

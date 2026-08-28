@@ -194,6 +194,8 @@ pub fn run() {
       runs::commands::target_branches,
       runs::commands::agent_usage,
       sessions::commands::sessions_list,
+      sessions::commands::sessions_open,
+      sessions::commands::sessions_delete,
       settings::commands::settings_load,
       settings::commands::settings_save,
       window::settings_window_open,

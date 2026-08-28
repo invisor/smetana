@@ -58,10 +58,23 @@ import IconButton from '../components/core/IconButton.vue'
 import { CommandPalette, TaskSearchButton, TerminalView } from '../components/index.js'
 import AgentList from '../components/agent/AgentList.vue'
 import SessionRow from '../components/agent/SessionRow.vue'
+import {
+  COPIED_MS,
+  DELETE_SESSION_TITLE,
+  copyNoun as copyVerbNoun,
+  copyPayload,
+  isCopyKind
+} from '../components/agent/sessionMenu.js'
 /* The right column's Sessions tab, and a different subject from the store
    below it: this one is Claude Code's own transcripts on disk, that one is the
    live PTY sessions of this run of the app. The two lists never mix. */
-import { initSessions, loadSessionHistory, sessionsState } from '../stores/sessions.js'
+import {
+  deleteSessionTranscript,
+  initSessions,
+  loadSessionHistory,
+  openSessionPath,
+  sessionsState
+} from '../stores/sessions.js'
 import {
   agentCounts,
   agentRows,
@@ -2063,6 +2076,216 @@ async function copyTaskId(id) {
 }
 
 onUnmounted(() => clearTimeout(copiedTaskTimer))
+
+/* ---- the Sessions tab's cards, and the menu on one ----------------------- */
+
+/* Which cards are open, by session id. A list rather than a `Set` for one
+   reason: this is read in the template once per row, and a `Set` behind a
+   `ref` is a proxy whose `has` is not tracked the way an array's `includes`
+   is — the same trap `expanded` in the file tree avoids by being an array in
+   `settings.json`.
+
+   Several at once, which is the design: comparing two sessions is what
+   somebody opens a second card for. And nothing about it is written down —
+   `settings.json` is where the things that survive a restart live, and opening
+   a card is a gesture inside one look at a list. */
+const expandedSessions = ref([])
+
+const isSessionOpen = (id) => expandedSessions.value.includes(id)
+
+const toggleSession = (id) => {
+  const at = expandedSessions.value.indexOf(id)
+  if (at >= 0) expandedSessions.value.splice(at, 1)
+  else expandedSessions.value.push(id)
+}
+
+/* A project switch closes everything. The ids of another project's sessions
+   would never match a row again, so nothing would be drawn open — but the list
+   would go on growing for as long as the window is up, and a session id is a
+   UUID: this is the one place that would quietly keep every card anybody had
+   ever opened. */
+watch(() => sessionsState.project, () => {
+  expandedSessions.value = []
+})
+
+/* Copying one of the three things a session row offers — its resume command,
+   its id, the path to its transcript — and saying so afterwards.
+
+   `copyTaskId` above is the policy, followed here to the millisecond and for
+   its own stated reason: a copy is the one action with nothing on screen to
+   show for it, so the answer belongs on the control somebody is still looking
+   at rather than in the corner of the screen. What differs is where it lands.
+   A task's id is a control of its own; a session's copy is picked from a menu
+   that closes on the way out, so the trigger the menu hung from is what is left
+   to answer on — it draws a tick and names what was copied, then goes back to
+   being a menu button.
+
+   One session at a time, deliberately, exactly as one id at a time up there:
+   two rows both claiming to have been copied would be a claim about a clipboard
+   that holds one thing. */
+const copiedSessionId = ref(null)
+/* '' | 'copied' | 'failed' */
+const sessionCopyState = ref('')
+/* Which of the three it was, for the sentence. */
+const sessionCopyNoun = ref('')
+let sessionCopyTimer = null
+
+const sessionCopyStateFor = (id) =>
+  id != null && id === copiedSessionId.value ? sessionCopyState.value : ''
+const sessionCopyNounFor = (id) =>
+  id != null && id === copiedSessionId.value ? sessionCopyNoun.value : ''
+
+async function copyFromSession(kind, session) {
+  const id = session?.id ?? null
+  const text = copyPayload(kind, session)
+  clearTimeout(sessionCopyTimer)
+  /* Claimed before the await and with no outcome yet, so the previous row has
+     already stopped saying it was copied by the time this one answers. */
+  copiedSessionId.value = id
+  sessionCopyState.value = ''
+  sessionCopyNoun.value = copyVerbNoun(kind)
+  /* Nothing to copy is a refusal rather than a copy of the empty string: a
+     clipboard emptied by a press is worse than one left alone, and the button
+     says which it was. */
+  const ok = text ? await copyText(text) : false
+  // A second press, on this session or another, has taken the state over since.
+  if (copiedSessionId.value !== id) return
+  /* Again, and not the same clear as the one above — `copyTaskId` spends a
+     paragraph on why two presses on one row both get past that guard and would
+     otherwise leave a stranded timer that cuts the second confirmation short. */
+  clearTimeout(sessionCopyTimer)
+  sessionCopyState.value = ok ? 'copied' : 'failed'
+  sessionCopyTimer = setTimeout(() => {
+    copiedSessionId.value = null
+    sessionCopyState.value = ''
+    sessionCopyNoun.value = ''
+  }, COPIED_MS)
+}
+
+onUnmounted(() => clearTimeout(sessionCopyTimer))
+
+/* Which transcript is being deleted, by path — the field the row's menu is
+   greyed from. A path and not a boolean, so a second row's menu is live while
+   the first one's is not. */
+const deletingSessionPath = ref(null)
+
+/* And which one a person is being asked about, or null. The whole record rather
+   than an id, unlike `confirmingDelete` for a task, and the difference is where
+   the truth lives: a task is in `trackerState` and can be read again by id at
+   the moment the dialog is announced, while the sessions list is read off disk
+   when the tab is opened and never watched — so the row the menu was opened
+   over is the whole of what this app knows about that session. */
+const confirmingSession = ref(null)
+
+/* The confirmation, in a window of its own. Its ground is the project alone;
+   `dialogRegistry.js` records why there is no sort of ground for a session and
+   why that is right rather than missing. */
+const openDeleteSession = (session) => {
+  confirmingSession.value = session
+  serveDialog('delete-session', {
+    ground: { project: activePath.value },
+    props: () => ({
+      /* The frame's caption, and the same one copy the component's own heading
+         calls — see `DELETE_SESSION_TITLE`. */
+      title: DELETE_SESSION_TITLE,
+      session: confirmingSession.value,
+      /* Announced because it is the component's prop, not because it is ever
+         seen here: the delete closes this window before it starts, for the
+         reason written over `deleteSession`. The state itself is looked at in
+         `?view=gallery`. */
+      busy: Boolean(deletingSessionPath.value)
+    }),
+    forget: () => {
+      confirmingSession.value = null
+    },
+    onResult: (name) => {
+      if (name === 'close') closeDialog('delete-session')
+      if (name === 'confirm') deleteSession(confirmingSession.value)
+    }
+  })
+}
+
+/* The dialog closes first and the file goes after, which is the shape every
+   write behind a dialog in this view keeps (`cutBranch` records it). Here it
+   costs nothing to observe: the answer arrives in a few milliseconds, the row
+   leaves the list on its own, and a refusal has a toast of its own — which is
+   the thing that would otherwise be hidden behind a window somebody is still
+   looking at.
+
+   The row's own menu is greyed while it runs, which is what `deletingSessionPath`
+   is for. It is a short window and it is not decoration: pressing Delete twice
+   would put the second press against a file the first one has already taken. */
+async function deleteSession(session) {
+  const path = session?.path
+  closeDialog('delete-session')
+  if (!path) return
+  deletingSessionPath.value = path
+  try {
+    const failure = await deleteSessionTranscript(path)
+    if (failure) {
+      sayFileMenu({ tone: 'error', title: 'Nothing was deleted', description: failure })
+      return
+    }
+    /* The store has taken the row out. Its card goes with it, or the id would
+       sit in that list for the life of the window naming nothing. */
+    const at = expandedSessions.value.indexOf(session.id)
+    if (at >= 0) expandedSessions.value.splice(at, 1)
+    sayFileMenu({
+      tone: 'success',
+      title: 'The transcript was deleted',
+      description: path
+    })
+  } finally {
+    deletingSessionPath.value = null
+  }
+}
+
+/* The session menu's verbs: which one does what. The rows themselves are
+   `components/agent/sessionMenu.js`'s, and the pair is joined by hand — a
+   `kind` renamed on one side draws perfectly and does nothing at all when
+   pressed, the same seam `fileMenu.js`/`onFileAction` has. The test pins the
+   producing side.
+
+   Every failure says so. That is the whole of one acceptance criterion and it
+   is not a formality: this list is read when the tab is opened and never
+   watched, so a transcript deleted from somewhere else — or a worktree removed
+   after the session that ran in it — leaves a row whose every verb is about a
+   file that has gone, and a menu item that did nothing and said nothing would
+   read as a broken app rather than as a stale row. */
+const onSessionAction = async ({ kind, session }) => {
+  if (isCopyKind(kind)) {
+    await copyFromSession(kind, session)
+  } else if (kind === 'open-log') {
+    const failure = await openSessionPath(session?.path)
+    if (failure) {
+      sayFileMenu({ tone: 'error', title: 'Could not open the log', description: failure })
+    }
+  } else if (kind === 'open-cwd') {
+    const failure = await openSessionPath(session?.cwd)
+    if (failure) {
+      sayFileMenu({
+        tone: 'error',
+        title: 'Could not open the working directory',
+        description: failure
+      })
+    }
+  } else if (kind === 'reveal-log') {
+    /* The one verb here that is still the opener plugin's, because it is the
+       one the app already had a capability for and `revealItemInDir` takes no
+       scope at all. `app.js` answers `false` in a browser rather than throwing,
+       which is what the sentence below is about. */
+    const ok = await revealInFileManager(session?.path)
+    if (!ok) {
+      sayFileMenu({
+        tone: 'error',
+        title: 'Could not show it',
+        description: 'This one needs the desktop app — a browser has no file manager to ask.'
+      })
+    }
+  } else if (kind === 'delete') {
+    openDeleteSession(session)
+  }
+}
 
 /* The row the panel is following. It has to be a lookup rather than a stored
    row: `agentRows` is rebuilt on every state event, and a row held from the
@@ -4248,6 +4471,12 @@ const toastStackStyle = {
                   :session="session"
                   :now="sessionsState.now"
                   :separated="index > 0"
+                  :expanded="isSessionOpen(session.id)"
+                  :busy="deletingSessionPath === session.path"
+                  :copy-state="sessionCopyStateFor(session.id)"
+                  :copy-noun="sessionCopyNounFor(session.id)"
+                  @toggle="toggleSession"
+                  @action="onSessionAction"
                 />
                 <!-- Said in words rather than left blank, and not while the
                      read is still out: this sentence is a claim about what is

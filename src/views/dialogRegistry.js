@@ -14,7 +14,7 @@
    underneath; a window somebody can push aside and click past has no such
    promise. */
 
-/* The seven, and the width each one's window gets. Every one of them drew at
+/* The eight, and the width each one's window gets. Every one of them drew at
    `Modal`'s default 440 as a modal, and there is no reason for that to change
    just because the frame did — the numbers are here so that a dialog which
    outgrows it has somewhere to say so. */
@@ -25,7 +25,18 @@ const REGISTRY = {
   'promote-column': { width: 440, ground: ['project', 'column'] },
   'setup-project': { width: 440, ground: ['project'] },
   'delete-task': { width: 440, ground: ['project', 'issue'] },
-  'ready-task': { width: 440, ground: ['project', 'issue'] }
+  'ready-task': { width: 440, ground: ['project', 'issue'] },
+  /* Deleting a Claude Code transcript. Its ground is the project and nothing
+     else, and that is a decision rather than a gap: the other sorts of ground
+     are sets this window keeps and can watch — the issues, the columns, the
+     branches — and there is no set of sessions to watch. The list is read off
+     disk when the tab is opened and deliberately never watched (see
+     `sessions/mod.rs`), so a transcript that goes while this dialog stands open
+     is not something the app can notice, and inventing a clause for it would be
+     a check that never fires. What answers that case instead is the delete
+     itself: `sessions_delete` says the transcript is no longer on disk, and the
+     person reads it as a sentence rather than as a window vanishing. */
+  'delete-session': { width: 440, ground: ['project'] }
 }
 
 export const DIALOG_KINDS = Object.keys(REGISTRY)
@@ -54,7 +65,8 @@ const DIALOG_NOUN = {
   'promote-column': 'promote column',
   'setup-project': 'project setup',
   'delete-task': 'delete',
-  'ready-task': 'move to ready'
+  'ready-task': 'move to ready',
+  'delete-session': 'delete session'
 }
 
 const REASON_CLAUSE = {

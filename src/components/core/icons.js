@@ -52,6 +52,7 @@ import {
   LoaderCircle,
   Lock,
   MessageCircleQuestion,
+  MessageSquare,
   Milestone,
   Minus,
   PanelLeftClose,
@@ -157,6 +158,12 @@ export const iconNodes = {
   // The design system asks for "message-circle-question-mark"; lucide 0.469 still
   // calls it MessageCircleQuestion (renamed upstream later). Keep the DS name.
   'message-circle-question-mark': MessageCircleQuestion,
+  /* The caption over an opened session card's first prompt. A plain speech
+     bubble and deliberately not the question mark above it: that glyph is the
+     card menu's "Answer questions" on a parked task, where it means somebody is
+     being asked something, and this one only says that what follows is a
+     message rather than a field. */
+  'message-square': MessageSquare,
 
   // log and tools
   pause: Pause,

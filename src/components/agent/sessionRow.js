@@ -167,3 +167,63 @@ export function sessionMeta(session, now) {
     .filter(Boolean)
     .map((piece, index) => ({ ...piece, lead: index === 0 ? null : META_SEPARATOR }))
 }
+
+/* ---- what a card says once it is opened ---------------------------------- */
+
+/* The caption over the first prompt, Orca's own and worth keeping: it is the
+   one line of a transcript a person recognises a conversation by, and saying so
+   in words is what stops the block below reading as a quotation of the last
+   thing said.
+
+   Sentence case here and uppercase on screen. Every small caption in this
+   system is set that way — `ContextMenu`'s labels, the task inspector's field
+   headings — so the letters are the stylesheet's business and the words are
+   this file's. */
+export const FIRST_PROMPT_HEADING = 'First prompt'
+
+/* The whole of the first thing the person typed, for the opened card.
+
+   The same record the title is taken from, and deliberately: `human_text` in
+   the worker walks past the hooks, the skill bodies and the slash-command
+   echoes to find it, and there is exactly one answer to "what did they open
+   with". What differs is the setting. The title is one line with an ellipsis,
+   because a list whose rows are each as tall as their opening remark cannot be
+   scanned; this wraps to as many lines as it takes, because the card was opened
+   on purpose.
+
+   How much of it there is to show is the worker's `CLIP` — 240 characters over
+   the wire, and no more is asked for here. Fetching the untruncated prompt
+   would mean a second read of a file that can be 16 MB for a block that is
+   already longer than anything a person reads standing up, and the cap is
+   `model.rs`'s to move if that is ever wanted.
+
+   Null when the transcript holds no human message at all, which is an ordinary
+   outcome — a session opened and abandoned — and is why the component has
+   something else to draw rather than an empty frame. */
+export function firstPrompt(session) {
+  return oneLine(session?.title)
+}
+
+/* What is said when there is none. A sentence rather than a blank box: an empty
+   frame under a caption reads as a block that failed to draw. */
+export const NO_FIRST_PROMPT = 'Nothing was typed in this session.'
+
+/* The two facts the opened card carries besides the prompt, in pieces rather
+   than as one string.
+
+   Both are paths, so both are set in mono and their labels in sans — the
+   project's rule, and the reason the pieces arrive tagged rather than joined.
+   The working directory is the one fact about a session the three collapsed
+   lines never carry: a session out of a worktree and one out of the project
+   root are both this project's, and only this tells them apart. It is the row's
+   hover string too, and that is not a duplicate worth removing — a hover string
+   is for the row somebody is pointing at, and this is for the card they opened.
+
+   Anything missing is left out entirely rather than drawn as an empty value,
+   the same reading `sessionMeta` takes of a session with no branch. */
+export function sessionDetails(session) {
+  return [
+    session?.path ? { label: 'Log', value: session.path } : null,
+    session?.cwd ? { label: 'Working directory', value: session.cwd } : null
+  ].filter(Boolean)
+}

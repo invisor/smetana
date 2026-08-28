@@ -3,7 +3,12 @@
 use std::path::PathBuf;
 
 use super::model::SessionSummary;
-use super::read;
+use super::{act, read};
+
+/// A machine with no `HOME` at all, which is the one state in which neither
+/// verb below can decide anything. Said in words rather than answered with
+/// "that is not a transcript", which would be a claim about the path.
+const NO_ROOT: &str = "There is no home directory to find Claude Code's transcripts under.";
 
 /// The sessions of a project, newest first.
 ///
@@ -43,4 +48,45 @@ pub async fn sessions_list(project: String) -> Vec<SessionSummary> {
             );
             Vec::new()
         })
+}
+
+/// A session's transcript, or the directory it ran in, handed to the desktop.
+///
+/// A `Result` where the command above has none, and the difference is the whole
+/// of `act.rs`'s header: this is a verb somebody pressed, and a press that does
+/// nothing and says nothing is the one outcome the Sessions tab may not have.
+/// The message is written for a person, since it is put on screen as it stands.
+///
+/// On the blocking pool for the same reason as the read: `open_path` stats the
+/// file and then spawns whatever the system has registered, and neither of
+/// those belongs on a runtime worker shared with the board and the terminals.
+#[tauri::command]
+pub async fn sessions_open(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let root = read::projects_root().ok_or_else(|| NO_ROOT.to_owned())?;
+        act::open(&PathBuf::from(path), &root)
+    })
+    .await
+    .unwrap_or_else(|err| Err(format!("The open did not run: {err}")))
+}
+
+/// One transcript, deleted.
+///
+/// The confirmation is the front end's — `views/dialogRegistry.js`'s
+/// `delete-session` window, which names the id, the path and the size — and
+/// this command is deliberately not the place that asks: a dialog raised from
+/// Rust would be a second vocabulary for the same question and could not draw
+/// in this app's own tokens.
+///
+/// What stands here instead is the guard, and it is not a formality: the path
+/// arrives from the webview, so `sessions::model::is_transcript` is the whole
+/// of what keeps this command from being "delete any file on the machine".
+#[tauri::command]
+pub async fn sessions_delete(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let root = read::projects_root().ok_or_else(|| NO_ROOT.to_owned())?;
+        act::delete(&PathBuf::from(path), &root)
+    })
+    .await
+    .unwrap_or_else(|err| Err(format!("The delete did not run: {err}")))
 }
