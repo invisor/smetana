@@ -116,18 +116,23 @@ export async function loadSessionHistory(project) {
   }
 }
 
-/* ---- the two verbs a session row's menu has that are not the clipboard ---- */
+/* ---- the verbs a session row's menu has that are not the clipboard ------- */
 
 /* Whatever a command refused with, as a sentence.
  *
- * `sessions_open` and `sessions_delete` reject with a `String` written for a
- * person — `sessions/act.rs` composes them and its header says why they are
- * sentences rather than codes. What arrives at this side of the wire is that
- * string for a refusal Rust made, and something else entirely when the call
- * itself failed: a browser's mock rejects with an `Error`, and a channel that
- * broke rejects with whatever Tauri felt like. So the string is taken when
- * there is one and the rest is turned into words, because the caller puts this
- * straight on the screen and `[object Object]` is not an explanation. */
+ * Every command in this section rejects with a `String` written for a person —
+ * `sessions/act.rs` composes them and its header says why they are sentences
+ * rather than codes. Named as a section rather than listed by name: the list
+ * has grown once already, and names written out here go stale silently, while
+ * a `grep` for one answers from this comment instead of from the places that
+ * matter.
+ *
+ * What arrives at this side of the wire is that string for a refusal Rust
+ * made, and something else entirely when the call itself failed: a browser's
+ * mock rejects with an `Error`, and a channel that broke rejects with whatever
+ * Tauri felt like. So the string is taken when there is one and the rest is
+ * turned into words, because the caller puts this straight on the screen and
+ * `[object Object]` is not an explanation. */
 function refusalText(err) {
   if (typeof err === 'string' && err) return err
   if (err && typeof err.message === 'string' && err.message) return err.message

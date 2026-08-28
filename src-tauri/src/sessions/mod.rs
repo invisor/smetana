@@ -59,9 +59,11 @@
 //! zero for every session written by a current Claude Code.
 
 //! `act.rs` is the deliberate exception to that, and its own header says why:
-//! opening a transcript and deleting one are verbs somebody pressed, so each
-//! answers with a sentence when it cannot be done. The list stays silent; the
-//! menu does not.
+//! everything in it is a verb somebody pressed, so each answers with a sentence
+//! when it cannot be done. The list stays silent; the menu does not. Which
+//! verbs there are is that file's business and is deliberately not counted
+//! here — the count has moved once already, and two headers of one module
+//! disagreeing is worse than one of them saying less.
 
 pub mod act;
 pub mod commands;
