@@ -313,7 +313,7 @@ fn resolve_within(timeout: std::time::Duration) -> Option<String> {
         // An rc file's warnings are not ours to relay.
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|err| eprintln!("[env] could not start {shell}: {err}"))
+        .map_err(|err| log::warn!("[env] could not start {shell}: {err}"))
         .ok()?;
 
     let mut stdout = child.stdout.take()?;
@@ -338,7 +338,7 @@ fn resolve_within(timeout: std::time::Duration) -> Option<String> {
             Some(String::from_utf8_lossy(&buf).into_owned())
         }
         Err(_) => {
-            eprintln!("[env] {shell} did not answer within {timeout:?}; using the inherited environment");
+            log::warn!("[env] {shell} did not answer within {timeout:?}; using the inherited environment");
             let _ = child.kill();
             let _ = child.wait();
             None

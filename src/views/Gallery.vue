@@ -3957,6 +3957,11 @@ const menuTargetStyle = {
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'queue_empty' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'no_progress' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'crashed', attempts: 5 } })" />
+        <!-- Beside `crashed` and beside `no_progress` on purpose: these three
+             are the endings that send somebody somewhere, and this one has to
+             be told from both at a glance. Every session exited cleanly and
+             none of them did anything, so the count is the detail line. -->
+        <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'nothing_done', batches: 3 } })" />
         <!-- Somebody's own doing, like a stop, and quiet for that reason — but
              a different act, and the line is where the two are told apart. -->
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'session_removed' } })" />
