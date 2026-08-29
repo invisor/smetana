@@ -362,7 +362,11 @@ name is never touched** — the app cannot show it started it — and neither is
 since been reused, nor anything under a writer that is alive or unreadable. The sweep is silent: the
 app is finishing its own interrupted shutdown rather than taking a new decision, and a modal about
 housekeeping after every rebuild would be the loudness budget spent on the opposite of a card needing
-a human. What was killed goes to the log.
+a human. What was killed goes to the log, and the log is a file:
+`~/Library/Logs/com.invisor.smetana/smetana.log` on macOS,
+`$XDG_DATA_HOME/com.invisor.smetana/logs/` on Linux — written by every build since smetana-2tf and
+not only a debug one. It rolls at 2 MiB and eleven files, so what a night wrote is still there in the
+morning; `lib.rs` holds that arithmetic, and the stamps in it are UTC where a run report's are local.
 
 The record itself **outlives the processes on purpose**, for up to `ABANDONED_DAYS`: its actors are
 the evidence Phase R reads, and deleting it the moment the processes were dealt with would send that

@@ -67,8 +67,12 @@ and never was an error. 128 arrives as `VcsError::Git { status: 128, .. }` and i
 code, because the alternative is a line per open folder on every window focus, forever, in every
 project nobody has put under git — and a channel that noisy says nothing when a real failure needs it.
 What that gives up is real and small: 128 is git's code for any fatal, so an unreadable index or a
-permissions problem is now as quiet as an ordinary folder. The failures that do **not** recur still
-speak — `VcsError::NoGit` and a read that hit `READ_CEILING` reach the log as a warning.
+permissions problem is now as quiet as an ordinary folder. What is left — `VcsError::NoGit`, a read
+that hit `READ_CEILING`, a spawn that failed — reaches the log as a warning, and **once per process**:
+no git on the machine would otherwise be that same line per open folder per focus, which is the one
+place in this tree where a log line arrives per unit of work rather than per failure. Every failure
+that arm can still catch is a fact about the machine and not about the folder, so the second line
+would repeat the first; `fs.rs` carries the reasoning beside the latch.
 
 `run::git_maybe_fed` is `git_maybe` with bytes written to the child's standard input, and it exists
 for this one caller. `bounded` gives every other git call `/dev/null` there on purpose — git with an

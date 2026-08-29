@@ -15,7 +15,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use super::model::{
@@ -284,6 +284,10 @@ pub fn list_dir(root: &Path, rel: &str) -> Result<Listing, FilesError> {
     Ok(Listing { dir: rel.to_owned(), entries, truncated })
 }
 
+/// Whether the arm below has already had its say. See it for why once is
+/// the whole of what it gets.
+static COMPLAINED: AtomicBool = AtomicBool::new(false);
+
 /// Ask git which of these entries it ignores, and mark them. One call per
 /// listing, and the only process this module spawns.
 ///
@@ -337,10 +341,23 @@ pub fn list_dir(root: &Path, rel: &str) -> Result<Listing, FilesError> {
 /// worthless at the moment a real failure needs it. What that gives up is real
 /// and small: 128 is git's code for any fatal, so a genuinely broken repository
 /// — an unreadable index, a permissions problem — is now as quiet as an
-/// ordinary folder. It buys back the only diagnostic that recurs, and the
-/// failures that do not recur still speak: no git on the machine
-/// (`VcsError::NoGit`) and a read that hit `READ_CEILING` are logged, because
-/// neither is an ordinary state and neither repeats once per folder.
+/// ordinary folder. What is left — no git on the machine (`VcsError::NoGit`), a
+/// read that hit `READ_CEILING`, a spawn that failed — is logged, because none
+/// of it is an ordinary state.
+///
+/// **Logged once per process, though, and that is the whole of `COMPLAINED`.**
+/// This is the only `log::` site in the tree that can arrive once per unit of
+/// work rather than once per failure: one listing asks one directory, and
+/// `refreshDirs` re-lists every open folder on every window focus, so a machine
+/// with no git at all would write a line per folder per focus for as long as the
+/// app is up — the least informative line in the tree, in the quantity that
+/// would roll a night's run history out of `smetana.log` (`lib.rs` counts the
+/// budget). Every failure this arm can still catch is a fact about the machine
+/// rather than about the folder, so the second line would say what the first
+/// said; the two cannot alternate either, since a `NoGit` machine never reaches
+/// a timeout and a machine that has git never reports `NoGit`. This was free
+/// while it was an `eprintln!` into a bundle's absent stderr, and stopped being
+/// free the moment the log became a file.
 fn mark_git_ignored(dir: &Path, entries: &mut [Entry]) {
     // Not a shortcut: `git check-ignore --stdin` given nothing at all exits 128
     // with "no path specified", which is a refusal on a directory that is
@@ -368,7 +385,9 @@ fn mark_git_ignored(dir: &Path, entries: &mut [Entry]) {
         // failure — see the note above for what staying quiet costs.
         Err(VcsError::Git { status: 128, .. }) => {}
         Err(err) => {
-            log::warn!("[files] could not ask git about {}: {err}", dir.display());
+            if !COMPLAINED.swap(true, Ordering::Relaxed) {
+                log::warn!("[files] could not ask git about {}: {err}", dir.display());
+            }
         }
     }
 }

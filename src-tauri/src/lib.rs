@@ -33,6 +33,16 @@ use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 /// sentence: how much of somebody's disk this is allowed to occupy has to be a
 /// number, and under `KeepAll` there is none. A night would have to write
 /// 22 MiB — around 180 000 lines — before the oldest of the eleven is dropped.
+///
+/// One thing about that file to know before reading an incident by it: its
+/// stamps are **UTC**, the plugin's default, while the run report beside it is
+/// stamped local (`chrono::Local::now()`, `runs/service.rs`), so the two are an
+/// offset apart and the offset is the reader's to hold.
+/// `TimezoneStrategy::UseLocal` is not the fix and was not taken: the `time`
+/// crate refuses `now_local()` in a process that has threads unless it is built
+/// with `unsound_local_offset`, and the plugin quietly falls back to UTC — the
+/// call would change the format and read as though the question had been
+/// settled.
 const LOG_FILE_SIZE: u128 = 2 * 1024 * 1024;
 const LOG_FILES_KEPT: usize = 10;
 
@@ -90,7 +100,22 @@ pub fn run() {
       // `TargetKind::Webview` is deliberately not a third target: the front end
       // does not read this log, nothing in the tree calls `attachConsole`, and
       // a receiver nobody reads is one more place a path can reach.
-      app.handle().plugin(
+      //
+      // The one plugin in this file whose failure is swallowed rather than
+      // carried out on a `?`. Everything it does at registration is disk —
+      // `create_dir_all` on the log directory, the creating open of
+      // `smetana.log`, the `read_dir` the rotation counts old files with — and
+      // a `?` here leaves the setup hook, comes back out of `build()` as
+      // `Error::Setup` and lands on the `expect` at the bottom of this file. In
+      // a bundled app that panic has nowhere to print, so what a person gets is
+      // the icon bouncing and no window: no dialog, and no log either, because
+      // the log is the thing that failed. A full disk is the ordinary way in,
+      // and this is an app that fills disks overnight with worktrees and
+      // reports; a read-only home, a file where the directory should be and a
+      // directory owned by somebody else are the others. Only registration
+      // needs the guard — a write that fails afterwards falls back to stderr
+      // inside fern and takes nothing down with it.
+      if let Err(err) = app.handle().plugin(
         tauri_plugin_log::Builder::default()
           .level(log::LevelFilter::Info)
           .max_file_size(LOG_FILE_SIZE)
@@ -100,7 +125,11 @@ pub fn run() {
             Target::new(TargetKind::LogDir { file_name: None }),
           ])
           .build(),
-      )?;
+      ) {
+        // There is nowhere to say this: the thing that says things is what
+        // just failed to start.
+        let _ = err;
+      }
       // Whatever `raise` above had to say, said now that there is something to
       // say it to. See `rlimit`: it runs before the builder, so it cannot log.
       rlimit::report();
