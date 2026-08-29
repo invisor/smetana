@@ -19,10 +19,29 @@
    repository not at all. It is a verb about a different branch like the switch
    above it, which is why it is in that group and not in the writes' one.
 
-   The last is the one thing here that is not about a branch that exists:
-   cutting a new one from this row's commit. It is last and in a group of its
-   own, because it is the only item that leaves the list longer than it found
-   it.
+   Beside the comparison sits the one item that touches git not at all: marking
+   this branch so the panel keeps it above the tree. It is a write to
+   `settings.json` and a fact about how somebody reads this list, which is why
+   nothing refuses it — not a run, not an operation in flight, and not the row
+   being the branch already checked out.
+
+   The last two are the ones that are not about a branch as it stands: cutting a
+   new one from this row's commit, and deleting this one. They change whether a
+   branch exists at all, and they sit in a group each rather than in one
+   together. `Delete this branch` is last because it is the only item here that
+   loses work, and a destructive row is worth the separator that keeps a roughly
+   aimed pointer off it. The two are also refused differently — cutting from
+   where you are standing is the ordinary case and deleting where you are
+   standing is impossible — so one group holding both would grey half of itself
+   and leave the caption reaching over a live row into a dead one.
+
+   That last property is one this file used to have whole and now has in part,
+   which is worth saying plainly rather than leaving to be discovered. Once the
+   favourite arrived in the first group there is no arrangement in which the
+   greyed rows are one unbroken run: `Add to favourites` is live under every
+   caption there is. So the caption is read as being true of whatever is greyed
+   below it rather than of a contiguous block, and the items are grouped by what
+   they *are* — read, write, create, destroy — with the greying following.
 
    **The reason is a caption, not a suffix per row.** One fact refuses a whole
    group at once, so the sentence sits above the group and is said once.
@@ -43,7 +62,13 @@
    comparison: that item reads and writes nothing, so `held` does not reach it at
    all, and a caption saying "not now" can therefore stand over one row that is
    still live. What says how far a caption reaches is the greying under it: the
-   live row is visibly not part of the group. */
+   live row is visibly not part of the group.
+
+   The favourite is the **fourth** reach and the narrowest of the lot: nothing
+   refuses it at all. Its neighbour the comparison still reads the repository,
+   so a branch has no difference from itself to draw and the current row refuses
+   it; this one writes a preference and reads nothing, so it stays live on every
+   row in every state. */
 
 /* What refuses the whole menu, in order of what is worth saying. Both mean "not
    now" rather than "not this row", which is what puts either at the very top. */
@@ -53,7 +78,12 @@ function frozen({ allowed, busy }) {
   return null
 }
 
-export function branchMenuItems({ current = false, allowed = true, busy = false } = {}) {
+export function branchMenuItems({
+  current = false,
+  allowed = true,
+  busy = false,
+  favorite = false
+} = {}) {
   const held = frozen({ allowed, busy })
   /* The three verbs about moving between branches. Every one of them is a no-op
      on the branch already checked out: git answers a merge with "Already up to
@@ -74,6 +104,21 @@ export function branchMenuItems({ current = false, allowed = true, busy = false 
        being the branch already checked out: a branch has no difference from
        itself to draw. */
     { kind: 'compare', label: 'Compare with the current branch', icon: 'git-compare', disabled: current },
+    /* The one item in this menu that asks git for nothing. It writes a line in
+       `settings.json` and moves a row up the list, so there is nothing for a
+       run, an operation in flight or the tick on this row to refuse. `disabled`
+       is written out as a constant `false` rather than left off: every other
+       verb here carries the field, and a row missing it reads as a row somebody
+       forgot rather than as one nothing can refuse.
+       The label is the act and not the state: a row already marked offers the
+       way back out, which is the whole of what tells somebody the mark is
+       theirs to remove. */
+    {
+      kind: 'favorite',
+      label: favorite ? 'Remove from favourites' : 'Add to favourites',
+      icon: 'star',
+      disabled: false
+    },
     /* A separator, because the two below are not the same kind of act as the
        one above: switching branches is where you are, merging and rebasing
        change what the branch you are on contains. */
@@ -95,6 +140,23 @@ export function branchMenuItems({ current = false, allowed = true, busy = false 
       label: 'New branch from this',
       icon: 'git-branch-plus',
       disabled: Boolean(held)
+    },
+    { type: 'separator' },
+    /* Its own group at the foot, and the separator above it is doing two things
+       at once. It keeps the destructive item apart from the one that creates,
+       which is worth a line on its own in a menu opened by a gesture people aim
+       roughly; and it keeps this row's greying off that one's, since this is
+       refused on the current branch where `New branch from this` above it is
+       not. That is a claim about these two rows and no more — the header above
+       says why the menu as a whole no longer has an unbroken run of greyed rows
+       to protect. Refused here in the menu and refused again in Rust: the window
+       that asks the question is a window of its own, and HEAD can move while it
+       stands. */
+    {
+      kind: 'delete',
+      label: 'Delete this branch',
+      icon: 'trash-2',
+      disabled: moving
     }
   ]
 }

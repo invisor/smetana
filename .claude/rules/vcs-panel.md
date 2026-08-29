@@ -6,6 +6,14 @@ paths:
   - "src/stores/vcs.js"
   - "src/stores/compare.js"
   - "src/views/CompareWindow.vue"
+  # The two views that own this panel's dialog windows. Neither draws a branch
+  # row, which is why they were not here — but `reground`, `removeBranch` and
+  # the branch clause of `stalenessOf` all live in them, and the sections below
+  # state those as fact. Without these lines a session editing the file that
+  # owns `reground` is never handed the prose describing its contract, and a
+  # session handed the prose is never shown the code.
+  - "src/views/DesktopApp.vue"
+  - "src/views/dialogRegistry.js"
 ---
 
 # The Git panel: what only the binary can answer
@@ -225,16 +233,17 @@ the deliberate trade, and the only thing paying it back is that the project list
 the same gesture the same way. **The refusal is one caption above the rows, not a clause on each**,
 which `shell/projectMenu.js` now does too: it suffixed its one refusal onto each of its two refused
 labels until the sentence was found clipped mid-word, a clause per row being for a menu whose rows
-are refused for *different* reasons. Here one fact refuses all three — the branch is
+are refused for *different* reasons. Here one fact refuses the group — the branch is
 the one already checked out, a run holds the repository, or git is mid-operation — and the caption
 says it once. The current branch wins that caption even under a run, because somebody right-clicking
 the row with the tick is asking about that row. The menu opens on **every** branch row including the
 refused ones: a gesture that answers on some rows and does nothing on others reads as a broken row
 rather than a refused one.
 
-**The fourth item is the one that leaves the list longer than it found it**: `New branch from this`,
+**The item that leaves the list longer than it found it**: `New branch from this`,
 cut from the row that was clicked and never from HEAD, which is the whole reason it belongs to a row
-rather than to the section header. It is last, in a group of its own, and it is the item that made
+rather than to the section header. It is second from the bottom now, in a group of its own with the
+delete below it, and it is the item that made
 `branchMenu.js`'s refusals grow two different reaches — a run or an operation in flight refuses it
 like everything else, but *being on the branch* does not, since cutting a branch from where you are
 standing is the ordinary case. So "already on this branch" heads the three moving verbs and stops
@@ -313,14 +322,67 @@ saying something untrue about itself.
 tree before the tree is built, so it is on screen whatever the reflog said and whatever fold its name
 would otherwise put it behind — the row Pull and Push in the caption are about, and the one fact
 somebody opens this section to read, was reachable only by unfolding a `feature/` heading before this.
-It draws its **whole** name, since there is no heading above it carrying the prefix, and it carries
-`SectionHeader`'s own hairline under it so the list proper reads as starting below. That rule sits
-inside the row's `--row-h` and adds no height to it — `box-sizing: border-box` — so the arithmetic
-over `BRANCH_ROWS` is untouched. It is lifted rather than copied: the tree below never holds it, a
-heading it was the whole of is not drawn at all, and `folderBehind` passes over it for the same
-reason, since a fold cannot be hiding a row that is at the top. It scrolls with everything else — what
-was asked for is an order, and a row pinned against the top of a box capped at a handful of rows would
-spend one of them on every scroll.
+It draws its **whole** name, since there is no heading above it carrying the prefix. It is lifted
+rather than copied: the tree below never holds it, a heading it was the whole of is not drawn at all,
+and `folderBehind` passes over it, since a fold cannot be hiding a row that is at the top. It scrolls
+with everything else — what was asked for is an order, and a row pinned against the top of a box
+capped at a handful of rows would spend one of them on every scroll.
+
+**Under it come the branches somebody marked**, so the top of this section is two groups and not one:
+the current branch, then the favourites, then the tree. Everything in the paragraph above is true of
+the second group word for word — whole names at depth 0, taken out of what the tree is built from, so
+a marked branch is gone from its folder, that folder's count comes down by one, a folder it was the
+whole of is not drawn, and `folderBehind` passes over it too. `liftedOut` in `branchTree.js` is the
+one test of "is this row above the tree", exported and read by `tracking.js` rather than written out
+twice, because the two have to agree exactly: the tree is built from whatever the first answer left
+over, and a heading marking a row that is on screen anyway is the defect. A branch that is both
+current and marked is **one** row, the first, with the star on it.
+
+**The order inside the favourites is the order the list arrived in** — `by_recency`'s, like
+everything else here — and deliberately not the order they were marked in. This panel promises one
+ordering, and a second one nested inside it would also be invisible, since nothing on a row says when
+it was pinned. The stored list's own order decides one thing only: which name falls off first when
+`sane_list` trims the file at its ceiling.
+
+**The hairline moved off the current branch and onto the last row of that block.** It is
+`SectionHeader`'s own rule and it says one thing — the real list starts below — which is a fact about
+the bottom of the block rather than about which branch the repository is on. `branchTree.js` marks
+the row that carries it (`divider`) and `BranchList` draws it; with nothing marked, that is the
+current branch, exactly as before. It sits inside the row's `--row-h` and adds no height to it —
+`box-sizing: border-box` — so the arithmetic over `BRANCH_ROWS` is untouched.
+
+**The mark is a star in the leading icon's place, not a sixth glyph.** It replaces `git-branch` at
+the same `MARK` size in the same `--text-muted`, and the reason is arithmetic rather than taste: an
+icon added in front of the name would put the marked rows' names out of line with every other row's
+in a column about 252px wide. What was rejected with it: a star button appearing on the row under the
+pointer, which is exactly the control-per-row-per-verb this section already took out once when merge
+and rebase went into the menu; and no mark at all, on the argument that the position says it —
+position says a row is at the top and says nothing about why, or about where to go to take the mark
+off.
+
+The list is `settings.project.favoriteBranches`, beside `branchFolders` and per project on that
+field's argument: which names are worth keeping in reach is a fact about a repository and its naming
+convention, not a habit of reading, so it is not in `layout`. It is a plain `Vec` in Rust where its
+neighbour is an `Option`, and that is the one place the two part company — `branchFolders` has a real
+third state and this has none, since an empty list means exactly "nothing is marked". Validation is
+`sane_list` at 50 names of `MAX_PATH_LEN` each, cleaned in place, with **no** check that the name
+exists: a project can hold several repositories and one list, so a name the selected one has never
+heard of is the ordinary case and simply draws no row. Storing per repository was rejected — a map of
+path to list is a new shape in `ProjectState` with its own validation and its own question about
+repositories that have gone — and so was storing it globally beside `layout.gitSections`, where one
+project's `main` would arrive pinned in another's panel.
+
+The menu item is `branchMenu.js`'s **fourth reach of refusal**, and it is narrower than the
+comparison's: nothing refuses it at all. A run, git mid-operation and the row being the branch already
+checked out are all facts about the repository, and this writes a preference and asks git for nothing.
+So the caption at the top may say "not now" over a group in which this one row is live, which is the
+same argument that keeps Fetch pressable under a run. Its label is the act rather than the state —
+`Add to favourites` / `Remove from favourites` — because a row already marked has to offer the way
+back out, and the position at the top of the list is not somewhere a person would think to look for
+it. One consequence worth stating plainly: with this item in the first group there is no arrangement
+of this menu in which the greyed rows are one unbroken run, so the caption is read as being true of
+whatever is greyed below it, and the items are grouped by what they *are* rather than by how they are
+refused.
 
 Which folders are unfolded is per project — `settings.project.branchFolders`, beside the file tree's
 `expanded` — because a `feature/…` convention belongs to a repository where the section heights above
@@ -334,6 +396,86 @@ read as the first case and come back unfolded on the next start. `branchTree.js`
 against that seed and hands the panel a whole new list, which is what writes the seed out on the
 first press. Nothing reopens a folder afterwards, and it does not need to: the only way to press a
 branch row is to see it, so a branch checked out from this panel was in a folder that was open.
+
+## Deleting a branch
+
+**The last item in a branch row's menu, in a group of its own, and it is the only thing in this panel
+that loses work.** It is refused on the branch already checked out and by everything that refuses a
+write — a run in the project, git mid-operation — which is `moving`, the same clause the three verbs
+about moving between branches take. Its own group rather than beside `New branch from this`: those
+two are the pair that decides whether a branch exists at all, and they are refused differently, so one
+group holding both would grey half of itself; and a destructive row in a menu opened by a roughly
+aimed pointer is worth a separator on its own account.
+
+**The current branch is refused in Rust as well, and that is not belt and braces.** The window that
+asks the question is an OS window with no scrim, so HEAD can move while it stands — an agent in the
+same tree, a checkout in a terminal — and the press that arrives afterwards would be about a branch
+that has since become the one the repository is on. `VcsError::CurrentBranch` is its own variant
+rather than git's own refusal, which is in perfectly good words, because the front end has a second
+question to ask about this command and telling the answers apart by reading git's prose is the thing
+the next paragraph exists to avoid. The guard reads `git::head`, which is file reads and no process,
+so it costs nothing in front of the delete.
+
+**Why the reason is asked for rather than read.** Without `force` this is `git branch -d`, which
+declines at one exit code for several different reasons — the branch is not merged, it is checked out
+in another worktree, there is no such branch. Only the first has a way forward, and the way forward
+loses commits, so the window has to know which it was before it offers `Delete anyway`. git says which
+in **prose**, and nothing in `run.rs` fixes the locale, so a substring search would pass on the
+machine it was written on and quietly stop working on somebody else's — the rule this module keeps
+everywhere else (`--porcelain=v2` over `git status`, an unmerged record over a merge's message). So
+the answer comes from a second question with an exit code for an answer: `git merge-base --is-ancestor
+<branch> HEAD` through `run::git_maybe` with 1 as "no". Only a definite "no" becomes
+`VcsError::NotMerged`; everything else, the probe itself failing included, is handed back as git
+refused it. The extra process runs on the refusal path alone. **That split is what decides whether the
+force button is drawn at all**, which is the whole point: `-D` does not help a branch held by another
+worktree, and offering it there is offering a button whose answer is the message already on screen.
+
+One case is knowingly imprecise and is cheaper left so: a branch that is both unmerged **and** held by
+another worktree answers "not merged" and is offered `Delete anyway`, which git then declines in the
+same window in its own words. Naming that case exactly means parsing `git worktree list --porcelain`
+on every refusal, and what it would buy is one press.
+
+`vcs_delete_branch` goes through `run::git_attempt`, which is now that function's second caller and
+for its reason one scope wider: a non-zero exit that is not by itself an answer.
+
+**In the store, `deleteBranch` is the one write that hands its refusal back out.** Everything else in
+`stores/vcs.js` puts git's words in `writeError` and returns; this one does that *as well* and then
+throws, because the decision about a second button belongs to the window that asked the first
+question and cannot be made by a panel that draws one block of prose and no buttons. It is read back
+off `writeError` and keyed on the `op` rather than plumbed out of `write`, since that function also
+answers `false` for a call it never made — git already busy, the project or the repository moved —
+and neither of those is a refusal anybody should be shown a second button about. A successful delete
+strikes the name from `favoriteBranches` on the way out: a pinned name with nothing behind it costs
+nothing while it sits in the file, but it would come back the day somebody cut a branch of that name
+again, pinned by a decision about a different branch.
+
+**The window is `delete-branch`, and it is the one confirm in this app that asks twice.**
+`DeleteBranchModal.vue` follows `DeleteTaskModal.vue` — the same `Modal`, the same two buttons, the
+consequence stated rather than apologised for — and draws three states out of the props it is
+announced: the question, the same window with the sentence about losing commits and `Delete anyway`,
+and a refusal `-D` would repeat, where git's own words stand in the mono block under the failed-red
+title `GitPanel` uses (`failureTitleStyle` / `failureTextStyle`, borrowed rather than reinvented) and
+the only way out is Cancel. Rejected: a `force` checkbox in the first state, which puts the dangerous
+option in front of somebody who does not yet know they need it and usually never will; and deleting
+straight from the menu with no window, which would be the only act in this panel that loses work
+without asking. The panel's own refusal block draws the same failure under `Git did not delete the
+branch`, since `writeError` is set whatever the window does with it.
+
+Its ground is the project, the repository and the branch — `new-branch`'s exactly, and for the same
+two reasons: every write in `stores/vcs.js` resolves its repository from `vcsState.selected` at the
+moment it is pressed, and this window is about a branch that exists. Adding it is why
+`REASON_CLAUSE.branch` reads "the branch it was about is gone" rather than "the branch it started
+from is gone": one clause now serves two windows, and the delete window's branch is the one being
+deleted rather than one it was cut from.
+
+**And it is the one dialog in `DesktopApp.vue` that does not close before its write.** Every other one
+closes first, because nothing it hears back changes what the window would have said; here git's
+refusal *is* the second question, so the window has to still be there to ask it. What that costs is
+the ground, and `reground` is what pays it: pressing Delete lets go of the branch — `null`, which
+`stalenessOf` already documents as "this window does not stand on one" — so the refresh that follows a
+successful delete does not have the ground watcher pull the window out from under the person with a
+notice about a branch they just deleted themselves. The branch goes back on if git refuses, since the
+window is then standing over one that still exists and that somebody else can still delete.
 
 ## Committing, and the message somebody does not have to write
 
@@ -884,7 +1026,7 @@ now" while the row directly under it stays live and opens the window**. It is th
 keeps Fetch pressable under a run and leaves a folder heading undimmed beside greyed rows — a row
 refused for a reason that does not apply to it is the menu saying something untrue about itself. What
 still refuses it is the row being the branch already checked out, since a branch has no difference
-from itself to draw, so that caption now heads four rows rather than three.
+from itself to draw, so that caption heads it along with the three moving verbs.
 
 **The file list is dragged by a `Resizer`, and its width lives for as long as the window does.** The
 rules are `src/views/compareWidth.js` — pure, no Vue and no DOM, for the reason `panelWidths.js` is

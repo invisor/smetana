@@ -1,14 +1,14 @@
 <script setup>
-/* The local branches of one repository, which of them it is on, and the five
+/* The local branches of one repository, which of them it is on, and the seven
    things that can be done from a row: switch to it, compare it with the current
-   branch, merge it into the current branch, rebase the current branch onto it,
-   cut a new branch from it.
+   branch, mark it as a favourite, merge it into the current branch, rebase the
+   current branch onto it, cut a new branch from it, delete it.
 
-   **All five live in the row's right-click menu**, and the first of them is
+   **All seven live in the row's right-click menu**, and the first of them is
    also the row's own click. Merging and rebasing used to be two buttons that
    appeared on the row under the pointer, which is a control per row per verb in
    a panel that also draws a file tree, a change list and a commit box; they are
-   `branchMenu.js`'s three items now and the row draws its name, its mark and
+   `branchMenu.js`'s items now and the row draws its name, its mark and
    nothing else. What that costs is real and worth writing down: a right-click
    is a gesture somebody has to know about, and nothing on the row says the two
    verbs exist. The menu is `PointerMenu`, the same panel on the same gesture as
@@ -52,18 +52,28 @@
    still `git::by_recency`'s — a folder stands where its most recent branch
    stood — so the promise above survives the grouping.
 
-   ## The current branch is the first row, always
+   ## The current branch is the first row, always, and the favourites follow it
 
-   `branchTree.js` lifts it out of the tree, so it is on screen whatever the
-   reflog says and whatever fold its name would otherwise put it behind. It
-   draws its **whole** name rather than the leaf every other row draws — there
-   is no heading above it to carry the prefix — and it carries the hairline
-   `SectionHeader` uses under it, saying the list proper starts below. The
-   hairline sits inside the row's own `--row-h` and adds no height to it, which
-   `box-sizing: border-box` is what makes true, so `GitPanel`'s arithmetic over
-   `BRANCH_ROWS` is untouched. It scrolls with the rest: what was asked for is
-   an order, and a row pinned against the top of a box capped at a handful of
-   rows would spend one of them on every scroll.
+   `branchTree.js` lifts the current branch out of the tree, so it is on screen
+   whatever the reflog says and whatever fold its name would otherwise put it
+   behind. Under it come the branches somebody marked, in the order the list
+   arrived in. Both groups draw their **whole** name rather than the leaf every
+   other row draws — there is no heading above them to carry the prefix — and
+   the **last row of the block** carries the hairline `SectionHeader` uses,
+   saying the list proper starts below. The hairline sits inside the row's own
+   `--row-h` and adds no height to it, which `box-sizing: border-box` is what
+   makes true, so `GitPanel`'s arithmetic over `BRANCH_ROWS` is untouched. It
+   all scrolls with the rest: what was asked for is an order, and a row pinned
+   against the top of a box capped at a handful of rows would spend one of them
+   on every scroll.
+
+   A marked row draws a star **in the leading icon's place**, instead of
+   `git-branch` and at the same size — a sixth glyph in front of the name would
+   put the marked rows' names out of line with all the others, which is the one
+   thing this list cannot afford in a column this narrow. The colour is
+   `--text-muted`, the same as the branch glyph it stands in for: it says which
+   rows are marked, and the position at the top of the list has already said why
+   they are there.
 
    A heading can be pressed while a run holds the three writes, and it is
    deliberately not dimmed with the rows: unfolding is reading, not writing, and
@@ -86,7 +96,7 @@
    `gitActions.js` family; this file draws its verdict and holds none of it.
 
    Remote branches as rows of their own are still outside this epic, and so is
-   checking one out. So are renaming and deleting a branch, and so is every flag
+   checking one out. So is renaming a branch, and so is every flag
    and strategy a merge can take: this offers the merge and the rebase git would
    do by itself, and nothing else. Creating one was outside it too until a row's
    menu had somewhere to put it. */
@@ -96,7 +106,7 @@ import Tooltip from '../core/Tooltip.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
 import { useInteractive } from '../core/interactive.js'
 import { branchMenuItems } from './branchMenu.js'
-import { branchRows, expandedFolders, toggleFolder } from './branchTree.js'
+import { branchRows, expandedFolders, toggleFavorite, toggleFolder } from './branchTree.js'
 import { AHEAD_TOKEN, BEHIND_TOKEN, folderBehind, trackingMark } from './tracking.js'
 
 const props = defineProps({
@@ -111,6 +121,12 @@ const props = defineProps({
      or null for "nobody has chosen here", which opens the folder the current
      branch is in. The two are different states and `branchTree.js` says why. */
   folders: { type: Array, default: null },
+  /* The branch names pinned above the tree, as
+     `settings.project.favoriteBranches` keeps them. A plain list where the
+     folders above are nullable, because there is no third state: nothing is
+     marked until somebody marks it. A name the selected repository does not
+     have draws no row and breaks nothing. */
+  favorites: { type: Array, default: () => [] },
   /* `{ allowed, reason }` from `gitActions.js`. The default is the answer for a
      project with no run going, which is what the gallery and every
      single-branch frame want. */
@@ -120,7 +136,19 @@ const props = defineProps({
      spinner in the wrong place would name the wrong operation. */
   busy: { type: Object, default: null }
 })
-const emit = defineEmits(['checkout', 'compare', 'merge', 'rebase', 'new-branch', 'toggle-folder'])
+const emit = defineEmits([
+  'checkout',
+  'compare',
+  /* The whole new list, resolved by `branchTree.js`, exactly as `toggle-folder`
+     carries one: the panel is told what the list became rather than working it
+     out, so the rule stays in the file a test can reach. */
+  'favorite',
+  'merge',
+  'rebase',
+  'new-branch',
+  'delete',
+  'toggle-folder'
+])
 
 /* Hover is per row and `useInteractive` tracks one control at a time, so an
    instance built inside `rowStyle` would be thrown away on every re-render.
@@ -169,7 +197,12 @@ const items = computed(() =>
   branchMenuItems({
     current: props.branches.some((branch) => branch.name === menuFor.value && branch.current),
     allowed: props.actions?.allowed !== false,
-    busy: Boolean(props.busy)
+    busy: Boolean(props.busy),
+    /* Read from the stored list rather than from the row the menu was opened
+       on, for the reason `current` above is read from the branches: what the
+       item's label is about is whether this name is marked, which is a fact
+       about `settings.json` and not about how the list happens to be drawn. */
+    favorite: (props.favorites ?? []).includes(menuFor.value)
   })
 )
 
@@ -187,13 +220,15 @@ const openMenu = (row, event) => {
 const pick = (item, name) => {
   if (item.kind === 'checkout') emit('checkout', name)
   else if (item.kind === 'compare') emit('compare', name)
+  else if (item.kind === 'favorite') emit('favorite', toggleFavorite(props.favorites, name))
   else if (item.kind === 'merge') emit('merge', name)
   else if (item.kind === 'rebase') emit('rebase', name)
   else if (item.kind === 'new-branch') emit('new-branch', name)
+  else if (item.kind === 'delete') emit('delete', name)
 }
 
 const rows = computed(() =>
-  branchRows(props.branches, expandedFolders(props.folders, props.branches))
+  branchRows(props.branches, expandedFolders(props.folders, props.branches), props.favorites)
 )
 
 const MARK = 12
@@ -244,11 +279,13 @@ const rowStyle = (branch) => ({
         ? 'var(--surface-hover)'
         : 'transparent',
   cursor: blocked.value && !branch.current ? 'not-allowed' : 'default',
-  /* The rule under the pinned row, the same hairline `SectionHeader` draws
-     above a caption and for the same reason: without it the row reads as one
-     more row of the list rather than as the thing the list is being read
-     against. */
-  borderBottom: branch.pinned ? 'var(--border-w) solid var(--border-subtle)' : 'none',
+  /* The rule under the **last** row of the top block, the same hairline
+     `SectionHeader` draws above a caption and for the same reason: without it
+     those rows read as more rows of the list rather than as the thing the list
+     is being read against. Under the last one and not under each, because it
+     states one fact — the real list starts below — and that fact is about the
+     bottom of the block. `branchTree.js` says which row carries it. */
+  borderBottom: branch.divider ? 'var(--border-w) solid var(--border-subtle)' : 'none',
   transition: 'var(--transition-control)'
 })
 
@@ -343,7 +380,8 @@ const aheadStyle = { ...behindStyle, color: `var(${AHEAD_TOKEN})` }
 /* What a fold is hiding, which is `tracking.js`'s answer and not this file's —
    the unfolded case is the only half that belongs here, since a heading with
    its rows on screen has nothing left to stand in for. */
-const folderMark = (row) => !row.expanded && folderBehind(row.path, props.branches, props.tracking)
+const folderMark = (row) =>
+  !row.expanded && folderBehind(row.path, props.branches, props.tracking, props.favorites)
 
 const folderMarkStyle = { flex: 'none', color: `var(${BEHIND_TOKEN})` }
 
@@ -359,6 +397,13 @@ const OPERATIONS = {
   merge: 'Merging this branch in',
   rebase: 'Rebasing onto this branch',
   create: 'Cutting a new branch from this',
+  /* The one that leaves from a window rather than from this panel at all, and
+     it is in this table for `create`'s reason: the dialog closes or stands on
+     its second question, and either way the row it was about is still on
+     screen, still spinning, until the refresh takes it away. A row dimmed with
+     nothing on it saying which branch git is working on is the state this table
+     exists to prevent. */
+  delete: 'Deleting this branch',
   /* The two that leave from the section header rather than from a row. They
      are about the current branch and `busy` carries its name, so the spinner
      lands on the row with the tick — which is the rule this panel already keeps
@@ -469,7 +514,16 @@ const empty = computed(() => props.branches.length === 0)
           @click="target(row) && $emit('checkout', row.name)"
           @contextmenu.prevent="openMenu(row, $event)"
         >
-          <Icon name="git-branch" :size="MARK" :style="{ flex: 'none', color: 'var(--text-muted)' }" />
+          <!-- The star stands **in** the branch glyph's place rather than
+               beside it: a sixth icon before the name would shift the marked
+               rows' names against every other row's, which is the one thing a
+               column this narrow cannot afford. Same size, same token. -->
+          <Icon
+            :name="row.favorite ? 'star' : 'git-branch'"
+            :size="MARK"
+            :style="{ flex: 'none', color: 'var(--text-muted)' }"
+            :title="row.favorite ? 'A favourite branch' : undefined"
+          />
           <!-- The leaf, with the whole name behind it: under a heading the
                prefix is on every row and the tail is the half that identifies
                one, so drawing the prefix again spends the width the folder was

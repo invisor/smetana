@@ -251,6 +251,77 @@ fn create_branch(repo: &Path, name: &str, start: &str, switch: bool) -> Result<(
     run::git_write(repo, &args)
 }
 
+/// Delete a local branch.
+///
+/// **Not the current one, and that is refused here rather than only in the
+/// menu.** The window that asks the question is an OS window of its own with no
+/// scrim over the board, so HEAD can move while it stands — an agent working in
+/// the same tree, or a checkout in a terminal — and the press that arrives
+/// afterwards would be about a branch that has since become the one the
+/// repository is standing on. `git branch -d` refuses that too, in good words;
+/// what this buys is a `kind` the front end can act on rather than prose it
+/// would have to read.
+///
+/// The head is read through `git::head`, which is three file reads and no
+/// process at all, so the guard costs nothing next to the delete behind it.
+///
+/// **Why a refused delete is asked about a second time instead of being read.**
+/// Without `force` this runs `git branch -d`, which declines for several
+/// different reasons at the same exit code — the branch is not merged, it is
+/// checked out in another worktree, it does not exist. Only the first of those
+/// has a way forward, and the way forward loses commits, so the window has to
+/// know which it was before it offers `Delete anyway`. git says which in
+/// **prose**, and nothing in `run.rs` fixes the locale, so a substring search
+/// here would pass on the machine it was written on and quietly stop working on
+/// somebody else's — the rule this module keeps everywhere (`--porcelain=v2`
+/// over `git status`, an unmerged record over a merge's message). So the answer
+/// comes from a second question with an exit code for an answer:
+/// `git merge-base --is-ancestor <branch> HEAD`, exit 1 for "no" through
+/// `run::git_maybe`. Only a definite "no" becomes `VcsError::NotMerged`;
+/// everything else, the probe itself failing included, is handed back as git
+/// refused it. The extra process runs on the failure path alone.
+///
+/// One case is knowingly imprecise and is cheaper left so: a branch that is
+/// both unmerged **and** checked out in another worktree answers "not merged"
+/// and is offered `Delete anyway`, which git then declines in its own words in
+/// the same window. Naming that case exactly means parsing `git worktree list
+/// --porcelain` on every refusal, and what it would buy is one press.
+///
+/// With `force` it is `git branch -D`, and there is no second question to ask:
+/// the person has already been told what they are losing.
+#[tauri::command]
+pub async fn vcs_delete_branch(
+    repo: String,
+    branch: String,
+    force: bool,
+) -> Result<(), VcsError> {
+    off_the_runtime(move || delete_branch(Path::new(&repo), &branch, force)).await
+}
+
+fn delete_branch(repo: &Path, branch: &str, force: bool) -> Result<(), VcsError> {
+    if git::head(repo).branch.as_deref() == Some(branch) {
+        return Err(VcsError::CurrentBranch(branch.to_owned()));
+    }
+    let flag = if force { "-D" } else { "-d" };
+    match run::git_attempt(repo, &["branch", flag, branch])? {
+        Attempt::Done => Ok(()),
+        Attempt::Refused(refused) => {
+            if !force && matches!(merged_into_head(repo, branch), Ok(false)) {
+                return Err(VcsError::NotMerged(branch.to_owned()));
+            }
+            Err(refused)
+        }
+    }
+}
+
+/// Whether every commit on this branch is already in the branch the repository
+/// is on. Exit 0 is yes, exit 1 is no, anything else is a refusal — which is
+/// `run::git_maybe`'s own shape, with the code named by the caller because this
+/// function is the only one that knows which non-zero exit was an answer.
+fn merged_into_head(repo: &Path, branch: &str) -> Result<bool, VcsError> {
+    run::git_maybe(repo, &["merge-base", "--is-ancestor", branch, "HEAD"], 1).map(|out| out.is_some())
+}
+
 /// Bring another branch's work into the one this repository is on.
 ///
 /// `--no-edit` is the only word added, and it is about not hanging rather than
@@ -1132,5 +1203,133 @@ mod tests {
         assert!(compare(&dir, "other", Mode::Direct).is_ok());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A repository on `main` with one commit, so the delete tests below have
+    /// somewhere to stand. The branches they need are cut per test, since what
+    /// distinguishes them is entirely whether the branch has a commit of its
+    /// own.
+    fn deletable(name: &str) -> PathBuf {
+        let dir = scratch(name);
+        git(&dir, &["init", "-q", "-b", "main"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "one"]);
+        dir
+    }
+
+    fn names(repo: &Path) -> Vec<String> {
+        branch_list(repo).into_iter().map(|branch| branch.name).collect()
+    }
+
+    /// The ordinary case: a branch whose commits are all in the current one.
+    /// `git branch -d` takes it, nothing is lost, and the row goes.
+    #[test]
+    fn a_branch_merged_into_the_current_one_is_deleted_without_force() {
+        let repo = deletable("delete-merged");
+        git(&repo, &["branch", "spent"]);
+        assert!(names(&repo).iter().any(|name| name == "spent"));
+
+        delete_branch(&repo, "spent", false).expect("delete the merged branch");
+
+        assert!(!names(&repo).iter().any(|name| name == "spent"));
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A branch holding a commit the current one does not. `-d` refuses, and
+    /// what comes back is **this app's own variant** rather than git's prose —
+    /// which is what lets the window offer a second button for exactly this
+    /// case and for no other.
+    #[test]
+    fn a_branch_with_its_own_commits_is_refused_as_not_merged() {
+        let repo = deletable("delete-unmerged");
+        git(&repo, &["checkout", "-q", "-b", "work"]);
+        fs::write(repo.join("b.txt"), "two\n").expect("write");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "two"]);
+        git(&repo, &["checkout", "-q", "main"]);
+
+        let refused = delete_branch(&repo, "work", false).expect_err("git refuses this");
+
+        assert_eq!(refused.kind(), "notMerged");
+        assert!(names(&repo).iter().any(|name| name == "work"), "nothing was deleted");
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// The way forward the variant above exists to unlock: the same branch,
+    /// asked for again with `force`, and `git branch -D` takes it.
+    #[test]
+    fn the_same_branch_goes_when_the_delete_is_forced() {
+        let repo = deletable("delete-forced");
+        git(&repo, &["checkout", "-q", "-b", "work"]);
+        fs::write(repo.join("b.txt"), "two\n").expect("write");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "two"]);
+        git(&repo, &["checkout", "-q", "main"]);
+
+        delete_branch(&repo, "work", false).expect_err("refused first");
+        delete_branch(&repo, "work", true).expect("forced through");
+
+        assert!(!names(&repo).iter().any(|name| name == "work"));
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// The branch the repository is standing on, refused **before** git is
+    /// asked anything. The menu greys the item too, and this is the half that
+    /// still holds when HEAD moves under an open window.
+    #[test]
+    fn the_branch_the_repository_is_on_is_refused_by_this_module() {
+        let repo = deletable("delete-current");
+
+        let refused = delete_branch(&repo, "main", false).expect_err("the current branch");
+
+        assert_eq!(refused.kind(), "currentBranch");
+        assert!(names(&repo).iter().any(|name| name == "main"));
+        // Forcing does not get past it either: `-D` would be refused by git for
+        // the same reason, and the point of the guard is that the answer is the
+        // same whichever button was pressed.
+        assert_eq!(
+            delete_branch(&repo, "main", true).expect_err("still the current branch").kind(),
+            "currentBranch"
+        );
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A branch checked out in a second worktree. git refuses it and `-D` would
+    /// not help, so the refusal has to arrive in **git's own words** and not as
+    /// `NotMerged` — which is the whole reason the reason is asked for
+    /// separately rather than read off the stderr.
+    #[test]
+    fn a_branch_held_by_another_worktree_comes_back_in_git_own_words() {
+        let repo = deletable("delete-in-worktree");
+        let elsewhere = repo.join("linked");
+        git(&repo, &["branch", "held"]);
+        git(&repo, &["worktree", "add", "-q", elsewhere.to_str().expect("path"), "held"]);
+
+        let refused = delete_branch(&repo, "held", false).expect_err("git holds this one");
+
+        assert_eq!(refused.kind(), "git", "not `notMerged`: forcing would fail the same way");
+        assert!(names(&repo).iter().any(|name| name == "held"));
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A name no branch has. git refuses in its own words, and the probe behind
+    /// the refusal must not turn that into something else: `merge-base
+    /// --is-ancestor` cannot resolve the name either, which is a refusal rather
+    /// than the "no" that means unmerged.
+    #[test]
+    fn a_branch_that_does_not_exist_is_refused_as_git_refused_it() {
+        let repo = deletable("delete-missing");
+
+        let refused = delete_branch(&repo, "never-existed", false).expect_err("no such branch");
+
+        assert_eq!(refused.kind(), "git");
+
+        let _ = fs::remove_dir_all(&repo);
     }
 }

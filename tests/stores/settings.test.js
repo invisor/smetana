@@ -295,6 +295,33 @@ describe('a project\'s layout', () => {
     expect(settings.settings.project.rightTab).toBe('task')
   })
 
+  it("keeps a project's pinned branches, and clears them for a project with none", async () => {
+    /* Which branches are pinned above the Git panel's tree. Listed in the
+       defaults for `rightTab`'s reason — a key missing from that object is a
+       key the defaults layer cannot clear — and the consequence here is louder
+       than a tab: one project's `main` standing in another project's panel is a
+       row somebody never marked.
+
+       Written out of the store as well as into it, since a value that only ever
+       arrives is a value no restart can preserve. */
+    ipc.on('settings_load', { project: { favoriteBranches: ['main', 'fix/legacy'] } })
+    ipc.on('settings_save', null)
+    await settings.loadSettings()
+    expect(settings.settings.project.favoriteBranches).toEqual(['main', 'fix/legacy'])
+
+    settings.settings.project.selectedTask = 'smetana-j9y'
+    await settings.flushPending()
+    expect(ipc.calls('settings_save').at(-1).settings.project.favoriteBranches).toEqual([
+      'main',
+      'fix/legacy'
+    ])
+
+    ipc.on('settings_load', { project: {} })
+    await settings.loadProjectLayout('/new')
+
+    expect(settings.settings.project.favoriteBranches).toEqual([])
+  })
+
   it('a section is merged in place: the reference to the object stays the same', async () => {
     ipc.on('settings_load', {})
     await settings.loadSettings()

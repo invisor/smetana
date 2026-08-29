@@ -551,6 +551,62 @@ export async function rebase(onto) {
   await write('rebase', onto, (repo) => invoke('vcs_rebase', { repo, onto }))
 }
 
+/* Delete a local branch.
+
+   Through `write` like everything else here, so it takes the same `busy`, lands
+   its refusal in the same block under `GitPanel`'s "Git did not delete the
+   branch", and brings the whole list back afterwards — which is what makes the
+   row disappear.
+
+   **It is the one write in this file that hands the refusal back out**, and the
+   reason is that the window which asked the question is the thing that has to
+   decide what to do about it. A branch git declined because it is not merged
+   has a way forward and one that is held by another worktree does not, so the
+   window offers a second button for the first and only Cancel for the second —
+   a decision the panel behind it cannot make, since it draws one block of git's
+   words and no buttons at all. The refusal still goes to `writeError` on its way
+   past: what happened is a fact about this repository whether or not the window
+   is still standing.
+
+   Read back off `writeError` rather than plumbed out of `write`: that function
+   also answers `false` for a call it never made (git already busy) and for one
+   whose project or repository moved underneath, and neither of those is a
+   refusal anybody should be shown a second button about. The `op` is what tells
+   them apart.
+
+   The name is struck from the favourites on the way out. A pinned branch that
+   no longer exists costs nothing while it sits in the file — `branchRows` draws
+   no row for a name the repository does not have — but it would come back the
+   day somebody cut a branch of that name again, pinned by a decision they made
+   about a different branch. */
+export async function deleteBranch(branch, { force = false } = {}) {
+  if (!branch) return false
+  /* Which project's list `settings.project` is holding, captured before the
+     await and checked after it. `write()` answers `true` for a project that
+     moved underneath — deliberately, since the branch did go on disk — and
+     `settings.project` is merged **in place** on a switch, so by the time this
+     resumes that object can be the next project's. Without this, a name pinned
+     in both projects (`main`, `develop`) would be quietly unpinned in the one
+     somebody had just switched to.
+     `activeProject` rather than `vcsState.project`: `projects.js` sets it
+     synchronously, before the layout is read and before `loadRepos` runs, so it
+     is the earliest signal of a switch and can never be behind the object it is
+     a statement about. */
+  const of = settings.activeProject
+  const gone = await write('delete', branch, (repo) =>
+    invoke('vcs_delete_branch', { repo, branch, force })
+  )
+  if (!gone) {
+    if (vcsState.writeError?.op === 'delete') throw vcsState.writeError
+    return false
+  }
+  const marked = settings.project.favoriteBranches
+  if (settings.activeProject === of && Array.isArray(marked) && marked.includes(branch)) {
+    settings.project.favoriteBranches = marked.filter((name) => name !== branch)
+  }
+  return true
+}
+
 /* Bring the upstream's commits into the branch this repository is on.
 
    Through `write` like every other write here, so it takes the same `busy`, the

@@ -322,6 +322,138 @@ describe('the git panel store', () => {
     expect(stores.git.gitState.branch).toBe('main')
   })
 
+  /* A repository whose branch list shrinks when git is told to delete one, so
+     the row going — and the name coming off the favourites with it — can be
+     watched from the store. `refused` makes the very next delete fail with the
+     shape Rust hands back, which is the whole of what the window branches on. */
+  const deleting = (ipc, refusal = null) => {
+    let names = ['main', 'develop', 'spike']
+    ipc.on('vcs_repos', () => answer([{ name: '.', path: '/p/.', branch: 'main', detached: null }]))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', () => names.map((name) => ({ name, current: name === 'main' })))
+    ipc.on('vcs_tracking', [])
+    ipc.on('git_head', { branch: 'main', detached: null })
+    ipc.on('settings_save', null)
+    if (refusal) ipc.fail('vcs_delete_branch', refusal)
+    else {
+      ipc.on('vcs_delete_branch', (args) => {
+        names = names.filter((name) => name !== args.branch)
+        return null
+      })
+    }
+  }
+
+  it('a deleted branch goes from the list and from the favourites with it', async () => {
+    const { stores, ipc } = await loadStores()
+    deleting(ipc)
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.project.favoriteBranches = ['spike', 'develop']
+
+    expect(await stores.vcs.deleteBranch('spike')).toBe(true)
+
+    expect(ipc.calls('vcs_delete_branch')).toEqual([
+      { repo: '/p/.', branch: 'spike', force: false }
+    ])
+    expect(stores.vcs.vcsState.branches.map((b) => b.name)).not.toContain('spike')
+    /* A pinned name with nothing behind it draws no row, but it would come back
+       the day somebody cut a branch of that name again — pinned by a decision
+       about a different branch. */
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['develop'])
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* The second press is a different command, and the flag rides in from the
+     window that asked rather than being worked out here. */
+  it('a forced delete carries the flag git is run with', async () => {
+    const { stores, ipc } = await loadStores()
+    deleting(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.deleteBranch('spike', { force: true })
+
+    expect(ipc.calls('vcs_delete_branch')).toEqual([
+      { repo: '/p/.', branch: 'spike', force: true }
+    ])
+  })
+
+  /* **The one write in this store that hands its refusal back out.** The window
+     that asked the question is what decides whether to offer a second button,
+     and it cannot decide that from a field on a panel. The refusal still lands
+     in `writeError` on its way past, because what happened is a fact about this
+     repository whether or not that window is still standing. */
+  it('a refused delete is thrown to the caller and drawn in the panel as well', async () => {
+    const { stores, ipc } = await loadStores()
+    deleting(ipc, {
+      kind: 'notMerged',
+      message: 'spike has commits that are not in the branch this repository is on. Deleting it loses them.'
+    })
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.project.favoriteBranches = ['spike']
+
+    await expect(stores.vcs.deleteBranch('spike')).rejects.toMatchObject({
+      kind: 'notMerged',
+      op: 'delete'
+    })
+
+    expect(stores.vcs.vcsState.writeError).toMatchObject({ kind: 'notMerged', op: 'delete' })
+    expect(stores.vcs.vcsState.branches.map((b) => b.name)).toContain('spike')
+    // Nothing was deleted, so nothing is unmarked either.
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['spike'])
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* Git already working is not a refusal and must not be thrown as one: the
+     window would offer a second button about a call nobody made. */
+  it('a delete that never left the store answers false rather than throwing', async () => {
+    const { stores, ipc } = await loadStores()
+    deleting(ipc)
+    await stores.vcs.loadRepos('/p')
+    stores.vcs.vcsState.busy = { op: 'merge', branch: 'develop' }
+
+    expect(await stores.vcs.deleteBranch('spike')).toBe(false)
+
+    expect(ipc.calls('vcs_delete_branch')).toEqual([])
+  })
+
+  /* `write()` answers `true` for a project that moved underneath — the branch
+     did go on disk — and `settings.project` is merged **in place** on a switch.
+     Without a guard the strike would land on whichever project's list is in
+     that object by then, and `main` is pinned in plenty of projects at once. */
+  it('does not strike the name out of a project somebody switched to mid-delete', async () => {
+    const { stores, ipc } = await loadStores()
+    let release
+    const held = new Promise((resolve) => {
+      release = () => resolve(null)
+    })
+    deleting(ipc)
+    ipc.on('vcs_delete_branch', () => held)
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.activeProject = '/p'
+    stores.settings.settings.project.favoriteBranches = ['spike']
+
+    const deleting_ = stores.vcs.deleteBranch('spike')
+    /* The switch, in the order `projects.js` performs it: the active project
+       first, then the layout merged in place over the same object. */
+    stores.settings.settings.activeProject = '/other'
+    stores.settings.settings.project.favoriteBranches = ['spike', 'main']
+    stores.vcs.vcsState.project = '/other'
+    release()
+    await deleting_
+
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['spike', 'main'])
+  })
+
+  it('a delete with no branch asks git nothing', async () => {
+    const { stores, ipc } = await loadStores()
+    deleting(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    expect(await stores.vcs.deleteBranch('')).toBe(false)
+
+    expect(ipc.calls('vcs_delete_branch')).toEqual([])
+  })
+
   it('a name that is only whitespace asks git nothing', async () => {
     const { stores, ipc } = await loadStores()
     cutting(ipc)
