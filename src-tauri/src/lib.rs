@@ -16,6 +16,35 @@ mod vcs;
 mod window;
 
 use tauri::Manager;
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+
+/// How much of one log file is written before it is rolled aside, and how many
+/// rolled-aside files are kept. The numbers are here rather than left to the
+/// plugin's defaults because both of the plugin's are wrong for this app: 40 KB
+/// a file, and `KeepOne`, which deletes the previous file every time it rolls.
+/// A run works unattended for a night, and a night's log is the only account of
+/// what it did — a strategy that can delete the beginning of that account
+/// deletes exactly the part somebody reads first.
+///
+/// So: 2 MiB apiece and ten rolled-aside files beside the one being written,
+/// which is at most eleven files and 22 MiB in the person's log directory, and
+/// it is a ceiling rather than an estimate. `KeepAll` would also never delete a
+/// run's early lines, and it was not taken for the other half of the same
+/// sentence: how much of somebody's disk this is allowed to occupy has to be a
+/// number, and under `KeepAll` there is none. A night would have to write
+/// 22 MiB — around 180 000 lines — before the oldest of the eleven is dropped.
+///
+/// One thing about that file to know before reading an incident by it: its
+/// stamps are **UTC**, the plugin's default, while the run report beside it is
+/// stamped local (`chrono::Local::now()`, `runs/service.rs`), so the two are an
+/// offset apart and the offset is the reader's to hold.
+/// `TimezoneStrategy::UseLocal` is not the fix and was not taken: the `time`
+/// crate refuses `now_local()` in a process that has threads unless it is built
+/// with `unsound_local_offset`, and the plugin quietly falls back to UTC — the
+/// call would change the format and read as though the question had been
+/// settled.
+const LOG_FILE_SIZE: u128 = 2 * 1024 * 1024;
+const LOG_FILES_KEPT: usize = 10;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -55,18 +84,60 @@ pub fn run() {
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init())
     .setup(|app| {
+      // First in this hook, because everything below it writes to `log` and a
+      // `log::warn!` made before a logger exists goes nowhere at all.
+      //
+      // Not under `cfg!(debug_assertions)`, which is where the Tauri template
+      // put this line on the first day and where it stayed for a month: the
+      // build that works unattended overnight is the release one, so the only
+      // account of what a run did was written by the one build that never runs
+      // a run. `TargetKind::LogDir` is `~/Library/Logs/<bundle identifier>/` on
+      // macOS, `$XDG_DATA_HOME/<identifier>/logs` on Linux; `file_name: None`
+      // takes the product name, which is the `smetana.log` already sitting
+      // there empty. Stdout stays beside it, and that is the line
+      // `npm run tauri dev` prints.
+      //
+      // `TargetKind::Webview` is deliberately not a third target: the front end
+      // does not read this log, nothing in the tree calls `attachConsole`, and
+      // a receiver nobody reads is one more place a path can reach.
+      //
+      // The one plugin in this file whose failure is swallowed rather than
+      // carried out on a `?`. Everything it does at registration is disk —
+      // `create_dir_all` on the log directory, the creating open of
+      // `smetana.log`, the `read_dir` the rotation counts old files with — and
+      // a `?` here leaves the setup hook, comes back out of `build()` as
+      // `Error::Setup` and lands on the `expect` at the bottom of this file. In
+      // a bundled app that panic has nowhere to print, so what a person gets is
+      // the icon bouncing and no window: no dialog, and no log either, because
+      // the log is the thing that failed. A full disk is the ordinary way in,
+      // and this is an app that fills disks overnight with worktrees and
+      // reports; a read-only home, a file where the directory should be and a
+      // directory owned by somebody else are the others. Only registration
+      // needs the guard — a write that fails afterwards falls back to stderr
+      // inside fern and takes nothing down with it.
+      if let Err(err) = app.handle().plugin(
+        tauri_plugin_log::Builder::default()
+          .level(log::LevelFilter::Info)
+          .max_file_size(LOG_FILE_SIZE)
+          .rotation_strategy(RotationStrategy::KeepSome(LOG_FILES_KEPT))
+          .targets([
+            Target::new(TargetKind::Stdout),
+            Target::new(TargetKind::LogDir { file_name: None }),
+          ])
+          .build(),
+      ) {
+        // There is nowhere to say this: the thing that says things is what
+        // just failed to start.
+        let _ = err;
+      }
+      // Whatever `raise` above had to say, said now that there is something to
+      // say it to. See `rlimit`: it runs before the builder, so it cannot log.
+      rlimit::report();
       // Before anything asks for an agent. A bundled app is handed launchd's
       // environment rather than the person's, so the answer takes a login
       // shell to get; starting it here means the first "+ New agent" does not
       // wait for one. See `shell_env`.
       shell_env::warm();
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
       // The settings file knows what to open with: the last run's active
       // project lives there. We read it here rather than waiting for the front
       // end — the board gets to load while the webview comes up. No file, or an
