@@ -157,10 +157,39 @@ and not its logic: the source shelled out to `bd ready` and `bd list` between ev
 seconds each, while this reads the snapshot the tracker worker already keeps current. It tracks
 `unfinished` — `in_progress` and `ready_to_merge` — separately from `ready`, because `bd ready` hides
 both and a run watching only the ready set would leave a killed batch's orphans on the board forever.
-A dependency counts as blocking only when it is bd's `blocks` kind. And `LastBatch` has three answers
-rather than "did it crash", because a batch stopped by a spent allowance moved the board no more than
-a crashed one did — reading either as a stuck queue would end a run over nothing — while a harness
-that keeps falling over needs a person and an exhausted allowance needs only time.
+A dependency counts as blocking only when it is bd's `blocks` kind. And `LastBatch` has an answer per
+ending rather than "did it crash", because a batch stopped by a spent allowance moved the board no
+more than a crashed one did — reading either as a stuck queue would end a run over nothing — while a
+harness that keeps falling over needs a person and an exhausted allowance needs only time.
+
+**A clean exit is not the same fact as a batch having happened** (smetana-0t4), and until this was
+written the loop asked the dying batch nothing else. Claude Code exits with zero when it did the work
+and when it died on its first request to the API, so a night where every session came back after
+eight minutes with one `Request timed out` in it read as a run doing its job: `crashes` was reset,
+`LastBatch::Completed` was recorded, and two tasks sat `in_progress` under a dead actor until
+somebody cleared them by hand in the morning. Two rules answer it, and both are in `queue.rs` where a
+test can reach them. `did_nothing` is the cheap signal — no account of itself and a board exactly
+where the batch found it — and it feeds `LastBatch::Empty`, counted in a row against
+`MAX_EMPTY_BATCHES` beside `MAX_CRASHES` and ending the run as `StopReason::NothingDone`. It is a
+second threshold rather than a share of the crash count because an empty batch exits with zero and
+never reaches that counter, and it is not `NoProgress`, which needs a *completed* batch and an
+unmoved board twice running — a dying batch that got as far as claiming one task defeats it. "The
+board moved" is stricter here than progress is in `next_action`, deliberately: this rule ends runs,
+so the closed and parked counts count too.
+
+`queue::release` is the other, and it runs after **every** batch ending rather than only the one that
+parks: `in_progress` goes back to `open` with the claim dropped, `ready_to_merge` keeps its status
+and loses only the claim, and the merge lock is never touched at all — releasing it behind a batch
+that may still be alive is releasing it in the middle of somebody's merge. Returned rather than
+parked, and that is the whole distinction: parking is for a task carrying a question to a person, and
+this one carries none, so parking it would hide it from every run that comes after. The note is an
+ordinary one for the same reason — a `parked:` line puts an answer in the trail that nobody gave — and
+it names the batch, its actor and, where `git::task_work` could find them, the branch the work was
+left on and the commit at its tip. That last part is the one thing the app can say that nobody else
+will: work committed on a branch and never merged is invisible to the board. The unanswered question
+is the one ending that does not release, and it is the other half of the rule rather than an
+exception — `park_claims` puts the question in the note of everything that batch claimed, and a
+release running first would leave it nothing to park.
 
 `usage.rs` is the piece the runs design deliberately left out and then took back. Reading
 `claude -p "/usage"` is a parse of somebody else's prose that can break silently, which is why it was
@@ -293,15 +322,18 @@ being ended by the run, and nothing in the document drew it before.
 
 **And the report names what a silent batch left on the board**, through `queue::left_behind` over a
 `fresh_board` read: the merge lock if its actor still holds it, and anything left `in_progress` or
-`ready_to_merge` under that actor, with ids. Only for a batch that left no account — a lead that
-answered has already said where it left things, and a second resync per batch is not worth a line
-nobody needed. It is wider than `claimed_by` on purpose, since this is a record rather than a parking
-list. **Named, never acted on**: the recovery boundary below holds, so nothing here releases a lock
-or rewrites a status, and the line exists precisely because the alternative is the *next* run
-discovering the lock by failing to take it. That boundary is about *recovery* and is not a claim
-that the loop never writes to bd: `park_claims` does, on the unanswered path, seconds after this
-very reading — one batch's `in_progress` claims to `parked` with the question as the note, and the
-only bd write `drive` makes.
+`ready_to_merge` under that actor, with ids. Drawn only for a batch that left no account — a lead
+that answered has already said where it left things, and the line would say it again. The read
+itself is every batch's now, since `release_claims` and `did_nothing` want it too; what is conditional
+is the line in the document. It is wider than `claimed_by` on purpose, since this is a record rather
+than a parking list. The **lock** is named and never acted on — the recovery boundary below holds
+for it, and the line exists precisely because the alternative is the *next* run discovering the lock
+by failing to take it. The rest of that reading is acted on, by `release_claims` off the same
+`fresh_board` call, and the boundary is untouched by that: it is about what a *previous* app left,
+which Phase R clears with the worktrees in front of it, while here the run is holding the actor, the
+session and the moment the batch ended, and nobody else will ever know as much. So the loop makes two
+kinds of bd write and no others — `park_claims` on the unanswered path, one batch's `in_progress`
+claims to `parked` with the question as the note, and `release_claims` after every other ending.
 
 **Every ending the loop task reaches goes through one `finish(...)` in `service.rs`, and that
 consolidation is the feature.** A dozen exits into `RunState::Stopped` is how the next ending
@@ -337,10 +369,12 @@ written for, where the only write happened at `Exit`.
 **The app writes a registry and deals with processes; the tracker half stays with
 `smetana:running-tasks` Phase R.** The split follows what each half can see: the app can see the
 process table and the tracker cannot, and Phase R already recovers claimed tasks correctly with the
-worktrees in front of it. So the app never rewrites `in_progress`, never parks anything, and writes
-to bd nowhere as part of recovery — doing both would be a second mechanism doing Phase R's job, and
-two mechanisms on one fact drift. The registry is `.smetana/runs.json` in the project folder, beside
-`project.toml` and outside the repository, so Phase R reads it with an ordinary file read, needing
+worktrees in front of it. So the app writes to bd nowhere as part of *recovery* — doing that would be
+a second mechanism doing Phase R's job, and two mechanisms on one fact drift. What its own live run
+left claimed a second ago is not recovery and is the run's own to give back (`release_claims`,
+smetana-0t4); a previous app's leavings are Phase R's, whole. The registry is `.smetana/runs.json` in
+the project folder, beside `project.toml` and outside the repository, so Phase R reads it with an
+ordinary file read, needing
 nothing from the app and no path passed through a prompt — which a file in `app_config_dir()` could
 not be, being platform-dependent and findable by a skill only if the app told it.
 
@@ -386,9 +420,10 @@ that and for nothing else. **A batch's liveness is its own `group`, not its reco
 batch killed mid-merge under an app that is still up leaves a lock no one will ever release, and the
 writer being alive says only that the app is; the `writer` stays the signal for a task claim, where
 the question is whether the run still exists to finish what it took. Both readings are the skills' to
-make and not this side's: the app never releases the lock — the one bd write the loop
-makes is `park_claims` on the unanswered path, which parks a claim rather than freeing one — so the
-lock is released by `smetana:running-tasks` Phase R or by nobody.
+make and not this side's: the app never releases the lock — the loop's two bd writes are
+`park_claims` on the unanswered path, which parks a claim rather than freeing one, and
+`release_claims` after every other ending, which refuses the lock explicitly (`queue::release`
+answers nothing for it) — so the lock is released by `smetana:running-tasks` Phase R or by nobody.
 
 On the front end, `runs.js` is deliberately small — a file read with no worker behind it, freshness
 from switching projects, from window focus, and from any of the project's sessions starting or

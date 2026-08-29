@@ -62,6 +62,20 @@ const MAX_ITERATIONS: u32 = 40;
 /// How many times in a row a session may exit non-zero before the run gives
 /// up. A transient failure of the harness is common; five of them is not.
 const MAX_CRASHES: u32 = 5;
+/// How many batches in a row may end having done nothing at all — no account of
+/// themselves and a board exactly where they found it — before the run gives up.
+///
+/// A second threshold rather than a share of the one above, because an empty
+/// batch is not a crash and does not reach that counter: it exits with zero,
+/// which is what smetana-0t4 is about. Three rather than one, because a single
+/// empty batch has innocent readings — a lead that found its work taken by a
+/// run in the next window has nothing to do and little to say — while three in
+/// a row is the night this constant was written for, where every session died
+/// on its first request to the API and the run kept starting them for forty
+/// minutes. `NoProgress` does not cover it: it needs a completed batch and an
+/// unmoved board twice running, so it costs an extra batch at best and never
+/// fires at all once a dying batch has claimed one task.
+const MAX_EMPTY_BATCHES: u32 = 3;
 const CRASH_BACKOFF_BASE: Duration = Duration::from_secs(5);
 const CRASH_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// How often the wait on a batch asks what the session's own state is. Only an
@@ -364,6 +378,7 @@ fn handle(
                 run.clone(),
                 config.preflight.clone(),
                 PathBuf::from(&project),
+                config.project.repos.clone(),
                 agent,
                 remove_worktrees,
                 tracker.clone(),
@@ -618,6 +633,12 @@ async fn drive(
     mut run: Run,
     preflight_config: Option<config::Preflight>,
     root: PathBuf,
+    // `[project].repos`, read once when the run started and carried for the
+    // whole of it, exactly as `agent` below is. The loop wants it in one place
+    // only — to find the branch a released task's work was left on — and a
+    // project that grew a repository mid-run would still be the project this
+    // run started against.
+    repos: Vec<String>,
     agent: String,
     // `settings.json`'s `git.removeWorktrees`, read once when the run started
     // and carried for the whole of it — the same snapshot `agent` above is,
@@ -681,6 +702,10 @@ async fn drive(
 
     let mut previous: Option<QueueSnapshot> = None;
     let mut crashes: u32 = 0;
+    // Batches that ended having done nothing at all, counted in a row and kept
+    // apart from the crashes above for the reason `MAX_EMPTY_BATCHES` gives:
+    // they exit with zero, so nothing about them was ever a crash.
+    let mut empties: u32 = 0;
     let mut unreadable: u32 = 0;
     let mut last_batch = LastBatch::Completed;
     // Batches ended by an unanswered question, counted in a row: the first
@@ -832,14 +857,65 @@ async fn drive(
             batch_started.elapsed().as_secs(),
             outcome_of(&outcome),
         );
-        // Only for a batch that said nothing: an account is a lead telling
-        // somebody where it left the board, and a second board read behind a
-        // lead that already answered would cost every run a resync for a line
-        // nobody needed.
-        if !record.reported {
-            record.left_behind = held_by(&tracker, session).await;
+        // One board read for the whole of this batch's ending, and it is a
+        // resync (`fresh_board`) because what is being looked for are the
+        // *agent's* own bd writes: those reach this process through the
+        // watcher, and a claim made moments before the session died may not
+        // have landed in the cached snapshot. It answers three questions at
+        // once — what the batch left claimed, whether it moved the board at
+        // all, and, through the first, what has to be given back — so that no
+        // arm below can be added later without one of them. The named cost is
+        // that every batch now pays the resync a silent one used to pay alone,
+        // about two seconds at the one moment in a run when nothing at all is
+        // waiting on it.
+        let actor = crate::terminal::model::run_actor(session);
+        let after = fresh_board(&tracker).await;
+        let leftovers =
+            after.as_deref().map(|issues| queue::left_behind(issues, &actor)).unwrap_or_default();
+        // In the document, only for a batch that said nothing: an account is a
+        // lead telling somebody where it left the board, and a line about the
+        // leftovers behind a lead that already answered is one nobody needed.
+        // The release below is not conditioned on it — a lead's account says
+        // where the work was left and releases nothing.
+        let reported = record.reported;
+        if !reported {
+            record.left_behind = leftovers.clone();
         }
         account.batches.push(record);
+
+        // Did this batch do anything at all? An unreadable board answers no:
+        // the rule ends runs, so a fact the app could not check must never
+        // stand in for one it did.
+        let nothing_done = match (&after, &previous) {
+            (Some(issues), Some(before)) => queue::did_nothing(
+                reported,
+                before,
+                &queue::snapshot(issues, &run.settings.scope, run.settings.min_priority),
+            ),
+            _ => false,
+        };
+        // "In a row" is literal, the same way it is for a repeated question.
+        if !nothing_done {
+            empties = 0;
+        }
+
+        // Give back what this batch left claimed, after **every** ending and
+        // not only the one that parks (smetana-0t4). A batch that exited with
+        // zero having left a task `in_progress` used to be believed: the board
+        // was not read, the claim stayed under a dead actor, and the next
+        // batches walked past work nobody was doing until somebody cleared it
+        // by hand in the morning. `queue::release` is the rule — `in_progress`
+        // back to `open`, `ready_to_merge` unclaimed and left reviewed, the
+        // merge lock never touched.
+        //
+        // The one ending that does not release is the unanswered question, and
+        // it is not an exception to the rule so much as the other half of it:
+        // `park_claims` below puts the question in the note of everything the
+        // batch claimed, and a release running first would leave it nothing to
+        // park (smetana-8pe).
+        if !matches!(outcome, Batch::Unanswered { .. }) {
+            release_claims(&tracker, &root, &repos, batch_no, &actor, &leftovers).await;
+        }
 
         let exit = match outcome {
             // The work is done and the session is still alive with a person in
@@ -923,6 +999,26 @@ async fn drive(
         // batch either — the same reading `terminal/service.rs` records beside
         // the waiter.
         if exit == Exit::Code(0) {
+            // A clean exit is not the same fact as a batch having happened,
+            // and treating it as one is smetana-0t4: the harness exits with
+            // zero when it did the work and when it died on its first request
+            // to the API, so the board and the batch's own account are asked
+            // as well. An empty batch does not reset the crash count — it never
+            // reached it, having exited well — and it is counted on its own.
+            if nothing_done {
+                empties += 1;
+                last_batch = LastBatch::Empty;
+                // A run allowed one batch has had it. The threshold is for a
+                // night of them; here there is no second batch to wait for, and
+                // spawning one at a person sitting in the session would be this
+                // fix taking more than it gives.
+                if empties >= MAX_EMPTY_BATCHES || once {
+                    let reason = StopReason::NothingDone { batches: empties };
+                    finish(&mut run, reason, &say, &account, &root, &tracker).await;
+                    return;
+                }
+                continue;
+            }
             crashes = 0;
             last_batch = LastBatch::Completed;
             continue;
@@ -1058,29 +1154,47 @@ fn outcome_of(batch: &Batch) -> BatchOutcome {
     }
 }
 
-/// What this batch's actor was still holding when the batch ended: the merge
-/// lock, work left `in_progress`, work left `ready_to_merge`.
+/// Give back what a batch left claimed on the board when it ended.
 ///
-/// Read through `fresh_board` for the reason `park_claims` reads through it —
-/// the claims being looked for are the *agent's* own bd writes, which reach this
-/// process through the watcher, and a claim made moments before the session died
-/// may not have landed in the cached snapshot. The cost is one resync per
-/// accountless batch, at a moment when the batch is already over.
+/// The rule itself is `queue::release` and it is pure: `in_progress` returns to
+/// `open` unclaimed, `ready_to_merge` keeps its status and loses only the claim,
+/// the merge lock is never touched. What this side adds is the note's other
+/// half — where the work was left, from the branch whose slug carries the task's
+/// own id (`git::task_work`) — and it looks in every repository the project
+/// declares, since a task's branch is cut in each repository it touches and the
+/// first one to answer is enough for a line somebody reads.
 ///
-/// **Read only.** Nothing here releases a lock, parks a claim or writes a note:
-/// the app writes to the tracker nowhere as part of recovery (`recovery.rs`),
-/// and `running-tasks` Phase R is what clears this up with the worktrees in
-/// front of it. Naming what was read in the run's own document does not cross
-/// that line — and it is the difference between somebody learning about an
-/// abandoned lock now and the next run learning about it by failing.
+/// **This is the app writing to the tracker, and it is deliberately not
+/// recovery.** The boundary `recovery.rs` keeps is about a *previous* app's
+/// leavings, which Phase R clears with the worktrees in front of it. Here the
+/// run is holding the actor, the session and the moment the batch ended, and
+/// nobody else is ever going to know as much: a claim left under a dead actor
+/// is invisible to every batch that follows, which is exactly what smetana-0t4
+/// cost a night to.
 ///
-/// An unreadable board answers with nothing rather than an error: the batch's
-/// record is still worth writing, and a report is not the place a tracker outage
-/// is reported.
-async fn held_by(tracker: &TrackerHandle, session: u64) -> Vec<queue::Leftover> {
-    let actor = crate::terminal::model::run_actor(session);
-    let Some(issues) = fresh_board(tracker).await else { return vec![] };
-    queue::left_behind(&issues, &actor)
+/// A failed release is left alone rather than retried, the same way a failed
+/// parking is: the task stays `in_progress`, which the queue reads as unfinished
+/// work for the next batch to recover, so the cost is a recovery rather than a
+/// task.
+async fn release_claims(
+    tracker: &TrackerHandle,
+    root: &Path,
+    repos: &[String],
+    batch: u32,
+    actor: &str,
+    leftovers: &[queue::Leftover],
+) {
+    for left in leftovers {
+        let work = repos.iter().find_map(|repo| crate::git::task_work(&root.join(repo), &left.id));
+        let borrowed = work.as_ref().map(|(branch, commit)| (branch.as_str(), commit.as_str()));
+        let Some(patch) = queue::release(left, batch, actor, borrowed) else { continue };
+        let (tx, rx) = oneshot::channel();
+        if tracker.0.send(TrackerRequest::Update(left.id.clone(), patch, tx)).await.is_ok() {
+            if let Ok(Err(err)) = rx.await {
+                log::warn!("could not release {} after batch {batch}: {err}", left.id);
+            }
+        }
+    }
 }
 
 /// Has this batch handed its work back — the question that ends a batch in a

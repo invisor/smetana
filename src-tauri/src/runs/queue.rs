@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use crate::runs::model::{RunScope, StopReason};
-use crate::tracker::model::Issue;
+use crate::tracker::model::{Issue, IssuePatch};
 
 /// bd's own status for work that has been claimed.
 const IN_PROGRESS: &str = "in_progress";
@@ -20,8 +20,10 @@ const READY_TO_MERGE: &str = "ready_to_merge";
 /// also something the run itself does to a stuck batch's claims — see
 /// `service::park_claims` — and a second copy of the string would drift.
 pub const PARKED: &str = "parked";
-/// bd's own status for work that is available.
-const OPEN: &str = "open";
+/// bd's own status for work that is available. `pub` because giving a dead
+/// batch's unfinished work back is putting it in exactly this status — see
+/// `release` — and a second copy of the string would drift.
+pub const OPEN: &str = "open";
 /// bd's own status for work that is finished. `pub(super)` because
 /// `summary.rs` diffs the board against this very word, and a second copy of
 /// the string would drift.
@@ -66,6 +68,9 @@ pub enum RunReason {
     RecoverUnfinished,
     RetryAfterCrash,
     RetryAfterLimit,
+    /// The batch before this one ended having done nothing at all, and the run
+    /// has not yet seen enough of those in a row to give up.
+    RetryAfterEmpty,
     /// The batch before this one stopped on a question and its claims were
     /// parked; this batch takes what is left.
     AfterQuestion,
@@ -73,13 +78,13 @@ pub enum RunReason {
 
 /// How the batch before this one ended, as far as the decision cares.
 ///
-/// Three answers rather than "did it crash", and the third is what the type
-/// exists for: a batch stopped by a spent subscription allowance changed the
-/// board no more than a crashed one did, and reading either as a stuck queue
-/// would end a run over something that is not stuck. But they are not the same
-/// event and must not be reported as one — a harness that keeps falling over
-/// needs somebody to look at it, while an exhausted allowance needs nothing at
-/// all except time.
+/// More answers than "did it crash", and the reason is the same one every time
+/// the type has grown: a batch stopped by a spent subscription allowance
+/// changed the board no more than a crashed one did, and reading either as a
+/// stuck queue would end a run over something that is not stuck. But they are
+/// not the same event and must not be reported as one — a harness that keeps
+/// falling over needs somebody to look at it, while an exhausted allowance
+/// needs nothing at all except time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LastBatch {
     /// It ran to completion.
@@ -98,6 +103,20 @@ pub enum LastBatch {
     /// stop: `RepeatedQuestion` in `model.rs` ends the run on the second
     /// identical question before the decision here is ever asked.
     Asked,
+    /// It ended having done nothing at all: no account of itself, and a board
+    /// exactly where it stood when the batch started — `did_nothing` is the
+    /// rule, and it is what a batch that died on its first request to the API
+    /// looks like from here.
+    ///
+    /// Its own answer rather than `Completed`, and that is the whole of
+    /// smetana-0t4: the harness exits with zero both when it did the work and
+    /// when it fell over before starting, so a clean exit alone said nothing
+    /// about whether a batch had happened, and a night of eight-minute batches
+    /// read as a run doing its job. Like `Crashed` it must not read as a stuck
+    /// queue — the board is unmoved because nothing ran, not because the work
+    /// is unfinishable — and, like a crash, it is the run's own count of them
+    /// in a row that ends the night, in `service.rs` beside the crash count.
+    Empty,
 }
 
 /// Is this issue inside what the run was asked to work on?
@@ -260,6 +279,104 @@ pub fn parking_note(question: &str) -> String {
     format!("parked: {question}")
 }
 
+/// How one thing a batch left claimed is given back, as a patch for the
+/// tracker — or `None` for the one leftover that is never given back.
+///
+/// Three rules, and each of them is a way of being wrong that costs a night:
+///
+/// - **`in_progress` goes back to `open`, unclaimed.** Returned rather than
+///   parked: parking is for a task carrying a question to a person, and this
+///   one carries none — it is simply not finished — so parking it would hide it
+///   from every run that comes after (smetana-0t4).
+/// - **`ready_to_merge` keeps its status and loses only the claim.** That is
+///   reviewed work waiting to be merged, and putting it back in `open` would
+///   throw the review away and have it done again.
+/// - **The merge lock is never touched.** Releasing it behind a batch that is
+///   still alive is releasing it in the middle of somebody's merge, which is
+///   the half-merged target branch the lock exists to prevent.
+///
+/// A status this rule has never seen is left alone too: `left_behind` produces
+/// only the two above, and guessing at a third is not this function's to do.
+/// The note is an ordinary one — deliberately not the `parked:` or `resolved:`
+/// the `running-tasks` skill writes, since neither happened here — and it names
+/// the batch, its actor and, where the app could find them, the branch the work
+/// was left on and the commit at its tip.
+pub fn release(
+    left: &Leftover,
+    batch: u32,
+    actor: &str,
+    work: Option<(&str, &str)>,
+) -> Option<IssuePatch> {
+    if left.lock {
+        return None;
+    }
+    let (status, said) = match left.status.as_str() {
+        IN_PROGRESS => (
+            Some(OPEN.to_string()),
+            format!(
+                "batch {batch} ({actor}) ended without finishing this; \
+                 it is open again and unclaimed"
+            ),
+        ),
+        READY_TO_MERGE => (
+            None,
+            format!(
+                "batch {batch} ({actor}) ended before this was merged; \
+                 the claim is released and the review stands"
+            ),
+        ),
+        _ => return None,
+    };
+    let found = match work {
+        Some((branch, commit)) => format!(", work so far on {branch} at {commit}"),
+        None => String::new(),
+    };
+    Some(IssuePatch {
+        status,
+        // An empty assignee is how bd clears the field — checked against the
+        // binary rather than assumed, since `bd update -a ""` could as easily
+        // have been a no-op or an error.
+        assignee: Some(String::new()),
+        append_notes: Some(format!("{said}{found}")),
+        ..Default::default()
+    })
+}
+
+/// Did this batch do anything at all?
+///
+/// The cheap signal smetana-0t4 asked for, and it is made of facts the loop is
+/// already holding rather than anything new: the batch left no account of
+/// itself, and the board is where it was when the batch started. A batch that
+/// died on its first request to the API looks exactly like this, and until this
+/// rule existed nothing could tell it apart from a batch that had nothing to do
+/// — `StopReason::NoProgress` costs a whole extra iteration and needs the board
+/// unmoved *twice* running, which a batch that got as far as claiming one task
+/// defeats.
+///
+/// `reported` is the account file having **parsed**, which is `read_batch`'s own
+/// answer and never a file that merely exists — an agent's write is not atomic.
+/// A batch that said anything at all about itself is not empty whatever the
+/// board says: it may honestly have found there was nothing to take, and that
+/// is a batch reporting rather than a batch dying.
+///
+/// "The board moved" is stricter here than progress is in `next_action`, and
+/// deliberately so: this rule ends runs, so every reading under which the batch
+/// did something has to count. Hence the closed and parked counts as well as the
+/// two sets — a task closed out of `parked`, or parked from a status this run
+/// never looks at, moves neither set and is plainly not nothing.
+pub fn did_nothing(reported: bool, before: &QueueSnapshot, after: &QueueSnapshot) -> bool {
+    !reported && same_board(before, after)
+}
+
+/// The board twice over, as far as "did anything happen at all" cares.
+/// Order-independent for the reason `same_set` is.
+fn same_board(a: &QueueSnapshot, b: &QueueSnapshot) -> bool {
+    same_set(&a.ready, &b.ready)
+        && same_set(&a.unfinished, &b.unfinished)
+        && a.closed == b.closed
+        && a.parked == b.parked
+}
+
 /// Order-independent equality: bd's ordering is not stable across calls, and
 /// two passes returning the same work in a different order is not progress.
 fn same_set(a: &[String], b: &[String]) -> bool {
@@ -281,9 +398,10 @@ fn same_set(a: &[String], b: &[String]) -> bool {
 ///   stuck one has made progress, and stopping there would call a working run
 ///   stuck.
 /// - **A batch that did not run to completion suppresses the no-progress
-///   stop.** An unchanged board after a crash, after an allowance ran out, or
-///   after a session was killed at a question it stopped on, means the batch
-///   never got to move anything — not that the board is stuck.
+///   stop.** An unchanged board after a crash, after an allowance ran out,
+///   after a session was killed at a question it stopped on, or after a batch
+///   that did nothing at all, means the batch never got to move anything — not
+///   that the board is stuck.
 /// - **A run allowed one batch stops once that batch has run to completion**
 ///   (`once`, derived from the mode — the decision cares about whether a second
 ///   batch may go out, not about who answers a question). `prev` is what says a
@@ -320,6 +438,11 @@ pub fn next_action(
         LastBatch::Crashed => return Action::Run(RunReason::RetryAfterCrash),
         LastBatch::Limited => return Action::Run(RunReason::RetryAfterLimit),
         LastBatch::Asked => return Action::Run(RunReason::AfterQuestion),
+        // An empty batch never got to do its work either, so it is retried the
+        // way a crash is, and the count of them in a row is what ends the run
+        // — `service.rs`, beside the crash count. A one-batch run never arrives
+        // here with one, because that count ends it at the first.
+        LastBatch::Empty => return Action::Run(RunReason::RetryAfterEmpty),
         LastBatch::Completed => {}
     }
     Action::Run(if now.ready.is_empty() {
@@ -879,6 +1002,122 @@ mod tests {
             next_action(&snap(&[], &[]), Some(&before), 1, 20, LastBatch::Completed, true),
             Action::Stop(StopReason::QueueEmpty)
         );
+    }
+
+    #[test]
+    fn a_batch_that_left_no_account_and_an_unmoved_board_did_nothing() {
+        // The night smetana-0t4 was filed about: the session exited with zero
+        // having died on its first request to the API, so nothing was written
+        // and nothing moved. Nothing else in the run could see that.
+        let before = snap(&["a", "b"], &["c"]);
+        let after = snap(&["b", "a"], &["c"]);
+        assert!(did_nothing(false, &before, &after), "order is not movement either");
+    }
+
+    #[test]
+    fn a_batch_that_left_an_account_is_never_empty() {
+        // A batch that said something about itself may honestly have found
+        // nothing to take, and that is a batch reporting rather than a batch
+        // dying. The board is identical here and it still does not count.
+        let before = snap(&["a"], &[]);
+        assert!(!did_nothing(true, &before, &snap(&["a"], &[])));
+    }
+
+    #[test]
+    fn a_batch_that_moved_the_board_is_never_empty() {
+        let before = snap(&["a", "b"], &[]);
+        // Taken: `a` left the ready set for the unfinished one.
+        assert!(!did_nothing(false, &before, &snap(&["b"], &["a"])));
+        // Recovered: an orphan is gone from the unfinished set.
+        let held = snap(&["a"], &["orphan"]);
+        assert!(!did_nothing(false, &held, &snap(&["a"], &[])));
+        // And the counts move where neither set does — a task closed out of
+        // `parked` touches nothing this run takes work from, and is plainly
+        // not nothing. Stricter than `next_action`'s idea of progress, on
+        // purpose: this rule is what ends the run.
+        let mut closed_one = before.clone();
+        closed_one.closed += 1;
+        assert!(!did_nothing(false, &before, &closed_one));
+    }
+
+    #[test]
+    fn an_empty_batch_is_retried_and_does_not_read_as_a_stuck_queue() {
+        // The board is unmoved, which after a *completed* batch is the stuck
+        // ending — but this batch never ran, so `NoProgress` would send
+        // somebody to the board when the agent is what needs looking at. The
+        // count of them in a row is `service.rs`'s.
+        let before = snap(&["a"], &[]);
+        assert_eq!(
+            next_action(&snap(&["a"], &[]), Some(&before), 1, 20, LastBatch::Empty, false),
+            Action::Run(RunReason::RetryAfterEmpty)
+        );
+    }
+
+    #[test]
+    fn unfinished_work_goes_back_to_open_with_its_claim_dropped() {
+        let left = Leftover {
+            id: "smetana-08f".into(),
+            status: "in_progress".into(),
+            lock: false,
+        };
+        let patch = release(&left, 2, "smetana-run-10", None).expect("work is given back");
+        assert_eq!(patch.status.as_deref(), Some("open"));
+        assert_eq!(patch.assignee.as_deref(), Some(""), "bd clears the field on an empty assignee");
+        let note = patch.append_notes.expect("a note saying what happened");
+        assert!(note.contains("batch 2"), "{note}");
+        assert!(note.contains("smetana-run-10"), "{note}");
+        // Not the lead's own vocabulary: nothing was parked and no question was
+        // answered, and a `parked:` line puts an answer in the trail that
+        // nobody gave.
+        assert!(!note.starts_with("parked:") && !note.starts_with("resolved:"), "{note}");
+        assert!(!note.contains('\n'), "one line: {note}");
+    }
+
+    #[test]
+    fn reviewed_work_keeps_its_status_and_loses_only_the_claim() {
+        // `ready_to_merge` is work somebody already reviewed. Putting it back
+        // in `open` would throw that away and have it done a second time.
+        let left = Leftover {
+            id: "smetana-2ya".into(),
+            status: "ready_to_merge".into(),
+            lock: false,
+        };
+        let patch = release(&left, 3, "smetana-run-10", None).expect("the claim is released");
+        assert_eq!(patch.status, None);
+        assert_eq!(patch.assignee.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn the_merge_lock_is_never_given_back() {
+        // Releasing it behind a batch that is still alive is releasing it in
+        // the middle of somebody's merge — the half-merged target branch the
+        // lock exists to prevent. It is refused in whichever status it is held.
+        for status in ["in_progress", "ready_to_merge"] {
+            let lock = Leftover { id: "smetana-uox".into(), status: status.into(), lock: true };
+            assert!(release(&lock, 4, "smetana-run-10", None).is_none(), "in `{status}`");
+        }
+    }
+
+    #[test]
+    fn a_status_this_rule_has_never_seen_is_left_alone() {
+        // `left_behind` produces exactly two, and guessing at a third is not
+        // this function's to do.
+        let odd = Leftover { id: "x".into(), status: "hooked".into(), lock: false };
+        assert!(release(&odd, 1, "smetana-run-10", None).is_none());
+    }
+
+    #[test]
+    fn the_note_names_the_branch_and_the_commit_when_the_app_found_them() {
+        // What somebody reading the note the next morning actually needs: work
+        // that was committed and never merged is on a branch, and the note is
+        // the only place the board will ever say so.
+        let left = Leftover { id: "smetana-08f".into(), status: "in_progress".into(), lock: false };
+        let patch = release(&left, 2, "smetana-run-10", Some(("fix/smetana-08f-a-task", "d3a4309")))
+            .expect("work is given back");
+        let note = patch.append_notes.expect("a note");
+        assert!(note.contains("fix/smetana-08f-a-task"), "{note}");
+        assert!(note.contains("d3a4309"), "{note}");
+        assert!(!note.contains('\n'), "one line: {note}");
     }
 
     #[test]
