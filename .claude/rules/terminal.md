@@ -549,9 +549,27 @@ removed them explicitly.
 
 **No transcript is read whole, and that is a constraint rather than an optimisation.** 844 MB for one
 project, the largest file 16 MB, and the tab has to open at once. What a row needs is at the start of
-the file (`cwd`, `gitBranch`, the first human message), at the end of it (the last message), or is a
-count of lines with a substring check before any JSON is parsed. The last-activity time is the file's
-mtime, which is free and says the same thing as the final record's timestamp.
+the file (`cwd`, `gitBranch`, the session's title — the generated `ai-title` when there is one, the
+first human message otherwise), at the end of it (the last message), or is a count of lines with a
+substring check before any JSON is parsed. The last-activity time is the file's mtime, which is free
+and says the same thing as the final record's timestamp.
+
+**A row's title is Claude Code's own `ai-title` record where the transcript carries one, and the
+first thing the person typed where it does not.** The person's words were the whole rule until the
+generated record was measured: somebody who opens nearly every session with the same standing
+instruction gets the same title on nearly every row, and on this machine one identical phrase titled
+156 of 313 sessions against 122 distinct titles in all. Taking the generated line gives 220 distinct
+and drops the commonest to 67. It costs nothing to find — the record sits tens of kilobytes into a
+file but only 7 to 88 *lines* in, inside the head budget the forward pass was already parsing — and a
+file that ever carried one past that budget falls back to the person rather than being chased for it.
+The measurements and the budget are `read.rs`'s `HEAD_LINES`; do not re-open the question without
+retaking them, which `bench_listing_the_real_projects_folder` is there for.
+
+**That is why a row carries two sentences and not one.** `title` answers what the session was about;
+`firstPrompt` is always `human_text`'s answer and answers what the person opened with. They hold the
+same string for a transcript with no generated title, which is the ordinary case — but the moment
+they can differ, one field cannot serve both, and the opened card's block is captioned "First prompt"
+in so many words. A card fed the title there claims the person typed a sentence Claude Code wrote.
 
 `src/stores/sessions.js` is the front end's half: one command, `sessions_list`, and the store carries
 the rules the panel rests on — the list is emptied the moment another project is asked about, the
@@ -581,7 +599,12 @@ test, and an interval nobody clears would outlive every test that started one.
 
 The row is a card now: a chevron and a menu button on its right, the card opening onto the whole of
 the first prompt and the two paths, and nothing else — an opened card is deliberately **not** a
-transcript viewer, because reading the conversation is what Open log is for.
+transcript viewer, because reading the conversation is what Open log is for. The prompt in that block
+is the row's `firstPrompt` and never its `title`: on a session Claude Code named itself the two are
+different sentences, and the caption over the block says whose words are underneath it. The line at
+the top of the card stays at one line even when the card is open — not because it would otherwise
+repeat the block, which it no longer does, but because a row that grew taller would move every row
+above it the moment somebody opened a card halfway down the column.
 
 **Which cards are open is held by whoever draws the list, and is written down nowhere.** Several may
 be open at once, which is what somebody opens a second one for; `settings.json` is where the things

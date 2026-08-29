@@ -148,9 +148,10 @@ struct Facts {
     /// Claude Code's own one-line title for the session, when the transcript
     /// carries one. It wins over `human_title`; see [`summarise`].
     generated_title: Option<String>,
-    /// The first thing the person actually typed — the title of a transcript
-    /// with no generated one, and the only title there was before that record
-    /// existed.
+    /// The first thing the person actually typed. It titles a transcript with
+    /// no generated title, and it is `SessionSummary::first_prompt` either way
+    /// — which is why it is still collected on a file whose title is already
+    /// decided.
     human_title: Option<String>,
     model: Option<String>,
     messages: u32,
@@ -359,7 +360,13 @@ fn summarise(
            transcript has one, and the first thing the person typed when it does
            not. `generated_title` has already refused an empty one, so an
            `ai-title` record saying nothing falls through here too. */
-        title: facts.generated_title.or(facts.human_title),
+        title: facts.generated_title.or(facts.human_title.clone()),
+        /* The other question, and the reason `Facts` keeps both: the row's
+           title may now be Claude Code's sentence rather than the person's, so
+           the opened card's "First prompt" block is answered from the human
+           line directly and reads the same whichever way the title fell. The
+           forward pass gathered this already; nothing extra is read for it. */
+        first_prompt: facts.human_title,
         last_role: tail.role,
         last_text: tail.text,
         messages: facts.messages,
@@ -647,6 +654,51 @@ mod tests {
         );
 
         assert_eq!(list_in(&root, &project)[0].title.as_deref(), Some("Task menu in DONE"));
+    }
+
+    #[test]
+    fn the_card_keeps_the_person_s_own_words_whichever_way_the_title_fell() {
+        // The whole point of the second field: the row answers "what was this
+        // session about" and the opened card answers "what did they open
+        // with", and those are two different sentences the moment a generated
+        // title exists. Both cases in one test, because what has to hold is
+        // the relationship between them rather than either on its own.
+        let root = temp_dir("both-titles-root");
+        let project = temp_dir("both-titles-project");
+        write_session(
+            &root,
+            &project,
+            "generated",
+            &[
+                user_line(&project, "main", "Talk to me in Russian: everything you say"),
+                ai_title_line("Task menu in DONE"),
+                assistant_line(&project, "Understood."),
+            ],
+        );
+        write_session(
+            &root,
+            &project,
+            "ungenerated",
+            &[
+                user_line(&project, "main", "Move the card to done"),
+                assistant_line(&project, "Moved it."),
+            ],
+        );
+
+        let listed = list_in(&root, &project);
+        let generated =
+            listed.iter().find(|session| session.id == "generated").expect("the titled session");
+        assert_eq!(generated.title.as_deref(), Some("Task menu in DONE"));
+        assert_eq!(
+            generated.first_prompt.as_deref(),
+            Some("Talk to me in Russian: everything you say")
+        );
+        assert_ne!(generated.title, generated.first_prompt, "the two answer different questions");
+
+        let ungenerated =
+            listed.iter().find(|session| session.id == "ungenerated").expect("the plain session");
+        assert_eq!(ungenerated.title.as_deref(), Some("Move the card to done"));
+        assert_eq!(ungenerated.first_prompt, ungenerated.title, "one answer serves both here");
     }
 
     #[test]
