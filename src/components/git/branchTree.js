@@ -167,7 +167,12 @@ export function branchRows(branches, expanded, favorites) {
       if (isOpen) walk(children)
     }
   }
-  walk(build(list.filter((branch) => branch !== current && !marked.has(branch?.name))))
+  /* `liftedOut` and never a second copy of its test written out here. The tree
+     is by definition what the lifting left over, so the two are one rule: a
+     third reason for lifting added to that function has to reach this line
+     without anybody remembering to come here, or a row would be drawn twice
+     and a folded heading would carry a mark for a row already on screen. */
+  walk(build(list.filter((branch) => !liftedOut(branch, favorites))))
   return rows
 }
 
@@ -185,6 +190,20 @@ export function liftedOut(branch, favorites) {
 }
 
 /**
+ * How many branches may be marked, and it is **`MAX_FAVORITE_BRANCHES` in
+ * `src-tauri/src/settings/model.rs`, written out again on this side**.
+ *
+ * The pair has to be kept in step by hand, and the direction of a divergence is
+ * what matters: this side may be stricter than Rust and must never be more
+ * permissive. Rust trims a list past its ceiling from the **tail**, so a front
+ * end that let a 51st star be added would draw it, persist it for the session,
+ * and lose it on the next load with nothing on screen saying why — a mark
+ * somebody made, gone, silently. Refusing it here means the star simply does
+ * not appear, which is a press that did nothing rather than a press that lied.
+ */
+export const MAX_FAVORITES = 50
+
+/**
  * The list a press on `Add to favourites` / `Remove from favourites` leaves
  * behind.
  *
@@ -196,13 +215,17 @@ export function liftedOut(branch, favorites) {
  *
  * Adding puts the name on the end, which decides nothing about where the row is
  * drawn: `branchRows` reads this as a set and takes its order from the branch
- * list. What the position does say is which name falls off first when the file
- * is trimmed at its ceiling.
+ * list. What the position does say is which name falls off first if the file is
+ * ever trimmed at the ceiling — which is also why the ceiling is enforced here
+ * rather than left to Rust. Unmarking is never refused: a list already over the
+ * ceiling, from a hand-edited file, still has to be reachable to shorten.
  */
 export function toggleFavorite(stored, name) {
   const marked = stored ?? []
   if (!name) return [...marked]
-  return marked.includes(name) ? marked.filter((one) => one !== name) : [...marked, name]
+  if (marked.includes(name)) return marked.filter((one) => one !== name)
+  if (marked.length >= MAX_FAVORITES) return [...marked]
+  return [...marked, name]
 }
 
 /**

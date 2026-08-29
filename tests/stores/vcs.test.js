@@ -416,6 +416,34 @@ describe('the git panel store', () => {
     expect(ipc.calls('vcs_delete_branch')).toEqual([])
   })
 
+  /* `write()` answers `true` for a project that moved underneath — the branch
+     did go on disk — and `settings.project` is merged **in place** on a switch.
+     Without a guard the strike would land on whichever project's list is in
+     that object by then, and `main` is pinned in plenty of projects at once. */
+  it('does not strike the name out of a project somebody switched to mid-delete', async () => {
+    const { stores, ipc } = await loadStores()
+    let release
+    const held = new Promise((resolve) => {
+      release = () => resolve(null)
+    })
+    deleting(ipc)
+    ipc.on('vcs_delete_branch', () => held)
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.activeProject = '/p'
+    stores.settings.settings.project.favoriteBranches = ['spike']
+
+    const deleting_ = stores.vcs.deleteBranch('spike')
+    /* The switch, in the order `projects.js` performs it: the active project
+       first, then the layout merged in place over the same object. */
+    stores.settings.settings.activeProject = '/other'
+    stores.settings.settings.project.favoriteBranches = ['spike', 'main']
+    stores.vcs.vcsState.project = '/other'
+    release()
+    await deleting_
+
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['spike', 'main'])
+  })
+
   it('a delete with no branch asks git nothing', async () => {
     const { stores, ipc } = await loadStores()
     deleting(ipc)

@@ -106,8 +106,10 @@ export function branchMenuItems({
     { kind: 'compare', label: 'Compare with the current branch', icon: 'git-compare', disabled: current },
     /* The one item in this menu that asks git for nothing. It writes a line in
        `settings.json` and moves a row up the list, so there is nothing for a
-       run, an operation in flight or the tick on this row to refuse — which is
-       why it carries no `disabled` clause rather than one that is always false.
+       run, an operation in flight or the tick on this row to refuse. `disabled`
+       is written out as a constant `false` rather than left off: every other
+       verb here carries the field, and a row missing it reads as a row somebody
+       forgot rather than as one nothing can refuse.
        The label is the act and not the state: a row already marked offers the
        way back out, which is the whole of what tells somebody the mark is
        theirs to remove. */
@@ -143,10 +145,12 @@ export function branchMenuItems({
     /* Its own group at the foot, and the separator above it is doing two things
        at once. It keeps the destructive item apart from the one that creates,
        which is worth a line on its own in a menu opened by a gesture people aim
-       roughly; and it is what lets the greying stay all of one piece, since this
-       is refused on the current branch where `New branch from this` above it is
-       not. Refused there in the menu and refused again in Rust — the window that
-       asks the question is a window of its own, and HEAD can move while it
+       roughly; and it keeps this row's greying off that one's, since this is
+       refused on the current branch where `New branch from this` above it is
+       not. That is a claim about these two rows and no more — the header above
+       says why the menu as a whole no longer has an unbroken run of greyed rows
+       to protect. Refused here in the menu and refused again in Rust: the window
+       that asks the question is a window of its own, and HEAD can move while it
        stands. */
     {
       kind: 'delete',

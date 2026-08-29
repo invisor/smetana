@@ -1126,15 +1126,30 @@ const gitFolders = ref(null)
    a thing that can be done here. */
 const foldedTracking = ref([])
 
-/* The branches somebody pinned, against `FOLDER_BRANCHES` — one that lives
-   inside a folder, one that has no slash in it at all, and the branch the
-   repository is on, which is marked as well. That third one is the case worth
-   looking at: it is one row and not two, first, with the star on it. The list
-   is live, so the menu item on any row moves that row in and out of the block
-   at the top. */
+/* The branches somebody pinned, against `FOLDER_BRANCHES` — two that live
+   inside folders, one that has no slash in it at all, and the branch the
+   repository is on, which is marked as well. That last one is the case worth
+   looking at: it is one row and not two, first, with the star on it.
+
+   **Written in an order the frames must not draw.** `develop` is last in the
+   branch list and first here; `fix/holiday-curb-w78w…` is third there and
+   second here. The block at the top has to come out in the branch list's order
+   — `fix/holiday-curb…`, then `feature/smetana-8ok.5…`, then `develop` — and a
+   fixture whose two orders happened to agree could not show that by eye at all,
+   which is what this one used to be.
+
+   `feature/smetana-8ok.5-branch-folders` is here for the other half:
+   marking it empties the `feature/` folder, so the frame below can actually
+   show a heading that is not drawn because everything under it was lifted.
+   `FOLDER_BRANCHES` itself is deliberately untouched — the frame above it is
+   the only place the current-branch-behind-a-fold rule can be looked at.
+
+   The list is live, so the menu item on any row moves that row in and out of
+   the block at the top. */
 const favoriteBranches = ref([
-  'fix/holiday-curb-w78w-warehouse-geocode-precision',
   'develop',
+  'fix/holiday-curb-w78w-warehouse-geocode-precision',
+  'feature/smetana-8ok.5-branch-folders',
   'feature/holiday-curb-y5bt.8-drop-depot-columns'
 ])
 /* Everything folded, so the frame below shows what the marks do to the tree
@@ -1774,6 +1789,10 @@ const branchMenu = ref(null)
 const refusedBranchMenu = ref(null)
 const BRANCH_MENU = branchMenuItems()
 const REFUSED_BRANCH_MENU = branchMenuItems({ allowed: false })
+/* The same menu over a row that is already marked, which is the only item here
+   whose label changes: `Remove from favourites` is the longer of its two
+   wordings and is what the 280px width has to hold. */
+const MARKED_BRANCH_MENU = branchMenuItems({ favorite: true })
 /* Room for the tree and room under it. The empty space below the last row is
    what opens the root's menu, and a box the height of its rows has none — at
    320px this fixture overflowed in comfortable density and the second half of
@@ -3472,13 +3491,16 @@ const menuTargetStyle = {
              repository is on.
 
              What to check. The block at the top is the current branch and then
-             the marked ones, in the order the list arrived in and not the order
-             this fixture lists them; the current branch is marked too and is
-             still **one** row, the first, carrying the star. The star sits
-             where `git-branch` sits on every other row, so the names all start
-             at the same x — the easiest way to see it is to unmark a row and
-             watch that nothing moves sideways. And the hairline is under the
-             **last** row of the block rather than under the current branch. -->
+             the marked ones **in the order the branch list arrived in, which is
+             not the order the fixture writes them**: the constant lists
+             `develop` first and it has to draw last of the three, under
+             `fix/holiday-curb…` and `feature/smetana-8ok.5…`. The current
+             branch is marked too and is still **one** row, the first, carrying
+             the star. The star sits where `git-branch` sits on every other row,
+             so the names all start at the same x — the easiest way to see it is
+             to unmark a row and watch that nothing moves sideways. And the
+             hairline is under the **last** row of the block rather than under
+             the current branch. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList
             :branches="FOLDER_BRANCHES"
@@ -3490,9 +3512,13 @@ const menuTargetStyle = {
         </div>
         <!-- The same marks with every folder open, which is where the second
              half of the rule can be seen: a marked branch is gone from the
-             folder it was in, `fix` says one where it said two, and the folder
-             that held nothing but a marked branch is not drawn at all. The
-             marked names are whole up top and the leaves below are not. -->
+             folder it was in, so `fix` says one where it said two, and
+             `feature/` — whose only remaining member was marked too — is **not
+             drawn at all**, heading, chevron, count and everything. That last
+             one is why `feature/smetana-8ok.5-branch-folders` is in the
+             fixture; without it no folder is emptied and this frame shows only
+             half of what its caption claims. The marked names are whole up top
+             and the leaves below are not. -->
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList
             :branches="FOLDER_BRANCHES"
@@ -4256,6 +4282,24 @@ const menuTargetStyle = {
           </div>
           <PointerMenu ref="branchMenu" :items="BRANCH_MENU" :width="280" @select="() => {}" />
           <PointerMenu ref="refusedBranchMenu" :items="REFUSED_BRANCH_MENU" :width="280" @select="() => {}" />
+          <!-- The same rows, drawn straight into a `ContextMenu` with no
+               gesture in front of them — `fileMenuItems` two groups up has the
+               same pair for the same reason. The two boxes above are the whole
+               interaction and are the only place the panel's placement and
+               flipping can be tried; they are also behind a right-click, which
+               is a gesture an automated pass cannot reliably raise and a person
+               has to remember to make. So the rows themselves get a frame that
+               is simply on the page: the two glyphs this task added (`star`,
+               `trash-2`) sit in the gutter with the four that were already
+               there, the labels have to fit `:width="280"` without an ellipsis,
+               and the separators have to land in three places rather than two.
+               Live, from the rule itself, so it cannot drift from what the menu
+               actually offers. -->
+          <ContextMenu :items="BRANCH_MENU" :width="280" />
+          <!-- And the marked state of the same menu, which is the one row whose
+               text depends on something: `Remove from favourites` is the longer
+               of the two labels and is what the width has to hold. -->
+          <ContextMenu :items="MARKED_BRANCH_MENU" :width="280" />
         </div>
         <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
           <Toast tone="warning" title="claude-1 needs you" description="bd-a1b2 · worktree name collision · 4m" />

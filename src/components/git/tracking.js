@@ -67,7 +67,7 @@ export function trackingMark(tracking) {
    are is `liftedOut` in that same file rather than a second copy of the test
    here: the two have to agree exactly, since the tree is built from what is
    left over. */
-export function folderBehind(path, branches, tracking, favorites) {
+export function folderBehind(path, branches, tracking, favorites = []) {
   const prefix = `${path}/`
   return branches.some(
     (branch) =>

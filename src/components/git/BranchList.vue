@@ -397,6 +397,13 @@ const OPERATIONS = {
   merge: 'Merging this branch in',
   rebase: 'Rebasing onto this branch',
   create: 'Cutting a new branch from this',
+  /* The one that leaves from a window rather than from this panel at all, and
+     it is in this table for `create`'s reason: the dialog closes or stands on
+     its second question, and either way the row it was about is still on
+     screen, still spinning, until the refresh takes it away. A row dimmed with
+     nothing on it saying which branch git is working on is the state this table
+     exists to prevent. */
+  delete: 'Deleting this branch',
   /* The two that leave from the section header rather than from a row. They
      are about the current branch and `busy` carries its name, so the spinner
      lands on the row with the tick — which is the rule this panel already keeps

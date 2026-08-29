@@ -101,6 +101,7 @@ export { default as SectionHeader } from './git/SectionHeader.vue'
 export { branchMenuItems } from './git/branchMenu.js'
 export { branchNameError, canCreate } from './git/branchName.js'
 export {
+  MAX_FAVORITES,
   branchRows,
   currentChain,
   expandedFolders,
@@ -118,6 +119,7 @@ export {
   toggleChanges
 } from './git/changesFold.js'
 export { canCommit, canSuggest, commitHint, commitLabel } from './git/commitBox.js'
+export { failureTextStyle, failureTitleStyle } from './git/failureStyle.js'
 export { gitActions } from './git/gitActions.js'
 export { BRANCH_ROWS, filler, resolveDrag } from './git/sectionHeights.js'
 export { AHEAD_TOKEN, BEHIND_TOKEN, folderBehind, pullAction, pushAction, trackingMark } from './git/tracking.js'

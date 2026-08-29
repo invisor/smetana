@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_FAVORITES,
   branchRows,
   currentChain,
   expandedFolders,
@@ -277,6 +278,33 @@ describe('what a press on the favourite item leaves behind', () => {
     const stored = ['main']
     expect(toggleFavorite(stored, 'spike')).not.toBe(stored)
     expect(stored).toEqual(['main'])
+  })
+
+  /* The ceiling is `MAX_FAVORITE_BRANCHES` in `settings/model.rs`, written out
+     on this side too. It has to be refused **here**, because Rust trims from
+     the tail: a front end that accepted the 51st would draw the star, keep it
+     for the session and lose it on the next load, with nothing on screen
+     saying a mark somebody made had gone. */
+  it('refuses a mark past the ceiling rather than letting Rust drop it later', () => {
+    const full = Array.from({ length: MAX_FAVORITES }, (_, at) => `branch/${at}`)
+    const after = toggleFavorite(full, 'one-too-many')
+    expect(after).toHaveLength(MAX_FAVORITES)
+    expect(after).not.toContain('one-too-many')
+  })
+
+  /* Unmarking is never refused, and a hand-edited file already over the ceiling
+     is exactly the case: a list somebody cannot shorten is a list they cannot
+     fix. */
+  it('always lets a mark come off, even from a list already over the ceiling', () => {
+    const over = Array.from({ length: MAX_FAVORITES + 5 }, (_, at) => `branch/${at}`)
+    expect(toggleFavorite(over, 'branch/0')).toHaveLength(MAX_FAVORITES + 4)
+  })
+
+  /* Marking a name already in the list is an unmark, so a full list is not
+     frozen against its own members. */
+  it('unmarks a member of a full list rather than reading it as an add', () => {
+    const full = Array.from({ length: MAX_FAVORITES }, (_, at) => `branch/${at}`)
+    expect(toggleFavorite(full, 'branch/3')).not.toContain('branch/3')
   })
 })
 

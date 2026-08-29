@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import Modal from '../overlays/Modal.vue'
 import Button from '../core/Button.vue'
+import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 
 /* Deleting a branch, asked about first. Reached from a branch row's own menu,
    which is the only place it is offered.
@@ -86,21 +87,10 @@ const branchStyle = {
   overflowWrap: 'anywhere'
 }
 
-/* git's stderr, in the idiom the Git panel already draws one in — a failed-red
-   title over a pre-wrapped mono block, `failureTitleStyle` and
-   `failureTextStyle` in `GitPanel.vue`. The same pair rather than a third: a
-   person who has seen one of these has seen all of them, and the words in it
-   are git's either way. */
-const refusalTitleStyle = {
-  font: 'var(--weight-medium) var(--text-sm)/1 var(--font-sans)',
-  color: 'var(--status-failed-fg)'
-}
-const refusalTextStyle = {
-  font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-mono)',
-  color: 'var(--text-secondary)',
-  whiteSpace: 'pre-wrap',
-  overflowWrap: 'anywhere'
-}
+/* Only the box is this file's. The failed-red title and the pre-wrapped mono
+   under it are `failureStyle.js`'s, shared with the two blocks `GitPanel.vue`
+   draws: a person who has seen one of these has seen all of them, and the words
+   in it are git's either way. */
 const refusalStyle = {
   display: 'flex',
   flexDirection: 'column',
@@ -129,8 +119,8 @@ const confirmLabel = computed(() => {
          than sitting beside it, which is the whole of what this state says: the
          way out of here is Cancel. -->
     <div v-if="refusal" :style="refusalStyle">
-      <div :style="refusalTitleStyle">Git did not delete the branch</div>
-      <div :style="refusalTextStyle">{{ refusal }}</div>
+      <div :style="failureTitleStyle">Git did not delete the branch</div>
+      <div :style="failureTextStyle">{{ refusal }}</div>
     </div>
     <template #footer>
       <Button variant="ghost" :disabled="busy" @click="$emit('close')">Cancel</Button>

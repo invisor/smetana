@@ -6,6 +6,14 @@ paths:
   - "src/stores/vcs.js"
   - "src/stores/compare.js"
   - "src/views/CompareWindow.vue"
+  # The two views that own this panel's dialog windows. Neither draws a branch
+  # row, which is why they were not here — but `reground`, `removeBranch` and
+  # the branch clause of `stalenessOf` all live in them, and the sections below
+  # state those as fact. Without these lines a session editing the file that
+  # owns `reground` is never handed the prose describing its contract, and a
+  # session handed the prose is never shown the code.
+  - "src/views/DesktopApp.vue"
+  - "src/views/dialogRegistry.js"
 ---
 
 # The Git panel: what only the binary can answer

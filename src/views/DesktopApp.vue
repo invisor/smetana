@@ -865,6 +865,23 @@ function openDeleteBranch(branch) {
 async function removeBranch(force) {
   const branch = deletingBranch.value
   if (!branch) return
+  /* A second press while the first is still out, and it is not a hypothetical:
+     `busy` reaches the window's button through an announcement, so the guest's
+     `:disabled` is one IPC hop behind the flag. `write()` in the store already
+     refuses the second call — but by then this function has nulled the ground
+     twice and the second refusal's `else` would hand the branch **back** while
+     the first call is still in flight. The refresh that follows the first would
+     then find the window standing over a branch that has gone, and close it
+     with the very notice `reground` exists to prevent. The guard is the same
+     one `write()` keeps, one layer earlier, so nothing here runs twice.
+
+     It does **not** stand in the way of the second question, and that rests on
+     an ordering worth naming: `write()` clears `busy` in its `finally`, before
+     `deleteBranch` throws and long before the `catch` below sets `notMerged`, so
+     by the time `Delete anyway` is on screen there is nothing in flight to
+     refuse it. `vcs.test.js` pins that half — a refused delete leaves `busy`
+     null. */
+  if (vcsState.busy) return
   const standing = { project: activePath.value, repo: vcsState.selected, branch }
   reground('delete-branch', { ...standing, branch: null })
   try {

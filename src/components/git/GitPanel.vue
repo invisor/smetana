@@ -86,6 +86,7 @@ import Resizer from '../shell/Resizer.vue'
 import SectionHeader from './SectionHeader.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { DEFAULT_ROWS as COMMIT_ROWS } from './commitBox.js'
+import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 import {
   BRANCH_ROWS,
   UNDRAGGED_ROWS,
@@ -234,8 +235,12 @@ const fold = computed(() => ({
   commitRows: props.sections?.commitRows ?? COMMIT_ROWS
 }))
 
-/* git's own stderr. Mono and left-aligned rather than an `EmptyState`'s centred
-   prose: this is machine output, and it is shown exactly as git wrote it.
+/* The box git's own stderr sits in. Mono and left-aligned rather than an
+   `EmptyState`'s centred prose: this is machine output, and it is shown exactly
+   as git wrote it. The two lines inside it are `failureStyle.js`'s and are
+   shared with `DeleteBranchModal.vue`, which draws the same block inside the
+   window that asked; only the box is this file's, because where it sits is the
+   caller's business and what it looks like is not.
 
    Used twice: inside the changes scroller for a read that failed, and as a flex
    item of this column for a write git refused. `flexShrink: 0` is for the
@@ -250,16 +255,6 @@ const failureStyle = {
   flexDirection: 'column',
   flexShrink: 0,
   gap: 'var(--space-3)'
-}
-const failureTitleStyle = {
-  font: 'var(--weight-medium) var(--text-sm)/1 var(--font-sans)',
-  color: 'var(--status-failed-fg)'
-}
-const failureTextStyle = {
-  font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-mono)',
-  color: 'var(--text-secondary)',
-  whiteSpace: 'pre-wrap',
-  overflowWrap: 'anywhere'
 }
 
 /* There being no git at all is the panel's own state rather than one section's:

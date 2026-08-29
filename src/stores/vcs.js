@@ -581,6 +581,18 @@ export async function rebase(onto) {
    about a different branch. */
 export async function deleteBranch(branch, { force = false } = {}) {
   if (!branch) return false
+  /* Which project's list `settings.project` is holding, captured before the
+     await and checked after it. `write()` answers `true` for a project that
+     moved underneath — deliberately, since the branch did go on disk — and
+     `settings.project` is merged **in place** on a switch, so by the time this
+     resumes that object can be the next project's. Without this, a name pinned
+     in both projects (`main`, `develop`) would be quietly unpinned in the one
+     somebody had just switched to.
+     `activeProject` rather than `vcsState.project`: `projects.js` sets it
+     synchronously, before the layout is read and before `loadRepos` runs, so it
+     is the earliest signal of a switch and can never be behind the object it is
+     a statement about. */
+  const of = settings.activeProject
   const gone = await write('delete', branch, (repo) =>
     invoke('vcs_delete_branch', { repo, branch, force })
   )
@@ -589,7 +601,7 @@ export async function deleteBranch(branch, { force = false } = {}) {
     return false
   }
   const marked = settings.project.favoriteBranches
-  if (Array.isArray(marked) && marked.includes(branch)) {
+  if (settings.activeProject === of && Array.isArray(marked) && marked.includes(branch)) {
     settings.project.favoriteBranches = marked.filter((name) => name !== branch)
   }
   return true
