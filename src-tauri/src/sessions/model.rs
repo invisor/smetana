@@ -35,9 +35,10 @@ pub struct SessionSummary {
     /// wins the row's title when a transcript carries one, so the row now
     /// answers "what was this session about"; the opened card asks the other
     /// question — "what did they open with" — and one field cannot answer both
-    /// once the two are allowed to differ. They still hold the same string for
-    /// a transcript with no generated title, and that is the ordinary case
-    /// rather than a special one.
+    /// once the two are allowed to differ. They hold the same string only where
+    /// a transcript carries no generated title, and that is the smaller half:
+    /// 218 of the 313 files measured on this machine carry one, so the two
+    /// answers differ on about seven rows in ten rather than on a rare one.
     ///
     /// `None` when the transcript holds no human message at all: a session
     /// opened and abandoned, which is why the card has a sentence to draw

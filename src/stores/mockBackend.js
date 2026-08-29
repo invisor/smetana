@@ -443,7 +443,9 @@ function mockSessions(project) {
       branch: 'feature/smetana-oln-sessions-tab-disk-history',
       /* The long one, which the row has to ellipsise and the card has to wrap.
          No generated title in this transcript, so both fields hold the one
-         string — the ordinary case, and the shape every row had before. */
+         string — the shape every row had before that record was read, and now
+         the smaller half of the folder rather than the usual case: the row
+         above is the one there are more of. */
       title:
         'Implement the front-end half of the sessions tab, the row and the opened card, against the fixtures alone',
       firstPrompt:

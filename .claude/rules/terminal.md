@@ -567,9 +567,9 @@ retaking them, which `bench_listing_the_real_projects_folder` is there for.
 
 **That is why a row carries two sentences and not one.** `title` answers what the session was about;
 `firstPrompt` is always `human_text`'s answer and answers what the person opened with. They hold the
-same string for a transcript with no generated title, which is the ordinary case — but the moment
-they can differ, one field cannot serve both, and the opened card's block is captioned "First prompt"
-in so many words. A card fed the title there claims the person typed a sentence Claude Code wrote.
+same string only where a transcript carries no generated title, and that is the smaller half — 218 of
+this machine's 313 carry one, so the two differ on about seven rows in ten. One field cannot serve
+both, and the opened card's block is captioned "First prompt" in so many words. A card fed the title there claims the person typed a sentence Claude Code wrote.
 
 `src/stores/sessions.js` is the front end's half: one command, `sessions_list`, and the store carries
 the rules the panel rests on — the list is emptied the moment another project is asked about, the

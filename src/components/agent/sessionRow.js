@@ -193,8 +193,12 @@ export const FIRST_PROMPT_HEADING = 'First prompt'
    walking past the hooks, the skill bodies and the slash-command echoes; it is
    now carried across as `firstPrompt` rather than borrowed from the title.
 
-   The two hold the same string for a transcript with no generated title, which
-   is the ordinary case and is why the change is invisible on most rows.
+   The two hold the same string only where a transcript carries no generated
+   title, and that is the minority: 218 of this machine's 313 transcripts have
+   one, so the row and this block say different things on about seven rows in
+   ten. Stating the direction is the point. This function read `title` in the
+   first place because somebody took the divergence to be rare, and a reader who
+   picks that belief up again will reach for `title` here again.
 
    How much of it there is to show is the worker's `CLIP` — 240 characters over
    the wire, and no more is asked for here. Fetching the untruncated prompt
