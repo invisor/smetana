@@ -55,6 +55,8 @@
 //! So neither limit is asked for verbatim. This module asks for a number it
 //! wants, and the limits it reads only ever reduce that number.
 
+use std::sync::OnceLock;
+
 /// What a usable descriptor limit is, for us: the ceilings below only ever
 /// clamp this, never raise it. The bug needs a number above the 2560 an agent
 /// refused to work at, not the largest number the machine will part with —
@@ -114,21 +116,42 @@ fn target_soft(soft: u64, hard: Option<u64>, ceiling: Option<u64>) -> Option<u64
     (want > soft).then_some(want)
 }
 
+/// What `raise` had to complain about, kept until there is a log to say it to.
+///
+/// `raise` runs as the first statement of `run()` — before the Tauri builder,
+/// so before the log plugin exists — and a `log::warn!` made there reaches no
+/// logger and is dropped where it stands. Writing to stderr instead is what
+/// this module used to do, and stderr is what a bundled `.app` has none of, so
+/// the one line that says an agent is about to be started with a limit it
+/// cannot work at went nowhere in exactly the build that matters. The line is
+/// held here instead and `lib.rs` asks for it once the plugin is registered.
+///
+/// One string and not a list: `raise` complains at most once per call, and it
+/// is called once.
+static COMPLAINT: OnceLock<String> = OnceLock::new();
+
+/// Say whatever `raise` had to say. Called from `lib.rs`'s setup hook, right
+/// after the log plugin is installed; a no-op when the limit was raised without
+/// argument, which is the ordinary case.
+pub fn report() {
+    if let Some(complaint) = COMPLAINT.get() {
+        log::warn!("{complaint}");
+    }
+}
+
 /// Raise this process's soft `RLIMIT_NOFILE` to a usable number — `WANTED`, or
 /// as much of it as the machine allows. Never panics, never blocks and never
-/// reports upwards: the worst outcome is a line on stderr and an app that comes
-/// up with the limit it was given, which is where it was before this module
-/// existed.
+/// reports upwards: the worst outcome is a line in the log and an app that
+/// comes up with the limit it was given, which is where it was before this
+/// module existed.
 #[cfg(unix)]
 pub fn raise() {
-    // Not `log::warn!`: this runs before the Tauri builder, so before the log
-    // plugin exists to receive anything — and that plugin is only installed in
-    // a debug build anyway. `shell_env` and `tracker::service` write to stderr
-    // with a bracketed tag for the same reason, and it is visible in exactly
-    // the case that matters for reading it, `npm run tauri dev`.
     let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
     if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
-        eprintln!("[rlimit] could not read RLIMIT_NOFILE: {}", std::io::Error::last_os_error());
+        complain(format!(
+            "[rlimit] could not read RLIMIT_NOFILE: {}",
+            std::io::Error::last_os_error()
+        ));
         return;
     }
     let soft = limit.rlim_cur as u64;
@@ -146,13 +169,15 @@ pub fn raise() {
     // retry is the same call twice and the log line would be a lie.
     match target_soft(soft, hard, Some(FALLBACK_CEILING)) {
         Some(retry) if retry < want && set_soft(retry, limit.rlim_max) => {
-            eprintln!("[rlimit] {want} descriptors was refused ({refused}); settled for {retry}");
+            complain(format!(
+                "[rlimit] {want} descriptors was refused ({refused}); settled for {retry}"
+            ));
         }
         _ => {
-            eprintln!(
+            complain(format!(
                 "[rlimit] could not raise the descriptor limit from {soft} to {want}: {refused}; \
                  an agent started from here may refuse to run"
-            );
+            ));
         }
     }
 }
@@ -162,6 +187,13 @@ pub fn raise() {
 /// unsupported, and the call site stays free of a `cfg`.
 #[cfg(not(unix))]
 pub fn raise() {}
+
+/// Put a complaint where `report` will find it. The second one in a process
+/// would be dropped, and there is no second one to drop.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn complain(line: String) {
+    let _ = COMPLAINT.set(line);
+}
 
 /// Set the soft limit, carrying the hard limit through untouched. `true` when
 /// the kernel took it.

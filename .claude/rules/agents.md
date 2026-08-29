@@ -17,10 +17,12 @@ done is the same for every agent, and how it reaches one is not.** An `Intent` �
 "+ New agent" row, `NewTask` from the new-task dialog, `EditTask` from a card's "Edit", `ResolveTask`
 from a parked card's "Answer questions", `FixTask` from a done card's "Fix this",
 `RepairTracker` from the second button under a failing
-board, `Setup` from the dialog a person gets when they add a project, and `Run` for one batch of a
-run — is where the product decision lives, written once. `FixTask` is deliberately not an `EditTask`
-pointed at something else: an edit changes an issue's own prose and is the only way this app has of
-changing it, while a fix changes the code behind a task that is closed and merged and turned out not
+board, `Setup` from the dialog a person gets when they add a project,
+`ResumeSession` from either of the two launching rows of a card in the Sessions tab, and `Run` for
+one batch of a run — is where the product decision lives, written once. `FixTask` is deliberately not
+an `EditTask` pointed at something else: an edit changes an issue's own prose and is the only way
+this app has of changing it, while a fix changes the code behind a task that is closed and merged and
+turned out not
 to be finished. That makes it the one intent about a single issue in **both** `writes_to_the_tracker`
 and `commits_to_git` — it leaves a note saying what was put right, carrying no `parked:`/`resolved:`
 marker since it is neither an open question nor an answered one, and it commits the correction. The
@@ -78,7 +80,7 @@ turned `needs-you` spends one of the one or two loud rows on the screen and make
 `terminal_run_capture` refuse a session with nothing open on it, so a change to that CLI should cost
 a miss rather than a false alarm.
 
-Six more methods on `Profile` are the same split one level down, and each one's **default is a
+The rest of `Profile` is the same split one level down, and each method's **default is a
 working answer rather than a gap** — the shape to keep when the next one is added. `images` says how
 pixels reach a harness: Codex takes `-i/--image`, Claude Code simply opens a path the prompt names,
 so the default is `InPrompt`, the one channel every CLI has. `usage_command` and `parse_usage` are a
@@ -99,7 +101,7 @@ nothing and no translator, working answers again: a harness given neither runs e
 harness ran before they existed — which is Codex today, deliberately and with its own task behind
 it.
 
-`oneshot_args` is the sixth and the only one with no session behind it at all: how this harness is
+`oneshot_args` is the only one with no session behind it at all: how this harness is
 asked **one question** and nothing more. Claude Code answers it with the same `-p` `batch_args`
 opens with, and the two are still different questions — that one is "carry this batch out and exit"
 and comes with a stream format and a translator because somebody watches a batch work, this one is
@@ -113,6 +115,44 @@ field, so each way of failing keeps its own name and reaches the panel as a sent
 `None` again, and the panel draws the button for everybody rather than hiding it: a harness that
 cannot be asked says so, which the front end could not decide for itself anyway, since it never
 learns an agent's name.
+
+`resume_args` and `fork_args` are the newest of them and the pair a whole feature hangs off: how
+this harness is told to pick a **recorded session** up again by its id, and how it is told to carry
+one on in a *new* session instead, as the arguments in front of everything else on its command line.
+Claude Code answers `--resume <id>` and `--resume <id> --fork-session`; Codex keeps both defaults of
+`None`, and that is a decision rather than a gap — its argument grammar is its own and this app does
+not get to guess it, which is the same rule `claude.rs`'s `command` already follows about argument
+*order*. The capability and the arguments are one answer for `usage_command`'s reason: a profile that
+said "yes" without saying how would leave the caller inventing somebody else's command line.
+
+**Two methods and not one flag appended to the other's answer**, and that is the same rule one level
+down: reopening a transcript and branching it are two capabilities, a harness that grows the first
+without the second is an ordinary shape, and a caller that appended `--fork-session` to whatever
+`resume_args` said would be composing somebody else's command line out of halves. `claude.rs` writes
+the forked line out whole for exactly that reason, repeating `--resume <id>` rather than borrowing
+it.
+
+What the defaults cost is nothing and refuse everything: `terminal::service` asks before it spawns
+and answers `TerminalError::NoResume` or `NoFork` — its own variant apiece, because a sentence saying
+a harness cannot resume would be untrue about the row nobody pressed — since the alternative,
+starting the agent anyway, is a *fresh* session in a worktree under a card promising the conversation
+somebody left. The front end greys the rows before that, from `RESUMES_BY_ID` and `FORKS_BY_ID` in
+`components/agent/sessionMenu.js`, which are the second copy of this fact and say so; nothing
+mechanical joins the two sides, and both directions of drift are quiet, which is why those lists may
+be wrong there and never here.
+
+`Intent::ResumeSession` carries `fork`, which is the whole difference between the Sessions tab's two
+launching verbs and nothing else about it: the directory, the id and the row it draws are one path.
+`Intent::work` reads the flag and drops it, so a resumed session and a forked one are the same row —
+what a person picks a session out of that list for is the conversation, not which file it goes on
+being written into.
+
+It is also the one intent that opens on **no prompt at all**, and `prompt::build`
+refuses it before it composes a word. A prompt rides as the positional argument and both harnesses
+*submit* it as the session's first message; a resumed conversation already has somebody's words in
+it, so even the conversation-language paragraph — which reaches every other intent, `Bare`
+included — would be this app talking over the person whose session it is. Whatever was settled in
+there was settled before this window existed.
 
 `agents::IDS` is the single copy of the agent-id list, and `settings/model.rs` validates against it
 rather than repeating it — the side-tab hazard again: a value that survives the session and silently

@@ -406,6 +406,37 @@ pub enum VcsError {
     /// act on.
     #[error("No branch called {0} in this repository.")]
     NoSuchBranch(String),
+    /// A delete asked for the branch the repository is standing on. Refused
+    /// here and not only by the greyed menu item, because the window that asks
+    /// the question is a window of its own with no scrim: HEAD can move while
+    /// it stands open, from a terminal or from an agent working in the same
+    /// tree, and the press that arrives afterwards would be about a branch that
+    /// has since become the current one.
+    ///
+    /// Its own variant rather than git's own refusal, which is in perfectly
+    /// good words — because the front end has a second question to ask about
+    /// this one, and telling it apart by reading git's prose is the thing
+    /// `NotMerged` below exists to avoid.
+    #[error("The repository is on {0}, so git will not delete it.")]
+    CurrentBranch(String),
+    /// A `git branch -d` that was refused **and** the branch really does hold
+    /// commits the current one does not.
+    ///
+    /// **Determined by asking git a second question, never by reading its
+    /// first answer.** `git merge-base --is-ancestor <branch> HEAD` answers yes
+    /// or no in an exit code, where the stderr of a refused delete is prose
+    /// that moves between versions and is localisable — nothing in `run.rs`
+    /// fixes `LC_ALL`, so a substring search here would work on the machine it
+    /// was written on and quietly stop working on somebody else's.
+    ///
+    /// It is a variant of its own because it is the one refusal here that has a
+    /// way forward: `-D` deletes the branch and loses those commits, and the
+    /// window offers that only when this is what came back. Everything else git
+    /// declines arrives as `Git { .. }` in git's own words with no second
+    /// button under it — a branch held by another worktree is the case that
+    /// matters, where `-D` fails exactly as `-d` did.
+    #[error("{0} has commits that are not in the branch this repository is on. Deleting it loses them.")]
+    NotMerged(String),
     /// No commit in common, so there is no point they diverged from. Refused
     /// rather than quietly answered with the direct comparison: a diff computed
     /// from a base nobody asked for, drawn under a switch that says otherwise,
@@ -434,6 +465,8 @@ impl VcsError {
             Self::NoMessage => "noMessage",
             Self::Timeout(_) => "timeout",
             Self::NoSuchBranch(_) => "noSuchBranch",
+            Self::CurrentBranch(_) => "currentBranch",
+            Self::NotMerged(_) => "notMerged",
             Self::Unrelated => "unrelated",
             Self::BadRevision(_) => "badRevision",
             Self::Io(_) => "io",

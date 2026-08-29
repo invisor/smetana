@@ -53,6 +53,26 @@ pub struct SessionSummary {
     pub subagents: u32,
     pub model: Option<String>,
     pub modified_at: String,
+    /// Whether the directory this session ran in is still on disk.
+    ///
+    /// A worktree is removed once its task is merged and the transcript stays
+    /// behind, so on any machine that has done a few tasks this is `false` for
+    /// a good number of rows — an ordinary state and not a fault. What reads it
+    /// is the Resume verb: `claude --resume` resolves an id against the
+    /// directory it is run in, so a session whose directory has gone cannot be
+    /// picked up anywhere, and the row says so instead of offering a press that
+    /// would be refused.
+    ///
+    /// Answered here rather than asked for when the menu opens, because the
+    /// menu row has to be greyed at the moment it is drawn; and taken with the
+    /// `stat` the list is already doing, one `is_dir` per row.
+    ///
+    /// It can be stale, and deliberately: the list is read when the tab is
+    /// opened and never watched (see `mod.rs`), so a worktree removed since is
+    /// a row still offering a resume. That press is refused by
+    /// `terminal::service`'s own check, which is the one standing next to the
+    /// spawn, and the refusal reaches the person as a sentence.
+    pub cwd_exists: bool,
     /// The transcript's size in bytes, and the one field here that nothing on
     /// the row draws. It exists for the confirmation before a delete, which
     /// names what is about to go — the id, the path and how big it is. A

@@ -26,6 +26,27 @@ describe('how the run bar draws an ending', () => {
     expect(stopReason('preflight').tone).toBe(TONE.failed)
   })
 
+  /* The pair the worker's `StopReason::NothingDone` exists to keep apart: one
+     is a batch that ran and left the board stuck, which sends somebody to the
+     tracker, and the other is a session that came back having done nothing,
+     which sends them to the agent. Both are failures and both are drawn in one
+     colour, so the sentence is the whole of the difference — and until this
+     entry existed the second fell through to the unknown-reason fallback and
+     read as "Stopped — nothing done" beside "Stuck — a whole batch changed
+     nothing". */
+  it('tells a run whose agent did nothing from one whose board is stuck', () => {
+    expect(stopReason('nothing_done').tone).toBe(TONE.failed)
+    expect(stopReason('nothing_done').text).toBe('Stopped — the agent came back having done nothing')
+    expect(stopReason('nothing_done').text).not.toBe(stopReason('no_progress').text)
+    /* Not the fallback's sentence, which is the version-skew path and says so
+       of itself: a build that knows this ending must not read as one that does
+       not. Compared against the literal the fallback would produce for this
+       very kind — comparing it against another unknown kind's fallback passes
+       whether the entry exists or not, which is an assertion that cannot
+       fail. */
+    expect(stopReason('nothing_done').text).not.toBe('Stopped — nothing done')
+  })
+
   /* smetana-e3o. Nothing fell over here — the agent asked something and an
      unattended run had nobody to answer — and while loudness and failure were
      one flag, this bar drew it in exactly the colour of the two above it. */
@@ -109,6 +130,25 @@ describe('what the second line says about an ending', () => {
     expect(endingDetail({ kind: 'needs_answer', question: 'Trust this folder?' }, 'into develop')).toBe(
       'Trust this folder?'
     )
+  })
+
+  /* The one payload that is a number rather than a sentence. Without it the
+     ending fell through to the branch and drew "…having done nothing into
+     main", which is the same garden path the `preflight` defect above made —
+     and the count is the whole of what somebody wants to know next. One batch
+     is said as one batch, because a run allowed a single batch stops on its
+     first empty one and a streak of one would name a threshold nobody
+     reached. */
+  it('counts the batches that did nothing, and says one of them as one', () => {
+    expect(endingDetail({ kind: 'nothing_done', batches: 3 }, 'into main')).toBe(
+      '3 batches in a row, none of which did anything'
+    )
+    expect(endingDetail({ kind: 'nothing_done', batches: 1 }, 'into main')).toBe(
+      'one batch, and it did nothing at all'
+    )
+    /* A count this build cannot make sense of is not a line: better the branch
+       than "undefined batches in a row". */
+    expect(endingDetail({ kind: 'nothing_done' }, 'into main')).toBe('into main')
   })
 
   /* Every other ending keeps the line it has always had. */

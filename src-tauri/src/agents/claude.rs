@@ -47,6 +47,24 @@ impl Profile for Claude {
                 cmd.arg(arg);
             }
         }
+        // Then the resume, if this is one. In front of the plugins and of
+        // everything else for the reason `batch_args` is in front of them: a
+        // harness may answer this with a subcommand rather than a flag, and a
+        // subcommand has one legal position. Claude Code's `--resume <id>`
+        // resolves the id against the working directory, which
+        // `terminal::service` has already checked is the one the transcript
+        // recorded.
+        //
+        // Which of the two capabilities the profile is asked for is the whole
+        // of the difference between the Sessions tab's two launching verbs, and
+        // it is asked as one question either way: neither branch composes a
+        // command line out of the other's answer plus a flag.
+        if let Intent::ResumeSession { id, fork, .. } = &launch.intent {
+            let resume = if *fork { self.fork_args(id) } else { self.resume_args(id) };
+            for arg in resume.into_iter().flatten() {
+                cmd.arg(arg);
+            }
+        }
         cmd.arg("--plugin-dir");
         cmd.arg(&launch.skills.smetana);
         if !launch.skills.superpowers_installed {
@@ -147,6 +165,36 @@ impl Profile for Claude {
     /// already prints.
     fn oneshot_args(&self) -> Option<&'static [&'static str]> {
         Some(&["-p"])
+    }
+
+    /// `--resume <id>`, which is Claude Code's own way of opening a recorded
+    /// conversation again. The id is the transcript file's stem — see
+    /// `sessions::model::SessionSummary::id`, which is where it comes from —
+    /// and it is resolved against the working directory, so the two travel
+    /// together or neither is any use.
+    ///
+    /// **This is Claude Code's grammar and nobody else's.** `codex.rs` keeps
+    /// the default `None` rather than a guess, for the reason `command` above
+    /// records about argument order: this app does not get to assume anything
+    /// about somebody else's command line, and a wrong flag here would start a
+    /// fresh agent in a worktree under a card promising a conversation.
+    fn resume_args(&self, session: &str) -> Option<Vec<String>> {
+        Some(vec!["--resume".to_owned(), session.to_owned()])
+    }
+
+    /// The same `--resume <id>` with `--fork-session` behind it, which is
+    /// Claude Code's own way of opening a recorded conversation into a **new**
+    /// session: its help describes that flag as starting a new session id when
+    /// resuming, so nothing here is guessed about somebody else's grammar. The
+    /// original transcript is left as it was and a second one appears beside
+    /// it, which is why the Sessions tab grows a card after this and not after
+    /// a plain resume.
+    ///
+    /// Written out whole rather than as `resume_args` plus a flag: the two are
+    /// separate answers to separate questions — see `Profile::fork_args` — and
+    /// a caller that appended would be composing a command line out of halves.
+    fn fork_args(&self, session: &str) -> Option<Vec<String>> {
+        Some(vec!["--resume".to_owned(), session.to_owned(), "--fork-session".to_owned()])
     }
 
     fn parse_usage(&self, output: &str) -> Option<Usage> {
@@ -611,6 +659,105 @@ mod tests {
         assert_eq!(args.len(), 6);
         assert!(args.last().unwrap().contains("Talk to me in English"), "{args:?}");
         assert_eq!(argv(&launch(Intent::Bare, true)).len(), 4);
+    }
+
+    fn resume(id: &str) -> Intent {
+        resuming(id, false)
+    }
+
+    fn resuming(id: &str, fork: bool) -> Intent {
+        Intent::ResumeSession {
+            id: id.to_owned(),
+            cwd: "/tmp/project/.worktrees/smetana-0cj".into(),
+            title: Some("Move the card to done".into()),
+            fork,
+        }
+    }
+
+    #[test]
+    fn a_resumed_session_carries_the_id_behind_resume_and_no_prompt_at_all() {
+        // The whole of what this feature adds to a command line, and the two
+        // halves are one assertion apiece. `--resume <id>` is Claude Code's own
+        // grammar and the id is the transcript's stem, immediately after it and
+        // not somewhere else on the line.
+        //
+        // And nothing positional: a prompt is submitted as the session's first
+        // message, so one here would be this app talking into a conversation
+        // that already has somebody's words in it. `prompt::build` refuses it,
+        // and this is the check standing where the argument would appear.
+        let args = argv(&launch(resume("9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60"), true));
+        assert_eq!(
+            args,
+            vec![
+                "claude",
+                "--resume",
+                "9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60",
+                "--plugin-dir",
+                "/app/resources/smetana",
+            ],
+            "a resumed session is the ordinary command line plus --resume <id>"
+        );
+    }
+
+    #[test]
+    fn the_resume_flag_goes_in_front_of_the_plugins() {
+        // In front of everything else for the reason `batch_args` is: a harness
+        // may answer this with a subcommand rather than a flag, and a
+        // subcommand has one legal position. The plugins still travel, so a
+        // resumed session can reach the skill library exactly as any other can.
+        let args = argv(&launch(resume("abc"), false));
+        let resume_at = args.iter().position(|a| a == "--resume").expect("the flag is on the line");
+        let first_plugin =
+            args.iter().position(|a| a == "--plugin-dir").expect("the plugins still travel");
+        assert!(resume_at < first_plugin, "{args:?}");
+    }
+
+    #[test]
+    fn nothing_but_a_resume_puts_that_flag_on_a_command_line() {
+        // The guard against the flag leaking into every other session, which
+        // would resume some other conversation under a person who asked for a
+        // new agent.
+        for intent in [Intent::Bare, Intent::Setup, new_task(Vec::new())] {
+            let args = argv(&launch(intent, false));
+            assert!(!args.iter().any(|a| a == "--resume"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_forked_session_carries_the_same_id_and_the_flag_that_branches_it() {
+        // Continue in a new session: the resume's own command line with
+        // `--fork-session` behind it, so the history is read and what is
+        // written goes somewhere new. Leaving the original transcript alone is
+        // what that flag is for, and it is why the Sessions tab grows a second
+        // card after this.
+        let args = argv(&launch(resuming("9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60", true), true));
+        assert_eq!(
+            args,
+            vec![
+                "claude",
+                "--resume",
+                "9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60",
+                "--fork-session",
+                "--plugin-dir",
+                "/app/resources/smetana",
+            ],
+            "a forked session is the resumed command line plus --fork-session"
+        );
+    }
+
+    #[test]
+    fn only_a_fork_branches_the_transcript() {
+        // The flag that decides whether somebody's transcript is written into
+        // or left alone, so its absence is worth an assertion of its own rather
+        // than only the whole-line comparison above: a fork leaking into Resume
+        // in worktree would answer a person who asked to carry on in the same
+        // conversation with a second one.
+        let plain = argv(&launch(resume("abc"), false));
+        assert!(!plain.iter().any(|a| a == "--fork-session"), "{plain:?}");
+        for intent in [Intent::Bare, Intent::Setup, new_task(Vec::new())] {
+            let args = argv(&launch(intent, false));
+            assert!(!args.iter().any(|a| a == "--fork-session"), "{args:?}");
+        }
     }
 
     fn new_task(images: Vec<String>) -> Intent {

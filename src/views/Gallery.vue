@@ -8,11 +8,13 @@ import { branchMenuItems } from '../components/git/branchMenu.js'
 import { fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import {
-  COPIED_MS,
   copyNoun as copyVerbNoun,
   copyPayload,
   isCopyKind
 } from '../components/agent/sessionMenu.js'
+/* The app's own copy-confirmation policy rather than this page's rendering of
+   it: one duration, one rule about which press owns the state, in one file. */
+import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import { orderTabs } from '../components/shell/tabOrder.js'
 import {
@@ -36,6 +38,7 @@ import {
   CommandPalette,
   ConflictModal,
   ContextMenu,
+  DeleteBranchModal,
   DeleteSessionModal,
   DeleteTaskModal,
   DependencyMark,
@@ -805,6 +808,7 @@ const GALLERY_SESSIONS = [
     id: '3a7e5b10-1c2d-4e3f-9a8b-7c6d5e4f3a2b',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana/3a7e5b10.jsonl',
     cwd: '/Users/you/dev/smetana',
+    cwdExists: true,
     branch: 'develop',
     title: 'Why does the scope bar count dirty files it cannot see',
     firstPrompt: 'Why does the scope bar count dirty files it cannot see',
@@ -820,6 +824,7 @@ const GALLERY_SESSIONS = [
     id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana/9f1c0a2e.jsonl',
     cwd: '/Users/you/dev/smetana',
+    cwdExists: true,
     branch: 'main',
     /* The row this page opens on load, and it is this one deliberately: Claude
        Code titled the session itself, so the line at the top and the block
@@ -842,6 +847,10 @@ const GALLERY_SESSIONS = [
     id: '5d2f8c41-9b0a-4c1d-8e7f-6a5b4c3d2e1f',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana--worktrees-smetana-oln/5d2f8c41.jsonl',
     cwd: '/Users/you/dev/smetana/.worktrees/smetana-oln-sessions-tab-disk-history',
+    /* The worktree was removed when its task merged and the transcript stayed
+       behind, which is what greys this card's two launching buttons — the one
+       state of them the other five fixtures cannot show. */
+    cwdExists: false,
     branch: 'feature/smetana-oln-sessions-tab-disk-history',
     /* The long one the row has to ellipsise, and a transcript with no generated
        title, so both fields hold the one string — the shape every row had
@@ -863,6 +872,7 @@ const GALLERY_SESSIONS = [
     id: 'c81b0e39-4a5f-4b6c-9d0e-1f2a3b4c5d6e',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana-src-tauri/c81b0e39.jsonl',
     cwd: '/Users/you/dev/smetana/src-tauri',
+    cwdExists: true,
     branch: null,
     title: 'Check whether the sidecar digest matches the pinned release',
     firstPrompt: 'Check whether the sidecar digest matches the pinned release',
@@ -878,6 +888,7 @@ const GALLERY_SESSIONS = [
     id: 'e4a90d77-2b3c-4d5e-8f90-1a2b3c4d5e6f',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana/e4a90d77.jsonl',
     cwd: '/Users/you/dev/smetana',
+    cwdExists: true,
     branch: 'main',
     title: null,
     firstPrompt: null,
@@ -893,6 +904,7 @@ const GALLERY_SESSIONS = [
     id: '7b6a5948-3c2d-4e1f-9a0b-8c7d6e5f4a3b',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana/7b6a5948.jsonl',
     cwd: '/Users/you/dev/smetana',
+    cwdExists: true,
     branch: 'staging',
     title: 'Port the branch list to the design system',
     firstPrompt: 'Port the branch list to the design system',
@@ -917,12 +929,17 @@ const GALLERY_SESSIONS = [
 
    The second row starts open, so the opened card is on screen without anybody
    having to find and press a chevron in four theme and density combinations.
+   The third starts open too, and for the same reason one card further on: its
+   working directory is gone, so it is where the refused launching verbs — both
+   buttons greyed, with the one reason they share written once under them — can
+   be seen without pressing anything.
 
-   `action` is answered with the same copy policy the app keeps — one session
-   and one outcome at a time, cleared after the same 1.2 s — and with nothing at
-   all for the four verbs that reach a desktop or a disk: a gallery has neither,
-   and the menu opening, walking and closing is what there is to check here. */
-const openSessions = ref([GALLERY_SESSIONS[1].id])
+   `action` is answered with the same copy policy the app keeps — literally the
+   same, `useCopyFeedback`, rather than a second writing of it — and with
+   nothing at all for the four verbs that reach a desktop or a disk: a gallery
+   has neither, and the menu opening, walking and closing is what there is to
+   check here. */
+const openSessions = ref([GALLERY_SESSIONS[1].id, GALLERY_SESSIONS[2].id])
 
 const toggleSession = (id) => {
   const at = openSessions.value.indexOf(id)
@@ -930,35 +947,20 @@ const toggleSession = (id) => {
   else openSessions.value.push(id)
 }
 
-const copiedSessionId = ref(null)
-const sessionCopyState = ref('')
-const sessionCopyNoun = ref('')
-let sessionCopyTimer = null
+const {
+  stateFor: sessionCopyStateFor,
+  nounFor: sessionCopyNounFor,
+  copy: sessionCopyFeedback
+} = useCopyFeedback(copyText)
 
-const sessionCopyStateFor = (id) =>
-  id != null && id === copiedSessionId.value ? sessionCopyState.value : ''
-const sessionCopyNounFor = (id) =>
-  id != null && id === copiedSessionId.value ? sessionCopyNoun.value : ''
-
-const onSessionAction = async ({ kind, session }) => {
+const onSessionAction = ({ kind, session }) => {
+  /* Everything that is not a copy is left alone, the two launching verbs among
+     them: a gallery has no worker to start a session in, and a press that did
+     nothing is the honest answer where a fabricated agent row would not be.
+     What is checkable here is the rows and the buttons — that they are drawn,
+     greyed and explained — which is the half a `.vue` file keeps to itself. */
   if (!isCopyKind(kind)) return
-  clearTimeout(sessionCopyTimer)
-  copiedSessionId.value = session.id
-  sessionCopyState.value = ''
-  sessionCopyNoun.value = copyVerbNoun(kind)
-  const text = copyPayload(kind, session)
-  const ok = text ? await copyText(text) : false
-  if (copiedSessionId.value !== session.id) return
-  /* The second clear, for the reason `copyId` above spells out: two presses on
-     one row both get past the guard, and the first one's timer would otherwise
-     go on running with nothing pointing at it. */
-  clearTimeout(sessionCopyTimer)
-  sessionCopyState.value = ok ? 'copied' : 'failed'
-  sessionCopyTimer = setTimeout(() => {
-    copiedSessionId.value = null
-    sessionCopyState.value = ''
-    sessionCopyNoun.value = ''
-  }, COPIED_MS)
+  return sessionCopyFeedback(session?.id ?? null, copyPayload(kind, session), copyVerbNoun(kind))
 }
 
 /* The Git panel's three states, in the shape `src-tauri/src/vcs/` answers with.
@@ -1142,6 +1144,37 @@ const gitFolders = ref(null)
    a thing that can be done here. */
 const foldedTracking = ref([])
 
+/* The branches somebody pinned, against `FOLDER_BRANCHES` — two that live
+   inside folders, one that has no slash in it at all, and the branch the
+   repository is on, which is marked as well. That last one is the case worth
+   looking at: it is one row and not two, first, with the star on it.
+
+   **Written in an order the frames must not draw.** `develop` is last in the
+   branch list and first here; `fix/holiday-curb-w78w…` is third there and
+   second here. The block at the top has to come out in the branch list's order
+   — `fix/holiday-curb…`, then `feature/smetana-8ok.5…`, then `develop` — and a
+   fixture whose two orders happened to agree could not show that by eye at all,
+   which is what this one used to be.
+
+   `feature/smetana-8ok.5-branch-folders` is here for the other half:
+   marking it empties the `feature/` folder, so the frame below can actually
+   show a heading that is not drawn because everything under it was lifted.
+   `FOLDER_BRANCHES` itself is deliberately untouched — the frame above it is
+   the only place the current-branch-behind-a-fold rule can be looked at.
+
+   The list is live, so the menu item on any row moves that row in and out of
+   the block at the top. */
+const favoriteBranches = ref([
+  'develop',
+  'fix/holiday-curb-w78w-warehouse-geocode-precision',
+  'feature/smetana-8ok.5-branch-folders',
+  'feature/holiday-curb-y5bt.8-drop-depot-columns'
+])
+/* Everything folded, so the frame below shows what the marks do to the tree
+   they were lifted out of: `fix` counts one fewer, and the heading a marked
+   branch was the whole of is not drawn at all. */
+const favoriteFolders = ref([])
+
 /* The caption on its own, in all three of the states it can be in: unfolded
    with a count, unfolded without one, and folded — which still carries its
    count, because somebody who folds the branches away is saying they do not
@@ -1260,41 +1293,24 @@ const MARKDOWN_SAMPLE = [
    has to answer them the way the app does. Without it the new prop and the new
    emit would be drawn here and exercised nowhere, and the tooltip would sit on
    `Copy id` for ever — which reads as a broken feature to whoever checks this
-   page by eye. One id and one outcome at a time, cleared after the same 1.2 s,
-   so copying one id here takes the confirmation off another exactly as it does
-   on the board. It reaches the boards below through the same two hops the app
+   page by eye. It reaches the boards below through the same two hops the app
    uses, `copiedId` and `copyState`, so those are exercised too.
 
-   The duration is imported and no longer a bare `1200` written out here. That
-   was the half of this pair the hazards list warns about: this page is the only
-   verification this project has for anything under `src/components/`, so a
-   duration that moved in the app alone would leave the harness confirming a copy
-   at a speed the product no longer uses. */
-const copiedId = ref(null)
-const copyState = ref('')
-let copyTimer = null
+   The policy itself is not written out here at all any more — `useCopyFeedback`
+   is the same code the app runs, and that is the whole point of this pair. It
+   was the half the hazards list warns about: this page is the only verification
+   this project has for anything under `src/components/`, so a copy fixed in the
+   app and not here would leave the harness reproducing a defect the product no
+   longer has, which by eye is indistinguishable from a real one. It had already
+   happened once, over a stranded timer that had to be found in both copies. */
+const {
+  target: copiedId,
+  state: copyState,
+  stateFor: copyStateFor,
+  copy: copyIdFeedback
+} = useCopyFeedback(copyText)
 
-const copyStateFor = (id) => (id != null && id === copiedId.value ? copyState.value : '')
-
-async function copyId(id) {
-  clearTimeout(copyTimer)
-  copiedId.value = id
-  copyState.value = ''
-  const ok = await copyText(id)
-  if (copiedId.value !== id) return
-  /* The second clear, and it is not the first one over again: two clicks on
-     one id both get past the guard above, and without this the earlier click's
-     timer would be left running with nothing pointing at it — cutting this
-     confirmation short, and putting `copiedId` back to null under a later copy
-     that then says nothing at all. `DesktopApp.vue` carries the same line for
-     the same reason. */
-  clearTimeout(copyTimer)
-  copyState.value = ok ? 'copied' : 'failed'
-  copyTimer = setTimeout(() => {
-    copiedId.value = null
-    copyState.value = ''
-  }, COPIED_MS)
-}
+const copyId = (id) => copyIdFeedback(id, id)
 
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking
@@ -1774,6 +1790,10 @@ const branchMenu = ref(null)
 const refusedBranchMenu = ref(null)
 const BRANCH_MENU = branchMenuItems()
 const REFUSED_BRANCH_MENU = branchMenuItems({ allowed: false })
+/* The same menu over a row that is already marked, which is the only item here
+   whose label changes: `Remove from favourites` is the longer of its two
+   wordings and is what the 280px width has to hold. */
+const MARKED_BRANCH_MENU = branchMenuItems({ favorite: true })
 /* Room for the tree and room under it. The empty space below the last row is
    what opens the root's menu, and a box the height of its rows has none — at
    320px this fixture overflowed in comfortable density and the second half of
@@ -2245,6 +2265,59 @@ const menuTargetStyle = {
            instead of anything about the name. -->
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <NewBranchModal :open="true" from="feat/worktree-rename" :branches="BRANCHES" :actions="RUN_GOING" @close="() => {}" @create="() => {}" />
+      </div>
+      <!-- Deleting one, which is the only confirm in this app that asks twice.
+           The question first: what a branch is and is not, and one Delete.
+
+           The name is long and slashed on purpose — it is the subject of the
+           heading and of the line in the body, and a short one would show
+           neither wrapping. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DeleteBranchModal
+          :open="true"
+          branch="feature/smetana-8ok-git-panel-branches"
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- The second state, which is the same window after git declined the
+           plain delete: the sentence names what is about to be lost and the
+           button says `Delete anyway`. What to check is that the two frames are
+           the same size and the same shape — this is one window changing what
+           it says, not a second dialog — and that the red button is the only
+           thing in either of them drawing attention. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DeleteBranchModal
+          :open="true"
+          branch="feature/smetana-8ok-git-panel-branches"
+          not-merged
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- And the third: a refusal forcing would repeat, in git's own words, in
+           the same mono block under the same failed-red title `GitPanel` draws
+           one in. There is no delete button at all here, which is the whole
+           point of the state — the only way out is Cancel. -->
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DeleteBranchModal
+          :open="true"
+          branch="feature/smetana-8ok-git-panel-branches"
+          refusal="error: Cannot delete branch 'feature/smetana-8ok-git-panel-branches' checked out at '/Users/you/dev/smetana/.worktrees/smetana-8ok'"
+          @close="() => {}"
+          @confirm="() => {}"
+        />
+      </div>
+      <!-- git working, where every way out is dead including the cross: the
+           call can fail and the message belongs over the window that asked. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <DeleteBranchModal
+          :open="true"
+          branch="feature/smetana-8ok-git-panel-branches"
+          busy
+          @close="() => {}"
+          @confirm="() => {}"
+        />
       </div>
       <!-- Three, because the fields differ between them: solo is offered for a
            single task and refused for a queue, and that is the model's rule
@@ -2940,13 +3013,21 @@ const menuTargetStyle = {
           @action="onSessionAction"
         />
       </div>
-      <!-- The two states of an opened card the list above cannot show at once.
-           The first is a session nobody said anything in: its prompt block
-           carries the sentence that stands in for a first prompt, which is the
-           only place that string appears. The second is a card whose menu is
-           frozen while a delete runs against it — every row greyed, which is
-           the state the app draws for the moment between Delete and the row
-           leaving the list. -->
+      <!-- The three states of an opened card the list above cannot show at
+           once. The first is a session nobody said anything in: its prompt
+           block carries the sentence that stands in for a first prompt, which
+           is the only place that string appears. The second is a card frozen
+           while a delete runs against it — every row of the menu greyed and the
+           two launching buttons with them, and no reason under either, since a
+           freeze is a moment rather than a refusal. That is the state the app
+           draws between Delete and the row leaving the list. The third is a project set to an agent that
+           cannot pick a session up by id: both launching verbs are refused for
+           the whole project rather than for this session, and the card says
+           which of the refusals it is — two lines here, since the harness is
+           asked two questions and answers each in its own words. The other
+           refusal — a working directory that has gone — is the third card of
+           the list above, where the fixture carries `cwdExists: false` and the
+           one reason the two verbs share is written once. -->
       <div :style="{ width: '340px', border: 'var(--border-w) solid var(--border)' }">
         <SessionRow :session="GALLERY_SESSIONS[4]" :now="GALLERY_SESSION_NOW" expanded />
         <SessionRow
@@ -2955,6 +3036,13 @@ const menuTargetStyle = {
           separated
           expanded
           busy
+        />
+        <SessionRow
+          :session="GALLERY_SESSIONS[5]"
+          :now="GALLERY_SESSION_NOW"
+          agent="codex"
+          separated
+          expanded
         />
       </div>
       <!-- What the tab draws for a project whose disk holds no transcript at
@@ -3413,6 +3501,54 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="FOLDER_BRANCHES" :folders="['feature']" :actions="RUN_GOING" />
         </div>
+        <!-- The favourites, live: right-click any row and the menu offers to
+             mark it or to unmark it. Three are marked here — one inside the
+             `fix/` folder, one with no slash in it, and the branch the
+             repository is on.
+
+             What to check. The block at the top is the current branch and then
+             the marked ones **in the order the branch list arrived in, which is
+             not the order the fixture writes them**: the constant lists
+             `develop` first and it has to draw last of the three, under
+             `fix/holiday-curb…` and `feature/smetana-8ok.5…`. The current
+             branch is marked too and is still **one** row, the first, carrying
+             the star. The star sits where `git-branch` sits on every other row,
+             so the names all start at the same x — the easiest way to see it is
+             to unmark a row and watch that nothing moves sideways. And the
+             hairline is under the **last** row of the block rather than under
+             the current branch. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :folders="favoriteFolders"
+            :favorites="favoriteBranches"
+            @toggle-folder="favoriteFolders = $event"
+            @favorite="favoriteBranches = $event"
+          />
+        </div>
+        <!-- The same marks with every folder open, which is where the second
+             half of the rule can be seen: a marked branch is gone from the
+             folder it was in, so `fix` says one where it said two, and
+             `feature/` — whose only remaining member was marked too — is **not
+             drawn at all**, heading, chevron, count and everything. That last
+             one is why `feature/smetana-8ok.5-branch-folders` is in the
+             fixture; without it no folder is emptied and this frame shows only
+             half of what its caption claims. The marked names are whole up top
+             and the leaves below are not. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList
+            :branches="FOLDER_BRANCHES"
+            :folders="['feature', 'fix', 'fix/legacy']"
+            :favorites="favoriteBranches"
+          />
+        </div>
+        <!-- A name nothing in this repository is called, which is the ordinary
+             state of a project whose repositories have different branches: it
+             draws no row and changes nothing, and the block at the top is the
+             current branch alone with the hairline back under it. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <BranchList :branches="BRANCHES" :favorites="['nothing-is-called-this']" />
+        </div>
         <!-- The fourth of the panel's empty sentences, which no `GitPanel`
              frame can reach: a folder git can see nothing in has no branch to
              list, and the section is gated on there being a repository, so this
@@ -3837,6 +3973,11 @@ const menuTargetStyle = {
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'queue_empty' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'no_progress' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'crashed', attempts: 5 } })" />
+        <!-- Beside `crashed` and beside `no_progress` on purpose: these three
+             are the endings that send somebody somewhere, and this one has to
+             be told from both at a glance. Every session exited cleanly and
+             none of them did anything, so the count is the detail line. -->
+        <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'nothing_done', batches: 3 } })" />
         <!-- Somebody's own doing, like a stop, and quiet for that reason — but
              a different act, and the line is where the two are told apart. -->
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'session_removed' } })" />
@@ -4162,6 +4303,24 @@ const menuTargetStyle = {
           </div>
           <PointerMenu ref="branchMenu" :items="BRANCH_MENU" :width="280" @select="() => {}" />
           <PointerMenu ref="refusedBranchMenu" :items="REFUSED_BRANCH_MENU" :width="280" @select="() => {}" />
+          <!-- The same rows, drawn straight into a `ContextMenu` with no
+               gesture in front of them — `fileMenuItems` two groups up has the
+               same pair for the same reason. The two boxes above are the whole
+               interaction and are the only place the panel's placement and
+               flipping can be tried; they are also behind a right-click, which
+               is a gesture an automated pass cannot reliably raise and a person
+               has to remember to make. So the rows themselves get a frame that
+               is simply on the page: the two glyphs this task added (`star`,
+               `trash-2`) sit in the gutter with the four that were already
+               there, the labels have to fit `:width="280"` without an ellipsis,
+               and the separators have to land in three places rather than two.
+               Live, from the rule itself, so it cannot drift from what the menu
+               actually offers. -->
+          <ContextMenu :items="BRANCH_MENU" :width="280" />
+          <!-- And the marked state of the same menu, which is the one row whose
+               text depends on something: `Remove from favourites` is the longer
+               of the two labels and is what the width has to hold. -->
+          <ContextMenu :items="MARKED_BRANCH_MENU" :width="280" />
         </div>
         <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
           <Toast tone="warning" title="claude-1 needs you" description="bd-a1b2 · worktree name collision · 4m" />

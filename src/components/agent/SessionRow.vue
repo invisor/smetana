@@ -30,6 +30,7 @@
    because the stores live in the view: one file under `src/components/` imports
    a store and it is `TerminalView`, and this is not going to be the second. */
 import { computed } from 'vue'
+import Button from '../core/Button.vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
 import MenuButton from '../overlays/MenuButton.vue'
@@ -44,9 +45,15 @@ import {
   sessionTitle
 } from './sessionRow.js'
 import {
+  FORK_KIND,
+  FORK_LABEL,
+  RESUME_KIND,
+  RESUME_LABEL,
   SESSION_MENU_W,
   menuButtonIcon,
   menuButtonLabel,
+  resumeAvailability,
+  resumeReasonLines,
   sessionMenuItems
 } from './sessionMenu.js'
 
@@ -109,7 +116,18 @@ const props = defineProps({
   /* And which of the three copying verbs it was, so the sentence can name it.
      Two props rather than one object: whoever draws this holds two refs, and a
      composite would be rebuilt on every unrelated render of the list. */
-  copyNoun: { type: String, default: '' }
+  copyNoun: { type: String, default: '' },
+  /* Which coding agent this project is set to, which decides whether either of
+     the two launching verbs can be offered at all: `--resume <id>` and
+     `--fork-session` are Claude Code's grammar, and `resumeAvailability` is the
+     rule.
+
+     A prop rather than a store read, for the reason every other fact on this
+     row is one: a component here knows nothing about `settings.json`. The
+     default matches `AgentSettings.vue`'s, so a row drawn on its own — a
+     gallery entry, a future one-off — offers the verb rather than a dead
+     button nobody can explain. */
+  agent: { type: String, default: 'claude' }
 })
 
 const emit = defineEmits(['toggle', 'action'])
@@ -242,6 +260,33 @@ const bodyStyle = {
   borderTop: 'var(--border-w) solid var(--border-subtle)'
 }
 
+/* The controls the card carries under its head: the two verbs that *start*
+   something, which is what makes them buttons rather than rows of the menu
+   alone. Orca puts them there and the reason survives the port — a card is
+   opened to decide what to do with the session, and the thing most often done
+   with one is picking it up again.
+
+   **Stacked, where Orca has them side by side**, and the panel is why: this
+   card is drawn in a side column, 340px wide in the gallery and narrower under
+   a person who has dragged the splitter in. `Continue in a new session` is 25
+   characters, which wants about 160px of label before the glyph and the
+   padding, and half of a narrow column is not that — a row would have put an
+   ellipsis through the label of a control whose whole job is to say what it
+   does. A column costs one control's height and nothing else.
+
+   The reasons sit under the pair rather than beside either button: a disabled
+   control that says nothing is a control somebody presses twice. */
+const actionsStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-2)'
+}
+const reasonStyle = {
+  marginTop: 'var(--space-2)',
+  font: 'var(--weight-regular) var(--text-2xs)/var(--leading-normal) var(--font-sans)',
+  color: 'var(--text-muted)'
+}
+
 /* The caption over the first prompt. The small-caps idiom every other caption
    in this system uses — `ContextMenu`'s labels, the inspector's field headings
    — with the glyph in front of it doing what the glyph on Orca's own block
@@ -299,8 +344,20 @@ const last = computed(() => lastMessageLine(props.session))
 const meta = computed(() => sessionMeta(props.session, props.now))
 const prompt = computed(() => firstPrompt(props.session))
 const details = computed(() => sessionDetails(props.session))
+const resume = computed(() => resumeAvailability(props.session, { agent: props.agent }))
+const fork = computed(() => resumeAvailability(props.session, { agent: props.agent, fork: true }))
+/* Every distinct reason among the two, as sentences. Distinct because the
+   commonest refusal — the worktree is gone — stops both verbs in the same
+   words, and saying it twice under two greyed buttons would read as two
+   different faults; see `resumeReasonLines`. */
+const resumeReasons = computed(() => resumeReasonLines(resume.value.reason, fork.value.reason))
 const items = computed(() =>
-  sessionMenuItems({ busy: props.busy, userAgent: navigator.userAgent })
+  sessionMenuItems({
+    busy: props.busy,
+    userAgent: navigator.userAgent,
+    resume: resume.value,
+    fork: fork.value
+  })
 )
 
 /* `navigator.userAgent` is read here rather than in `sessionMenu.js`, which is
@@ -404,6 +461,37 @@ const toggle = () => emit('toggle', props.session.id)
          the two paths. Nothing else — an opened card is not a transcript
          viewer, and reading the conversation is what Open log is for. -->
     <div v-if="expanded" :style="bodyStyle">
+      <!-- The two launching verbs, drawn as controls rather than only as rows
+           of the menu: they are what a card is most often opened to do. Each
+           raises the very `action` its menu row raises, with the same `kind`,
+           so the two doors onto each cannot come to mean different things —
+           which is also why `busy` reaches both. A delete in flight greys every
+           row of the menu, and a card whose two largest controls stayed live
+           through it would be the one door of the pair inviting a press that
+           races the delete. No reason line is drawn for it: the freeze lasts a
+           moment and is not a refusal, exactly as the menu rows keep their
+           plain labels through it. -->
+      <div>
+        <div :style="actionsStyle">
+          <Button
+            icon="play"
+            :disabled="busy || !resume.available"
+            full-width
+            @click="emit('action', { kind: RESUME_KIND, session })"
+          >
+            {{ RESUME_LABEL }}
+          </Button>
+          <Button
+            icon="git-fork"
+            :disabled="busy || !fork.available"
+            full-width
+            @click="emit('action', { kind: FORK_KIND, session })"
+          >
+            {{ FORK_LABEL }}
+          </Button>
+        </div>
+        <div v-for="line in resumeReasons" :key="line" :style="reasonStyle">{{ line }}</div>
+      </div>
       <div>
         <div :style="captionStyle">
           <Icon name="message-square" :size="12" />

@@ -89,7 +89,35 @@ export const REASONS = {
   max_iterations: { text: 'Stopped after too many batches', tone: TONE.failed, icon: NEUTRAL },
   unreadable: { text: 'Stopped — the tracker could not be read', tone: TONE.failed, icon: NEUTRAL },
   crashed: { text: 'Stopped — the agent kept failing', tone: TONE.failed, icon: NEUTRAL },
+  /* Beside `crashed` because it is the same class of trouble — the agent, not
+     the board — and deliberately worded away from `no_progress` two lines up.
+     The two are the pair the worker's own `StopReason::NothingDone` spends a
+     paragraph keeping apart: `no_progress` is a batch that *ran* and left the
+     board stuck, which sends somebody to the tracker, while this one is a
+     session that came back having done nothing at all, which sends them to the
+     agent. Drawn as two near-identical sentences in one colour they would be
+     the failure `smetana-e3o` above records, arrived at from the other end.
+     The count of those batches is the second line's, through
+     `endingDetail`. */
+  nothing_done: {
+    text: 'Stopped — the agent came back having done nothing',
+    tone: TONE.failed,
+    icon: NEUTRAL
+  },
   preflight: { text: 'Could not start', tone: TONE.failed, icon: NEUTRAL }
+}
+
+/* How many batches did nothing, as the second line says it.
+
+   One batch is an ordinary sentence rather than "1 batch in a row", because a
+   run allowed a single batch stops on its first empty one — `once` in
+   `service.rs` — and a count of one presented as a streak reads as a threshold
+   nobody reached. */
+function emptyBatches(batches) {
+  if (!Number.isInteger(batches) || batches < 1) return ''
+  return batches === 1
+    ? 'one batch, and it did nothing at all'
+    : `${batches} batches in a row, none of which did anything`
 }
 
 /* The second line under an ending: what the worker said about it, or failing
@@ -109,9 +137,12 @@ export const REASONS = {
    whether somebody goes and answers it. `detail` next, which is the two
    endings that could not start at all — the project that would not come up, and
    the batch that could not be spawned, since `service.rs` reports both this way.
+   The empty batches next, which is the one ending whose payload is a number:
+   without it `nothing_done` fell through to the branch and said "…having done
+   nothing into main", the same garden path the `preflight` defect above made.
    The branch last, for every ending with nothing of its own to add. */
 export function endingDetail(reason, branch = '') {
-  return reason?.question || reason?.detail || branch
+  return reason?.question || reason?.detail || emptyBatches(reason?.batches) || branch
 }
 
 export function stopReason(kind) {

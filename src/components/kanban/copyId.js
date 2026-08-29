@@ -13,13 +13,16 @@
    of the interface, which is where this tree keeps that kind. No Vue and no DOM
    in it.
 
-   `COPIED_MS` below is the one thing here a second part of the interface reads,
-   and it is here rather than beside that one for the ordinary reason: this file
-   is where the copy confirmation's vocabulary already lived, and the duration is
-   the rest of the same policy. A session row's menu
-   (`components/agent/sessionMenu.js`) imports it, which is a reach across two
-   groups and is the smaller of the two costs — the other was the number written
-   out three times, in this file's two consumers and in the gallery. */
+   `COPIED_MS` below is the one thing here that the rest of the interface reads,
+   and it is here rather than beside any of them for the ordinary reason: this
+   file is where the copy confirmation's vocabulary already lived, and the
+   duration is the rest of the same policy. A session row's menu
+   (`components/agent/sessionMenu.js`) imports it, and so does the composable
+   that waits it out (`components/core/copyFeedback.js`) — both a reach across
+   two groups, and both the smaller of the two costs, the other being the number
+   written out three times over. It stays here rather than moving in with the
+   behaviour so that this module keeps the property its own header claims: pure,
+   with no Vue in it, which is the whole of why a test can reach it. */
 /* Null-prototype, and that is the whole of why it is not a plain object
    literal. The fallback below is `??`, which only catches nullish, so an
    inherited key would be answered rather than fallen back on: over

@@ -350,11 +350,18 @@ fn summarise(
     }
     let facts = scan_forward(File::open(path).ok()?, project, also)?;
     let tail = scan_tail(path, meta.len());
+    /* One `stat` per row for the directory the session ran in. A worktree
+       removed after its task was merged is the ordinary case this answers, and
+       an unreadable path is "not there" as far as a resume is concerned — there
+       is nothing else this field could usefully say. */
+    let cwd = facts.cwd.unwrap_or_default();
+    let cwd_exists = !cwd.is_empty() && Path::new(&cwd).is_dir();
     Some(SessionSummary {
         subagents: subagents(folder, &id, facts.sidechains),
         id,
         path: path.to_string_lossy().into_owned(),
-        cwd: facts.cwd.unwrap_or_default(),
+        cwd,
+        cwd_exists,
         branch: facts.branch,
         /* The title rule, in one line: Claude Code's own one-liner when the
            transcript has one, and the first thing the person typed when it does
@@ -562,6 +569,30 @@ mod tests {
         assert_eq!(listed.len(), 1, "a worktree is part of the project");
         assert_eq!(listed[0].cwd, worktree.to_string_lossy());
         assert_eq!(listed[0].branch.as_deref(), Some("fix/smetana-oln"));
+    }
+
+    /// The two states of the Resume verb, told apart by the one field that
+    /// decides it. A worktree is removed once its task is merged and the
+    /// transcript stays behind, so the second of these is an ordinary row on
+    /// any machine that has done a few tasks — and the one the menu greys.
+    #[test]
+    fn a_session_says_whether_the_directory_it_ran_in_is_still_there() {
+        let root = temp_dir("cwd-exists-root");
+        let project = temp_dir("cwd-exists-project");
+        let live = project.join(".worktrees/smetana-0cj");
+        let merged = project.join(".worktrees/smetana-merged-long-ago");
+        std::fs::create_dir_all(&live).expect("a worktree that is still there");
+        write_session(&root, &live, "live", &[user_line(&live, "main", "Still going")]);
+        // Nothing is created for this one: the transcript records a directory
+        // that has been removed, which is the whole case.
+        write_session(&root, &merged, "gone", &[user_line(&merged, "main", "Long finished")]);
+
+        let listed = list_in(&root, &project);
+        let by_id = |id: &str| {
+            listed.iter().find(|row| row.id == id).unwrap_or_else(|| panic!("{id} was listed"))
+        };
+        assert!(by_id("live").cwd_exists, "a worktree that is on disk can be resumed");
+        assert!(!by_id("gone").cwd_exists, "a worktree that has gone cannot");
     }
 
     #[test]

@@ -35,10 +35,10 @@ import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
-/* The one duration every copy confirmation in this window holds for — the
-   board's id and a session row's menu both. `kanban/copyId.js` owns it because
-   that is where the rest of the copy vocabulary already lived. */
-import { COPIED_MS } from '../components/kanban/copyId.js'
+/* The whole of what happens on screen after a copy — the board's id and a
+   session row's menu both, one policy and one duration for the two of them, and
+   the same one the gallery answers with. */
+import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
 import Button from '../components/core/Button.vue'
 import RunBar from '../components/run/RunBar.vue'
@@ -64,9 +64,12 @@ import AgentList from '../components/agent/AgentList.vue'
 import SessionRow from '../components/agent/SessionRow.vue'
 import {
   DELETE_SESSION_TITLE,
+  FORK_KIND,
+  RESUME_KIND,
   copyNoun as copyVerbNoun,
   copyPayload,
-  isCopyKind
+  isCopyKind,
+  resumeAvailability
 } from '../components/agent/sessionMenu.js'
 /* The right column's Sessions tab, and a different subject from the store
    below it: this one is Claude Code's own transcripts on disk, that one is the
@@ -169,6 +172,7 @@ import {
   checkout,
   commit,
   createBranch,
+  deleteBranch,
   dirtyCount,
   dismissConflict,
   draftMessage,
@@ -705,6 +709,27 @@ function serveDialog(kind, { ground, props: propsFor, onResult, forget = null })
   openDialogWindow(kind, dialogWidth(kind))
 }
 
+/* The ground under a dialog window that is already up, changed while it stands.
+
+   **One caller and one reason**, and it is worth reading before adding a
+   second. Pressing Delete in the `delete-branch` window is the moment that
+   window stops standing on the branch existing: it is the thing about to make
+   it not exist. Left as it was, the refresh that follows a successful delete
+   takes the branch out of `vcsState.branches`, the ground watcher at the foot
+   of this file finds a window standing over nothing, and the person is told
+   "the branch it was about is gone" — a notice written for a board that moved
+   under somebody, raised over the very act they just performed. The branch goes
+   back on if git refuses, since the window is then standing over a branch that
+   still exists and that somebody else can still delete from a terminal.
+
+   `null` is what `stalenessOf` reads as "this window does not stand on one",
+   which is that rule's own documented shape and not a new one — the project and
+   the repository still hold it up in the meantime. */
+function reground(kind, ground) {
+  const service = openDialogs.get(kind)
+  if (service) service.ground = ground
+}
+
 /* Everything this window was doing for one dialog, undone — but nothing said to
    the window itself. Split from `closeDialog` because the window closing is one
    of the two ways this is reached: a person pressing the frame's own cross is
@@ -784,6 +809,101 @@ function openNewBranch(from) {
 const cutBranch = (ask) => {
   closeDialog('new-branch')
   createBranch(ask)
+}
+
+/* Which branch the delete-branch window is asking about, and null for closed —
+   the branch is the state for `newBranchFrom`'s reason, since what the window
+   is about is entirely the row somebody right-clicked.
+
+   Beside it the two fields that make this the one confirm in the app that asks
+   twice: whether git has already declined the plain delete because the branch
+   holds commits of its own, and git's own words for a refusal forcing would not
+   fix. Both are cleared when the window is opened and when it is forgotten, so
+   a second delete never opens on the last one's answer. */
+const deletingBranch = ref(null)
+const deleteBranchNotMerged = ref(false)
+const deleteBranchRefusal = ref('')
+
+/* Deleting a branch, in a window of its own rather than a modal over the board.
+   The same ground as cutting one and for the same two reasons `openNewBranch`
+   records: `deleteBranch` resolves the repository from `vcsState.selected` when
+   the button is pressed, and this window is about a branch that exists. */
+function openDeleteBranch(branch) {
+  deletingBranch.value = branch
+  deleteBranchNotMerged.value = false
+  deleteBranchRefusal.value = ''
+  serveDialog('delete-branch', {
+    ground: { project: activePath.value, repo: vcsState.selected, branch },
+    props: () => ({
+      /* The frame's caption, in `DeleteBranchModal`'s own words — see the
+         comment beside its `title`. */
+      title: `Delete ${deletingBranch.value}?`,
+      branch: deletingBranch.value ?? '',
+      notMerged: deleteBranchNotMerged.value,
+      refusal: deleteBranchRefusal.value,
+      busy: vcsState.busy?.op === 'delete'
+    }),
+    forget: () => {
+      deletingBranch.value = null
+      deleteBranchNotMerged.value = false
+      deleteBranchRefusal.value = ''
+    },
+    onResult: (name, payload) => {
+      if (name === 'close') closeDialog('delete-branch')
+      if (name === 'confirm') removeBranch(Boolean(payload?.force))
+    }
+  })
+}
+
+/* The one write behind a dialog in this view that does **not** close the window
+   first, and the exception is the whole feature: git's refusal is the second
+   question, so the window that asked the first one has to still be there to ask
+   it. `cutBranch` and `deleteTask` close first because nothing they hear back
+   changes what the window would say.
+
+   What that costs is the ground, and `reground` above is what pays it: the
+   branch is let go of before git is asked, so the successful case closes this
+   window from here — quietly — instead of having it pulled out from under the
+   person with a notice about a branch they just deleted. */
+async function removeBranch(force) {
+  const branch = deletingBranch.value
+  if (!branch) return
+  /* A second press while the first is still out, and it is not a hypothetical:
+     `busy` reaches the window's button through an announcement, so the guest's
+     `:disabled` is one IPC hop behind the flag. `write()` in the store already
+     refuses the second call — but by then this function has nulled the ground
+     twice and the second refusal's `else` would hand the branch **back** while
+     the first call is still in flight. The refresh that follows the first would
+     then find the window standing over a branch that has gone, and close it
+     with the very notice `reground` exists to prevent. The guard is the same
+     one `write()` keeps, one layer earlier, so nothing here runs twice.
+
+     It does **not** stand in the way of the second question, and that rests on
+     an ordering worth naming: `write()` clears `busy` in its `finally`, before
+     `deleteBranch` throws and long before the `catch` below sets `notMerged`, so
+     by the time `Delete anyway` is on screen there is nothing in flight to
+     refuse it. `vcs.test.js` pins that half — a refused delete leaves `busy`
+     null. */
+  if (vcsState.busy) return
+  const standing = { project: activePath.value, repo: vcsState.selected, branch }
+  reground('delete-branch', { ...standing, branch: null })
+  try {
+    const gone = await deleteBranch(branch, { force })
+    /* `false` with nothing thrown is git already busy, or the project or the
+       repository having moved while the call was out — in every one of which
+       the window is either about to be closed by the ground watcher or was
+       never going to write anything. Nothing to say and nothing to redraw. */
+    if (gone) closeDialog('delete-branch')
+    else reground('delete-branch', standing)
+  } catch (refused) {
+    reground('delete-branch', standing)
+    if (refused?.kind === 'notMerged') deleteBranchNotMerged.value = true
+    /* Anything else — a branch held by another worktree above all — is a
+       refusal `-D` would repeat, so what the window draws is git's own words
+       and one way out. The panel behind it draws the same refusal under its own
+       title, since `writeError` is set whatever this window does with it. */
+    else deleteBranchRefusal.value = refused?.message ?? ''
+  }
 }
 
 /* The Git panel's own folds and section heights. They live in `layout` rather
@@ -891,6 +1011,15 @@ const resizeGitSection = ({ section, rows }) => {
    started from. */
 const toggleBranchFolders = (folders) => {
   project.branchFolders = folders
+}
+
+/* Which branches are pinned above the tree, and this one is under the project
+   beside the folders for the same argument: which names are worth keeping in
+   reach is a fact about a repository and its naming convention, not a habit of
+   reading. What arrives is the whole new list, already resolved by
+   `branchTree.js` — the panel is presentational on this as on the folds. */
+const setFavoriteBranches = (favorites) => {
+  project.favoriteBranches = favorites
 }
 
 /* The second door out of a conflict, and the one this view has to carry: the
@@ -2045,45 +2174,26 @@ const selectFromBoard = (id) => {
    cards both reading `Copied` would be a claim about a clipboard that only
    holds one thing.
 
-   How long it stands is `COPIED_MS`, imported rather than written here: it used
-   to be a `COPIED_ID_MS` of this file's own, and the session row's menu made it
-   the second copy of one number. */
-const copiedTaskId = ref(null)
-/* '' | 'copied' | 'failed' */
-const taskIdCopyState = ref('')
-let copiedTaskTimer = null
+   All of which is `useCopyFeedback` now and not written out here: how long the
+   confirmation stands, which press owns it when two race, and the second clear
+   that keeps a stranded timer from putting out the later one. That policy had
+   been written out four times over — twice here and twice in the gallery — and
+   had already cost once, when the stranded timer sat in both copies of it and
+   had to be found and fixed in each. Two lines of wiring is what is left: which
+   id is being claimed, and what text goes on the clipboard. */
+const {
+  target: copiedTaskId,
+  state: taskIdCopyState,
+  /* What each of the two components gets: its own outcome, and nothing for
+     anybody else's id. */
+  stateFor: copyStateFor,
+  copy: copyIdFeedback
+} = useCopyFeedback(copyText)
 
-/* What each of the two components gets: its own outcome, and nothing for
-   anybody else's id. */
-const copyStateFor = (id) => (id != null && id === copiedTaskId.value ? taskIdCopyState.value : '')
-
-async function copyTaskId(id) {
-  clearTimeout(copiedTaskTimer)
-  /* Claimed before the await, and with no outcome yet: the write takes a
-     moment in the app, and until it answers the previous card must already
-     have stopped saying it was copied. */
-  copiedTaskId.value = id
-  taskIdCopyState.value = ''
-  const ok = await copyText(id)
-  // A second click, on this id or another, has taken the state over since.
-  if (copiedTaskId.value !== id) return
-  /* Again, and this is not the same clear as the one above. Two clicks on the
-     same id both get past that guard, and the second one's `setTimeout` would
-     overwrite the first's handle while the first timer went on running with
-     nothing pointing at it. It then fires 1.2 s after the *first* copy
-     resolved: soon enough to cut this confirmation short, and — since it puts
-     `copiedTaskId` back to null — soon enough to make a later copy's own guard
-     bail on it, so a copy that worked would say nothing at all. A double-click
-     is the most ordinary way there is to point at a word somebody wants. */
-  clearTimeout(copiedTaskTimer)
-  taskIdCopyState.value = ok ? 'copied' : 'failed'
-  copiedTaskTimer = setTimeout(() => {
-    copiedTaskId.value = null
-    taskIdCopyState.value = ''
-  }, COPIED_MS)
-}
-
-onUnmounted(() => clearTimeout(copiedTaskTimer))
+/* The id is both the thing claimed and the thing written — a card is told apart
+   by exactly what it puts on the clipboard, which is what makes this the
+   simpler of this window's two callers. */
+const copyTaskId = (id) => copyIdFeedback(id, id)
 
 /* ---- the Sessions tab's cards, and the menu on one ----------------------- */
 
@@ -2119,11 +2229,11 @@ watch(() => sessionsState.project, () => {
 /* Copying one of the three things a session row offers — its resume command,
    its id, the path to its transcript — and saying so afterwards.
 
-   `copyTaskId` above is the policy, followed here to the millisecond — the same
-   `COPIED_MS`, since there is only one of it now — and for its own stated
-   reason: a copy is the one action with nothing on screen to
-   show for it, so the answer belongs on the control somebody is still looking
-   at rather than in the corner of the screen. What differs is where it lands.
+   The same policy as the id above, which is now the same code as the id above,
+   and for its own stated reason: a copy is the one action with nothing on
+   screen to show for it, so the answer belongs on the control somebody is
+   still looking at rather than in the corner of the screen. What differs is
+   where it lands.
    A task's id is a control of its own; a session's copy is picked from a menu
    that closes on the way out, so the trigger the menu hung from is what is left
    to answer on — it draws a tick and names what was copied, then goes back to
@@ -2132,46 +2242,19 @@ watch(() => sessionsState.project, () => {
    One session at a time, deliberately, exactly as one id at a time up there:
    two rows both claiming to have been copied would be a claim about a clipboard
    that holds one thing. */
-const copiedSessionId = ref(null)
-/* '' | 'copied' | 'failed' */
-const sessionCopyState = ref('')
-/* Which of the three it was, for the sentence. */
-const sessionCopyNoun = ref('')
-let sessionCopyTimer = null
+const {
+  stateFor: sessionCopyStateFor,
+  /* Which of the three it was, for the sentence. */
+  nounFor: sessionCopyNounFor,
+  copy: sessionCopyFeedback
+} = useCopyFeedback(copyText)
 
-const sessionCopyStateFor = (id) =>
-  id != null && id === copiedSessionId.value ? sessionCopyState.value : ''
-const sessionCopyNounFor = (id) =>
-  id != null && id === copiedSessionId.value ? sessionCopyNoun.value : ''
-
-async function copyFromSession(kind, session) {
-  const id = session?.id ?? null
-  const text = copyPayload(kind, session)
-  clearTimeout(sessionCopyTimer)
-  /* Claimed before the await and with no outcome yet, so the previous row has
-     already stopped saying it was copied by the time this one answers. */
-  copiedSessionId.value = id
-  sessionCopyState.value = ''
-  sessionCopyNoun.value = copyVerbNoun(kind)
-  /* Nothing to copy is a refusal rather than a copy of the empty string: a
-     clipboard emptied by a press is worse than one left alone, and the button
-     says which it was. */
-  const ok = text ? await copyText(text) : false
-  // A second press, on this session or another, has taken the state over since.
-  if (copiedSessionId.value !== id) return
-  /* Again, and not the same clear as the one above — `copyTaskId` spends a
-     paragraph on why two presses on one row both get past that guard and would
-     otherwise leave a stranded timer that cuts the second confirmation short. */
-  clearTimeout(sessionCopyTimer)
-  sessionCopyState.value = ok ? 'copied' : 'failed'
-  sessionCopyTimer = setTimeout(() => {
-    copiedSessionId.value = null
-    sessionCopyState.value = ''
-    sessionCopyNoun.value = ''
-  }, COPIED_MS)
-}
-
-onUnmounted(() => clearTimeout(sessionCopyTimer))
+/* Three verbs into one call: which row is claimed, what the verb puts on the
+   clipboard — `''` when there is nothing, which the composable answers as a
+   refusal rather than as an emptied clipboard — and what to call it in the
+   sentence. */
+const copyFromSession = (kind, session) =>
+  sessionCopyFeedback(session?.id ?? null, copyPayload(kind, session), copyVerbNoun(kind))
 
 /* Which transcript is being deleted, by path — the field the row's menu is
    greyed from. A path and not a boolean, so a second row's menu is live while
@@ -2249,6 +2332,68 @@ async function deleteSession(session) {
   }
 }
 
+/* A session read off disk, brought back as a live agent.
+
+   **The same road every other agent in this app takes**, and that is the whole
+   design of it rather than a detail: `createSession` with an intent, which is
+   `terminal_create`, which is a profile's own command line plus `--resume <id>`
+   and `Pty::spawn`. A second way to start an agent is the place two ways
+   silently diverge. What the session gets that others do not is the directory
+   it is resumed in — the one its transcript recorded, which for a worktree
+   session is a path under `.worktrees/` and is never quietly replaced by the
+   project root.
+
+   `fork` is the whole of the difference between the Sessions tab's two
+   launching verbs, and it rides in the intent rather than forking this
+   function: Resume in worktree carries on writing into the transcript it
+   opened, Continue in a new session leaves that file exactly as it was and
+   starts a second one beside it from the same history. Everything else — the
+   directory, the id, the guard, the row that appears — is one path, because two
+   would be the place two paths silently diverge. The second card that turns up
+   in this tab afterwards is that fork's own transcript and an expected outcome
+   rather than a duplicate.
+
+   The two lines before the await are `newAgent`'s, for its stated reason: a
+   spawn takes about a second, and a person who pressed this must see the row
+   they asked for rather than nothing at all. What is deliberately *not* here is
+   the third line — `project.rightTab` stays where it is. Somebody standing in
+   the Sessions tab is standing there on purpose, possibly to bring up a second
+   one, and a resume that swung the column onto Task would be the app deciding
+   what they came for. The row does appear in the left column and the terminal
+   comes forward in the centre, which is where a person who pressed this is
+   looking.
+
+   The availability is asked again here even though the row that raised this is
+   already greyed, and it is not belt and braces about the menu: the card's
+   button and the menu row are two doors onto one verb, and the list they are
+   drawn from was read when the tab was opened. What this cannot catch — a
+   worktree removed in the meantime — is refused by the worker itself, which is
+   the guard standing next to the spawn.
+
+   The catch swallows the rejection for `newAgent`'s reason: `createSession` has
+   already reported it, and this exists only to stop Vue repeating what the
+   store said. */
+async function resumeSession(session, { fork = false } = {}) {
+  const path = activePath.value
+  if (!path) return
+  if (!resumeAvailability(session, { agent: settings.agent, fork }).available) return
+  try {
+    project.sideTab = 'agents'
+    project.activeTab = 'terminal'
+    await createSession(path, {
+      kind: 'resumeSession',
+      id: session.id,
+      cwd: session.cwd,
+      /* Absence travels as absence: a transcript nobody typed in has no title,
+         and the row says what it is rather than inventing a name for it. */
+      title: session.title ?? null,
+      fork
+    })
+  } catch {
+    // already reported — see comment above
+  }
+}
+
 /* The session menu's verbs: which one does what. The rows themselves are
    `components/agent/sessionMenu.js`'s, and the pair is joined by hand — a
    `kind` renamed on one side draws perfectly and does nothing at all when
@@ -2263,13 +2408,17 @@ async function deleteSession(session) {
    read as a broken app rather than as a stale row. */
 const onSessionAction = async ({ kind, session }) => {
   /* Three verbs and one shape: a sentence from the worker, or null. Written
-     here rather than three times over so that the four rows below stay a list
-     of what each verb is, which is the half a person reads this chain for. */
+     here rather than three times over so that the rows below stay a list of
+     what each verb is, which is the half a person reads this chain for. The
+     two launching verbs are not among them — they start a session rather than
+     reaching a file, and a failed spawn is already a toast of the store's. */
   const say = (failure, title) => {
     if (failure) sayFileMenu({ tone: 'error', title, description: failure })
   }
   if (isCopyKind(kind)) {
     await copyFromSession(kind, session)
+  } else if (kind === RESUME_KIND || kind === FORK_KIND) {
+    await resumeSession(session, { fork: kind === FORK_KIND })
   } else if (kind === 'open-log') {
     say(await openSessionLog(session?.path), 'Could not open the log')
   } else if (kind === 'open-cwd') {
@@ -4084,11 +4233,13 @@ const toastStackStyle = {
                 :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
                 :sections="resolvedGitSections"
                 :branch-folders="project.branchFolders"
+                :favorite-branches="project.favoriteBranches"
                 :message="draftMessage()"
                 :suggesting="vcsState.suggesting"
                 :suggest-error="vcsState.suggestError"
                 @toggle="toggleGitSection"
                 @toggle-folder="toggleBranchFolders"
+                @favorite="setFavoriteBranches"
                 @resize="resizeGitSection"
                 @setup="openSetup(activePath, true)"
                 @select="selectRepo"
@@ -4100,6 +4251,7 @@ const toastStackStyle = {
                 @push="push"
                 @fetch="fetchNow"
                 @new-branch="openNewBranch"
+                @delete="openDeleteBranch"
                 @message="setMessage"
                 @commit="commit"
                 @suggest="suggestMessage"
@@ -4172,9 +4324,10 @@ const toastStackStyle = {
              promises to show and has nothing to draw it with. Everything in it
              comes from the record the store made when git answered, including
              which repository — the panel's selection can have moved since. -->
-        <!-- Seven dialogs are not here any more: each is a window of its own,
+        <!-- Every dialog of this app but two is a window of its own now,
              opened above by `openRun`, `openNewTask`, `openNewBranch`,
-             `openPromote`, `openSetup`, `openDeleteTask` and `openReadyTask` —
+             `openDeleteBranch`, `openPromote`, `openSetup`, `openDeleteTask`,
+             `openReadyTask` and `openDeleteSession` —
              the whole of `REGISTRY` in `dialogRegistry.js`, which is what
              finishes the epic this comment was first written in the middle of.
              What each of them is a question about — a list of branches, the
@@ -4471,6 +4624,7 @@ const toastStackStyle = {
                   :key="session.id"
                   :session="session"
                   :now="sessionsState.now"
+                  :agent="settings.agent"
                   :separated="index > 0"
                   :expanded="isSessionOpen(session.id)"
                   :busy="deletingSessionPath === session.path"

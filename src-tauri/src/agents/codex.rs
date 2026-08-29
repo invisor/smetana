@@ -599,6 +599,23 @@ mod tests {
         with_images(brainstorm, Vec::new())
     }
 
+    #[test]
+    fn this_harness_says_it_can_neither_pick_a_recorded_session_up_nor_branch_one() {
+        // Codex has its own argument grammar and this app does not get to guess
+        // it, so the profile keeps both defaults rather than flags that look
+        // like Claude Code's. The refusals are what `terminal::service` turns
+        // into `TerminalError::NoResume` and `TerminalError::NoFork`, and they
+        // are what stops either verb from starting a *fresh* Codex in the
+        // worktree under a card promising the conversation somebody left.
+        //
+        // Two assertions and not one, because they are two capabilities: a
+        // harness that reopens a transcript and cannot branch one is an
+        // ordinary shape, and this one happens to answer no to both.
+        use crate::agents::Profile;
+        assert_eq!(Codex.resume_args("9f1c0a2e"), None);
+        assert_eq!(Codex.fork_args("9f1c0a2e"), None);
+    }
+
     fn with_images(brainstorm: Stage, images: Vec<String>) -> Intent {
         staged(brainstorm, Stage::Off, Stage::Off, images)
     }

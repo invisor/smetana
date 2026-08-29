@@ -614,22 +614,37 @@ an opened card at all if the component keeps the state, and `?view=gallery` is t
 this project has for anything under `src/components/`.
 
 `components/agent/sessionMenu.js` is the menu's whole rule, beside `sessionRow.js` and outside the
-component for the same reason. Seven verbs in Orca's own order and grouping — Copy resume command;
-Open log, Reveal log, Open working directory; Copy session id, Copy log path; Delete — and the two
-launching ones Orca has beside them, Resume in worktree and Continue in a new session, are a task of
-their own: those bring a live agent back and are not about the file. Copy resume command is what
-stands in for them, and is also the answer for somebody who would rather paste `cd … && claude
---resume …` into their own terminal than have this app spawn anything.
+component for the same reason. Nine verbs in Orca's own order and grouping — Resume in worktree,
+Continue in a new session; Copy resume command; Open log, Reveal log, Open working directory; Copy
+session id, Copy log path; Delete. The first two are the only ones that are not about the file, and
+they have a section of their own below. Copy resume command stays beside them and is not made
+redundant by them: it is the answer for somebody who would rather paste `cd … && claude --resume …`
+into their own terminal than have this app spawn anything.
 
-**The three copying verbs answer on the row's menu button, not in a toast.** `kanban/copyId.js` is
-the policy and this follows it to the millisecond: a copy is the one action with nothing on screen to
-show for it, so the confirmation belongs on the control somebody is still looking at. What differs is
-where it can land — the menu closes on the way out, so the trigger it hung from is what is left, and
-it draws a tick and names what was copied. How long for is `COPIED_MS`, which lives in
-`kanban/copyId.js` beside the rest of that vocabulary and is imported by everything that confirms a
-copy: it was written out three times over — the view, the gallery and the session menu — and the
-gallery is the only verification this project has for anything under `src/components/`, so a duration
-that moved in the app alone would have left the harness measuring the wrong thing.
+**No ellipsis on the second**, where Orca writes `Continue in New Session…`. An ellipsis is a promise
+to ask the person something, and this row asks nothing: it starts an agent exactly as the row above
+it does, in the same directory and on the same history.
+
+**The three copying verbs answer on the row's menu button, not in a toast.** `core/copyFeedback.js`
+is the policy, and this does not follow it — it *is* it, the same `useCopyFeedback` the board's id
+calls: a copy is the one action with nothing on screen to show for it, so the confirmation belongs on
+the control somebody is still looking at. What differs is where it can land — the menu closes on the
+way out, so the trigger it hung from is what is left, and it draws a tick and names what was copied,
+which is what `nounFor` is for. Three verbs land on one button, and "Copied" alone would leave a
+person unsure which of them they pressed.
+
+That composable is the second in the tree after `core/interactive.js`, and it exists because the
+policy — clear the pending timer, claim the row, blank the outcome, await the write, bail if a later
+press has taken the state over, clear the timer a second time, set the outcome, arm the reset — had
+been written out **four times**: a task's id and a session's menu, each in `views/DesktopApp.vue` and
+again in `views/Gallery.vue`. The pair drawing a task's id had already cost once, over a stranded
+reset timer that sat in both copies and made a copy that had worked show no confirmation at all. The
+gallery is the only verification this project has for anything under `src/components/`, so a copy
+fixed in the app and not in the harness leaves the harness reproducing a defect the product no longer
+has — indistinguishable by eye from a real one. `tests/components/core/copyFeedback.test.js` is what
+now sees the rule at all; it was entirely inside `.vue` files before, which no runner here can read.
+How long a confirmation stands is still `COPIED_MS` in `kanban/copyId.js`, borrowed by the composable
+rather than declared again, so the pure rule modules stay free of Vue.
 
 **Open log, Reveal log and Open working directory are three commands of ours, not the opener
 plugin's, and they are three rather than one on purpose.** The plugin's `open_path` is refused by its
@@ -675,16 +690,89 @@ draws. Its ground is the project alone: the other sorts of ground are sets the a
 and there is no set of sessions to watch, so a transcript that goes while the window stands open is
 answered by the delete itself saying so rather than by the window vanishing.
 
-**Every one of the seven says something when it cannot be done.** The list is read when the tab is
-opened and never watched, so a transcript deleted from somewhere else — or a worktree removed after
-the session that ran in it — leaves a row whose every verb is about a file that has gone. That is the
-one place this subsystem's "nothing here is an error" contract is deliberately reversed:
-`sessions/act.rs` answers with a sentence written for a person, and `DesktopApp.vue` puts it in the
-toast corner. A menu item that did nothing and said nothing would read as a broken app rather than as
+**Every one of the verbs that reaches a file says something when it cannot be done.** The list is
+read when the tab is opened and never watched, so a transcript deleted from somewhere else — or a
+worktree removed after the session that ran in it — leaves a row whose every verb is about a file
+that has gone. That is the one place this subsystem's "nothing here is an error" contract is
+deliberately reversed: `sessions/act.rs` answers with a sentence written for a person, and
+`DesktopApp.vue` puts it in the toast corner. A menu item that did nothing and said nothing would read as a broken app rather than as
 a stale row.
 
-Still deliberately not built, and each of them discussed: resuming a session from inside the app,
-searching, grouping by project, and telling a "talking" session from a "coding" one. The last is the
-interesting one — coding happens in a worktree, and both the path and the branch carry a task id —
-but the signal is not absolute (98 of 275 root sessions sat on `develop`, `staging` or a `feature/…`
-branch), and the instruction was to show all of them and sort it out later.
+### Resume and fork: a session off disk comes back as a live agent
+
+The customer's decision, stated directly: resuming must not look like a terminal opening, it must
+look like **an agent being restored**. So Resume in worktree puts an ordinary row in the left
+column's Agents tab — a state, a timer, an elapsed time, a place in the scope bar's counter — and the
+terminal tab behind it exists only because an agent in this app *is* a PTY session. Orca has no
+terminal of its own and hands the command outside; that shape was discussed and rejected.
+
+**Continue in a new session is a fork**, and that is the customer's decision too: the same command
+line with `--fork-session` behind it, in the same directory, on the same history. The one difference
+is where the writing lands — a resume goes on filling the transcript it opened, a fork leaves that
+file exactly as it was and starts a second one beside it — so a card turning up in this tab
+afterwards is the expected outcome and not a duplicate. Rejected with that choice: a clean session in
+the same folder, which would have differed from "+ New agent" only by its directory, and a new
+session opened on a prompt assembled out of the transcript, which is a new intent and a new prompt in
+`prompt.rs` for something the fork gives whole and more accurately.
+
+**There is one road to a PTY and this takes it.** `resumeSession` in `DesktopApp.vue` calls
+`createSession` with an `Intent::ResumeSession`, which is `terminal_create`, which is the profile's
+own command line plus `--resume <id>` and `Pty::spawn` — the same road "+ New agent", a filing
+session and a run's batch all take. A second way to start an agent is the place two ways silently
+diverge, which is also why the fork is a `fork` flag on that one intent rather than a road of its
+own: everything but the arguments is shared.
+
+**The working directory is the session's own, and never the project root.** `claude --resume`
+resolves an id against the directory it is run in, so the same id somewhere else is a session Claude
+Code has never heard of, and a worktree session started at the root would be an agent reading a tree
+its own transcript never mentions. `resume_cwd` in `terminal/service.rs` is the guard and it refuses
+rather than substitutes: the path has to lie inside the project (`sessions::model::belongs_to`, the
+very rule that decided the session was this project's), hold no `..`, and be a directory that is
+there now. This is the one intent for which a session's `cwd` and its `project` differ — the same
+divergence a shell opened from a folder in the tree has.
+
+A directory that has gone is the **ordinary** case, not an exotic one: a worktree is removed once its
+task is merged and the transcript stays behind, which was true of 11 sessions on the machine this was
+written against. The row is greyed with the reason on it, from `cwdExists` on `SessionSummary` — one
+`is_dir` taken with the `stat` the list already does, because a menu greyed a round trip later is a
+menu somebody has already pressed. It can be stale, deliberately, and the spawn's own guard is what
+answers a worktree removed since the tab was opened.
+
+**A profile that cannot resume greys it too**, with its own reason. `Profile::resume_args` and
+`Profile::fork_args` are the two capabilities — two answers, because a harness that reopens a
+transcript and cannot branch one is an ordinary shape — and `.claude/rules/agents.md` carries the
+arguments; `RESUMES_BY_ID` and `FORKS_BY_ID` in `components/agent/sessionMenu.js` are the front end's
+copy of them and the file says so. The refusals are worded apart for that reason, and the opened
+card draws every *distinct* one: the commonest, a worktree that is gone, stops both verbs in the same
+words and is said once, since two identical lines under two greyed buttons read as two faults. The
+fork's own fragment is the terse `cannot fork` because `SESSION_MENU_W` is what a refusal is worded
+against rather than the other way round — this menu opens over a side panel, and a panel grown to fit
+a longer sentence is one wider than the column its trigger stands in.
+
+**The row must not lie about what it is doing.** A resumed session has no tracker work — nothing
+claimed it and there is no issue behind it — so `SessionWork::ResumeSession` carries the session's
+own title and `captionOf` in `stores/terminals.js` draws "Resumed session: …". The title goes in the
+label rather than beside it because `tasks` is set in mono, where a person's own sentence would read
+as an identifier; the id is on the card in full and not on the row, since a 36-character UUID tells
+nobody which conversation this is.
+
+**A fork draws that same row**, deliberately and by the customer's choice: `Intent::work` reads
+`fork` and throws it away. What matters in the agents list is which conversation is going, not which
+file it is written into, and two indistinguishable rows — which need somebody to raise one session
+by both verbs in a row — are rare enough not to be worth a second kind of work.
+
+**One side moves.** Resume switches the left column to Agents and the centre to the terminal, exactly
+as "+ New agent" does, and deliberately leaves `rightTab` alone: somebody standing in the Sessions
+tab is standing there on purpose, possibly to bring up a second one.
+
+Each verb is drawn twice — a row of the menu and a button in the opened card, both raising the same
+`action` with the same `kind`, which is Orca's own arrangement and the reason the card has a button
+box at all. The buttons are **stacked** where Orca has them side by side, and the panel is why: this
+card is drawn in a side column, and half of a narrow one is not enough for `Continue in a new
+session` without an ellipsis through the label of a control whose whole job is to say what it does.
+
+Still deliberately not built, and each of them discussed: searching, grouping by project, and
+telling a "talking" session from a "coding" one. The last is the interesting one — coding happens in
+a worktree, and both the path and the branch carry a task id — but the signal is not absolute (98 of
+275 root sessions sat on `develop`, `staging` or a `feature/…` branch), and the instruction was to
+show all of them and sort it out later.
