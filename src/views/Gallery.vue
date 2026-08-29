@@ -936,21 +936,12 @@ const {
   copy: sessionCopyFeedback
 } = useCopyFeedback(copyText)
 
-const {
-  stateFor: sessionCopyStateFor,
-  nounFor: sessionCopyNounFor,
-  copy: sessionCopyFeedback
-} = useCopyFeedback(copyText)
-
 const onSessionAction = ({ kind, session }) => {
   /* Everything that is not a copy is left alone, the two launching verbs among
      them: a gallery has no worker to start a session in, and a press that did
      nothing is the honest answer where a fabricated agent row would not be.
      What is checkable here is the rows and the buttons — that they are drawn,
      greyed and explained — which is the half a `.vue` file keeps to itself. */
-  if (!isCopyKind(kind)) return
-  return sessionCopyFeedback(session?.id ?? null, copyPayload(kind, session), copyVerbNoun(kind))
-}
   if (!isCopyKind(kind)) return
   return sessionCopyFeedback(session?.id ?? null, copyPayload(kind, session), copyVerbNoun(kind))
 }
