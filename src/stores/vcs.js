@@ -551,6 +551,50 @@ export async function rebase(onto) {
   await write('rebase', onto, (repo) => invoke('vcs_rebase', { repo, onto }))
 }
 
+/* Delete a local branch.
+
+   Through `write` like everything else here, so it takes the same `busy`, lands
+   its refusal in the same block under `GitPanel`'s "Git did not delete the
+   branch", and brings the whole list back afterwards — which is what makes the
+   row disappear.
+
+   **It is the one write in this file that hands the refusal back out**, and the
+   reason is that the window which asked the question is the thing that has to
+   decide what to do about it. A branch git declined because it is not merged
+   has a way forward and one that is held by another worktree does not, so the
+   window offers a second button for the first and only Cancel for the second —
+   a decision the panel behind it cannot make, since it draws one block of git's
+   words and no buttons at all. The refusal still goes to `writeError` on its way
+   past: what happened is a fact about this repository whether or not the window
+   is still standing.
+
+   Read back off `writeError` rather than plumbed out of `write`: that function
+   also answers `false` for a call it never made (git already busy) and for one
+   whose project or repository moved underneath, and neither of those is a
+   refusal anybody should be shown a second button about. The `op` is what tells
+   them apart.
+
+   The name is struck from the favourites on the way out. A pinned branch that
+   no longer exists costs nothing while it sits in the file — `branchRows` draws
+   no row for a name the repository does not have — but it would come back the
+   day somebody cut a branch of that name again, pinned by a decision they made
+   about a different branch. */
+export async function deleteBranch(branch, { force = false } = {}) {
+  if (!branch) return false
+  const gone = await write('delete', branch, (repo) =>
+    invoke('vcs_delete_branch', { repo, branch, force })
+  )
+  if (!gone) {
+    if (vcsState.writeError?.op === 'delete') throw vcsState.writeError
+    return false
+  }
+  const marked = settings.project.favoriteBranches
+  if (Array.isArray(marked) && marked.includes(branch)) {
+    settings.project.favoriteBranches = marked.filter((name) => name !== branch)
+  }
+  return true
+}
+
 /* Bring the upstream's commits into the branch this repository is on.
 
    Through `write` like every other write here, so it takes the same `busy`, the

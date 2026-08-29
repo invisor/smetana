@@ -25,6 +25,26 @@
    left out of the tree below so the list never holds it twice; a folder that
    held nothing else is then not drawn at all.
 
+   **The branches somebody marked are lifted the same way and sit under it.**
+   The top block is therefore two groups and not one: the current branch, then
+   the favourites, then the tree. Both groups are taken out of what the tree is
+   built from, so a marked branch is not drawn twice, its folder's count comes
+   down by one, and a folder it was the whole of is not drawn at all — every one
+   of those is the current branch's rule, applied to a second reason for being
+   lifted. A branch that is both current and marked is one row, the first, with
+   the star on it.
+
+   **The order inside the favourites is the order the list arrived in**, which
+   is `by_recency`'s, and deliberately not the order they were marked in. This
+   panel promises one ordering and this would be a second one inside it — and
+   the second would be invisible, since nothing on a row says when it was
+   pinned.
+
+   **The hairline is under the last row of the top block**, not under the
+   current branch. It says one thing — the real list starts below — and that is
+   a fact about the bottom of the block rather than about which branch the
+   repository is on. `divider` is the row that carries it.
+
    The tree is flattened to a single list, exactly as `FileTree.vue` flattens
    its own — one `v-for` over rows carrying their own depth, rather than a
    component recursing into itself. */
@@ -84,34 +104,57 @@ function build(branches) {
 /**
  * The rows to draw, top to bottom.
  *
- * `branches` is `vcs_branches`' own list and `expanded` the folder paths that
- * are open. A folder row is `{ kind: 'folder', path, label, depth, count,
- * expanded }`; a branch row is the branch itself with `kind`, `label` and
- * `depth` added — the whole `name` travels, because that is what a checkout, a
- * merge and a rebase are given, while `label` is the leaf and all that is
- * drawn.
+ * `branches` is `vcs_branches`' own list, `expanded` the folder paths that are
+ * open and `favorites` the names somebody has pinned, as
+ * `settings.project.favoriteBranches` keeps them. A folder row is
+ * `{ kind: 'folder', path, label, depth, count, expanded }`; a branch row is
+ * the branch itself with `kind`, `label` and `depth` added — the whole `name`
+ * travels, because that is what a checkout, a merge and a rebase are given,
+ * while `label` is the leaf and all that is drawn.
  *
- * The current branch is the first row whatever else is true, at depth 0 and
- * carrying `pinned` and its whole name as the label: it is the header's own
- * subject and the answer somebody opens the panel for, and it is the one row a
- * fold could otherwise take off the screen. It is taken out of what the tree is
- * built from, so nothing draws it twice.
+ * **Three groups.** The current branch, then the branches marked as favourites
+ * in the order the list arrived in, then the tree. Both of the first two are at
+ * depth 0, draw their whole name as the label and carry `pinned` — they are
+ * lifted out of what the tree is built from, so nothing draws them twice. A row
+ * whose name is in `favorites` also carries `favorite`, including the current
+ * branch when it is marked, which is one row and not two.
+ *
+ * The last row of that top block carries `divider`, and the component draws the
+ * hairline under it: the fact being stated is that the real list starts below.
  *
  * A folded folder leaves its branches out of the list altogether rather than
  * hiding them, which is both the height this buys back and what makes the count
  * on the heading the only thing saying they are there.
  */
-export function branchRows(branches, expanded) {
+export function branchRows(branches, expanded, favorites) {
   const list = branches ?? []
   /* A branch with no name at all is dropped here for the reason `build` drops
      it below — there is no row to draw for it — rather than being lifted to the
      top as an empty one. */
-  const current = list.find((branch) => branch?.current && segments(branch?.name).length > 0)
+  const named = (branch) => segments(branch?.name).length > 0
+  const current = list.find((branch) => branch?.current && named(branch))
+  const marked = new Set(favorites ?? [])
+  /* Read off the branch list rather than off the stored names, which is what
+     keeps the group in `by_recency`'s order and what makes a name the selected
+     repository has never heard of draw nothing at all. */
+  const pinnedFavorites = list.filter(
+    (branch) => branch !== current && named(branch) && marked.has(branch.name)
+  )
   const open = new Set(expanded ?? [])
   const rows = []
-  if (current) {
-    rows.push({ ...current, kind: 'branch', label: current.name, depth: 0, pinned: true })
+  const lift = (branch) => {
+    rows.push({
+      ...branch,
+      kind: 'branch',
+      label: branch.name,
+      depth: 0,
+      pinned: true,
+      favorite: marked.has(branch.name)
+    })
   }
+  if (current) lift(current)
+  for (const branch of pinnedFavorites) lift(branch)
+  if (rows.length > 0) rows[rows.length - 1].divider = true
   const walk = (nodes) => {
     for (const node of nodes) {
       if (node.kind === 'branch') {
@@ -124,8 +167,42 @@ export function branchRows(branches, expanded) {
       if (isOpen) walk(children)
     }
   }
-  walk(build(current ? list.filter((branch) => branch !== current) : list))
+  walk(build(list.filter((branch) => branch !== current && !marked.has(branch?.name))))
   return rows
+}
+
+/**
+ * Whether a branch is drawn above the tree rather than in it — the current one,
+ * or one somebody marked.
+ *
+ * Here rather than written out at each call site, because two of them are the
+ * same question asked about a fold: `tracking.js` has to know which rows a
+ * folded heading is *not* hiding, and getting that wrong puts a mark on a
+ * heading standing in for a row already on screen.
+ */
+export function liftedOut(branch, favorites) {
+  return Boolean(branch?.current) || (favorites ?? []).includes(branch?.name)
+}
+
+/**
+ * The list a press on `Add to favourites` / `Remove from favourites` leaves
+ * behind.
+ *
+ * Pure and here beside `toggleFolder`, for that function's reason: the panel is
+ * told what the list became rather than working it out, so the one rule lives
+ * where a test can reach it. Always a new array — the caller assigns it into
+ * `settings.json`, and a list mutated in place gives the store's watcher
+ * nothing to notice.
+ *
+ * Adding puts the name on the end, which decides nothing about where the row is
+ * drawn: `branchRows` reads this as a set and takes its order from the branch
+ * list. What the position does say is which name falls off first when the file
+ * is trimmed at its ceiling.
+ */
+export function toggleFavorite(stored, name) {
+  const marked = stored ?? []
+  if (!name) return [...marked]
+  return marked.includes(name) ? marked.filter((one) => one !== name) : [...marked, name]
 }
 
 /**

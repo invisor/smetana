@@ -70,6 +70,7 @@ import {
   Settings2,
   Sparkles,
   Square,
+  Star,
   SquareCheck,
   SquarePen,
   Tag,
@@ -113,6 +114,13 @@ export const iconNodes = {
   'git-compare': GitCompare,
   'folder-git-2': FolderGit2,
   'file-pen': FilePen,
+  /* A branch somebody pinned to the top of the Git panel's list. It is drawn in
+     the leading icon's place, instead of `git-branch` and never beside it — a
+     sixth glyph in front of a name would put the marked rows' names out of line
+     with every other row's. The same glyph names the menu item that puts it
+     there and the one that takes it away: the item's own label is what says
+     which of the two a press does. */
+  star: Star,
 
   // attachments
   paperclip: Paperclip,

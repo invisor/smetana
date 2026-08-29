@@ -136,6 +136,17 @@ const DIALOG_PROPS = {
     actions: { allowed: true, reason: null },
     busy: false
   },
+  /* Deleting one, in the state it opens in — the question, before git has been
+     asked anything. The other two states are reached by an answer from a
+     backend a browser does not have, so they are looked at in `?view=gallery`
+     instead, where all three stand side by side. */
+  'delete-branch': {
+    title: 'Delete release/7?',
+    branch: 'release/7',
+    notMerged: false,
+    refusal: '',
+    busy: false
+  },
   /* Every fixture carries a `title` beside what its dialog draws, because that
      string is the OS frame's caption in the app and there is no frame in a
      browser to notice it missing. It is the same sentence the component works

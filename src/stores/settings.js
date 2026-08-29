@@ -205,6 +205,14 @@ const defaults = () => ({
        in, while an empty list is somebody having folded them all. Written out
        whole on the first press — `branchTree.js` holds both halves of that. */
     branchFolders: null,
+    /* Which branches the Git panel pins above the tree, by whole name. A plain
+       list where the folders above are nullable, and that is the difference
+       between the two: there is no third state here, since nothing is marked
+       until somebody marks it. Listed for the reason `runSettings` below spells
+       out — a key missing from this object is a key the defaults layer cannot
+       clear, so one project's pinned branches would follow somebody into the
+       next project's panel. */
+    favoriteBranches: [],
     openTabs: [],
     previewTab: null,
     /* The board's columns in the order a person dragged them to. Empty means

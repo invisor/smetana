@@ -169,6 +169,7 @@ import {
   checkout,
   commit,
   createBranch,
+  deleteBranch,
   dirtyCount,
   dismissConflict,
   draftMessage,
@@ -705,6 +706,27 @@ function serveDialog(kind, { ground, props: propsFor, onResult, forget = null })
   openDialogWindow(kind, dialogWidth(kind))
 }
 
+/* The ground under a dialog window that is already up, changed while it stands.
+
+   **One caller and one reason**, and it is worth reading before adding a
+   second. Pressing Delete in the `delete-branch` window is the moment that
+   window stops standing on the branch existing: it is the thing about to make
+   it not exist. Left as it was, the refresh that follows a successful delete
+   takes the branch out of `vcsState.branches`, the ground watcher at the foot
+   of this file finds a window standing over nothing, and the person is told
+   "the branch it was about is gone" — a notice written for a board that moved
+   under somebody, raised over the very act they just performed. The branch goes
+   back on if git refuses, since the window is then standing over a branch that
+   still exists and that somebody else can still delete from a terminal.
+
+   `null` is what `stalenessOf` reads as "this window does not stand on one",
+   which is that rule's own documented shape and not a new one — the project and
+   the repository still hold it up in the meantime. */
+function reground(kind, ground) {
+  const service = openDialogs.get(kind)
+  if (service) service.ground = ground
+}
+
 /* Everything this window was doing for one dialog, undone — but nothing said to
    the window itself. Split from `closeDialog` because the window closing is one
    of the two ways this is reached: a person pressing the frame's own cross is
@@ -784,6 +806,84 @@ function openNewBranch(from) {
 const cutBranch = (ask) => {
   closeDialog('new-branch')
   createBranch(ask)
+}
+
+/* Which branch the delete-branch window is asking about, and null for closed —
+   the branch is the state for `newBranchFrom`'s reason, since what the window
+   is about is entirely the row somebody right-clicked.
+
+   Beside it the two fields that make this the one confirm in the app that asks
+   twice: whether git has already declined the plain delete because the branch
+   holds commits of its own, and git's own words for a refusal forcing would not
+   fix. Both are cleared when the window is opened and when it is forgotten, so
+   a second delete never opens on the last one's answer. */
+const deletingBranch = ref(null)
+const deleteBranchNotMerged = ref(false)
+const deleteBranchRefusal = ref('')
+
+/* Deleting a branch, in a window of its own rather than a modal over the board.
+   The same ground as cutting one and for the same two reasons `openNewBranch`
+   records: `deleteBranch` resolves the repository from `vcsState.selected` when
+   the button is pressed, and this window is about a branch that exists. */
+function openDeleteBranch(branch) {
+  deletingBranch.value = branch
+  deleteBranchNotMerged.value = false
+  deleteBranchRefusal.value = ''
+  serveDialog('delete-branch', {
+    ground: { project: activePath.value, repo: vcsState.selected, branch },
+    props: () => ({
+      /* The frame's caption, in `DeleteBranchModal`'s own words — see the
+         comment beside its `title`. */
+      title: `Delete ${deletingBranch.value}?`,
+      branch: deletingBranch.value ?? '',
+      notMerged: deleteBranchNotMerged.value,
+      refusal: deleteBranchRefusal.value,
+      busy: vcsState.busy?.op === 'delete'
+    }),
+    forget: () => {
+      deletingBranch.value = null
+      deleteBranchNotMerged.value = false
+      deleteBranchRefusal.value = ''
+    },
+    onResult: (name, payload) => {
+      if (name === 'close') closeDialog('delete-branch')
+      if (name === 'confirm') removeBranch(Boolean(payload?.force))
+    }
+  })
+}
+
+/* The one write behind a dialog in this view that does **not** close the window
+   first, and the exception is the whole feature: git's refusal is the second
+   question, so the window that asked the first one has to still be there to ask
+   it. `cutBranch` and `deleteTask` close first because nothing they hear back
+   changes what the window would say.
+
+   What that costs is the ground, and `reground` above is what pays it: the
+   branch is let go of before git is asked, so the successful case closes this
+   window from here — quietly — instead of having it pulled out from under the
+   person with a notice about a branch they just deleted. */
+async function removeBranch(force) {
+  const branch = deletingBranch.value
+  if (!branch) return
+  const standing = { project: activePath.value, repo: vcsState.selected, branch }
+  reground('delete-branch', { ...standing, branch: null })
+  try {
+    const gone = await deleteBranch(branch, { force })
+    /* `false` with nothing thrown is git already busy, or the project or the
+       repository having moved while the call was out — in every one of which
+       the window is either about to be closed by the ground watcher or was
+       never going to write anything. Nothing to say and nothing to redraw. */
+    if (gone) closeDialog('delete-branch')
+    else reground('delete-branch', standing)
+  } catch (refused) {
+    reground('delete-branch', standing)
+    if (refused?.kind === 'notMerged') deleteBranchNotMerged.value = true
+    /* Anything else — a branch held by another worktree above all — is a
+       refusal `-D` would repeat, so what the window draws is git's own words
+       and one way out. The panel behind it draws the same refusal under its own
+       title, since `writeError` is set whatever this window does with it. */
+    else deleteBranchRefusal.value = refused?.message ?? ''
+  }
 }
 
 /* The Git panel's own folds and section heights. They live in `layout` rather
@@ -891,6 +991,15 @@ const resizeGitSection = ({ section, rows }) => {
    started from. */
 const toggleBranchFolders = (folders) => {
   project.branchFolders = folders
+}
+
+/* Which branches are pinned above the tree, and this one is under the project
+   beside the folders for the same argument: which names are worth keeping in
+   reach is a fact about a repository and its naming convention, not a habit of
+   reading. What arrives is the whole new list, already resolved by
+   `branchTree.js` — the panel is presentational on this as on the folds. */
+const setFavoriteBranches = (favorites) => {
+  project.favoriteBranches = favorites
 }
 
 /* The second door out of a conflict, and the one this view has to carry: the
@@ -4084,11 +4193,13 @@ const toastStackStyle = {
                 :open-path="activeDiff?.repo === vcsState.selected ? activeDiff.path : null"
                 :sections="resolvedGitSections"
                 :branch-folders="project.branchFolders"
+                :favorite-branches="project.favoriteBranches"
                 :message="draftMessage()"
                 :suggesting="vcsState.suggesting"
                 :suggest-error="vcsState.suggestError"
                 @toggle="toggleGitSection"
                 @toggle-folder="toggleBranchFolders"
+                @favorite="setFavoriteBranches"
                 @resize="resizeGitSection"
                 @setup="openSetup(activePath, true)"
                 @select="selectRepo"
@@ -4100,6 +4211,7 @@ const toastStackStyle = {
                 @push="push"
                 @fetch="fetchNow"
                 @new-branch="openNewBranch"
+                @delete="openDeleteBranch"
                 @message="setMessage"
                 @commit="commit"
                 @suggest="suggestMessage"
@@ -4172,9 +4284,10 @@ const toastStackStyle = {
              promises to show and has nothing to draw it with. Everything in it
              comes from the record the store made when git answered, including
              which repository — the panel's selection can have moved since. -->
-        <!-- Seven dialogs are not here any more: each is a window of its own,
+        <!-- Every dialog of this app but two is a window of its own now,
              opened above by `openRun`, `openNewTask`, `openNewBranch`,
-             `openPromote`, `openSetup`, `openDeleteTask` and `openReadyTask` —
+             `openDeleteBranch`, `openPromote`, `openSetup`, `openDeleteTask`,
+             `openReadyTask` and `openDeleteSession` —
              the whole of `REGISTRY` in `dialogRegistry.js`, which is what
              finishes the epic this comment was first written in the middle of.
              What each of them is a question about — a list of branches, the

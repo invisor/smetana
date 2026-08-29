@@ -178,6 +178,7 @@ pub fn run() {
       vcs::commands::vcs_push,
       vcs::commands::vcs_checkout,
       vcs::commands::vcs_create_branch,
+      vcs::commands::vcs_delete_branch,
       vcs::commands::vcs_merge,
       vcs::commands::vcs_rebase,
       vcs::commands::vcs_abort,

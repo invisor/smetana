@@ -200,15 +200,19 @@ pub enum Attempt {
 
 /// A **write** with the non-zero exit handed back instead of raised.
 ///
-/// One caller and one reason: `git merge` and `git rebase` exit non-zero for a
-/// tree they left conflicted exactly as they do for one they refused to touch,
-/// and telling those apart means reading the tree afterwards rather than the
-/// message. Everything else still goes through `git_write` above, where a
+/// Two callers and one reason between them: a non-zero exit that is not by
+/// itself an answer. `git merge` and `git rebase` exit non-zero for a tree they
+/// left conflicted exactly as they do for one they refused to touch, so telling
+/// those apart means reading the tree afterwards rather than the message; and
+/// `git branch -d` declines an unmerged branch and one held by another worktree
+/// at the same code, so telling *those* apart means asking git a second
+/// question. Everything else still goes through `git_write` above, where a
 /// non-zero exit is a refusal and nothing else — a caller that has no second
 /// question to ask must not have to remember to ask this one.
 ///
-/// A write by construction, so `WRITE_CEILING`: the two operations it exists
-/// for are the two that rewrite the working tree.
+/// A write by construction, so `WRITE_CEILING`: two of the three operations it
+/// is used for rewrite the working tree, and the third writes a ref, which is
+/// still a call a repository's own hooks can sit in front of.
 ///
 /// A spawn that failed is still an `Err`: no git on the machine is not an exit
 /// code, and there is no tree to go and look at.
