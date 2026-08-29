@@ -1005,12 +1005,20 @@ async fn drive(
             // batch is still holding `in_progress`, because those are the ones
             // the question is about, and a release running first would leave it
             // nothing to park (smetana-8pe). It owns nothing else, though —
-            // `queue::claimed_by` is `in_progress` and only that — so reviewed
-            // work would otherwise sit claimed under a session this run has
-            // just killed, which on the `Stop` arm means until some later run's
-            // Phase R. That is this task's own defect on the one branch it did
-            // not reach, so the reviewed half is released here and the two sets
-            // cannot overlap.
+            // `queue::claimed_by` is `in_progress` under that actor, the merge
+            // lock excepted — so reviewed work would otherwise sit claimed under
+            // a session this run has just killed, which on the `Stop` arm means
+            // until some later run's Phase R. That is this task's own defect on
+            // the one branch it did not reach, so the reviewed half is released
+            // here and the two sets cannot overlap.
+            //
+            // The lock is in neither of them, and that is the whole of
+            // smetana-dgv: `queue::release` refuses it here and
+            // `queue::claimed_by` refuses it there, so a batch killed while it
+            // was merging leaves the lock exactly as it found it. Either path
+            // touching it would be worse than losing this batch — a lock that
+            // is not `open` is claimable by nobody, so it is every later merge
+            // in the project rather than one task.
             Batch::Unanswered { .. } => {
                 let reviewed: Vec<queue::Leftover> =
                     leftovers.iter().filter(|left| queue::is_reviewed(left)).cloned().collect();
@@ -1288,8 +1296,10 @@ fn outcome_of(batch: &Batch) -> BatchOutcome {
 /// it, so nothing of its is released — the argument that keeps the merge lock
 /// out of `queue::release` is the same one, and it applies to a task claim word
 /// for word. On an unanswered question only the reviewed half comes here, since
-/// `park_claims` owns everything that batch holds `in_progress`. Every other
-/// ending is a dead session and brings all of its leftovers.
+/// `park_claims` owns everything that batch holds `in_progress` bar the merge
+/// lock, which neither path may touch. Every other ending is a dead session and
+/// brings all of its leftovers — the lock among them, refused here by
+/// `queue::release` as it is refused there by `queue::claimed_by`.
 ///
 /// The rule itself is `queue::release` and it is pure: `in_progress` returns to
 /// `open` unclaimed, `ready_to_merge` keeps its status and loses only the claim,
@@ -1711,6 +1721,14 @@ async fn fresh_board(tracker: &TrackerHandle) -> Option<Vec<crate::tracker::mode
 /// thinking about. A park that fails is left alone rather than retried — the
 /// task stays `in_progress`, which the queue reads as unfinished work for the
 /// next batch to recover, so the failure costs a recovery rather than a task.
+///
+/// What "everything" leaves out is the merge lock, and the exception is
+/// `queue::claimed_by`'s rather than a check made here — the rule belongs where
+/// the rest of this area's rules are, and where a test can reach it. A batch
+/// that stopped to ask while it held the lock is exactly the case: parking the
+/// lock takes it out of `open`, only an `open` issue is claimable, and every
+/// merge in the project after that waits for a person to put it back
+/// (smetana-dgv).
 async fn park_claims(tracker: &TrackerHandle, session: u64, question: &str) {
     let actor = crate::terminal::model::run_actor(session);
     let Some(issues) = fresh_board(tracker).await else { return };

@@ -37,7 +37,10 @@ const BLOCKS: &str = "blocks";
 /// `bd ready` returns it and, unfiltered, it would count as ready work here;
 /// held, it is `in_progress` and would count as unfinished. Either reading
 /// turns coordination into work: a lead would try to implement it, and a run
-/// would keep taking batches to "recover" it.
+/// would keep taking batches to "recover" it. The first half of that — only an
+/// `open` issue is claimable — is also why no rule in this file may ever write
+/// the lock into a status of its own: `release` and `claimed_by` each say what
+/// that cost, and it is the whole project's merges rather than one task's.
 pub(super) const LOCK_LABEL: &str = "smetana-lock";
 
 /// The board, as a run cares about it.
@@ -189,9 +192,13 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) ->
 /// closed, where releasing it would take work whose premise was a wiring
 /// error.
 ///
-/// `pub(super)` because `summary.rs` has to make the same exclusion — a lock is
-/// coordination there too, and it must never appear in a report — and sharing
-/// the predicate is what stops the two from drifting apart.
+/// Its readers in this file want different things of the lock: the snapshot
+/// leaves it out of every count, `claimed_by` refuses to park it, and
+/// `left_behind` keeps it and flags it, since a held lock is exactly what a
+/// report has to name. One reader is outside — `summary.rs` has to make the
+/// same exclusion, a lock being coordination there too and never a task a run
+/// closed — which is what `pub(super)` is for. Sharing the predicate is what
+/// stops them from drifting apart.
 pub(super) fn is_lock(issue: &Issue) -> bool {
     issue.labels.iter().any(|l| l == LOCK_LABEL)
 }
@@ -223,10 +230,24 @@ fn blocked(issue: &Issue, not_finished: &HashSet<&str>) -> bool {
 /// reviewed task waiting for its merge is finished work, and parking it would
 /// throw the review away — the recovery phase's `unfinished` set is what picks
 /// it up. Parking is only for work the stuck lead never got to settle.
+///
+/// **And deliberately not the merge lock**, which a batch holds `in_progress`
+/// under this very actor while it merges and which therefore sat in this set
+/// until smetana-dgv. Parked, it got `status: parked` and a `parked:` note, and
+/// the dead actor stayed on it — but only an `open` issue is claimable, so a
+/// lock that is not `open` can never be taken by anybody again: not the next
+/// batch, not the next run, not a lead somebody starts by hand. One batch
+/// killed at a question while it held the lock cost every merge in the project
+/// from then on, and nothing but a person editing the board gets it back.
+/// `running-tasks` forbids a lead to park the lock in exactly these words; the
+/// app was doing it in code. It is the same refusal `release` already makes on
+/// the other path, for the same reason: the lock is coordination rather than
+/// work, so no way a batch can end is allowed to move it.
 pub fn claimed_by(issues: &[Issue], actor: &str) -> Vec<String> {
     issues
         .iter()
         .filter(|i| i.status == IN_PROGRESS && i.assignee.as_deref() == Some(actor))
+        .filter(|i| !is_lock(i))
         .map(|i| i.id.clone())
         .collect()
 }
@@ -282,9 +303,10 @@ pub fn parking_note(question: &str) -> String {
 /// Is this leftover reviewed work rather than work in flight?
 ///
 /// The predicate exists for one caller and one branch: on the unanswered
-/// question `park_claims` takes the `in_progress` claims and nothing else, so
-/// the reviewed half has to be released beside it, and asking for it by name
-/// here is what keeps `ready_to_merge` a string this file spells once.
+/// question `park_claims` takes the `in_progress` claims — the merge lock
+/// excepted, which neither path may write — and nothing else, so the reviewed
+/// half has to be released beside it, and asking for it by name here is what
+/// keeps `ready_to_merge` a string this file spells once.
 pub fn is_reviewed(left: &Leftover) -> bool {
     left.status == READY_TO_MERGE
 }
@@ -310,7 +332,9 @@ pub fn is_reviewed(left: &Leftover) -> bool {
 /// Which *endings* this is applied to is `service::drive`'s decision and is
 /// made there: a batch that handed its work back is still alive with a person
 /// in it and is not released at all, and on an unanswered question only the
-/// reviewed half is, `park_claims` owning the rest.
+/// reviewed half is, `park_claims` owning the rest of what that batch holds —
+/// the lock apart, which the merge-lock bullet above refuses here and
+/// `claimed_by` refuses there, so no ending of a batch writes to it.
 /// The note is an ordinary one — deliberately not the `parked:` or `resolved:`
 /// the `running-tasks` skill writes, since neither happened here — and it names
 /// the batch, its actor and, where the app could find them, the branch the work
@@ -872,6 +896,28 @@ mod tests {
     }
 
     #[test]
+    fn the_merge_lock_is_never_parked() {
+        // smetana-dgv, and it is the same refusal
+        // `the_merge_lock_is_never_given_back` pins on the other path. A batch
+        // killed at an unanswered question while it was merging holds the lock
+        // `in_progress` under its own actor, which is precisely the shape this
+        // filter passes — so the lock was parked, with the question as its note
+        // and the dead actor still on it. Only an `open` issue is claimable, so
+        // that lock is unclaimable by everybody for good and every later merge
+        // in the project waits on a person to notice. The ordinary claim beside
+        // it must still be parked: refusing the whole set would be the other
+        // way of leaving work `in_progress` under a dead actor.
+        let actor = "smetana-run-42";
+        let mut mine = issue("mine", "in_progress");
+        mine.assignee = Some(actor.into());
+        let mut lock = issue("smetana-uox", "in_progress");
+        lock.assignee = Some(actor.into());
+        lock.labels = vec![LOCK_LABEL.into()];
+
+        assert_eq!(claimed_by(&[mine, lock], actor), vec!["mine"]);
+    }
+
+    #[test]
     fn what_a_batch_left_holding_is_wider_than_what_it_would_have_parked() {
         // The record the report draws, and it is deliberately not the parking
         // list: `ready_to_merge` is reviewed work nobody merged, which parking
@@ -1112,8 +1158,10 @@ mod tests {
 
     #[test]
     fn reviewed_work_is_what_the_question_path_releases_and_nothing_else() {
-        // `park_claims` takes the `in_progress` claims on that branch, so the
-        // two sets have to be disjoint and this is the predicate that says so.
+        // `park_claims` takes the `in_progress` claims on that branch — the
+        // merge lock apart, which parking filters out and `release` answers
+        // nothing for — so the two sets have to be disjoint and this is the
+        // predicate that says so.
         let reviewed = Leftover {
             id: "a".into(),
             status: "ready_to_merge".into(),
