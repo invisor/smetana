@@ -352,12 +352,20 @@ static COMPLAINED: AtomicBool = AtomicBool::new(false);
 /// with no git at all would write a line per folder per focus for as long as the
 /// app is up — the least informative line in the tree, in the quantity that
 /// would roll a night's run history out of `smetana.log` (`lib.rs` counts the
-/// budget). Every failure this arm can still catch is a fact about the machine
-/// rather than about the folder, so the second line would say what the first
-/// said; the two cannot alternate either, since a `NoGit` machine never reaches
-/// a timeout and a machine that has git never reports `NoGit`. This was free
-/// while it was an `eprintln!` into a bundle's absent stderr, and stopped being
-/// free the moment the log became a file.
+/// budget). It is the one case that can flood, and it floods because a missing
+/// binary is an instant spawn failure with nothing rate-limiting it; the rest of
+/// what reaches here — a `READ_CEILING` timeout, an `Io`, a `Git { status }`
+/// that is neither 1 nor 128 — is about one repository rather than about the
+/// machine, and self-rate-limited besides, a timeout being one per thirty
+/// seconds per folder. Those are rare enough, and near enough alike, that the
+/// first line is the diagnostic and a second would add a path and nothing else.
+/// What that costs is one clause, said rather than papered over: the line that
+/// survives names the **first** folder to fail, which on a timeout is not
+/// necessarily the folder worth knowing about. The two cannot alternate either,
+/// since a `NoGit` machine never reaches a timeout and a machine that has git
+/// never reports `NoGit`. All of this was free while it was an `eprintln!` into
+/// a bundle's absent stderr, and stopped being free the moment the log became a
+/// file.
 fn mark_git_ignored(dir: &Path, entries: &mut [Entry]) {
     // Not a shortcut: `git check-ignore --stdin` given nothing at all exits 128
     // with "no path specified", which is a refusal on a directory that is
