@@ -3,6 +3,8 @@ import {
   COPIED_MS,
   DELETE_SESSION_DESCRIPTION,
   DELETE_SESSION_TITLE,
+  FORK_LABEL,
+  RESUME_LABEL,
   SESSION_MENU_W,
   copyNoun,
   copyPayload,
@@ -10,7 +12,11 @@ import {
   isCopyKind,
   menuButtonIcon,
   menuButtonLabel,
+  resumeAvailability,
   resumeCommand,
+  resumeMenuLabel,
+  resumeReasonLine,
+  resumeReasonLines,
   sessionMenuItems
 } from '../../../src/components/agent/sessionMenu.js'
 
@@ -18,20 +24,30 @@ const session = (over = {}) => ({
   id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
   path: '/Users/you/.claude/projects/-Users-you-dev-smetana/9f1c0a2e.jsonl',
   cwd: '/Users/you/dev/smetana',
+  cwdExists: true,
   title: 'Why does the scope bar count dirty files it cannot see',
   size: 148_392,
   ...over
 })
 
+/* The project as it is configured out of the box. Written once because every
+   test about the two launching verbs has to say which agent the project is set
+   to, and the answer decides the whole rule. */
+const claude = { agent: 'claude' }
+const forking = { agent: 'claude', fork: true }
+
 const kinds = (items) => items.filter((item) => !item.type).map((item) => item.kind)
 
 describe('what a session row offers', () => {
-  /* The seven verbs and their order are the acceptance criteria of this task,
-     and the consuming side of the pair is `onSessionAction` in a `.vue` file no
-     runner here can read — so this is the only mechanical check either half
-     gets. */
-  it('offers the seven verbs, in Orca\'s order', () => {
+  /* The verbs and their order are the acceptance criteria of this task, and the
+     consuming side of the pair is `onSessionAction` in a `.vue` file no runner
+     here can read — so this is the only mechanical check either half gets. All
+     nine Orca has, and the two that start an agent lead them the way they lead
+     Orca's own menu. */
+  it('offers the nine verbs, in Orca\'s order', () => {
     expect(kinds(sessionMenuItems())).toEqual([
+      'resume',
+      'fork',
       'copy-resume',
       'open-log',
       'reveal-log',
@@ -42,11 +58,15 @@ describe('what a session row offers', () => {
     ])
   })
 
-  /* Four groups: the command, the three that open something somewhere else,
-     the two that copy, and the one that destroys. */
+  /* Five groups: the two that start an agent, the one that hands a command
+     over, the three that open something somewhere else, the two that copy, and
+     the one that destroys. */
   it('groups them with a separator between each group', () => {
     const shape = sessionMenuItems().map((item) => item.type ?? 'row')
     expect(shape).toEqual([
+      'row',
+      'row',
+      'separator',
       'row',
       'separator',
       'row',
@@ -96,8 +116,178 @@ describe('what a session row offers', () => {
     expect(sessionMenuItems().every((item) => !item.disabled)).toBe(true)
   })
 
+  /* The ceiling is measured against the longest label this file can produce,
+     which is one of the two greyed launching rows carrying its own reason —
+     every other row is a verb of two or three words. `ContextMenu` clips at the
+     ceiling with an ellipsis and a menu row has no tooltip, so a label past it
+     is gone with no way back.
+
+     A test cannot measure a font, so what it holds is the *arithmetic* the
+     ceiling was chosen by: 70px of chrome and 6.4px a character, which is what
+     the resume's sentence measured at in the webview (324px for 51 characters
+     at `--text-sm`) rounded up. What it catches is a reason reworded longer
+     than the panel it has to fit in, which is the way this number goes wrong. */
   it('keeps a ceiling wide enough for its longest label', () => {
-    expect(SESSION_MENU_W).toBeGreaterThan(0)
+    const longest = sessionMenuItems({
+      resume: resumeAvailability({}, {}),
+      fork: resumeAvailability({}, { fork: true })
+    })
+      .filter((item) => !item.type)
+      .map((item) => item.label)
+      .reduce((a, b) => (b.length > a.length ? b : a))
+    expect(70 + longest.length * 6.4).toBeLessThan(SESSION_MENU_W)
+  })
+})
+
+describe('bringing a session back as a live agent', () => {
+  /* The ordinary case: this project's agent can be told to resume, the
+     directory the session ran in is still there, so the row is live. */
+  it('offers the resume for a session whose directory is still on disk', () => {
+    const answer = resumeAvailability(session(), claude)
+    expect(answer).toEqual({ available: true, reason: null })
+    const row = sessionMenuItems({ resume: answer }).find((item) => item.kind === 'resume')
+    expect(row.label).toBe(RESUME_LABEL)
+    expect(row.disabled).toBe(false)
+  })
+
+  /* A worktree is removed once its task is merged and the transcript stays
+     behind, so this is an ordinary row rather than an exotic one. `--resume`
+     resolves an id against the directory it is run in, and starting the agent
+     at the project root instead would be an agent reading a tree its own
+     transcript never mentions — so the verb is refused and says why. */
+  it('refuses a session whose working directory is gone, and says so on the row', () => {
+    const answer = resumeAvailability(session({ cwdExists: false }), claude)
+    expect(answer.available).toBe(false)
+    const row = sessionMenuItems({ resume: answer }).find((item) => item.kind === 'resume')
+    expect(row.disabled).toBe(true)
+    expect(row.label).toBe(`${RESUME_LABEL} — the working directory is gone`)
+  })
+
+  it('refuses a transcript that recorded no working directory at all', () => {
+    const answer = resumeAvailability(session({ cwd: '' }), claude)
+    expect(answer.available).toBe(false)
+    expect(resumeMenuLabel(answer.reason)).toBe(`${RESUME_LABEL} — no working directory recorded`)
+  })
+
+  /* `--resume <id>` is Claude Code's grammar and this app does not guess
+     anybody else's: `Profile::resume_args` in `agents/codex.rs` keeps its
+     default `None`, and this is the front-end half of that pair. */
+  it('refuses every session when the project is set to an agent that cannot resume', () => {
+    for (const agent of ['codex', '', 'something-new']) {
+      const answer = resumeAvailability(session(), { agent })
+      expect(answer.available).toBe(false)
+      expect(answer.reason).toBe('this agent cannot resume by id')
+    }
+  })
+
+  /* A record that does not carry the field is one this front end cannot answer
+     for — an older worker, a hand-written fixture — and the softer way to be
+     wrong is to offer the verb: the spawn's own guard refuses a directory that
+     is not there and says so in words, while greying the row would take a
+     working session away with nothing to explain it. */
+  it('offers the resume for a record that never mentioned whether the directory is there', () => {
+    const { cwdExists, ...older } = session()
+    expect(cwdExists).toBe(true)
+    expect(resumeAvailability(older, claude).available).toBe(true)
+  })
+
+  /* One wording for one refusal, set two ways: a lowercase fragment joined onto
+     the menu row with a dash, and the same fragment as a sentence under the
+     card's button. Two tables would have been two accounts of one thing. */
+  it('sets the same reason as a sentence for the opened card', () => {
+    expect(resumeReasonLine('the working directory is gone')).toBe(
+      'The working directory is gone.'
+    )
+    expect(resumeReasonLine(null)).toBe('')
+  })
+
+  it('says nothing but the verb when there is nothing to explain', () => {
+    expect(resumeMenuLabel(null)).toBe(RESUME_LABEL)
+  })
+
+  /* A delete in flight greys the resume with everything else, and the label
+     stays the plain verb: the row is not refused, it is waiting. */
+  it('freezes the resume while a delete runs, without claiming a reason', () => {
+    const row = sessionMenuItems({ busy: true }).find((item) => item.kind === 'resume')
+    expect(row.disabled).toBe(true)
+    expect(row.label).toBe(RESUME_LABEL)
+  })
+})
+
+describe('carrying a session on in a new one', () => {
+  /* Orca calls this row `Continue in New Session…` and the ellipsis is a
+     promise to ask the person something. Ours asks nothing — it starts an agent
+     exactly as the row above it does — so the label carries none, and this is
+     the one mechanical check of a rule that is otherwise a sentence in a
+     comment. Sentence case with it, as every label in this system is. */
+  it('is called Continue in a new session, with no ellipsis on it', () => {
+    expect(FORK_LABEL).toBe('Continue in a new session')
+    expect(FORK_LABEL).not.toMatch(/[.…]/)
+    const row = sessionMenuItems().find((item) => item.kind === 'fork')
+    expect(row.label).toBe(FORK_LABEL)
+    expect(row.disabled).toBe(false)
+  })
+
+  /* The row sits directly under the resume and draws its own glyph: what the
+     verb does to a transcript is branch it, and the resume's `play` on both
+     would have made two rows that differ only in their words. */
+  it('stands beside the resume in the group that starts an agent', () => {
+    const [first, second] = sessionMenuItems()
+    expect([first.kind, second.kind]).toEqual(['resume', 'fork'])
+    expect(second.icon).toBe('git-fork')
+    expect(second.icon).not.toBe(first.icon)
+  })
+
+  /* A worktree removed once its task merged takes both verbs with it, and in
+     the same words: `--resume` resolves an id against the directory it is run
+     in either way, so a fork has no more of a place to run than a resume. */
+  it('is refused with the resume when the working directory is gone', () => {
+    const answer = resumeAvailability(session({ cwdExists: false }), forking)
+    expect(answer.available).toBe(false)
+    expect(answer.reason).toBe(resumeAvailability(session({ cwdExists: false }), claude).reason)
+    const row = sessionMenuItems({ fork: answer }).find((item) => item.kind === 'fork')
+    expect(row.disabled).toBe(true)
+    expect(row.label).toBe(`${FORK_LABEL} — the working directory is gone`)
+  })
+
+  it('is refused with the resume for a transcript that recorded no directory', () => {
+    const answer = resumeAvailability(session({ cwd: '' }), forking)
+    expect(answer.available).toBe(false)
+    expect(answer.reason).toBe('no working directory recorded')
+  })
+
+  /* The capability is the profile's own answer — `Profile::fork_args` in Rust,
+     and not `--fork-session` appended to somebody else's `--resume` — so the
+     refusal is worded about forking rather than about resuming. A harness that
+     reopens a transcript and cannot branch one is the shape this keeps room
+     for. */
+  it('says it is the forking the agent cannot do, not the resuming', () => {
+    for (const agent of ['codex', '', 'something-new']) {
+      const answer = resumeAvailability(session(), { agent, fork: true })
+      expect(answer.available).toBe(false)
+      expect(answer.reason).toBe('this agent cannot fork')
+    }
+  })
+
+  /* The opened card's account of two greyed buttons. One refusal in two
+     identical words is one line — the alternative reads as two faults — and two
+     genuinely different answers are two. */
+  it('says one shared reason once and two different ones twice', () => {
+    expect(resumeReasonLines('the working directory is gone', 'the working directory is gone')).toEqual([
+      'The working directory is gone.'
+    ])
+    expect(
+      resumeReasonLines('this agent cannot resume by id', 'this agent cannot fork')
+    ).toEqual(['This agent cannot resume by id.', 'This agent cannot fork.'])
+    expect(resumeReasonLines(null, null)).toEqual([])
+  })
+
+  /* A delete in flight greys this one with everything else too, and the label
+     stays the plain verb: the row is not refused, it is waiting. */
+  it('freezes while a delete runs, without claiming a reason', () => {
+    const row = sessionMenuItems({ busy: true }).find((item) => item.kind === 'fork')
+    expect(row.disabled).toBe(true)
+    expect(row.label).toBe(FORK_LABEL)
   })
 })
 

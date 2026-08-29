@@ -9,6 +9,10 @@ const session = (id, over = {}) => ({
   id,
   path: `/Users/you/.claude/projects/-p/${id}.jsonl`,
   cwd: '/p',
+  /* Whether that directory is still there, which is what the Resume verb is
+     greyed from: a worktree is removed once its task is merged and the
+     transcript stays behind. */
+  cwdExists: true,
   branch: 'main',
   title: 'A conversation',
   lastRole: 'assistant',

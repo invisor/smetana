@@ -291,6 +291,41 @@ describe('agent rows', () => {
     })
   })
 
+  /* The one work with no tracker behind it at all: a conversation off disk,
+     picked up again. The row has to say what it is and carry the session's own
+     title, and it must not read as work taken off the board — there is no
+     issue, nothing claimed it, and a row that showed a bare sentence would be
+     indistinguishable from a filing agent's draft. The title is in the *label*
+     rather than beside it because `tasks` is set in mono, where a person's own
+     words would read as an identifier. */
+  it('a resumed session names itself and the conversation it brings back', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit(
+      'terminal:state',
+      session({ id: 2, work: { kind: 'resumeSession', title: 'Move the card to done' } })
+    )
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Resumed session: Move the card to done',
+      tasks: []
+    })
+  })
+
+  /* A transcript nobody typed in has no title, which is an ordinary outcome —
+     a session opened and abandoned. The row says what it is and stops there
+     rather than inventing a name for it. */
+  it('a resumed session with nothing said in it still says what it is', async () => {
+    const { stores, emit, nextTick } = await ready()
+    await emit('terminal:state', session({ id: 2, work: { kind: 'resumeSession', title: null } }))
+    await nextTick()
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Resumed session',
+      tasks: []
+    })
+  })
+
   /* A session the worker described with something this front end has never
      heard of is an ordinary outcome, not an error: it is still an agent, and a
      row that says so is worth more than a blank one. */
@@ -744,6 +779,83 @@ describe('starting a session', () => {
     expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
       label: 'Editing',
       tasks: ['smetana-42']
+    })
+  })
+
+  /* And the same for a resumed session, which is the placeholder a person sees
+     for the second between pressing Resume in the Sessions tab and the worker
+     answering. It goes through `terminal_create` like every other agent —
+     there is no second road to a PTY — so the only thing that could go wrong
+     here is `workOf` failing to mirror `Intent::work`, which would caption this
+     second as a bare agent and then change under the reader. */
+  it("a resumed session's placeholder already names the conversation", async () => {
+    const { ipc, stores } = await ready()
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+
+    const started = stores.terminals.createSession('/p', {
+      kind: 'resumeSession',
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      cwd: '/p/.worktrees/smetana-0cj',
+      title: 'Move the card to done',
+      fork: false
+    })
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Resumed session: Move the card to done',
+      starting: true
+    })
+
+    answer(
+      session({ id: 9, work: { kind: 'resumeSession', title: 'Move the card to done' } })
+    )
+    await started
+
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Resumed session: Move the card to done'
+    })
+    /* The whole of the intent goes over the wire: the id and the directory are
+       the agent's briefing — Rust turns one into `--resume <id>` and the other
+       into where the session runs — and neither is drawn anywhere. */
+    expect(ipc.calls('terminal_create').at(-1)).toMatchObject({
+      project: '/p',
+      intent: {
+        kind: 'resumeSession',
+        id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+        cwd: '/p/.worktrees/smetana-0cj',
+        title: 'Move the card to done',
+        fork: false
+      }
+    })
+  })
+
+  /* Continue in a new session goes down the very same road, and `fork` is the
+     whole of what is different about it: Rust turns it into `--fork-session`
+     behind the same `--resume <id>`, in the same directory. The row is the
+     resume's own, deliberately — `Intent::work` drops the flag — so a person
+     picking one conversation up twice sees two rows that say the same thing,
+     which was chosen over a second caption for the half nobody chose between. */
+  it('a forked session travels as the same intent with the flag that branches it', async () => {
+    const { ipc, stores } = await ready()
+    ipc.on('terminal_create', () =>
+      session({ id: 9, work: { kind: 'resumeSession', title: 'Move the card to done' } })
+    )
+
+    await stores.terminals.createSession('/p', {
+      kind: 'resumeSession',
+      id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
+      cwd: '/p/.worktrees/smetana-0cj',
+      title: 'Move the card to done',
+      fork: true
+    })
+
+    expect(ipc.calls('terminal_create').at(-1).intent).toMatchObject({
+      kind: 'resumeSession',
+      cwd: '/p/.worktrees/smetana-0cj',
+      fork: true
+    })
+    expect(stores.terminals.agentRows.value.at(-1)).toMatchObject({
+      label: 'Resumed session: Move the card to done',
+      tasks: []
     })
   })
 

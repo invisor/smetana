@@ -64,9 +64,12 @@ import AgentList from '../components/agent/AgentList.vue'
 import SessionRow from '../components/agent/SessionRow.vue'
 import {
   DELETE_SESSION_TITLE,
+  FORK_KIND,
+  RESUME_KIND,
   copyNoun as copyVerbNoun,
   copyPayload,
-  isCopyKind
+  isCopyKind,
+  resumeAvailability
 } from '../components/agent/sessionMenu.js'
 /* The right column's Sessions tab, and a different subject from the store
    below it: this one is Claude Code's own transcripts on disk, that one is the
@@ -2329,6 +2332,68 @@ async function deleteSession(session) {
   }
 }
 
+/* A session read off disk, brought back as a live agent.
+
+   **The same road every other agent in this app takes**, and that is the whole
+   design of it rather than a detail: `createSession` with an intent, which is
+   `terminal_create`, which is a profile's own command line plus `--resume <id>`
+   and `Pty::spawn`. A second way to start an agent is the place two ways
+   silently diverge. What the session gets that others do not is the directory
+   it is resumed in — the one its transcript recorded, which for a worktree
+   session is a path under `.worktrees/` and is never quietly replaced by the
+   project root.
+
+   `fork` is the whole of the difference between the Sessions tab's two
+   launching verbs, and it rides in the intent rather than forking this
+   function: Resume in worktree carries on writing into the transcript it
+   opened, Continue in a new session leaves that file exactly as it was and
+   starts a second one beside it from the same history. Everything else — the
+   directory, the id, the guard, the row that appears — is one path, because two
+   would be the place two paths silently diverge. The second card that turns up
+   in this tab afterwards is that fork's own transcript and an expected outcome
+   rather than a duplicate.
+
+   The two lines before the await are `newAgent`'s, for its stated reason: a
+   spawn takes about a second, and a person who pressed this must see the row
+   they asked for rather than nothing at all. What is deliberately *not* here is
+   the third line — `project.rightTab` stays where it is. Somebody standing in
+   the Sessions tab is standing there on purpose, possibly to bring up a second
+   one, and a resume that swung the column onto Task would be the app deciding
+   what they came for. The row does appear in the left column and the terminal
+   comes forward in the centre, which is where a person who pressed this is
+   looking.
+
+   The availability is asked again here even though the row that raised this is
+   already greyed, and it is not belt and braces about the menu: the card's
+   button and the menu row are two doors onto one verb, and the list they are
+   drawn from was read when the tab was opened. What this cannot catch — a
+   worktree removed in the meantime — is refused by the worker itself, which is
+   the guard standing next to the spawn.
+
+   The catch swallows the rejection for `newAgent`'s reason: `createSession` has
+   already reported it, and this exists only to stop Vue repeating what the
+   store said. */
+async function resumeSession(session, { fork = false } = {}) {
+  const path = activePath.value
+  if (!path) return
+  if (!resumeAvailability(session, { agent: settings.agent, fork }).available) return
+  try {
+    project.sideTab = 'agents'
+    project.activeTab = 'terminal'
+    await createSession(path, {
+      kind: 'resumeSession',
+      id: session.id,
+      cwd: session.cwd,
+      /* Absence travels as absence: a transcript nobody typed in has no title,
+         and the row says what it is rather than inventing a name for it. */
+      title: session.title ?? null,
+      fork
+    })
+  } catch {
+    // already reported — see comment above
+  }
+}
+
 /* The session menu's verbs: which one does what. The rows themselves are
    `components/agent/sessionMenu.js`'s, and the pair is joined by hand — a
    `kind` renamed on one side draws perfectly and does nothing at all when
@@ -2343,13 +2408,17 @@ async function deleteSession(session) {
    read as a broken app rather than as a stale row. */
 const onSessionAction = async ({ kind, session }) => {
   /* Three verbs and one shape: a sentence from the worker, or null. Written
-     here rather than three times over so that the four rows below stay a list
-     of what each verb is, which is the half a person reads this chain for. */
+     here rather than three times over so that the rows below stay a list of
+     what each verb is, which is the half a person reads this chain for. The
+     two launching verbs are not among them — they start a session rather than
+     reaching a file, and a failed spawn is already a toast of the store's. */
   const say = (failure, title) => {
     if (failure) sayFileMenu({ tone: 'error', title, description: failure })
   }
   if (isCopyKind(kind)) {
     await copyFromSession(kind, session)
+  } else if (kind === RESUME_KIND || kind === FORK_KIND) {
+    await resumeSession(session, { fork: kind === FORK_KIND })
   } else if (kind === 'open-log') {
     say(await openSessionLog(session?.path), 'Could not open the log')
   } else if (kind === 'open-cwd') {
@@ -4555,6 +4624,7 @@ const toastStackStyle = {
                   :key="session.id"
                   :session="session"
                   :now="sessionsState.now"
+                  :agent="settings.agent"
                   :separated="index > 0"
                   :expanded="isSessionOpen(session.id)"
                   :busy="deletingSessionPath === session.path"

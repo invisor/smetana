@@ -579,11 +579,19 @@ fn leaves_a_run_report(intent: &Intent) -> bool {
     matches!(intent, Intent::Run { .. })
 }
 
-/// What the session opens on. Never `None` any more: the conversation language
-/// is said in every intent, so even the "+ New agent" row opens on one
-/// sentence. The `Option` stays because it is the profiles' contract for "is
-/// there a positional argument", and a caller that stops reading the signature
-/// here is one that stops passing the prompt.
+/// What the session opens on. `None` for exactly one intent, and it is the
+/// conversation language that makes every other one `Some`: that sentence is
+/// said in all of them, so even the "+ New agent" row opens on one paragraph.
+///
+/// The exception is `ResumeSession`, and it is the reason the `Option` was
+/// worth keeping. A prompt rides as the agent's positional argument and both
+/// harnesses **submit** it as the session's first message rather than leaving
+/// it in the composer — which is right for a session that is starting and wrong
+/// for one that is being picked up. A resumed conversation already has
+/// somebody's words in it, and a paragraph about which language to speak,
+/// pushed into it by the app the moment it opens, would be this app talking
+/// over the person whose session it is. Whatever was settled in there was
+/// settled before this window existed.
 pub fn build(
     intent: &Intent,
     delivery: SkillDelivery,
@@ -593,6 +601,12 @@ pub fn build(
     text: SkillText,
     languages: &Languages,
 ) -> Option<String> {
+    // Nothing at all for a resumed session, before any of the paragraphs below
+    // are composed: see this function's own doc for why a prompt is the one
+    // thing that must not reach it.
+    if matches!(intent, Intent::ResumeSession { .. }) {
+        return None;
+    }
     // The language rules come first, before the work rather than after it, for
     // the reason `stages` gives about a skill body: what is said last can be
     // pushed off the top of what the agent reads first by 7 KB of process, and
@@ -669,6 +683,11 @@ fn body(
         Intent::RepairTracker { dir, bd_version, command, stderr } => {
             Some(repair_tracker(dir, bd_version, command, stderr))
         }
+        // Unreachable through `build`, which refuses this intent a prompt
+        // before it composes anything; stated all the same, because the match
+        // is exhaustive and the next variant added to `Intent` has to meet a
+        // decision rather than a wildcard.
+        Intent::ResumeSession { .. } => None,
         Intent::Setup => Some(setup(delivery, skills, facts)),
         Intent::Run { settings, reports, batch, remove_worktrees } => {
             Some(run(settings, reports, *batch, *remove_worktrees, delivery, skills))
@@ -1694,6 +1713,42 @@ mod tests {
         assert!(text.contains("ask me what is wrong"), "{text}");
         assert!(text.contains("commit it"), "{text}");
         assert!(text.contains("stays closed"), "{text}");
+    }
+
+    #[test]
+    fn a_resumed_session_is_handed_no_prompt_at_all() {
+        // The one intent `build` answers `None` for, and the reason is that a
+        // prompt is not an opening remark here: both harnesses submit the
+        // positional argument as the session's first message, and this session
+        // already has somebody's words in it. Even the conversation-language
+        // paragraph — which reaches every other intent, "+ New agent"
+        // included — would be the app typing into a conversation of theirs.
+        //
+        // Both languages, because the paragraphs are what would otherwise make
+        // this `Some` whatever the work says.
+        //
+        // Both verbs too: a fork opens on a conversation that already has
+        // somebody's words in it exactly as a resume does, so the refusal
+        // cannot be written against `fork == false`.
+        for (languages, fork) in
+            [(english(), false), (english(), true), (russian(), false), (russian(), true)]
+        {
+            let built = build(
+                &Intent::ResumeSession {
+                    id: "9f1c0a2e".into(),
+                    cwd: "/p/.worktrees/smetana-0cj".into(),
+                    title: Some("Move the card".into()),
+                    fork,
+                },
+                SkillDelivery::PluginDir,
+                ImageDelivery::InPrompt,
+                &skills(),
+                Some(FACTS),
+                every_skill(),
+                &languages,
+            );
+            assert_eq!(built, None, "{languages:?} put a prompt on a resumed session (fork: {fork})");
+        }
     }
 
     #[test]

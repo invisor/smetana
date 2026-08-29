@@ -807,6 +807,7 @@ const GALLERY_SESSIONS = [
     id: '3a7e5b10-1c2d-4e3f-9a8b-7c6d5e4f3a2b',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana/3a7e5b10.jsonl',
     cwd: '/Users/you/dev/smetana',
+    cwdExists: true,
     branch: 'develop',
     title: 'Why does the scope bar count dirty files it cannot see',
     lastRole: 'user',
@@ -821,6 +822,7 @@ const GALLERY_SESSIONS = [
     id: '9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana/9f1c0a2e.jsonl',
     cwd: '/Users/you/dev/smetana',
+    cwdExists: true,
     branch: 'main',
     title:
       'Talk to me in Russian: everything you say in this project, and keep the commit messages in Russian too',
@@ -837,6 +839,10 @@ const GALLERY_SESSIONS = [
     id: '5d2f8c41-9b0a-4c1d-8e7f-6a5b4c3d2e1f',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana--worktrees-smetana-oln/5d2f8c41.jsonl',
     cwd: '/Users/you/dev/smetana/.worktrees/smetana-oln-sessions-tab-disk-history',
+    /* The worktree was removed when its task merged and the transcript stayed
+       behind, which is what greys this card's two launching buttons — the one
+       state of them the other five fixtures cannot show. */
+    cwdExists: false,
     branch: 'feature/smetana-oln-sessions-tab-disk-history',
     title: 'Implement the front-end half of the sessions tab',
     lastRole: 'assistant',
@@ -852,6 +858,7 @@ const GALLERY_SESSIONS = [
     id: 'c81b0e39-4a5f-4b6c-9d0e-1f2a3b4c5d6e',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana-src-tauri/c81b0e39.jsonl',
     cwd: '/Users/you/dev/smetana/src-tauri',
+    cwdExists: true,
     branch: null,
     title: 'Check whether the sidecar digest matches the pinned release',
     lastRole: 'user',
@@ -866,6 +873,7 @@ const GALLERY_SESSIONS = [
     id: 'e4a90d77-2b3c-4d5e-8f90-1a2b3c4d5e6f',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana/e4a90d77.jsonl',
     cwd: '/Users/you/dev/smetana',
+    cwdExists: true,
     branch: 'main',
     title: null,
     lastRole: null,
@@ -880,6 +888,7 @@ const GALLERY_SESSIONS = [
     id: '7b6a5948-3c2d-4e1f-9a0b-8c7d6e5f4a3b',
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana/7b6a5948.jsonl',
     cwd: '/Users/you/dev/smetana',
+    cwdExists: true,
     branch: 'staging',
     title: 'Port the branch list to the design system',
     lastRole: 'assistant',
@@ -903,13 +912,17 @@ const GALLERY_SESSIONS = [
 
    The second row starts open, so the opened card is on screen without anybody
    having to find and press a chevron in four theme and density combinations.
+   The third starts open too, and for the same reason one card further on: its
+   working directory is gone, so it is where the refused launching verbs — both
+   buttons greyed, with the one reason they share written once under them — can
+   be seen without pressing anything.
 
    `action` is answered with the same copy policy the app keeps — literally the
    same, `useCopyFeedback`, rather than a second writing of it — and with
    nothing at all for the four verbs that reach a desktop or a disk: a gallery
    has neither, and the menu opening, walking and closing is what there is to
    check here. */
-const openSessions = ref([GALLERY_SESSIONS[1].id])
+const openSessions = ref([GALLERY_SESSIONS[1].id, GALLERY_SESSIONS[2].id])
 
 const toggleSession = (id) => {
   const at = openSessions.value.indexOf(id)
@@ -924,6 +937,11 @@ const {
 } = useCopyFeedback(copyText)
 
 const onSessionAction = ({ kind, session }) => {
+  /* Everything that is not a copy is left alone, the two launching verbs among
+     them: a gallery has no worker to start a session in, and a press that did
+     nothing is the honest answer where a fabricated agent row would not be.
+     What is checkable here is the rows and the buttons — that they are drawn,
+     greyed and explained — which is the half a `.vue` file keeps to itself. */
   if (!isCopyKind(kind)) return
   return sessionCopyFeedback(session?.id ?? null, copyPayload(kind, session), copyVerbNoun(kind))
 }
@@ -2978,13 +2996,21 @@ const menuTargetStyle = {
           @action="onSessionAction"
         />
       </div>
-      <!-- The two states of an opened card the list above cannot show at once.
-           The first is a session nobody said anything in: its prompt block
-           carries the sentence that stands in for a first prompt, which is the
-           only place that string appears. The second is a card whose menu is
-           frozen while a delete runs against it — every row greyed, which is
-           the state the app draws for the moment between Delete and the row
-           leaving the list. -->
+      <!-- The three states of an opened card the list above cannot show at
+           once. The first is a session nobody said anything in: its prompt
+           block carries the sentence that stands in for a first prompt, which
+           is the only place that string appears. The second is a card frozen
+           while a delete runs against it — every row of the menu greyed and the
+           two launching buttons with them, and no reason under either, since a
+           freeze is a moment rather than a refusal. That is the state the app
+           draws between Delete and the row leaving the list. The third is a project set to an agent that
+           cannot pick a session up by id: both launching verbs are refused for
+           the whole project rather than for this session, and the card says
+           which of the refusals it is — two lines here, since the harness is
+           asked two questions and answers each in its own words. The other
+           refusal — a working directory that has gone — is the third card of
+           the list above, where the fixture carries `cwdExists: false` and the
+           one reason the two verbs share is written once. -->
       <div :style="{ width: '340px', border: 'var(--border-w) solid var(--border)' }">
         <SessionRow :session="GALLERY_SESSIONS[4]" :now="GALLERY_SESSION_NOW" expanded />
         <SessionRow
@@ -2993,6 +3019,13 @@ const menuTargetStyle = {
           separated
           expanded
           busy
+        />
+        <SessionRow
+          :session="GALLERY_SESSIONS[5]"
+          :now="GALLERY_SESSION_NOW"
+          agent="codex"
+          separated
+          expanded
         />
       </div>
       <!-- What the tab draws for a project whose disk holds no transcript at
