@@ -381,11 +381,12 @@ function fixtureIssues() {
 
 /* The Sessions tab's fixture: Claude Code transcripts as the worker reports
    them, field for field with the real `sessions_list`. Six rows, each one a
-   case the row has to draw and none of them a repeat of another: a session with
-   subagents and one without, a long title that has to ellipsise, a session out
-   of a worktree on a branch of its own, one with no branch at all, one nobody
-   has titled because the transcript holds no human message, and one so recent
-   the time label is not measured in hours.
+   case the row has to draw and none of them a repeat of another: a session
+   Claude Code titled itself, whose `title` and `firstPrompt` are two different
+   sentences, a session with subagents and one without, a long title that has to
+   ellipsise, a session out of a worktree on a branch of its own, one with no
+   branch at all, one nobody has titled because the transcript holds no human
+   message, and one so recent the time label is not measured in hours.
 
    Built per call rather than written out as constants, and the times are
    offsets from now: a fixture with dates in it reads "2y ago" a year after
@@ -421,7 +422,15 @@ function mockSessions(project) {
       cwd: project,
       cwdExists: true,
       branch: 'main',
-      title: 'Talk to me in Russian: everything you say in this project, and keep the commit messages in Russian too',
+      /* The case the second field exists for, and the one the real folder is
+         mostly made of: Claude Code titled the session itself, so the row says
+         what it was about while the card below still says what the person
+         opened with. The two are deliberately nothing like each other here —
+         a fixture where they matched would let a card that had gone back to
+         drawing the title look correct. */
+      title: 'Sessions tab reads Claude Code transcripts off disk',
+      firstPrompt:
+        'Talk to me in Russian: everything you say in this project, and keep the commit messages in Russian too',
       lastRole: 'assistant',
       lastText:
         'Done. The three columns are drawn from the tracker now, and the fixture that used to stand in for the log pane is gone with it.',
@@ -437,6 +446,7 @@ function mockSessions(project) {
       cwdExists: true,
       branch: 'develop',
       title: 'Why does the scope bar count dirty files it cannot see',
+      firstPrompt: 'Why does the scope bar count dirty files it cannot see',
       lastRole: 'user',
       lastText: 'Leave it for now, file it as a task instead.',
       messages: 12,
@@ -452,7 +462,15 @@ function mockSessions(project) {
          here, and the row says so by refusing the resume. */
       cwdExists: false,
       branch: 'feature/smetana-oln-sessions-tab-disk-history',
-      title: 'Implement the front-end half of the sessions tab',
+      /* The long one, which the row has to ellipsise and the card has to wrap.
+         No generated title in this transcript, so both fields hold the one
+         string — the shape every row had before that record was read, and now
+         the smaller half of the folder rather than the usual case: the row
+         above is the one there are more of. */
+      title:
+        'Implement the front-end half of the sessions tab, the row and the opened card, against the fixtures alone',
+      firstPrompt:
+        'Implement the front-end half of the sessions tab, the row and the opened card, against the fixtures alone',
       lastRole: 'assistant',
       lastText:
         'Both gates are green. The row draws in all four theme and density combinations; what is left is the pass over the gallery.',
@@ -471,6 +489,7 @@ function mockSessions(project) {
          fewer. */
       branch: null,
       title: 'Check whether the sidecar digest matches the pinned release',
+      firstPrompt: 'Check whether the sidecar digest matches the pinned release',
       lastRole: 'user',
       lastText: 'It does. Nothing to do.',
       messages: 6,
@@ -488,6 +507,7 @@ function mockSessions(project) {
       cwdExists: true,
       branch: 'main',
       title: null,
+      firstPrompt: null,
       lastRole: null,
       lastText: null,
       messages: 0,
@@ -502,6 +522,7 @@ function mockSessions(project) {
       cwdExists: true,
       branch: 'staging',
       title: 'Port the branch list to the design system',
+      firstPrompt: 'Port the branch list to the design system',
       lastRole: 'assistant',
       lastText: 'The rebase glyph is git-graph; lucide ships no rebase mark and that is the one about the shape of the history.',
       messages: 97,

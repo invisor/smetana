@@ -15,6 +15,11 @@ const session = (id, over = {}) => ({
   cwdExists: true,
   branch: 'main',
   title: 'A conversation',
+  /* Its own field rather than the title, and different from it on purpose: the
+     worker titles a row with Claude Code's generated line when there is one, so
+     a fixture holding the same string twice would agree with a build that had
+     gone back to reading `title` for the opened card. */
+  firstPrompt: 'What happened to the scope bar count',
   lastRole: 'assistant',
   lastText: 'Done.',
   messages: 12,

@@ -183,13 +183,22 @@ export const FIRST_PROMPT_HEADING = 'First prompt'
 
 /* The whole of the first thing the person typed, for the opened card.
 
-   The same record the title is taken from, and deliberately: `human_text` in
-   the worker walks past the hooks, the skill bodies and the slash-command
-   echoes to find it, and there is exactly one answer to "what did they open
-   with". What differs is the setting. The title is one line with an ellipsis,
-   because a list whose rows are each as tall as their opening remark cannot be
-   scanned; this wraps to as many lines as it takes, because the card was opened
-   on purpose.
+   Its own field, and that is the load-bearing part: this used to read `title`,
+   on the premise that the two came from one record and differed only in their
+   setting. They no longer do. The worker titles a row with Claude Code's
+   generated `ai-title` when the transcript carries one, so `title` answers what
+   the session was about, while this block asks what the person opened with —
+   and a block captioned "First prompt" showing a sentence the person never
+   typed is a card that lies. `human_text` in the worker is still what finds it,
+   walking past the hooks, the skill bodies and the slash-command echoes; it is
+   now carried across as `firstPrompt` rather than borrowed from the title.
+
+   The two hold the same string only where a transcript carries no generated
+   title, and that is the minority: 218 of this machine's 313 transcripts have
+   one, so the row and this block say different things on about seven rows in
+   ten. Stating the direction is the point. This function read `title` in the
+   first place because somebody took the divergence to be rare, and a reader who
+   picks that belief up again will reach for `title` here again.
 
    How much of it there is to show is the worker's `CLIP` — 240 characters over
    the wire, and no more is asked for here. Fetching the untruncated prompt
@@ -199,9 +208,11 @@ export const FIRST_PROMPT_HEADING = 'First prompt'
 
    Null when the transcript holds no human message at all, which is an ordinary
    outcome — a session opened and abandoned — and is why the component has
-   something else to draw rather than an empty frame. */
+   something else to draw rather than an empty frame. A session can now have a
+   generated title and nothing typed at once, and that case has to come out
+   null here rather than falling back to the title. */
 export function firstPrompt(session) {
-  return oneLine(session?.title)
+  return oneLine(session?.firstPrompt)
 }
 
 /* What is said when there is none. A sentence rather than a blank box: an empty

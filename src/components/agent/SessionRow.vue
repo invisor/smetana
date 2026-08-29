@@ -171,17 +171,19 @@ const linesStyle = {
 }
 const controlsStyle = { flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }
 
-/* The title is prose — the person's own first sentence — so it is sans, and one
-   line with an ellipsis: a conversation opened with a paragraph as readily as
-   with a question, and a list whose rows are each as tall as their opening
-   remark cannot be scanned.
+/* The title is prose — what the session was about, in Claude Code's own
+   generated sentence where there is one and in the person's opening words where
+   there is not — so it is sans, and one line with an ellipsis: either can be a
+   paragraph as readily as a question, and a list whose rows are each as tall as
+   their opening remark cannot be scanned.
 
    It keeps that one line when the card is open, which is deliberate rather than
-   an omission. The opened card carries the whole of the first prompt in a block
-   of its own below, so letting this line wrap as well would be the same words
-   twice; and holding it at one line is what stops the row's top edge — and
+   an omission: holding it at one line is what stops the row's top edge — and
    every row above it — from moving when somebody opens a card halfway down the
-   column. */
+   column. The block below is a different sentence now rather than the same
+   words twice, since it answers what the person typed and this answers what the
+   session was about, but the reason for the one line was never the repetition
+   and does not go with it. */
 const titleStyle = {
   font: 'var(--weight-medium) var(--text-sm)/var(--leading-snug) var(--font-sans)',
   color: 'var(--text-primary)',

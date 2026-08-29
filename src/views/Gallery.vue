@@ -795,10 +795,11 @@ const agentRows = [
    one about every other thing on it — and a slot here is a case, as the next
    paragraph spends all six of them.
 
-   Six rows and no two of them the same case: subagents and none, a title long
-   enough to ellipsise, a session out of a worktree, one with no branch, and one
-   with neither title nor last message — the row's two fallbacks, which appear
-   nowhere else. Newest first, as the store sorts them: this page draws rows
+   Six rows and no two of them the same case: a session Claude Code titled
+   itself, whose title and first prompt are two different sentences, subagents
+   and none, a title long enough to ellipsise, a session out of a worktree, one
+   with no branch, and one with neither title nor last message — the row's two
+   fallbacks, which appear nowhere else. Newest first, as the store sorts them: this page draws rows
    rather than the store, so the order is written out here by hand. */
 const GALLERY_SESSION_NOW = Date.parse('2026-08-28T12:00:00Z')
 const galleryAt = (ms) => new Date(GALLERY_SESSION_NOW - ms).toISOString()
@@ -810,6 +811,7 @@ const GALLERY_SESSIONS = [
     cwdExists: true,
     branch: 'develop',
     title: 'Why does the scope bar count dirty files it cannot see',
+    firstPrompt: 'Why does the scope bar count dirty files it cannot see',
     lastRole: 'user',
     lastText: 'Leave it for now, file it as a task instead.',
     messages: 1,
@@ -824,7 +826,13 @@ const GALLERY_SESSIONS = [
     cwd: '/Users/you/dev/smetana',
     cwdExists: true,
     branch: 'main',
-    title:
+    /* The row this page opens on load, and it is this one deliberately: Claude
+       Code titled the session itself, so the line at the top and the block
+       inside say two different things. A card drawn from a row whose title and
+       first prompt matched would look right whether it read the right field or
+       the wrong one. */
+    title: 'Sessions tab reads Claude Code transcripts off disk',
+    firstPrompt:
       'Talk to me in Russian: everything you say in this project, and keep the commit messages in Russian too',
     lastRole: 'assistant',
     lastText:
@@ -844,7 +852,13 @@ const GALLERY_SESSIONS = [
        state of them the other five fixtures cannot show. */
     cwdExists: false,
     branch: 'feature/smetana-oln-sessions-tab-disk-history',
-    title: 'Implement the front-end half of the sessions tab',
+    /* The long one the row has to ellipsise, and a transcript with no generated
+       title, so both fields hold the one string — the shape every row had
+       before that record was read. */
+    title:
+      'Implement the front-end half of the sessions tab, the row and the opened card, against the fixtures alone',
+    firstPrompt:
+      'Implement the front-end half of the sessions tab, the row and the opened card, against the fixtures alone',
     lastRole: 'assistant',
     lastText:
       'Both gates are green. The row draws in all four theme and density combinations; what is left is the pass over the gallery.',
@@ -861,6 +875,7 @@ const GALLERY_SESSIONS = [
     cwdExists: true,
     branch: null,
     title: 'Check whether the sidecar digest matches the pinned release',
+    firstPrompt: 'Check whether the sidecar digest matches the pinned release',
     lastRole: 'user',
     lastText: 'It does. Nothing to do.',
     messages: 6,
@@ -876,6 +891,7 @@ const GALLERY_SESSIONS = [
     cwdExists: true,
     branch: 'main',
     title: null,
+    firstPrompt: null,
     lastRole: null,
     lastText: null,
     messages: 0,
@@ -891,6 +907,7 @@ const GALLERY_SESSIONS = [
     cwdExists: true,
     branch: 'staging',
     title: 'Port the branch list to the design system',
+    firstPrompt: 'Port the branch list to the design system',
     lastRole: 'assistant',
     lastText:
       'The rebase glyph is git-graph; lucide ships no rebase mark and that is the one about the shape of the history.',

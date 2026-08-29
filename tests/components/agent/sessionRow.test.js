@@ -242,16 +242,26 @@ describe('the row\'s meta line', () => {
 })
 
 describe('what an opened card carries', () => {
-  /* The first prompt and the title come from one record — `human_text` in the
-     worker walks past the hooks, the skill bodies and the slash-command echoes
-     to find the one thing the person actually typed. What differs is the
-     setting: the title is one line with an ellipsis so the list can be scanned,
-     and this wraps to as many lines as it takes because the card was opened on
-     purpose. */
+  /* The block has its own field, and these tests are written against it rather
+     than against the title. They used to be the same field on the premise that
+     the title and the prompt came from one record and differed only in their
+     setting; the worker now titles a row with Claude Code's generated
+     `ai-title` where the transcript carries one, so the title answers what the
+     session was about and this answers what the person opened with. `firstPrompt`
+     is still `human_text`'s work — past the hooks, the skill bodies and the
+     slash-command echoes — carried over in a field of its own. */
   it('shows the whole of what the person opened with', () => {
-    expect(firstPrompt({ title: 'Why does the scope bar count dirty files' })).toBe(
+    expect(firstPrompt({ firstPrompt: 'Why does the scope bar count dirty files' })).toBe(
       'Why does the scope bar count dirty files'
     )
+  })
+
+  /* The case that made the second field necessary, and the one thing here no
+     other test can see: the row is titled and the card still has nothing to
+     quote. Reading `title` for this block would put a sentence the person never
+     typed under a caption that says they did. */
+  it('does not borrow the title when the person typed nothing', () => {
+    expect(firstPrompt({ title: 'Task menu in DONE', firstPrompt: null })).toBe(null)
   })
 
   /* Collapsed the same way the title is, and for the same reason: a message
@@ -259,7 +269,7 @@ describe('what an opened card carries', () => {
      tall the card is. The worker has already done this on the way over; the
      guard is against a record that arrives unclipped. */
   it('collapses whatever line breaks arrived with it', () => {
-    expect(firstPrompt({ title: 'Talk to me in Russian:\n\n   everything' })).toBe(
+    expect(firstPrompt({ firstPrompt: 'Talk to me in Russian:\n\n   everything' })).toBe(
       'Talk to me in Russian: everything'
     )
   })
@@ -269,8 +279,8 @@ describe('what an opened card carries', () => {
      rather than an empty frame under a caption, which would read as a block
      that failed. */
   it('answers with nothing for a session nobody said anything in', () => {
-    expect(firstPrompt({ title: null })).toBe(null)
-    expect(firstPrompt({ title: '   ' })).toBe(null)
+    expect(firstPrompt({ firstPrompt: null })).toBe(null)
+    expect(firstPrompt({ firstPrompt: '   ' })).toBe(null)
     expect(firstPrompt(null)).toBe(null)
     expect(NO_FIRST_PROMPT).toBe('Nothing was typed in this session.')
   })

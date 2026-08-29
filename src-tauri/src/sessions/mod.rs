@@ -38,25 +38,37 @@
 //! rule a folder out, and `model::folder_could_hold` records why even that is
 //! safe.
 //!
-//! **The title is the first thing the person typed, and it is not a `summary`
-//! record.** Claude Code writes `summary` records, and there are none in a
-//! fresh file — 0 of the last 25 checked — so a title taken from them would be
-//! absent from every recent session. What is there is the conversation itself,
-//! and the first `user` record is usually not a person talking: it is a hook's
-//! output, a skill's body carried on a `user` record with `isMeta`, or the echo
-//! of a slash command wrapped in `<command-name>`. `model::human_text` is that
-//! rule and carries the reasoning.
+//! **The title is Claude Code's own `ai-title` when the file has one, and the
+//! first thing the person typed when it does not.** It is not a `summary`
+//! record: Claude Code writes those, and there are none in a fresh file — 0 of
+//! the last 25 checked — so a title taken from them would be absent from every
+//! recent session.
 //!
-//! Two things found on disk that this deliberately does **not** use, recorded
-//! so the next person does not have to find them again. Recent transcripts
-//! carry an `ai-title` record — a generated one-line title of the whole
-//! session, in 210 of this project's 276 files — which reads far better than
-//! the first human message when the person opens every session with the same
-//! standing instruction, as this one does; using it is a change to what `title`
-//! means and so a decision rather than an implementation detail. And subagent
-//! turns have moved out of the transcript into `<session id>/subagents/`, which
-//! `read::subagents` does have to know about, because otherwise the count is
-//! zero for every session written by a current Claude Code.
+//! The person's first words were the whole rule until the `ai-title` record was
+//! measured, and the measurement is what changed it. A person who opens nearly
+//! every session with the same standing instruction gets the same title on
+//! nearly every row: of 299 sessions here, **142 carried one identical phrase**
+//! and there were 122 distinct titles between them, so the column read as one
+//! sentence repeated and a row was told apart only by its last message. The
+//! generated record is in 211 of those files and says what the session was
+//! about; taking it gives **214 distinct titles**, and the commonest one is
+//! down to 60. `model::generated_title` is that rule, `model::human_text` is
+//! the fallback, and both carry their own reasoning — the first `user` record
+//! is usually not a person talking at all, but a hook's output, a skill's body
+//! carried with `isMeta`, or the echo of a slash command.
+//!
+//! It is bought inside the existing budget rather than paid for: the record
+//! sits tens of kilobytes into a file but only 7 to 88 *lines* in, well within
+//! the head the forward pass already parses, so `sessions_list` takes the same
+//! 330–355 ms it did before. `read::HEAD_LINES` holds those measurements, and
+//! a file that ever carried the record past that line falls back to the person
+//! rather than being chased for it.
+//!
+//! One thing found on disk that this had to learn about, recorded so the next
+//! person does not have to find it again: subagent turns have moved out of the
+//! transcript into `<session id>/subagents/`, which `read::subagents` does have
+//! to know about, because otherwise the count is zero for every session written
+//! by a current Claude Code.
 
 //! `act.rs` is the deliberate exception to that, and its own header says why:
 //! everything in it is a verb somebody pressed, so each answers with a sentence
