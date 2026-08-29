@@ -279,6 +279,16 @@ pub fn parking_note(question: &str) -> String {
     format!("parked: {question}")
 }
 
+/// Is this leftover reviewed work rather than work in flight?
+///
+/// The predicate exists for one caller and one branch: on the unanswered
+/// question `park_claims` takes the `in_progress` claims and nothing else, so
+/// the reviewed half has to be released beside it, and asking for it by name
+/// here is what keeps `ready_to_merge` a string this file spells once.
+pub fn is_reviewed(left: &Leftover) -> bool {
+    left.status == READY_TO_MERGE
+}
+
 /// How one thing a batch left claimed is given back, as a patch for the
 /// tracker — or `None` for the one leftover that is never given back.
 ///
@@ -297,6 +307,10 @@ pub fn parking_note(question: &str) -> String {
 ///
 /// A status this rule has never seen is left alone too: `left_behind` produces
 /// only the two above, and guessing at a third is not this function's to do.
+/// Which *endings* this is applied to is `service::drive`'s decision and is
+/// made there: a batch that handed its work back is still alive with a person
+/// in it and is not released at all, and on an unanswered question only the
+/// reviewed half is, `park_claims` owning the rest.
 /// The note is an ordinary one — deliberately not the `parked:` or `resolved:`
 /// the `running-tasks` skill writes, since neither happened here — and it names
 /// the batch, its actor and, where the app could find them, the branch the work
@@ -333,9 +347,12 @@ pub fn release(
     };
     Some(IssuePatch {
         status,
-        // An empty assignee is how bd clears the field — checked against the
-        // binary rather than assumed, since `bd update -a ""` could as easily
-        // have been a no-op or an error.
+        // An empty assignee is how bd clears the field. Checked against the
+        // pinned sidecar rather than assumed, since `bd update -a ""` could as
+        // easily have been a no-op or an error: on a claimed issue,
+        // `bd update <id> -s open -a "" --json` came back `"status": "open"`
+        // with the `assignee` key **gone from the object** — bd omits an empty
+        // field rather than emitting one — and so did the `bd list` after it.
         assignee: Some(String::new()),
         append_notes: Some(format!("{said}{found}")),
         ..Default::default()
@@ -1085,6 +1102,26 @@ mod tests {
         let patch = release(&left, 3, "smetana-run-10", None).expect("the claim is released");
         assert_eq!(patch.status, None);
         assert_eq!(patch.assignee.as_deref(), Some(""));
+        // The marker rule holds for both notes, not only the returning one: a
+        // reword reaches half of what this function writes and nothing else
+        // was watching this half.
+        let note = patch.append_notes.expect("a note saying what happened");
+        assert!(!note.starts_with("parked:") && !note.starts_with("resolved:"), "{note}");
+        assert!(!note.contains('\n'), "one line: {note}");
+    }
+
+    #[test]
+    fn reviewed_work_is_what_the_question_path_releases_and_nothing_else() {
+        // `park_claims` takes the `in_progress` claims on that branch, so the
+        // two sets have to be disjoint and this is the predicate that says so.
+        let reviewed = Leftover {
+            id: "a".into(),
+            status: "ready_to_merge".into(),
+            lock: false,
+        };
+        let in_flight = Leftover { id: "b".into(), status: "in_progress".into(), lock: false };
+        assert!(is_reviewed(&reviewed));
+        assert!(!is_reviewed(&in_flight), "parking owns this one");
     }
 
     #[test]

@@ -42,6 +42,22 @@ first repository's answer, or the least of them, would bury the branch somebody 
 from `[project].repos` that do not have it, in the order those repositories were given. An empty
 `missing_in` means every one of them has it.
 
+**There is a third reader of those same refs, and it asks a narrower question**: `task_work(project,
+id)` answers where one tracker task's work was left — its branch, and the commit at the tip of it —
+for the note a run writes when it gives a dead batch's claim back (`runs::service::release_claims`,
+smetana-0t4). It is the only place in this file that knows anything about the tracker, and what it
+knows is one convention rather than a lookup: `provisioning` requires a task's branch to be
+`<fix|feature>/<id>-<short-kebab-title>`, with the id in the slug precisely so that a branch found
+afterwards can be *proved* to belong to the task looking for it. `task_branch` encodes exactly that
+and is pure over `(name, sha)` pairs — the last path segment is the id, or the id and a hyphen, so
+`fix/smetana-1ab-follow-up-to-smetana-0t4` and `fix/smetana-0t4x-…` are both refused. The commit
+comes from the ref itself: `parse_packed_heads` keeps each packed branch's sha beside its name
+(`parse_packed_refs` is now a projection of that one parser rather than a second pass over the same
+lines), a loose ref file is read for its object name and wins over the packed copy the way it does
+for git itself, and a symbolic ref is not a commit and answers nothing. The leaf property above is
+untouched: the caller passes a `&Path` per repository and walks `[project].repos` itself, so nothing
+here reads project configuration, and a folder outside git simply has no work to name.
+
 **`git.rs` no longer answers the dialog.** `runs::commands::target_branches` does, because "what may
 this run merge into" is a question about a run rather than about one directory: it reads
 `.smetana/project.toml` itself, through `config::load`, and walks `[project].repos`, calling

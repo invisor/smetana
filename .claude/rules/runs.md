@@ -177,19 +177,29 @@ unmoved board twice running — a dying batch that got as far as claiming one ta
 board moved" is stricter here than progress is in `next_action`, deliberately: this rule ends runs,
 so the closed and parked counts count too.
 
-`queue::release` is the other, and it runs after **every** batch ending rather than only the one that
-parks: `in_progress` goes back to `open` with the claim dropped, `ready_to_merge` keeps its status
-and loses only the claim, and the merge lock is never touched at all — releasing it behind a batch
-that may still be alive is releasing it in the middle of somebody's merge. Returned rather than
-parked, and that is the whole distinction: parking is for a task carrying a question to a person, and
-this one carries none, so parking it would hide it from every run that comes after. The note is an
-ordinary one for the same reason — a `parked:` line puts an answer in the trail that nobody gave — and
-it names the batch, its actor and, where `git::task_work` could find them, the branch the work was
-left on and the commit at its tip. That last part is the one thing the app can say that nobody else
-will: work committed on a branch and never merged is invisible to the board. The unanswered question
-is the one ending that does not release, and it is the other half of the rule rather than an
-exception — `park_claims` puts the question in the note of everything that batch claimed, and a
-release running first would leave it nothing to park.
+`queue::release` is the other, and it runs after **every ending that ended the session** rather than
+only the one that parks: `in_progress` goes back to `open` with the claim dropped, `ready_to_merge`
+keeps its status and loses only the claim, and the merge lock is never touched at all — releasing it
+behind a batch that may still be alive is releasing it in the middle of somebody's merge. Returned
+rather than parked, and that is the whole distinction: parking is for a task carrying a question to a
+person, and this one carries none, so parking it would hide it from every run that comes after. The
+note is an ordinary one for the same reason — a `parked:` line puts an answer in the trail that
+nobody gave — and it names the batch, its actor and, where `git::task_work` could find them, the
+branch the work was left on and the commit at its tip. That last part is the one thing the app can
+say that nobody else will: work committed on a branch and never merged is invisible to the board.
+
+**Two endings are not "the session ended", and each is refused for its own reason.** A hand-back
+leaves the session alive with a person in it — that is what the mode is for — so nothing of that
+batch is released: the very sentence that keeps the merge lock out of `release` applies to a task
+claim word for word, and in Solo the freed task would land back in `ready` and send a second session
+out on the work somebody is at that moment still talking about. The unanswered question is the other,
+and it is a split rather than a refusal: `park_claims` owns everything the batch holds `in_progress`,
+since those are the claims the question is about and a release running first would leave it nothing
+to park, while the **reviewed** half is released beside it — `queue::claimed_by` is `in_progress` and
+only that, so reviewed work would otherwise sit claimed under a session the run has just killed,
+which on the `Stop` arm means until some later run's Phase R. The two sets cannot overlap, which is
+what makes the order safe; `queue::is_reviewed` is the predicate, so `ready_to_merge` stays a string
+that file spells once.
 
 `usage.rs` is the piece the runs design deliberately left out and then took back. Reading
 `claude -p "/usage"` is a parse of somebody else's prose that can break silently, which is why it was
@@ -333,7 +343,8 @@ by failing to take it. The rest of that reading is acted on, by `release_claims`
 which Phase R clears with the worktrees in front of it, while here the run is holding the actor, the
 session and the moment the batch ended, and nobody else will ever know as much. So the loop makes two
 kinds of bd write and no others — `park_claims` on the unanswered path, one batch's `in_progress`
-claims to `parked` with the question as the note, and `release_claims` after every other ending.
+claims to `parked` with the question as the note, and `release_claims` behind every session that
+ended, the reviewed half of that same unanswered batch included.
 
 **Every ending the loop task reaches goes through one `finish(...)` in `service.rs`, and that
 consolidation is the feature.** A dozen exits into `RunState::Stopped` is how the next ending
@@ -422,7 +433,7 @@ writer being alive says only that the app is; the `writer` stays the signal for 
 the question is whether the run still exists to finish what it took. Both readings are the skills' to
 make and not this side's: the app never releases the lock — the loop's two bd writes are
 `park_claims` on the unanswered path, which parks a claim rather than freeing one, and
-`release_claims` after every other ending, which refuses the lock explicitly (`queue::release`
+`release_claims` behind every session that ended, which refuses the lock explicitly (`queue::release`
 answers nothing for it) — so the lock is released by `smetana:running-tasks` Phase R or by nobody.
 
 On the front end, `runs.js` is deliberately small — a file read with no worker behind it, freshness

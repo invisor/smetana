@@ -899,22 +899,45 @@ async fn drive(
             empties = 0;
         }
 
-        // Give back what this batch left claimed, after **every** ending and
-        // not only the one that parks (smetana-0t4). A batch that exited with
-        // zero having left a task `in_progress` used to be believed: the board
-        // was not read, the claim stayed under a dead actor, and the next
-        // batches walked past work nobody was doing until somebody cleared it
-        // by hand in the morning. `queue::release` is the rule — `in_progress`
-        // back to `open`, `ready_to_merge` unclaimed and left reviewed, the
-        // merge lock never touched.
+        // Give back what this batch left claimed, after every ending that
+        // ended the *session* and not only the one that parks (smetana-0t4). A
+        // batch that exited with zero having left a task `in_progress` used to
+        // be believed: the board was not read, the claim stayed under a dead
+        // actor, and the next batches walked past work nobody was doing until
+        // somebody cleared it by hand in the morning. `queue::release` is the
+        // rule — `in_progress` back to `open`, `ready_to_merge` unclaimed and
+        // left reviewed, the merge lock never touched.
         //
-        // The one ending that does not release is the unanswered question, and
-        // it is not an exception to the rule so much as the other half of it:
-        // `park_claims` below puts the question in the note of everything the
-        // batch claimed, and a release running first would leave it nothing to
-        // park (smetana-8pe).
-        if !matches!(outcome, Batch::Unanswered { .. }) {
-            release_claims(&tracker, &root, &repos, batch_no, &actor, &leftovers).await;
+        // Two endings are not that, and each is refused for its own reason.
+        match &outcome {
+            // A hand-back is the one ending whose session is **still alive with
+            // a person in it** — that is what the mode is for, and the arm
+            // below says so where it declines to kill anything. So the same
+            // sentence that keeps the merge lock out of `queue::release` keeps
+            // the whole batch out here: releasing a claim behind a live agent
+            // is releasing it in the middle of the work. In Solo it is worse
+            // than a stray note — the freed task lands back in `ready` and the
+            // very next decision sends a second session out on the task
+            // somebody is at that moment still talking about.
+            Batch::HandedBack => {}
+            // The unanswered question: `park_claims` below owns the claims this
+            // batch is still holding `in_progress`, because those are the ones
+            // the question is about, and a release running first would leave it
+            // nothing to park (smetana-8pe). It owns nothing else, though —
+            // `queue::claimed_by` is `in_progress` and only that — so reviewed
+            // work would otherwise sit claimed under a session this run has
+            // just killed, which on the `Stop` arm means until some later run's
+            // Phase R. That is this task's own defect on the one branch it did
+            // not reach, so the reviewed half is released here and the two sets
+            // cannot overlap.
+            Batch::Unanswered { .. } => {
+                let reviewed: Vec<queue::Leftover> =
+                    leftovers.iter().filter(|left| queue::is_reviewed(left)).cloned().collect();
+                release_claims(&tracker, &root, &repos, batch_no, &actor, &reviewed).await;
+            }
+            Batch::Ended(_) => {
+                release_claims(&tracker, &root, &repos, batch_no, &actor, &leftovers).await;
+            }
         }
 
         let exit = match outcome {
@@ -1155,6 +1178,14 @@ fn outcome_of(batch: &Batch) -> BatchOutcome {
 }
 
 /// Give back what a batch left claimed on the board when it ended.
+///
+/// **Whose leftovers reach here is the caller's decision, and it is not "every
+/// batch".** A batch that handed its work back is still alive with a person in
+/// it, so nothing of its is released — the argument that keeps the merge lock
+/// out of `queue::release` is the same one, and it applies to a task claim word
+/// for word. On an unanswered question only the reviewed half comes here, since
+/// `park_claims` owns everything that batch holds `in_progress`. Every other
+/// ending is a dead session and brings all of its leftovers.
 ///
 /// The rule itself is `queue::release` and it is pure: `in_progress` returns to
 /// `open` unclaimed, `ready_to_merge` keeps its status and loses only the claim,
