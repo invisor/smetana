@@ -118,6 +118,15 @@ pub struct RunReport<'a> {
     pub seconds: u64,
     pub tasks: Option<&'a Tasks>,
     pub batches: &'a [BatchLine],
+    /// Where this run's journal is — the file `journal.rs` wrote a line to at
+    /// every decision the loop made (smetana-7di). `None` when the journal
+    /// could not be opened at all, and the document then says nothing rather
+    /// than naming a path that is not there.
+    ///
+    /// A path and not a link: this document reaches nowhere — no stylesheet, no
+    /// font, no script, no image — which is what makes it safe to hand to a
+    /// sandboxed frame, and a `file:` anchor would be the first exception.
+    pub journal: Option<&'a str>,
 }
 
 /// Malformed is an ordinary outcome, not an error: the batch's tasks still
@@ -320,7 +329,17 @@ pub fn render(report: &RunReport) -> String {
     out.push_str("<div class=\"total\"><span class=\"total-label\">total</span>");
     out.push_str("<span class=\"total-n\">");
     out.push_str(&human(report.seconds));
-    out.push_str("</span></div></div></body></html>");
+    out.push_str("</span></div>");
+    // Under the rule, in the same mono the header's own line is set in — the
+    // document's other identifier. It is the one direction the pair cannot go
+    // by itself: the journal names the report at its last line, and without
+    // this a person holding the document has no way back to the mechanics.
+    if let Some(path) = report.journal {
+        out.push_str("<p class=\"meta\">journal: ");
+        out.push_str(&escape(path));
+        out.push_str("</p>");
+    }
+    out.push_str("</div></body></html>");
     out
 }
 
@@ -724,6 +743,7 @@ mod tests {
             seconds,
             tasks,
             batches,
+            journal: None,
         }
     }
 
@@ -1397,6 +1417,31 @@ mod tests {
             "the notes go through the same rule as a task's account: {html}"
         );
         assert!(html.contains("left no account of itself"), "{html}");
+    }
+
+    #[test]
+    fn the_footer_names_the_journal_this_run_wrote() {
+        // The one link between the two halves of a run's record, and it goes in
+        // this direction because the journal's own last line names the report:
+        // somebody who has the document open has no other way to the mechanics.
+        let path = "/p/.smetana/runs/3/journal-2026-08-29-220109.log";
+        let html = render(&RunReport { journal: Some(path), ..report(8040, None, &[]) });
+
+        assert!(html.contains("journal: /p/.smetana/runs/3/journal-2026-08-29-220109.log"), "{html}");
+        assert!(
+            html.find("class=\"total\"").expect("the footer")
+                < html.find("journal: ").expect("the journal line"),
+            "it belongs under the rule, with the footer"
+        );
+        assert!(!html.contains("<a "), "a path, never a link: this document reaches nowhere");
+    }
+
+    #[test]
+    fn a_run_whose_journal_could_not_be_opened_says_nothing_about_one() {
+        // Naming a path that is not there sends somebody to a file that does
+        // not exist, which is worse than the document being quiet about it.
+        let html = render(&report(8040, None, &[]));
+        assert!(!html.contains("journal"), "{html}");
     }
 
     #[test]
