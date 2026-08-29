@@ -77,7 +77,7 @@ pub async fn sessions_open_log(path: String) -> Result<(), String> {
 ///
 /// The one verb here with nothing to do with `~/.claude/projects`: a working
 /// directory is the project the person opened the app on. Its rule is
-/// `act::open_directory`'s, and it is a rule rather than a shrug — a directory
+/// `act::guard_directory`, and it is a rule rather than a shrug — a directory
 /// with an extension is an application on macOS, and this command does not
 /// launch things.
 #[tauri::command]

@@ -21,8 +21,22 @@
 //! updater plugin and for the same reason: a permission is published to every
 //! window in the app, so the narrow thing to publish is a command of ours that
 //! names its own rule. [`is_transcript`] is that rule for the three verbs about
-//! a transcript, it is pure, and it is pinned by tests in `model.rs`; the
-//! fourth, [`open_directory`], carries the only other one there is.
+//! a transcript, it is pure, and it is pinned by tests in `model.rs`;
+//! [`guard_directory`] is the only other one there is.
+//!
+//! **Each rule is a function, and the act is the one line after it.** The three
+//! verbs that reach the desktop are a guard — [`guard_transcript`] or
+//! [`guard_directory`] — and then the single call that hands the path over.
+//! That seam is not tidiness. `open_path` asks Tauri for nothing; on macOS it
+//! shells out to `/usr/bin/open`, which works exactly as well from a test
+//! binary as from the built app, so a test that called the *verb* on a path its
+//! guard lets through opened a real, empty Finder window on whichever machine
+//! ran `cargo test` — once per run, on a gate this repository runs for every
+//! worker, every review and every merge. They were found stacked by the dozen
+//! over a night's work and, from the same runs, 787 temporary folders still in
+//! `$TMPDIR` (smetana-p9i). The guards answer with the refusal, or with its
+//! absence, and reach nothing outside this process; the tests below ask them,
+//! and ask a verb for a refusal only.
 //!
 //! **The reveal is ours for a different reason**, and it is the one that cost
 //! something: the plugin's own `reveal_item_in_dir` needs no scope and this app
@@ -98,23 +112,34 @@ fn refused_by_system(verb: &str, err: impl std::fmt::Display) -> String {
     format!("The system would not {verb} it: {err}")
 }
 
-/// A session's transcript, handed to whatever the desktop has registered for
-/// it.
+/// Whether a path is a transcript this app may act on, said without acting.
 ///
-/// Guarded by [`is_transcript`] and by the file being a file: a `.jsonl` outside
-/// the projects root is somebody else's, and a *directory* named `x.jsonl`
-/// would otherwise be opened by the branch below this one's rules rather than
-/// by its own.
-pub fn open_transcript(path: &Path, root: &Path) -> Result<(), String> {
+/// [`is_transcript`] and the file being a file: a `.jsonl` outside the projects
+/// root is somebody else's, and a *directory* named `x.jsonl` would otherwise
+/// be opened by the transcript branch's rules rather than by the ones written
+/// for the shape it actually has.
+///
+/// Shared by the two transcript verbs because it is one rule they both read,
+/// and separate from both because that is what lets it be pinned without a
+/// desktop being asked anything — see the header.
+fn guard_transcript(path: &Path, root: &Path) -> Result<(), String> {
     let meta = stat(path, "transcript")?;
     if !meta.is_file() || !is_transcript(path, root) {
         return Err(refusal(path, "a Claude Code transcript"));
     }
+    Ok(())
+}
+
+/// A session's transcript, handed to whatever the desktop has registered for
+/// it. [`guard_transcript`] decides; this is the act.
+pub fn open_transcript(path: &Path, root: &Path) -> Result<(), String> {
+    guard_transcript(path, root)?;
     tauri_plugin_opener::open_path(path, None::<&str>)
         .map_err(|err| refused_by_system("open", err))
 }
 
-/// The directory a session ran in, opened in the platform's file manager.
+/// Whether a path is a working directory this app may show, said without
+/// showing it.
 ///
 /// **Two conditions, and the second is the one worth reading.** It has to be a
 /// directory, which is the obvious half. And it must have **no extension at
@@ -135,11 +160,18 @@ pub fn open_transcript(path: &Path, root: &Path) -> Result<(), String> {
 /// Not asked to be under the projects root, and cannot be: this path is the
 /// project the person opened the app on, which is the opposite end of the disk
 /// from `~/.claude/projects`.
-pub fn open_directory(path: &Path) -> Result<(), String> {
+fn guard_directory(path: &Path) -> Result<(), String> {
     let meta = stat(path, "working directory")?;
     if !meta.is_dir() || path.extension().is_some() {
         return Err(refusal(path, "a session's working directory"));
     }
+    Ok(())
+}
+
+/// The directory a session ran in, opened in the platform's file manager.
+/// [`guard_directory`] decides; this is the act.
+pub fn open_directory(path: &Path) -> Result<(), String> {
+    guard_directory(path)?;
     tauri_plugin_opener::open_path(path, None::<&str>)
         .map_err(|err| refused_by_system("open", err))
 }
@@ -157,10 +189,7 @@ pub fn open_directory(path: &Path) -> Result<(), String> {
 /// already running. So this verb is stated here, behind the same guard and with
 /// the same words as the other three.
 pub fn reveal_transcript(path: &Path, root: &Path) -> Result<(), String> {
-    let meta = stat(path, "transcript")?;
-    if !meta.is_file() || !is_transcript(path, root) {
-        return Err(refusal(path, "a Claude Code transcript"));
-    }
+    guard_transcript(path, root)?;
     tauri_plugin_opener::reveal_item_in_dir(path).map_err(|err| refused_by_system("show", err))
 }
 
@@ -189,11 +218,39 @@ mod tests {
 
     /// A temporary stand-in for `~/.claude/projects`, with one project folder
     /// in it. Named per test so nothing here shares a disk with anything else.
-    fn root(name: &str) -> PathBuf {
+    ///
+    /// It is a type rather than a `PathBuf` for the one thing a `PathBuf`
+    /// cannot do: take its directory away again when the test ends. The earlier
+    /// version left behind every root it made, and this gate runs often enough
+    /// that 787 of them were counted in one `$TMPDIR` (smetana-p9i). `Drop`
+    /// runs on a panicking test too, so a failure does not go back to leaking.
+    ///
+    /// [`root`] is the only place allowed to build one, and the field is
+    /// visible only because a test module has no reason to carry a `new`. The
+    /// type's whole point is that it calls `remove_dir_all` on what it holds,
+    /// so a `Root` made anywhere else is that call on whatever path was handed
+    /// in.
+    struct Root(PathBuf);
+
+    impl std::ops::Deref for Root {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn root(name: &str) -> Root {
         let dir = std::env::temp_dir().join(format!("smetana-act-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("-p")).expect("a temporary projects root");
-        dir
+        Root(dir)
     }
 
     #[test]
@@ -338,20 +395,33 @@ mod tests {
         assert!(answer.unwrap_err().contains("working directory"));
     }
 
+    /// The case the clause above exists to let *through*, and the counterpart
+    /// of the bundle: a folder with no extension is caught by neither clause.
+    ///
+    /// It asks [`guard_directory`] and never [`open_directory`], because that
+    /// verb's last line is `/usr/bin/open` and a test it passed therefore
+    /// opened a Finder window on the machine running the gate. That is the
+    /// whole of smetana-p9i; the header carries the argument.
     #[test]
     fn an_ordinary_working_directory_passes_the_guard() {
         let root = root("cwd-ok");
         let cwd = root.join("-p/worktree");
         std::fs::create_dir_all(&cwd).expect("a directory");
 
-        // The desktop is not asked in a test binary, so the guard is what is
-        // checked: it gets past every clause and reaches `open_path`, whose own
-        // failure — there is no desktop here — is the only thing left.
-        let answer = open_directory(&cwd);
-        assert!(
-            answer.is_ok() || !answer.clone().unwrap_err().contains("working directory"),
-            "the guard must not be what refuses an ordinary folder: {answer:?}"
-        );
+        assert_eq!(guard_directory(&cwd), Ok(()));
+    }
+
+    /// The same for the other rule, which had no case for the shape it is
+    /// written around at all: every transcript test here is a refusal, so
+    /// nothing pinned that an ordinary transcript gets *past* the guard rather
+    /// than being turned away by one of its two clauses.
+    #[test]
+    fn an_ordinary_transcript_passes_the_guard() {
+        let root = root("open-ok");
+        let path = root.join("-p/session.jsonl");
+        std::fs::write(&path, "{}\n").expect("a transcript");
+
+        assert_eq!(guard_transcript(&path, &root), Ok(()));
     }
 
     /// A transcript is a file, and a *directory* that happens to be named
