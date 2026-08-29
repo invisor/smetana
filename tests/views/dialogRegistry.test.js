@@ -10,8 +10,9 @@ import {
 } from '../../src/views/dialogRegistry.js'
 
 describe('the dialog registry', () => {
-  it('holds the eight kinds that became windows', () => {
+  it('holds the nine kinds that became windows', () => {
     expect([...DIALOG_KINDS].sort()).toEqual([
+      'delete-branch',
       'delete-session',
       'delete-task',
       'new-branch',
@@ -71,9 +72,13 @@ describe('ground that has gone', () => {
 
   it('closes a dialog whose starting branch is gone', () => {
     const open = [
-      { kind: 'new-branch', ground: { project: '/repo', repo: '/repo/app', branch: 'gone' } }
+      { kind: 'new-branch', ground: { project: '/repo', repo: '/repo/app', branch: 'gone' } },
+      {
+        kind: 'delete-branch',
+        ground: { project: '/repo', repo: '/repo/app', branch: 'gone' }
+      }
     ]
-    expect(staleDialogs(open, world)).toEqual(['new-branch'])
+    expect(staleDialogs(open, world)).toEqual(['new-branch', 'delete-branch'])
   })
 
   /* The repository is equality against the selected one and not membership of
@@ -109,8 +114,14 @@ describe('ground that has gone', () => {
       'The delete dialog closed: the task it was about no longer exists.'
     )
     expect(stalenessMessage('run', 'project')).toBe('The run dialog closed: the project changed.')
+    /* One clause for two windows now, which is why it says "it was about"
+       rather than "it started from": the delete window's branch is the one
+       being deleted and never one it was cut from. */
     expect(stalenessMessage('new-branch', 'branch')).toBe(
-      'The new branch dialog closed: the branch it started from is gone.'
+      'The new branch dialog closed: the branch it was about is gone.'
+    )
+    expect(stalenessMessage('delete-branch', 'branch')).toBe(
+      'The delete branch dialog closed: the branch it was about is gone.'
     )
     expect(stalenessMessage('new-branch', 'repo')).toBe(
       'The new branch dialog closed: the Git panel moved to another repository.'

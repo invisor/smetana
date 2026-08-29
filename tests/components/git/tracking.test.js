@@ -101,6 +101,15 @@ describe('what a folded folder stands in for', () => {
 
     expect(folderBehind('fix', named, tracking)).toBe(false)
   })
+
+  /* And over a branch somebody marked, for exactly the same reason: it is drawn
+     above the tree too, so the fold is not hiding it. The heading has to go
+     back to unmarked the moment the mark is taken off. */
+  it('passes over a branch somebody pinned above the tree', () => {
+    expect(folderBehind('fix', branches, tracking, ['fix/legacy/depot-import'])).toBe(false)
+    expect(folderBehind('fix', branches, tracking, ['something-else'])).toBe(true)
+    expect(folderBehind('fix', branches, tracking, [])).toBe(true)
+  })
 })
 
 describe('the two buttons in the section header', () => {

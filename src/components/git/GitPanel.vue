@@ -25,8 +25,10 @@
    opens. This panel gains no verb of its own for it: that file is the setup
    agent's to write.
 
-   The writes a branch row offers — checkout, merge, rebase, new branch — leave
-   as events and are drawn by `BranchList`. Three more leave from the Branches
+   The writes a branch row offers — checkout, merge, rebase, new branch, delete
+   — leave as events and are drawn by `BranchList`, and beside them the one item
+   in that menu that asks git for nothing: pinning a branch above the tree,
+   which leaves here as the whole new list. Three more leave from the Branches
    caption rather than from a row: Pull and Push are about the branch this
    repository is **on**, so a row's menu would refuse them on nine rows in ten,
    and the caption is also the one thing on screen saying the two verbs exist.
@@ -84,6 +86,7 @@ import Resizer from '../shell/Resizer.vue'
 import SectionHeader from './SectionHeader.vue'
 import Tooltip from '../core/Tooltip.vue'
 import { DEFAULT_ROWS as COMMIT_ROWS } from './commitBox.js'
+import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 import {
   BRANCH_ROWS,
   UNDRAGGED_ROWS,
@@ -119,6 +122,11 @@ const props = defineProps({
      `feature/…` is a habit of a repository, while how tall somebody likes their
      branch list is a habit of theirs. */
   branchFolders: { type: Array, default: null },
+  /* The branch names pinned above the tree, as
+     `settings.project.favoriteBranches` keeps them. Passed straight through for
+     the reason the folders above are: what a mark does to the order is
+     `branchTree.js`, and this panel is presentational on it. */
+  favoriteBranches: { type: Array, default: () => [] },
   /* Where each branch stands against its upstream, keyed by name, as
      `vcsState.tracking` holds it. It draws the marks on the rows and it is what
      the two buttons in the Branches caption are made of — an empty object is a
@@ -188,9 +196,19 @@ const emit = defineEmits([
      `gitActions.js`, it cannot stop mid-tree, and what it opens is a window of
      its own. */
   'compare',
+  /* The other item that never reaches git. It carries the resolved list rather
+     than the name, exactly as `toggle-folder` does, so the rule lives in
+     `branchTree.js` where a test can read it. It is absent from `WRITE_REFUSED`
+     below for `compare`'s reason and a stronger one: it writes `settings.json`
+     and nothing else. */
+  'favorite',
   'merge',
   'rebase',
   'new-branch',
+  /* The name of the branch a person asked to delete. The window that asks about
+     it is the caller's to open, and what comes back from git lands in
+     `writeError` under this table's own title like every other write. */
+  'delete',
   'pull',
   'push',
   'fetch',
@@ -217,8 +235,12 @@ const fold = computed(() => ({
   commitRows: props.sections?.commitRows ?? COMMIT_ROWS
 }))
 
-/* git's own stderr. Mono and left-aligned rather than an `EmptyState`'s centred
-   prose: this is machine output, and it is shown exactly as git wrote it.
+/* The box git's own stderr sits in. Mono and left-aligned rather than an
+   `EmptyState`'s centred prose: this is machine output, and it is shown exactly
+   as git wrote it. The two lines inside it are `failureStyle.js`'s and are
+   shared with `DeleteBranchModal.vue`, which draws the same block inside the
+   window that asked; only the box is this file's, because where it sits is the
+   caller's business and what it looks like is not.
 
    Used twice: inside the changes scroller for a read that failed, and as a flex
    item of this column for a write git refused. `flexShrink: 0` is for the
@@ -233,16 +255,6 @@ const failureStyle = {
   flexDirection: 'column',
   flexShrink: 0,
   gap: 'var(--space-3)'
-}
-const failureTitleStyle = {
-  font: 'var(--weight-medium) var(--text-sm)/1 var(--font-sans)',
-  color: 'var(--status-failed-fg)'
-}
-const failureTextStyle = {
-  font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-mono)',
-  color: 'var(--text-secondary)',
-  whiteSpace: 'pre-wrap',
-  overflowWrap: 'anywhere'
 }
 
 /* There being no git at all is the panel's own state rather than one section's:
@@ -361,6 +373,7 @@ const WRITE_REFUSED = {
   commit: 'Git did not commit',
   pull: 'Git did not pull',
   push: 'Git did not push',
+  delete: 'Git did not delete the branch',
   /* The one entry here for something that is not a write to the tree. It is in
      this table all the same, because a fetch somebody pressed for fails the way
      a pressed write fails — in this block, in git's own words — and the
@@ -856,13 +869,16 @@ const onReset = (section) => emit('resize', { section, rows: null })
             :branches="branches"
             :tracking="tracking"
             :folders="branchFolders"
+            :favorites="favoriteBranches"
             :actions="actions"
             :busy="busy"
             @checkout="$emit('checkout', $event)"
             @compare="$emit('compare', $event)"
+            @favorite="$emit('favorite', $event)"
             @merge="$emit('merge', $event)"
             @rebase="$emit('rebase', $event)"
             @new-branch="$emit('new-branch', $event)"
+            @delete="$emit('delete', $event)"
             @toggle-folder="$emit('toggle-folder', $event)"
           />
         </div>

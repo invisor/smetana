@@ -63,7 +63,7 @@ fn writer() -> Option<&'static Proc> {
         .get_or_init(|| {
             let own = procs::own();
             if own.is_none() {
-                eprintln!(
+                log::error!(
                     "[runs] this platform cannot read a process start time, so no run registry is kept"
                 );
             }
@@ -162,7 +162,7 @@ async fn recover_one(root: &Path) {
     // of it here.
     let abandoned = registry::abandoned_actors(&held, &procs::look);
     if !abandoned.is_empty() {
-        eprintln!(
+        log::info!(
             "[runs] recovery in {}: {} claimed under a run whose app is gone; the next run's Phase R recovers those",
             root.display(),
             abandoned.join(", ")
@@ -185,7 +185,7 @@ async fn hang_up(root: &Path, orphans: &[Orphan]) {
     let mut signalled: Vec<&Orphan> = Vec::new();
     for orphan in orphans {
         if procs::hangup_group(orphan.group.pid) {
-            eprintln!(
+            log::info!(
                 "[runs] recovery in {}: hung up {} (pid {}), left by a run whose app is gone",
                 root.display(),
                 describe(orphan),
@@ -206,7 +206,7 @@ async fn hang_up(root: &Path, orphans: &[Orphan]) {
     }
     for orphan in signalled {
         if !gone(orphan) && procs::kill_group(orphan.group.pid) {
-            eprintln!(
+            log::warn!(
                 "[runs] recovery in {}: killed {} (pid {}), which did not leave on its own",
                 root.display(),
                 describe(orphan),
@@ -279,7 +279,7 @@ fn read(root: &Path) -> Held {
             return Held::Read(Registry::default())
         }
         Err(err) => {
-            eprintln!(
+            log::warn!(
                 "[runs] {} could not be read ({err}); nothing will be written over it",
                 path.display()
             );
@@ -291,9 +291,9 @@ fn read(root: &Path) -> Held {
         None => {
             let backup = path.with_extension("json.bak");
             if let Err(err) = std::fs::copy(&path, &backup) {
-                eprintln!("[runs] could not save a copy to {}: {err}", backup.display());
+                log::warn!("[runs] could not save a copy to {}: {err}", backup.display());
             }
-            eprintln!(
+            log::warn!(
                 "[runs] {} could not be read; a copy is in {} and it is being replaced",
                 path.display(),
                 backup.display()
@@ -312,13 +312,13 @@ fn write(root: &Path, held: &Registry) {
     let text = match registry::render(held) {
         Ok(text) => text,
         Err(err) => {
-            eprintln!("[runs] could not write the run registry: {err}");
+            log::warn!("[runs] could not write the run registry: {err}");
             return;
         }
     };
     let Some(dir) = path.parent() else { return };
     if let Err(err) = std::fs::create_dir_all(dir) {
-        eprintln!("[runs] could not create {}: {err}", dir.display());
+        log::warn!("[runs] could not create {}: {err}", dir.display());
         return;
     }
     // The counter beside the pid, copied from `settings/file.rs` along with its
@@ -331,12 +331,12 @@ fn write(root: &Path, held: &Registry) {
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let temp = dir.join(format!("runs.{}.{n}.tmp", std::process::id()));
     if let Err(err) = write_all(&temp, &text) {
-        eprintln!("[runs] could not write {}: {err}", temp.display());
+        log::warn!("[runs] could not write {}: {err}", temp.display());
         let _ = std::fs::remove_file(&temp);
         return;
     }
     if let Err(err) = std::fs::rename(&temp, &path) {
-        eprintln!("[runs] could not write {}: {err}", path.display());
+        log::warn!("[runs] could not write {}: {err}", path.display());
         let _ = std::fs::remove_file(&temp);
     }
 }

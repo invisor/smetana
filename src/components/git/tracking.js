@@ -12,6 +12,13 @@
    what is true of these two verbs and of nothing else in the panel — that there
    is an upstream, and that there is something to send or to bring in. */
 
+/* The one thing this file borrows from its sibling, and it is borrowed rather
+   than repeated for the reason `publishes` is exported downwards: which rows
+   are drawn above the tree decides which rows a fold is hiding, and two copies
+   of that test would put a mark on a heading standing in for a row that is on
+   screen. */
+import { liftedOut } from './branchTree.js'
+
 /* The token, and never a colour: the browser repaints on a theme change with
    nothing here to keep in step. `--git-modified` is the orange the file tree
    and the change list already draw "differs from what is committed" in, and
@@ -53,15 +60,18 @@ export function trackingMark(tracking) {
    file is here: a `.vue` file is the one thing no test in this repository can
    reach.
 
-   The current branch is passed over however its name reads, because
-   `branchTree.js` lifts it out of the tree and draws it first: a heading
-   standing in for a row that is on screen anyway would be saying it twice, and
-   saying it about a branch the fold is not hiding. */
-export function folderBehind(path, branches, tracking) {
+   Every branch `branchTree.js` lifts above the tree is passed over however its
+   name reads — the current one, and the ones somebody marked as favourites. A
+   heading standing in for a row that is on screen anyway would be saying it
+   twice, and saying it about a branch the fold is not hiding. Which rows those
+   are is `liftedOut` in that same file rather than a second copy of the test
+   here: the two have to agree exactly, since the tree is built from what is
+   left over. */
+export function folderBehind(path, branches, tracking, favorites = []) {
   const prefix = `${path}/`
   return branches.some(
     (branch) =>
-      !branch?.current &&
+      !liftedOut(branch, favorites) &&
       String(branch?.name ?? '').startsWith(prefix) &&
       trackingMark(tracking[branch.name]).orange
   )

@@ -47,6 +47,13 @@ const MAX_EXPANDED: usize = 500;
 /// directories, so a list past this is a hand-edited file rather than somebody
 /// who has been unfolding things.
 const MAX_BRANCH_FOLDERS: usize = 200;
+/// How many branches may be pinned to the top of the branch list. Smaller again
+/// than the folders above, and for the reason the feature exists: the list of
+/// favourites is drawn above the tree in full, so a person who marked fifty of
+/// them has turned the whole panel into one flat list and lost the ordering the
+/// pinning was for. The cap is a ceiling on a hand-edited file rather than a
+/// budget somebody could reach by working.
+const MAX_FAVORITE_BRANCHES: usize = 50;
 /// How many file tabs we remember. The limit is not about taste but about
 /// keeping the tab row a row, and the settings file readable.
 pub const MAX_OPEN_TABS: usize = 50;
@@ -553,6 +560,21 @@ pub struct ProjectState {
     /// would be no way to fold the last folder away, because the empty list
     /// would read as the first case and come back unfolded on the next start.
     pub branch_folders: Option<Vec<String>>,
+    /// Which branches the Git panel pins above the tree, by whole name. Per
+    /// project and beside `branch_folders` on that field's own argument: which
+    /// names are worth keeping in reach is a fact about a repository and its
+    /// naming convention, not a habit of reading, so it is not in `layout`.
+    ///
+    /// **A plain `Vec` and not an `Option`, which is where it parts company
+    /// with its neighbour.** `branch_folders` has a real third state — nobody
+    /// has chosen here, so unfold the folder the current branch is in — and
+    /// this has none: an empty list means exactly "nothing is marked", which is
+    /// also what the panel does when nobody has ever marked anything.
+    ///
+    /// Not checked against the repository, the rule `selected_repo` and
+    /// `column_order` both keep: which branches exist is not known here, and a
+    /// name that matches nothing simply draws no row.
+    pub favorite_branches: Vec<String>,
     /// Open files in tab order. Paths are relative to the project root: the
     /// project's key in the map is already absolute, and duplicating it in
     /// every tab is pointless — it also means a moved folder does not turn the
@@ -626,6 +648,7 @@ impl Default for ProjectState {
             selected_repo: None,
             expanded: Vec::new(),
             branch_folders: None,
+            favorite_branches: Vec::new(),
             open_tabs: Vec::new(),
             preview_tab: None,
             column_order: Vec::new(),
@@ -1210,6 +1233,12 @@ impl ProjectState {
         if let Some(folders) = self.branch_folders.as_mut() {
             sane_list(folders, MAX_BRANCH_FOLDERS, MAX_PATH_LEN);
         }
+        // A branch name is path-like, so the path ceiling and not the
+        // identifier one. Cleaned in place for the reason the folders above
+        // are: the list is a record of what somebody marked, and one junk entry
+        // is no reason to unmark the rest. There is no membership check here
+        // either — see the field's own note.
+        sane_list(&mut self.favorite_branches, MAX_FAVORITE_BRANCHES, MAX_PATH_LEN);
         sane_list(&mut self.open_tabs, MAX_OPEN_TABS, MAX_PATH_LEN);
         // A status name, not a path — hence the identifier ceiling. Membership
         // is deliberately not checked: bd's set of statuses is not known here,
@@ -2051,6 +2080,81 @@ mod tests {
             settings.projects["/q"].branch_folders,
             Some(Vec::new()),
             "folded on purpose is not the same as never chosen"
+        );
+    }
+
+    /// The list of pinned branches is cleaned where it stands, exactly as the
+    /// folders beside it are: the blanks and the repeats go, the survivors keep
+    /// the order they were written in, and one junk entry unmarks nothing else.
+    #[test]
+    fn the_favourite_branches_lose_blanks_and_duplicates_and_keep_their_order() {
+        let text = serde_json::json!({
+            "version": 1,
+            "projects": {
+                "/p": {"favoriteBranches": ["main", "", "feature/x", "main", "release/7"]}
+            }
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(
+            settings.projects["/p"].favorite_branches,
+            vec![
+                String::from("main"),
+                String::from("feature/x"),
+                String::from("release/7")
+            ]
+        );
+    }
+
+    /// Unlike its neighbour there is no third state to keep, so a file written
+    /// before this existed reads as "nothing is marked" — which is also what an
+    /// explicit empty list means.
+    #[test]
+    fn a_file_with_no_favourite_branches_reads_as_none_marked() {
+        let text = serde_json::json!({"version": 1, "projects": {"/p": {"expanded": []}}});
+
+        let settings = settings_of(&text.to_string());
+
+        assert!(settings.projects["/p"].favorite_branches.is_empty());
+    }
+
+    /// The ceiling, and the head of the list is what survives it: a name near
+    /// the top was marked first and is the one somebody would miss.
+    #[test]
+    fn the_favourite_branches_stop_at_the_ceiling() {
+        let names: Vec<String> =
+            (0..MAX_FAVORITE_BRANCHES + 10).map(|i| format!("branch/{i:04}")).collect();
+        let text =
+            serde_json::json!({"version": 1, "projects": {"/p": {"favoriteBranches": names}}});
+
+        let settings = settings_of(&text.to_string());
+
+        let kept = &settings.projects["/p"].favorite_branches;
+        assert_eq!(kept.len(), MAX_FAVORITE_BRANCHES);
+        assert_eq!(kept[0], "branch/0000");
+        assert_eq!(
+            kept.last(),
+            Some(&format!("branch/{:04}", MAX_FAVORITE_BRANCHES - 1)),
+            "the tail is trimmed, not the head"
+        );
+    }
+
+    /// A name too long to be a ref is garbage rather than a branch, and it goes
+    /// on its own without taking the rest of the list with it.
+    #[test]
+    fn an_overlong_favourite_branch_falls_out_alone() {
+        let long = "x".repeat(MAX_PATH_LEN + 1);
+        let text = serde_json::json!({
+            "version": 1,
+            "projects": {"/p": {"favoriteBranches": ["main", long, "develop"]}}
+        });
+
+        let settings = settings_of(&text.to_string());
+
+        assert_eq!(
+            settings.projects["/p"].favorite_branches,
+            vec![String::from("main"), String::from("develop")]
         );
     }
 

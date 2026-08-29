@@ -26,6 +26,11 @@
 import { computed } from 'vue'
 import Button from '../core/Button.vue'
 import Modal from '../overlays/Modal.vue'
+/* git's own stderr: machine output, shown exactly as git wrote it, because
+   the person reading it knows git. The two lines were written out here and
+   in `GitPanel.vue` alike, in the same words, which is what `failureStyle.js`
+   now holds once. */
+import { failureTextStyle, failureTitleStyle } from './failureStyle.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -96,19 +101,6 @@ const filesStyle = {
 const fileStyle = {
   font: 'var(--weight-regular) var(--text-xs)/1.4 var(--font-mono)',
   color: 'var(--status-failed-fg)',
-  overflowWrap: 'anywhere'
-}
-
-/* git's own stderr, drawn the way `GitPanel` draws it: machine output, shown
-   exactly as git wrote it, because the person reading it knows git. */
-const failureTitleStyle = {
-  font: 'var(--weight-medium) var(--text-sm)/1 var(--font-sans)',
-  color: 'var(--status-failed-fg)'
-}
-const failureTextStyle = {
-  font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-mono)',
-  color: 'var(--text-secondary)',
-  whiteSpace: 'pre-wrap',
   overflowWrap: 'anywhere'
 }
 

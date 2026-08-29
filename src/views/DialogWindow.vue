@@ -23,6 +23,7 @@
    `set_size` nor `show` and adding them would publish both to every window in
    the app for the sake of one call. */
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watchEffect } from 'vue'
+import DeleteBranchModal from '../components/git/DeleteBranchModal.vue'
 import DeleteSessionModal from '../components/agent/DeleteSessionModal.vue'
 import EmptyState from '../components/core/EmptyState.vue'
 import DeleteTaskModal from '../components/kanban/DeleteTaskModal.vue'
@@ -64,6 +65,7 @@ const COMPONENTS = {
   run: RunModal,
   'new-task': NewTaskModal,
   'new-branch': NewBranchModal,
+  'delete-branch': DeleteBranchModal,
   'promote-column': PromoteColumnModal,
   'setup-project': SetupProjectModal,
   'delete-task': DeleteTaskModal,
@@ -186,7 +188,7 @@ const stopWaiting = setTimeout(() => {
   told.value = true
 }, FIRST_PAINT_WAIT)
 
-/* Every emit the eight guests have between them that crosses back to the app
+/* Every emit the nine guests have between them that crosses back to the app
    window, forwarded by name. A list rather than a wildcard because listeners
    need names, and because a name that is not here is a message that would
    silently go nowhere. A name here that a guest does not declare costs nothing:

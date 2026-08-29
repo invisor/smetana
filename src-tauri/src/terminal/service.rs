@@ -678,7 +678,7 @@ fn handle(
                 if let Err(err) = crate::runs::gitignore::ensure(Path::new(&project)) {
                     // Not ".smetana/": `ensure` writes whatever of its own
                     // list the file is missing, and that list has grown.
-                    eprintln!("[runs] could not amend .gitignore: {err}");
+                    log::warn!("[runs] could not amend .gitignore: {err}");
                 }
                 let root = Path::new(&project);
                 // Two blocks and not one: the scan says what this project is,

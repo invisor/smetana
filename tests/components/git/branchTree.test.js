@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_FAVORITES,
   branchRows,
   currentChain,
   expandedFolders,
+  liftedOut,
+  toggleFavorite,
   toggleFolder
 } from '../../../src/components/git/branchTree.js'
 
@@ -137,6 +140,15 @@ describe('what a list of branch names becomes', () => {
     ])
   })
 
+  /* The hairline goes under the last row of the block above the list, and with
+     nothing marked that is still the current branch — which is what the rule
+     was before favourites existed. */
+  it('rules off under the current branch when nothing is marked', () => {
+    const rows = branchRows(branches('*main', 'develop'), [])
+    expect(rows[0].divider).toBe(true)
+    expect(rows[1].divider).toBeUndefined()
+  })
+
   /* A repository nobody is standing in — a detached HEAD, or a list that
      arrived before HEAD did — pins nothing and draws the tree it always drew. */
   it('pins nothing when no branch is current', () => {
@@ -158,6 +170,141 @@ describe('what a list of branch names becomes', () => {
       true,
       false
     ])
+  })
+})
+
+describe('the branches somebody pinned', () => {
+  /* Three groups: the current branch, then the marked ones, then the tree. Both
+     of the first two draw their whole name at depth 0, because there is no
+     heading above either of them to carry a prefix. */
+  it('draws the marked branches under the current one and above the tree', () => {
+    const rows = branchRows(
+      branches('feature/one', '*main', 'fix/two', 'develop'),
+      ['feature', 'fix'],
+      ['fix/two', 'develop']
+    )
+    expect(labels(rows)).toEqual(['main', 'fix/two', 'develop', '/feature', 'one'])
+    expect(rows[1]).toMatchObject({ name: 'fix/two', depth: 0, pinned: true, favorite: true })
+    expect(rows[2]).toMatchObject({ name: 'develop', depth: 0, pinned: true, favorite: true })
+  })
+
+  /* The order inside the group is the order the list arrived in — `by_recency`'s
+     — and never the order they were marked in. A second ordering inside one
+     list would be invisible, since nothing on a row says when it was pinned. */
+  it('keeps the marked branches in the order the list arrived in', () => {
+    const rows = branchRows(
+      branches('*main', 'one', 'two', 'three'),
+      [],
+      /* Marked in the opposite order to the one they arrive in. */
+      ['three', 'two', 'one']
+    )
+    expect(labels(rows)).toEqual(['main', 'one', 'two', 'three'])
+  })
+
+  /* Lifted rather than copied, exactly as the current branch is: it is gone
+     from its folder, the count on the heading comes down, and a heading it was
+     the whole of is not drawn at all. */
+  it('takes a marked branch out of the folder it was in', () => {
+    const rows = branchRows(
+      branches('*main', 'fix/one', 'fix/two', 'spike/only'),
+      ['fix', 'spike'],
+      ['fix/one', 'spike/only']
+    )
+    expect(labels(rows)).toEqual(['main', 'fix/one', 'spike/only', '/fix', 'two'])
+    expect(rows.find((row) => row.kind === 'folder').count).toBe(1)
+  })
+
+  /* One row and not two: the branch the repository is on wins the first
+     position, and the mark rides on that row. */
+  it('draws a branch that is both current and marked once, at the top', () => {
+    const rows = branchRows(branches('*main', 'develop'), [], ['main'])
+    expect(labels(rows)).toEqual(['main', 'develop'])
+    expect(rows[0]).toMatchObject({ name: 'main', current: true, favorite: true, pinned: true })
+  })
+
+  /* The hairline is about the bottom of the block rather than about the current
+     branch: it says the real list starts below, and it says it once. */
+  it('rules off under the last marked row rather than under the current branch', () => {
+    const rows = branchRows(branches('*main', 'develop', 'spike'), [], ['develop', 'spike'])
+    expect(rows.map((row) => Boolean(row.divider))).toEqual([false, false, true])
+  })
+
+  /* A project can hold several repositories and the list is one list, so a name
+     that is nowhere in this repository is the ordinary case. It draws nothing
+     and changes nothing. */
+  it('draws no row for a name this repository does not have', () => {
+    const rows = branchRows(branches('*main', 'develop'), [], ['nothing-called-this'])
+    expect(labels(rows)).toEqual(['main', 'develop'])
+    expect(rows[0].divider).toBe(true)
+  })
+
+  /* Nothing marked is the state every project starts in, and it has to draw
+     exactly what it drew before this existed. */
+  it('is the list it always was when nothing is marked', () => {
+    const list = branches('*feature/one', 'main')
+    expect(labels(branchRows(list, ['feature']))).toEqual(
+      labels(branchRows(list, ['feature'], []))
+    )
+  })
+
+  /* Which rows are above the tree, which is the same question `tracking.js` has
+     to ask about a fold: a heading standing in for a row that is on screen
+     anyway would be saying it twice. */
+  it('counts the current branch and every marked one as lifted out', () => {
+    expect(liftedOut({ name: 'main', current: true }, [])).toBe(true)
+    expect(liftedOut({ name: 'spike', current: false }, ['spike'])).toBe(true)
+    expect(liftedOut({ name: 'spike', current: false }, [])).toBe(false)
+    expect(liftedOut(undefined, undefined)).toBe(false)
+  })
+})
+
+describe('what a press on the favourite item leaves behind', () => {
+  it('marks an unmarked branch and unmarks a marked one', () => {
+    expect(toggleFavorite([], 'main')).toEqual(['main'])
+    expect(toggleFavorite(['main', 'spike'], 'main')).toEqual(['spike'])
+  })
+
+  /* Nothing has ever been marked in a project that has never had a list, and
+     the first press has to write one out. */
+  it('writes a list out over nothing at all', () => {
+    expect(toggleFavorite(null, 'main')).toEqual(['main'])
+    expect(toggleFavorite(undefined, 'main')).toEqual(['main'])
+  })
+
+  /* A fresh array every time, for `toggleFolder`'s reason: the caller assigns
+     it into `settings.json`, and a list mutated in place gives the store's own
+     watcher nothing to notice. */
+  it('answers with a new list rather than the one it was given', () => {
+    const stored = ['main']
+    expect(toggleFavorite(stored, 'spike')).not.toBe(stored)
+    expect(stored).toEqual(['main'])
+  })
+
+  /* The ceiling is `MAX_FAVORITE_BRANCHES` in `settings/model.rs`, written out
+     on this side too. It has to be refused **here**, because Rust trims from
+     the tail: a front end that accepted the 51st would draw the star, keep it
+     for the session and lose it on the next load, with nothing on screen
+     saying a mark somebody made had gone. */
+  it('refuses a mark past the ceiling rather than letting Rust drop it later', () => {
+    const full = Array.from({ length: MAX_FAVORITES }, (_, at) => `branch/${at}`)
+    const after = toggleFavorite(full, 'one-too-many')
+    expect(after).toHaveLength(MAX_FAVORITES)
+    expect(after).not.toContain('one-too-many')
+  })
+
+  /* Unmarking is never refused, and a hand-edited file already over the ceiling
+     is exactly the case: a list somebody cannot shorten is a list they cannot
+     fix. */
+  it('always lets a mark come off, even from a list already over the ceiling', () => {
+    const over = Array.from({ length: MAX_FAVORITES + 5 }, (_, at) => `branch/${at}`)
+    expect(toggleFavorite(over, 'branch/0')).toHaveLength(MAX_FAVORITES + 4)
+  })
+
+  /* Marking a name already in the list is an unmark, so a full list is not
+     frozen against its own members. */
+  it('unmarks a member of a full list rather than reading it as an add', () => {
+    const full = Array.from({ length: MAX_FAVORITES }, (_, at) => `branch/${at}`)
+    expect(toggleFavorite(full, 'branch/3')).not.toContain('branch/3')
   })
 })
 

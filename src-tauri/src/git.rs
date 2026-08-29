@@ -13,6 +13,7 @@
 //! for "this folder is not a git repository" would be noise about a state
 //! that is perfectly ordinary.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -141,12 +142,23 @@ const HEADS: &str = "refs/heads/";
 /// line of its own for what an annotated tag points at — that last one has no
 /// ref name at all and is skipped rather than parsed into a branch called `^…`.
 pub fn parse_packed_refs(contents: &str) -> Vec<String> {
+    parse_packed_heads(contents).into_iter().map(|(name, _)| name).collect()
+}
+
+/// The same file, with each branch's commit still attached: `(name, sha)`.
+///
+/// The parser lives here and `parse_packed_refs` is a projection of it rather
+/// than a second pass over the same lines — the header, the `^` continuation
+/// and the `refs/heads/` prefix are one rule, and two copies of it would agree
+/// until somebody fixed one.
+pub fn parse_packed_heads(contents: &str) -> Vec<(String, String)> {
     contents
         .lines()
         .filter(|line| !line.starts_with('#') && !line.starts_with('^'))
-        .filter_map(|line| line.split_once(' ').map(|(_, name)| name.trim()))
-        .filter_map(|name| name.strip_prefix(HEADS))
-        .map(str::to_owned)
+        .filter_map(|line| line.split_once(' '))
+        .filter_map(|(sha, name)| {
+            name.trim().strip_prefix(HEADS).map(|name| (name.to_owned(), sha.trim().to_owned()))
+        })
         .collect()
 }
 
@@ -339,6 +351,78 @@ pub fn branches_with_recency(project: &Path) -> Vec<(String, Option<i64>)> {
     out.dedup();
     let logs = common.join("logs/refs/heads");
     out.into_iter().map(|name| { let at = touched_at(&logs, &name); (name, at) }).collect()
+}
+
+/// The commit a loose ref names, or nothing.
+///
+/// A ref file holds an object name and that is all this wants; git also writes
+/// symbolic refs (`ref: refs/heads/other`) in a few places, and one of those is
+/// not a commit to quote at anybody. Hex and long enough is the check, the same
+/// one `parse_head` makes and for the same reason: git is on its way to sha256.
+fn loose_tip(heads: &Path, branch: &str) -> Option<String> {
+    let text = std::fs::read_to_string(heads.join(branch)).ok()?;
+    let line = text.trim();
+    let hex = line.len() >= SHORT_HASH && line.chars().all(|c| c.is_ascii_hexdigit());
+    hex.then(|| line.to_owned())
+}
+
+/// The branch a task's work was left on, out of every local branch and its
+/// commit.
+///
+/// The convention is `provisioning`'s and it is a rule that skill states rather
+/// than a habit: `slug = "<id>-<short-kebab-title>"`, `branch =
+/// "<fix|feature>/<slug>"`, and the id is in the slug precisely so that a
+/// worktree found afterwards can be *proved* to belong to the task looking for
+/// it. So the test is the last segment of the name: the task's id, or the id
+/// followed by a hyphen. Matching the id anywhere in the name would take
+/// `fix/smetana-1ab-see-also-smetana-0t4` for this task's branch, and matching
+/// it as a bare prefix would take `smetana-0t4x`'s.
+///
+/// Several branches for one task means somebody cut a second one, and the first
+/// by name is the one named: a note pointing at one of them is worth more than a
+/// note pointing at none, and the order is stable, so a run does not say two
+/// different things about the same board.
+pub fn task_branch(refs: &[(String, String)], id: &str) -> Option<(String, String)> {
+    refs.iter()
+        .filter(|(name, _)| {
+            let slug = name.rsplit('/').next().unwrap_or(name);
+            slug == id || slug.strip_prefix(id).is_some_and(|rest| rest.starts_with('-'))
+        })
+        .map(|(name, sha)| (name.clone(), short(sha)))
+        .next()
+}
+
+/// How a commit is written into a note a person reads: git's own abbreviation.
+fn short(sha: &str) -> String {
+    sha.chars().take(SHORT_HASH).collect()
+}
+
+/// Where one task's work was left in this repository — its branch and the
+/// commit at the tip of it — or nothing, which is the ordinary answer for a
+/// task nobody cut a branch for.
+///
+/// Reading, not running, like everything else in this file: the two sources are
+/// `refs/heads/` and `packed-refs`, both in the **common** directory, and a
+/// loose ref wins over a packed one because that is what git itself does with a
+/// branch that has moved since it was packed. Nothing here is an error — a
+/// folder outside git, or refs that cannot be read, simply has no work to name,
+/// and the note the caller is writing is worth having without it.
+pub fn task_work(project: &Path, id: &str) -> Option<(String, String)> {
+    let common = common_dir(&git_dir(project)?);
+    let mut refs: BTreeMap<String, String> = BTreeMap::new();
+    if let Ok(packed) = std::fs::read_to_string(common.join("packed-refs")) {
+        refs.extend(parse_packed_heads(&packed));
+    }
+    let heads = common.join("refs/heads");
+    let mut loose = Vec::new();
+    loose_branches(&heads, "", &mut loose);
+    for name in loose {
+        if let Some(sha) = loose_tip(&heads, &name) {
+            refs.insert(name, sha);
+        }
+    }
+    let refs: Vec<(String, String)> = refs.into_iter().collect();
+    task_branch(&refs, id)
 }
 
 #[cfg(test)]
@@ -745,5 +829,103 @@ c0ffee refs/remotes/origin/main
     #[test]
     fn no_repositories_at_all_is_an_empty_list_and_not_a_panic() {
         assert_eq!(combine(vec![]), vec![]);
+    }
+
+    #[test]
+    fn packed_refs_keeps_each_branchs_commit_beside_its_name() {
+        // The half `parse_packed_refs` throws away, and the reason the two are
+        // one parser: a note saying where a task's work was left needs the sha.
+        let packed = "\
+# pack-refs with: peeled fully-peeled sorted
+a1b2c3d4e5f6 refs/heads/main
+d4e5f6a1b2c3 refs/heads/fix/smetana-08f-batch-clean-exit
+0f0f0f0f0f0f refs/tags/v1.0.0
+^9988776655
+";
+        assert_eq!(
+            parse_packed_heads(packed),
+            vec![
+                ("main".to_string(), "a1b2c3d4e5f6".to_string()),
+                ("fix/smetana-08f-batch-clean-exit".to_string(), "d4e5f6a1b2c3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tasks_branch_is_the_one_whose_slug_is_its_id() {
+        let refs = vec![
+            ("main".to_string(), "aaaaaaaaaaaa".to_string()),
+            ("fix/smetana-0t4-batch-clean-exit".to_string(), "d3a4309abcdef".to_string()),
+            ("feature/smetana-2ya-something".to_string(), "e139e79abcdef".to_string()),
+        ];
+        assert_eq!(
+            task_branch(&refs, "smetana-0t4"),
+            Some(("fix/smetana-0t4-batch-clean-exit".to_string(), "d3a4309".to_string()))
+        );
+        assert_eq!(task_branch(&refs, "smetana-xxx"), None);
+    }
+
+    #[test]
+    fn a_branch_that_merely_mentions_the_id_is_not_that_tasks_branch() {
+        // Both ways of matching loosely, and both of them put somebody else's
+        // work in a note about this task. The rule is `provisioning`'s slug:
+        // the last segment is the id, or the id and a hyphen.
+        let refs = vec![
+            ("fix/smetana-0t4x-another-task".to_string(), "aaaaaaaaaa".to_string()),
+            ("fix/smetana-1ab-follow-up-to-smetana-0t4".to_string(), "bbbbbbbbbb".to_string()),
+        ];
+        assert_eq!(task_branch(&refs, "smetana-0t4"), None);
+
+        // The bare id on its own is a branch somebody cut by hand, and it does
+        // belong to the task.
+        let bare = vec![("smetana-0t4".to_string(), "cccccccccc".to_string())];
+        assert_eq!(
+            task_branch(&bare, "smetana-0t4"),
+            Some(("smetana-0t4".to_string(), "ccccccc".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_tasks_work_is_found_loose_or_packed_and_the_loose_ref_wins() {
+        let dir = scratch("task-work");
+        let heads = dir.join(".git/refs/heads/fix");
+        fs::create_dir_all(&heads).expect("create refs/heads/fix");
+        fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+        // Packed says one thing about this branch and the loose ref says
+        // another, which is git's own ordinary state after a branch moves.
+        fs::write(
+            dir.join(".git/packed-refs"),
+            "0000000000 refs/heads/fix/smetana-08f-a-task\n\
+             1111111111 refs/heads/feature/smetana-2ya-another\n",
+        )
+        .expect("write packed-refs");
+        fs::write(heads.join("smetana-08f-a-task"), "d3a4309abcdef\n").expect("write the ref");
+
+        assert_eq!(
+            task_work(&dir, "smetana-08f"),
+            Some(("fix/smetana-08f-a-task".to_string(), "d3a4309".to_string()))
+        );
+        assert_eq!(
+            task_work(&dir, "smetana-2ya"),
+            Some(("feature/smetana-2ya-another".to_string(), "1111111".to_string())),
+            "a branch that exists only in packed-refs still answers"
+        );
+        assert_eq!(task_work(&dir, "smetana-000"), None);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_symbolic_ref_is_not_a_commit_to_quote_at_anybody() {
+        let dir = scratch("task-work-symref");
+        let heads = dir.join(".git/refs/heads");
+        fs::create_dir_all(heads.join("fix")).expect("create refs/heads/fix");
+        fs::write(heads.join("fix/smetana-08f-a-task"), "ref: refs/heads/main\n")
+            .expect("write the ref");
+        assert_eq!(task_work(&dir, "smetana-08f"), None);
+
+        // And a folder outside git has no work to name, which is not an error
+        // either — the note is worth having without it.
+        assert_eq!(task_work(Path::new("/nowhere/at/all"), "smetana-08f"), None);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
     }
 }

@@ -14,7 +14,7 @@
    underneath; a window somebody can push aside and click past has no such
    promise. */
 
-/* The eight, and the width each one's window gets. Every one of them drew at
+/* The nine, and the width each one's window gets. Every one of them drew at
    `Modal`'s default 440 as a modal, and there is no reason for that to change
    just because the frame did — the numbers are here so that a dialog which
    outgrows it has somewhere to say so. */
@@ -22,6 +22,12 @@ const REGISTRY = {
   run: { width: 440, ground: ['project'] },
   'new-task': { width: 440, ground: ['project', 'column'] },
   'new-branch': { width: 440, ground: ['project', 'repo', 'branch'] },
+  /* Deleting one. The same ground as cutting one and for the same reasons: the
+     repository because every write in `stores/vcs.js` resolves which one it
+     runs in at the moment it is pressed, and the branch because this window is
+     entirely about a branch that exists — one deleted from a terminal while
+     this stands open leaves nothing to answer about. */
+  'delete-branch': { width: 440, ground: ['project', 'repo', 'branch'] },
   'promote-column': { width: 440, ground: ['project', 'column'] },
   'setup-project': { width: 440, ground: ['project'] },
   'delete-task': { width: 440, ground: ['project', 'issue'] },
@@ -62,6 +68,7 @@ const DIALOG_NOUN = {
   run: 'run',
   'new-task': 'new task',
   'new-branch': 'new branch',
+  'delete-branch': 'delete branch',
   'promote-column': 'promote column',
   'setup-project': 'project setup',
   'delete-task': 'delete',
@@ -74,7 +81,13 @@ const REASON_CLAUSE = {
   repo: 'the Git panel moved to another repository',
   issue: 'the task it was about no longer exists',
   column: 'the column it was about is no longer on the board',
-  branch: 'the branch it started from is gone'
+  /* "It was about" and not "it started from", which is what this said while
+     `new-branch` was the only window standing on a branch. That clause now has
+     to serve a window whose branch is the one being deleted rather than the one
+     being cut from, and a delete dialog announcing that the branch it started
+     from is gone would name a relationship it never had. The wider wording is
+     true of both. */
+  branch: 'the branch it was about is gone'
 }
 
 export function stalenessMessage(kind, reason) {
