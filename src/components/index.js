@@ -15,6 +15,7 @@ export { default as Textarea } from './core/Textarea.vue'
 export { default as Tooltip } from './core/Tooltip.vue'
 export { iconNodes } from './core/icons.js'
 export { useInteractive } from './core/interactive.js'
+export { useCopyFeedback } from './core/copyFeedback.js'
 
 // status
 export { default as DependencyBand } from './status/DependencyBand.vue'

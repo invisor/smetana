@@ -32,11 +32,16 @@ import { formatBytes } from '../settings/storage.js'
    at a different speed from a task id's two panels away. None of the three
    imports pulls Vue or Tauri in: all four modules are the same pure family.
 
-   `COPIED_MS` is re-exported rather than merely used, so that a component
-   drawing a session row has one place to import its rule from and does not have
-   to know that half of it is the board's. It is one name for one number either
-   way — the re-export cannot drift, which is the whole difference between this
-   and the three copies it replaced. */
+   `COPIED_MS` is re-exported rather than merely used, so that whatever draws a
+   session row has one place to import its rule from and does not have to know
+   that half of it is the board's. Nothing under `src/` takes it from here
+   today, and that is recent: `views/Gallery.vue` did, and the policy it wanted
+   the number for is `core/copyFeedback.js` now, which borrows it from
+   `kanban/copyId.js` itself. The line stays anyway, because it is one name for
+   one number either way — a re-export cannot drift, which is the whole
+   difference between this and the three copies it replaced — and because the
+   thing it stands in the way of is whoever wants a dwell next declaring the
+   number again where they needed it. */
 export { COPIED_MS }
 
 /* How wide the menu may get. A ceiling and not a width — `ContextMenu` draws

@@ -8,11 +8,13 @@ import { branchMenuItems } from '../components/git/branchMenu.js'
 import { fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import {
-  COPIED_MS,
   copyNoun as copyVerbNoun,
   copyPayload,
   isCopyKind
 } from '../components/agent/sessionMenu.js'
+/* The app's own copy-confirmation policy rather than this page's rendering of
+   it: one duration, one rule about which press owns the state, in one file. */
+import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { NEW_TAB_ITEMS } from '../components/shell/newTabMenu.js'
 import { orderTabs } from '../components/shell/tabOrder.js'
 import {
@@ -902,10 +904,11 @@ const GALLERY_SESSIONS = [
    The second row starts open, so the opened card is on screen without anybody
    having to find and press a chevron in four theme and density combinations.
 
-   `action` is answered with the same copy policy the app keeps — one session
-   and one outcome at a time, cleared after the same 1.2 s — and with nothing at
-   all for the four verbs that reach a desktop or a disk: a gallery has neither,
-   and the menu opening, walking and closing is what there is to check here. */
+   `action` is answered with the same copy policy the app keeps — literally the
+   same, `useCopyFeedback`, rather than a second writing of it — and with
+   nothing at all for the four verbs that reach a desktop or a disk: a gallery
+   has neither, and the menu opening, walking and closing is what there is to
+   check here. */
 const openSessions = ref([GALLERY_SESSIONS[1].id])
 
 const toggleSession = (id) => {
@@ -914,35 +917,15 @@ const toggleSession = (id) => {
   else openSessions.value.push(id)
 }
 
-const copiedSessionId = ref(null)
-const sessionCopyState = ref('')
-const sessionCopyNoun = ref('')
-let sessionCopyTimer = null
+const {
+  stateFor: sessionCopyStateFor,
+  nounFor: sessionCopyNounFor,
+  copy: sessionCopyFeedback
+} = useCopyFeedback(copyText)
 
-const sessionCopyStateFor = (id) =>
-  id != null && id === copiedSessionId.value ? sessionCopyState.value : ''
-const sessionCopyNounFor = (id) =>
-  id != null && id === copiedSessionId.value ? sessionCopyNoun.value : ''
-
-const onSessionAction = async ({ kind, session }) => {
+const onSessionAction = ({ kind, session }) => {
   if (!isCopyKind(kind)) return
-  clearTimeout(sessionCopyTimer)
-  copiedSessionId.value = session.id
-  sessionCopyState.value = ''
-  sessionCopyNoun.value = copyVerbNoun(kind)
-  const text = copyPayload(kind, session)
-  const ok = text ? await copyText(text) : false
-  if (copiedSessionId.value !== session.id) return
-  /* The second clear, for the reason `copyId` above spells out: two presses on
-     one row both get past the guard, and the first one's timer would otherwise
-     go on running with nothing pointing at it. */
-  clearTimeout(sessionCopyTimer)
-  sessionCopyState.value = ok ? 'copied' : 'failed'
-  sessionCopyTimer = setTimeout(() => {
-    copiedSessionId.value = null
-    sessionCopyState.value = ''
-    sessionCopyNoun.value = ''
-  }, COPIED_MS)
+  return sessionCopyFeedback(session?.id ?? null, copyPayload(kind, session), copyVerbNoun(kind))
 }
 
 /* The Git panel's three states, in the shape `src-tauri/src/vcs/` answers with.
@@ -1275,41 +1258,24 @@ const MARKDOWN_SAMPLE = [
    has to answer them the way the app does. Without it the new prop and the new
    emit would be drawn here and exercised nowhere, and the tooltip would sit on
    `Copy id` for ever — which reads as a broken feature to whoever checks this
-   page by eye. One id and one outcome at a time, cleared after the same 1.2 s,
-   so copying one id here takes the confirmation off another exactly as it does
-   on the board. It reaches the boards below through the same two hops the app
+   page by eye. It reaches the boards below through the same two hops the app
    uses, `copiedId` and `copyState`, so those are exercised too.
 
-   The duration is imported and no longer a bare `1200` written out here. That
-   was the half of this pair the hazards list warns about: this page is the only
-   verification this project has for anything under `src/components/`, so a
-   duration that moved in the app alone would leave the harness confirming a copy
-   at a speed the product no longer uses. */
-const copiedId = ref(null)
-const copyState = ref('')
-let copyTimer = null
+   The policy itself is not written out here at all any more — `useCopyFeedback`
+   is the same code the app runs, and that is the whole point of this pair. It
+   was the half the hazards list warns about: this page is the only verification
+   this project has for anything under `src/components/`, so a copy fixed in the
+   app and not here would leave the harness reproducing a defect the product no
+   longer has, which by eye is indistinguishable from a real one. It had already
+   happened once, over a stranded timer that had to be found in both copies. */
+const {
+  target: copiedId,
+  state: copyState,
+  stateFor: copyStateFor,
+  copy: copyIdFeedback
+} = useCopyFeedback(copyText)
 
-const copyStateFor = (id) => (id != null && id === copiedId.value ? copyState.value : '')
-
-async function copyId(id) {
-  clearTimeout(copyTimer)
-  copiedId.value = id
-  copyState.value = ''
-  const ok = await copyText(id)
-  if (copiedId.value !== id) return
-  /* The second clear, and it is not the first one over again: two clicks on
-     one id both get past the guard above, and without this the earlier click's
-     timer would be left running with nothing pointing at it — cutting this
-     confirmation short, and putting `copiedId` back to null under a later copy
-     that then says nothing at all. `DesktopApp.vue` carries the same line for
-     the same reason. */
-  clearTimeout(copyTimer)
-  copyState.value = ok ? 'copied' : 'failed'
-  copyTimer = setTimeout(() => {
-    copiedId.value = null
-    copyState.value = ''
-  }, COPIED_MS)
-}
+const copyId = (id) => copyIdFeedback(id, id)
 
 /* Two issues in bd's own shape: one that has everything the inspector can
    draw, and one that has almost nothing. The second is the case worth looking

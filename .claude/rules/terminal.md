@@ -598,15 +598,26 @@ their own: those bring a live agent back and are not about the file. Copy resume
 stands in for them, and is also the answer for somebody who would rather paste `cd … && claude
 --resume …` into their own terminal than have this app spawn anything.
 
-**The three copying verbs answer on the row's menu button, not in a toast.** `kanban/copyId.js` is
-the policy and this follows it to the millisecond: a copy is the one action with nothing on screen to
-show for it, so the confirmation belongs on the control somebody is still looking at. What differs is
-where it can land — the menu closes on the way out, so the trigger it hung from is what is left, and
-it draws a tick and names what was copied. How long for is `COPIED_MS`, which lives in
-`kanban/copyId.js` beside the rest of that vocabulary and is imported by everything that confirms a
-copy: it was written out three times over — the view, the gallery and the session menu — and the
-gallery is the only verification this project has for anything under `src/components/`, so a duration
-that moved in the app alone would have left the harness measuring the wrong thing.
+**The three copying verbs answer on the row's menu button, not in a toast.** `core/copyFeedback.js`
+is the policy, and this does not follow it — it *is* it, the same `useCopyFeedback` the board's id
+calls: a copy is the one action with nothing on screen to show for it, so the confirmation belongs on
+the control somebody is still looking at. What differs is where it can land — the menu closes on the
+way out, so the trigger it hung from is what is left, and it draws a tick and names what was copied,
+which is what `nounFor` is for. Three verbs land on one button, and "Copied" alone would leave a
+person unsure which of them they pressed.
+
+That composable is the second in the tree after `core/interactive.js`, and it exists because the
+policy — clear the pending timer, claim the row, blank the outcome, await the write, bail if a later
+press has taken the state over, clear the timer a second time, set the outcome, arm the reset — had
+been written out **four times**: a task's id and a session's menu, each in `views/DesktopApp.vue` and
+again in `views/Gallery.vue`. The pair drawing a task's id had already cost once, over a stranded
+reset timer that sat in both copies and made a copy that had worked show no confirmation at all. The
+gallery is the only verification this project has for anything under `src/components/`, so a copy
+fixed in the app and not in the harness leaves the harness reproducing a defect the product no longer
+has — indistinguishable by eye from a real one. `tests/components/core/copyFeedback.test.js` is what
+now sees the rule at all; it was entirely inside `.vue` files before, which no runner here can read.
+How long a confirmation stands is still `COPIED_MS` in `kanban/copyId.js`, borrowed by the composable
+rather than declared again, so the pure rule modules stay free of Vue.
 
 **Open log, Reveal log and Open working directory are three commands of ours, not the opener
 plugin's, and they are three rather than one on purpose.** The plugin's `open_path` is refused by its
