@@ -368,7 +368,7 @@ fn mark_git_ignored(dir: &Path, entries: &mut [Entry]) {
         // failure — see the note above for what staying quiet costs.
         Err(VcsError::Git { status: 128, .. }) => {}
         Err(err) => {
-            eprintln!("[files] could not ask git about {}: {err}", dir.display());
+            log::warn!("[files] could not ask git about {}: {err}", dir.display());
         }
     }
 }

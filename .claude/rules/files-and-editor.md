@@ -68,7 +68,7 @@ code, because the alternative is a line per open folder on every window focus, f
 project nobody has put under git — and a channel that noisy says nothing when a real failure needs it.
 What that gives up is real and small: 128 is git's code for any fatal, so an unreadable index or a
 permissions problem is now as quiet as an ordinary folder. The failures that do **not** recur still
-speak — `VcsError::NoGit` and a read that hit `READ_CEILING` are logged to stderr.
+speak — `VcsError::NoGit` and a read that hit `READ_CEILING` reach the log as a warning.
 
 `run::git_maybe_fed` is `git_maybe` with bytes written to the child's standard input, and it exists
 for this one caller. `bounded` gives every other git call `/dev/null` there on purpose — git with an

@@ -541,7 +541,7 @@ async fn handle(
             // terminal worker treats it: a `.gitignore` that could not be
             // written is not a reason to leave a tracker broken.
             if let Err(err) = crate::runs::gitignore::ensure(&dir) {
-                eprintln!("[tracker] could not add .beads.backup-*/ to .gitignore: {err}");
+                log::warn!("[tracker] could not add .beads.backup-*/ to .gitignore: {err}");
             }
             // The copy next, and a failure to take it ends the whole thing
             // here: it is the only reason the button in front of this has no
