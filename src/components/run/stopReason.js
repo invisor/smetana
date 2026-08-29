@@ -114,7 +114,7 @@ export const REASONS = {
    `service.rs` — and a count of one presented as a streak reads as a threshold
    nobody reached. */
 function emptyBatches(batches) {
-  if (typeof batches !== 'number' || batches < 1) return ''
+  if (!Number.isInteger(batches) || batches < 1) return ''
   return batches === 1
     ? 'one batch, and it did nothing at all'
     : `${batches} batches in a row, none of which did anything`

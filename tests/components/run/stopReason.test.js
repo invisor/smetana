@@ -40,8 +40,11 @@ describe('how the run bar draws an ending', () => {
     expect(stopReason('nothing_done').text).not.toBe(stopReason('no_progress').text)
     /* Not the fallback's sentence, which is the version-skew path and says so
        of itself: a build that knows this ending must not read as one that does
-       not. */
-    expect(stopReason('nothing_done').text).not.toBe(stopReason('nothing_done_x').text)
+       not. Compared against the literal the fallback would produce for this
+       very kind — comparing it against another unknown kind's fallback passes
+       whether the entry exists or not, which is an assertion that cannot
+       fail. */
+    expect(stopReason('nothing_done').text).not.toBe('Stopped — nothing done')
   })
 
   /* smetana-e3o. Nothing fell over here — the agent asked something and an
