@@ -591,18 +591,16 @@ an opened card at all if the component keeps the state, and `?view=gallery` is t
 this project has for anything under `src/components/`.
 
 `components/agent/sessionMenu.js` is the menu's whole rule, beside `sessionRow.js` and outside the
-component for the same reason. Eight verbs in Orca's own order and grouping — Resume in worktree;
-Copy resume command; Open log, Reveal log, Open working directory; Copy session id, Copy log path;
-Delete. The first of them is the only one that is not about the file, and it has a section of its
-own below. Copy resume command stays beside it and is not made redundant by it: it is the answer for
-somebody who would rather paste `cd … && claude --resume …` into their own terminal than have this
-app spawn anything.
+component for the same reason. Nine verbs in Orca's own order and grouping — Resume in worktree,
+Continue in a new session; Copy resume command; Open log, Reveal log, Open working directory; Copy
+session id, Copy log path; Delete. The first two are the only ones that are not about the file, and
+they have a section of their own below. Copy resume command stays beside them and is not made
+redundant by them: it is the answer for somebody who would rather paste `cd … && claude --resume …`
+into their own terminal than have this app spawn anything.
 
-The ninth verb Orca has, **Continue in a new session, is deliberately still absent, and it is an open
-question rather than an omission**: what a new session starting from the same place receives as
-input — the transcript, a summary of it, nothing but the directory — is settled nowhere in this
-project, and the three answers behave differently enough that a row which guessed would be a row
-doing something nobody chose.
+**No ellipsis on the second**, where Orca writes `Continue in New Session…`. An ellipsis is a promise
+to ask the person something, and this row asks nothing: it starts an agent exactly as the row above
+it does, in the same directory and on the same history.
 
 **The three copying verbs answer on the row's menu button, not in a toast.** `kanban/copyId.js` is
 the policy and this follows it to the millisecond: a copy is the one action with nothing on screen to
@@ -658,15 +656,15 @@ draws. Its ground is the project alone: the other sorts of ground are sets the a
 and there is no set of sessions to watch, so a transcript that goes while the window stands open is
 answered by the delete itself saying so rather than by the window vanishing.
 
-**Every one of the verbs that reaches a file says something when it cannot be done.** The list is read when the tab is
-opened and never watched, so a transcript deleted from somewhere else — or a worktree removed after
-the session that ran in it — leaves a row whose every verb is about a file that has gone. That is the
-one place this subsystem's "nothing here is an error" contract is deliberately reversed:
-`sessions/act.rs` answers with a sentence written for a person, and `DesktopApp.vue` puts it in the
-toast corner. A menu item that did nothing and said nothing would read as a broken app rather than as
+**Every one of the verbs that reaches a file says something when it cannot be done.** The list is
+read when the tab is opened and never watched, so a transcript deleted from somewhere else — or a
+worktree removed after the session that ran in it — leaves a row whose every verb is about a file
+that has gone. That is the one place this subsystem's "nothing here is an error" contract is
+deliberately reversed: `sessions/act.rs` answers with a sentence written for a person, and
+`DesktopApp.vue` puts it in the toast corner. A menu item that did nothing and said nothing would read as a broken app rather than as
 a stale row.
 
-### Resume: a session off disk comes back as a live agent
+### Resume and fork: a session off disk comes back as a live agent
 
 The customer's decision, stated directly: resuming must not look like a terminal opening, it must
 look like **an agent being restored**. So Resume in worktree puts an ordinary row in the left
@@ -674,11 +672,21 @@ column's Agents tab — a state, a timer, an elapsed time, a place in the scope 
 terminal tab behind it exists only because an agent in this app *is* a PTY session. Orca has no
 terminal of its own and hands the command outside; that shape was discussed and rejected.
 
+**Continue in a new session is a fork**, and that is the customer's decision too: the same command
+line with `--fork-session` behind it, in the same directory, on the same history. The one difference
+is where the writing lands — a resume goes on filling the transcript it opened, a fork leaves that
+file exactly as it was and starts a second one beside it — so a card turning up in this tab
+afterwards is the expected outcome and not a duplicate. Rejected with that choice: a clean session in
+the same folder, which would have differed from "+ New agent" only by its directory, and a new
+session opened on a prompt assembled out of the transcript, which is a new intent and a new prompt in
+`prompt.rs` for something the fork gives whole and more accurately.
+
 **There is one road to a PTY and this takes it.** `resumeSession` in `DesktopApp.vue` calls
 `createSession` with an `Intent::ResumeSession`, which is `terminal_create`, which is the profile's
 own command line plus `--resume <id>` and `Pty::spawn` — the same road "+ New agent", a filing
 session and a run's batch all take. A second way to start an agent is the place two ways silently
-diverge.
+diverge, which is also why the fork is a `fork` flag on that one intent rather than a road of its
+own: everything but the arguments is shared.
 
 **The working directory is the session's own, and never the project root.** `claude --resume`
 resolves an id against the directory it is run in, so the same id somewhere else is a session Claude
@@ -696,9 +704,16 @@ written against. The row is greyed with the reason on it, from `cwdExists` on `S
 menu somebody has already pressed. It can be stale, deliberately, and the spawn's own guard is what
 answers a worktree removed since the tab was opened.
 
-**A profile that cannot resume greys it too**, with its own reason. `Profile::resume_args` is the
-capability and `.claude/rules/agents.md` carries the argument; `RESUMES_BY_ID` in
-`components/agent/sessionMenu.js` is the front end's copy of it and the file says so.
+**A profile that cannot resume greys it too**, with its own reason. `Profile::resume_args` and
+`Profile::fork_args` are the two capabilities — two answers, because a harness that reopens a
+transcript and cannot branch one is an ordinary shape — and `.claude/rules/agents.md` carries the
+arguments; `RESUMES_BY_ID` and `FORKS_BY_ID` in `components/agent/sessionMenu.js` are the front end's
+copy of them and the file says so. The refusals are worded apart for that reason, and the opened
+card draws every *distinct* one: the commonest, a worktree that is gone, stops both verbs in the same
+words and is said once, since two identical lines under two greyed buttons read as two faults. The
+fork's own fragment is the terse `cannot fork` because `SESSION_MENU_W` is what a refusal is worded
+against rather than the other way round — this menu opens over a side panel, and a panel grown to fit
+a longer sentence is one wider than the column its trigger stands in.
 
 **The row must not lie about what it is doing.** A resumed session has no tracker work — nothing
 claimed it and there is no issue behind it — so `SessionWork::ResumeSession` carries the session's
@@ -707,16 +722,23 @@ label rather than beside it because `tasks` is set in mono, where a person's own
 as an identifier; the id is on the card in full and not on the row, since a 36-character UUID tells
 nobody which conversation this is.
 
+**A fork draws that same row**, deliberately and by the customer's choice: `Intent::work` reads
+`fork` and throws it away. What matters in the agents list is which conversation is going, not which
+file it is written into, and two indistinguishable rows — which need somebody to raise one session
+by both verbs in a row — are rare enough not to be worth a second kind of work.
+
 **One side moves.** Resume switches the left column to Agents and the centre to the terminal, exactly
 as "+ New agent" does, and deliberately leaves `rightTab` alone: somebody standing in the Sessions
 tab is standing there on purpose, possibly to bring up a second one.
 
-The verb is drawn twice — a row of the menu and a button in the opened card, both raising the same
+Each verb is drawn twice — a row of the menu and a button in the opened card, both raising the same
 `action` with the same `kind`, which is Orca's own arrangement and the reason the card has a button
-row at all.
+box at all. The buttons are **stacked** where Orca has them side by side, and the panel is why: this
+card is drawn in a side column, and half of a narrow one is not enough for `Continue in a new
+session` without an ellipsis through the label of a control whose whole job is to say what it does.
 
-Still deliberately not built, and each of them discussed: searching,
-grouping by project, and telling a "talking" session from a "coding" one. The last is the
-interesting one — coding happens in a worktree, and both the path and the branch carry a task id —
-but the signal is not absolute (98 of 275 root sessions sat on `develop`, `staging` or a `feature/…`
-branch), and the instruction was to show all of them and sort it out later.
+Still deliberately not built, and each of them discussed: searching, grouping by project, and
+telling a "talking" session from a "coding" one. The last is the interesting one — coding happens in
+a worktree, and both the path and the branch carry a task id — but the signal is not absolute (98 of
+275 root sessions sat on `develop`, `staging` or a `feature/…` branch), and the instruction was to
+show all of them and sort it out later.

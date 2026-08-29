@@ -3,6 +3,7 @@ import {
   COPIED_MS,
   DELETE_SESSION_DESCRIPTION,
   DELETE_SESSION_TITLE,
+  FORK_LABEL,
   RESUME_LABEL,
   SESSION_MENU_W,
   copyNoun,
@@ -15,6 +16,7 @@ import {
   resumeCommand,
   resumeMenuLabel,
   resumeReasonLine,
+  resumeReasonLines,
   sessionMenuItems
 } from '../../../src/components/agent/sessionMenu.js'
 
@@ -29,22 +31,23 @@ const session = (over = {}) => ({
 })
 
 /* The project as it is configured out of the box. Written once because every
-   test about the resume has to say which agent the project is set to, and the
-   answer decides the whole rule. */
+   test about the two launching verbs has to say which agent the project is set
+   to, and the answer decides the whole rule. */
 const claude = { agent: 'claude' }
+const forking = { agent: 'claude', fork: true }
 
 const kinds = (items) => items.filter((item) => !item.type).map((item) => item.kind)
 
 describe('what a session row offers', () => {
   /* The verbs and their order are the acceptance criteria of this task, and the
      consuming side of the pair is `onSessionAction` in a `.vue` file no runner
-     here can read — so this is the only mechanical check either half gets.
-     Continue in a new session is the ninth Orca has and is deliberately not
-     here: what it would receive as input is an open question, and a row that
-     guessed would be a row doing something nobody chose. */
-  it('offers the eight verbs, in Orca\'s order', () => {
+     here can read — so this is the only mechanical check either half gets. All
+     nine Orca has, and the two that start an agent lead them the way they lead
+     Orca's own menu. */
+  it('offers the nine verbs, in Orca\'s order', () => {
     expect(kinds(sessionMenuItems())).toEqual([
       'resume',
+      'fork',
       'copy-resume',
       'open-log',
       'reveal-log',
@@ -55,12 +58,13 @@ describe('what a session row offers', () => {
     ])
   })
 
-  /* Five groups: the one that starts an agent, the one that hands a command
+  /* Five groups: the two that start an agent, the one that hands a command
      over, the three that open something somewhere else, the two that copy, and
      the one that destroys. */
   it('groups them with a separator between each group', () => {
     const shape = sessionMenuItems().map((item) => item.type ?? 'row')
     expect(shape).toEqual([
+      'row',
       'row',
       'separator',
       'row',
@@ -113,18 +117,21 @@ describe('what a session row offers', () => {
   })
 
   /* The ceiling is measured against the longest label this file can produce,
-     which is the greyed resume carrying its own reason — every other row is a
-     verb of two or three words. `ContextMenu` clips at the ceiling with an
-     ellipsis and a menu row has no tooltip, so a label past it is gone with no
-     way back.
+     which is one of the two greyed launching rows carrying its own reason —
+     every other row is a verb of two or three words. `ContextMenu` clips at the
+     ceiling with an ellipsis and a menu row has no tooltip, so a label past it
+     is gone with no way back.
 
      A test cannot measure a font, so what it holds is the *arithmetic* the
      ceiling was chosen by: 70px of chrome and 6.4px a character, which is what
-     that sentence measured at in the webview (324px for 51 characters at
-     `--text-sm`) rounded up. What it catches is a reason reworded longer than
-     the panel it has to fit in, which is the way this number goes wrong. */
+     the resume's sentence measured at in the webview (324px for 51 characters
+     at `--text-sm`) rounded up. What it catches is a reason reworded longer
+     than the panel it has to fit in, which is the way this number goes wrong. */
   it('keeps a ceiling wide enough for its longest label', () => {
-    const longest = sessionMenuItems({ resume: resumeAvailability({}, {}) })
+    const longest = sessionMenuItems({
+      resume: resumeAvailability({}, {}),
+      fork: resumeAvailability({}, { fork: true })
+    })
       .filter((item) => !item.type)
       .map((item) => item.label)
       .reduce((a, b) => (b.length > a.length ? b : a))
@@ -204,6 +211,83 @@ describe('bringing a session back as a live agent', () => {
     const row = sessionMenuItems({ busy: true }).find((item) => item.kind === 'resume')
     expect(row.disabled).toBe(true)
     expect(row.label).toBe(RESUME_LABEL)
+  })
+})
+
+describe('carrying a session on in a new one', () => {
+  /* Orca calls this row `Continue in New Session…` and the ellipsis is a
+     promise to ask the person something. Ours asks nothing — it starts an agent
+     exactly as the row above it does — so the label carries none, and this is
+     the one mechanical check of a rule that is otherwise a sentence in a
+     comment. Sentence case with it, as every label in this system is. */
+  it('is called Continue in a new session, with no ellipsis on it', () => {
+    expect(FORK_LABEL).toBe('Continue in a new session')
+    expect(FORK_LABEL).not.toMatch(/[.…]/)
+    const row = sessionMenuItems().find((item) => item.kind === 'fork')
+    expect(row.label).toBe(FORK_LABEL)
+    expect(row.disabled).toBe(false)
+  })
+
+  /* The row sits directly under the resume and draws its own glyph: what the
+     verb does to a transcript is branch it, and the resume's `play` on both
+     would have made two rows that differ only in their words. */
+  it('stands beside the resume in the group that starts an agent', () => {
+    const [first, second] = sessionMenuItems()
+    expect([first.kind, second.kind]).toEqual(['resume', 'fork'])
+    expect(second.icon).toBe('git-fork')
+    expect(second.icon).not.toBe(first.icon)
+  })
+
+  /* A worktree removed once its task merged takes both verbs with it, and in
+     the same words: `--resume` resolves an id against the directory it is run
+     in either way, so a fork has no more of a place to run than a resume. */
+  it('is refused with the resume when the working directory is gone', () => {
+    const answer = resumeAvailability(session({ cwdExists: false }), forking)
+    expect(answer.available).toBe(false)
+    expect(answer.reason).toBe(resumeAvailability(session({ cwdExists: false }), claude).reason)
+    const row = sessionMenuItems({ fork: answer }).find((item) => item.kind === 'fork')
+    expect(row.disabled).toBe(true)
+    expect(row.label).toBe(`${FORK_LABEL} — the working directory is gone`)
+  })
+
+  it('is refused with the resume for a transcript that recorded no directory', () => {
+    const answer = resumeAvailability(session({ cwd: '' }), forking)
+    expect(answer.available).toBe(false)
+    expect(answer.reason).toBe('no working directory recorded')
+  })
+
+  /* The capability is the profile's own answer — `Profile::fork_args` in Rust,
+     and not `--fork-session` appended to somebody else's `--resume` — so the
+     refusal is worded about forking rather than about resuming. A harness that
+     reopens a transcript and cannot branch one is the shape this keeps room
+     for. */
+  it('says it is the forking the agent cannot do, not the resuming', () => {
+    for (const agent of ['codex', '', 'something-new']) {
+      const answer = resumeAvailability(session(), { agent, fork: true })
+      expect(answer.available).toBe(false)
+      expect(answer.reason).toBe('this agent cannot fork')
+    }
+  })
+
+  /* The opened card's account of two greyed buttons. One refusal in two
+     identical words is one line — the alternative reads as two faults — and two
+     genuinely different answers are two. */
+  it('says one shared reason once and two different ones twice', () => {
+    expect(resumeReasonLines('the working directory is gone', 'the working directory is gone')).toEqual([
+      'The working directory is gone.'
+    ])
+    expect(
+      resumeReasonLines('this agent cannot resume by id', 'this agent cannot fork')
+    ).toEqual(['This agent cannot resume by id.', 'This agent cannot fork.'])
+    expect(resumeReasonLines(null, null)).toEqual([])
+  })
+
+  /* A delete in flight greys this one with everything else too, and the label
+     stays the plain verb: the row is not refused, it is waiting. */
+  it('freezes while a delete runs, without claiming a reason', () => {
+    const row = sessionMenuItems({ busy: true }).find((item) => item.kind === 'fork')
+    expect(row.disabled).toBe(true)
+    expect(row.label).toBe(FORK_LABEL)
   })
 })
 

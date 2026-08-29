@@ -625,9 +625,25 @@ fn handle(
             // card promising the conversation somebody left. `pick` may also
             // have substituted another harness for the configured one, which is
             // exactly the case nothing on screen can see.
-            if let agents::Intent::ResumeSession { id, .. } = &intent {
-                if profile.resume_args(id).is_none() {
-                    let _ = tx.send(Err(TerminalError::NoResume(profile.id().to_owned())));
+            //
+            // Which of the two capabilities is asked for is `fork`, and either
+            // way it is the profile's own answer: a harness that reopens a
+            // transcript and cannot branch one refuses the second verb alone,
+            // and each refusal reaches the person as its own sentence.
+            if let agents::Intent::ResumeSession { id, fork, .. } = &intent {
+                let refused = if *fork {
+                    profile
+                        .fork_args(id)
+                        .is_none()
+                        .then(|| TerminalError::NoFork(profile.id().to_owned()))
+                } else {
+                    profile
+                        .resume_args(id)
+                        .is_none()
+                        .then(|| TerminalError::NoResume(profile.id().to_owned()))
+                };
+                if let Some(err) = refused {
+                    let _ = tx.send(Err(err));
                     return;
                 }
             }

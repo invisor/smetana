@@ -64,6 +64,8 @@ import AgentList from '../components/agent/AgentList.vue'
 import SessionRow from '../components/agent/SessionRow.vue'
 import {
   DELETE_SESSION_TITLE,
+  FORK_KIND,
+  RESUME_KIND,
   copyNoun as copyVerbNoun,
   copyPayload,
   isCopyKind,
@@ -2261,6 +2263,16 @@ async function deleteSession(session) {
    session is a path under `.worktrees/` and is never quietly replaced by the
    project root.
 
+   `fork` is the whole of the difference between the Sessions tab's two
+   launching verbs, and it rides in the intent rather than forking this
+   function: Resume in worktree carries on writing into the transcript it
+   opened, Continue in a new session leaves that file exactly as it was and
+   starts a second one beside it from the same history. Everything else — the
+   directory, the id, the guard, the row that appears — is one path, because two
+   would be the place two paths silently diverge. The second card that turns up
+   in this tab afterwards is that fork's own transcript and an expected outcome
+   rather than a duplicate.
+
    The two lines before the await are `newAgent`'s, for its stated reason: a
    spawn takes about a second, and a person who pressed this must see the row
    they asked for rather than nothing at all. What is deliberately *not* here is
@@ -2281,10 +2293,10 @@ async function deleteSession(session) {
    The catch swallows the rejection for `newAgent`'s reason: `createSession` has
    already reported it, and this exists only to stop Vue repeating what the
    store said. */
-async function resumeSession(session) {
+async function resumeSession(session, { fork = false } = {}) {
   const path = activePath.value
   if (!path) return
-  if (!resumeAvailability(session, { agent: settings.agent }).available) return
+  if (!resumeAvailability(session, { agent: settings.agent, fork }).available) return
   try {
     project.sideTab = 'agents'
     project.activeTab = 'terminal'
@@ -2294,7 +2306,8 @@ async function resumeSession(session) {
       cwd: session.cwd,
       /* Absence travels as absence: a transcript nobody typed in has no title,
          and the row says what it is rather than inventing a name for it. */
-      title: session.title ?? null
+      title: session.title ?? null,
+      fork
     })
   } catch {
     // already reported — see comment above
@@ -2317,15 +2330,15 @@ const onSessionAction = async ({ kind, session }) => {
   /* Three verbs and one shape: a sentence from the worker, or null. Written
      here rather than three times over so that the rows below stay a list of
      what each verb is, which is the half a person reads this chain for. The
-     resume is not one of them — it starts a session rather than reaching a
-     file, and a failed spawn is already a toast of the store's. */
+     two launching verbs are not among them — they start a session rather than
+     reaching a file, and a failed spawn is already a toast of the store's. */
   const say = (failure, title) => {
     if (failure) sayFileMenu({ tone: 'error', title, description: failure })
   }
   if (isCopyKind(kind)) {
     await copyFromSession(kind, session)
-  } else if (kind === 'resume') {
-    await resumeSession(session)
+  } else if (kind === RESUME_KIND || kind === FORK_KIND) {
+    await resumeSession(session, { fork: kind === FORK_KIND })
   } else if (kind === 'open-log') {
     say(await openSessionLog(session?.path), 'Could not open the log')
   } else if (kind === 'open-cwd') {

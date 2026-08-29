@@ -269,10 +269,20 @@ pub enum Intent {
     /// the row in the agents panel would either say nothing about which
     /// conversation this is or pass itself off as a claimed task. `None` for a
     /// transcript with no human message in it, which is an ordinary outcome.
+    ///
+    /// `fork` is the whole difference between the two rows the Sessions tab
+    /// offers. `false` is Resume in worktree, which goes on writing into the
+    /// transcript it opened; `true` is Continue in a new session, which leaves
+    /// that file exactly as it was and starts a second one beside it from the
+    /// same history. One variant and not two, because everything else about
+    /// them is the same — the directory, the id, the row it draws — and the
+    /// arguments are the profile's own answer either way (`resume_args`
+    /// against `fork_args`).
     ResumeSession {
         id: String,
         cwd: String,
         title: Option<String>,
+        fork: bool,
     },
     /// Work out what this project is made of and write
     /// `.smetana/project.toml`. Started from the dialog a person gets when
@@ -358,6 +368,11 @@ impl Intent {
             // 36-character UUID and an absolute path are the briefing that got
             // the session started. The card in the Sessions tab is where both
             // of those are already written out.
+            // A fork draws the same row as a resume, deliberately: what a
+            // person picks a session out of that list for is the conversation,
+            // not which file it goes on being written into. `fork` is read here
+            // and thrown away — the one thing the row would gain from it is a
+            // second caption nobody asked for.
             Intent::ResumeSession { title, .. } => W::ResumeSession { title: title.clone() },
             Intent::Setup => W::Setup,
             Intent::Run { .. } => W::Run,
@@ -505,6 +520,22 @@ pub trait Profile: Sync {
     /// neighbours: the id is the argument, so there is nothing static to hand
     /// back.
     fn resume_args(&self, _session: &str) -> Option<Vec<String>> {
+        None
+    }
+
+    /// How this harness is told to open a recorded session's history in a
+    /// **new** session of its own, leaving the original transcript exactly as
+    /// it was.
+    ///
+    /// Its own method rather than a flag appended to `resume_args`, for the
+    /// reason that one already records: a capability and its arguments are one
+    /// answer, so a caller never composes somebody else's command line out of
+    /// two halves. A harness that can reopen a transcript and cannot branch one
+    /// is an ordinary shape, and appending would have invented a flag for it.
+    ///
+    /// The default is `None` and refuses before anything is spawned
+    /// (`TerminalError::NoFork`), exactly as `resume_args`'s does.
+    fn fork_args(&self, _session: &str) -> Option<Vec<String>> {
         None
     }
 
@@ -679,6 +710,31 @@ mod tests {
             let profile = resolve(id).expect("a listed id must resolve");
             assert_eq!(profile.id(), id);
         }
+    }
+
+    /// The two launching verbs of the Sessions tab draw **one** row, and this
+    /// is where that is decided: `Intent::work` reads `fork` and drops it. What
+    /// a person picks a session out of that list for is the conversation, and
+    /// two rows that differed only in which file was being written into would
+    /// spend a caption on the half nobody chose between.
+    #[test]
+    fn a_forked_session_draws_the_same_row_as_a_resumed_one() {
+        let work = |fork| {
+            Intent::ResumeSession {
+                id: "9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60".into(),
+                cwd: "/p/.worktrees/smetana-0cj".into(),
+                title: Some("Move the card to done".into()),
+                fork,
+            }
+            .work()
+        };
+        assert_eq!(work(true), work(false));
+        assert_eq!(
+            work(true),
+            crate::terminal::model::SessionWork::ResumeSession {
+                title: Some("Move the card to done".into())
+            }
+        );
     }
 
     #[test]

@@ -54,8 +54,14 @@ impl Profile for Claude {
         // resolves the id against the working directory, which
         // `terminal::service` has already checked is the one the transcript
         // recorded.
-        if let Intent::ResumeSession { id, .. } = &launch.intent {
-            for arg in self.resume_args(id).into_iter().flatten() {
+        //
+        // Which of the two capabilities the profile is asked for is the whole
+        // of the difference between the Sessions tab's two launching verbs, and
+        // it is asked as one question either way: neither branch composes a
+        // command line out of the other's answer plus a flag.
+        if let Intent::ResumeSession { id, fork, .. } = &launch.intent {
+            let resume = if *fork { self.fork_args(id) } else { self.resume_args(id) };
+            for arg in resume.into_iter().flatten() {
                 cmd.arg(arg);
             }
         }
@@ -174,6 +180,21 @@ impl Profile for Claude {
     /// fresh agent in a worktree under a card promising a conversation.
     fn resume_args(&self, session: &str) -> Option<Vec<String>> {
         Some(vec!["--resume".to_owned(), session.to_owned()])
+    }
+
+    /// The same `--resume <id>` with `--fork-session` behind it, which is
+    /// Claude Code's own way of opening a recorded conversation into a **new**
+    /// session: its help describes that flag as starting a new session id when
+    /// resuming, so nothing here is guessed about somebody else's grammar. The
+    /// original transcript is left as it was and a second one appears beside
+    /// it, which is why the Sessions tab grows a card after this and not after
+    /// a plain resume.
+    ///
+    /// Written out whole rather than as `resume_args` plus a flag: the two are
+    /// separate answers to separate questions — see `Profile::fork_args` — and
+    /// a caller that appended would be composing a command line out of halves.
+    fn fork_args(&self, session: &str) -> Option<Vec<String>> {
+        Some(vec!["--resume".to_owned(), session.to_owned(), "--fork-session".to_owned()])
     }
 
     fn parse_usage(&self, output: &str) -> Option<Usage> {
@@ -641,10 +662,15 @@ mod tests {
     }
 
     fn resume(id: &str) -> Intent {
+        resuming(id, false)
+    }
+
+    fn resuming(id: &str, fork: bool) -> Intent {
         Intent::ResumeSession {
             id: id.to_owned(),
             cwd: "/tmp/project/.worktrees/smetana-0cj".into(),
             title: Some("Move the card to done".into()),
+            fork,
         }
     }
 
@@ -694,6 +720,43 @@ mod tests {
         for intent in [Intent::Bare, Intent::Setup, new_task(Vec::new())] {
             let args = argv(&launch(intent, false));
             assert!(!args.iter().any(|a| a == "--resume"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_forked_session_carries_the_same_id_and_the_flag_that_branches_it() {
+        // Continue in a new session: the resume's own command line with
+        // `--fork-session` behind it, so the history is read and what is
+        // written goes somewhere new. Leaving the original transcript alone is
+        // what that flag is for, and it is why the Sessions tab grows a second
+        // card after this.
+        let args = argv(&launch(resuming("9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60", true), true));
+        assert_eq!(
+            args,
+            vec![
+                "claude",
+                "--resume",
+                "9f1c0a2e-6d4b-4f77-8f1a-0c2b3d4e5f60",
+                "--fork-session",
+                "--plugin-dir",
+                "/app/resources/smetana",
+            ],
+            "a forked session is the resumed command line plus --fork-session"
+        );
+    }
+
+    #[test]
+    fn only_a_fork_branches_the_transcript() {
+        // The flag that decides whether somebody's transcript is written into
+        // or left alone, so its absence is worth an assertion of its own rather
+        // than only the whole-line comparison above: a fork leaking into Resume
+        // in worktree would answer a person who asked to carry on in the same
+        // conversation with a second one.
+        let plain = argv(&launch(resume("abc"), false));
+        assert!(!plain.iter().any(|a| a == "--fork-session"), "{plain:?}");
+        for intent in [Intent::Bare, Intent::Setup, new_task(Vec::new())] {
+            let args = argv(&launch(intent, false));
+            assert!(!args.iter().any(|a| a == "--fork-session"), "{args:?}");
         }
     }
 

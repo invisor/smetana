@@ -1726,12 +1726,19 @@ mod tests {
         //
         // Both languages, because the paragraphs are what would otherwise make
         // this `Some` whatever the work says.
-        for languages in [english(), russian()] {
+        //
+        // Both verbs too: a fork opens on a conversation that already has
+        // somebody's words in it exactly as a resume does, so the refusal
+        // cannot be written against `fork == false`.
+        for (languages, fork) in
+            [(english(), false), (english(), true), (russian(), false), (russian(), true)]
+        {
             let built = build(
                 &Intent::ResumeSession {
                     id: "9f1c0a2e".into(),
                     cwd: "/p/.worktrees/smetana-0cj".into(),
                     title: Some("Move the card".into()),
+                    fork,
                 },
                 SkillDelivery::PluginDir,
                 ImageDelivery::InPrompt,
@@ -1740,7 +1747,7 @@ mod tests {
                 every_skill(),
                 &languages,
             );
-            assert_eq!(built, None, "{languages:?} put a prompt on a resumed session");
+            assert_eq!(built, None, "{languages:?} put a prompt on a resumed session (fork: {fork})");
         }
     }
 

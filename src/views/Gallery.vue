@@ -828,8 +828,8 @@ const GALLERY_SESSIONS = [
     path: '/Users/you/.claude/projects/-Users-you-dev-smetana--worktrees-smetana-oln/5d2f8c41.jsonl',
     cwd: '/Users/you/dev/smetana/.worktrees/smetana-oln-sessions-tab-disk-history',
     /* The worktree was removed when its task merged and the transcript stayed
-       behind, which is what greys this card's Resume — the one state of that
-       row the other five fixtures cannot show. */
+       behind, which is what greys this card's two launching buttons — the one
+       state of them the other five fixtures cannot show. */
     cwdExists: false,
     branch: 'feature/smetana-oln-sessions-tab-disk-history',
     title: 'Implement the front-end half of the sessions tab',
@@ -901,8 +901,9 @@ const GALLERY_SESSIONS = [
    The second row starts open, so the opened card is on screen without anybody
    having to find and press a chevron in four theme and density combinations.
    The third starts open too, and for the same reason one card further on: its
-   working directory is gone, so it is where the refused Resume — the button
-   greyed with its reason under it — can be seen without pressing anything.
+   working directory is gone, so it is where the refused launching verbs — both
+   buttons greyed, with the one reason they share written once under them — can
+   be seen without pressing anything.
 
    `action` is answered with the same copy policy the app keeps — one session
    and one outcome at a time, cleared after the same 1.2 s — and with nothing at
@@ -927,11 +928,11 @@ const sessionCopyNounFor = (id) =>
   id != null && id === copiedSessionId.value ? sessionCopyNoun.value : ''
 
 const onSessionAction = async ({ kind, session }) => {
-  /* Everything that is not a copy is left alone, the resume among them: a
-     gallery has no worker to start a session in, and a press that did nothing
-     is the honest answer where a fabricated agent row would not be. What is
-     checkable here is the row and the button — that they are drawn, greyed and
-     explained — which is the half a `.vue` file keeps to itself. */
+  /* Everything that is not a copy is left alone, the two launching verbs among
+     them: a gallery has no worker to start a session in, and a press that did
+     nothing is the honest answer where a fabricated agent row would not be.
+     What is checkable here is the rows and the buttons — that they are drawn,
+     greyed and explained — which is the half a `.vue` file keeps to itself. */
   if (!isCopyKind(kind)) return
   clearTimeout(sessionCopyTimer)
   copiedSessionId.value = session.id
@@ -2934,15 +2935,18 @@ const menuTargetStyle = {
       <!-- The three states of an opened card the list above cannot show at
            once. The first is a session nobody said anything in: its prompt
            block carries the sentence that stands in for a first prompt, which
-           is the only place that string appears. The second is a card whose
-           menu is frozen while a delete runs against it — every row greyed,
-           which is the state the app draws for the moment between Delete and
-           the row leaving the list. The third is a project set to an agent that
-           cannot pick a session up by id: the resume is refused for the whole
-           project rather than for this session, and the card says which of the
-           two refusals it is. The other one — a working directory that has gone
-           — is the third card of the list above, where the fixture carries
-           `cwdExists: false`. -->
+           is the only place that string appears. The second is a card frozen
+           while a delete runs against it — every row of the menu greyed and the
+           two launching buttons with them, and no reason under either, since a
+           freeze is a moment rather than a refusal. That is the state the app
+           draws between Delete and the row leaving the list. The third is a project set to an agent that
+           cannot pick a session up by id: both launching verbs are refused for
+           the whole project rather than for this session, and the card says
+           which of the refusals it is — two lines here, since the harness is
+           asked two questions and answers each in its own words. The other
+           refusal — a working directory that has gone — is the third card of
+           the list above, where the fixture carries `cwdExists: false` and the
+           one reason the two verbs share is written once. -->
       <div :style="{ width: '340px', border: 'var(--border-w) solid var(--border)' }">
         <SessionRow :session="GALLERY_SESSIONS[4]" :now="GALLERY_SESSION_NOW" expanded />
         <SessionRow

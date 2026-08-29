@@ -307,6 +307,16 @@ pub enum TerminalError {
     /// to the spawn, where a rule about spawning belongs.
     #[error("{0} cannot pick a recorded session up by its id")]
     NoResume(String),
+    /// The same refusal one verb over: a recorded session asked to be carried
+    /// on in a *new* session of its own by a harness that cannot be told to do
+    /// it — `Profile::fork_args` answered `None`.
+    ///
+    /// Its own variant rather than a second use of `NoResume`, because the two
+    /// are two capabilities: a harness that reopens a transcript and cannot
+    /// branch one is an ordinary shape, and a sentence saying it cannot resume
+    /// would be untrue about the row nobody pressed.
+    #[error("{0} cannot carry a recorded session on in a new one")]
+    NoFork(String),
 }
 
 impl Session {
