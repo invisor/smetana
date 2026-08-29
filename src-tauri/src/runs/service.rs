@@ -40,6 +40,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::awake;
 use super::config::{self, ConfigState};
+use super::journal::{self, Journal};
 use super::model::{
     Asked, OnQuestion, RepeatedQuestion, Run, RunError, RunScope, RunSettings, RunState, StopReason,
 };
@@ -617,6 +618,11 @@ fn live_projects(active: &HashMap<u64, Active>) -> Vec<String> {
 /// which is the very shape `finish` exists to collapse.
 struct Account {
     started: Instant,
+    /// What the loop decided and why, written down as it decides it
+    /// (smetana-7di). It rides in this struct because `finish` is the one place
+    /// a run ends and therefore the one place the last line can be written, and
+    /// `finish` already takes an `Account`.
+    journal: Journal,
     /// `None` until the first board read lands, which is exactly the case a run
     /// that died in its preflight is in: there is no baseline, so there is no
     /// diff, and the document says so rather than counting zero.
@@ -653,6 +659,18 @@ async fn drive(
         let _ = report.send(Report::State { token, run: Box::new(run.clone()) });
     };
 
+    // Keyed by the token, which is unique within this app instance — the
+    // document itself is timestamped instead, because a token counts from zero
+    // on every start and would collide across restarts. Made before the
+    // `Account` below rather than out of it, because the journal is opened
+    // inside this directory and wants it to exist.
+    let reports = root.join(".smetana").join("runs").join(token.to_string());
+    if let Err(err) = std::fs::create_dir_all(&reports) {
+        // Never a reason to hold a run up: a batch whose account cannot be
+        // written is a document saying that batch left none, which is the same
+        // outcome as a batch killed before it could write one.
+        log::warn!("could not make {}: {err}", reports.display());
+    }
     // The clock starts before anything the run will be held to account for: the
     // preflight, the pauses on a spent allowance and the crash backoff are all
     // part of how long the night took.
@@ -660,20 +678,18 @@ async fn drive(
         started: Instant::now(),
         baseline: None,
         batches: Vec::new(),
-        // Keyed by the token, which is unique within this app instance — the
-        // document itself is timestamped instead, because a token counts from
-        // zero on every start and would collide across restarts.
-        reports: root.join(".smetana").join("runs").join(token.to_string()),
+        // Opened before the first thing worth writing down and appended to line
+        // by line from here, so a run that dies leaves its journal up to the
+        // moment it died — which is the whole of what it is for. A journal that
+        // could not be opened is not an ending: `Journal` keeps the app-log half
+        // and no caller here learns the difference.
+        journal: Journal::open(&reports, token, chrono::Local::now()),
+        reports,
     };
-    if let Err(err) = std::fs::create_dir_all(&account.reports) {
-        // Never a reason to hold a run up: a batch whose account cannot be
-        // written is a document saying that batch left none, which is the same
-        // outcome as a batch killed before it could write one.
-        log::warn!("could not make {}: {err}", account.reports.display());
-    }
+    account.journal.say(&journal::started(&run, MAX_ITERATIONS));
 
     if let Some(config) = preflight_config {
-        match bring_up(&root, &config, &mut stop).await {
+        match bring_up(&root, &config, &account.journal, &mut stop).await {
             BringUp::Ready => {}
             BringUp::Cancelled => {
                 finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
@@ -725,6 +741,10 @@ async fn drive(
 
         let Some(issues) = board(&tracker).await else {
             unreadable += 1;
+            account.journal.say(&journal::unreadable_board(
+                journal::Read::Decision,
+                Some(unreadable),
+            ));
             // Once is a slow bd call or a watcher restart; twice running is a
             // tracker that is not there, and a run that cannot read the board
             // is deciding from nothing.
@@ -743,6 +763,7 @@ async fn drive(
         }
 
         let mut now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
+        account.journal.say(&journal::board(journal::Read::Decision, &now));
         // Narrower than the mode on purpose: what the decision cares about is
         // whether this run may take a second batch, not who answers a question
         // — see `RunMode::one_batch`.
@@ -760,6 +781,7 @@ async fn drive(
         if matches!(action, Action::Stop(StopReason::QueueEmpty)) {
             if let Some(fresh) = fresh_board(&tracker).await {
                 now = queue::snapshot(&fresh, &run.settings.scope, run.settings.min_priority);
+                account.journal.say(&journal::board(journal::Read::Resync, &now));
                 action = queue::next_action(
                     &now,
                     previous.as_ref(),
@@ -770,6 +792,16 @@ async fn drive(
                 );
             }
         }
+        // The whole of what the night of 29 August could not be asked: the
+        // decision, the ending it was made from, and whether this board is the
+        // board the last decision saw.
+        account.journal.say(&journal::decision(
+            &action,
+            last_batch,
+            iteration,
+            previous.as_ref(),
+            &now,
+        ));
         match action {
             Action::Stop(reason) => {
                 finish(&mut run, reason, &say, &account, &root, &tracker).await;
@@ -783,7 +815,8 @@ async fn drive(
         // the whole reason the gate is worth having: an exhausted limit costs
         // no session at all, where discovering it by failing costs one every
         // time round.
-        let Some(tasks) = headroom(&mut run, &say, profile, &mut stop).await else {
+        let Some(tasks) = headroom(&mut run, &say, profile, &account.journal, &mut stop).await
+        else {
             finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
             return;
         };
@@ -833,6 +866,17 @@ async fn drive(
         // killed at any moment, and what the registry does not know about by
         // then is an agent nobody will ever signal.
         let group = group_of(&terminal, session).await;
+        account.journal.say(&journal::batch_started(
+            batch_no,
+            session,
+            &crate::terminal::model::run_actor(session),
+            group.as_ref(),
+            tasks,
+            // What this batch may take from rather than what it was handed —
+            // nothing hands a batch a list of ids. `previous` is the snapshot
+            // the decision above was made from, which is that set.
+            previous.as_ref().map(|snapshot| snapshot.ready.as_slice()).unwrap_or_default(),
+        ));
         let _ = report.send(Report::Started { token, session, group });
 
         run.working_in(session);
@@ -872,6 +916,23 @@ async fn drive(
         let after = fresh_board(&tracker).await;
         let leftovers =
             after.as_deref().map(|issues| queue::left_behind(issues, &actor)).unwrap_or_default();
+        // Taken once, here, rather than inside the emptiness rule below: the
+        // line on the record and the value the decision is made from have to be
+        // the same snapshot, or the journal describes a board the loop did not
+        // use.
+        let after_board = after
+            .as_deref()
+            .map(|issues| queue::snapshot(issues, &run.settings.scope, run.settings.min_priority));
+        // The load-bearing read of the four. `did_nothing` turns it into
+        // `LastBatch::Empty` or `LastBatch::Completed`, which is the very
+        // discrimination the night of 29 August could not make — and a read
+        // that *failed* falls to the arm that counts the batch as having
+        // completed, so the failure has to be on the record as loudly as the
+        // success.
+        account.journal.say(&match &after_board {
+            Some(snapshot) => journal::board(journal::Read::AfterBatch, snapshot),
+            None => journal::unreadable_board(journal::Read::AfterBatch, None),
+        });
         // In the document, only for a batch that said nothing: an account is a
         // lead telling somebody where it left the board, and a line about the
         // leftovers behind a lead that already answered is one nobody needed.
@@ -881,17 +942,37 @@ async fn drive(
         if !reported {
             record.left_behind = leftovers.clone();
         }
+        account.journal.say(&journal::batch_ended(
+            batch_no,
+            &outcome,
+            record.seconds,
+            reported,
+            &leftovers,
+        ));
         account.batches.push(record);
+        // One line per batch about both counters, whichever of them moved, and
+        // a closure rather than seven copies of it: every arm below ends the
+        // batch, and seven call sites is how one of them comes to be missing
+        // the line this whole task exists for. It goes where `last_batch` has
+        // just been settled and nowhere else — see `journal::counted` for the
+        // two endings that deliberately have no counted line.
+        let counted = |last: LastBatch, crashes: u32, empties: u32, backoff: Option<Duration>| {
+            account.journal.say(&journal::counted(
+                batch_no,
+                last,
+                crashes,
+                MAX_CRASHES,
+                empties,
+                MAX_EMPTY_BATCHES,
+                backoff,
+            ));
+        };
 
         // Did this batch do anything at all? An unreadable board answers no:
         // the rule ends runs, so a fact the app could not check must never
         // stand in for one it did.
-        let nothing_done = match (&after, &previous) {
-            (Some(issues), Some(before)) => queue::did_nothing(
-                reported,
-                before,
-                &queue::snapshot(issues, &run.settings.scope, run.settings.min_priority),
-            ),
+        let nothing_done = match (&after_board, &previous) {
+            (Some(after), Some(before)) => queue::did_nothing(reported, before, after),
             _ => false,
         };
         // "In a row" is literal, the same way it is for a repeated question.
@@ -955,6 +1036,7 @@ async fn drive(
             Batch::HandedBack => {
                 crashes = 0;
                 last_batch = LastBatch::Completed;
+                counted(last_batch, crashes, empties, None);
                 continue;
             }
             Batch::Ended(exit) => {
@@ -989,6 +1071,7 @@ async fn drive(
                     remove_session(&terminal, session).await;
                     park_claims(&tracker, session, &question).await;
                     last_batch = LastBatch::Asked;
+                    counted(last_batch, crashes, empties, None);
                     continue;
                 }
                 OnQuestion::Stop => {
@@ -1031,6 +1114,7 @@ async fn drive(
             if nothing_done {
                 empties += 1;
                 last_batch = LastBatch::Empty;
+                counted(last_batch, crashes, empties, None);
                 // A run allowed one batch has had it. The threshold is for a
                 // night of them; here there is no second batch to wait for, and
                 // spawning one at a person sitting in the session would be this
@@ -1044,6 +1128,7 @@ async fn drive(
             }
             crashes = 0;
             last_batch = LastBatch::Completed;
+            counted(last_batch, crashes, empties, None);
             continue;
         }
 
@@ -1053,23 +1138,26 @@ async fn drive(
         // gate's own question is asked a second time, here as a classification
         // rather than as a gate — the source of the answer is the same one, and
         // there is no second mechanism to keep in step with the first.
-        if matches!(ask(profile).await, Decision::Pause { .. }) {
+        if matches!(ask(profile).await.1, Decision::Pause { .. }) {
             // Not a crash: the counter is untouched, and `Limited` is what
             // keeps the next round from reading an unmoved board as stuck.
             // Nothing pauses here — the gate at the top of the loop is where
             // waiting lives, and it is about to ask again anyway.
             last_batch = LastBatch::Limited;
+            counted(last_batch, crashes, empties, None);
             continue;
         }
 
         crashes += 1;
         last_batch = LastBatch::Crashed;
         if crashes >= MAX_CRASHES {
+            counted(last_batch, crashes, empties, None);
             let reason = StopReason::Crashed { attempts: crashes };
             finish(&mut run, reason, &say, &account, &root, &tracker).await;
             return;
         }
         let backoff = CRASH_BACKOFF_MAX.min(CRASH_BACKOFF_BASE * 2u32.pow(crashes - 1));
+        counted(last_batch, crashes, empties, Some(backoff));
         // Interruptible: two minutes of backoff is long enough that a
         // person who pressed stop would otherwise think it did nothing.
         tokio::select! {
@@ -1118,13 +1206,29 @@ async fn finish(
     tracker: &TrackerHandle,
 ) {
     let seconds = account.started.elapsed().as_secs();
-    let tasks = match (account.baseline.as_ref(), fresh_board(tracker).await) {
-        (Some(base), Some(issues)) => {
-            Some(summary::diff(base, &issues, &run.settings.scope))
-        }
+    // The run's last board read, and the fourth of the four the journal carries.
+    // A failure here is why `RunSummary::tasks` is an `Option` — an unreadable
+    // board and a board that did not move must never be written down as the
+    // same thing — and the line is what lets somebody reading the journal back
+    // tell which of the two the document's dashes came from.
+    let last = fresh_board(tracker).await;
+    account.journal.say(&match &last {
+        Some(issues) => journal::board(
+            journal::Read::Ending,
+            &queue::snapshot(issues, &run.settings.scope, run.settings.min_priority),
+        ),
+        None => journal::unreadable_board(journal::Read::Ending, None),
+    });
+    let tasks = match (account.baseline.as_ref(), last) {
+        (Some(base), Some(issues)) => Some(summary::diff(base, &issues, &run.settings.scope)),
         _ => None,
     };
-    let report = write_report(root, run, seconds, tasks.as_ref(), &account.batches);
+    let report =
+        write_report(root, run, seconds, tasks.as_ref(), &account.batches, account.journal.path());
+    // The journal's own last line, and the one place the two records name each
+    // other: the document carries the journal's path in its footer, and this
+    // carries the document's.
+    account.journal.say(&journal::ended(&reason, seconds, report.as_deref()));
     run.summary = Some(RunSummary { seconds, tasks, report });
     run.advance(RunState::Stopped { reason });
     say(run);
@@ -1291,6 +1395,10 @@ fn write_report(
     seconds: u64,
     tasks: Option<&summary::Tasks>,
     batches: &[BatchLine],
+    // Where this run's journal is, for the document's footer — `None` when it
+    // could not be opened, and the document then names no path at all rather
+    // than one that is not there.
+    journal: Option<&str>,
 ) -> Option<String> {
     let now = chrono::Local::now();
     let dir = root.join(".smetana").join("reports");
@@ -1308,6 +1416,7 @@ fn write_report(
         seconds,
         tasks,
         batches,
+        journal,
     });
     let (path, mut file) = claim_report(&dir, &now.format("%Y-%m-%d-%H%M%S").to_string())?;
     match std::io::Write::write_all(&mut file, html.as_bytes()) {
@@ -1356,10 +1465,16 @@ fn claim_report(dir: &Path, stem: &str) -> Option<(PathBuf, std::fs::File)> {
 /// What the harness says is left of the allowance. Blocking work goes to a
 /// thread, the same as the preflight's commands: waiting on somebody else's CLI
 /// would otherwise hold the whole async runtime.
-async fn ask(profile: Option<&'static dyn Profile>) -> Decision {
-    let Some(profile) = profile else { return Decision::Normal };
+///
+/// The reading comes back beside the decision because the journal writes both
+/// down and the decision alone cannot carry it: `Decision::Normal` is the
+/// answer to a fresh week and to a probe nobody could read, and those are
+/// different nights (smetana-7di). Nothing decides anything by the extra half.
+async fn ask(profile: Option<&'static dyn Profile>) -> (Option<usage::Usage>, Decision) {
+    let Some(profile) = profile else { return (None, Decision::Normal) };
     let read = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
-    usage::decide(read.as_ref())
+    let decision = usage::decide(read.as_ref());
+    (read, decision)
 }
 
 /// Wait until there is allowance enough to run a batch, and answer with how
@@ -1380,6 +1495,7 @@ async fn headroom(
     run: &mut Run,
     say: &impl Fn(&Run),
     profile: Option<&'static dyn Profile>,
+    journal: &Journal,
     stop: &mut mpsc::Receiver<()>,
 ) -> Option<Option<u8>> {
     loop {
@@ -1390,7 +1506,12 @@ async fn headroom(
         if stop.try_recv().is_ok() {
             return None;
         }
-        match ask(profile).await {
+        // Every answer the gate gets, including the ones that only say the
+        // wait goes on: a paused run writes a line every ten minutes, and those
+        // lines are what tell a night spent waiting from a night spent hung.
+        let (reading, decision) = ask(profile).await;
+        journal.say(&journal::gate(reading.as_ref(), &decision));
+        match decision {
             Decision::Pause { pct, resets } => {
                 run.advance(RunState::Paused { pct, resets });
                 say(run);
@@ -1440,18 +1561,31 @@ enum BringUp {
 async fn bring_up(
     root: &Path,
     config: &config::Preflight,
+    journal: &Journal,
     stop: &mut mpsc::Receiver<()>,
 ) -> BringUp {
     let cancel = preflight::Cancel::default();
     let owned = root.to_path_buf();
     let commands = config.commands.clone();
     let asked = cancel.clone();
+    // Written from inside the blocking thread rather than after it, which is
+    // what `Journal` is clonable for: a preflight that hangs on its third
+    // declared command has to leave the first two on the record.
+    let scribe = journal.clone();
     let mut running = tokio::task::spawn_blocking(move || {
         for command in &commands {
             match preflight::run_command(&owned, command, &asked) {
-                Ok(preflight::Ran::Done) => {}
-                Ok(preflight::Ran::Cancelled) => return Ok(preflight::Ran::Cancelled),
-                Err(err) => return Err(err.to_string()),
+                Ok(ran) => {
+                    scribe.say(&journal::preflight_command(command, Ok(ran)));
+                    if ran == preflight::Ran::Cancelled {
+                        return Ok(preflight::Ran::Cancelled);
+                    }
+                }
+                Err(err) => {
+                    let detail = err.to_string();
+                    scribe.say(&journal::preflight_command(command, Err(&detail)));
+                    return Err(detail);
+                }
             }
         }
         Ok(preflight::Ran::Done)
@@ -1481,7 +1615,9 @@ async fn bring_up(
     }
 
     for check in &config.health {
-        match healthy(check.clone(), stop).await {
+        let probe = healthy(check.clone(), stop).await;
+        journal.say(&journal::preflight_check(check, probe));
+        match probe {
             Probe::Up => {}
             Probe::Cancelled => return BringUp::Cancelled,
             Probe::Down => {
@@ -1496,7 +1632,12 @@ async fn bring_up(
 }
 
 /// What one health check settled on.
-enum Probe {
+///
+/// `pub(super)` and `Copy` for the same reader `Batch` is: the journal names
+/// each declared check and its outcome, and copying is what lets the line be
+/// written before the value is matched on rather than in three arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Probe {
     Up,
     Down,
     Cancelled,
@@ -1669,7 +1810,12 @@ async fn group_of(terminal: &TerminalHandle, session: u64) -> Option<Proc> {
 }
 
 /// What ended the wait on a batch.
-enum Batch {
+///
+/// `pub(super)` for one reader and one reason: `journal.rs` writes the ending
+/// of every batch down, and the acceptance of smetana-7di is that it names the
+/// `Exit` literally rather than paraphrasing it. Nothing outside `runs/` sees
+/// it, and nothing at all decides anything by it but this file.
+pub(super) enum Batch {
     /// The session's process is gone; `Exit` says how.
     Ended(Exit),
     /// The batch has written its account and handed the work back, in a mode

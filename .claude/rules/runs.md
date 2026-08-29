@@ -28,6 +28,7 @@ other caller.
 | `queue.rs` | what is left to do and whether to run another batch — pure, and where the tests are |
 | `summary.rs` | what the run did, as a diff of the board between its first read and its last — pure, and where those tests are |
 | `report.rs` | that summary and the batches' own accounts, rendered into a self-contained HTML document — pure, and where those tests are |
+| `journal.rs` | every decision the loop made, stamped and written as it is made — the line builders are pure and carry the tests, `Journal` is the write-through |
 | `awake.rs` | one power assertion for as long as any run is live anywhere — the counting rule, pure, and where those tests are |
 | `service.rs` | the worker: the loop, one run per scope per project |
 | `commands.rs` | thin `#[tauri::command]`s, shaped exactly like the tracker's |
@@ -375,6 +376,66 @@ emits the result. The ending deliberately does not travel with it — somebody p
 told `Cancelled`, while the loop may have got as far as finding the queue empty a moment later, and
 rewriting the reason under them would put a different run's story on the bar. Neither property the
 map rests on moves: the stop is still immediate, and an entry still leaves in exactly one place.
+
+## The journal: what the loop decided, while it was deciding it
+
+The report above is about the **work**, and there was nothing at all about the
+**mechanics** (smetana-7di). `.smetana/runs.json` is a registry of the live and
+is rewritten in place, so it holds no history by definition; the report names
+batch durations and the agent's own prose and never a batch's exit code, the
+reason another batch followed, or the reason the run stopped. The night of 29
+August is the measurement: six batches in two hours, four of which did nothing,
+and a day later it could not be settled off the disk whether those four were
+counted as `LastBatch::Completed` or as `Crashed`, nor which `StopReason` ended
+the run — both readings fit everything that survived. `journal.rs` closes
+exactly that question, and its list of lines is **closed at nine**: the run's
+own settings, every preflight command and health check with its outcome, every
+board read with the ids in it, every answer from the spend gate with the
+percentages behind it, every `next_action` with the `LastBatch` it came out of,
+every batch's start and ending, the two counters after each batch, and the
+ending with the document it was written into.
+
+Closed means whole, in both directions. A run makes **four** board reads and all
+four are on the record, each marked and each written down when it fails as well
+as when it answers: the one a decision is made from, the resync that settles an
+empty queue, the one after a batch, and the run's last. The post-batch read is
+the load-bearing one — `queue::did_nothing` turns it into `LastBatch::Empty` or
+`LastBatch::Completed`, which is exactly the discrimination 29 August could not
+make, and a read that *failed* falls to the arm counting the batch as completed.
+The final read is the other that matters: its failure is why `RunSummary::tasks`
+is an `Option`, and the line is what says which of the two the document's dashes
+came from. A record whose gaps are invisible is worse than a shorter one that is
+honest about its scope.
+
+**Two destinations, one text.** Every line goes to the app log with a `runs:`
+prefix, so somebody who has only that file open sees the whole of a run, and to
+`.smetana/runs/<token>/journal-<start time>.log`. Neither alone does it: the app
+log splices two nights and every other subsystem together and gives the report
+nothing to name, while a file alone is invisible to anybody debugging the app as
+a whole. `Journal::say` is the single call site for both, which is what stops
+them becoming two texts that disagree. The name carries the run's **start** time
+because the directory does not carry the run — `token` counts from zero on every
+app start, so `.smetana/runs/1/` is reused by a run two launches later.
+
+**It is a write-through and not a buffer**: opened at the run's start, one line
+written and flushed per event. The run this exists for is the one that died, and
+a journal assembled at the end is empty in precisely the case somebody goes
+looking for it. **A journal that cannot be opened never stops a run** — it keeps
+the `log::info!` half and no call site learns the difference, the same choice
+`lib.rs` makes about the app log itself. Nothing cleans these files up, and that
+is said out loud rather than left for somebody to look for.
+
+Three things follow in other files. `Batch` and `Probe` in `service.rs` are
+`pub(super)` for this one reader, because the acceptance is that an ending is
+named **literally** — `Code(0)` told apart from `NoCode` and from `Removed` — and
+every prose rendering of those three loses one of the distinctions; `report.rs`
+still says the same endings in sentences, for a different reader. `ask` hands
+back the `Usage` reading beside the `Decision`, since `Normal` is the answer both
+to a fresh week and to a probe nobody could read. And the report's footer carries
+the journal's absolute path, as plain text and never a link — this document
+reaches nowhere, which is what makes it safe in a sandboxed frame. Nothing about
+what the loop *decides* changed: the journal only writes down what was already
+happening.
 
 ## What an unclean exit leaves, and who clears it
 

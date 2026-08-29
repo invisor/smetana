@@ -12,6 +12,7 @@ pub mod browser;
 pub mod commands;
 pub mod config;
 pub mod gitignore;
+pub mod journal;
 pub mod model;
 pub mod preflight;
 pub mod procs;
