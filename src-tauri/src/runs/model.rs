@@ -156,6 +156,21 @@ pub enum StopReason {
     /// question a profile actually read — see `service::watch_batch` for why a
     /// bell alone is not enough to end a run over.
     NeedsAnswer { question: String },
+    /// This many batches in a row ended having done nothing at all: each left
+    /// no account of itself and each found the board exactly where the one
+    /// before it did (`queue::did_nothing`).
+    ///
+    /// None of its neighbours, and that is the point of it. Not `Crashed`:
+    /// every one of these sessions exited with zero, which is what a harness
+    /// that died on its first request to the API does, so nothing ever reached
+    /// the crash counter. Not `NoProgress`, which is about a batch that *ran*
+    /// and left the board stuck — it needs a completed batch and an unmoved
+    /// board twice running, and a dying batch that claims one task defeats it.
+    /// And not `QueueEmpty`: there is work sitting in Ready, and saying the run
+    /// had nothing to take would send somebody looking at the board rather than
+    /// at the agent. What happened is that the agent kept coming back having
+    /// done nothing, and only a person can find out why (smetana-0t4).
+    NothingDone { batches: u32 },
     /// The project would not come up; the string names what failed.
     Preflight { detail: String },
 }
