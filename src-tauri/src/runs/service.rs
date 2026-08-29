@@ -741,7 +741,10 @@ async fn drive(
 
         let Some(issues) = board(&tracker).await else {
             unreadable += 1;
-            account.journal.say(&journal::unreadable_board(unreadable));
+            account.journal.say(&journal::unreadable_board(
+                journal::Read::Decision,
+                Some(unreadable),
+            ));
             // Once is a slow bd call or a watcher restart; twice running is a
             // tracker that is not there, and a run that cannot read the board
             // is deciding from nothing.
@@ -760,7 +763,7 @@ async fn drive(
         }
 
         let mut now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
-        account.journal.say(&journal::board(&now, false));
+        account.journal.say(&journal::board(journal::Read::Decision, &now));
         // Narrower than the mode on purpose: what the decision cares about is
         // whether this run may take a second batch, not who answers a question
         // — see `RunMode::one_batch`.
@@ -778,7 +781,7 @@ async fn drive(
         if matches!(action, Action::Stop(StopReason::QueueEmpty)) {
             if let Some(fresh) = fresh_board(&tracker).await {
                 now = queue::snapshot(&fresh, &run.settings.scope, run.settings.min_priority);
-                account.journal.say(&journal::board(&now, true));
+                account.journal.say(&journal::board(journal::Read::Resync, &now));
                 action = queue::next_action(
                     &now,
                     previous.as_ref(),
@@ -913,6 +916,23 @@ async fn drive(
         let after = fresh_board(&tracker).await;
         let leftovers =
             after.as_deref().map(|issues| queue::left_behind(issues, &actor)).unwrap_or_default();
+        // Taken once, here, rather than inside the emptiness rule below: the
+        // line on the record and the value the decision is made from have to be
+        // the same snapshot, or the journal describes a board the loop did not
+        // use.
+        let after_board = after
+            .as_deref()
+            .map(|issues| queue::snapshot(issues, &run.settings.scope, run.settings.min_priority));
+        // The load-bearing read of the four. `did_nothing` turns it into
+        // `LastBatch::Empty` or `LastBatch::Completed`, which is the very
+        // discrimination the night of 29 August could not make — and a read
+        // that *failed* falls to the arm that counts the batch as having
+        // completed, so the failure has to be on the record as loudly as the
+        // success.
+        account.journal.say(&match &after_board {
+            Some(snapshot) => journal::board(journal::Read::AfterBatch, snapshot),
+            None => journal::unreadable_board(journal::Read::AfterBatch, None),
+        });
         // In the document, only for a batch that said nothing: an account is a
         // lead telling somebody where it left the board, and a line about the
         // leftovers behind a lead that already answered is one nobody needed.
@@ -951,12 +971,8 @@ async fn drive(
         // Did this batch do anything at all? An unreadable board answers no:
         // the rule ends runs, so a fact the app could not check must never
         // stand in for one it did.
-        let nothing_done = match (&after, &previous) {
-            (Some(issues), Some(before)) => queue::did_nothing(
-                reported,
-                before,
-                &queue::snapshot(issues, &run.settings.scope, run.settings.min_priority),
-            ),
+        let nothing_done = match (&after_board, &previous) {
+            (Some(after), Some(before)) => queue::did_nothing(reported, before, after),
             _ => false,
         };
         // "In a row" is literal, the same way it is for a repeated question.
@@ -1190,10 +1206,21 @@ async fn finish(
     tracker: &TrackerHandle,
 ) {
     let seconds = account.started.elapsed().as_secs();
-    let tasks = match (account.baseline.as_ref(), fresh_board(tracker).await) {
-        (Some(base), Some(issues)) => {
-            Some(summary::diff(base, &issues, &run.settings.scope))
-        }
+    // The run's last board read, and the fourth of the four the journal carries.
+    // A failure here is why `RunSummary::tasks` is an `Option` — an unreadable
+    // board and a board that did not move must never be written down as the
+    // same thing — and the line is what lets somebody reading the journal back
+    // tell which of the two the document's dashes came from.
+    let last = fresh_board(tracker).await;
+    account.journal.say(&match &last {
+        Some(issues) => journal::board(
+            journal::Read::Ending,
+            &queue::snapshot(issues, &run.settings.scope, run.settings.min_priority),
+        ),
+        None => journal::unreadable_board(journal::Read::Ending, None),
+    });
+    let tasks = match (account.baseline.as_ref(), last) {
+        (Some(base), Some(issues)) => Some(summary::diff(base, &issues, &run.settings.scope)),
         _ => None,
     };
     let report =

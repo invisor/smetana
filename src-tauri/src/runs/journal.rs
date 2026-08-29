@@ -12,6 +12,18 @@
 //! question, and its line list is closed at the nine things that could not be
 //! answered then.
 //!
+//! **Closed means whole, in both directions.** The nine cover every event of
+//! the kind they name and not a sample of it: a run makes four board reads, so
+//! all four are here — the one a decision is made from, the resync that settles
+//! an empty queue, the one after a batch that says whether the batch moved
+//! anything, and the run's last — and each of them is written down when it
+//! fails as well as when it answers. A record with invisible gaps is worse than
+//! a shorter one that is honest about its scope, because nothing in it tells a
+//! reader that a line is missing rather than that the thing never happened. The
+//! post-batch read is the sharpest case: when it fails, the loop falls to the
+//! arm that counts the batch as having completed, which is the 29 August
+//! question arriving again in a new place.
+//!
 //! **Two destinations, one text.** Every line goes to the app's own log with a
 //! `runs:` prefix — so somebody who has only that file open sees the whole of a
 //! run — and to a file of the run's own, `.smetana/runs/<token>/journal-<start
@@ -192,17 +204,59 @@ pub(super) fn preflight_check(check: &HealthCheck, probe: Probe) -> String {
     format!("preflight check {:?} {what}", preflight::describe(check))
 }
 
+/// Which of the run's board reads a line is about.
+///
+/// The run makes four, they answer different questions, and any of them can
+/// fail — so a line that did not say which one it was would leave a reader
+/// unable to tell a missing read from one that never happens in that shape.
+/// Every read is marked, including the plain one at the top of the loop: an
+/// unmarked line would mean "the one you have to know about", which is exactly
+/// the kind of thing a record is not allowed to assume of its reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Read {
+    /// The top of the loop: the board `next_action` is decided from.
+    Decision,
+    /// The second read the loop pays for when the first said the queue was
+    /// empty — the one ending worth a resync, since the ~2 s the watcher takes
+    /// would otherwise end a night saying there was nothing left to take.
+    Resync,
+    /// After a batch: what its actor still held, and — through
+    /// `queue::did_nothing` — whether the batch moved the board at all. The
+    /// load-bearing one, because that answer is `LastBatch::Empty` against
+    /// `LastBatch::Completed`, which is precisely the discrimination the night
+    /// of 29 August could not make.
+    AfterBatch,
+    /// The last read of the run, which the summary is a diff against.
+    Ending,
+}
+
+impl Read {
+    /// The mark a line carries. `(resync)` is left in the words it was already
+    /// written in, so no line that existed before means anything new.
+    fn mark(self) -> &'static str {
+        match self {
+            Read::Decision => "(decision)",
+            Read::Resync => "(resync)",
+            Read::AfterBatch => "(after batch)",
+            Read::Ending => "(ending)",
+        }
+    }
+}
+
 /// 3. A board read, with the ids and not only the counts: the counts say a run
 /// had work, and only the ids say *which*, which is what a person comparing a
 /// journal against the board a day later is doing.
 ///
-/// `resync` marks the second read the loop pays for when the first said the
-/// queue was empty — it is the same event, and which of the two a decision came
-/// from is worth being able to see.
-pub fn board(snapshot: &QueueSnapshot, resync: bool) -> String {
-    let mark = if resync { " (resync)" } else { "" };
+/// All four reads go through here and all four are counted the same way — the
+/// scope and the priority floor applied, as `queue::snapshot` sees them — so
+/// that two lines of a journal can be held against each other. The summary's
+/// own diff is deliberately wider than that (`summary.rs` reports an epic and
+/// ignores the floor), and this line is the queue's view rather than the
+/// document's.
+pub fn board(read: Read, snapshot: &QueueSnapshot) -> String {
     format!(
-        "board{mark} ready={} {} unfinished={} {} closed={} parked={}",
+        "board {} ready={} {} unfinished={} {} closed={} parked={}",
+        read.mark(),
         snapshot.ready.len(),
         ids(&snapshot.ready),
         snapshot.unfinished.len(),
@@ -214,9 +268,19 @@ pub fn board(snapshot: &QueueSnapshot, resync: bool) -> String {
 
 /// 3, when the read failed. An unreadable board is still a board read, and it
 /// is the one whose absence from the record would read as a run that simply
-/// stopped deciding.
-pub fn unreadable_board(in_a_row: u32) -> String {
-    format!("board unreadable ({in_a_row} in a row)")
+/// stopped deciding — or, after a batch, as a batch that plainly completed,
+/// since a board the app could not read falls to the same arm as one that
+/// moved.
+///
+/// `in_a_row` belongs to the decision read alone, whose failures are counted
+/// against the two that end a run as `Unreadable`. The other two have no such
+/// counter and are not given a made-up one: `None` says there is no count,
+/// which is a different thing from a count of one.
+pub fn unreadable_board(read: Read, in_a_row: Option<u32>) -> String {
+    match in_a_row {
+        Some(n) => format!("board {} unreadable ({n} in a row)", read.mark()),
+        None => format!("board {} unreadable", read.mark()),
+    }
 }
 
 /// 4. The spend gate: what the harness said, and what was made of it.
@@ -429,7 +493,10 @@ mod tests {
         // stamp a journal cannot be lined up against anything else that
         // happened that night, and without the token the app log — where every
         // run in every project is interleaved — cannot say whose line it is.
-        assert_eq!(stamp(at(3, 4, 5), 7, "board ready=0 []"), "2026-08-29 03:04:05 run 7 board ready=0 []");
+        assert_eq!(
+            stamp(at(3, 4, 5), 7, "board (decision) ready=0 []"),
+            "2026-08-29 03:04:05 run 7 board (decision) ready=0 []"
+        );
     }
 
     #[test]
@@ -536,22 +603,40 @@ mod tests {
 
     #[test]
     fn a_board_read_names_the_ids_and_not_only_the_counts() {
-        let line = board(&snapshot(&["a-1", "a-2"], &["a-3"]), false);
-        assert_eq!(line, "board ready=2 [a-1, a-2] unfinished=1 [a-3] closed=4 parked=1");
+        let line = board(Read::Decision, &snapshot(&["a-1", "a-2"], &["a-3"]));
+        assert_eq!(
+            line,
+            "board (decision) ready=2 [a-1, a-2] unfinished=1 [a-3] closed=4 parked=1"
+        );
     }
 
     #[test]
-    fn the_second_read_of_an_empty_queue_says_it_is_the_second() {
-        // The resync is what a `QueueEmpty` is settled on, and a journal
-        // showing two reads with no mark on either invites the reading that
-        // the loop went round twice.
-        let line = board(&snapshot(&[], &[]), true);
-        assert!(line.starts_with("board (resync) ready=0 []"), "{line}");
+    fn the_four_reads_are_told_apart_on_the_record() {
+        // They answer different questions and any of them can fail, so a
+        // reader has to be able to tell which one a line is about — the resync
+        // that settles a `QueueEmpty`, the read a batch's emptiness is decided
+        // from, and the last read of the run are three different facts.
+        let board_of = |read| board(read, &snapshot(&[], &[]));
+        assert!(board_of(Read::Decision).starts_with("board (decision) ready=0 []"));
+        assert!(board_of(Read::Resync).starts_with("board (resync) ready=0 []"));
+        assert!(board_of(Read::AfterBatch).starts_with("board (after batch) ready=0 []"));
+        assert!(board_of(Read::Ending).starts_with("board (ending) ready=0 []"));
     }
 
     #[test]
     fn an_unreadable_board_is_a_read_that_happened() {
-        assert_eq!(unreadable_board(2), "board unreadable (2 in a row)");
+        // The post-batch read is the one this matters most for: when it fails,
+        // the loop falls to the arm that counts the batch as having completed,
+        // and without a line nothing on the record says the app never looked.
+        assert_eq!(
+            unreadable_board(Read::Decision, Some(2)),
+            "board (decision) unreadable (2 in a row)"
+        );
+        assert_eq!(
+            unreadable_board(Read::AfterBatch, None),
+            "board (after batch) unreadable"
+        );
+        assert_eq!(unreadable_board(Read::Ending, None), "board (ending) unreadable");
     }
 
     #[test]

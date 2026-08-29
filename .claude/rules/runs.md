@@ -395,6 +395,18 @@ percentages behind it, every `next_action` with the `LastBatch` it came out of,
 every batch's start and ending, the two counters after each batch, and the
 ending with the document it was written into.
 
+Closed means whole, in both directions. A run makes **four** board reads and all
+four are on the record, each marked and each written down when it fails as well
+as when it answers: the one a decision is made from, the resync that settles an
+empty queue, the one after a batch, and the run's last. The post-batch read is
+the load-bearing one — `queue::did_nothing` turns it into `LastBatch::Empty` or
+`LastBatch::Completed`, which is exactly the discrimination 29 August could not
+make, and a read that *failed* falls to the arm counting the batch as completed.
+The final read is the other that matters: its failure is why `RunSummary::tasks`
+is an `Option`, and the line is what says which of the two the document's dashes
+came from. A record whose gaps are invisible is worse than a shorter one that is
+honest about its scope.
+
 **Two destinations, one text.** Every line goes to the app log with a `runs:`
 prefix, so somebody who has only that file open sees the whole of a run, and to
 `.smetana/runs/<token>/journal-<start time>.log`. Neither alone does it: the app
