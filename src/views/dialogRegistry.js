@@ -34,9 +34,10 @@ const REGISTRY = {
      as the setup window and for the same reason: the file belongs to the
      project, so a window left standing over a project somebody has clicked away
      from would save four numbers into the wrong repository. A window of its own
-     rather than a sixth tab in the settings window, which is about
+     rather than one more tab in the settings window, which is about
      `settings.json` — this machine's preferences, written by the app — where
-     `project.toml` is a file in somebody's repository, committed and shared. */
+     `project.toml` is a file in somebody's repository, committed and shared
+     with whoever else works in it. */
   'project-settings': { width: 440, ground: ['project'] },
   'delete-task': { width: 440, ground: ['project', 'issue'] },
   'ready-task': { width: 440, ground: ['project', 'issue'] },
