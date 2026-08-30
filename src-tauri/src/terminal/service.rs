@@ -728,6 +728,12 @@ fn handle(
                 // the languages back on a second road into a session, which is
                 // exactly what reading them here exists to prevent.
                 languages: crate::settings::languages(app),
+                // Read here rather than taken from `terminal_create`'s
+                // arguments, for the reason written on the line above: this is
+                // the one place every session in the app is built, so a
+                // person's session and a run's batch cannot disagree about it.
+                // It lives with the same debounce.
+                agent_prompt: crate::settings::agent_prompt(app),
             };
             let spawned = Pty::spawn(id, &launch, DEFAULT_COLS, DEFAULT_ROWS, chunks.clone());
             let _ = tx.send(match spawned {

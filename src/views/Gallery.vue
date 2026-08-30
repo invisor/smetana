@@ -1597,6 +1597,10 @@ const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
 const galleryCommitLanguage = ref('ja')
 const galleryReportLanguage = ref('de')
+/* A standing instruction with something in it, since the empty state of this
+   field is its placeholder and the filled one is the layout worth checking:
+   six lines of somebody's own prose in a column of its own. */
+const galleryAgentPrompt = ref('Talk to me briefly. This machine has no Docker.')
 /* The subscription block. A reading rather than one of the two empty states:
    those are a sentence each, while this is the shape with a layout to check —
    two rows, the line about what a run would do, and a live Refresh beside the
@@ -4123,19 +4127,25 @@ const menuTargetStyle = {
             @update:word-wrap="galleryEditorWordWrap = $event"
           />
         </div>
-        <div :style="{ width: '380px' }">
+        <!-- Wider than the 380 px the other settings cells take, and it has to
+             be: this tab now holds a row asking for a 48ch control, which is
+             wider than that cell, so at 380 px the harness would only ever show
+             the row giving way rather than the row as the window draws it. -->
+        <div :style="{ width: '560px' }">
           <AgentSettings
             :agent="galleryAgent"
             :agent-language="galleryAgentLanguage"
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
+            :agent-prompt="galleryAgentPrompt"
             :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
             @update:commit-language="galleryCommitLanguage = $event"
             @update:report-language="galleryReportLanguage = $event"
+            @update:agent-prompt="galleryAgentPrompt = $event"
           />
         </div>
         <!-- The same tab with Show run report off on the General tab, which is
@@ -4144,7 +4154,11 @@ const menuTargetStyle = {
              tab the switch is on. The chosen language is still handed in and
              still stands, which is what says the switch shuts the row rather
              than the setting. -->
-        <div :style="{ width: '380px' }">
+        <!-- Wider than the 380 px the other settings cells take, and it has to
+             be: this tab now holds a row asking for a 48ch control, which is
+             wider than that cell, so at 380 px the harness would only ever show
+             the row giving way rather than the row as the window draws it. -->
+        <div :style="{ width: '560px' }">
           <AgentSettings
             :agent="galleryAgent"
             :agent-language="galleryAgentLanguage"
@@ -4163,16 +4177,16 @@ const menuTargetStyle = {
              one row a half-read allowance draws, and the last is the only place
              the disabled button can be looked at. The three rows above them are
              along for the ride; the block is what these are for. -->
-        <div :style="{ width: '380px' }">
+        <div :style="{ width: '560px' }">
           <AgentSettings agent="codex" :usage="galleryAgentUsageUnsupported" />
         </div>
-        <div :style="{ width: '380px' }">
+        <div :style="{ width: '560px' }">
           <AgentSettings :usage="galleryAgentUsageUnreadable" />
         </div>
-        <div :style="{ width: '380px' }">
+        <div :style="{ width: '560px' }">
           <AgentSettings :usage="galleryAgentUsageHalf" />
         </div>
-        <div :style="{ width: '380px' }">
+        <div :style="{ width: '560px' }">
           <AgentSettings busy />
         </div>
         <div :style="{ width: '380px' }">

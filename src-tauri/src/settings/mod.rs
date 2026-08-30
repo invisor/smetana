@@ -45,6 +45,21 @@ pub fn languages(app: &AppHandle) -> crate::agents::Languages {
     path(app).map(|path| file::languages(&path)).unwrap_or_default()
 }
 
+/// What the person wants said in every session they are in.
+///
+/// Beside `languages` above, read the same way — from the disk on each call —
+/// and by the same caller for the same reason: `terminal::service` builds every
+/// session in the app, a person's and a run's alike, so reading it there once is
+/// what keeps a second road into a session from existing at all. It lives with
+/// the 400 ms debounce the languages already live with: a session started in the
+/// same fraction of a second as an edit reads the previous text.
+///
+/// A platform that will not name a config directory answers with the empty
+/// string, which is the shipped state and changes nothing.
+pub fn agent_prompt(app: &AppHandle) -> String {
+    path(app).map(|path| file::agent_prompt(&path)).unwrap_or_default()
+}
+
 /// Whether a run may remove each task's worktree after it is merged and closed.
 ///
 /// Beside `agent` above and read the same way, and by the same caller for the

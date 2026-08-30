@@ -84,6 +84,10 @@ const view = reactive({
   taskLanguage: 'en',
   commitLanguage: 'en',
   reportLanguage: 'en',
+  /* The person's own standing instruction, empty as it ships — see
+     `agentPrompt` in `stores/settings.js` for why empty is the whole of
+     today's behaviour rather than a placeholder. */
+  agentPrompt: '',
   /* The board's four, flat in the same message the rest ride in — see
      `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
      the same reason the agent and the languages above are shipped values: this
@@ -147,12 +151,42 @@ const heard = ref(false)
    asked out of one names a guess. */
 const adopted = ref(false)
 
+/* Whether somebody has typed in the standing instruction. From that moment this
+   window's copy of that **one** field is the truth and an announcement out of
+   the app window does not touch it.
+
+   It is the only field here that needs saying, because it is the only free-text
+   control in the window: everything else is a dropdown, a switch or a button,
+   where an announcement re-setting the value already on screen is invisible. A
+   text field is not so forgiving. Every keystroke goes out as a patch, the app
+   window applies it and then `announce()`s the whole state back — and an
+   announcement carrying "abc", landing after somebody has typed "abcd", would
+   rewind `view.agentPrompt`, put the caret back at the end and send the rewound
+   text on to the store and the disk. Characters would be lost for good, and only
+   on a busy machine, which is the worst way for it to happen.
+
+   Safe because nothing else can write this field: the app window has no control
+   for it, so an announcement can only ever be carrying this window's own words
+   back. Before the first keystroke announcements are taken as normal.
+
+   That "only our own words back" is exactly the argument for deleting this
+   guard, and it is the wrong one, because of what the other half of the loop
+   costs: `announce()` rebuilds the whole shared object and broadcasts it once
+   per keystroke, so typing a long instruction is the moment the app window's
+   queue is busiest, and the lag that makes an echo stale is at its most likely
+   precisely while somebody is typing. The guard makes that inert, which is why
+   the chattiness is affordable — remove it on the reasoning above and the
+   defect comes back at the volume that produces it. */
+let promptEdited = false
+
 const adopt = (state, fromApp) => {
   if (!state) return
   if (fromApp) heard.value = true
   adopted.value = true
   for (const field of FIELDS) {
-    if (field in state && state[field] != null) view[field] = state[field]
+    if (!(field in state) || state[field] == null) continue
+    if (field === 'agentPrompt' && fromApp && promptEdited) continue
+    view[field] = state[field]
   }
 }
 
@@ -162,6 +196,16 @@ const adopt = (state, fromApp) => {
 const change = (patch) => {
   adopt(patch, false)
   sendSettingsPatch(patch)
+}
+
+/* The standing instruction, which goes out per keystroke like every other edit
+   here and, unlike them, closes the door behind it. Sent immediately rather than
+   on a debounce of its own on purpose: the disk write is already debounced 400 ms
+   in the app window, so a debounce here would buy nothing but a window that can
+   be closed with the last few characters still in a timer. */
+const changeAgentPrompt = (text) => {
+  promptEdited = true
+  change({ agentPrompt: text })
 }
 
 let stopWatching = null
@@ -219,7 +263,13 @@ onMounted(async () => {
   }
   try {
     const stored = await readSharedSettings()
-    if (!heard.value) adopt(stored, false)
+    /* `promptEdited` as well as `heard`, because this call passes
+       `fromApp = false` and the guard in `adopt` would let the file's value
+       through. It takes an app window that never answers and somebody typing
+       before this awaited read resolves, which three `await listen(...)` calls
+       and a millisecond of disk make very unlikely — but the flag claims to be
+       the whole story about that field, and this is the road round it. */
+    if (!heard.value && !promptEdited) adopt(stored, false)
   } catch (err) {
     console.warn('[settings-window] the settings could not be read:', err)
   }
@@ -532,6 +582,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :task-language="view.taskLanguage"
           :commit-language="view.commitLanguage"
           :report-language="view.reportLanguage"
+          :agent-prompt="view.agentPrompt"
           :show-report="view.notificationShowReport"
           :usage="usage.reading"
           :busy="usage.busy"
@@ -541,6 +592,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:task-language="change({ taskLanguage: $event })"
           @update:commit-language="change({ commitLanguage: $event })"
           @update:report-language="change({ reportLanguage: $event })"
+          @update:agent-prompt="changeAgentPrompt($event)"
           @refresh="readUsage()"
         />
         <KanbanSettings
