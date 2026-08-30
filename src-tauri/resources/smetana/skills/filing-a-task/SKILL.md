@@ -117,6 +117,45 @@ If it splits into pieces that could be done by different people on different
 days, file them as separate tasks and say in each description how they relate.
 One task that means four is a task nobody can pick up.
 
+How you cut it also decides how much of it can be done at once. A run claims
+several ready tasks and gives each its own worktree, so pieces filed separately
+run in parallel by default, and pieces filed as one never do. The cut is worth
+thinking about rather than something to get through.
+
+**Stages are separated by a dependency, and a dependency is not a note to the
+reader.** `bd ready` returns only what is unblocked, so the edge is the one
+thing that physically keeps a later stage out of the same batch as the earlier
+one:
+
+```sh
+bd dep <earlier-id> --blocks <later-id>
+```
+
+Use that form rather than `--deps` on `bd create`: `type:id` reads either way
+round to a person, and a stage wired backwards is one picked up before the
+thing it needs exists. `bd dep` spells the direction out in the flag.
+
+**Within a stage, cut along file boundaries.** Two tasks that can be claimed
+into the same batch must not edit the same file. They work in separate
+worktrees cut from one target branch and are merged one at a time, so an
+overlap is not a race that surfaces early — it is a merge conflict found after
+both are finished and reviewed, and `merging` resolves conflicts by class,
+which is no help whatever against two deliberate changes to one region.
+
+**A piece earns its own task only if it can be merged alone**: without its
+siblings, with its repository's gates passing and the app still building. A
+piece that leaves the branch half-done until a sibling lands is not a task, it
+is part of one — which is why the model and the code that uses it are one task
+and not two, however neatly they divide on paper.
+
+**A shared contract is not a seam.** Where two pieces can be separated only by
+first agreeing a type, the shape of an event or the signature of a command,
+leave them in one task. Do not file the contract as a third task to unblock
+them: a worktree, a review pass and a merge cost more than the pair of
+signatures they would carry. Parallelism inside a single task belongs to
+`running-tasks`, and its Phase 1 already knows how to run layers that have
+agreed a contract at the same time.
+
 ## If you cannot meet the bar
 
 There are two honest outcomes, and filing a vague task is neither of them.
