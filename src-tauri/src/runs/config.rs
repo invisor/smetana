@@ -179,6 +179,108 @@ pub fn load(root: &Path) -> ConfigState {
     }
 }
 
+/// Rewrite `[defaults]` in a file's text, leaving every other byte alone.
+///
+/// Through `toml_edit` rather than by serializing `ProjectConfig` back out,
+/// and the difference is the point: this file is written by the setup agent
+/// and edited by people, so it holds comments and prose (`[merge].hazards` is
+/// explicitly text a lead reads). A serde round trip drops every comment and
+/// reorders the keys into the struct's order, so somebody changing one number
+/// would find a colleague's note gone.
+///
+/// The result is parsed again before it is returned. A save that leaves behind
+/// a file the app then refuses to load turns a wrong number into a broken
+/// project, and that is the one failure worth spending a check on.
+pub fn with_defaults(text: &str, defaults: &Defaults) -> Result<String, String> {
+    // The whole file has to parse first: an edit applied to a damaged file
+    // would write back a repair nobody asked for.
+    parse(text)?;
+
+    let mut doc = text.parse::<toml_edit::DocumentMut>().map_err(|err| err.to_string())?;
+
+    let table = doc
+        .entry("defaults")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| "defaults is not a table".to_string())?;
+    // An implicit table is one that exists only because something under it
+    // does, and it is not written out at all. A file with no `[defaults]`
+    // section of its own would otherwise take the four keys and emit none of
+    // them.
+    table.set_implicit(false);
+
+    match &defaults.target_branch {
+        Some(branch) => table["target_branch"] = toml_edit::value(branch.as_str()),
+        // Removed, never emptied — see the test of the same name.
+        None => {
+            table.remove("target_branch");
+        }
+    }
+    table["min_priority"] = toml_edit::value(i64::from(defaults.min_priority));
+    table["max_parallel_tasks"] = toml_edit::value(i64::from(defaults.max_parallel_tasks));
+    table["review_passes"] = toml_edit::value(i64::from(defaults.review_passes));
+
+    let out = doc.to_string();
+    parse(&out)?;
+    Ok(out)
+}
+
+/// Read, rewrite, write back atomically.
+///
+/// The temporary file is created in the same directory and renamed over the
+/// target, which is the shape `settings/file.rs` already uses and for its
+/// reason: a rename within one directory is the only thing the filesystem
+/// promises to do atomically. Its name carries the pid and a counter for that
+/// file's reason too — two overlapping writes sharing one name would have the
+/// first rename what the second had not finished writing.
+///
+/// A file that is not there is refused rather than created. This edits four
+/// keys of a configuration; the rest of it is the setup agent's, and a file
+/// holding nothing but `[defaults]` would not load at all — `[project].repos`
+/// has no default.
+pub fn save_defaults(root: &Path, defaults: &Defaults) -> Result<(), String> {
+    let path = path_in(root);
+    let text =
+        std::fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let out = with_defaults(&text, defaults)?;
+
+    let temp = temp_path(&path);
+    if let Err(err) = write_all(&temp, &out) {
+        // We clean up after ourselves: the name is unique, and there is nobody
+        // to reuse a half-written file anyway.
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("{}: {err}", temp.display()));
+    }
+    std::fs::rename(&temp, &path).map_err(|err| {
+        let _ = std::fs::remove_file(&temp);
+        format!("{}: {err}", path.display())
+    })
+}
+
+/// A counter for temp files. Together with the pid it gives a name no other
+/// write has — neither in this process nor in a neighbouring one.
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `project.<pid>.<n>.tmp` beside the target, in `.smetana/` rather than in the
+/// system temp directory: a rename across filesystems is not a rename at all.
+fn temp_path(path: &Path) -> PathBuf {
+    let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!("project.{}.{n}.tmp", std::process::id());
+    match path.parent() {
+        Some(dir) => dir.join(name),
+        None => PathBuf::from(name),
+    }
+}
+
+/// Flushed before the rename: without that a power loss could make the rename
+/// durable and not what is in the file.
+fn write_all(temp: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(temp)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +445,152 @@ notes = "The stand comes up from the live-staging worktrees."
             ConfigState::Ok { config } => assert_eq!(config.project.repos, ["."]),
             other => panic!("expected Ok, got {other:?}"),
         }
+        std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// The four keys are set, and everything the person wrote around them stays
+    /// exactly where it was. This is the whole reason the write goes through
+    /// `toml_edit` rather than through a serde round trip.
+    #[test]
+    fn setting_the_defaults_keeps_comments_and_every_other_key() {
+        let before = "\
+# how this project is laid out
+[project]
+repos = [\"backend\", \"frontend\"]
+
+[defaults]
+# the branch everything lands on
+target_branch = \"staging\"
+min_priority = 1
+max_parallel_tasks = 4
+review_passes = 3
+
+[merge]
+hazards = \"two branches emitting one migration number\"
+";
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 3,
+            max_parallel_tasks: 2,
+            review_passes: 7,
+        };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert!(after.contains("# how this project is laid out"), "{after}");
+        assert!(after.contains("# the branch everything lands on"), "{after}");
+        assert!(
+            after.contains("hazards = \"two branches emitting one migration number\""),
+            "{after}"
+        );
+
+        let parsed = parse(&after).expect("the result parses");
+        assert_eq!(parsed.defaults, wanted);
+        assert_eq!(parsed.project.repos, ["backend", "frontend"]);
+        assert_eq!(
+            parsed.merge.expect("the merge section").hazards.as_deref(),
+            Some("two branches emitting one migration number")
+        );
+    }
+
+    /// No target branch means the key is gone, not the key set to an empty
+    /// string: `Option<String>` reads absence as "fall back to the branch the
+    /// project is on", and "" is a branch name of length zero.
+    #[test]
+    fn no_target_branch_removes_the_key_rather_than_emptying_it() {
+        let before = "[project]\nrepos = [\".\"]\n\n[defaults]\ntarget_branch = \"staging\"\n";
+        let wanted = Defaults { target_branch: None, ..Defaults::default() };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert!(!after.contains("target_branch"), "the key is gone, not emptied: {after}");
+        assert_eq!(parse(&after).expect("the result parses").defaults.target_branch, None);
+    }
+
+    /// A file whose author never wrote a `[defaults]` section still has to be
+    /// editable — most files start that way, since every key in the table has a
+    /// default and the setup agent leaves out what it has nothing to say about.
+    #[test]
+    fn a_missing_defaults_table_is_created() {
+        let before = "[project]\nrepos = [\".\"]\n";
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 0,
+            max_parallel_tasks: 1,
+            review_passes: 1,
+        };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert!(after.contains("[defaults]"), "the section is written out: {after}");
+        assert_eq!(parse(&after).expect("the result parses").defaults, wanted);
+    }
+
+    /// A file that does not parse is refused rather than replaced. The menu
+    /// already refuses this case, and this is the back stop: the file can
+    /// change under an open window.
+    #[test]
+    fn a_file_that_will_not_parse_is_refused() {
+        let err = with_defaults("this is not toml at all [[[", &Defaults::default())
+            .expect_err("a damaged file is refused");
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn saving_writes_the_file_and_leaves_no_temporary_behind() {
+        let root = temp_root("save-defaults");
+        write_config(&root, "[project]\nrepos = [\".\"]\n\n[defaults]\nmin_priority = 1\n");
+
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 4,
+            max_parallel_tasks: 2,
+            review_passes: 9,
+        };
+        save_defaults(&root, &wanted).expect("save the defaults");
+
+        match load(&root) {
+            ConfigState::Ok { config } => assert_eq!(config.defaults, wanted),
+            other => panic!("expected a loadable config, got {other:?}"),
+        }
+
+        // The temp file's name is its own per call, so we look not for a
+        // particular name but for none being left in the directory at all.
+        let leftovers: Vec<_> = std::fs::read_dir(root.join(".smetana"))
+            .expect("read the directory")
+            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+            .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "a temporary file was left behind: {leftovers:?}");
+        std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// Nothing reaches the disk over a file that will not parse — not even the
+    /// four keys that would have been perfectly good. A save that left behind a
+    /// half-repaired file would be the app deciding what somebody meant.
+    #[test]
+    fn saving_over_a_damaged_file_changes_nothing_on_disk() {
+        let root = temp_root("save-defaults-damaged");
+        let damaged = "this is not toml at all [[[";
+        write_config(&root, damaged);
+
+        let err = save_defaults(&root, &Defaults::default()).expect_err("a damaged file is refused");
+
+        assert!(!err.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(path_in(&root)).expect("the file is still there"),
+            damaged
+        );
+        std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// A file that is not there is refused rather than created: this edits four
+    /// keys of a configuration, and the rest of one is the setup agent's.
+    #[test]
+    fn saving_over_a_file_that_is_not_there_is_refused() {
+        let root = temp_root("save-defaults-missing");
+        let err = save_defaults(&root, &Defaults::default()).expect_err("there is no file to edit");
+        assert!(!err.is_empty());
         std::fs::remove_dir_all(&root).expect("clean up");
     }
 

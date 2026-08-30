@@ -59,6 +59,24 @@ vt100 = "0.16.2"
 portable-pty = "0.9.0"
 base64 = "0.23.0"
 toml = "1.0.7"
+# Editing `.smetana/project.toml` in place, for the project settings dialog.
+# The obvious implementation — deserialize, change a field, `toml::to_string`
+# — is the wrong one: that file is written by the setup agent, which puts prose
+# in it (`[merge].hazards` is explicitly text a lead reads), and people write
+# comments in it besides. A serde round trip keeps neither, so somebody who
+# changed one number would find the file reordered and a colleague's note gone.
+# `runs/config.rs::with_defaults` touches four keys and leaves the rest of the
+# bytes exactly where they were.
+#
+# The price, counted against `Cargo.lock` the way every other line here is:
+# **nothing at all**. 0.25.13 is already in the lock file under
+# `proc-macro-crate`, and the one feature this adds to it — `display`, which is
+# what turns an edited document back into text — takes `toml_writer`, which is
+# already there for `toml`'s own sake. No new `[[package]]` entry, no download,
+# and no other crate moves version. The version is pinned to the major already
+# in the tree for exactly that reason: `0.23` would have been a second copy of
+# a format-preserving TOML parser for no gain.
+toml_edit = "0.25"
 # Delete in the file tree's menu, which puts an entry in the system trash rather
 # than removing it. A deletion somebody can undo from their own file manager is
 # a smaller promise than a permanent one, and this is a tree of somebody's
