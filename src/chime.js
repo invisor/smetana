@@ -16,21 +16,30 @@
    answer to it: this app has nothing to do in anybody's music library.
    Declaring the key would only make an unwarranted request look warranted. An
    `<audio>` element, a `new Audio(...)`, and `HTMLMediaElement` under any other
-   name are all the same trigger. Web Audio opens no Now Playing session, so the
-   noise is believed to cost nothing.
+   name are all the same trigger. Web Audio is not one of them, and that half is
+   a fact about the API rather than a belief: an `AudioContext` is no
+   `HTMLMediaElement` and registers nothing with the Now Playing info centre.
+   What is unconfirmed is the other half — that the media element path is what
+   raised the dialog.
 
    **That account was never confirmed, and this is the sentence that says so.**
    The TCC log the task asked for (`log stream --predicate 'subsystem ==
    "com.apple.TCC"' --info`, after `tccutil reset MediaLibrary
    com.invisor.smetana`) was not observed; what is implemented here is the
    hypothesis of smetana-i4w taken as the diagnosis, because the treatment is
-   cheap and the file is better this way regardless. So if the dialog survives
-   this change, the fault is somewhere else and the reserve the task named is
-   playing the sound from Rust (`NSSound`) — which costs IPC per noise and a
-   platform fork where there is now one file for every platform, and was
-   therefore kept as a second move rather than the first. Look there before
-   concluding this file is innocent, and run the log before concluding it is
-   guilty.
+   cheap and the file is better this way regardless.
+
+   So if the dialog survives this change, there are two worlds and they want
+   opposite things. Either Web Audio turns out to be the same trigger, which is
+   the one case the task kept a reserve for: playing the sound from Rust
+   (`NSSound`), which costs IPC per noise and a platform fork where there is now
+   one file for every platform, and was therefore a second move rather than the
+   first. Or the fault is not the sound at all — a native panel, a PTY child,
+   the trash — which is the audit of the app's other permission requests that
+   smetana-i4w deliberately left out of scope, and in that world moving the
+   sound into Rust buys the fork and changes nothing whatever. The TCC log is
+   what tells the two apart, and it is the first move either way: run it before
+   concluding this file is innocent, and before concluding it is guilty.
 
    What Web Audio costs here, and it is the shape of the rest of the file. An
    `AudioBufferSourceNode` is single-use — it cannot be rewound and played
@@ -120,14 +129,17 @@ async function ring(id, file) {
      resuming is what turns that into a sound at all.
 
      **The wait is bounded, and that is load-bearing rather than defensive.**
-     `resume()` on a context a webview will not yet let start does not reject:
-     the spec says it is held until the context is allowed to run, which is what
-     a Chromium-shaped webview does — WebView2, and `npm run dev`. Awaiting it
-     flatly parks one whole `ring` call per event behind it, and the gesture that
-     finally arrives releases every one of them into the same turn: a night of
-     notifications heard as a single burst. Racing a timer is what lets the wait
-     end without an answer, and the `running` check below is then reachable and
-     turns it into one console line and no sound. Do not simplify this to a bare
+     `resume()` on a context a webview will not yet let start need not reject at
+     all: the spec has it held until the context is allowed to run, which is what
+     a Chromium-shaped webview does — WebView2, and `npm run dev`. It is the held
+     case this race is about; WebKit has historically answered a blocked resume
+     with a rejected `NotAllowedError` instead, and that one the outer catch in
+     `chime` already takes. Awaiting the held case flatly parks one whole `ring`
+     call per event behind it, and the gesture that finally arrives releases
+     every one of them into the same turn: a night of notifications heard as a
+     single burst. Racing a timer is what lets the wait end without an answer,
+     and the `running` check below is then reachable and turns it into one
+     console line and no sound. Do not simplify this to a bare
      `await ctx.resume()`, and do not delete the check under it as unreachable —
      between them they are the whole of what keeps the pile-up from being
      audible. */
