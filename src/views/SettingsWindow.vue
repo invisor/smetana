@@ -167,9 +167,16 @@ const adopted = ref(false)
 
    Safe because nothing else can write this field: the app window has no control
    for it, so an announcement can only ever be carrying this window's own words
-   back. Before the first keystroke announcements are taken as normal, which is
-   what keeps the app window's copy — up to a debounce newer than the file —
-   winning over the disk read below. */
+   back. Before the first keystroke announcements are taken as normal.
+
+   That "only our own words back" is exactly the argument for deleting this
+   guard, and it is the wrong one, because of what the other half of the loop
+   costs: `announce()` rebuilds the whole shared object and broadcasts it once
+   per keystroke, so typing a long instruction is the moment the app window's
+   queue is busiest, and the lag that makes an echo stale is at its most likely
+   precisely while somebody is typing. The guard makes that inert, which is why
+   the chattiness is affordable — remove it on the reasoning above and the
+   defect comes back at the volume that produces it. */
 let promptEdited = false
 
 const adopt = (state, fromApp) => {
@@ -256,7 +263,13 @@ onMounted(async () => {
   }
   try {
     const stored = await readSharedSettings()
-    if (!heard.value) adopt(stored, false)
+    /* `promptEdited` as well as `heard`, because this call passes
+       `fromApp = false` and the guard in `adopt` would let the file's value
+       through. It takes an app window that never answers and somebody typing
+       before this awaited read resolves, which three `await listen(...)` calls
+       and a millisecond of disk make very unlikely — but the flag claims to be
+       the whole story about that field, and this is the road round it. */
+    if (!heard.value && !promptEdited) adopt(stored, false)
   } catch (err) {
     console.warn('[settings-window] the settings could not be read:', err)
   }

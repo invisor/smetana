@@ -2944,9 +2944,14 @@ mod tests {
     #[test]
     fn only_a_run_is_told_the_report_language() {
         // A run's lead is the only session that ever writes a batch file, so it
-        // is the only one with anything to word. The walk is the one the two
-        // settings above get, in both deliveries, and the predicate is asserted
-        // beside the text so that a change to either has to face the other.
+        // is the only one with anything to word. The predicate is asserted
+        // beside the text, in both deliveries, so that a change to either has
+        // to face the other.
+        //
+        // One conflict kind rather than the `every_intent_and_the_conflicts()`
+        // the two tests above walk, and deliberately: `leaves_a_run_report`
+        // cannot tell a merge from a rebase, so the second kind would be the
+        // same assertion twice. Not an oversight to sweep up into that helper.
         let intents: Vec<Intent> = every_intent()
             .into_iter()
             .chain([conflict(crate::vcs::model::OpKind::Merge)])
