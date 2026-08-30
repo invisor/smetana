@@ -221,9 +221,9 @@ const tipStyle = computed(() => ({
      the ceiling only bites on one that does not, and the labels that do not are
      the ones this panel now carries — an absolute project path, a read-only
      reason, a run blocked by a sentence. `nowrap` drew those straight off the
-     edge of the window, since the clamp in `show` can only move a panel that is
-     narrower than the window it is in. `anywhere` is what breaks a path: it has
-     no spaces to break at.
+     edge of the window, since the clamp in `place` can only move a panel that
+     is narrower than the window it is in. `anywhere` is what breaks a path: it
+     has no spaces to break at.
 
      Two ceilings, and the panel takes whichever is lower. `--tooltip-max-w` is
      the one that decides how a hint reads: a line of prose has a length it is

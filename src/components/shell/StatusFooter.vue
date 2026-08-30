@@ -153,6 +153,13 @@ const fillStyle = {
    for the reason it followed the old one: an affordance over ground that does
    not answer a press is the affordance lying about where the control is.
 
+   No `flex` on the row either, and its absence is the same decision seen from
+   the other side: the row used to grow, which is what spread it across the bar.
+   The trigger above is content-sized now (`flex: '0 0 auto'`), so its content
+   box is this row's own width and there is never free space for a grow factor
+   to take. Put back, it would be a declaration doing nothing, read later as the
+   thing holding the strip's left end open.
+
    The ring is pulled inside its own edge. `base.css` draws `:focus-visible`
    with `outline-offset: 1px`, and this row's bottom edge is the window's, under
    an ancestor that clips: the ring's bottom would be cut away entirely and its
@@ -318,7 +325,8 @@ const counterItem = { flex: '0 0 auto' }
     </component>
 
     <!-- The two ends are pushed apart rather than spaced: the subscription
-         keeps the window's corner, and the project's state keeps the other. -->
+         keeps the left end of the strip and the project's state the right, each
+         behind the bar's own gutter rather than against the window's edge. -->
     <span :style="{ flex: 1 }" />
 
     <!-- What this project is doing, in the order it stood in the scope bar.
