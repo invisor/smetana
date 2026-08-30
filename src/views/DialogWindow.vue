@@ -29,6 +29,7 @@ import EmptyState from '../components/core/EmptyState.vue'
 import DeleteTaskModal from '../components/kanban/DeleteTaskModal.vue'
 import NewBranchModal from '../components/git/NewBranchModal.vue'
 import NewTaskModal from '../components/kanban/NewTaskModal.vue'
+import ProjectSettingsModal from '../components/run/ProjectSettingsModal.vue'
 import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
 import ReadyTaskModal from '../components/kanban/ReadyTaskModal.vue'
 import RunModal from '../components/run/RunModal.vue'
@@ -68,6 +69,7 @@ const COMPONENTS = {
   'delete-branch': DeleteBranchModal,
   'promote-column': PromoteColumnModal,
   'setup-project': SetupProjectModal,
+  'project-settings': ProjectSettingsModal,
   'delete-task': DeleteTaskModal,
   'ready-task': ReadyTaskModal,
   'delete-session': DeleteSessionModal
@@ -188,12 +190,12 @@ const stopWaiting = setTimeout(() => {
   told.value = true
 }, FIRST_PAINT_WAIT)
 
-/* Every emit the nine guests have between them that crosses back to the app
+/* Every emit the ten guests have between them that crosses back to the app
    window, forwarded by name. A list rather than a wildcard because listeners
    need names, and because a name that is not here is a message that would
    silently go nowhere. A name here that a guest does not declare costs nothing:
    it falls through as an inert listener for a DOM event that never fires. */
-const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope']
+const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save']
 
 /* And the three that deliberately do not travel: `new-task`'s images, answered
    in this window by the store above. They are a separate list rather than a

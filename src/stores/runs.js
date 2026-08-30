@@ -140,6 +140,30 @@ export async function loadConfig(project) {
   }
 }
 
+/* Writing back the four keys of `[defaults]`, which is the one part of a run
+   configuration the app itself edits — everything else in `.smetana/project.toml`
+   is the setup agent's, and the write is a surgical `toml_edit` pass on the Rust
+   side so that comments and prose survive it.
+
+   Here rather than in the view because `src/stores/*.js` are the only files in
+   `src/` that know Tauri exists, and `DesktopApp.vue` does not import `invoke`.
+
+   Re-reads on success rather than patching `runsState.config` in place: what the
+   file now says is Rust's answer and not this function's guess, and a config
+   assembled here would be a second idea of the file to keep in step with the
+   first. Without the re-read the run dialog would go on offering the old
+   defaults and the menu would keep its old `configured` flag — the app would
+   have written a value it does not itself believe.
+
+   Failure is re-thrown rather than logged, unlike the reads above, because
+   somebody is standing in front of a dialog waiting to be told whether their
+   change landed. */
+export async function saveDefaults(project, defaults) {
+  if (!project) throw new Error('saveDefaults: no project')
+  await invoke('project_config_save_defaults', { project, defaults })
+  await loadConfig(project)
+}
+
 /* The runs in this project, if any. Called on mount and on switching projects,
    and guarded the same way loadConfig is and for the same reason. The answer
    replaces the list wholesale: it is the worker's whole truth for this

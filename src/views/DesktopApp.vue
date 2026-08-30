@@ -195,6 +195,7 @@ import {
   loadRun,
   needsSetup,
   runsState,
+  saveDefaults,
   startRun,
   stopRun
 } from '../stores/runs.js'
@@ -210,6 +211,7 @@ import { relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
+import { draftFrom } from '../components/run/projectDefaults.js'
 import {
   LEFT_DEFAULT,
   PROJECT_RAIL,
@@ -1335,6 +1337,79 @@ const openSetup = (path, existing) => {
 
 const closeSetup = () => {
   closeDialog('setup-project')
+}
+
+/* The other window about `.smetana/project.toml`, and the one that changes it
+   without starting anything: `[defaults]`, four scalars, edited in a form.
+   Modelled on `openSetup` above down to holding the path this is about rather
+   than reading `activePath` at render time — a window that outlived a project
+   switch must fail loudly instead of quietly writing four numbers into another
+   repository.
+
+   The two are refused in different states and that is the whole reason there
+   are two: the setup runs over a damaged file, this one cannot, because there
+   are no parsed values to put in its fields. `shell/projectMenu.js` carries
+   that rule and the captions that explain it. */
+const settingsFor = ref(null)
+const savingSettings = ref(false)
+const settingsError = ref('')
+
+const openProjectSettings = async (path) => {
+  settingsFor.value = path
+  settingsError.value = ''
+  serveDialog('project-settings', {
+    ground: { project: path },
+    props: () => ({
+      /* The frame's caption, in the component's own words, for the reason
+         `openSetup` above repeats its dialog's: the OS draws the frame, and
+         nothing on the window's side knows what this dialog is called. */
+      title: 'Project settings',
+      /* Re-read on every announcement rather than snapshotted at opening, which
+         is what makes the fields right when the config lands a moment after the
+         window: `runConfig` is filled by a command of its own, and the menu item
+         opens this the instant it is pressed. The component seeds its own draft
+         once, so this cannot overwrite what somebody is typing. */
+      defaults: draftFrom(runConfig.value),
+      branches: gitState.branches,
+      busy: savingSettings.value,
+      error: settingsError.value
+    }),
+    forget: () => {
+      settingsFor.value = null
+      settingsError.value = ''
+    },
+    onResult: (name, payload) => {
+      if (name === 'close') closeDialog('project-settings')
+      if (name === 'save') saveProjectSettings(payload)
+    }
+  })
+  /* After the dialog is up, for the run dialog's reason: the list is a git read
+     per repository and nobody needs it until they are looking at the field. The
+     same `loadBranches` and the same `gitState.branches` the run dialog's own
+     branch field is filled from — asking twice for one list would be two
+     sources to keep in step. */
+  await loadBranches(path)
+}
+
+const saveProjectSettings = async (draft) => {
+  const project = settingsFor.value
+  if (!project || savingSettings.value) return
+  savingSettings.value = true
+  settingsError.value = ''
+  try {
+    /* An empty branch is no branch: the file's `target_branch` is an
+       `Option<String>`, and `Select` has no way to hand back `null`. Sending
+       `""` would write a branch name of length zero. */
+    await saveDefaults(project, { ...draft, target_branch: draft.target_branch || null })
+    closeDialog('project-settings')
+  } catch (err) {
+    /* Shown in the window rather than swallowed: both refusals the command has
+       — no file, and a file that will not parse — are sentences the person has
+       to read to know what to do next. */
+    settingsError.value = String(err?.message ?? err)
+  } finally {
+    savingSettings.value = false
+  }
 }
 
 /* Adding a project is a read until this point: the dialog is where it becomes
@@ -4118,6 +4193,7 @@ const toastStackStyle = {
           @remove="removeProject"
           @add-agent="newAgent"
           @setup="openSetup"
+          @settings="openProjectSettings"
           @add-project="onAddProject"
         />
         <!-- The header button closes the column one step at a time: it hides the
@@ -4326,8 +4402,9 @@ const toastStackStyle = {
              which repository — the panel's selection can have moved since. -->
         <!-- Every dialog of this app but two is a window of its own now,
              opened above by `openRun`, `openNewTask`, `openNewBranch`,
-             `openDeleteBranch`, `openPromote`, `openSetup`, `openDeleteTask`,
-             `openReadyTask` and `openDeleteSession` —
+             `openDeleteBranch`, `openPromote`, `openSetup`,
+             `openProjectSettings`, `openDeleteTask`, `openReadyTask` and
+             `openDeleteSession` —
              the whole of `REGISTRY` in `dialogRegistry.js`, which is what
              finishes the epic this comment was first written in the middle of.
              What each of them is a question about — a list of branches, the

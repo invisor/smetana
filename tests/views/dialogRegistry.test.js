@@ -10,13 +10,14 @@ import {
 } from '../../src/views/dialogRegistry.js'
 
 describe('the dialog registry', () => {
-  it('holds the nine kinds that became windows', () => {
+  it('holds the ten kinds that became windows', () => {
     expect([...DIALOG_KINDS].sort()).toEqual([
       'delete-branch',
       'delete-session',
       'delete-task',
       'new-branch',
       'new-task',
+      'project-settings',
       'promote-column',
       'ready-task',
       'run',
@@ -125,6 +126,23 @@ describe('ground that has gone', () => {
     )
     expect(stalenessMessage('new-branch', 'repo')).toBe(
       'The new branch dialog closed: the Git panel moved to another repository.'
+    )
+  })
+})
+
+describe('the project settings window', () => {
+  it('is a kind of its own, standing on the project', () => {
+    expect(isDialogKind('project-settings')).toBe(true)
+    expect(dialogGround('project-settings')).toEqual(['project'])
+    expect(dialogWidth('project-settings')).toBe(440)
+  })
+
+  it('closes with a sentence naming itself when the project changes', () => {
+    // The file it edits is the project's own, so a window left standing over a
+    // project somebody clicked away from would save four numbers into the wrong
+    // repository.
+    expect(stalenessMessage('project-settings', 'project')).toBe(
+      'The project settings dialog closed: the project changed.'
     )
   })
 })
