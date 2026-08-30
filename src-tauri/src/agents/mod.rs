@@ -438,6 +438,10 @@ pub struct Launch {
     /// `settings.json` by the caller, for the reason `facts` is: `prompt.rs`
     /// stays pure and the disk stays outside it.
     pub languages: Languages,
+    /// The person's own standing instruction, or empty. Read from
+    /// `settings.json` by the caller, for the reason `languages` and `facts`
+    /// are: `prompt.rs` stays pure and the disk stays outside it.
+    pub agent_prompt: String,
     /// What a survey of the project found, already rendered. Only a `Setup`
     /// intent has any, and it is read by the caller for the same reason skill
     /// text is: `prompt.rs` stays pure and the disk stays outside it.
