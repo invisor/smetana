@@ -126,13 +126,17 @@ question. `src/sounds.js` is what a sound may be — four ids, `off`, and the tw
 and `src/chime.js` is the half that touches the DOM: **Web Audio, and never `new Audio`** — one
 shared `AudioContext`, one decoded buffer per id, a fresh `AudioBufferSourceNode` per playback, with
 every failure warned about and swallowed, because a webview may refuse audio no gesture asked for and
-an app that throws over a noise is worse than a quiet one. The prohibition is the load-bearing half
-and the file's own header carries the measurements: an `HTMLMediaElement` in WKWebView plays through
-AVFoundation, opens a Now Playing session, and macOS bills an unsandboxed app for it with a dialog
-asking for the person's Apple Music and media library, raised at whatever moment a run happened to
-end (smetana-i4w). Which sound each event makes is the `notifications`
-section of `settings.json` (`.claude/rules/settings.md`), edited on the settings window's General
-tab.
+an app that throws over a noise is worse than a quiet one. The prohibition is the load-bearing half,
+and the file's own header carries the account behind it together with the warning that the account
+was never confirmed: an `HTMLMediaElement` in WKWebView plays through AVFoundation, opens a Now
+Playing session, and macOS is believed to bill an unsandboxed app for that with a dialog asking for
+the person's Apple Music and media library, raised at whatever moment a run happened to end. The TCC
+log that would have proved it was not observed — this is smetana-i4w's hypothesis taken as the
+diagnosis, which is why the header also names the reserve: if the dialog survives, the fault is
+elsewhere and the next move is playing the sound from Rust (`NSSound`), at the price of IPC per
+noise and a platform fork where there is now one file for every platform. Which sound each event
+makes is the `notifications` section of `settings.json` (`.claude/rules/settings.md`), edited on the
+settings window's General tab.
 
 Three rules about where it fires, and all three are easy to break by accident. The run sound is
 played in the `run:state` listener in `runs.js` — the only channel by which a run reaches `stopped`

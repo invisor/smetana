@@ -3,22 +3,36 @@
    test — the same split `appearance.js` and `views/useAppearance.js` make.
 
    **It plays through Web Audio, and never through `new Audio`. That is the
-   whole reason this file looks the way it does, and undoing it brings back a
-   macOS permission dialog.** An `HTMLMediaElement` in WKWebView plays through
-   AVFoundation, which registers a Now Playing session; for an unsandboxed app
-   macOS bills that as a reach for the person's media library and raises
-   «"smetana" would like to access Apple Music, your music and video activity,
-   and your media library» — with no explaining sentence under it, since the
-   bundle declares no `NSAppleMusicUsageDescription` and deliberately never
-   will (smetana-i4w). The dialog arrives at whatever moment a run ended or an
-   agent asked a question, which is to say in the middle of reading somebody
-   else's output, and there is no true answer to it: this app has nothing to do
-   in anybody's music library. Declaring the key would only make an unwarranted
-   request look warranted. A `<audio>` element, a `new Audio(...)`, and
-   `HTMLMediaElement` under any other name are all the same trigger. Web Audio
-   opens no Now Playing session, so the noise costs nothing.
+   whole reason this file looks the way it does, and undoing it is believed to
+   bring back a macOS permission dialog.** The account: an `HTMLMediaElement` in
+   WKWebView plays through AVFoundation, which registers a Now Playing session;
+   for an unsandboxed app macOS bills that as a reach for the person's media
+   library and raises the dialog somebody actually saw — "smetana" would like to
+   access Apple Music, your music and video activity, and your media library —
+   with no explaining sentence under it, since the bundle declares no
+   `NSAppleMusicUsageDescription` and deliberately never will (smetana-i4w). It
+   arrives at whatever moment a run ended or an agent asked a question, which is
+   to say in the middle of reading somebody else's output, and there is no true
+   answer to it: this app has nothing to do in anybody's music library.
+   Declaring the key would only make an unwarranted request look warranted. An
+   `<audio>` element, a `new Audio(...)`, and `HTMLMediaElement` under any other
+   name are all the same trigger. Web Audio opens no Now Playing session, so the
+   noise is believed to cost nothing.
 
-   What that costs here, and it is the shape of the rest of the file. A
+   **That account was never confirmed, and this is the sentence that says so.**
+   The TCC log the task asked for (`log stream --predicate 'subsystem ==
+   "com.apple.TCC"' --info`, after `tccutil reset MediaLibrary
+   com.invisor.smetana`) was not observed; what is implemented here is the
+   hypothesis of smetana-i4w taken as the diagnosis, because the treatment is
+   cheap and the file is better this way regardless. So if the dialog survives
+   this change, the fault is somewhere else and the reserve the task named is
+   playing the sound from Rust (`NSSound`) — which costs IPC per noise and a
+   platform fork where there is now one file for every platform, and was
+   therefore kept as a second move rather than the first. Look there before
+   concluding this file is innocent, and run the log before concluding it is
+   guilty.
+
+   What Web Audio costs here, and it is the shape of the rest of the file. An
    `AudioBufferSourceNode` is single-use — it cannot be rewound and played
    again — so "one player per sound" becomes **one decoded buffer per sound**,
    made on first use and kept, with a fresh node per playback. The old
@@ -62,6 +76,14 @@ let context = null
    flight share it instead of fetching twice. */
 const buffers = new Map()
 
+/* How long to wait for a suspended context to start before giving up on this
+   one sound. See `ring` for why the wait is bounded at all; the number itself is
+   loose on purpose — it is long enough that no machine loses a sound to being
+   busy, and short enough that what comes out of it is still an answer about the
+   event that asked. A notification later than this is about a moment that has
+   passed anyway. */
+const RESUME_WAIT_MS = 1000
+
 function audioContext() {
   if (context) return context
   const Context = typeof window === 'undefined' ? undefined : window.AudioContext
@@ -94,13 +116,27 @@ function bufferFor(id, file, ctx) {
 async function ring(id, file) {
   const ctx = audioContext()
   /* A system webview may hand back a context in `suspended` when no gesture has
-     been made yet, and every call site here is an event rather than a press.
-     Resuming is what turns that into sound; awaiting it is what keeps a
-     suspended context from collecting scheduled nodes that all fire at once
-     whenever it does resume. A `resume()` that a webview leaves pending until a
-     gesture is itself the silence, and there is nothing further to say about
-     it — the console line below covers the refusals that do answer. */
-  if (ctx.state === 'suspended') await ctx.resume()
+     been made yet, and every call site here is an event rather than a press, so
+     resuming is what turns that into a sound at all.
+
+     **The wait is bounded, and that is load-bearing rather than defensive.**
+     `resume()` on a context a webview will not yet let start does not reject:
+     the spec says it is held until the context is allowed to run, which is what
+     a Chromium-shaped webview does — WebView2, and `npm run dev`. Awaiting it
+     flatly parks one whole `ring` call per event behind it, and the gesture that
+     finally arrives releases every one of them into the same turn: a night of
+     notifications heard as a single burst. Racing a timer is what lets the wait
+     end without an answer, and the `running` check below is then reachable and
+     turns it into one console line and no sound. Do not simplify this to a bare
+     `await ctx.resume()`, and do not delete the check under it as unreachable —
+     between them they are the whole of what keeps the pile-up from being
+     audible. */
+  if (ctx.state === 'suspended') {
+    await Promise.race([
+      ctx.resume(),
+      new Promise((settle) => setTimeout(settle, RESUME_WAIT_MS))
+    ])
+  }
   const buffer = await bufferFor(id, file, ctx)
   if (ctx.state !== 'running') {
     console.warn('[chime] the sound would not play: the audio context is', ctx.state)
@@ -147,7 +183,9 @@ export function chime(id, { unlessFocused = false } = {}) {
      reacting to an event that matters more than the noise, and none of them has
      anything to do with the answer. A webview with no Web Audio at all, a file
      that would not decode, a context that refuses to resume: all of it lands
-     here, is written to the console once, and takes nobody down. */
+     here, is written to the console, and takes nobody down. One failure can
+     print more than once — two events waiting on the same failed decode both
+     see it — which is the ordinary cost of not letting either of them throw. */
   ring(id, file).catch((err) => {
     console.warn('[chime] no sound:', err)
   })
