@@ -19,9 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use super::model::{
-    ignored_names, looks_binary, mark_ignored, reject_bad_name, reject_traversal, sort_entries,
-    Entry, EntryKind, FileText, FilesError, Listing, Stat, BINARY_SNIFF_BYTES, MAX_ENTRIES,
-    MAX_FILE_BYTES,
+    copy_candidates, ignored_names, is_inside, looks_binary, mark_ignored, reject_bad_name,
+    reject_traversal, sort_entries, Entry, EntryKind, FileText, FilesError, Listing, Stat,
+    BINARY_SNIFF_BYTES, MAX_COPY_BYTES, MAX_COPY_ENTRIES, MAX_ENTRIES, MAX_FILE_BYTES,
 };
 use crate::vcs::model::VcsError;
 
@@ -94,6 +94,48 @@ pub fn resolve_new_within(root: &Path, dir: &str, name: &str) -> Result<PathBuf,
     Ok(full)
 }
 
+/// A path split where the tree splits it: everything before the last `/` is the
+/// folder, everything after it is the name.
+///
+/// `/` alone, and that is not an oversight about Windows. Every path the tree
+/// produces is `child_path`'s, which uses `/` on every platform and says why; a
+/// backslash in one of these strings is therefore part of a **file name**, and
+/// `reject_traversal` lets such a name through, so `files_list` lists it and
+/// `files_read` opens it. Splitting on it would read `a\b.txt` as a folder and a
+/// file and act on something nobody named. Left in the tail, it is what
+/// `reject_bad_name` refuses — a refusal instead of the wrong file.
+fn split_leaf(rel: &str) -> (&str, &str) {
+    match rel.rfind('/') {
+        Some(at) => (&rel[..at], &rel[at + 1..]),
+        None => ("", rel),
+    }
+}
+
+/// Where an existing entry is, with its **last component left exactly as it was
+/// given** — the shape `move_to_trash` is built on, and this is the function it
+/// was lifted out of when copying and moving wanted the same guarantee.
+///
+/// `resolve_within` canonicalizes every component, the last one included, which
+/// is right for reading a file and wrong for anything that acts on the entry
+/// itself. A link is drawn in the tree as an ordinary row, so copying
+/// `node_modules/.bin/vite` through an unwound path would take the package's
+/// real script instead of the link somebody pointed at, and a link pointing at
+/// the project's own root resolves to the root, as does the literal `.`. So the
+/// **parent** is what gets canonicalized and checked for containment, the last
+/// component is checked as a name — `reject_bad_name` refuses `.`, `..`, a
+/// separator, a drive prefix and the empty string, which is every spelling of
+/// "not a child of that folder" — and what is joined back on is handed over as
+/// it stands.
+///
+/// It says nothing about whether anything is there: the callers differ on what
+/// a missing entry means and each checks for itself.
+fn resolve_leaf_within(root: &Path, rel: &str) -> Result<PathBuf, FilesError> {
+    let (dir, name) = split_leaf(rel);
+    reject_bad_name(name)?;
+    let parent = resolve_within(root, dir)?;
+    Ok(parent.join(name))
+}
+
 /// A new empty file. `create_new` rather than `create`: the existence check in
 /// `resolve_new_within` and this call are two moments, and between them somebody
 /// else's agent may write the same name — at which point truncating their file
@@ -124,6 +166,369 @@ pub fn create_dir(root: &Path, dir: &str, name: &str) -> Result<String, FilesErr
         }
         Err(err) => Err(io_error(&rel, &err)),
     }
+}
+
+/// Whether a name was already taken. `Made` means the entry is there and the
+/// work behind it is done.
+enum Attempt {
+    Made,
+    Taken,
+}
+
+/// The names an entry may land under, in the order they are tried: its own
+/// first, then `copy_candidates`'.
+///
+/// Its own first is what makes a copy into another folder keep the name it had
+/// — VS Code and every file manager do that, and `b/report copy.md` dropped
+/// into an empty folder would be a name nobody can explain. The chain the copy
+/// rule is written about is the same-folder case, where the first name is taken
+/// by the file being copied and the second is `report copy.md` anyway.
+///
+/// A move uses the same list for the same reason a copy does: something is
+/// already there is not a reason to overwrite it and there is nobody to ask, so
+/// both entries stay and the newcomer takes the next name.
+fn landing_names(name: &str, is_dir: bool) -> Vec<String> {
+    let mut names = vec![name.to_owned()];
+    names.extend(copy_candidates(name, is_dir));
+    names
+}
+
+/// The first free name out of the candidates, **taken by trying to make the
+/// entry** and never by reading the directory first.
+///
+/// Listing a folder and then creating what is missing from the listing is a
+/// race an agent writing into the same folder can win, and the prize is
+/// somebody else's file overwritten. `create_new` for a file, `create_dir` for a
+/// folder and `symlink` for a link each refuse when something is already there,
+/// so the first call that succeeds is the winner and there is no window between
+/// the question and the answer.
+///
+/// A hundred candidates and then a refusal: see `MAX_COPY_NAMES`.
+fn take_free_name(
+    dst: &Path,
+    dst_rel: &str,
+    names: &[String],
+    mut make: impl FnMut(&Path, &str) -> Result<Attempt, FilesError>,
+) -> Result<String, FilesError> {
+    for name in names {
+        let rel = child_path(dst_rel, name);
+        if let Attempt::Made = make(&dst.join(name), &rel)? {
+            return Ok(rel);
+        }
+    }
+    Err(FilesError::AlreadyExists(child_path(dst_rel, &names[0])))
+}
+
+/// What a copy would come to — entries and bytes — counted from the metadata
+/// before a single byte is written, so a refusal leaves nothing half-done.
+///
+/// Nothing here follows a symlink: a link is one entry and no bytes, exactly as
+/// it is copied. That is also what settles the question of cycles, since
+/// nothing is walked through.
+///
+/// The ceiling is checked as the children are pushed and not only as they are
+/// popped, which is what keeps a folder of a million names from being held in
+/// memory on the way to being refused.
+fn measure(path: &Path, rel: &str) -> Result<(), FilesError> {
+    let mut entries: usize = 0;
+    let mut bytes: u64 = 0;
+    let mut pending = vec![path.to_owned()];
+    while let Some(next) = pending.pop() {
+        let meta = fs::symlink_metadata(&next).map_err(|err| io_error(rel, &err))?;
+        entries += 1;
+        let kind = meta.file_type();
+        if kind.is_symlink() {
+            // One entry, no bytes and nothing under it.
+        } else if kind.is_dir() {
+            let reader = fs::read_dir(&next).map_err(|err| io_error(rel, &err))?;
+            for item in reader {
+                // An entry that vanished between `read_dir` and `next` is one
+                // fewer to copy, not a reason to refuse the whole thing.
+                let Ok(item) = item else { continue };
+                pending.push(item.path());
+                if entries + pending.len() > MAX_COPY_ENTRIES {
+                    return Err(FilesError::TooBig {
+                        path: rel.to_owned(),
+                        entries: entries + pending.len(),
+                        bytes,
+                    });
+                }
+            }
+        } else {
+            bytes += meta.len();
+        }
+        if entries > MAX_COPY_ENTRIES || bytes > MAX_COPY_BYTES {
+            return Err(FilesError::TooBig { path: rel.to_owned(), entries, bytes });
+        }
+    }
+    Ok(())
+}
+
+/// A folder may not be put inside itself or inside anything under it.
+///
+/// The check is made on the **canonicalized pair** and not on the two relative
+/// strings, because a string does not see a symlink: `src/deep/link` pointing
+/// back at `src` is a destination whose path has nothing in common with the
+/// source's, and dropping the folder onto it would be a folder growing inside
+/// itself until the disk filled up. `dst` arrives canonicalized from
+/// `resolve_within`; the source is canonicalized here, and only for this
+/// question — what is copied is still the un-unwound path.
+fn refuse_into_self(src: &Path, src_rel: &str, dst: &Path) -> Result<(), FilesError> {
+    let canonical = src.canonicalize().map_err(|err| io_error(src_rel, &err))?;
+    if is_inside(&canonical, dst) {
+        return Err(FilesError::IntoSelf(src_rel.to_owned()));
+    }
+    Ok(())
+}
+
+/// One entry copied to a name that is being claimed by this very call.
+///
+/// Whatever goes wrong after the name is taken, the half-made thing goes with
+/// it: a copy that failed must not leave an empty file or an empty folder
+/// sitting where the name used to be free, since the tree would draw it as a
+/// copy that worked.
+fn put_copy(
+    src: &Path,
+    meta: &fs::Metadata,
+    target: &Path,
+    rel: &str,
+) -> Result<Attempt, FilesError> {
+    let kind = meta.file_type();
+    if kind.is_symlink() {
+        // A link is copied as a link and never as what it points at — the same
+        // reasoning `resolve_leaf_within` carries. The call is both the claim
+        // and the whole of the work.
+        return match copy_link(src, target) {
+            Ok(()) => Ok(Attempt::Made),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(Attempt::Taken),
+            Err(err) => Err(io_error(rel, &err)),
+        };
+    }
+    if kind.is_dir() {
+        match fs::create_dir(target) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Ok(Attempt::Taken)
+            }
+            Err(err) => return Err(io_error(rel, &err)),
+        }
+        if let Err(err) = copy_tree(src, target) {
+            let _ = fs::remove_dir_all(target);
+            return Err(io_error(rel, &err));
+        }
+        return Ok(Attempt::Made);
+    }
+    // An ordinary file: `create_new` claims the name, and `fs::copy` then fills
+    // the empty file it left — which is also what carries the permissions over,
+    // so an executable script is still executable after being copied.
+    match fs::File::options().write(true).create_new(true).open(target) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Ok(Attempt::Taken),
+        Err(err) => return Err(io_error(rel, &err)),
+    }
+    if let Err(err) = fs::copy(src, target) {
+        let _ = fs::remove_file(target);
+        return Err(io_error(rel, &err));
+    }
+    Ok(Attempt::Made)
+}
+
+/// The contents of one directory into another that has just been made.
+///
+/// Recursion follows the nesting of the folders and nothing else: a link is
+/// recreated as a link, so nothing is ever walked through, and the ceiling
+/// `measure` put on the whole copy has already been passed by the time this
+/// runs.
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    for item in fs::read_dir(src)? {
+        let item = item?;
+        let from = item.path();
+        let to = dst.join(item.file_name());
+        let kind = item.file_type()?;
+        if kind.is_symlink() {
+            copy_link(&from, &to)?;
+        } else if kind.is_dir() {
+            fs::create_dir(&to)?;
+            copy_tree(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// A link copied as a link. `read_link` gives the target as it was written —
+/// relative stays relative — and nothing is opened.
+#[cfg(unix)]
+fn copy_link(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(fs::read_link(src)?, dst)
+}
+
+/// The same on Windows, where the call is two calls: a link to a folder and a
+/// link to a file are different objects there. It needs Developer Mode or an
+/// elevated process, and without one the copy fails with the platform's own
+/// message rather than quietly copying what the link pointed at — which would
+/// be somebody's real file under a name they meant as a pointer.
+#[cfg(windows)]
+fn copy_link(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let target = fs::read_link(src)?;
+    if fs::metadata(src).map(|meta| meta.is_dir()).unwrap_or(false) {
+        std::os::windows::fs::symlink_dir(target, dst)
+    } else {
+        std::os::windows::fs::symlink_file(target, dst)
+    }
+}
+
+/// A copy of one entry into another folder, answering with the new path from
+/// the root.
+///
+/// `src` is a whole path and `dst_dir` is a folder: nothing here takes a name,
+/// because the name is not the caller's to choose — it is `copy_candidates`',
+/// and the first of those that is still free wins.
+pub fn copy_entry(root: &Path, src_rel: &str, dst_dir_rel: &str) -> Result<String, FilesError> {
+    let src = resolve_leaf_within(root, src_rel)?;
+    let meta = src.symlink_metadata().map_err(|err| io_error(src_rel, &err))?;
+    let dst = resolve_within(root, dst_dir_rel)?;
+    if !dst.is_dir() {
+        return Err(FilesError::NotAFile(dst_dir_rel.to_owned()));
+    }
+    // A link is copied as a link, so a link to a folder walks nowhere and has
+    // nothing to be put inside of; only a real folder can swallow itself.
+    if meta.file_type().is_dir() {
+        refuse_into_self(&src, src_rel, &dst)?;
+    }
+    measure(&src, src_rel)?;
+
+    let (_, name) = split_leaf(src_rel);
+    let names = landing_names(name, meta.file_type().is_dir());
+    take_free_name(&dst, dst_dir_rel, &names, |target, rel| put_copy(&src, &meta, target, rel))
+}
+
+/// EXDEV on unix, `ERROR_NOT_SAME_DEVICE` on Windows: the destination is on
+/// another filesystem, which is the one failure of `rename` that is not a
+/// failure of the move.
+///
+/// The number rather than `ErrorKind::CrossesDevices`, which is newer than this
+/// crate's `rust-version`.
+fn is_cross_device(err: &std::io::Error) -> bool {
+    let code = err.raw_os_error();
+    if cfg!(windows) {
+        code == Some(17)
+    } else {
+        code == Some(18)
+    }
+}
+
+/// One entry moved to a name this call has just found free.
+///
+/// `rename` cannot claim a name by trying, the way every other verb here does:
+/// it replaces whatever is at the destination without a word, so a failed claim
+/// would be somebody's file gone. The name is therefore looked at first and the
+/// rename follows, which leaves a window this module cannot close portably —
+/// the conditional rename exists on Linux (`renameat2`) and nowhere else. What
+/// closes it in practice is that the loop only ever reaches a second name
+/// because the first was taken.
+fn put_move(
+    src: &Path,
+    src_rel: &str,
+    meta: &fs::Metadata,
+    target: &Path,
+    rel: &str,
+) -> Result<Attempt, FilesError> {
+    if target.symlink_metadata().is_ok() {
+        return Ok(Attempt::Taken);
+    }
+    match fs::rename(src, target) {
+        Ok(()) => Ok(Attempt::Made),
+        // Windows refuses a rename onto an existing directory outright.
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(Attempt::Taken),
+        Err(err) if is_cross_device(&err) => move_across_devices(src, src_rel, meta, target, rel),
+        Err(err) => Err(io_error(rel, &err)),
+    }
+}
+
+/// The move `rename` refused because the two paths are on different
+/// filesystems. It happens inside one project as soon as part of it is mounted
+/// separately — an external disk, a network share, a container mount.
+///
+/// A copy and then a **real** delete, deliberately not the trash: a move that
+/// left a copy in somebody's Trash reads as half done, and the entry they are
+/// looking for is the one they dragged. The ceiling applies here as it does to
+/// any copy, since this is one, and it is measured before anything is written —
+/// so a refusal leaves the entry exactly where it was.
+fn move_across_devices(
+    src: &Path,
+    src_rel: &str,
+    meta: &fs::Metadata,
+    target: &Path,
+    rel: &str,
+) -> Result<Attempt, FilesError> {
+    measure(src, src_rel)?;
+    if let Attempt::Taken = put_copy(src, meta, target, rel)? {
+        return Ok(Attempt::Taken);
+    }
+    // `symlink_metadata` above, so a link is removed as a link and what it
+    // pointed at is left alone.
+    let removed = if meta.file_type().is_dir() {
+        fs::remove_dir_all(src)
+    } else {
+        fs::remove_file(src)
+    };
+    // The copy stays if this fails, and it stays deliberately: the two halves
+    // cannot be made atomic across filesystems, and of the two ways to be wrong
+    // an entry in both places is the one nobody loses work to.
+    removed.map_err(|err| io_error(src_rel, &err))?;
+    Ok(Attempt::Made)
+}
+
+/// An entry moved into another folder, answering with the new path from the
+/// root.
+///
+/// The name it lands under is its own when that is free, and `copy_candidates`'
+/// otherwise — never an overwrite and never a question, which is the same
+/// decision the copy is built on. Dropping something back into the folder it is
+/// already in is a gesture people make by accident all the time, and it is
+/// answered with nothing done rather than with a stray `a copy.txt`.
+pub fn move_entry(root: &Path, src_rel: &str, dst_dir_rel: &str) -> Result<String, FilesError> {
+    let src = resolve_leaf_within(root, src_rel)?;
+    let meta = src.symlink_metadata().map_err(|err| io_error(src_rel, &err))?;
+    let dst = resolve_within(root, dst_dir_rel)?;
+    if !dst.is_dir() {
+        return Err(FilesError::NotAFile(dst_dir_rel.to_owned()));
+    }
+    let (src_dir, name) = split_leaf(src_rel);
+    if resolve_within(root, src_dir)? == dst {
+        return Ok(src_rel.to_owned());
+    }
+    if meta.file_type().is_dir() {
+        refuse_into_self(&src, src_rel, &dst)?;
+    }
+
+    let names = landing_names(name, meta.file_type().is_dir());
+    take_free_name(&dst, dst_dir_rel, &names, |target, rel| {
+        put_move(&src, src_rel, &meta, target, rel)
+    })
+}
+
+/// A new name for an entry, in the folder it is already in.
+///
+/// A command of its own rather than a flag on the move, because its argument is
+/// a **name**: what checks it is `resolve_new_within` — the split into a folder
+/// and a name that `create_file` and `create_dir` are built on — and not the
+/// containment check a move makes about two folders. A name already taken is an
+/// ordinary refusal here and not a second candidate: somebody typed this one,
+/// and quietly renaming to something else would be an answer to a question they
+/// did not ask.
+pub fn rename_entry(root: &Path, rel: &str, name: &str) -> Result<String, FilesError> {
+    let src = resolve_leaf_within(root, rel)?;
+    if src.symlink_metadata().is_err() {
+        return Err(FilesError::NotFound(rel.to_owned()));
+    }
+    let (dir, _) = split_leaf(rel);
+    let target = resolve_new_within(root, dir, name)?;
+    let new_rel = child_path(dir, name);
+    fs::rename(&src, &target).map_err(|err| io_error(&new_rel, &err))?;
+    Ok(new_rel)
 }
 
 /// The system trash, and deliberately not `remove_file`. A deletion somebody
@@ -200,21 +605,7 @@ fn move_to_trash_with(
     rel: &str,
     delete: impl FnOnce(&Path) -> Result<(), String>,
 ) -> Result<(), FilesError> {
-    // `/` alone, and that is not an oversight about Windows. Every path the
-    // tree produces is `child_path`'s, which uses `/` on every platform and
-    // says why; a backslash in one of these strings is therefore part of a
-    // **file name**, and `reject_traversal` lets such a name through, so
-    // `files_list` lists it and `files_read` opens it. Splitting on it would
-    // read `a\b.txt` as a folder and a file and delete something nobody named.
-    // Left in the tail, it is what `reject_bad_name` refuses — a refusal
-    // instead of the wrong file.
-    let (dir, name) = match rel.rfind('/') {
-        Some(at) => (&rel[..at], &rel[at + 1..]),
-        None => ("", rel),
-    };
-    reject_bad_name(name)?;
-    let parent = resolve_within(root, dir)?;
-    let full = parent.join(name);
+    let full = resolve_leaf_within(root, rel)?;
     // `symlink_metadata` and not `exists`, which answers "no" for a link
     // pointing nowhere — and a broken link is a thing somebody wants gone.
     if full.symlink_metadata().is_err() {
@@ -970,6 +1361,300 @@ mod tests {
             "create_dir_all would have made two of them for a question nobody asked"
         );
         assert!(!root.join("a").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_copy_lands_in_another_folder_under_its_own_name_and_the_original_stays() {
+        let root = scratch("copy-file");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::write(root.join("a.txt"), "hello\n").unwrap();
+
+        let rel = copy_entry(&root, "a.txt", "dst").unwrap();
+
+        assert_eq!(rel, "dst/a.txt", "a free name is kept: nobody can explain `a copy.txt` here");
+        assert_eq!(fs::read_to_string(root.join("dst/a.txt")).unwrap(), "hello\n");
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "hello\n",
+            "a copy leaves the original exactly where it was"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The claim is `create_new`, which makes an empty file with this process's
+    /// umask on it; what carries the source's own bits over is the copy that
+    /// fills it. Without that a script copied inside the tree would stop
+    /// running, with nothing about the copy to say why.
+    #[cfg(unix)]
+    #[test]
+    fn an_executable_stays_executable_through_a_copy() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch("copy-mode");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::write(root.join("run.sh"), "#!/bin/sh\n").unwrap();
+        fs::set_permissions(root.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+
+        copy_entry(&root, "run.sh", "dst").unwrap();
+
+        let mode = fs::metadata(root.join("dst/run.sh")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "the copy came out as {mode:o}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The chain the naming rule is written about, which is the same-folder
+    /// case: the first name is taken by the file being copied.
+    #[test]
+    fn two_copies_into_the_same_folder_walk_down_the_names() {
+        let root = scratch("copy-twice");
+        fs::write(root.join("a.txt"), "x\n").unwrap();
+
+        let first = copy_entry(&root, "a.txt", "").unwrap();
+        let second = copy_entry(&root, "a.txt", "").unwrap();
+
+        assert_eq!(first, "a copy.txt");
+        assert_eq!(second, "a copy 2.txt");
+        assert_eq!(fs::read_to_string(root.join("a copy 2.txt")).unwrap(), "x\n");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_folder_is_copied_with_everything_under_it() {
+        let root = scratch("copy-folder");
+        fs::create_dir_all(root.join("src/deep")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("src/deep/mod.rs"), "// deep\n").unwrap();
+        fs::create_dir_all(root.join("dst")).unwrap();
+
+        let rel = copy_entry(&root, "src", "dst").unwrap();
+
+        assert_eq!(rel, "dst/src");
+        assert_eq!(fs::read_to_string(root.join("dst/src/main.rs")).unwrap(), "fn main() {}\n");
+        assert_eq!(fs::read_to_string(root.join("dst/src/deep/mod.rs")).unwrap(), "// deep\n");
+        assert!(root.join("src/main.rs").exists(), "the original tree stays");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Without the check this is a folder growing inside itself until the disk
+    /// is full, and the tree offers the gesture with one drag.
+    #[test]
+    fn a_folder_cannot_be_copied_into_something_under_it() {
+        let root = scratch("copy-into-self");
+        fs::create_dir_all(root.join("src/deep")).unwrap();
+        fs::write(root.join("src/main.rs"), "x\n").unwrap();
+
+        let into_child = copy_entry(&root, "src", "src/deep");
+        let into_itself = copy_entry(&root, "src", "src");
+
+        assert_eq!(into_child.as_ref().err().map(|e| e.kind()), Some("intoSelf"), "{into_child:?}");
+        assert_eq!(
+            into_itself.as_ref().err().map(|e| e.kind()),
+            Some("intoSelf"),
+            "a folder counts as inside itself: {into_itself:?}"
+        );
+        assert!(
+            !root.join("src/deep/src").exists(),
+            "and nothing was made on the way to saying so"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_move_leaves_nothing_where_it_was() {
+        let root = scratch("move-file");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::write(root.join("a.txt"), "hello\n").unwrap();
+
+        let rel = move_entry(&root, "a.txt", "dst").unwrap();
+
+        assert_eq!(rel, "dst/a.txt");
+        assert_eq!(fs::read_to_string(root.join("dst/a.txt")).unwrap(), "hello\n");
+        assert!(root.join("a.txt").symlink_metadata().is_err(), "the source is gone");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_move_onto_a_taken_name_keeps_both() {
+        let root = scratch("move-taken");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::write(root.join("a.txt"), "mine\n").unwrap();
+        fs::write(root.join("dst/a.txt"), "somebody else's\n").unwrap();
+
+        let rel = move_entry(&root, "a.txt", "dst").unwrap();
+
+        assert_eq!(rel, "dst/a copy.txt");
+        assert_eq!(
+            fs::read_to_string(root.join("dst/a.txt")).unwrap(),
+            "somebody else's\n",
+            "there is nobody to ask, so the file already there is not the one that gives way"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A gesture people make by accident all the time — dropping a file back
+    /// into the folder it came from. A stray `a copy.txt` would be the answer
+    /// to a question nobody asked.
+    #[test]
+    fn a_move_into_the_folder_it_is_already_in_does_nothing_at_all() {
+        let root = scratch("move-nowhere");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.txt"), "x\n").unwrap();
+
+        let rel = move_entry(&root, "src/a.txt", "src").unwrap();
+
+        assert_eq!(rel, "src/a.txt");
+        let listing = list_dir(&root, "src").unwrap();
+        assert_eq!(listing.entries.len(), 1, "nothing was made beside it");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_rename_answers_with_the_new_path_in_the_same_folder() {
+        let root = scratch("rename");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.txt"), "x\n").unwrap();
+
+        let rel = rename_entry(&root, "src/a.txt", "b.txt").unwrap();
+
+        assert_eq!(rel, "src/b.txt", "the front end moves its tab to exactly this string");
+        assert_eq!(fs::read_to_string(root.join("src/b.txt")).unwrap(), "x\n");
+        assert!(root.join("src/a.txt").symlink_metadata().is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_rename_takes_a_name_and_never_a_path() {
+        let root = scratch("rename-path");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.txt"), "x\n").unwrap();
+
+        let err = rename_entry(&root, "src/a.txt", "../b.txt");
+
+        assert_eq!(err.as_ref().err().map(|e| e.kind()), Some("badName"), "{err:?}");
+        assert!(!root.join("b.txt").exists(), "a name is joined onto its own folder or nowhere");
+        assert!(root.join("src/a.txt").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_rename_onto_a_taken_name_is_a_refusal_and_not_an_overwrite() {
+        let root = scratch("rename-taken");
+        fs::write(root.join("a.txt"), "mine\n").unwrap();
+        fs::write(root.join("b.txt"), "somebody else's\n").unwrap();
+
+        let err = rename_entry(&root, "a.txt", "b.txt");
+
+        assert_eq!(err.as_ref().err().map(|e| e.kind()), Some("alreadyExists"), "{err:?}");
+        assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "somebody else's\n");
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "mine\n");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The tree draws a link as an ordinary row, so a copy that followed one
+    /// would put the real script behind `node_modules/.bin/vite` into somebody's
+    /// folder under a name they meant as a pointer.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_a_copied_folder_is_still_a_link() {
+        let root = scratch("copy-link");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("bin/real.js"), "console.log(1)\n").unwrap();
+        std::os::unix::fs::symlink("real.js", root.join("bin/link.js")).unwrap();
+        fs::create_dir_all(root.join("dst")).unwrap();
+
+        copy_entry(&root, "bin", "dst").unwrap();
+
+        let copied = root.join("dst/bin/link.js");
+        assert!(
+            copied.symlink_metadata().unwrap().file_type().is_symlink(),
+            "the copy dereferenced the link and wrote the file behind it"
+        );
+        assert_eq!(fs::read_link(&copied).unwrap(), Path::new("real.js"), "written as it stood");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A link at the top of the copy, which is the row somebody right-clicks.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_copied_on_its_own_is_copied_as_a_link() {
+        let root = scratch("copy-link-alone");
+        let outside = scratch("copy-link-alone-target");
+        fs::write(outside.join("real.txt"), "somebody's file").unwrap();
+        std::os::unix::fs::symlink(outside.join("real.txt"), root.join("link.txt")).unwrap();
+        fs::create_dir_all(root.join("dst")).unwrap();
+
+        let rel = copy_entry(&root, "link.txt", "dst").unwrap();
+
+        assert_eq!(rel, "dst/link.txt");
+        let copied = root.join("dst/link.txt");
+        assert!(copied.symlink_metadata().unwrap().file_type().is_symlink());
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    /// The ceiling, and the half of it that matters: the refusal arrives before
+    /// anything has been written, so there is no half-copied folder to explain.
+    /// There is no progress bar in this app and no cancel button — see
+    /// `MAX_COPY_ENTRIES`.
+    #[test]
+    fn a_folder_of_too_many_entries_is_refused_before_anything_is_copied() {
+        let root = scratch("copy-too-big");
+        fs::create_dir_all(root.join("huge")).unwrap();
+        for i in 0..MAX_COPY_ENTRIES + 1 {
+            fs::write(root.join(format!("huge/f{i:05}.txt")), "").unwrap();
+        }
+        fs::create_dir_all(root.join("dst")).unwrap();
+
+        let err = copy_entry(&root, "huge", "dst");
+
+        assert_eq!(err.as_ref().err().map(|e| e.kind()), Some("tooBig"), "{err:?}");
+        assert!(
+            fs::read_dir(root.join("dst")).unwrap().next().is_none(),
+            "the count is made from the metadata, before a single byte is written"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A copy that failed after taking the name has to give the name back. What
+    /// is left otherwise is an empty file, or an empty folder, that the tree
+    /// draws exactly like a copy that worked.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_that_failed_leaves_neither_an_empty_file_nor_an_empty_folder() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch("copy-failed");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::write(root.join("secret.txt"), "x\n").unwrap();
+        fs::create_dir_all(root.join("folder")).unwrap();
+        fs::write(root.join("folder/inner.txt"), "x\n").unwrap();
+        fs::set_permissions(root.join("secret.txt"), fs::Permissions::from_mode(0o000)).unwrap();
+        fs::set_permissions(root.join("folder/inner.txt"), fs::Permissions::from_mode(0o000))
+            .unwrap();
+
+        // Running as root ignores the permissions and the test would pass
+        // without ever reaching the cleanup it is about.
+        if fs::read(root.join("secret.txt")).is_ok() {
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+
+        let file = copy_entry(&root, "secret.txt", "dst");
+        let folder = copy_entry(&root, "folder", "dst");
+
+        // Back before the assertions, so the cleanup below can remove the tree
+        // whichever way this ends.
+        fs::set_permissions(root.join("secret.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(root.join("folder/inner.txt"), fs::Permissions::from_mode(0o644))
+            .unwrap();
+
+        assert!(file.is_err(), "an unreadable source cannot be copied: {file:?}");
+        assert!(folder.is_err(), "and neither can a folder holding one: {folder:?}");
+        assert!(
+            fs::read_dir(root.join("dst")).unwrap().next().is_none(),
+            "the destination is as empty as it was before either attempt"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

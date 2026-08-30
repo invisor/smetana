@@ -3,6 +3,17 @@
 //! `model.rs` is the vocabulary and the pure logic and carries the tests,
 //! `fs.rs` is the disk, `commands.rs` is thin commands over it.
 //!
+//! **Copying, moving and renaming are three verbs and not one with a flag.** A
+//! rename takes a **name**, and what checks a name is `resolve_new_within` —
+//! the split into a folder and a name that `files_create` is built on — while a
+//! copy and a move take a **folder** and check that one is not inside the
+//! other. Two of the three carry ceilings of their own (`MAX_COPY_ENTRIES`,
+//! `MAX_COPY_BYTES`) for the reason every ceiling here exists: there is no
+//! progress bar, no cancel and no watcher, so an unbounded copy is a frozen
+//! panel with nothing on screen to say why. Nothing any of them does ever
+//! overwrites anything and nothing ever asks — a name already taken means the
+//! newcomer takes the next one, `report copy.md` and then `report copy 2.md`.
+//!
 //! **A listing is a `read_dir` and one spawn of git.** It was only the first for
 //! most of this module's life, and `fs.rs`'s header still opens on what follows
 //! from that — no worker, no queue, no watcher — which is all still true. What is
