@@ -81,6 +81,15 @@ pub fn languages(path: &Path) -> crate::agents::Languages {
     }
 }
 
+/// The standing instruction off the file, and nothing else out of it. The shape
+/// of `agent` above, one field over, and answering on the same terms: a missing
+/// or unreadable file answers with the empty string, which says nothing at all —
+/// today's behaviour to the letter, and the right answer on a first run when
+/// there is no file yet.
+pub fn agent_prompt(path: &Path) -> String {
+    load(path).0.agent_prompt
+}
+
 /// Whether a run may remove a task's worktree once it is merged and closed, and
 /// nothing else out of the file. The shape of `agent` above, one field over.
 ///

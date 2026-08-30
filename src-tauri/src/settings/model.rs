@@ -40,6 +40,10 @@ const RIGHT_TABS: [&str; 2] = ["task", "sessions"];
 /// the project. So we check sanity rather than membership.
 const MAX_ID_LEN: usize = 200;
 const MAX_PATH_LEN: usize = 4096;
+/// How long a standing instruction may be. A sanity bound rather than taste:
+/// past it the file is damaged rather than opinionated, since the interface
+/// cannot produce a value this long.
+const MAX_AGENT_PROMPT: usize = 4000;
 const MAX_EXPANDED: usize = 500;
 /// How many branch folders an unfolded list may name. Smaller than the file
 /// tree's ceiling above and for a different subject: a repository has a handful
@@ -781,6 +785,24 @@ pub struct Settings {
     /// `runs::report`'s own English labels, which are this product's interface
     /// copy. `prompt.rs` records the whole watershed.
     pub report_language: String,
+    /// What the person wants said in every agent session they are actually in:
+    /// their own standing instruction, in their own words, or empty.
+    ///
+    /// At the root beside `agent_language` and for the reason written there —
+    /// "talk to me briefly", "this machine has no Docker" is a fact about a
+    /// person and travels with them between repositories. Something meant for
+    /// one repository has a better home the harness reads itself, `CLAUDE.md`
+    /// or `AGENTS.md`.
+    ///
+    /// Empty by default, and empty means today's behaviour to the letter: not
+    /// one word and not one blank line added to any prompt. That is the
+    /// opposite shape from the languages beside it, which default to `en` and
+    /// do emit a paragraph — a language always has an answer, a standing
+    /// instruction usually does not.
+    ///
+    /// Which sessions it reaches is `agents::prompt::talks_to_a_person`, and
+    /// this file has no opinion about it.
+    pub agent_prompt: String,
     pub last_project: Option<String>,
     /// The contents and order of the on-screen list — the order things were
     /// added, not how recent they are: rows that jump on every switch are
@@ -806,6 +828,7 @@ impl Default for Settings {
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
             commit_language: crate::agents::DEFAULT_LANGUAGE.into(),
             report_language: crate::agents::DEFAULT_LANGUAGE.into(),
+            agent_prompt: String::new(),
             last_project: None,
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
@@ -845,6 +868,8 @@ pub struct ResolvedSettings {
     pub task_language: String,
     pub commit_language: String,
     pub report_language: String,
+    /// The standing instruction. See `Settings::agent_prompt`.
+    pub agent_prompt: String,
     pub project: ProjectState,
     pub open_projects: Vec<String>,
     pub active_project: Option<String>,
@@ -872,6 +897,7 @@ impl Default for ResolvedSettings {
             task_language: crate::agents::DEFAULT_LANGUAGE.into(),
             commit_language: crate::agents::DEFAULT_LANGUAGE.into(),
             report_language: crate::agents::DEFAULT_LANGUAGE.into(),
+            agent_prompt: String::new(),
             project: ProjectState::default(),
             open_projects: Vec::new(),
             active_project: None,
@@ -919,6 +945,11 @@ pub fn parse(text: &str) -> Outcome {
         task_language: language_field(&object, "taskLanguage"),
         commit_language: language_field(&object, "commitLanguage"),
         report_language: language_field(&object, "reportLanguage"),
+        agent_prompt: object
+            .get("agentPrompt")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_default(),
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
@@ -965,6 +996,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         task_language: file.task_language.clone(),
         commit_language: file.commit_language.clone(),
         report_language: file.report_language.clone(),
+        agent_prompt: file.agent_prompt.clone(),
         project: active
             .as_deref()
             .and_then(|path| file.projects.get(path))
@@ -993,6 +1025,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.task_language = resolved.task_language;
     file.commit_language = resolved.commit_language;
     file.report_language = resolved.report_language;
+    file.agent_prompt = resolved.agent_prompt;
     file.open_projects = resolved.open_projects;
     file.last_project = resolved.active_project.clone();
 
@@ -1096,6 +1129,7 @@ impl Settings {
         known_language(&mut self.task_language);
         known_language(&mut self.commit_language);
         known_language(&mut self.report_language);
+        forget_if_too_long(&mut self.agent_prompt, MAX_AGENT_PROMPT);
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -1116,6 +1150,7 @@ impl ResolvedSettings {
         known_language(&mut self.task_language);
         known_language(&mut self.commit_language);
         known_language(&mut self.report_language);
+        forget_if_too_long(&mut self.agent_prompt, MAX_AGENT_PROMPT);
         self.appearance.validate();
         self.layout.validate();
         self.editor.validate();
@@ -1339,6 +1374,23 @@ fn forget_if_junk(value: &mut Option<String>, max: usize) {
         if text.is_empty() || text.len() > max {
             *value = None;
         }
+    }
+}
+
+/// A standing instruction longer than anybody writes by hand is a damaged file
+/// rather than a preference, and it is forgotten whole rather than cut down to
+/// the ceiling: a truncated instruction ends mid-sentence, which is the one
+/// shape `agents/prompt.rs` refuses everywhere — `no_prompt_stops_mid_sentence`
+/// walks every intent to keep dangling punctuation out of a prompt, and a
+/// ceiling that halved somebody's paragraph would be this app producing exactly
+/// what that test forbids.
+///
+/// Not `forget_if_junk` one field up, and the difference is the whole reason
+/// this exists: that one discards the empty string too, and here the empty
+/// string is a legal value — it is how somebody clears the field.
+fn forget_if_too_long(value: &mut String, max: usize) {
+    if value.len() > max {
+        value.clear();
     }
 }
 
@@ -2838,6 +2890,49 @@ mod tests {
         assert_eq!(written.task_language, "ja");
         assert_eq!(written.commit_language, "de");
         assert_eq!(written.report_language, "it");
+    }
+
+    /// The walk `a_chosen_language_does_not_quietly_become_english_again`
+    /// makes, one field over and for the same reason: a field added to the two
+    /// structs but not wired into `parse`, `resolve` and `merge` reads as empty
+    /// for ever no matter what the file says.
+    #[test]
+    fn a_standing_instruction_does_not_quietly_vanish() {
+        let file = settings_of(r#"{"version":1,"agentPrompt":"Always use pnpm."}"#);
+        assert_eq!(file.agent_prompt, "Always use pnpm.", "parse must read it off the disk");
+
+        let resolved = resolve(&file, None);
+        assert_eq!(
+            resolved.agent_prompt, "Always use pnpm.",
+            "resolve must carry it to the front end"
+        );
+
+        let mut written = Settings::default();
+        merge(&mut written, resolved, "2026-08-01T00:00:00+00:00".into());
+        assert_eq!(
+            written.agent_prompt, "Always use pnpm.",
+            "merge must carry it back into the file"
+        );
+    }
+
+    /// Forgotten whole rather than cut short, and the rest of the file left
+    /// standing — the rule `min_priority` follows, with a second reason of its
+    /// own: a truncated instruction ends mid-sentence, which is the one shape
+    /// `agents/prompt.rs` refuses everywhere.
+    #[test]
+    fn an_overlong_standing_instruction_is_forgotten_whole() {
+        let at_the_ceiling = "x".repeat(MAX_AGENT_PROMPT);
+        let file = settings_of(&format!(
+            r#"{{"version":1,"agentPrompt":"{at_the_ceiling}","agent":"codex"}}"#
+        ));
+        assert_eq!(file.agent_prompt, at_the_ceiling, "the ceiling itself is a legal value");
+
+        let over = "x".repeat(MAX_AGENT_PROMPT + 1);
+        let file = settings_of(&format!(
+            r#"{{"version":1,"agentPrompt":"{over}","agent":"codex"}}"#
+        ));
+        assert_eq!(file.agent_prompt, "", "one byte past the ceiling loses the whole field");
+        assert_eq!(file.agent, "codex", "and nothing else in the file");
     }
 
     #[test]
