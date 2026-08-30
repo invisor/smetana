@@ -226,6 +226,26 @@ describe('loading', () => {
     expect(sent.commitLanguage).toBe('de')
     expect(sent.reportLanguage).toBe('it')
   })
+
+  it('opens on no standing instruction when the file names none, and takes the one it does', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', {})
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.agentPrompt).toBe('')
+
+    const second = await loadStores()
+    second.ipc.on('settings_load', { agentPrompt: 'Always use pnpm.' })
+    second.ipc.on('settings_save', null)
+    await second.stores.settings.loadSettings()
+    expect(second.stores.settings.settings.agentPrompt).toBe('Always use pnpm.')
+
+    /* And back out on the next write, so a restart brings the text back. */
+    second.stores.settings.settings.appearance.theme = 'light'
+    await second.stores.settings.flushPending()
+    const sent = second.ipc.calls('settings_save').at(-1).settings
+    expect(sent.agentPrompt).toBe('Always use pnpm.')
+  })
 })
 
 describe('a project\'s layout', () => {
@@ -534,6 +554,27 @@ describe('the settings window', () => {
     expect(settings.settings.reportLanguage).toBe('ko')
   })
 
+  it('takes a standing instruction it is sent, and takes an empty one as a clearing', async () => {
+    await emit(settings.SETTINGS_APPLY, { agentPrompt: 'Always use pnpm.' })
+    await nextTick()
+    expect(settings.settings.agentPrompt).toBe('Always use pnpm.')
+
+    /* The empty string is why the check here is the type alone, unlike the
+       languages one field over: it is how somebody clears the field, and a
+       truthiness guard would swallow the clearing and leave the old text
+       standing on the next session started, with the field on screen looking
+       empty. */
+    await emit(settings.SETTINGS_APPLY, { agentPrompt: '' })
+    await nextTick()
+    expect(settings.settings.agentPrompt).toBe('')
+
+    /* A value of the wrong type is still skipped, the same as every other field
+       here: an event is not a response to a request. */
+    await emit(settings.SETTINGS_APPLY, { agentPrompt: 7 })
+    await nextTick()
+    expect(settings.settings.agentPrompt).toBe('')
+  })
+
   it('takes the board settings and cleans the two column lists on the way in', async () => {
     await emit(settings.SETTINGS_APPLY, {
       kanbanColumns: 'non-empty',
@@ -822,7 +863,8 @@ describe('the settings window', () => {
       agentLanguage: 'en',
       taskLanguage: 'en',
       commitLanguage: 'en',
-      reportLanguage: 'en'
+      reportLanguage: 'en',
+      agentPrompt: ''
     })
   })
 
@@ -861,7 +903,8 @@ describe('the settings window', () => {
       agentLanguage: 'en',
       taskLanguage: 'en',
       commitLanguage: 'en',
-      reportLanguage: 'en'
+      reportLanguage: 'en',
+      agentPrompt: ''
     })
   })
 })
