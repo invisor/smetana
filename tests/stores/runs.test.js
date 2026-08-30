@@ -18,6 +18,17 @@ beforeEach(() => {
 
 const OK = { state: 'ok', config: { project: { repos: ['.'] } } }
 
+/* What the project settings dialog hands the store, and what the file says
+   afterwards. Every number differs from the fall-backs `projectDefaults.js`
+   holds, so neither can be mistaken for a value nobody wrote. */
+const DRAFT = {
+  target_branch: 'staging',
+  min_priority: 1,
+  max_parallel_tasks: 6,
+  review_passes: 2
+}
+const SAVED = { state: 'ok', config: { project: { repos: ['.'] }, defaults: DRAFT } }
+
 describe('the active project\'s run configuration', () => {
   it('a configured project needs no setup', async () => {
     const { ipc, stores } = await loadStores()
@@ -101,6 +112,51 @@ describe('the active project\'s run configuration', () => {
     await stores.runs.loadConfig('/other')
 
     expect(stores.runs.runsState.config.state).toBe('missing')
+  })
+
+  /* The store's only write, and the only one anywhere in `src/` that goes into
+     somebody else's repository. */
+  it('writing the defaults reaches the file, then reads back what it now says', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    await stores.runs.loadConfig('/p')
+
+    // A second answer that is a different file, so what ends up in the store
+    // can only have come from the re-read: a `saveDefaults` that patched its
+    // own copy of the config would leave the first answer standing, and the run
+    // dialog would go on offering defaults the app had just replaced.
+    ipc.on('project_config', SAVED)
+    ipc.on('project_config_save_defaults', null)
+
+    await stores.runs.saveDefaults('/p', DRAFT)
+
+    // snake_case, straight through: this is the shape Rust deserializes, and
+    // the file, the console and `projectDefaults.js` all spell it this way.
+    expect(ipc.calls('project_config_save_defaults')).toEqual([{ project: '/p', defaults: DRAFT }])
+    expect(stores.runs.runsState.config).toEqual(SAVED)
+  })
+
+  it('does not read back for a project the store has already left', async () => {
+    // The press arrives over IPC from a window of its own, so a project switch
+    // can land between it and the ground watcher closing that window. The guard
+    // is not a redundant early return: `loadConfig` for a project this store
+    // has left does not merely read a file — it takes the "the project moved"
+    // branch, empties the run list, drops the bell's cards and the browser
+    // reading, and writes the old path back into `runsState.project`.
+    const { ipc, stores } = await loadStores()
+    ipc.on('project_config', OK)
+    ipc.on('project_config_save_defaults', null)
+    await stores.runs.loadConfig('/p')
+    await stores.runs.loadConfig('/other')
+
+    await stores.runs.saveDefaults('/p', DRAFT)
+
+    // The write itself still happens, and must: it is the file the person
+    // asked for, and it is already on its way when the switch lands.
+    expect(ipc.calls('project_config_save_defaults')).toEqual([{ project: '/p', defaults: DRAFT }])
+    // The read does not, so the store still describes the project on screen.
+    expect(ipc.calls('project_config')).toEqual([{ project: '/p' }, { project: '/other' }])
+    expect(stores.runs.runsState.project).toBe('/other')
   })
 })
 

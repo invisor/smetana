@@ -189,12 +189,14 @@ pub fn load(root: &Path) -> ConfigState {
 /// would find a colleague's note gone.
 ///
 /// **One comment does not survive, and it is the one attached to a key that is
-/// being removed.** Choosing no target branch takes `target_branch` out, and a
-/// comment written above it goes with it, because in `toml_edit` a comment
-/// above a key is that key's own prefix. That is the right answer rather than a
-/// gap: the only other place to put the line is on whichever key follows, where
-/// it would describe something it was never written about. The test of the same
-/// name pins it, so the guarantee above is read with its one exception.
+/// being removed.** Choosing no target branch takes `target_branch` out, and
+/// every comment belonging to that key goes with it — the one written above it,
+/// which is the key's prefix, and one written after the value on the same line,
+/// which is the value's suffix. Both travel inside the `Item` being removed.
+/// That is the right answer rather than a gap: the only other place to put
+/// either line is on whichever key follows, where it would describe something it
+/// was never written about. The test of the same name pins it, so the guarantee
+/// above is read with its one exception.
 ///
 /// The result is parsed again before it is returned. A save that leaves behind
 /// a file the app then refuses to load turns a wrong number into a broken
@@ -248,6 +250,17 @@ pub fn with_defaults(text: &str, defaults: &Defaults) -> Result<String, String> 
 /// promise in `with_defaults`'s header true of both positions.
 fn set_value(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::Value) {
     match table.get_mut(key).and_then(|item| item.as_value_mut()) {
+        // Already saying what it should. Left alone rather than written again,
+        // because a replacement is re-rendered canonically — `Formatted::new`
+        // carries no `repr`, so the way the person spelled it is dropped — and
+        // a save that changed some other field would turn `target_branch =
+        // 'staging'` into `"staging"` and `max_parallel_tasks = 0x10` into
+        // `16`. Both are inside the four keys this form owns, so neither
+        // breaches the promise in `with_defaults`'s header; both are the
+        // miniature of exactly what that promise exists to prevent — change one
+        // number, find a line you did not touch rewritten. It also makes
+        // `with_defaults` idempotent structurally rather than by luck.
+        Some(existing) if unchanged(existing, &value) => {}
         Some(existing) => {
             let decor = existing.decor().clone();
             *existing = value;
@@ -258,6 +271,22 @@ fn set_value(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::
         None => {
             table.insert(key, toml_edit::Item::Value(value));
         }
+    }
+}
+
+/// Whether the file already says this, comparing the **value** and not how it
+/// was written.
+///
+/// `Value`'s own `PartialEq` is derived over the repr and the decor as well, so
+/// it would answer "different" for the one input that matters here: a hex
+/// integer, or a literal string, holding the number or the name being written.
+/// Only the two shapes `with_defaults` ever writes are compared; anything else
+/// answers "different" and is written, which is the safe direction.
+fn unchanged(existing: &toml_edit::Value, value: &toml_edit::Value) -> bool {
+    match value {
+        toml_edit::Value::Integer(n) => existing.as_integer() == Some(*n.value()),
+        toml_edit::Value::String(text) => existing.as_str() == Some(text.value().as_str()),
+        _ => false,
     }
 }
 
@@ -583,21 +612,23 @@ target_branch = \"main\"
 
     /// The one comment that does not survive, pinned so that the guarantee
     /// above is read with its exception rather than as a promise about every
-    /// line in the file.
+    /// line in the file. Both of its positions are here, because "above" is the
+    /// one a reader will check and it is not the only one: a comment above the
+    /// key is that key's prefix and a comment after the value is that value's
+    /// suffix, and removing the key takes the whole `Item` with both inside it.
     ///
-    /// A comment above a key is that key's own prefix, so removing the key
-    /// removes it. That is the right answer rather than a gap: the only other
-    /// place to put the line is on whichever key follows, where it would
-    /// describe something it was never written about.
+    /// That is the right answer rather than a gap: the only other place to put
+    /// either line is on whichever key follows, where it would describe
+    /// something it was never written about.
     #[test]
-    fn removing_the_branch_takes_the_comment_written_above_it() {
+    fn removing_the_branch_takes_every_comment_belonging_to_that_key() {
         let before = "\
 [project]
 repos = [\".\"]
 
 [defaults]
 # the branch everything lands on
-target_branch = \"staging\"
+target_branch = \"staging\"  # and the one it is on today
 min_priority = 1
 ";
 
@@ -612,6 +643,51 @@ min_priority = 2
 max_parallel_tasks = 3
 review_passes = 5
 ");
+    }
+
+    /// A key whose value is already right is left exactly as it was written.
+    ///
+    /// The two spellings here are the whole reason: a replacement is rendered
+    /// canonically, so writing them again would turn `'staging'` into
+    /// `"staging"` and `0x10` into `16` on a save that changed neither — change
+    /// one number, find two lines you did not touch rewritten. That is the
+    /// miniature of what the whole `toml_edit` argument exists to prevent.
+    ///
+    /// The second half is the property this buys: applying the same defaults
+    /// again is a no-op, so `with_defaults` is idempotent structurally rather
+    /// than by luck.
+    #[test]
+    fn a_value_that_is_already_right_keeps_the_way_it_was_written() {
+        let before = "\
+[project]
+repos = [\".\"]
+
+[defaults]
+target_branch = 'staging'
+min_priority = 1
+max_parallel_tasks = 0x10
+review_passes = 3
+";
+        let wanted = Defaults {
+            target_branch: Some("staging".into()),
+            min_priority: 3,
+            max_parallel_tasks: 16,
+            review_passes: 3,
+        };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert_eq!(after, "\
+[project]
+repos = [\".\"]
+
+[defaults]
+target_branch = 'staging'
+min_priority = 3
+max_parallel_tasks = 0x10
+review_passes = 3
+");
+        assert_eq!(with_defaults(&after, &wanted).expect("again"), after, "not idempotent");
     }
 
     /// The two other spellings TOML allows for this section. Neither is what

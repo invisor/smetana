@@ -189,13 +189,19 @@ const DIALOG_PROPS = {
      command, and a window offering branches the project behind it could not
      merge into would be two fixtures disagreeing about one project.
 
-     None of the four is `DEFAULTS_FALLBACK`'s, and that is the whole point of
-     the fixture rather than a taste in numbers — the same argument the `run`
-     fixture makes above. The form seeds its draft once, when the window opens,
-     out of what was announced; a fixture holding no branch, 2, 3 and 5 would
-     draw the identical screen whether the announcement arrived or never came,
-     and `?view=dialog&kind=project-settings` is this project's only check that
-     it did. */
+     None of the four is `DEFAULTS_FALLBACK`'s, and that is the point of the
+     fixture rather than a taste in numbers — though not for quite the reason
+     the `run` fixture gives above, and the difference is worth having straight.
+     `RunModal` really does carry its own fall-backs, so a fixture matching them
+     draws the same screen announced or not. This form carries none: its
+     `defaults` prop defaults to `{}`, so an unannounced window draws empty
+     fields under "Between…" lines, which is exactly what the browser saw before
+     this fixture existed. What the numbers buy here is that the screen differs
+     from **every** fall-back in the chain, so it is proof that the announcement
+     arrived *and* was seeded — and `DEFAULTS_FALLBACK` is the one set that
+     could stop being proof, if that prop default were ever tidied to it.
+     `?view=dialog&kind=project-settings` is this project's only check of any of
+     that. */
   'project-settings': {
     title: 'Project settings',
     defaults: {

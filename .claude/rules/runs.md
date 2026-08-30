@@ -297,17 +297,28 @@ leaves behind a file the app then refuses to load turns a wrong number into a br
 write is atomic in `settings/file.rs`'s shape — a uniquely named temporary beside the target, then a
 rename, since a rename within one directory is the only thing the filesystem promises.
 
-Two details of that pass are worth knowing before touching it, because both are silent when got
-wrong. A value is **mutated in place with its decor carried across**, never assigned as a whole
-`Item`: a `Value`'s decor is the space before it and anything after it on the same line, so the
-obvious `table["min_priority"] = value(n)` turns `min_priority = 1  # the floor here` into
-`min_priority = 3`, and the key's own decor survives that, which is why a comment on the line *above*
-is unharmed either way and the loss is easy to miss. And **one comment genuinely does not survive**:
-choosing no target branch removes the key, and a comment written above it is that key's prefix, so it
-goes too. That is the right answer rather than a gap — the only other home for the line is whichever
-key follows, where it would describe something it was never written about — and a test of that name
-pins it so the guarantee is read with its exception. The section is reached through
-`as_table_like_mut`, so the two other spellings TOML allows for it, `defaults = { … }` and the dotted
+Four details of that pass are worth knowing before touching it, because every one of them is silent
+when got wrong.
+
+A value is **mutated in place with its decor carried across**, never assigned as a whole `Item`: a
+`Value`'s decor is the space before it and anything after it on the same line, so the obvious
+`table["min_priority"] = value(n)` turns `min_priority = 1  # the floor here` into `min_priority = 3`.
+The key's own decor survives that, which is why a comment on the line *above* is unharmed either way
+and the loss is easy to miss. A key **already saying what it should is left alone** rather than
+written again, because a replacement is rendered canonically — `Formatted::new` carries no `repr` —
+so rewriting an unchanged key would turn `target_branch = 'staging'` into `"staging"` and
+`max_parallel_tasks = 0x10` into `16` on a save that touched neither. The comparison behind that is
+of the value and not of how it was written: `Value`'s own `PartialEq` is derived over the repr and
+the decor too, and would answer "different" for exactly those two inputs. It is also what makes
+`with_defaults` idempotent structurally rather than by luck.
+
+**One comment genuinely does not survive**, and it is every comment belonging to a key that is being
+removed: choosing no target branch takes the key out, and both the line above it (the key's prefix)
+and anything after its value (the value's suffix) travel inside the `Item` that goes. That is the
+right answer rather than a gap — the only other home for either line is whichever key follows, where
+it would describe something it was never written about — and a test of that name pins it, so the
+guarantee is read with its exception. Last, the section is reached through `as_table_like_mut`, so
+the two other spellings TOML allows for it, `defaults = { … }` and the dotted
 `defaults.min_priority = 1`, are edited in their own shape rather than answered with "defaults is not
 a table", which reads as nonsense to whoever typed one.
 
