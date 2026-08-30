@@ -2256,7 +2256,7 @@ const menuTargetStyle = {
            showing 2, 3 and 5 with no branch proves nothing about the fields,
            and the branch here is one `branchOptions` had to keep because the
            list no longer holds it. -->
-      <div :style="{ position: 'relative', height: '520px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '600px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -2273,7 +2273,7 @@ const menuTargetStyle = {
       <!-- And the shape a refusal takes: the command's own message under the
            fields, which is what "the file will not parse" looks like when the
            file changed under an open window. -->
-      <div :style="{ position: 'relative', height: '520px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '600px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
