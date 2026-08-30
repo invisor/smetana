@@ -54,7 +54,7 @@ import MenuButton from '../components/overlays/MenuButton.vue'
 import Toast from '../components/overlays/Toast.vue'
 import ProjectRail from '../components/shell/ProjectRail.vue'
 import { projectSummary } from '../components/shell/projectState.js'
-import UsageFooter from '../components/shell/UsageFooter.vue'
+import StatusFooter from '../components/shell/StatusFooter.vue'
 import Skeleton from '../components/core/Skeleton.vue'
 import Icon from '../components/core/Icon.vue'
 import Tooltip from '../components/core/Tooltip.vue'
@@ -2584,9 +2584,9 @@ const rightPanel = computed(() => {
    remembered tab is left alone.
 
    One direction only. Nothing anywhere switches somebody **to** Sessions: an
-   agent that needs an answer already has the bell, the scope bar and the left
-   column, and taking the panel out from under a person reading a task is not on
-   that list. */
+   agent that needs an answer already has the bell, the status footer and the
+   left column, and taking the panel out from under a person reading a task is
+   not on that list. */
 watch(rightPanel, (panel) => {
   if (panel !== 'board') project.rightTab = 'task'
 })
@@ -3927,20 +3927,21 @@ const showReport = (report) => {
    had been turned back on in between. */
 const decidedRuns = new Set()
 
-/* The scope bar's one sentence about this project. Derived rather than stored,
-   like everything else in this bar: the rule is components/shell/headline.js and
-   both of its inputs are already reactive here.
+/* The status footer's one sentence about this project. Derived rather than
+   stored, like everything else in that strip: the rule is
+   components/shell/headline.js and both of its inputs are already reactive
+   here.
 
    The agents come from `agentCounts` and not from the rail's `projectStates`,
    which is the map that knows about every project at once. That map counted a
    person's own shells when this was written, so a shell that rang the bell
-   would have had this bar announce an agent waiting on somebody in a project
+   would have had this strip announce an agent waiting on somebody in a project
    holding no agent at all; the mark carries a work kind now and the map drops
    them, but the source is unchanged — the counter beside this sentence is built
    from the sessions and the two have to agree. The store comment beside
-   `agentCounts` has the whole of it. This is the active project's bar, so the
+   `agentCounts` has the whole of it. This is the active project's strip, so the
    active project's own list is the right source anyway. */
-const scopeHeadline = computed(() =>
+const stateHeadline = computed(() =>
   headline({ row: agentCounts.value, runs: runsState.runs })
 )
 
@@ -4092,29 +4093,17 @@ const toastStackStyle = {
 
 <template>
   <div :style="rootStyle">
-    <!-- The project's name and the branch it is on, both live. `worktree` is
-         left empty on purpose: the component shows worktree-or-branch in that
-         slot and appends "@branch" only when both are set, so passing the
-         branch alone is what puts it there once, undecorated.
-
-         Both counters are the stores' own computeds and neither is counted
-         here: the files are the Git panel's selected repository, so the number
-         is the length of the list that panel draws, and the agents are the
-         left column's rows minus the ones that have finished. The two rules
-         live in vcs.js and terminals.js because a rule in this file is a rule
-         no test can reach. Note that with several repositories in one project
-         the branch beside them is the project root's while the count is the
-         selected repository's — the panel is where a person is looking at that
-         list, and this is the number they can check against it. -->
+    <!-- The project's name and the branch it is on, both live, and the whole of
+         what this bar says now: what the project is *doing* is along the bottom
+         of the window instead. `worktree` is left empty on purpose: the
+         component shows worktree-or-branch in that slot and appends "@branch"
+         only when both are set, so passing the branch alone is what puts it
+         there once, undecorated. -->
     <ScopeIndicator
       ref="scopeBar"
       :repo="activePath ? basename(activePath) : '—'"
       worktree=""
       :branch="branchLabel"
-      :dirty-count="dirtyCount"
-      :agents-active="liveAgentCount"
-      :headline="scopeHeadline.text"
-      :headline-level="scopeHeadline.level"
       :notifications="notificationsState.items.length"
       :window-chrome="barChrome"
       :maximized="maximized"
@@ -4124,18 +4113,6 @@ const toastStackStyle = {
       @toggle-maximize="toggleMaximizeWindow"
       @close="closeWindow"
     >
-      <template #status>
-        <!-- One segment per run, oldest first — a project holds several now,
-             and each segment's stop names its own run by token. The scope
-             bar's own gap spaces the segments; RunBar draws nothing for a
-             run it was not given, so an empty list costs no width. `busy` is
-             deliberately not bound: the run a confirm is starting has no
-             segment until the worker answers, so `runStarting` is about none
-             of these, and passing it disabled the other live runs' stop
-             buttons over a start that never touches them. -->
-        <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
-      </template>
-
       <!-- All the bar keeps of the search: the door, and the key that opens it.
            The palette itself is below, outside this bar. -->
       <template #search>
@@ -4732,19 +4709,46 @@ const toastStackStyle = {
       </div>
     </div>
 
-    <!-- The strip along the bottom, the sibling of the scope bar above: what is
-         left of the agent's subscription, which otherwise lives only on a tab
-         of a window somebody has to open on purpose. Outside the three columns
-         rather than inside the middle one — it is about the machine, not about
-         the board, and a strip that stopped at the board's edges would read as
-         a caption to the board. It is drawn in every state, this window's own
-         `footer` beside `AppShell`'s slot of the same name. -->
-    <UsageFooter
+    <!-- The strip along the bottom, the sibling of the scope bar above. At its
+         left, what is left of the agent's subscription, which otherwise lives
+         only on a tab of a window somebody has to open on purpose; at its
+         right, what this project is doing right now. Outside the three columns
+         rather than inside the middle one — neither half is about the board,
+         and a strip that stopped at the board's edges would read as a caption
+         to it. It is drawn in every state, this window's own `footer` beside
+         `AppShell`'s slot of the same name.
+
+         Both counters are the stores' own computeds and neither is counted
+         here: the files are the Git panel's selected repository, so the number
+         is the length of the list that panel draws, and the agents are the left
+         column's rows minus the ones that have finished. The two rules live in
+         vcs.js and terminals.js because a rule in this file is a rule no test
+         can reach. Note that with several repositories in one project the
+         branch in the bar above is the project root's while this count is the
+         selected repository's — the panel is where a person is looking at that
+         list, and this is the number they can check against it. -->
+    <StatusFooter
       :usage="usageReading"
       :busy="usageBusy"
       :error="usageError"
+      :dirty-count="dirtyCount"
+      :agents-active="liveAgentCount"
+      :headline="stateHeadline.text"
+      :headline-level="stateHeadline.level"
       @refresh="readUsage"
-    />
+    >
+      <template #status>
+        <!-- One segment per run, oldest first — a project holds several now,
+             and each segment's stop names its own run by token. The strip's
+             own gap spaces the segments; RunBar draws nothing for a run it was
+             not given, so an empty list costs no width. `busy` is deliberately
+             not bound: the run a confirm is starting has no segment until the
+             worker answers, so `runStarting` is about none of these, and
+             passing it disabled the other live runs' stop buttons over a start
+             that never touches them. -->
+        <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
+      </template>
+    </StatusFooter>
 
     <!-- The toasts live in one column: two fixed corners would overlap each
          other, and a tracker failure would hide a disk failure exactly when

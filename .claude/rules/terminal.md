@@ -120,7 +120,7 @@ introduces.
 Detection runs over a shell and is welcome to. Layer A is agent-independent and there is nothing about
 it to switch off; a shell that rings the bell has rung it for the person sitting in front of it, and
 nothing in this app acts on a shell's state — it has no row in the agents panel, it is not counted by
-the scope bar or by the project rail, and notifications are raised by a run rather than by a session
+the status footer or by the project rail, and notifications are raised by a run rather than by a session
 going `needs-you`. **That sentence is a property to keep true rather than an observation**: it was
 false for as long as `SessionMark` carried no work kind, since a shell ringing the bell lit its
 project's tile loud (smetana-low), and anything new that reads a session's state owes the same
@@ -316,7 +316,7 @@ option list in the right-hand panel, for a tick or two, corrected as soon as the
 and `claude.rs`'s own guards (a question mark required, the last numbered block, exactly one option
 carrying the cursor) make even that unlikely. What forced the split is the person: typing an
 answer redraws the screen on every keystroke, so it never settles while they type, layer B went
-unasked on those ticks, layer A answered `running` — and the agent row, the scope bar's counter, the
+unasked on those ticks, layer A answered `running` — and the agent row, the footer's counter, the
 project header and the project tile all flickered yellow to blue and back at the speed of typing
 (smetana-4a6). The dialog had not moved; only the input row under it had. What releases the hold is
 layer B failing to match rather than any clock: the moment somebody presses Return and the agent
@@ -415,7 +415,7 @@ That register is a `Set` and every subscriber gets every chunk: a single field w
 unsubscribing to who mounted last, exactly the ordering the rest of this subsystem refuses to depend
 on.
 
-`liveAgentCount` reads that same session state and is the scope bar's agents counter
+`liveAgentCount` reads that same session state and is the status footer's agents counter
 (`.claude/rules/git-head.md`): the agent list minus the rows that have finished, which is every
 session whose state is not `exited`, plus the starts `visibleStarts` says belong to this project.
 `needs-you` counts, which is the whole decision: an agent waiting for an answer is why somebody is
@@ -702,7 +702,7 @@ a stale row.
 
 The customer's decision, stated directly: resuming must not look like a terminal opening, it must
 look like **an agent being restored**. So Resume in worktree puts an ordinary row in the left
-column's Agents tab — a state, a timer, an elapsed time, a place in the scope bar's counter — and the
+column's Agents tab — a state, a timer, an elapsed time, a place in the footer's counter — and the
 terminal tab behind it exists only because an agent in this app *is* a PTY session. Orca has no
 terminal of its own and hands the command outside; that shape was discussed and rejected.
 

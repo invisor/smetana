@@ -610,8 +610,8 @@ heard of must not silently read as one it has. The runs ride as a set keyed by `
 word about one run can never write over another. It is guarded against its own stale response exactly
 as `git.js` and `terminals.js` are, and the `run:state` listener carries that guard in its other form
 — an event is not a response to anything, so a batch ending just as somebody moves project would
-otherwise post its run under the new project's name. `RunBar` draws one segment per run in the scope
-bar, each stop button naming its own token, and keeps a stopped run there until the project changes
+otherwise post its run under the new project's name. `RunBar` draws one segment per run in the status
+footer, each stop button naming its own token, and keeps a stopped run there until the project changes
 or a run of the same scope replaces it: the reason it stopped is what somebody came back to read, an
 unknown reason is an ordinary outcome rather than a crash, and the endings differ by glyph as well as
 by colour. The scope rule itself is `components/run/runScopes.js`, one of the `branchChoice.js`

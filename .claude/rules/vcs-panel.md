@@ -114,10 +114,10 @@ do not add one**: a third watcher subsystem would fire on every write inside `no
 `target`, and the price of the sweep is named — while an agent works, this list is as stale as the
 file tree beside it.
 
-The list is **read from outside this panel too**: `dirtyCount`, the scope bar's uncommitted-files
+The list is **read from outside this panel too**: `dirtyCount`, the status footer's uncommitted-files
 counter (`.claude/rules/git-head.md`). It is deliberately nothing more than
 `tree.changes.length` — every kind, staged and unstaged and untracked and conflicted alike — so that
-the number in the bar is the number of rows here and can be checked by looking rather than by
+the number in the strip is the number of rows here and can be checked by looking rather than by
 counting. It is `null` and never `0`
 for a tree that could not be read, the same opposition `tree` itself keeps, and the bar draws no
 counter at all for it. Its freshness is this store's freshness and there is no second mechanism: the

@@ -171,7 +171,7 @@ because a shell reaches `needs-you` by the shortest path there is: any BEL byte 
 in `terminal/service.rs`, and layer A of `terminal/detect.rs` turns that into `NeedsYou` with no
 profile involved — and a shell has no profile. zsh's `LIST_BEEP` and bash's audible bell are both on
 by default, so an ambiguous tab completion would have played the notification sound at somebody
-typing into that very tab. The rail already skips shells and the scope bar's counter already filters
+typing into that very tab. The rail already skips shells and the footer's counter already filters
 through the same function; a sound that did not would have been the third population and the loud
 one, going off while both of those read zero with nothing on screen to explain it. It is asked as
 "is a shell" rather than "is an agent" for the reason `isShellSession` gives — work this front end

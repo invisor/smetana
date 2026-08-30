@@ -1,7 +1,9 @@
-/* The one line in the scope bar saying what this project is doing right now.
+/* The one line in the status footer saying what this project is doing right
+   now. It was the scope bar's until the window's title bar went back to
+   answering "where am I working" alone; the sentence itself did not change.
    Present tense only, and empty when there is nothing to say — an empty
-   headline draws nothing at all and the bar closes up, rather than reserving a
-   gap for a sentence most projects will not have most of the time.
+   headline draws nothing at all and the strip closes up, rather than reserving
+   a gap for a sentence most projects will not have most of the time.
 
    Pure, and a module of its own for the reason the `projectMenu.js` family is:
    no test in this repository can reach a `.vue`, so a rule left inside the
@@ -26,7 +28,7 @@
 const STOPPED = 'stopped'
 
 /**
- * What the scope bar says about this project.
+ * What the status footer says about this project.
  *
  * @param {object} input
  * @param {{live: number, loud: number} | undefined} input.row

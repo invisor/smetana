@@ -89,7 +89,7 @@ export function answeredCount({ project, loading, count }, path) {
  * What arriving on the Git tab leaves behind.
  *
  * `dirty` is how many uncommitted files the selected repository has — the
- * `dirtyCount` the scope bar already reads out of `stores/vcs.js`, `null` for a
+ * `dirtyCount` the status footer already reads out of `stores/vcs.js`, `null` for a
  * tree that has not been read or could not be. Taking that number rather than
  * the tree itself is deliberate: "is the tree known, and is there anything in
  * it" is the whole of what this file needs to know, it is already spelled once

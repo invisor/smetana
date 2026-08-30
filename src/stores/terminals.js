@@ -75,7 +75,7 @@ const marks = reactive(new Map())
    **A person's own shells are not counted**, and that is what `mark.kind` is
    on the mark for: a shell that rings the bell reaches `needs-you` exactly as
    an agent does, and while the mark carried only an id, a project and a state,
-   such a shell lit its project's tile loud while the scope bar's counter — which
+   such a shell lit its project's tile loud while the footer's counter — which
    filters through `isShellSession` — read zero, two numbers about one project
    on one screen. This map now drops the same population that one does, by the
    same word. What the tile still does not say is *which* agent or how many of
@@ -465,8 +465,8 @@ export const agentRows = computed(() => [
   }))
 ])
 
-/* How many of this project's agents are alive — the scope bar's agents counter,
-   and the list above minus the rows that have finished.
+/* How many of this project's agents are alive — the status footer's agents
+   counter, and the list above minus the rows that have finished.
 
    `exited` is the one state that does not count. A session that fell over
    yesterday is still a row somebody may want to read, which is why it stays in
@@ -500,10 +500,10 @@ export const liveAgentCount = computed(
   () => agentSessions().filter((s) => s.state !== 'exited').length + visibleStarts().length
 )
 
-/* The same agents, split the way the scope bar's headline needs them: how many
-   are waiting on the person, and how many of the rest are alive.
-   `components/shell/headline.js` turns this into the one sentence at the top of
-   the window.
+/* The same agents, split the way the status footer's headline needs them: how
+   many are waiting on the person, and how many of the rest are alive.
+   `components/shell/headline.js` turns this into the one sentence along the
+   bottom of the window.
 
    Through `agentSessions` and `liveAgentCount`, deliberately, and this is the
    whole reason the computed lives here rather than in the view. The obvious
@@ -694,7 +694,7 @@ export async function initTerminals() {
        all. So an ambiguous tab completion under zsh's `LIST_BEEP` or bash's
        audible bell, both on by default, would play the notification sound at
        somebody typing into that very tab. The rail already skips shells here
-       and the scope bar's counter already filters through `isShellSession`; a
+       and the footer's counter already filters through `isShellSession`; a
        sound that did not would be the loudest channel this app has going off
        while both of those read zero, with nothing on screen to explain it.
        Asked as "is a shell" rather than "is an agent" for the reason
