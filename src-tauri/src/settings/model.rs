@@ -40,9 +40,16 @@ const RIGHT_TABS: [&str; 2] = ["task", "sessions"];
 /// the project. So we check sanity rather than membership.
 const MAX_ID_LEN: usize = 200;
 const MAX_PATH_LEN: usize = 4096;
-/// How long a standing instruction may be. A sanity bound rather than taste:
-/// past it the file is damaged rather than opinionated, since the interface
-/// cannot produce a value this long.
+/// How long a standing instruction may be, **in bytes** — `String::len`, the
+/// unit `forget_if_junk` measures in too. Worth saying out loud, because it is
+/// not the unit the field's own control counts: `maxlength` on a `<textarea>`
+/// is UTF-16 code units, so the interface's 4000 and this 4000 coincide for
+/// Latin text and part company outside it, where this is the smaller of the
+/// two — roughly 2000 Cyrillic characters, 1330 CJK.
+///
+/// A sanity bound rather than taste, and the interface **can** reach it, by
+/// pasting in a script that costs more than a byte a character. What gets here
+/// past the bound is discarded whole rather than cut down to it.
 const MAX_AGENT_PROMPT: usize = 4000;
 const MAX_EXPANDED: usize = 500;
 /// How many branch folders an unfolded list may name. Smaller than the file

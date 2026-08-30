@@ -151,12 +151,35 @@ const heard = ref(false)
    asked out of one names a guess. */
 const adopted = ref(false)
 
+/* Whether somebody has typed in the standing instruction. From that moment this
+   window's copy of that **one** field is the truth and an announcement out of
+   the app window does not touch it.
+
+   It is the only field here that needs saying, because it is the only free-text
+   control in the window: everything else is a dropdown, a switch or a button,
+   where an announcement re-setting the value already on screen is invisible. A
+   text field is not so forgiving. Every keystroke goes out as a patch, the app
+   window applies it and then `announce()`s the whole state back — and an
+   announcement carrying "abc", landing after somebody has typed "abcd", would
+   rewind `view.agentPrompt`, put the caret back at the end and send the rewound
+   text on to the store and the disk. Characters would be lost for good, and only
+   on a busy machine, which is the worst way for it to happen.
+
+   Safe because nothing else can write this field: the app window has no control
+   for it, so an announcement can only ever be carrying this window's own words
+   back. Before the first keystroke announcements are taken as normal, which is
+   what keeps the app window's copy — up to a debounce newer than the file —
+   winning over the disk read below. */
+let promptEdited = false
+
 const adopt = (state, fromApp) => {
   if (!state) return
   if (fromApp) heard.value = true
   adopted.value = true
   for (const field of FIELDS) {
-    if (field in state && state[field] != null) view[field] = state[field]
+    if (!(field in state) || state[field] == null) continue
+    if (field === 'agentPrompt' && fromApp && promptEdited) continue
+    view[field] = state[field]
   }
 }
 
@@ -166,6 +189,16 @@ const adopt = (state, fromApp) => {
 const change = (patch) => {
   adopt(patch, false)
   sendSettingsPatch(patch)
+}
+
+/* The standing instruction, which goes out per keystroke like every other edit
+   here and, unlike them, closes the door behind it. Sent immediately rather than
+   on a debounce of its own on purpose: the disk write is already debounced 400 ms
+   in the app window, so a debounce here would buy nothing but a window that can
+   be closed with the last few characters still in a timer. */
+const changeAgentPrompt = (text) => {
+  promptEdited = true
+  change({ agentPrompt: text })
 }
 
 let stopWatching = null
@@ -546,7 +579,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:task-language="change({ taskLanguage: $event })"
           @update:commit-language="change({ commitLanguage: $event })"
           @update:report-language="change({ reportLanguage: $event })"
-          @update:agent-prompt="change({ agentPrompt: $event })"
+          @update:agent-prompt="changeAgentPrompt($event)"
           @refresh="readUsage()"
         />
         <KanbanSettings

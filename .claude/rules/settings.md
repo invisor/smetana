@@ -60,8 +60,18 @@ The ceiling is `MAX_AGENT_PROMPT`, 4000 bytes, checked in both `validate` bodies
 carries more force: a truncated instruction ends mid-sentence, and that is precisely the shape
 `agents/prompt.rs` refuses everywhere, since `no_prompt_stops_mid_sentence` walks every intent to
 keep dangling punctuation out of a prompt. A ceiling that halved somebody's paragraph would be this
-app producing exactly what that test forbids. The interface cannot reach the ceiling — the field is a
-bounded `Textarea` — so the check is for a hand-edited file.
+app producing exactly what that test forbids.
+
+The interface **can** reach that ceiling, which is why the control carries a bound of its own:
+`AgentSettings.vue` passes `maxlength` to the `Textarea`, at the same 4000. Without it a pasted 10 KB
+would be taken by `applyPatch`, written to disk by the debounced save, cleared whole by
+`forget_if_too_long` on the way through `merge`, and gone at the next open — with the text still on
+screen the whole time, because nothing announces a refusal for this field and the echo carries the
+store's un-validated value. The two 4000s are not the same measure and cannot be: Rust counts bytes
+and `maxlength` counts UTF-16 code units. They coincide for Latin text, where the ceiling is then
+genuinely out of reach through the interface; outside it the control is the looser of the two — 4000
+Cyrillic characters is 8000 bytes — so the file check stays a real backstop and a long non-Latin
+instruction can still be discarded whole.
 
 The empty string is a **legal value** of this field rather than junk: it is how a person clears it.
 That is why `forget_if_junk` one field up is wrong here, and it is also why the front end's guard in

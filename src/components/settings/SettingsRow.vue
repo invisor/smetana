@@ -46,7 +46,14 @@ const descriptionStyle = {
       <span :style="labelStyle">{{ props.label }}</span>
       <span v-if="props.description" :style="descriptionStyle">{{ props.description }}</span>
     </div>
-    <div :style="{ flex: '0 0 auto', width: props.controlWidth, display: 'flex', justifyContent: 'flex-end' }">
+    <!-- `0 1 auto`, not `0 0 auto`: `controlWidth` is the width this row asks
+         for, and it gives way rather than painting outside the panel when there
+         is not that much room. Nothing changes for a row that fits — shrinking
+         only engages once the asked width plus the gap exceeds the container,
+         which is a width at which this row used to overflow it instead. The
+         first row to reach that was the standing instruction's `48ch` in the
+         gallery's 380 px cell, where it drew across the cell beside it. -->
+    <div :style="{ flex: '0 1 auto', minWidth: 0, width: props.controlWidth, display: 'flex', justifyContent: 'flex-end' }">
       <slot />
     </div>
   </div>

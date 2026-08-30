@@ -685,6 +685,18 @@ pub fn build(
     // reader resolves a contradiction in favour of what came later, so a person
     // who deliberately writes across a language setting gets what they wrote
     // and everybody else costs the language rules nothing.
+    //
+    // Trimmed rather than taken as it stands, and the guard is on the trimmed
+    // text rather than on the raw string. A lone newline or a space is what a
+    // person clearing this field leaves behind as readily as an empty string,
+    // and `!is_empty()` would let it through: the prompt would then announce a
+    // standing instruction and follow the announcement with nothing, leaving
+    // `STANDING`'s colon dangling — the one shape `no_prompt_stops_mid_sentence`
+    // exists to keep out of a prompt — and, for a newline, putting back the
+    // `\n\n\n` the empty case is tested against. What is stored stays
+    // untouched: the words are the person's, and only what this function pastes
+    // into a prompt is tidied.
+    let agent_prompt = agent_prompt.trim();
     if !agent_prompt.is_empty() && talks_to_a_person(intent) {
         out.push_str("\n\n");
         out.push_str(STANDING);
@@ -2680,17 +2692,27 @@ mod tests {
         .expect("every intent opens on at least the language sentence")
     }
 
-    /// Every intent somebody is present for, which is `every_intent` minus the
-    /// run plus the two conflicts it does not carry — walked rather than
-    /// written out as a list of eight, because a list goes stale the next time
-    /// an intent is added and nothing fails when it does.
-    fn every_conversation() -> Vec<Intent> {
+    /// Every intent there is: `every_intent` plus the two conflict kinds it
+    /// does not carry. The whole vocabulary, walked rather than listed, and the
+    /// chain written once — the tests below wanted it and each had written its
+    /// own copy.
+    fn every_intent_and_the_conflicts() -> Vec<Intent> {
         every_intent()
             .into_iter()
             .chain([
                 conflict(crate::vcs::model::OpKind::Merge),
                 conflict(crate::vcs::model::OpKind::Rebase),
             ])
+            .collect()
+    }
+
+    /// Every intent somebody is present for: the whole vocabulary above minus
+    /// the run — walked rather than written out as a list of eight, because a
+    /// list goes stale the next time an intent is added and nothing fails when
+    /// it does.
+    fn every_conversation() -> Vec<Intent> {
+        every_intent_and_the_conflicts()
+            .into_iter()
             .filter(|intent| !matches!(intent, Intent::Run { .. }))
             .collect()
     }
@@ -2745,14 +2767,26 @@ mod tests {
         // Not one word, and not one blank line: the empty default has to leave
         // every prompt exactly as it was before this field existed, and a
         // stray separator is the way that quietly stops being true.
-        for intent in every_intent() {
+        //
+        // Whitespace counts as empty and is walked with it. A lone space or
+        // newline is what a person clearing the field leaves behind as readily
+        // as nothing at all, and it must not buy a framing line announcing an
+        // instruction that is not there — with a newline it would also put back
+        // the very `\n\n\n` this test forbids.
+        for intent in every_intent_and_the_conflicts() {
             for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
-                let text = with_standing(&intent, delivery, "");
-                assert!(!text.contains(STANDING), "{intent:?}/{delivery:?}: {text}");
-                assert!(
-                    !text.contains("\n\n\n"),
-                    "an empty instruction left a blank line behind: {intent:?}/{delivery:?}: {text}"
-                );
+                for standing in ["", " ", "\n", "\n\n", "  \t\n "] {
+                    let text = with_standing(&intent, delivery, standing);
+                    assert!(
+                        !text.contains(STANDING),
+                        "{intent:?}/{delivery:?}/{standing:?}: {text}"
+                    );
+                    assert!(
+                        !text.contains("\n\n\n"),
+                        "an empty instruction left a blank line behind: \
+                         {intent:?}/{delivery:?}/{standing:?}: {text}"
+                    );
+                }
             }
         }
     }
@@ -2792,10 +2826,7 @@ mod tests {
         // issue, and the last could not if it wanted to, since bd is what is
         // broken. The paragraph there would be prose about something that will
         // not happen.
-        let intents: Vec<Intent> = every_intent()
-            .into_iter()
-            .chain([conflict(crate::vcs::model::OpKind::Merge), conflict(crate::vcs::model::OpKind::Rebase)])
-            .collect();
+        let intents = every_intent_and_the_conflicts();
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
             for intent in &intents {
                 let text = in_language(intent, delivery, &russian());
@@ -2831,10 +2862,7 @@ mod tests {
         // bd commits for itself, and none of those is a commit of this
         // session's making — telling them how to word one would be a paragraph
         // about something that will not happen.
-        let intents: Vec<Intent> = every_intent()
-            .into_iter()
-            .chain([conflict(crate::vcs::model::OpKind::Merge), conflict(crate::vcs::model::OpKind::Rebase)])
-            .collect();
+        let intents = every_intent_and_the_conflicts();
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
             for intent in &intents {
                 let commits = matches!(

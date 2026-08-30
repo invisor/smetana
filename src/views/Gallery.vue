@@ -4127,7 +4127,11 @@ const menuTargetStyle = {
             @update:word-wrap="galleryEditorWordWrap = $event"
           />
         </div>
-        <div :style="{ width: '380px' }">
+        <!-- Wider than the 380 px the other settings cells take, and it has to
+             be: this tab now holds a row asking for a 48ch control, which is
+             wider than that cell, so at 380 px the harness would only ever show
+             the row giving way rather than the row as the window draws it. -->
+        <div :style="{ width: '560px' }">
           <AgentSettings
             :agent="galleryAgent"
             :agent-language="galleryAgentLanguage"
@@ -4150,7 +4154,11 @@ const menuTargetStyle = {
              tab the switch is on. The chosen language is still handed in and
              still stands, which is what says the switch shuts the row rather
              than the setting. -->
-        <div :style="{ width: '380px' }">
+        <!-- Wider than the 380 px the other settings cells take, and it has to
+             be: this tab now holds a row asking for a 48ch control, which is
+             wider than that cell, so at 380 px the harness would only ever show
+             the row giving way rather than the row as the window draws it. -->
+        <div :style="{ width: '560px' }">
           <AgentSettings
             :agent="galleryAgent"
             :agent-language="galleryAgentLanguage"
@@ -4169,16 +4177,16 @@ const menuTargetStyle = {
              one row a half-read allowance draws, and the last is the only place
              the disabled button can be looked at. The three rows above them are
              along for the ride; the block is what these are for. -->
-        <div :style="{ width: '380px' }">
+        <div :style="{ width: '560px' }">
           <AgentSettings agent="codex" :usage="galleryAgentUsageUnsupported" />
         </div>
-        <div :style="{ width: '380px' }">
+        <div :style="{ width: '560px' }">
           <AgentSettings :usage="galleryAgentUsageUnreadable" />
         </div>
-        <div :style="{ width: '380px' }">
+        <div :style="{ width: '560px' }">
           <AgentSettings :usage="galleryAgentUsageHalf" />
         </div>
-        <div :style="{ width: '380px' }">
+        <div :style="{ width: '560px' }">
           <AgentSettings busy />
         </div>
         <div :style="{ width: '380px' }">

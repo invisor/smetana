@@ -161,6 +161,21 @@ const CONTROL_WIDTH = '30ch'
    the reason the width above is. */
 const PROMPT_WIDTH = '48ch'
 
+/* The same 4000 as `MAX_AGENT_PROMPT` in `src-tauri/src/settings/model.rs`, and
+   the fifth copy of a number this feature keeps in two places — worth it here
+   because without it the ceiling is only ever met by the file, silently. Rust
+   forgets an overlong instruction **whole** rather than truncating it, and
+   nothing announces that refusal for this field, so a pasted 10 KB would sit on
+   screen looking accepted and be gone at the next open.
+
+   The two numbers are not the same measure and cannot be: Rust counts bytes and
+   `maxlength` counts UTF-16 code units. They coincide for Latin text, where this
+   makes the ceiling genuinely unreachable through the interface; outside it this
+   is the looser of the two — 4000 Cyrillic characters is 8000 bytes — so the
+   file check stays a real backstop rather than a formality. `MAX_AGENT_PROMPT`'s
+   own doc carries that arithmetic. */
+const MAX_AGENT_PROMPT = 4000
+
 /* What the block below is headed, and it names **whoever answered the probe**
    rather than whoever is showing in the picker above. The two can differ:
    `agents::pick` substitutes the first installed profile for a configured one
@@ -330,6 +345,7 @@ const errorStyle = {
         <Textarea
           :model-value="props.agentPrompt"
           :rows="6"
+          :maxlength="MAX_AGENT_PROMPT"
           placeholder="Anything you want said in every session — how to talk to you, what this machine has, what to leave alone."
           @update:model-value="emit('update:agentPrompt', $event)"
         />
