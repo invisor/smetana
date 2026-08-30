@@ -123,9 +123,14 @@ leave the person with neither.
 The bell is a badge on a bar somebody has to be looking at, and both things it carries happen when
 nobody is: a run ends at three in the morning, and an agent inside one stops to ask a permission
 question. `src/sounds.js` is what a sound may be — four ids, `off`, and the two shipped defaults —
-and `src/chime.js` is the half that touches the DOM, one `Audio` per id, with a rejected `play()`
-warned about and swallowed, because a webview may refuse audio no gesture asked for and an app that
-throws over a noise is worse than a quiet one. Which sound each event makes is the `notifications`
+and `src/chime.js` is the half that touches the DOM: **Web Audio, and never `new Audio`** — one
+shared `AudioContext`, one decoded buffer per id, a fresh `AudioBufferSourceNode` per playback, with
+every failure warned about and swallowed, because a webview may refuse audio no gesture asked for and
+an app that throws over a noise is worse than a quiet one. The prohibition is the load-bearing half
+and the file's own header carries the measurements: an `HTMLMediaElement` in WKWebView plays through
+AVFoundation, opens a Now Playing session, and macOS bills an unsandboxed app for it with a dialog
+asking for the person's Apple Music and media library, raised at whatever moment a run happened to
+end (smetana-i4w). Which sound each event makes is the `notifications`
 section of `settings.json` (`.claude/rules/settings.md`), edited on the settings window's General
 tab.
 
