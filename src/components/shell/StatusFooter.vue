@@ -128,8 +128,10 @@ const fillStyle = {
   display: 'inline-flex',
   alignItems: 'stretch',
   alignSelf: 'stretch',
-  flex: '0 0 auto',
-  minWidth: 0
+  /* No `minWidth` beside it: an item that cannot shrink is never measured
+     against its minimum, so a `0` here would be a declaration doing nothing,
+     read later as the thing holding the row's width. */
+  flex: '0 0 auto'
 }
 /* The row carries the padding, the cursor and the ring, and none of the three
    is arbitrary. The padding is here rather than on the bar because the bar is
@@ -201,15 +203,19 @@ const segStyle = { whiteSpace: 'nowrap', flex: '0 0 auto' }
    here. `minWidth: 0` is what makes that possible at all. A flex item's
    automatic minimum is its min-content width, and a row flex container's
    min-content size is the largest contribution over its items rather than the
-   sum of what each could give up — the counters and the run segments cannot
-   shrink, so that largest is effectively the whole of what this block draws,
-   and left at `auto` the block would be immovable while the row beside it
-   collapsed instead. Which is exactly what it did.
+   sum of what each could give up — the counters cannot shrink, so that largest
+   is effectively the whole of what this block draws, and left at `auto` the
+   block would be immovable while the row beside it collapsed instead. Which is
+   exactly what it did.
 
-   The floor is one level down instead, and it is a better one: the counters
-   and the run segments are ordinary flex items with `min-width: auto`, so they
-   keep their letters, and the headline is the only thing in here with anything
-   to give. */
+   The floor is one level down instead, and it is a better one, but it is the
+   counters alone: they are the only items in here that hold their width, and
+   they hold it because they are declared to. The order is what is worth
+   knowing. The headline goes first and goes all the way to nothing. Then the
+   run segment gives — `RunBar`'s root is an ordinary `flex: 0 1 auto` over
+   `minWidth: 0`, so its detail ellipsises like anything else on this strip,
+   which is its own rule and not this block's. The counters never give at
+   all. */
 const stateStyle = {
   display: 'flex',
   alignItems: 'center',
@@ -220,12 +226,14 @@ const stateStyle = {
 }
 
 /* The one segment on this strip that is a sentence rather than a name or a
-   number, which is why it is the one that ellipsises. It is the only item in
-   the block that can: the shrink factor is far above the 1 the counters and the
-   run segments have, and `minWidth: 0` with a clipped overflow is what lets it
-   go all the way to nothing while they keep their letters. The app's own window
-   stops at 1024px (`tauri.conf.json`), so this is reached in earnest only where
-   a browser can be dragged narrower — which is `?view=gallery`.
+   number, which is why it is the first to give and the only one that can go
+   entirely: the shrink factor is far above the 1 the run segment beside it has,
+   and `minWidth: 0` with a clipped overflow is what lets it reach nothing while
+   the counters keep their letters. A run's own detail ellipsises after this has
+   run out, which is `RunBar`'s doing rather than this style's. The app's own
+   window stops at 1024px (`tauri.conf.json`), so any of this is reached in
+   earnest only where a browser can be dragged narrower — which is
+   `?view=gallery`.
 
    Loud takes the attention colour and the glyph below with it. Colour alone is
    what `status/status.js` refuses everywhere else, and a headline saying
@@ -247,9 +255,14 @@ const counter = (color) => ({
   display: 'inline-flex',
   alignItems: 'center',
   gap: 'var(--space-2)',
-  flex: '0 0 auto',
   color
 })
+/* The flex item of the block above is the hint's trigger, not the span inside
+   it, so this is where "a counter does not shrink" has to be declared — the
+   argument the block's own comment makes rests on it. On the span it was a
+   declaration about the wrong box: true of the counter's contents, silent
+   about the counter. */
+const counterItem = { flex: '0 0 auto' }
 </script>
 
 <template>
@@ -307,12 +320,12 @@ const counter = (color) => ({
         <span :style="truncate">{{ headline }}</span>
       </span>
 
-      <Tooltip v-if="dirtyCount > 0" :label="dirtyTip">
+      <Tooltip v-if="dirtyCount > 0" :label="dirtyTip" :style="counterItem">
         <span :style="counter('var(--git-modified)')">
           <Icon name="file-pen" :style="glyphSize" />{{ dirtyCount }}
         </span>
       </Tooltip>
-      <Tooltip v-if="agentsActive > 0" :label="agentsTip">
+      <Tooltip v-if="agentsActive > 0" :label="agentsTip" :style="counterItem">
         <span :style="counter('var(--attn-live)')">
           <Icon name="bot" :style="glyphSize" />{{ agentsActive }}
         </span>
