@@ -8,6 +8,12 @@ const props = defineProps({
      in lines of its own type stays right when the type scale or the density
      changes, and there is no token that means "four lines". */
   rows: { type: Number, default: 4 },
+  /* How much text the field will accept, or `null` for no bound — which is
+     what every caller but one wants, and the default for that reason. The
+     browser counts `maxlength` in UTF-16 code units, so a caller whose real
+     ceiling is measured in something else (bytes, on the way to a file) gets
+     an upper bound here rather than the same number, and owns saying so. */
+  maxlength: { type: Number, default: null },
   /* identifier -> mono, prose -> sans, never the reverse */
   mono: { type: Boolean, default: false },
   invalid: { type: Boolean, default: false },
@@ -59,6 +65,7 @@ const style = computed(() => ({
     :value="modelValue"
     :placeholder="placeholder"
     :rows="rows"
+    :maxlength="maxlength ?? undefined"
     :disabled="disabled"
     :readonly="readOnly"
     :aria-invalid="invalid || undefined"

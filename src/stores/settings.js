@@ -165,6 +165,12 @@ const defaults = () => ({
   taskLanguage: 'en',
   commitLanguage: 'en',
   reportLanguage: 'en',
+  /* The person's own standing instruction, put in front of every agent session
+     they are actually in. Empty by default, and empty adds nothing at all to a
+     prompt — the opposite shape from the languages above, which always have an
+     answer. Which sessions it reaches is decided in Rust
+     (`agents::prompt::talks_to_a_person`); nothing here knows or needs to. */
+  agentPrompt: '',
   openProjects: [],
   activeProject: null,
   project: {
@@ -422,6 +428,7 @@ export async function loadSettings() {
     settings.taskLanguage = stored.taskLanguage ?? base.taskLanguage
     settings.commitLanguage = stored.commitLanguage ?? base.commitLanguage
     settings.reportLanguage = stored.reportLanguage ?? base.reportLanguage
+    settings.agentPrompt = stored.agentPrompt ?? base.agentPrompt
   } catch (err) {
     console.error('[settings] the read failed, taking the defaults:', err)
   }
@@ -527,7 +534,10 @@ function toShared(source) {
     agentLanguage: source.agentLanguage ?? base.agentLanguage,
     taskLanguage: source.taskLanguage ?? base.taskLanguage,
     commitLanguage: source.commitLanguage ?? base.commitLanguage,
-    reportLanguage: source.reportLanguage ?? base.reportLanguage
+    reportLanguage: source.reportLanguage ?? base.reportLanguage,
+    /* Flat beside the four languages, and the fifth field of that family: what
+       the person wants said in every session they are in. */
+    agentPrompt: source.agentPrompt ?? base.agentPrompt
   }
 }
 
@@ -583,6 +593,15 @@ export function applyPatch(patch) {
   }
   if (typeof patch.reportLanguage === 'string' && patch.reportLanguage) {
     settings.reportLanguage = patch.reportLanguage
+  }
+  /* The type and nothing else, unlike the four languages above — the shape
+     `editorWordWrap` uses, and here for a reason of its own: the empty string
+     is a real value of this field rather than "nothing was chosen", so a
+     truthiness guard would make clearing the field impossible. It would leave
+     the old text standing in this window's state and in the next session
+     started, with the field on screen looking empty. */
+  if (typeof patch.agentPrompt === 'string') {
+    settings.agentPrompt = patch.agentPrompt
   }
   /* The board's four. The two scalars are checked against the closed lists
      `boardView.js` holds — unlike `agent`, where Rust is the only party with

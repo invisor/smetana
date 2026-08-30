@@ -411,6 +411,7 @@ mod tests {
             },
             facts: None,
             languages: agents::Languages::default(),
+            agent_prompt: String::new(),
         }
     }
 
