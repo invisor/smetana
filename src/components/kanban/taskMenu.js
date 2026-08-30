@@ -191,7 +191,7 @@ export function taskMenuItems({ bdStatus, runnable, runBlockedReason, busy }) {
 
          The glyph carries what the words dropped: a pen, not the robot, so the
          row reads as the action rather than as who performs it — `AgentList`
-         and the scope bar are where `bot` means an agent. */
+         and the status footer are where `bot` means an agent. */
       kind: 'ask-agent',
       label: 'Edit',
       icon: 'square-pen',

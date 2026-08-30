@@ -1,6 +1,6 @@
 <script setup>
-/* The run's segment in the scope bar: where it has got to, and the one control
-   it has.
+/* The run's segment in the status footer: where it has got to, and the one
+   control it has.
 
    A stopped run stays here until the project changes or another starts. The
    reason it stopped is the thing somebody came back to read, and the unhappy

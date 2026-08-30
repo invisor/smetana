@@ -91,6 +91,7 @@ import {
   Skeleton,
   StatusBadge,
   StatusDot,
+  StatusFooter,
   StorageSettings,
   Switch,
   TabBar,
@@ -103,7 +104,6 @@ import {
   Toast,
   ToolCall,
   Tooltip,
-  UsageFooter,
   WindowControls
 } from '../components/index.js'
 import { gitActions } from '../components/git/gitActions.js'
@@ -2508,33 +2508,25 @@ const menuTargetStyle = {
       <div :style="headStyle">Scope bar</div>
       <!-- The bar runs across the top of the app window, so each instance takes
            the whole width of the page rather than sitting in a frame: what it
-           has to survive is the name, the counters and the two buttons meeting
-           in one row, and a box would answer at a width nobody uses.
+           has to survive is the name, the search and the two buttons meeting in
+           one row, and a box would answer at a width nobody uses.
 
-           The counters are why there are five of them. Each is drawn only above
-           zero, and an unknown number of uncommitted files — `null`, what
-           `stores/vcs.js` hands over when the working tree could not be read —
-           draws nothing at all, exactly as a clean tree does. The two look
-           identical on screen on purpose, so the pair at the bottom is the only
-           place the difference can be seen against its own props.
+           What it no longer has to survive is the project's own state: the
+           headline, the counters and the run segments are the status footer's
+           now, and their states are drawn under Shell below. What is left here
+           is the name of the place, so the instances are about the shapes that
+           name can take.
 
-           The singulars are hover-only, being tooltips: point at the file and
-           agent counters in the third bar for "1 uncommitted file" and "1 agent
-           running", and at its bell for "1 notification".
-
-           The three below them are the headline, which the five above draw
-           none of — the empty case is the common one and has to be seen as the
-           bar closing up rather than as a gap. -->
+           The bell's singular is hover-only, being a tooltip: point at the bell
+           in the third bar for "1 notification". -->
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
         <!-- A worktree with a branch checked out in it: `scopeName` draws the
-             worktree, and the branch follows it after an @. Both counters
-             plural, and a count on the bell. -->
+             worktree, and the branch follows it after an @. A count on the
+             bell. -->
         <ScopeIndicator
           repo="smetana"
           worktree="smetana-f69-scope-indicator"
           branch="feature/smetana-f69-scope-indicator"
-          :dirty-count="7"
-          :agents-active="3"
           :notifications="2"
         />
         <!-- No worktree, which is what the app itself passes today: `scopeName`
@@ -2542,73 +2534,20 @@ const menuTargetStyle = {
         <ScopeIndicator
           repo="holiday-curb"
           branch="develop"
-          :dirty-count="12"
-          :agents-active="2"
         />
-        <!-- Ones, in all three places there is a noun to get wrong. -->
+        <!-- One notification, the one place in this bar there is a noun to get
+             wrong. -->
         <ScopeIndicator
           repo="smetana"
           branch="main"
-          :dirty-count="1"
-          :agents-active="1"
           :notifications="1"
         />
-        <!-- Unknown rather than zero: no file glyph and no number, with the
-             agents counter beside it to show the bar is otherwise alive. -->
-        <ScopeIndicator
-          repo="beads-viewer"
-          branch="develop"
-          :dirty-count="null"
-          :agents-active="2"
-        />
-        <!-- A clean tree with nothing running: the same nothing as above from
-             the opposite fact, and a bell with no badge on it. -->
-        <ScopeIndicator
-          repo="tracker-notes"
-          branch="main"
-          :dirty-count="0"
-          :agents-active="0"
-        />
-
-        <!-- Nothing to say, said explicitly: the props are there and empty, and
-             the bar between the branch and the counters closes up. This is the
-             one to compare the two below against. -->
-        <ScopeIndicator
-          repo="tracker-notes"
-          branch="main"
-          headline=""
-          :dirty-count="2"
-          :agents-active="0"
-        />
-        <!-- Live: muted, no glyph, and beside the agents counter it is a
-             sentence rather than a number. It carries a run segment as well,
-             because in the app this sentence is only ever drawn beside one —
-             this is the crowded case, and the one to narrow the window on: the
-             sentence is what gives way, and the counters and the two buttons
-             stay where they are. -->
-        <ScopeIndicator
-          repo="holiday-curb"
-          branch="develop"
-          headline="Run under way"
-          headline-level="live"
-          :dirty-count="4"
-          :agents-active="2"
-        >
-          <template #status>
-            <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3 })" @stop="() => {}" />
-          </template>
-        </ScopeIndicator>
-        <!-- Loud, which is the case the glyph exists for: this bar is one of
-             the one or two on a screen allowed to shout, and the colour is
-             never the only thing saying so. -->
+        <!-- A bell with no badge on it, and a branch name long enough to be the
+             thing that gives way when the window is narrowed. -->
         <ScopeIndicator
           repo="smetana"
-          branch="feature/smetana-ec9-scope-bar-headline"
-          headline="1 agent needs you"
-          headline-level="loud"
-          :dirty-count="1"
-          :agents-active="3"
-          :notifications="1"
+          branch="feature/smetana-f0bf-project-state-to-footer"
+          :notifications="0"
         />
       </div>
 
@@ -2635,8 +2574,6 @@ const menuTargetStyle = {
             repo="smetana"
             branch="main"
             window-chrome="traffic-lights"
-            :dirty-count="4"
-            :agents-active="2"
             :notifications="1"
           />
         </div>
@@ -2646,8 +2583,6 @@ const menuTargetStyle = {
           repo="smetana"
           branch="main"
           window-chrome="buttons"
-          :dirty-count="4"
-          :agents-active="2"
           :notifications="1"
         />
         <!-- The same bar over a maximized window: the middle button alone
@@ -2657,8 +2592,6 @@ const menuTargetStyle = {
           branch="main"
           window-chrome="buttons"
           maximized
-          :dirty-count="4"
-          :agents-active="2"
           :notifications="1"
         />
       </div>
@@ -2678,10 +2611,6 @@ const menuTargetStyle = {
         <ScopeIndicator
           repo="smetana"
           branch="feature/smetana-mht-command-palette"
-          headline="Run under way"
-          headline-level="live"
-          :dirty-count="4"
-          :agents-active="2"
           :notifications="1"
         >
           <template #search>
@@ -2827,12 +2756,12 @@ const menuTargetStyle = {
           <!-- The shell's second bar slot, and the only place on this page
                where the strip is seen where it actually lives: under the three
                columns, across the whole shell, outside their resizers. -->
-          <template #footer><UsageFooter :usage="galleryUsage[0]" /></template>
+          <template #footer><StatusFooter :usage="galleryUsage[0]" /></template>
         </AppShell>
       </div>
 
-      <!-- The rest of what the strip has to draw, one under the other, since
-           the state is an answer from Rust rather than a control anybody can
+      <!-- The left end of the strip, one state under the other, since the
+           reading is an answer from Rust rather than a control anybody can
            reach from here. In order: a half the harness did not print, drawn as
            a dash beside the half it did; an agent that does not report this at
            all; a fresh week's real `0`, which is a number and not a dash;
@@ -2840,14 +2769,85 @@ const menuTargetStyle = {
            the last numbers and says so in the hint; and `invoke` refusing, which
            is the channel rather than an answer and says which. Hover any of
            them — the hint is the whole of the reset times, of what a run would
-           do, and of why there is nothing to read. -->
+           do, and of why there is nothing to read. The right end is empty in
+           all six, which is what a quiet project looks like and the state to
+           compare the block below against. -->
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
-        <UsageFooter :usage="galleryUsage[1]" />
-        <UsageFooter :usage="galleryUsage[2]" />
-        <UsageFooter :usage="galleryUsage[3]" />
-        <UsageFooter />
-        <UsageFooter :usage="galleryUsage[0]" busy />
-        <UsageFooter error="the worker is not answering" />
+        <StatusFooter :usage="galleryUsage[1]" />
+        <StatusFooter :usage="galleryUsage[2]" />
+        <StatusFooter :usage="galleryUsage[3]" />
+        <StatusFooter />
+        <StatusFooter :usage="galleryUsage[0]" busy />
+        <StatusFooter error="the worker is not answering" />
+      </div>
+
+      <!-- The right end: what the project is doing, which used to be drawn by
+           the scope bar above and is drawn here now.
+
+           The counters are why there are so many. Each is drawn only above
+           zero, and an unknown number of uncommitted files — `null`, what
+           `stores/vcs.js` hands over when the working tree could not be read —
+           draws nothing at all, exactly as a clean tree does. The two look
+           identical on screen on purpose, so the pair in the middle is the only
+           place the difference can be seen against its own props.
+
+           The singulars are hover-only, being tooltips: point at the file and
+           agent counters in the second strip for "1 uncommitted file" and "1
+           agent running".
+
+           The last three are the headline, which none of the others draw — the
+           empty case is the common one and has to be seen as the strip closing
+           up rather than as a gap. The live one is also where the strip is
+           narrowed: the app's own window stops at 1024px and nothing has to
+           give up anything there, so this takes a browser dragged to about half
+           that. What must happen then is that the sentence ellipsises and goes,
+           while the subscription keeps every letter of `Claude Code Session
+           Week` and both counters keep their numbers — the sentence is the only
+           thing on the strip written to be lost. -->
+      <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
+        <!-- Both counters plural. -->
+        <StatusFooter :usage="galleryUsage[0]" :dirty-count="12" :agents-active="3" />
+        <!-- Ones, in both places there is a noun to get wrong. -->
+        <StatusFooter :usage="galleryUsage[0]" :dirty-count="1" :agents-active="1" />
+        <!-- Unknown rather than zero: no file glyph and no number, with the
+             agents counter beside it to show the strip is otherwise alive. -->
+        <StatusFooter :usage="galleryUsage[0]" :dirty-count="null" :agents-active="2" />
+        <!-- A clean tree with nothing running: the same nothing as above from
+             the opposite fact. -->
+        <StatusFooter :usage="galleryUsage[0]" :dirty-count="0" :agents-active="0" />
+
+        <!-- Nothing to say, said explicitly: the prop is there and empty, and
+             the strip between the subscription and the counters closes up. This
+             is the one to compare the two below against. -->
+        <StatusFooter :usage="galleryUsage[0]" headline="" :dirty-count="2" :agents-active="0" />
+        <!-- Live: muted, no glyph, and beside the agents counter it is a
+             sentence rather than a number. It carries a run segment as well,
+             because in the app this sentence is only ever drawn beside one —
+             this is the crowded case, and the stop button on it is the one to
+             press: it belongs to the run and not to the subscription, which is
+             the whole reason the strip's press target ends where its own words
+             do. -->
+        <StatusFooter
+          :usage="galleryUsage[0]"
+          headline="Run under way"
+          headline-level="live"
+          :dirty-count="4"
+          :agents-active="2"
+        >
+          <template #status>
+            <RunBar :run="runFixture({ kind: 'working', iteration: 2 }, { batches: 3 })" @stop="() => {}" />
+          </template>
+        </StatusFooter>
+        <!-- Loud, which is the case the glyph exists for: this strip is one of
+             the one or two places on a screen allowed to shout, and the colour
+             is never the only thing saying so. -->
+        <StatusFooter
+          :usage="galleryUsage[0]"
+          headline="1 agent needs you"
+          headline-level="loud"
+          :dirty-count="1"
+          :agents-active="3"
+        />
       </div>
     </section>
 

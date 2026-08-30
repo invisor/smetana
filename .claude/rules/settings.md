@@ -579,7 +579,7 @@ derived on the front end (`rightPanel` in `DesktopApp.vue`), for the reason `sel
 a panel choice that wrote to a remembered field would turn a glance into an edit of a preference.
 
 The tab moves by itself only **towards** `task`, never to `sessions`: an agent that needs an answer
-already has the bell, the scope bar and the left column, and taking the panel out from under somebody
+already has the bell, the status footer and the left column, and taking the panel out from under somebody
 reading a task is not on that list. Three things move it, and only one of them is a watch. A draft or
 a run's claimed list arriving in the column is the watch, on `rightPanel`. A card picked on the board
 or in the command palette (`selectFromBoard`) and an agent row whose work is an issue

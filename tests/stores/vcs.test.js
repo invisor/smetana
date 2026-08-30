@@ -1373,10 +1373,11 @@ describe('the git panel store', () => {
   })
 })
 
-/* The scope bar's first counter. It reads the very list the panel draws, and
-   these three cases are the whole of the rule: every kind of change counts,
-   nothing to commit is zero, and a tree nobody could read is not zero. */
-describe('the uncommitted file count in the scope bar', () => {
+/* The status footer's first counter. It reads the very list the panel draws,
+   and these three cases are the whole of the rule: every kind of change
+   counts, nothing to commit is zero, and a tree nobody could read is not
+   zero. */
+describe('the uncommitted file count in the status footer', () => {
   const load = async (statusReply) => {
     const { stores, ipc } = await loadStores()
     ipc.on('vcs_repos', answer(repoIn('/p')))
@@ -1413,7 +1414,7 @@ describe('the uncommitted file count in the scope bar', () => {
 
   /* Unknown is not zero — the opposition the store keeps for `tree` itself. A
      repository whose status could not be read has an unknown number of
-     uncommitted files, and the bar draws no counter for it; answering `0` would
+     uncommitted files, and the strip draws no counter for it; answering `0` would
      be this app telling somebody their work is committed. */
   it('a tree that could not be read counts nothing at all, not zero', async () => {
     const vcs = await load((ipc) => ipc.fail('vcs_status', { kind: 'noGit', message: 'git not found' }))

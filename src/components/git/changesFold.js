@@ -58,7 +58,7 @@ export function changesVisible(stored, visit) {
  * **The count is handed in and never derived here, and that is deliberate.**
  * `dirtyCount` in the store against the changes caption in `GitPanel.vue` are
  * already two spellings of one rule, held to the promise that the number in the
- * scope bar is the rows of the panel's list; a `tree.changes.length` in this
+ * status footer is the rows of the panel's list; a `tree.changes.length` in this
  * file would be a third, and the first to drift. So this function filters a
  * count rather than computing one, and `tree` is not among its fields at all —
  * `dirtyCount` is `null` exactly when `tree` is, so an unread tree already
@@ -89,7 +89,7 @@ export function answeredCount({ project, loading, count }, path) {
  * What arriving on the Git tab leaves behind.
  *
  * `dirty` is how many uncommitted files the selected repository has — the
- * `dirtyCount` the scope bar already reads out of `stores/vcs.js`, `null` for a
+ * `dirtyCount` the status footer already reads out of `stores/vcs.js`, `null` for a
  * tree that has not been read or could not be. Taking that number rather than
  * the tree itself is deliberate: "is the tree known, and is there anything in
  * it" is the whole of what this file needs to know, it is already spelled once

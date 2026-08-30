@@ -2,36 +2,23 @@
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
-import Tooltip from '../core/Tooltip.vue'
 import WindowControls from './WindowControls.vue'
 import { CHROME_BUTTONS, CHROME_NONE, CHROME_STATES } from './windowChrome.js'
 
-/* The scope bar answers "where am I working" before anything else on screen:
-   repo / worktree @ branch, then the two live counters. */
+/* The scope bar answers "where am I working" before anything else on screen,
+   and that one question is now the whole of it: repo / worktree @ branch, the
+   search, the bell and the window's own buttons.
+
+   What this project is *doing* used to be here as well — the headline, the two
+   live counters and a segment per run — and it is `shell/StatusFooter.vue`'s
+   now. This bar is the window's title bar, and a title bar that was also the
+   status bar spent the eye's first stop on numbers that change every few
+   seconds. */
 const props = defineProps({
   repo: { type: String, required: true },
   worktree: { type: String, default: '' },
   branch: { type: String, default: '' },
-  /* `null` and deliberately not `0`, the way `git/SectionHeader.vue` declares
-     its own count: a working tree that could not be read has an unknown number
-     of uncommitted files, which is the opposite fact to a clean one, and
-     `stores/vcs.js` says so by handing over `null`. Both come out as no icon
-     and no number here — the difference is that nothing in this component ever
-     claims a repository is tidy on the strength of not knowing. */
-  dirtyCount: { type: Number, default: null },
-  /* Zero, because this one is never unknown: the store counts sessions and
-     start tickets it is already holding, and there is no read behind it that
-     could fail. */
-  agentsActive: { type: Number, default: 0 },
   notifications: { type: Number, default: 0 },
-  /* What this project is doing right now, from components/shell/headline.js.
-     Empty is the ordinary case and draws nothing at all — most of the time
-     nothing is happening, and a bar reserving room for the sentence would be a
-     bar with a hole in it. */
-  headline: { type: String, default: '' },
-  /* The design system's attention vocabulary, so an agent waiting on somebody
-     reads loud here as it does on a badge. `quiet` is the default. */
-  headlineLevel: { type: String, default: 'quiet' },
   /* Which chrome the window around this bar has, from
      `shell/windowChrome.js`. `none` is the default and is what a browser gets:
      the gallery and the dev server draw this bar with no window behind it at
@@ -75,40 +62,8 @@ const segStyle = (strong) => ({
   fontWeight: strong ? 'var(--weight-medium)' : 'var(--weight-regular)'
 })
 const truncate = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
-const counter = (color) => ({ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', color })
 
 const scopeName = computed(() => props.worktree || props.branch)
-
-/* The one segment in this bar that is a sentence rather than a name, which is
-   why it is the one that gives way when the window is narrow: the shrink factor
-   in `flex` is far above the 1 every other item in the row has, so at 900px the
-   repo and the branch keep their letters and this ellipsises instead.
-
-   Loud takes the attention colour and the glyph below with it. Colour alone is
-   what `status/status.js` refuses everywhere else, and a headline saying
-   somebody is waited on is exactly the case that rule is written for. */
-const headlineStyle = computed(() => ({
-  ...truncate,
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 'var(--space-2)',
-  flex: '0 100 auto',
-  minWidth: 0,
-  color: props.headlineLevel === 'loud' ? 'var(--attn-loud)' : 'var(--text-muted)'
-}))
-
-/* The counters' tooltips. Both were glued together with a plural noun and
-   said "1 uncommitted files" for the commonest case there is, which nobody saw
-   while the numbers were a fixture holding 3 and 2 — the bell below had the
-   same fault and was fixed for the same reason. Neither label is ever drawn
-   over a count of zero: the counter itself is hidden then, so there is no third
-   case to word. */
-const dirtyLabel = computed(() =>
-  props.dirtyCount === 1 ? '1 uncommitted file' : `${props.dirtyCount} uncommitted files`
-)
-const agentsLabel = computed(() =>
-  props.agentsActive === 1 ? '1 agent running' : `${props.agentsActive} agents running`
-)
 
 /* The bell's name, and the tooltip over it. It used to say "unread", which is a
    ledger this app deliberately does not keep — a notification here is derived
@@ -137,8 +92,8 @@ const badgeStyle = {
 <template>
   <!-- The drag region is unconditional. Nothing in a browser listens for the
        attribute, and Tauri starts a drag only from the element that actually
-       carries it, so the buttons, the search field and the run segments below —
-       which do not — keep working. -->
+       carries it, so the buttons and the search field below — which do not —
+       keep working. -->
   <div :style="barStyle" data-tauri-drag-region>
     <span :style="segStyle(true)">
       <Icon name="folder-git-2" :size="12" :style="{ color: 'var(--text-muted)' }" />
@@ -151,36 +106,11 @@ const badgeStyle = {
     </span>
     <span v-if="branch && worktree" :style="{ color: 'var(--text-muted)' }">@{{ branch }}</span>
 
-    <!-- What is going on in this project, when anything is. No `v-else`, no
-         placeholder and no reserved width: an empty headline is the common
-         case and the bar simply closes up around it. -->
-    <span v-if="headline" :style="headlineStyle">
-      <Icon v-if="headlineLevel === 'loud'" name="triangle-alert" :size="12" />
-      <span :style="truncate">{{ headline }}</span>
-    </span>
-
-    <Tooltip v-if="dirtyCount > 0" :label="dirtyLabel">
-      <span :style="counter('var(--git-modified)')">
-        <Icon name="file-pen" :size="12" />{{ dirtyCount }}
-      </span>
-    </Tooltip>
-    <Tooltip v-if="agentsActive > 0" :label="agentsLabel">
-      <span :style="counter('var(--attn-live)')">
-        <Icon name="bot" :size="12" />{{ agentsActive }}
-      </span>
-    </Tooltip>
-
-    <!-- Whatever else belongs to the scope right now — today the run. Beside
-         the counters rather than out at the right, because it is about this
-         project and the buttons over there are about the window. -->
-    <slot name="status" />
-
     <span :style="{ flex: 1 }" data-tauri-drag-region />
 
-    <!-- The search field. A slot rather than props for the same reason
-         `#status` above is one: this bar knows about a repository, a branch and
-         two counters, and giving it the tracker as well would make the one
-         component on screen that is deliberately ignorant of what it is
+    <!-- The search field. A slot rather than props: this bar knows about a
+         repository and a branch, and giving it the tracker as well would make
+         the one component on screen that is deliberately ignorant of what it is
          describing know the most of anything. -->
     <slot name="search" />
 

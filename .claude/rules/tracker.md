@@ -208,7 +208,7 @@ cannot drift.
 Those words name **no noun** — "1 waiting on you", not "1 agent waiting on you".
 That began as a constraint: `SessionMark` carried no work kind, so
 `projectStates` counted a person's own shell exactly like an agent, and a shell
-that rang the bell lit the tile loud while the scope bar's counter, filtering
+that rang the bell lit the tile loud while the footer's counter, filtering
 through `isShellSession`, read 0 a few pixels away. The mark carries a `kind`
 now (smetana-low) and the map drops shells by it, so the two counts are about
 one population again and the sentence *could* name agents. It does not: the copy
