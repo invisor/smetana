@@ -42,7 +42,14 @@ export const NO_BRANCH = 'No default — use the current branch'
 
    bd's priority scale is the one of the three that is closed rather than
    chosen: 0 to 4 is what the tracker has, so the field is a select and the
-   bound is the scale itself. */
+   bound is the scale itself.
+
+   The consequence, which is asked for rather than overlooked: a file whose
+   author deliberately wrote `max_parallel_tasks = 20` opens this form with a
+   permanent "Between 1 and 16." and a dead Save, so no other field can be
+   changed there without agreeing to be narrowed first. That is the bound doing
+   its job — the point of it being tighter than the `u8` — and the file stays
+   whatever it says until somebody presses Save. */
 const RANGES = {
   min_priority: [0, 4],
   max_parallel_tasks: [1, 16],

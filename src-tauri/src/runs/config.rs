@@ -188,6 +188,14 @@ pub fn load(root: &Path) -> ConfigState {
 /// reorders the keys into the struct's order, so somebody changing one number
 /// would find a colleague's note gone.
 ///
+/// **One comment does not survive, and it is the one attached to a key that is
+/// being removed.** Choosing no target branch takes `target_branch` out, and a
+/// comment written above it goes with it, because in `toml_edit` a comment
+/// above a key is that key's own prefix. That is the right answer rather than a
+/// gap: the only other place to put the line is on whichever key follows, where
+/// it would describe something it was never written about. The test of the same
+/// name pins it, so the guarantee above is read with its one exception.
+///
 /// The result is parsed again before it is returned. A save that leaves behind
 /// a file the app then refuses to load turns a wrong number into a broken
 /// project, and that is the one failure worth spending a check on.
@@ -198,31 +206,59 @@ pub fn with_defaults(text: &str, defaults: &Defaults) -> Result<String, String> 
 
     let mut doc = text.parse::<toml_edit::DocumentMut>().map_err(|err| err.to_string())?;
 
+    // `as_table_like_mut` rather than `as_table_mut`, so that the two other
+    // spellings TOML allows for this section are edited instead of refused:
+    // `defaults = { min_priority = 1 }` on one line, and the dotted
+    // `defaults.min_priority = 1`. Neither is what the setup agent writes and
+    // both are things a person may have typed, to whom "defaults is not a
+    // table" reads as nonsense. What is left of that refusal is a `defaults`
+    // that is not a table at all, which cannot reach here: `parse` above has
+    // already had its say.
     let table = doc
         .entry("defaults")
         .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| "defaults is not a table".to_string())?;
-    // An implicit table is one that exists only because something under it
-    // does, and it is not written out at all. A file with no `[defaults]`
-    // section of its own would otherwise take the four keys and emit none of
-    // them.
-    table.set_implicit(false);
 
     match &defaults.target_branch {
-        Some(branch) => table["target_branch"] = toml_edit::value(branch.as_str()),
+        Some(branch) => set_value(table, "target_branch", branch.as_str().into()),
         // Removed, never emptied — see the test of the same name.
         None => {
             table.remove("target_branch");
         }
     }
-    table["min_priority"] = toml_edit::value(i64::from(defaults.min_priority));
-    table["max_parallel_tasks"] = toml_edit::value(i64::from(defaults.max_parallel_tasks));
-    table["review_passes"] = toml_edit::value(i64::from(defaults.review_passes));
+    set_value(table, "min_priority", i64::from(defaults.min_priority).into());
+    set_value(table, "max_parallel_tasks", i64::from(defaults.max_parallel_tasks).into());
+    set_value(table, "review_passes", i64::from(defaults.review_passes).into());
 
     let out = doc.to_string();
     parse(&out)?;
     Ok(out)
+}
+
+/// One key set, keeping whatever was written around the value it replaces.
+///
+/// The obvious spelling — `table["min_priority"] = toml_edit::value(n)` —
+/// silently loses a trailing comment. `IndexMut` replaces the whole `Item`, and
+/// a `Value`'s decor is the space before it and **anything after it on the same
+/// line**, so `min_priority = 1  # the floor for this project` comes back as
+/// `min_priority = 3`. The key's own decor survives that, which is why a comment
+/// on the line above is unharmed either way and the loss is easy to miss.
+/// Mutating the value in place and carrying its decor across is what makes the
+/// promise in `with_defaults`'s header true of both positions.
+fn set_value(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::Value) {
+    match table.get_mut(key).and_then(|item| item.as_value_mut()) {
+        Some(existing) => {
+            let decor = existing.decor().clone();
+            *existing = value;
+            *existing.decor_mut() = decor;
+        }
+        // A key that was not there. Nothing was written around it, so there is
+        // nothing to carry and the default `key = value` spacing is right.
+        None => {
+            table.insert(key, toml_edit::Item::Value(value));
+        }
+    }
 }
 
 /// Read, rewrite, write back atomically.
@@ -451,6 +487,12 @@ notes = "The stand comes up from the live-staging worktrees."
     /// The four keys are set, and everything the person wrote around them stays
     /// exactly where it was. This is the whole reason the write goes through
     /// `toml_edit` rather than through a serde round trip.
+    ///
+    /// Byte for byte against a literal rather than three `contains` calls, and
+    /// the difference is not pedantry: `contains` passes over a file whose
+    /// sections have been reordered, whose blank lines have been collapsed and
+    /// whose keys inside `[defaults]` have swapped places — which is most of
+    /// what the serde round trip would have got wrong.
     #[test]
     fn setting_the_defaults_keeps_comments_and_every_other_key() {
         let before = "\
@@ -477,12 +519,21 @@ hazards = \"two branches emitting one migration number\"
 
         let after = with_defaults(before, &wanted).expect("rewrite the defaults");
 
-        assert!(after.contains("# how this project is laid out"), "{after}");
-        assert!(after.contains("# the branch everything lands on"), "{after}");
-        assert!(
-            after.contains("hazards = \"two branches emitting one migration number\""),
-            "{after}"
-        );
+        assert_eq!(after, "\
+# how this project is laid out
+[project]
+repos = [\"backend\", \"frontend\"]
+
+[defaults]
+# the branch everything lands on
+target_branch = \"main\"
+min_priority = 3
+max_parallel_tasks = 2
+review_passes = 7
+
+[merge]
+hazards = \"two branches emitting one migration number\"
+");
 
         let parsed = parse(&after).expect("the result parses");
         assert_eq!(parsed.defaults, wanted);
@@ -491,6 +542,123 @@ hazards = \"two branches emitting one migration number\"
             parsed.merge.expect("the merge section").hazards.as_deref(),
             Some("two branches emitting one migration number")
         );
+    }
+
+    /// A comment written *after* a value, on the same line. It is the value's
+    /// decor rather than the key's, so it is the one a whole-`Item` assignment
+    /// silently drops — and the failure is easy to miss, because a comment on
+    /// the line above rides on the key and survives either way. `set_value`
+    /// carries the decor across, and this is what says so.
+    #[test]
+    fn a_comment_after_a_value_survives_the_value_changing() {
+        let before = "\
+[project]
+repos = [\".\"]
+
+[defaults]
+min_priority = 1  # the floor for this project
+max_parallel_tasks = 4
+review_passes = 3
+";
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 3,
+            max_parallel_tasks: 2,
+            review_passes: 7,
+        };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert_eq!(after, "\
+[project]
+repos = [\".\"]
+
+[defaults]
+min_priority = 3  # the floor for this project
+max_parallel_tasks = 2
+review_passes = 7
+target_branch = \"main\"
+");
+    }
+
+    /// The one comment that does not survive, pinned so that the guarantee
+    /// above is read with its exception rather than as a promise about every
+    /// line in the file.
+    ///
+    /// A comment above a key is that key's own prefix, so removing the key
+    /// removes it. That is the right answer rather than a gap: the only other
+    /// place to put the line is on whichever key follows, where it would
+    /// describe something it was never written about.
+    #[test]
+    fn removing_the_branch_takes_the_comment_written_above_it() {
+        let before = "\
+[project]
+repos = [\".\"]
+
+[defaults]
+# the branch everything lands on
+target_branch = \"staging\"
+min_priority = 1
+";
+
+        let after = with_defaults(before, &Defaults::default()).expect("rewrite the defaults");
+
+        assert_eq!(after, "\
+[project]
+repos = [\".\"]
+
+[defaults]
+min_priority = 2
+max_parallel_tasks = 3
+review_passes = 5
+");
+    }
+
+    /// The two other spellings TOML allows for this section. Neither is what
+    /// the setup agent writes and both are things a person may have typed, so
+    /// they are edited rather than refused — "defaults is not a table" reads as
+    /// nonsense to whoever wrote one of them. The exact output is pinned
+    /// because each keeps its own shape: the dotted keys stay dotted, and the
+    /// inline table stays on one line with its trailing comment.
+    #[test]
+    fn a_defaults_written_as_dotted_keys_or_inline_is_edited_rather_than_refused() {
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 0,
+            max_parallel_tasks: 1,
+            review_passes: 1,
+        };
+
+        let dotted = with_defaults("\
+defaults.min_priority = 1
+
+[project]
+repos = [\".\"]
+", &wanted).expect("dotted keys are editable");
+        assert_eq!(dotted, "\
+defaults.min_priority = 0
+defaults.target_branch = \"main\"
+defaults.max_parallel_tasks = 1
+defaults.review_passes = 1
+
+[project]
+repos = [\".\"]
+");
+        assert_eq!(parse(&dotted).expect("the result parses").defaults, wanted);
+
+        let inline = with_defaults("\
+defaults = { min_priority = 1 }  # inline
+
+[project]
+repos = [\".\"]
+", &wanted).expect("an inline table is editable");
+        assert_eq!(inline, "\
+defaults = { min_priority = 0 , target_branch = \"main\", max_parallel_tasks = 1, review_passes = 1 }  # inline
+
+[project]
+repos = [\".\"]
+");
+        assert_eq!(parse(&inline).expect("the result parses").defaults, wanted);
     }
 
     /// No target branch means the key is gone, not the key set to an empty

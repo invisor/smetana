@@ -211,7 +211,7 @@ import { relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
-import { draftFrom } from '../components/run/projectDefaults.js'
+import { DEFAULTS_FALLBACK, draftFrom } from '../components/run/projectDefaults.js'
 import {
   LEFT_DEFAULT,
   PROJECT_RAIL,
@@ -1101,8 +1101,9 @@ const openRun = async (scopeValue) => {
       partOf: runParent.value,
       branches: gitState.branches,
       defaultBranch: runConfig.value?.defaults?.target_branch ?? branchLabel.value,
-      defaultPriority: runConfig.value?.defaults?.min_priority ?? 2,
-      defaultParallel: runConfig.value?.defaults?.max_parallel_tasks ?? 3,
+      defaultPriority: runConfig.value?.defaults?.min_priority ?? DEFAULTS_FALLBACK.min_priority,
+      defaultParallel:
+        runConfig.value?.defaults?.max_parallel_tasks ?? DEFAULTS_FALLBACK.max_parallel_tasks,
       remembered: project.runSettings,
       liveCheckAvailable: runConfig.value?.live_check?.mode !== 'none',
       liveCheckBlocked: liveCheckBlocked.value,
@@ -1364,11 +1365,14 @@ const openProjectSettings = async (path) => {
          `openSetup` above repeats its dialog's: the OS draws the frame, and
          nothing on the window's side knows what this dialog is called. */
       title: 'Project settings',
-      /* Re-read on every announcement rather than snapshotted at opening, which
-         is what makes the fields right when the config lands a moment after the
-         window: `runConfig` is filled by a command of its own, and the menu item
-         opens this the instant it is pressed. The component seeds its own draft
-         once, so this cannot overwrite what somebody is typing. */
+      /* Announced on every change, like everything else here, but read **once**
+         at the other end: `ProjectSettingsModal` seeds its draft in a watcher on
+         `open`, and `DialogWindow.vue` holds `open` true for the life of the
+         window, so what this value is at the moment the window mounts is what
+         the fields get and a later announcement never reaches them. That is
+         what stops a prop arriving mid-edit from taking away what somebody is
+         typing, and it is safe here because the menu item is greyed until
+         `configured` — which is exactly when `runConfig` is non-null. */
       defaults: draftFrom(runConfig.value),
       branches: gitState.branches,
       busy: savingSettings.value,

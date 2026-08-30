@@ -183,6 +183,31 @@ const DIALOG_PROPS = {
     existing: false,
     busy: false
   },
+  /* The other window about the same file, and the one with fields in it.
+     `branches` is the `target_branches` answer above rather than the panel's
+     list, for the `run` fixture's reason: the field is filled from the same
+     command, and a window offering branches the project behind it could not
+     merge into would be two fixtures disagreeing about one project.
+
+     None of the four is `DEFAULTS_FALLBACK`'s, and that is the whole point of
+     the fixture rather than a taste in numbers — the same argument the `run`
+     fixture makes above. The form seeds its draft once, when the window opens,
+     out of what was announced; a fixture holding no branch, 2, 3 and 5 would
+     draw the identical screen whether the announcement arrived or never came,
+     and `?view=dialog&kind=project-settings` is this project's only check that
+     it did. */
+  'project-settings': {
+    title: 'Project settings',
+    defaults: {
+      target_branch: 'main',
+      min_priority: 1,
+      max_parallel_tasks: 6,
+      review_passes: 2
+    },
+    branches: MOCK_TARGET_BRANCHES,
+    busy: false,
+    error: ''
+  },
   /* Deleting a Claude Code transcript. The record is the first row of
      `mockSessions` above, so what this window says in a browser is what the
      Sessions tab behind it holds — the same rule the `ready-task` fixture keeps

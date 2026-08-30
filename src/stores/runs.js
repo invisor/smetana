@@ -161,7 +161,15 @@ export async function loadConfig(project) {
 export async function saveDefaults(project, defaults) {
   if (!project) throw new Error('saveDefaults: no project')
   await invoke('project_config_save_defaults', { project, defaults })
-  await loadConfig(project)
+  /* Only while this is still the project on screen. The press comes over IPC
+     from another window, so a project switch can land between it and the ground
+     watcher closing the dialog — and `loadConfig` for a project this store has
+     left does not simply read a file: it takes the "the project moved" branch,
+     empties the run list, drops the bell's cards and the browser reading, and
+     writes the old path back into `runsState.project`. The write itself has
+     already happened and is not in question; what this refuses is describing
+     the wrong project afterwards. */
+  if (runsState.project === project) await loadConfig(project)
 }
 
 /* The runs in this project, if any. Called on mount and on switching projects,
