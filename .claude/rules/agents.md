@@ -250,6 +250,62 @@ be a table of twelve languages in Rust for words one long. The switch that hides
 none of this — `runs::service::finish` renders the document whatever it says, so the setting goes on
 moving text that lands on disk; **Show run report** only decides whether anybody is handed it.
 
+`agentPrompt` is the fifth field of that family and the first that is not a language: a person's own
+standing instruction — "talk to me briefly", "this machine has no Docker", "here it is pnpm, not
+npm" — written once on the Agents tab and put in front of every session they are actually in. It
+travels the languages' road exactly, and that is the load-bearing decision rather than a
+convenience: `settings::agent_prompt(app)` beside `settings::languages(app)`, read by
+`terminal::service` in the `Create` arm while it builds the `Launch`, carried as `Launch.agent_prompt`
+into a still-pure `prompt::build`. It never crosses the IPC and is never an argument to
+`terminal_create`. One place builds every session in the app, a person's and a run's alike, so
+reading it there once is what makes it impossible for the two to disagree; handing it in from the
+front end would be a second road into a session, which is the shape this module exists to prevent.
+It lives with the same two costs the languages do, unchanged: the 400 ms debounce, and a value read
+per session rather than snapshotted.
+
+Empty by default, and empty is today's behaviour **to the letter** — no framing line, no paragraph,
+and not one extra blank line in any prompt. That is the opposite shape from the four languages, which
+default to `en` and print their paragraph anyway, and the difference is that a language always has an
+answer where a standing instruction usually does not. The person's words are not pasted bare: one
+framing sentence (`STANDING`) says whose they are, because everything else in a prompt is this app
+asking for something, and "answer briefly" read as a task is a session that answers briefly and does
+nothing else.
+
+It lands **after** the four language paragraphs and before the work. Near the front for the reason
+the languages are — what is said last can be pushed off the top of what the agent reads first by
+seven kilobytes of skill text. After them rather than before because those paragraphs close silent
+failures (a translated `## Acceptance Criteria` is bd refusing the issue, a translated `parked:`
+marker empties a parked card's questions) and a reader resolves a contradiction in favour of what
+came later: a person who deliberately writes across a language setting gets what they wrote, and
+everybody else costs the language rules nothing.
+
+`talks_to_a_person` is the predicate, and unlike `writes_to_the_tracker`, `commits_to_git` and
+`leaves_a_run_report` it is written as a **negation** — `!matches!(intent, Intent::Run { .. })`. Two
+reasons. Those three name a capability a session *has*, and a positive list is the honest shape for
+that; this one names the **absence of a listener**, so a list of the eight conversations would be the
+complement of the rule rather than the rule. And a variant added to `Intent` later is, on the
+evidence of all ten there are, another conversation: the negation hands it the instruction for free,
+which is the right default, since an instruction reaching one more conversation is benign and missing
+one is the bug the field exists to fix. A positive list would leave a new variant out silently — the
+same quiet drift this file records about `RESUMES_BY_ID`. `Intent::Run` is the one exclusion: nobody
+is in a run's conversation, so an instruction written for one would shape autonomous work overnight
+with no one to correct it, on top of the four language paragraphs a run already opens with. That was
+offered in the discussion and declined. `ResumeSession` is deliberately **not** named in the
+predicate and never reaches it — `build` refuses it a prompt on its first line — and a clause for it
+would be dead code wearing the clothes of a decision. `agents::oneshot` is outside all of this too:
+it is one question with its answer on stdout, not a conversation anything can be carried into.
+
+Claude Code's `--append-system-prompt` was the rejected alternative, and it would have been a real
+system prompt, closer to what the field is called. Only one of the two supported harnesses has such a
+switch: Codex has no per-session equivalent — the same asymmetry that already forces
+`SkillDelivery::Inline` — so the setting would be an invisible system prompt on one harness and
+visible prose in the first message on the other, one field with two behaviours, with a person's
+instruction appearing and disappearing from the transcript as they moved between them. It would also
+have moved the feature out of `prompt.rs`, which is pure and holds every test in this module, and
+into the per-harness `command` builders, which are checked only against captured fixtures. The four
+languages already ride as prose in the positional argument; this is the fifth field of that family
+and travels the same way.
+
 A setting for the language of *code comments* was
 asked for and refused — it would either do nothing in a repository with a convention, or produce
 exactly the regression the Language section names.

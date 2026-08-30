@@ -24,7 +24,8 @@ At the root the file keeps appearance — theme, density and `uiFontSize` — pa
 state and width for each side, `railOpen` for whether the project rail is drawn beside the left
 panel, and `gitSections` beside them), `editor` with its own `fontSize` and `wordWrap`, `agent`, the id of the CLI agent to
 start, `agentLanguage`, `taskLanguage`, `commitLanguage` and `reportLanguage`, the languages that agent
-works in, `kanban`, how
+works in, `agentPrompt`, the person's own standing instruction for every session they are in,
+`kanban`, how
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
 `window`, whether the main window opens where it was left, `updates`, whether the app asks
 about a newer version by itself, and `notifications`,
@@ -43,6 +44,32 @@ ceilings that are deliberately not `column_order`'s: an entry is a tab id and a 
 path, so the item limit is `MAX_PATH_LEN`, and the count is well past `MAX_OPEN_TABS` because three
 kinds of tab share the one list. A hint rather than a truth, exactly as the column order is — the
 rule that reads it is `components/shell/tabOrder.js` (`.claude/rules/files-and-editor.md`).
+
+`agentPrompt` sits at the root beside the four languages and for their reason rather than a new one:
+a standing instruction of the "talk to me briefly", "this machine has no Docker" kind is a fact about
+a **person**, not about one repository, and it travels with them between projects. A per-project
+field was considered and refused on the argument `kanban` and `git.autoFetch` below record, with a
+second reason of its own: an instruction meant for one repository already has a better home the
+harness reads by itself — `CLAUDE.md` or `AGENTS.md` — and a project half would have widened the two
+windows' contract for something nobody asked for. What the field reaches, and by which road, is
+`.claude/rules/agents.md`; this file only stores it.
+
+The ceiling is `MAX_AGENT_PROMPT`, 4000 bytes, checked in both `validate` bodies through
+`forget_if_too_long`. Over it the value is **forgotten whole rather than truncated** — the rule
+`min_priority` and the Git panel's section heights already follow, with a second reason here that
+carries more force: a truncated instruction ends mid-sentence, and that is precisely the shape
+`agents/prompt.rs` refuses everywhere, since `no_prompt_stops_mid_sentence` walks every intent to
+keep dangling punctuation out of a prompt. A ceiling that halved somebody's paragraph would be this
+app producing exactly what that test forbids. The interface cannot reach the ceiling — the field is a
+bounded `Textarea` — so the check is for a hand-edited file.
+
+The empty string is a **legal value** of this field rather than junk: it is how a person clears it.
+That is why `forget_if_junk` one field up is wrong here, and it is also why the front end's guard in
+`applyPatch` is `typeof patch.agentPrompt === 'string'` and nothing more, where the four languages
+beside it test truthiness as well. For a language an empty id is nothing anybody chose; here a
+truthiness guard would swallow the clearing, leaving the old text in the app window's state and in
+the next session started while the field on screen looked empty. The shape to copy is
+`editorWordWrap`'s, not `agentLanguage`'s.
 
 `layout.gitSections` is the other thing at the root that could plausibly have gone under a project and
 did not: how the Git panel's three sections are folded, how tall two of them were dragged to, and how
