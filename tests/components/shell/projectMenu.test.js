@@ -7,14 +7,15 @@ const caption = (items) => items.find((i) => i.type === 'label')?.label
 const find = (items, kind) => items.find((i) => i.kind === kind)
 
 describe('projectMenuItems', () => {
-  it('offers the row three actions, with removal last and behind a separator', () => {
+  it('offers the row four actions, with removal last and behind a separator', () => {
     const items = projectMenuItems(base)
-    expect(kinds(items)).toEqual(['setup', 'add-agent', 'remove'])
+    expect(kinds(items)).toEqual(['setup', 'settings', 'add-agent', 'remove'])
     expect(items.at(-2)).toEqual({ type: 'separator' })
     // The caption's reach: removal is live below the separator, so it is not
     // part of the group the caption refuses.
     expect(kinds(projectMenuItems({ ...base, active: false }))).toEqual([
       'setup',
+      'settings',
       'add-agent',
       'remove'
     ])
@@ -77,5 +78,57 @@ describe('projectMenuItems', () => {
     // session switches to that panel anyway.
     const items = projectMenuItems({ ...base, canAddAgent: false })
     expect(find(items, 'add-agent').disabled).toBe(false)
+  })
+})
+
+describe('the project settings item', () => {
+  const settings = (items) => items.find((item) => item.kind === 'settings')
+  const captions = (items) => items.filter((item) => item.type === 'label').map((i) => i.label)
+
+  it('is live for an active project whose configuration loads', () => {
+    const items = projectMenuItems({ ...base, configured: true, configBroken: false })
+    expect(settings(items).disabled).toBe(false)
+    expect(captions(items)).toEqual([])
+  })
+
+  it('is dead on a row that is not the active project, under the existing caption', () => {
+    // One caption, not two: `ELSEWHERE` already greys the whole group, and a
+    // second sentence under it would claim to know something about a project
+    // nobody measured.
+    const items = projectMenuItems({ ...base, active: false })
+    expect(settings(items).disabled).toBe(true)
+    expect(captions(items)).toEqual(['Switch to this project first'])
+  })
+
+  it('is dead with its own caption when the project has no configuration yet', () => {
+    const items = projectMenuItems({ ...base, configured: false, configBroken: false })
+    expect(settings(items).disabled).toBe(true)
+    expect(captions(items)).toEqual(['Set this project up first'])
+    // The route out stays live: setting the project up is what this refuses in
+    // favour of.
+    expect(find(items, 'setup').disabled).toBe(false)
+  })
+
+  it('is dead with its own caption when the configuration will not parse', () => {
+    const items = projectMenuItems({ ...base, configured: false, configBroken: true })
+    expect(settings(items).disabled).toBe(true)
+    expect(captions(items)).toEqual(["This project's configuration will not parse"])
+    // A form cannot help here — there are no parsed values to draw — and
+    // running the setup over the damaged file is exactly what this menu is for.
+    expect(find(items, 'setup').label).toBe('Set up again')
+    expect(find(items, 'setup').disabled).toBe(false)
+  })
+
+  it('puts the caption immediately above the item it refuses, so its reach is one row', () => {
+    const items = projectMenuItems({ ...base, configured: false, configBroken: false })
+    const at = items.findIndex((item) => item.label === 'Set this project up first')
+    expect(items[at + 1].kind).toBe('settings')
+    expect(items[at + 2].kind).toBe('add-agent')
+    expect(items[at + 2].disabled).toBe(false)
+  })
+
+  it("does not share the setup item's glyph", () => {
+    const items = projectMenuItems(base)
+    expect(settings(items).icon).not.toBe(find(items, 'setup').icon)
   })
 })

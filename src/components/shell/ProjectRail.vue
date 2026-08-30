@@ -42,7 +42,7 @@ const props = defineProps({
   configBroken: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'remove', 'add-agent', 'setup', 'add-project'])
+const emit = defineEmits(['select', 'remove', 'add-agent', 'setup', 'settings', 'add-project'])
 
 /* 28px, the tile's own size: the add button is a place for a project standing
    in a column of projects, so it is the same box. */
@@ -112,6 +112,7 @@ const openMenu = (project, event) => {
 
 const pick = (item, path) => {
   if (item.kind === 'setup') emit('setup', path, item.existing)
+  else if (item.kind === 'settings') emit('settings', path)
   else if (item.kind === 'add-agent') emit('add-agent', path)
   else if (item.kind === 'remove') emit('remove', path)
 }

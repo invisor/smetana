@@ -68,6 +68,7 @@ import {
   Search,
   Settings,
   Settings2,
+  SlidersHorizontal,
   Sparkles,
   Square,
   SquareCheck,
@@ -216,6 +217,11 @@ export const iconNodes = {
   'hard-drive': HardDrive,
   settings: Settings,
   'settings-2': Settings2,
+  /* The project tile's menu, for editing `[defaults]` in the project's own
+     file. Deliberately not `settings-2` beside it: that row starts the setup
+     agent, this one adjusts a value, and two adjacent rows under one glyph
+     read as one row with a stutter. */
+  'sliders-horizontal': SlidersHorizontal,
   plus: Plus,
   minus: Minus,
   gauge: Gauge,
