@@ -15,7 +15,56 @@ the same reasoning that keeps settings out of a worker. `model.rs` is the vocabu
 logic (entry sorting, the `..` check, the name check, the binary sniff, the ceilings: 1000 entries
 per directory, 2 MB per file) and carries most of the tests; `fs.rs` is the disk; `commands.rs` is
 thin commands over it — the reads (`files_list`, `files_read`, `files_stat`) and the writes
-(`files_write`, `files_create`, `files_mkdir`, `files_trash`).
+(`files_write`, `files_create`, `files_mkdir`, `files_trash`, `files_copy`, `files_move`,
+`files_rename`).
+
+**The last three are three verbs and not one with a flag**, and the split is by what the argument
+is. `files_rename` takes a **name**, so what checks it is `resolve_new_within` — the folder-and-name
+split `files_create` is built on, where a name already taken is a plain refusal because somebody
+typed that one. `files_copy` and `files_move` take a **folder**, so what they check instead is that
+one is not inside the other, on the canonicalized pair (`is_inside`) rather than on the two relative
+strings, which cannot see a symlink pointing back into the folder being dragged. Both of them run
+their work off the runtime, for `files_list`'s rule and different arithmetic: no process, but a walk
+of a folder and then the bytes of it.
+
+Four decisions under them. **Nothing is ever overwritten and nothing is ever asked** — the entry
+keeps its own name where that is free and takes `copy_candidates`' next one where it is not
+(`report copy.md`, `report copy 2.md`, VS Code's rule, in `model.rs` because it is a rule about a
+string), which is what replaced a "replace or keep both" dialog. **A free name is claimed by trying,
+never by reading the directory first**: `create_new`, `create_dir` and `symlink` refuse when
+something is there, so the first success is the winner, where listing and then creating is a race an
+agent writing into the same folder can win and the prize is somebody else's file. **A symlink is
+copied as a symlink and never followed**, the same reasoning that keeps `move_to_trash` from
+canonicalizing the last component — which also settles the question of cycles, since nothing is
+walked through, and which is why `fs.rs`'s `copy_children` is deliberately **not** the `copy_tree` in
+`tracker/backup.rs`: that one follows a directory link on purpose and keeps a visited set, because a
+backup missing what a link pointed at would claim to be complete and would not be. Making the two
+agree would reintroduce whichever defect the other was written against. And there is a **ceiling of
+10 000 entries or 1 GiB**, counted from the metadata before a byte is written, the third of this
+module's ceilings and there for the reason the other two are: no progress bar, no cancel, no watcher,
+so a copy of `node_modules` is a frozen panel for an unknown number of minutes. Copying everything
+the way VS Code does was considered and turned down — VS Code has the progress and the cancel this
+does not. The same walk refuses **anything that is not a file, a folder or a link**: a named pipe is
+one entry and zero bytes, so no ceiling covers it, and `fs::copy` opening one blocks until a writer
+appears — a worker parked for the life of the process and a promise that never resolves.
+
+**The claim-by-trying rule holds for two of the three verbs and not for the move, and that is the
+exception worth knowing before trusting the paragraph above.** `fs::rename` replaces whatever is at
+the destination without a word, and the conditional form is Linux's alone (`renameat2`), so
+`put_move` looks at the name first and renames second, with a window between the two that nothing in
+this module closes; `rename_entry` carries the same window, its check being
+`resolve_new_within`'s refusal. Everything that *makes* something — a copy, a new file, a new folder
+— cannot overwrite anything whoever else is writing into the folder. A move can, narrowly, and in an
+app whose premise is other agents writing into the same tree that is worth saying out loud.
+
+A move that `rename` refuses with `EXDEV` — the destination is on another filesystem, which happens
+inside one project as soon as part of it is mounted separately — falls back to a copy and a **real**
+delete rather than the trash: a move that left a copy in somebody's Trash reads as half done. The
+copy ceiling rides along with that fallback, since the fallback is a copy, and it is the one refusal
+in this feature a person cannot act on: the same drag of the same folder succeeds instantly within
+one volume and comes back `tooBig` across two, with nothing on screen that could explain the
+difference. It is the honest half of a bad choice — the alternative is an unbounded copy with no
+progress and no cancel, which is the frozen panel the ceiling exists to prevent.
 
 **A listing is a `read_dir` and one spawn of git**, and that second half is new: the module spawned
 nothing at all for most of its life. `list_dir` ends by asking `git check-ignore -z --stdin` which of

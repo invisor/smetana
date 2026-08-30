@@ -28,6 +28,15 @@ describe('error texts', () => {
     expect(files.fileErrorText({ kind: 'timeout' })).toBe('Git took too long and was stopped.')
   })
 
+  /* The two kinds `files_copy` and `files_move` make. Nothing on screen calls
+     either command yet, which is exactly why the pair is pinned here: the menu
+     that will call them is a later task, and a kind missing from the table
+     falls back to a sentence about reading a file with nothing failing. */
+  it('a copy refused for its own reasons does not fall back to a sentence about reading', () => {
+    expect(files.fileErrorText({ kind: 'intoSelf' })).toBe('A folder cannot be put inside itself.')
+    expect(files.fileErrorText({ kind: 'tooBig' })).toBe('That is too much to copy at once.')
+  })
+
   it('a write speaks about writing, not about reading', () => {
     expect(files.saveErrorText({ kind: 'denied' })).toBe('No permission to write this file.')
   })

@@ -3,6 +3,31 @@
 //! `model.rs` is the vocabulary and the pure logic and carries the tests,
 //! `fs.rs` is the disk, `commands.rs` is thin commands over it.
 //!
+//! **Copying, moving and renaming are three verbs and not one with a flag.** A
+//! rename takes a **name**, and what checks a name is `resolve_new_within` —
+//! the split into a folder and a name that `files_create` is built on — while a
+//! copy and a move take a **folder** and check that one is not inside the
+//! other. Two of the three carry ceilings of their own (`MAX_COPY_ENTRIES`,
+//! `MAX_COPY_BYTES`) for the reason every ceiling here exists: there is no
+//! progress bar, no cancel and no watcher, so an unbounded copy is a frozen
+//! panel with nothing on screen to say why. A name already taken is never
+//! overwritten and never asked about — the newcomer takes the next name,
+//! `report copy.md` and then `report copy 2.md`.
+//!
+//! **With one exception, and it is the property that costs somebody a file, so
+//! it is written here and not only where it lives.** A copy claims a name by
+//! *trying* to make the entry — `create_new`, `create_dir`, `symlink` all
+//! refuse when something is there — and cannot overwrite anything, whoever else
+//! is writing into the folder. A **move** cannot be built that way: `fs::rename`
+//! replaces whatever is at the destination without a word, and a conditional
+//! rename exists on Linux alone (`renameat2`), so `put_move` looks first and
+//! renames second and there is a window between the two. `rename_entry` carries
+//! the same window for the same reason. What closes it in practice is that the
+//! loop only reaches a second name because the first was taken — and what does
+//! not close it is anything in this module, which is why an agent writing into
+//! the destination folder at that instant is a real, if narrow, way to lose a
+//! file.
+//!
 //! **A listing is a `read_dir` and one spawn of git.** It was only the first for
 //! most of this module's life, and `fs.rs`'s header still opens on what follows
 //! from that — no worker, no queue, no watcher — which is all still true. What is
