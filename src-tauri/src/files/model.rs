@@ -20,6 +20,25 @@ pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// How many bytes we sniff for binariness.
 pub const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 
+/// How many entries one copy may carry, and how many bytes. The module already
+/// keeps two ceilings of this kind — 1000 entries per listing, 2 MB per file —
+/// and this is the third for the same reason: there is no progress bar in this
+/// app, no cancel button and no watcher over the tree, so a copy of
+/// `node_modules` is a frozen panel for an unknown number of minutes with
+/// nothing on screen to say what is happening or how to stop it. Counted by
+/// walking the metadata before a single byte is written, so the refusal arrives
+/// with nothing half-done behind it.
+///
+/// "Copy everything, the way VS Code does" was considered and turned down: VS
+/// Code can afford it because it has the progress and the cancel this does not.
+pub const MAX_COPY_ENTRIES: usize = 10_000;
+pub const MAX_COPY_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// How many names a copy tries before giving up. A hundred `report copy N.md`
+/// in one folder is somebody's script gone wrong, not somebody's work, and
+/// trying forever would be a loop with the disk in it.
+pub const MAX_COPY_NAMES: usize = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryKind {
@@ -95,6 +114,10 @@ pub enum FilesError {
     AlreadyExists(String),
     #[error("a name that cannot be used: {0:?}")]
     BadName(String),
+    #[error("a folder cannot be put inside itself: {0}")]
+    IntoSelf(String),
+    #[error("too much to copy at once: {path} ({entries} entries, {bytes} bytes)")]
+    TooBig { path: String, entries: usize, bytes: u64 },
     #[error("{0}")]
     Io(String),
 }
@@ -115,6 +138,8 @@ impl FilesError {
             Self::Stale(_) => "stale",
             Self::AlreadyExists(_) => "alreadyExists",
             Self::BadName(_) => "badName",
+            Self::IntoSelf(_) => "intoSelf",
+            Self::TooBig { .. } => "tooBig",
             Self::Io(_) => "io",
         }
     }
@@ -257,6 +282,67 @@ pub fn reject_bad_name(name: &str) -> Result<(), FilesError> {
         return Err(FilesError::BadName(name.to_owned()));
     }
     Ok(())
+}
+
+/// The names a copy may take, in the order they are to be tried:
+/// `report copy.md`, then `report copy 2.md`, and so on to
+/// `MAX_COPY_NAMES`. VS Code's rule, and it is a rule about a string, which is
+/// what puts it here rather than in `fs.rs`.
+///
+/// Where the extension starts is the whole of the difficulty, and three cases
+/// settle it. The stem is everything up to the **last** dot, so
+/// `archive.tar.gz` becomes `archive.tar copy.gz` and not `archive copy.tar.gz`
+/// — the compound suffix is not a thing this can know about. A **leading** dot
+/// is part of the name and not a separator, so `.gitignore` becomes
+/// `.gitignore copy` rather than ` copy.gitignore`. And a directory has no
+/// extension at all whatever dots are in it: `some.dir` becomes
+/// `some.dir copy`, because `some copy.dir` would rename the folder.
+///
+/// Nothing here is ever overwritten and nothing is ever asked. That was decided
+/// in place of a "replace or keep both" dialog: a copy is a gesture somebody
+/// makes in passing, and a modal over it is a question they did not come to
+/// answer.
+pub fn copy_candidates(name: &str, is_dir: bool) -> Vec<String> {
+    let (stem, ext) = split_extension(name, is_dir);
+    (1..=MAX_COPY_NAMES)
+        .map(|n| {
+            if n == 1 {
+                format!("{stem} copy{ext}")
+            } else {
+                format!("{stem} copy {n}{ext}")
+            }
+        })
+        .collect()
+}
+
+/// The stem and the extension — the extension carrying its own dot, so the two
+/// halves join back into the original with nothing in between.
+fn split_extension(name: &str, is_dir: bool) -> (&str, &str) {
+    if is_dir {
+        return (name, "");
+    }
+    match name.rfind('.') {
+        Some(at) if at > 0 => name.split_at(at),
+        // No dot at all, or a leading one and nothing else: the name is all stem.
+        _ => (name, ""),
+    }
+}
+
+/// Whether `child` is `parent` or lies under it. What a folder may not be
+/// copied or moved into.
+///
+/// `Path::starts_with` compares **components** and not characters, which is the
+/// only reason this is one line: `/p/srcx` does not start with `/p/src` the way
+/// the two strings do. The other half of the rule cannot be seen from here and
+/// belongs to the caller — both paths have to be canonicalized first, because a
+/// relative string does not see a symlink, and the folder dropped into may be a
+/// link back into the folder being dragged.
+///
+/// A folder counts as inside itself, deliberately: copying a folder into itself
+/// is the same refusal as copying it into its own child, and saying so once is
+/// what stops the caller writing the equality case out by hand.
+pub fn is_inside(parent: &Path, child: &Path) -> bool {
+    child.starts_with(parent)
 }
 
 #[cfg(test)]
@@ -406,6 +492,11 @@ mod tests {
         assert_eq!(FilesError::Stale("a".into()).kind(), "stale");
         assert_eq!(FilesError::AlreadyExists("a".into()).kind(), "alreadyExists");
         assert_eq!(FilesError::BadName("a".into()).kind(), "badName");
+        assert_eq!(FilesError::IntoSelf("a".into()).kind(), "intoSelf");
+        assert_eq!(
+            FilesError::TooBig { path: "a".into(), entries: 9, bytes: 9 }.kind(),
+            "tooBig"
+        );
         assert_eq!(FilesError::Io("a".into()).kind(), "io");
     }
 
@@ -449,6 +540,69 @@ mod tests {
         assert!(matches!(reject_bad_name("/"), Err(FilesError::BadName(_))));
         assert!(matches!(reject_bad_name("./a.txt"), Err(FilesError::BadName(_))));
         assert!(matches!(reject_bad_name("a/."), Err(FilesError::BadName(_))));
+    }
+
+    #[test]
+    fn a_copy_is_named_the_way_vs_code_names_one() {
+        let names = copy_candidates("report.md", false);
+        assert_eq!(names[0], "report copy.md");
+        assert_eq!(names[1], "report copy 2.md");
+        assert_eq!(names[2], "report copy 3.md");
+    }
+
+    #[test]
+    fn a_name_with_no_extension_takes_the_word_on_the_end() {
+        let names = copy_candidates("Makefile", false);
+        assert_eq!(names[0], "Makefile copy");
+        assert_eq!(names[1], "Makefile copy 2");
+    }
+
+    /// A leading dot is part of the name and not the start of an extension: a
+    /// copy named "space copy dot gitignore" would be a file nobody asked for
+    /// and git would never read.
+    #[test]
+    fn a_dotfile_is_all_stem() {
+        let names = copy_candidates(".gitignore", false);
+        assert_eq!(names[0], ".gitignore copy");
+        assert_eq!(names[1], ".gitignore copy 2");
+    }
+
+    /// The **last** dot separates, so a compound suffix keeps only its last
+    /// part. `archive copy.tar.gz` would read better and would mean this
+    /// function knows which suffixes are compound, which it cannot.
+    #[test]
+    fn only_the_last_dot_separates_the_extension() {
+        assert_eq!(copy_candidates("archive.tar.gz", false)[0], "archive.tar copy.gz");
+    }
+
+    /// A directory has no extension whatever dots are in its name: `some copy.dir`
+    /// would be a folder renamed rather than a folder copied.
+    #[test]
+    fn a_directory_has_no_extension_to_keep() {
+        let names = copy_candidates("some.dir", true);
+        assert_eq!(names[0], "some.dir copy");
+        assert_eq!(names[1], "some.dir copy 2");
+    }
+
+    #[test]
+    fn a_hundred_names_are_offered_and_not_one_more() {
+        let names = copy_candidates("report.md", false);
+        assert_eq!(names.len(), MAX_COPY_NAMES);
+        assert_eq!(names.len(), 100, "the loop over them has the disk in it");
+        assert_eq!(names[99], "report copy 100.md");
+    }
+
+    #[test]
+    fn a_folder_is_inside_itself_and_inside_nothing_that_merely_starts_alike() {
+        let src = Path::new("/p/src");
+        assert!(is_inside(src, Path::new("/p/src/components")), "a descendant is inside");
+        assert!(is_inside(src, src), "and a folder counts as inside itself");
+        assert!(
+            !is_inside(src, Path::new("/p/srcx")),
+            "a longer name sharing a prefix is a neighbour, which components see and characters do not"
+        );
+        assert!(!is_inside(src, Path::new("/p")), "the parent is not inside the child");
+        assert!(!is_inside(src, Path::new("/q/src")), "and neither is a namesake elsewhere");
     }
 
     #[test]

@@ -63,6 +63,16 @@ const ERRORS = {
      see MAKE_ERRORS, which is where a person actually meets them. */
   alreadyExists: NAME_TAKEN,
   badName: NAME_REFUSED,
+  /* And the last two, from `files_copy` and `files_move`, which nothing on
+     screen calls yet — the menu that will is a later task. They are written now
+     for the reason the four above them are: an unknown kind falls back
+     silently, so a refused folder copy would read "Could not read this file."
+     with no error anywhere and both suites green. `intoSelf` is a folder
+     dropped onto itself or onto something under it; `tooBig` is the ceiling on
+     a copy, 10 000 entries or 1 GiB, which exists because there is no progress
+     bar here and no way to cancel. */
+  intoSelf: 'A folder cannot be put inside itself.',
+  tooBig: 'That is too much to copy at once.',
   io: 'Could not read this file.'
 }
 
