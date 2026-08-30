@@ -6,14 +6,18 @@
    this repository can reach a `.vue`, so a rule left inside the component is a
    rule nothing checks.
 
-   The menu holds the three actions the row already carries, and it is not a
-   copy of the row's visibility rules. Each of those rules has two halves — the
-   gear appears while the project is active *and* has no configuration, the plus
-   while it is active *and* the agents panel is open — and the menu keeps only
-   the first half of each. Dropping the second half is the point rather than an
-   oversight: a person who asked for this menu asked for the verb, and a row
-   that offers a button only in one panel is answering a different question
-   about where the button should sit. */
+   Three of the four items are actions the row already carries, and the menu is
+   not a copy of the row's visibility rules for them. Each of those rules has
+   two halves — the gear appears while the project is active *and* has no
+   configuration, the plus while it is active *and* the agents panel is open —
+   and the menu keeps only the first half of each. Dropping the second half is
+   the point rather than an oversight: a person who asked for this menu asked
+   for the verb, and a row that offers a button only in one panel is answering a
+   different question about where the button should sit.
+
+   The fourth, `settings`, has no counterpart on the row at all: a 28px tile has
+   room for a monogram and a dot, and editing `[defaults]` in the project's own
+   `.smetana/project.toml` had no door in the app before this menu. */
 
 /* Why the two project-scoped verbs are refused elsewhere, and where that reason
    is written. `ContextMenu` clips a row's label rather than wrapping it and
@@ -30,6 +34,19 @@
    would be for a menu whose rows are refused for *different* reasons, and this
    one has never been that. */
 const ELSEWHERE = 'Switch to this project first'
+
+/* Two more refusals, and both are the settings item's alone. They take the same
+   shape as `ELSEWHERE` and for the same reason recorded above it: a reason
+   suffixed onto a label runs off the end of the panel, and a caption is the one
+   kind of row this menu wraps.
+
+   Each points at the setup item, which stays live under it — the form cannot
+   help in either case, and running the setup is what can. How far a caption
+   reaches is read off the greying beneath it, so the item it refuses sits
+   immediately below it and a live row sits immediately below that: the reach is
+   one row, and it looks like one row. */
+const UNSET = 'Set this project up first'
+const BROKEN = "This project's configuration will not parse"
 
 /* `configured` and `configBroken` are measured for the active project alone —
    probing every row would be a command per project for a mark nobody reads —
@@ -49,6 +66,18 @@ export function projectMenuItems({ active, configured, configBroken, canAddAgent
      to be a button in the run dialog. */
   const existing = here && Boolean(configured || configBroken)
 
+  /* The form draws parsed values, so it wants `configured` and nothing looser.
+     `existing` above is deliberately wider — a damaged file is still a file,
+     which is what the setup dialog's words hang on — and the two must not be
+     confused: a broken configuration is exactly the case where the setup is the
+     answer and the form is not, since there are no values to put in its
+     fields. */
+  const canEdit = here && Boolean(configured)
+  /* Nothing on another row: `ELSEWHERE` already greys the whole group there,
+     and a second caption under it would be this row claiming to know something
+     about a project nobody measured. */
+  const refusal = !here || canEdit ? null : configBroken ? BROKEN : UNSET
+
   return [
     ...(here ? [] : [{ type: 'label', label: ELSEWHERE }]),
     {
@@ -61,6 +90,23 @@ export function projectMenuItems({ active, configured, configBroken, canAddAgent
          the words in the menu and the words in the dialog cannot disagree. */
       existing,
       disabled: !here
+    },
+    ...(refusal ? [{ type: 'label', label: refusal }] : []),
+    {
+      /* Editing `[defaults]` in the project's own file, without starting
+         anything. The setup item above is the other verb about the same file
+         and is not a substitute for this one: it costs a session and takes no
+         instruction, which is the right price for "this project grew a fourth
+         repository" and the wrong one for "run three tasks at a time, not
+         five". */
+      kind: 'settings',
+      label: 'Project settings',
+      /* Not `settings-2`, which the setup item above already carries: two
+         adjacent rows under one glyph read as one row with a stutter, and these
+         two verbs are genuinely different — one adjusts a value, the other
+         starts an agent. */
+      icon: 'sliders-horizontal',
+      disabled: !canEdit
     },
     {
       kind: 'add-agent',

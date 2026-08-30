@@ -259,6 +259,7 @@ pub fn run() {
       vcs::commands::vcs_file_at_rev,
       vcs::commands::vcs_compare,
       runs::commands::project_config,
+      runs::commands::project_config_save_defaults,
       runs::commands::browser_tools,
       runs::commands::run_start,
       runs::commands::run_stop,

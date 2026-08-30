@@ -276,6 +276,81 @@ declarative where the work is mechanical and prose where it needs judgement — 
 the lead reads, because two branches emitting the same migration number off one base is not a
 pattern, it is a thing to look for.
 
+**The app writes exactly four keys of that file and never any others** (smetana-2cfl). `[defaults]` —
+`target_branch`, `min_priority`, `max_parallel_tasks`, `review_passes` — is edited from a dialog off
+the project tile's right-click menu, and everything else stays the setup agent's. The split is by
+what a person reaches for between runs: those four are scalars somebody turns while watching a board,
+where the rest is a description of the machinery — commands, gate lists, paths, and the prose above —
+that is discovered by looking at the folder rather than chosen in a form. "Set up again" is unchanged
+and is still the answer to "this project grew a fourth repository"; it costs a session and takes no
+instruction, which is the wrong price for "run three at a time, not five".
+
+The write is `config::with_defaults`, **surgical through `toml_edit` and never a serde round trip**.
+`toml::to_string` keeps no comment and returns the keys in the struct's order, so somebody who
+changed one number would find the file reordered and a colleague's note gone — and `[merge].hazards`
+is by design a paragraph a lead reads. Four rules hold it up, each with a test of its own:
+`target_branch` with no value is the key **removed**, never `target_branch = ""`, because the field
+is an `Option<String>` and `None` is what makes the run dialog fall back to the branch the project is
+on; a missing `[defaults]` table is created rather than refused, since most files start without one;
+the produced text is re-parsed by `config::parse` before it reaches the disk, because a save that
+leaves behind a file the app then refuses to load turns a wrong number into a broken project; and the
+write is atomic in `settings/file.rs`'s shape — a uniquely named temporary beside the target, then a
+rename, since a rename within one directory is the only thing the filesystem promises.
+
+Four details of that pass are worth knowing before touching it, because every one of them is silent
+when got wrong.
+
+A value is **mutated in place with its decor carried across**, never assigned as a whole `Item`: a
+`Value`'s decor is the space before it and anything after it on the same line, so the obvious
+`table["min_priority"] = value(n)` turns `min_priority = 1  # the floor here` into `min_priority = 3`.
+The key's own decor survives that, which is why a comment on the line *above* is unharmed either way
+and the loss is easy to miss. A key **already saying what it should is left alone** rather than
+written again, because a replacement is rendered canonically — `Formatted::new` carries no `repr` —
+so rewriting an unchanged key would turn `target_branch = 'staging'` into `"staging"` and
+`max_parallel_tasks = 0x10` into `16` on a save that touched neither. The comparison behind that is
+of the value and not of how it was written: `Value`'s own `PartialEq` is derived over the repr and
+the decor too, and would answer "different" for exactly those two inputs. It is also what makes
+`with_defaults` idempotent structurally rather than by luck.
+
+**One comment genuinely does not survive**, and it is every comment belonging to a key that is being
+removed: choosing no target branch takes the key out, and both the line above it (the key's prefix)
+and anything after its value (the value's suffix) travel inside the `Item` that goes. That is the
+right answer rather than a gap — the only other home for either line is whichever key follows, where
+it would describe something it was never written about — and a test of that name pins it, so the
+guarantee is read with its exception. Last, the section is reached through `as_table_like_mut`, so
+the two other spellings TOML allows for it, `defaults = { … }` and the dotted
+`defaults.min_priority = 1`, are edited in their own shape rather than answered with "defaults is not
+a table", which reads as nonsense to whoever typed one.
+
+The dialog is `'project-settings'` in `dialogRegistry.js`, a window of its own on `ground:
+['project']` like the setup window and for its reason: the file belongs to the project, so a window
+left standing over a project somebody clicked away from would save four numbers into the wrong
+repository. `components/run/projectDefaults.js` is the pure half — the fall-backs, which are
+`Defaults::default()`'s own (no branch, 2, 3, 5), the bounds, the branch option list and "has
+anything changed" — and `ProjectSettingsModal.vue` draws it. The bounds are narrower than the `u8` the file holds and that is
+their purpose: the type stops 300, the bound stops the typo that spawns two hundred agents overnight.
+A stored branch the list no longer holds stays in the list as an option of its own, because opening a
+settings screen must never be a way to change a value silently.
+
+The menu item refuses in three states and each refusal is a **caption above it** rather than a suffix
+on its label, which is `projectMenu.js`'s existing rule: `ContextMenu` clips a label and gives a row
+no tooltip, so a reason on one runs off the end of the panel. Another project's row keeps the
+existing "Switch to this project first"; an active project with no file gets "Set this project up
+first"; one whose file will not parse gets "This project's configuration will not parse". The third
+is the one worth reading twice — a broken configuration is exactly what this menu was built for, and
+a form cannot help there because there are no parsed values to put in its fields, so it refuses and
+the live setup item below it is what can. How far a caption reaches is read off the greying beneath
+it, so the item it refuses sits immediately under it and a live row immediately under that.
+
+The `invoke` is `stores/runs.js`'s `saveDefaults` and not the view's, since the stores are the only
+files in `src/` that know Tauri exists, and it **re-reads through `loadConfig`** on success: without
+that the run dialog would go on offering the old defaults and the menu would keep its old
+`configured` flag, which is the app having written a value it does not itself believe. The branch
+list is `stores/git.js`'s `loadBranches`, the run dialog's own source, rather than a second read of
+the same thing. `mockBackend.js` needs nothing: a command it does not handle falls through to its
+loud refusal, which is what every write but `settings_save` already gets, and a browser has no
+project to write to.
+
 `gitignore.rs` keeps `.smetana/` out of the repository, and it is code rather than a line in the
 setup skill on purpose: an instruction in prose can be followed, argued with or quietly skipped, and
 this one was all three — an agent reading a `.gitignore` whose neighbouring lines hide the tracker

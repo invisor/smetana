@@ -14,7 +14,7 @@
    underneath; a window somebody can push aside and click past has no such
    promise. */
 
-/* The nine, and the width each one's window gets. Every one of them drew at
+/* The ten, and the width each one's window gets. Every one of them drew at
    `Modal`'s default 440 as a modal, and there is no reason for that to change
    just because the frame did — the numbers are here so that a dialog which
    outgrows it has somewhere to say so. */
@@ -30,6 +30,15 @@ const REGISTRY = {
   'delete-branch': { width: 440, ground: ['project', 'repo', 'branch'] },
   'promote-column': { width: 440, ground: ['project', 'column'] },
   'setup-project': { width: 440, ground: ['project'] },
+  /* Editing `[defaults]` in the project's own `project.toml`. The same ground
+     as the setup window and for the same reason: the file belongs to the
+     project, so a window left standing over a project somebody has clicked away
+     from would save four numbers into the wrong repository. A window of its own
+     rather than one more tab in the settings window, which is about
+     `settings.json` — this machine's preferences, written by the app — where
+     `project.toml` is a file in somebody's repository, committed and shared
+     with whoever else works in it. */
+  'project-settings': { width: 440, ground: ['project'] },
   'delete-task': { width: 440, ground: ['project', 'issue'] },
   'ready-task': { width: 440, ground: ['project', 'issue'] },
   /* Deleting a Claude Code transcript. Its ground is the project and nothing
@@ -71,6 +80,7 @@ const DIALOG_NOUN = {
   'delete-branch': 'delete branch',
   'promote-column': 'promote column',
   'setup-project': 'project setup',
+  'project-settings': 'project settings',
   'delete-task': 'delete',
   'ready-task': 'move to ready',
   'delete-session': 'delete session'

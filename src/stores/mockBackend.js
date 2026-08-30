@@ -183,6 +183,37 @@ const DIALOG_PROPS = {
     existing: false,
     busy: false
   },
+  /* The other window about the same file, and the one with fields in it.
+     `branches` is the `target_branches` answer above rather than the panel's
+     list, for the `run` fixture's reason: the field is filled from the same
+     command, and a window offering branches the project behind it could not
+     merge into would be two fixtures disagreeing about one project.
+
+     None of the four is `DEFAULTS_FALLBACK`'s, and that is the point of the
+     fixture rather than a taste in numbers — though not for quite the reason
+     the `run` fixture gives above, and the difference is worth having straight.
+     `RunModal` really does carry its own fall-backs, so a fixture matching them
+     draws the same screen announced or not. This form carries none: its
+     `defaults` prop defaults to `{}`, so an unannounced window draws empty
+     fields under "Between…" lines, which is exactly what the browser saw before
+     this fixture existed. What the numbers buy here is that the screen differs
+     from **every** fall-back in the chain, so it is proof that the announcement
+     arrived *and* was seeded — and `DEFAULTS_FALLBACK` is the one set that
+     could stop being proof, if that prop default were ever tidied to it.
+     `?view=dialog&kind=project-settings` is this project's only check of any of
+     that. */
+  'project-settings': {
+    title: 'Project settings',
+    defaults: {
+      target_branch: 'main',
+      min_priority: 1,
+      max_parallel_tasks: 6,
+      review_passes: 2
+    },
+    branches: MOCK_TARGET_BRANCHES,
+    busy: false,
+    error: ''
+  },
   /* Deleting a Claude Code transcript. The record is the first row of
      `mockSessions` above, so what this window says in a browser is what the
      Sessions tab behind it holds — the same rule the `ready-task` fixture keeps

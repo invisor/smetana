@@ -179,6 +179,173 @@ pub fn load(root: &Path) -> ConfigState {
     }
 }
 
+/// Rewrite `[defaults]` in a file's text, leaving every other byte alone.
+///
+/// Through `toml_edit` rather than by serializing `ProjectConfig` back out,
+/// and the difference is the point: this file is written by the setup agent
+/// and edited by people, so it holds comments and prose (`[merge].hazards` is
+/// explicitly text a lead reads). A serde round trip drops every comment and
+/// reorders the keys into the struct's order, so somebody changing one number
+/// would find a colleague's note gone.
+///
+/// **One comment does not survive, and it is the one attached to a key that is
+/// being removed.** Choosing no target branch takes `target_branch` out, and
+/// every comment belonging to that key goes with it — the one written above it,
+/// which is the key's prefix, and one written after the value on the same line,
+/// which is the value's suffix. Both travel inside the `Item` being removed.
+/// That is the right answer rather than a gap: the only other place to put
+/// either line is on whichever key follows, where it would describe something it
+/// was never written about. The test of the same name pins it, so the guarantee
+/// above is read with its one exception.
+///
+/// The result is parsed again before it is returned. A save that leaves behind
+/// a file the app then refuses to load turns a wrong number into a broken
+/// project, and that is the one failure worth spending a check on.
+pub fn with_defaults(text: &str, defaults: &Defaults) -> Result<String, String> {
+    // The whole file has to parse first: an edit applied to a damaged file
+    // would write back a repair nobody asked for.
+    parse(text)?;
+
+    let mut doc = text.parse::<toml_edit::DocumentMut>().map_err(|err| err.to_string())?;
+
+    // `as_table_like_mut` rather than `as_table_mut`, so that the two other
+    // spellings TOML allows for this section are edited instead of refused:
+    // `defaults = { min_priority = 1 }` on one line, and the dotted
+    // `defaults.min_priority = 1`. Neither is what the setup agent writes and
+    // both are things a person may have typed, to whom "defaults is not a
+    // table" reads as nonsense. What is left of that refusal is a `defaults`
+    // that is not a table at all, which cannot reach here: `parse` above has
+    // already had its say.
+    let table = doc
+        .entry("defaults")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_like_mut()
+        .ok_or_else(|| "defaults is not a table".to_string())?;
+
+    match &defaults.target_branch {
+        Some(branch) => set_value(table, "target_branch", branch.as_str().into()),
+        // Removed, never emptied — see the test of the same name.
+        None => {
+            table.remove("target_branch");
+        }
+    }
+    set_value(table, "min_priority", i64::from(defaults.min_priority).into());
+    set_value(table, "max_parallel_tasks", i64::from(defaults.max_parallel_tasks).into());
+    set_value(table, "review_passes", i64::from(defaults.review_passes).into());
+
+    let out = doc.to_string();
+    parse(&out)?;
+    Ok(out)
+}
+
+/// One key set, keeping whatever was written around the value it replaces.
+///
+/// The obvious spelling — `table["min_priority"] = toml_edit::value(n)` —
+/// silently loses a trailing comment. `IndexMut` replaces the whole `Item`, and
+/// a `Value`'s decor is the space before it and **anything after it on the same
+/// line**, so `min_priority = 1  # the floor for this project` comes back as
+/// `min_priority = 3`. The key's own decor survives that, which is why a comment
+/// on the line above is unharmed either way and the loss is easy to miss.
+/// Mutating the value in place and carrying its decor across is what makes the
+/// promise in `with_defaults`'s header true of both positions.
+fn set_value(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::Value) {
+    match table.get_mut(key).and_then(|item| item.as_value_mut()) {
+        // Already saying what it should. Left alone rather than written again,
+        // because a replacement is re-rendered canonically — `Formatted::new`
+        // carries no `repr`, so the way the person spelled it is dropped — and
+        // a save that changed some other field would turn `target_branch =
+        // 'staging'` into `"staging"` and `max_parallel_tasks = 0x10` into
+        // `16`. Both are inside the four keys this form owns, so neither
+        // breaches the promise in `with_defaults`'s header; both are the
+        // miniature of exactly what that promise exists to prevent — change one
+        // number, find a line you did not touch rewritten. It also makes
+        // `with_defaults` idempotent structurally rather than by luck.
+        Some(existing) if unchanged(existing, &value) => {}
+        Some(existing) => {
+            let decor = existing.decor().clone();
+            *existing = value;
+            *existing.decor_mut() = decor;
+        }
+        // A key that was not there. Nothing was written around it, so there is
+        // nothing to carry and the default `key = value` spacing is right.
+        None => {
+            table.insert(key, toml_edit::Item::Value(value));
+        }
+    }
+}
+
+/// Whether the file already says this, comparing the **value** and not how it
+/// was written.
+///
+/// `Value`'s own `PartialEq` is derived over the repr and the decor as well, so
+/// it would answer "different" for the one input that matters here: a hex
+/// integer, or a literal string, holding the number or the name being written.
+/// Only the two shapes `with_defaults` ever writes are compared; anything else
+/// answers "different" and is written, which is the safe direction.
+fn unchanged(existing: &toml_edit::Value, value: &toml_edit::Value) -> bool {
+    match value {
+        toml_edit::Value::Integer(n) => existing.as_integer() == Some(*n.value()),
+        toml_edit::Value::String(text) => existing.as_str() == Some(text.value().as_str()),
+        _ => false,
+    }
+}
+
+/// Read, rewrite, write back atomically.
+///
+/// The temporary file is created in the same directory and renamed over the
+/// target, which is the shape `settings/file.rs` already uses and for its
+/// reason: a rename within one directory is the only thing the filesystem
+/// promises to do atomically. Its name carries the pid and a counter for that
+/// file's reason too — two overlapping writes sharing one name would have the
+/// first rename what the second had not finished writing.
+///
+/// A file that is not there is refused rather than created. This edits four
+/// keys of a configuration; the rest of it is the setup agent's, and a file
+/// holding nothing but `[defaults]` would not load at all — `[project].repos`
+/// has no default.
+pub fn save_defaults(root: &Path, defaults: &Defaults) -> Result<(), String> {
+    let path = path_in(root);
+    let text =
+        std::fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let out = with_defaults(&text, defaults)?;
+
+    let temp = temp_path(&path);
+    if let Err(err) = write_all(&temp, &out) {
+        // We clean up after ourselves: the name is unique, and there is nobody
+        // to reuse a half-written file anyway.
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("{}: {err}", temp.display()));
+    }
+    std::fs::rename(&temp, &path).map_err(|err| {
+        let _ = std::fs::remove_file(&temp);
+        format!("{}: {err}", path.display())
+    })
+}
+
+/// A counter for temp files. Together with the pid it gives a name no other
+/// write has — neither in this process nor in a neighbouring one.
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `project.<pid>.<n>.tmp` beside the target, in `.smetana/` rather than in the
+/// system temp directory: a rename across filesystems is not a rename at all.
+fn temp_path(path: &Path) -> PathBuf {
+    let n = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!("project.{}.{n}.tmp", std::process::id());
+    match path.parent() {
+        Some(dir) => dir.join(name),
+        None => PathBuf::from(name),
+    }
+}
+
+/// Flushed before the rename: without that a power loss could make the rename
+/// durable and not what is in the file.
+fn write_all(temp: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(temp)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +510,331 @@ notes = "The stand comes up from the live-staging worktrees."
             ConfigState::Ok { config } => assert_eq!(config.project.repos, ["."]),
             other => panic!("expected Ok, got {other:?}"),
         }
+        std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// The four keys are set, and everything the person wrote around them stays
+    /// exactly where it was. This is the whole reason the write goes through
+    /// `toml_edit` rather than through a serde round trip.
+    ///
+    /// Byte for byte against a literal rather than three `contains` calls, and
+    /// the difference is not pedantry: `contains` passes over a file whose
+    /// sections have been reordered, whose blank lines have been collapsed and
+    /// whose keys inside `[defaults]` have swapped places — which is most of
+    /// what the serde round trip would have got wrong.
+    #[test]
+    fn setting_the_defaults_keeps_comments_and_every_other_key() {
+        let before = "\
+# how this project is laid out
+[project]
+repos = [\"backend\", \"frontend\"]
+
+[defaults]
+# the branch everything lands on
+target_branch = \"staging\"
+min_priority = 1
+max_parallel_tasks = 4
+review_passes = 3
+
+[merge]
+hazards = \"two branches emitting one migration number\"
+";
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 3,
+            max_parallel_tasks: 2,
+            review_passes: 7,
+        };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert_eq!(after, "\
+# how this project is laid out
+[project]
+repos = [\"backend\", \"frontend\"]
+
+[defaults]
+# the branch everything lands on
+target_branch = \"main\"
+min_priority = 3
+max_parallel_tasks = 2
+review_passes = 7
+
+[merge]
+hazards = \"two branches emitting one migration number\"
+");
+
+        let parsed = parse(&after).expect("the result parses");
+        assert_eq!(parsed.defaults, wanted);
+        assert_eq!(parsed.project.repos, ["backend", "frontend"]);
+        assert_eq!(
+            parsed.merge.expect("the merge section").hazards.as_deref(),
+            Some("two branches emitting one migration number")
+        );
+    }
+
+    /// A comment written *after* a value, on the same line. It is the value's
+    /// decor rather than the key's, so it is the one a whole-`Item` assignment
+    /// silently drops — and the failure is easy to miss, because a comment on
+    /// the line above rides on the key and survives either way. `set_value`
+    /// carries the decor across, and this is what says so.
+    #[test]
+    fn a_comment_after_a_value_survives_the_value_changing() {
+        let before = "\
+[project]
+repos = [\".\"]
+
+[defaults]
+min_priority = 1  # the floor for this project
+max_parallel_tasks = 4
+review_passes = 3
+";
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 3,
+            max_parallel_tasks: 2,
+            review_passes: 7,
+        };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert_eq!(after, "\
+[project]
+repos = [\".\"]
+
+[defaults]
+min_priority = 3  # the floor for this project
+max_parallel_tasks = 2
+review_passes = 7
+target_branch = \"main\"
+");
+    }
+
+    /// The one comment that does not survive, pinned so that the guarantee
+    /// above is read with its exception rather than as a promise about every
+    /// line in the file. Both of its positions are here, because "above" is the
+    /// one a reader will check and it is not the only one: a comment above the
+    /// key is that key's prefix and a comment after the value is that value's
+    /// suffix, and removing the key takes the whole `Item` with both inside it.
+    ///
+    /// That is the right answer rather than a gap: the only other place to put
+    /// either line is on whichever key follows, where it would describe
+    /// something it was never written about.
+    #[test]
+    fn removing_the_branch_takes_every_comment_belonging_to_that_key() {
+        let before = "\
+[project]
+repos = [\".\"]
+
+[defaults]
+# the branch everything lands on
+target_branch = \"staging\"  # and the one it is on today
+min_priority = 1
+";
+
+        let after = with_defaults(before, &Defaults::default()).expect("rewrite the defaults");
+
+        assert_eq!(after, "\
+[project]
+repos = [\".\"]
+
+[defaults]
+min_priority = 2
+max_parallel_tasks = 3
+review_passes = 5
+");
+    }
+
+    /// A key whose value is already right is left exactly as it was written.
+    ///
+    /// The two spellings here are the whole reason: a replacement is rendered
+    /// canonically, so writing them again would turn `'staging'` into
+    /// `"staging"` and `0x10` into `16` on a save that changed neither — change
+    /// one number, find two lines you did not touch rewritten. That is the
+    /// miniature of what the whole `toml_edit` argument exists to prevent.
+    ///
+    /// The second half is the property this buys: applying the same defaults
+    /// again is a no-op, so `with_defaults` is idempotent structurally rather
+    /// than by luck.
+    #[test]
+    fn a_value_that_is_already_right_keeps_the_way_it_was_written() {
+        let before = "\
+[project]
+repos = [\".\"]
+
+[defaults]
+target_branch = 'staging'
+min_priority = 1
+max_parallel_tasks = 0x10
+review_passes = 3
+";
+        let wanted = Defaults {
+            target_branch: Some("staging".into()),
+            min_priority: 3,
+            max_parallel_tasks: 16,
+            review_passes: 3,
+        };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert_eq!(after, "\
+[project]
+repos = [\".\"]
+
+[defaults]
+target_branch = 'staging'
+min_priority = 3
+max_parallel_tasks = 0x10
+review_passes = 3
+");
+        assert_eq!(with_defaults(&after, &wanted).expect("again"), after, "not idempotent");
+    }
+
+    /// The two other spellings TOML allows for this section. Neither is what
+    /// the setup agent writes and both are things a person may have typed, so
+    /// they are edited rather than refused — "defaults is not a table" reads as
+    /// nonsense to whoever wrote one of them. The exact output is pinned
+    /// because each keeps its own shape: the dotted keys stay dotted, and the
+    /// inline table stays on one line with its trailing comment.
+    #[test]
+    fn a_defaults_written_as_dotted_keys_or_inline_is_edited_rather_than_refused() {
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 0,
+            max_parallel_tasks: 1,
+            review_passes: 1,
+        };
+
+        let dotted = with_defaults("\
+defaults.min_priority = 1
+
+[project]
+repos = [\".\"]
+", &wanted).expect("dotted keys are editable");
+        assert_eq!(dotted, "\
+defaults.min_priority = 0
+defaults.target_branch = \"main\"
+defaults.max_parallel_tasks = 1
+defaults.review_passes = 1
+
+[project]
+repos = [\".\"]
+");
+        assert_eq!(parse(&dotted).expect("the result parses").defaults, wanted);
+
+        let inline = with_defaults("\
+defaults = { min_priority = 1 }  # inline
+
+[project]
+repos = [\".\"]
+", &wanted).expect("an inline table is editable");
+        assert_eq!(inline, "\
+defaults = { min_priority = 0 , target_branch = \"main\", max_parallel_tasks = 1, review_passes = 1 }  # inline
+
+[project]
+repos = [\".\"]
+");
+        assert_eq!(parse(&inline).expect("the result parses").defaults, wanted);
+    }
+
+    /// No target branch means the key is gone, not the key set to an empty
+    /// string: `Option<String>` reads absence as "fall back to the branch the
+    /// project is on", and "" is a branch name of length zero.
+    #[test]
+    fn no_target_branch_removes_the_key_rather_than_emptying_it() {
+        let before = "[project]\nrepos = [\".\"]\n\n[defaults]\ntarget_branch = \"staging\"\n";
+        let wanted = Defaults { target_branch: None, ..Defaults::default() };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert!(!after.contains("target_branch"), "the key is gone, not emptied: {after}");
+        assert_eq!(parse(&after).expect("the result parses").defaults.target_branch, None);
+    }
+
+    /// A file whose author never wrote a `[defaults]` section still has to be
+    /// editable — most files start that way, since every key in the table has a
+    /// default and the setup agent leaves out what it has nothing to say about.
+    #[test]
+    fn a_missing_defaults_table_is_created() {
+        let before = "[project]\nrepos = [\".\"]\n";
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 0,
+            max_parallel_tasks: 1,
+            review_passes: 1,
+        };
+
+        let after = with_defaults(before, &wanted).expect("rewrite the defaults");
+
+        assert!(after.contains("[defaults]"), "the section is written out: {after}");
+        assert_eq!(parse(&after).expect("the result parses").defaults, wanted);
+    }
+
+    /// A file that does not parse is refused rather than replaced. The menu
+    /// already refuses this case, and this is the back stop: the file can
+    /// change under an open window.
+    #[test]
+    fn a_file_that_will_not_parse_is_refused() {
+        let err = with_defaults("this is not toml at all [[[", &Defaults::default())
+            .expect_err("a damaged file is refused");
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn saving_writes_the_file_and_leaves_no_temporary_behind() {
+        let root = temp_root("save-defaults");
+        write_config(&root, "[project]\nrepos = [\".\"]\n\n[defaults]\nmin_priority = 1\n");
+
+        let wanted = Defaults {
+            target_branch: Some("main".into()),
+            min_priority: 4,
+            max_parallel_tasks: 2,
+            review_passes: 9,
+        };
+        save_defaults(&root, &wanted).expect("save the defaults");
+
+        match load(&root) {
+            ConfigState::Ok { config } => assert_eq!(config.defaults, wanted),
+            other => panic!("expected a loadable config, got {other:?}"),
+        }
+
+        // The temp file's name is its own per call, so we look not for a
+        // particular name but for none being left in the directory at all.
+        let leftovers: Vec<_> = std::fs::read_dir(root.join(".smetana"))
+            .expect("read the directory")
+            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+            .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "a temporary file was left behind: {leftovers:?}");
+        std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// Nothing reaches the disk over a file that will not parse — not even the
+    /// four keys that would have been perfectly good. A save that left behind a
+    /// half-repaired file would be the app deciding what somebody meant.
+    #[test]
+    fn saving_over_a_damaged_file_changes_nothing_on_disk() {
+        let root = temp_root("save-defaults-damaged");
+        let damaged = "this is not toml at all [[[";
+        write_config(&root, damaged);
+
+        let err = save_defaults(&root, &Defaults::default()).expect_err("a damaged file is refused");
+
+        assert!(!err.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(path_in(&root)).expect("the file is still there"),
+            damaged
+        );
+        std::fs::remove_dir_all(&root).expect("clean up");
+    }
+
+    /// A file that is not there is refused rather than created: this edits four
+    /// keys of a configuration, and the rest of one is the setup agent's.
+    #[test]
+    fn saving_over_a_file_that_is_not_there_is_refused() {
+        let root = temp_root("save-defaults-missing");
+        let err = save_defaults(&root, &Defaults::default()).expect_err("there is no file to edit");
+        assert!(!err.is_empty());
         std::fs::remove_dir_all(&root).expect("clean up");
     }
 

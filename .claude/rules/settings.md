@@ -384,6 +384,14 @@ window renders in `?view=gallery` too. The sections themselves are a closed list
 vocabulary, and an unknown section opens on General. Git sits between Kanban and Storage rather than
 at the end, because the tabs before Storage are settings and Storage is the one that is not.
 
+**A project's own run configuration is deliberately not a tab here** (smetana-2cfl). This window
+is about `settings.json` — this machine's preferences, written by the app, in the app's own data
+directory — where `.smetana/project.toml` is a file in somebody's repository, committed, shared with
+whoever else works in it, and about one project rather than about the app. A tab for it would put two
+different kinds of thing behind one door and would then have to explain, on the tab itself, that this
+one travels with the repository. It is a dialog window of its own instead, `'project-settings'`, off
+the project tile's right-click menu; `.claude/rules/runs.md` carries the whole of it.
+
 A tab is a stack of `SettingsRow`s, and where a run of them belongs together it is wrapped in
 `SettingsGroup`. The group draws two marks and they say different halves of one thing: a **caption**
 in mono caps with a hairline running out to the right edge, and a **spine** — `border-left` in

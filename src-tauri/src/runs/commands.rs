@@ -20,6 +20,28 @@ pub fn project_config(project: String) -> ConfigState {
     config::load(Path::new(&project))
 }
 
+/// The four keys of `[defaults]`, written back — the one part of a run
+/// configuration this app edits itself. Everything else in the file is the
+/// setup agent's, and `[merge].hazards` in particular is prose a lead reads,
+/// which is why the write is a surgical `toml_edit` pass rather than a serde
+/// round trip. `config::save_defaults` carries the whole of that argument.
+///
+/// Fallible, unlike `project_config` above, and deliberately: reading has a
+/// state for every outcome and writing does not. "There is no file" and "the
+/// file will not parse" are both real answers here, and both have to reach the
+/// person who pressed Save rather than being folded into a shrug.
+///
+/// The menu already refuses both, so this is the back stop — the file can
+/// change under an open window, and a project somebody set up in a text editor
+/// while the dialog stood open is exactly the case a form cannot repair.
+#[tauri::command]
+pub fn project_config_save_defaults(
+    project: String,
+    defaults: config::Defaults,
+) -> Result<(), String> {
+    config::save_defaults(Path::new(&project), &defaults)
+}
+
 /// What this project's runs may merge into: every local branch of every
 /// repository `[project].repos` names, and which of them each branch is
 /// missing from.
@@ -282,6 +304,63 @@ mod tests {
         // as a choice rather than as the empty field it came from.
         assert_eq!(wanted(Some("   ".into()), || "claude".into()), "claude");
         assert_eq!(wanted(Some(String::new()), || "claude".into()), "claude");
+    }
+
+    /// The command is a thin wrapper, so what it owes a test is the pair the
+    /// wrapper decides: a good save reaches the file, and a bad one comes back
+    /// as a message rather than as a panic.
+    #[test]
+    fn saving_the_defaults_reaches_the_file() {
+        let root = scratch("command-save-defaults");
+        config(&root, "[project]\nrepos = [\".\"]\n");
+
+        project_config_save_defaults(
+            root.to_string_lossy().into_owned(),
+            config::Defaults {
+                target_branch: Some("develop".into()),
+                min_priority: 1,
+                max_parallel_tasks: 6,
+                review_passes: 2,
+            },
+        )
+        .expect("save the defaults");
+
+        match config::load(&root) {
+            ConfigState::Ok { config } => {
+                assert_eq!(config.defaults.target_branch.as_deref(), Some("develop"));
+                assert_eq!(config.defaults.max_parallel_tasks, 6);
+            }
+            other => panic!("expected a loadable config, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn saving_the_defaults_over_a_damaged_file_answers_with_the_parse_error() {
+        let root = scratch("command-save-defaults-broken");
+        config(&root, "this is not toml at all [[[");
+
+        let err = project_config_save_defaults(
+            root.to_string_lossy().into_owned(),
+            config::Defaults::default(),
+        )
+        .expect_err("a damaged file is refused");
+        assert!(!err.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn saving_the_defaults_where_there_is_no_file_answers_rather_than_panicking() {
+        // The other of the two refusals, and the one the menu words differently:
+        // a project nobody has set up has nothing for a form to draw.
+        let root = scratch("command-save-defaults-absent");
+        let err = project_config_save_defaults(
+            root.to_string_lossy().into_owned(),
+            config::Defaults::default(),
+        )
+        .expect_err("there is no file to edit");
+        assert!(!err.is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

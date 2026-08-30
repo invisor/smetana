@@ -79,6 +79,7 @@ import {
   ScopeIndicator,
   SectionHeader,
   SegmentedTabs,
+  ProjectSettingsModal,
   ReportView,
   SessionRow,
   Select,
@@ -2253,6 +2254,43 @@ const menuTargetStyle = {
       </div>
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <SetupProjectModal :open="true" name="holiday-curb" existing @close="() => {}" @confirm="() => {}" />
+      </div>
+      <!-- The other window about the same file, and the one that changes it
+           without starting anything. Deliberately not on its defaults: a form
+           showing 2, 3 and 5 with no branch proves nothing about the fields,
+           and the branch here is one `branchOptions` had to keep because the
+           list no longer holds it. -->
+      <div :style="{ position: 'relative', height: '600px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ProjectSettingsModal
+          :open="true"
+          :defaults="{
+            target_branch: 'release/7',
+            min_priority: 1,
+            max_parallel_tasks: 6,
+            review_passes: 2
+          }"
+          :branches="everywhere('main', 'staging')"
+          @close="() => {}"
+          @save="() => {}"
+        />
+      </div>
+      <!-- And the shape a refusal takes: the command's own message under the
+           fields, which is what "the file will not parse" looks like when the
+           file changed under an open window. -->
+      <div :style="{ position: 'relative', height: '600px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ProjectSettingsModal
+          :open="true"
+          :defaults="{
+            target_branch: 'main',
+            min_priority: 0,
+            max_parallel_tasks: 16,
+            review_passes: 10
+          }"
+          :branches="everywhere('main', 'staging')"
+          error="unknown field `gate` — .smetana/project.toml could not be read"
+          @close="() => {}"
+          @save="() => {}"
+        />
       </div>
       <!-- Cutting a branch, from a row in the branch list. Live, because the
            line under the field is the half worth looking at: type a space or
