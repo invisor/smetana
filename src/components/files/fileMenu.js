@@ -9,11 +9,13 @@
    `newTabMenu.js` and `onNewTab` make, where a row renamed on one side draws
    perfectly and does nothing at all when pressed. The test pins this side.
 
-   All eight items are live now. The three that write to disk — New file, New
-   folder and Delete — were drawn greyed by the first half of this work and are
-   given their behaviour by the second, which is why the shape of the panel has
-   not moved: a menu that grows two rows in the middle a week after somebody
-   learned it is a menu whose muscle memory was worth nothing.
+   Every item is live. The panel has grown once since, by the five rows of the
+   clipboard group, and that is the one shape change this menu has had: the
+   three that write to disk — New file, New folder and Delete — were drawn
+   greyed by the first half of that work and given their behaviour by the
+   second, deliberately without moving anything, because a menu that grows two
+   rows in the middle a week after somebody learned it is a menu whose muscle
+   memory was worth nothing.
 
    Delete is the one row in this app that asks a second time in place. The first
    pick redraws it as "Click again to confirm" and leaves the panel open — that
@@ -68,9 +70,19 @@ export function fileManagerName(userAgent = '') {
 const NOTHING_TO_ATTACH_TO = 'no agent to type into'
 const NOTHING_SELECTED = 'select an agent first'
 
-/* The eight rows, in the order and the grouping the design was drawn in:
-   two about opening, two about making, two about copying, then the one that
-   reaches out of this window and the one that destroys.
+/* And why Paste is refused, in the same form and for the same reason. Two
+   causes, two sentences: nothing has been copied yet, or something has and the
+   folder under the pointer is inside it. The second is the check
+   `fileClipboard.js` makes and `files/fs.rs` makes again — this row is where a
+   person meets it, before the call rather than after it, which is the whole
+   point of greying rather than refusing. */
+const NOTHING_COPIED = 'nothing copied yet'
+const PASTE_INTO_SELF = 'cannot paste a folder into itself'
+
+/* The thirteen rows, in the order and the grouping the design was drawn in:
+   two about opening, two about making, five about the clipboard, two about
+   copying a path, then the one that reaches out of this window and the one that
+   destroys.
 
    `target` is `'file'`, `'dir'` or `'root'`; the last is the menu the empty
    space below the tree opens, and it is the whole of the difference between the
@@ -78,6 +90,14 @@ const NOTHING_SELECTED = 'select an agent first'
    greyed row says "not now", and neither verb has any meaning about a project's
    own root — there is no file to hand an agent and nothing anybody should be
    offered a way to delete.
+
+   The clipboard group is the same choice made a third time. Cut, Copy,
+   Duplicate and Rename say nothing at all about a project's own root, so the
+   root menu keeps Paste alone out of the five — a paste into the root is
+   ordinary, and it is the one of the group that has somewhere to land. Paste is
+   the row that is greyed instead of absent wherever it appears, because "not
+   now" is exactly what it means: copy something, or pick a folder that is not
+   inside what was copied, and it lights.
 
    `canAttach` is deliberately not called `hasAgentSession`, which is a different
    question and a live export of `stores/terminals.js`: that one counts a start
@@ -95,6 +115,14 @@ export function fileMenuItems({
   canAttach = false,
   hasLiveAgent = false,
   confirmingDelete = false,
+  /* Whether the clipboard has something the folder this menu is about can take,
+     and, when it has not, which of the two reasons that is. Both come from
+     `canPasteInto` in `fileClipboard.js` through `FileTree.vue` — the rule is
+     one function and this file only puts its answer into words. A caller that
+     passes neither gets the greyed row with the commonest of the two reasons,
+     which is also the true one before anything has ever been copied. */
+  canPaste = false,
+  pasteReason = 'empty',
   userAgent = ''
 } = {}) {
   const root = target === 'root'
@@ -109,6 +137,32 @@ export function fileMenuItems({
        of what the pair says. */
     { kind: 'new-file', label: 'New file', icon: 'file-plus' },
     { kind: 'new-folder', label: 'New folder', icon: 'folder-plus' },
+    { type: 'separator' },
+    /* The clipboard group, between the making rows and the two that copy a
+       path — the making verbs and these five are all about entries on disk,
+       while Copy path is about a string, and the separator is where the subject
+       changes.
+
+       Four of the five are absent on the root and Paste is not; see the header.
+       Duplicate takes no part in the clipboard at all — it is a copy into the
+       folder the entry is already in, so it neither reads the record nor
+       replaces it, which is why nothing about it is ever greyed. */
+    ...(root ? [] : [{ kind: 'cut', label: 'Cut', icon: 'scissors' }]),
+    ...(root ? [] : [{ kind: 'copy', label: 'Copy', icon: 'copy' }]),
+    {
+      kind: 'paste',
+      label: canPaste
+        ? 'Paste'
+        : `Paste — ${pasteReason === 'intoSelf' ? PASTE_INTO_SELF : NOTHING_COPIED}`,
+      icon: 'clipboard-paste',
+      disabled: !canPaste
+    },
+    ...(root
+      ? []
+      : [
+          { kind: 'duplicate', label: 'Duplicate', icon: 'copy-plus' },
+          { kind: 'rename', label: 'Rename', icon: 'pencil' }
+        ]),
     { type: 'separator' },
     { kind: 'copy-path', label: 'Copy path', icon: 'copy' },
     { kind: 'copy-relative-path', label: 'Copy relative path', icon: 'copy' }

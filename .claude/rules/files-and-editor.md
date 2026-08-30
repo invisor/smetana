@@ -242,6 +242,44 @@ mid-word. What the typed name comes to is `files/newEntry.js`, three outcomes ra
 an empty field is a cancel and says nothing, a name no entry can carry is a refusal with a sentence,
 and neither goes near Rust.
 
+**Renaming is that same draft row, filled**, drawn *in place of* the row it is about rather than
+beside it, with the part before the extension selected — `stemRange` in `files/renameName.js`, which
+is what VS Code selects and the part somebody is nearly always changing. A modal was rejected for
+the reason the making verbs already rejected one. The field's own key is what a cancel is checked
+against and deliberately not the folder or the path: a draft replaced by another unmounts the first
+field, and the `blur` that follows on the way out would otherwise cancel the draft that replaced it.
+
+**Between the making rows and the two "copy path" rows sits the clipboard group** — Cut, Copy,
+Paste, Duplicate, Rename — and on the root menu only Paste of the five survives, the same choice
+already made for Attach to agent and Delete: absent rather than greyed, because a greyed row says
+"not now" and these say "never". Paste is the exception and *is* greyed, with its reason written
+into the label (`Paste — nothing copied yet`, `Paste — cannot paste a folder into itself`), because
+"not now" is exactly what it means and because `ContextMenu` clips a row rather than wrapping it and
+gives it no tooltip, so a reason kept anywhere else is a reason nobody reads.
+
+The record itself is `filesState.clipboard` — `{ paths, mode }`, `mode` being `copy` or `cut`, an
+array although the tree selects one entry so that multiple selection does not change the shape
+later. Cut and Copy touch no disk at all: the whole verb is that record, which is what makes cutting
+a folder of any size instant and changing one's mind free. A cut row is drawn at
+`--attn-quiet-opacity` until the record is used or replaced, VS Code's signal and the only thing on
+screen saying a cut is pending; it is the *only* thing, since nothing has happened on disk. A move
+clears the record when the record is about the path that moved, and a copy deliberately keeps it —
+pasting one thing into three folders is one gesture repeated. Duplicate takes no part in it at all:
+it is `files_copy` into the entry's own folder, so a pending cut survives one. Whether a paste is
+offered at all is `files/fileClipboard.js`'s `canPasteInto`, pure and outside the component for the
+family's reason, and it asks the same question `refuse_into_self` asks in Rust — this copy greys the
+row *before* a click, the Rust one is what stays true when a symlink is in the path.
+
+**After a move or a rename, open tabs follow the file** (`renameTab` in `stores/tabs.js`): the id
+changes and the buffer travels whole, unsaved text, `mtime` and dirtiness included, because unlike a
+delete the file is still there and its timestamp has not moved, so the buffer is as valid as it was.
+Closing them was the alternative and it throws away somebody's place in a file for nothing. Diff
+tabs over a moved path are the one thing closed rather than carried — their left side is
+`vcs_file_at_head`, where the file is still under its old name — and they are found the way
+`deleteEntry` finds them, never by the bare `tab.path`. `expanded` and `selectedPath` are rewritten
+rather than dropped. Both folders are re-listed, source and destination, because there is still no
+watcher, and a pasted or duplicated file opens as a permanent tab the way a newly created one does.
+
 Delete asks a second time **in the row itself**: the first pick redraws it as "Click again to
 confirm" and leaves the panel up, the second deletes, and anything else — Esc, a click outside, a
 scroll, another row — leaves nothing done. That is the one change this work made to the shared

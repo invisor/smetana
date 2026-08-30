@@ -39,19 +39,24 @@ describe('fileManagerName', () => {
 })
 
 describe('fileMenuItems', () => {
-  it('offers eight rows in five groups', () => {
+  it('offers thirteen rows in six groups', () => {
     const items = fileMenuItems({ target: 'file', canAttach: true, userAgent: MAC })
     expect(kinds(items)).toEqual([
       'open-terminal',
       'reveal',
       'new-file',
       'new-folder',
+      'cut',
+      'copy',
+      'paste',
+      'duplicate',
+      'rename',
       'copy-path',
       'copy-relative-path',
       'attach',
       'delete'
     ])
-    expect(separators(items)).toBe(4)
+    expect(separators(items)).toBe(5)
   })
 
   it('draws the reveal row with the platform in it', () => {
@@ -65,8 +70,11 @@ describe('fileMenuItems', () => {
     expect(dir).toEqual(file)
   })
 
-  it('leaves nothing on the menu greyed, now that the three writing rows write', () => {
-    const items = fileMenuItems({ target: 'file', canAttach: true })
+  it('leaves nothing on the menu greyed once every row has something to act on', () => {
+    // Paste is the one row that is greyed rather than absent where it cannot
+    // act, so it is given something to paste here: what is being checked is
+    // that no *other* row is off in the ordinary state.
+    const items = fileMenuItems({ target: 'file', canAttach: true, canPaste: true })
     const off = items.filter((item) => item.disabled).map((item) => item.kind)
     expect(off).toEqual([])
   })
@@ -156,17 +164,18 @@ describe('fileMenuItems', () => {
     expect(on.map((item) => item.disabled)).toEqual([false, false])
   })
 
-  it('leaves the two row-only verbs out of the root menu rather than greying them', () => {
+  it('leaves the row-only verbs out of the root menu rather than greying them', () => {
     const items = fileMenuItems({ target: 'root', canAttach: true })
     expect(kinds(items)).toEqual([
       'open-terminal',
       'reveal',
       'new-file',
       'new-folder',
+      'paste',
       'copy-path',
       'copy-relative-path'
     ])
-    expect(separators(items)).toBe(2)
+    expect(separators(items)).toBe(3)
   })
 
   it('still offers the root both copies', () => {
@@ -188,6 +197,86 @@ describe('fileMenuItems', () => {
       .map((item) => item.icon)
     expect(named.length).toBeGreaterThan(0)
     for (const name of named) expect(iconNodes).toHaveProperty(name)
+  })
+})
+
+describe('the clipboard group', () => {
+  it('offers all five verbs on a file and the same five on a folder', () => {
+    const file = kinds(fileMenuItems({ target: 'file', canPaste: true }))
+    const dir = kinds(fileMenuItems({ target: 'dir', canPaste: true }))
+    for (const present of [file, dir]) {
+      expect(present).toEqual(
+        expect.arrayContaining(['cut', 'copy', 'paste', 'duplicate', 'rename'])
+      )
+    }
+  })
+
+  it('offers only paste on the root, and leaves the other four out entirely', () => {
+    // The same choice Attach to agent and Delete already made here: absent
+    // rather than greyed, because a greyed row says "not now" and these say
+    // "never" — cut, copy, duplicate and rename mean nothing about a project's
+    // own root.
+    const present = kinds(fileMenuItems({ target: 'root', canPaste: true }))
+    expect(present).toContain('paste')
+    expect(present).not.toContain('cut')
+    expect(present).not.toContain('copy')
+    expect(present).not.toContain('duplicate')
+    expect(present).not.toContain('rename')
+  })
+
+  it('sits between the making rows and the two that copy a path', () => {
+    const present = kinds(fileMenuItems({ target: 'file', canPaste: true }))
+    expect(present.indexOf('cut')).toBe(present.indexOf('new-folder') + 1)
+    expect(present.indexOf('copy-path')).toBe(present.indexOf('rename') + 1)
+  })
+
+  it('says in the label why paste is off when nothing was copied', () => {
+    // A row here has no tooltip and no title: a reason kept anywhere but the
+    // label is a reason nobody reads.
+    const paste = find(fileMenuItems({ target: 'file', canPaste: false, pasteReason: 'empty' }), 'paste')
+    expect(paste).toMatchObject({ label: 'Paste — nothing copied yet', disabled: true })
+  })
+
+  it('says in the label why paste is off inside the copied folder', () => {
+    const paste = find(
+      fileMenuItems({ target: 'dir', canPaste: false, pasteReason: 'intoSelf' }),
+      'paste'
+    )
+    expect(paste).toMatchObject({ label: 'Paste — cannot paste a folder into itself', disabled: true })
+  })
+
+  it('greys paste on the root with its reason too, since that is the one row there', () => {
+    const paste = find(fileMenuItems({ target: 'root' }), 'paste')
+    expect(paste).toMatchObject({ label: 'Paste — nothing copied yet', disabled: true })
+  })
+
+  it('says the bare verb when there is something to paste', () => {
+    const paste = find(fileMenuItems({ target: 'file', canPaste: true }), 'paste')
+    expect(paste).toMatchObject({ label: 'Paste', disabled: false })
+  })
+
+  it('greys nothing but paste, whatever the clipboard holds', () => {
+    for (const canPaste of [true, false]) {
+      const off = fileMenuItems({ target: 'file', canAttach: true, canPaste })
+        .filter((item) => item.disabled)
+        .map((item) => item.kind)
+      expect(off).toEqual(canPaste ? [] : ['paste'])
+    }
+  })
+
+  it('gives duplicate a glyph of its own rather than the one copy already wears twice', () => {
+    // Copy and Copy path are three rows apart under `copy`; a third row wearing
+    // it would leave the group told apart by its labels alone.
+    const items = fileMenuItems({ target: 'file' })
+    expect(find(items, 'duplicate').icon).toBe('copy-plus')
+    expect(find(items, 'copy').icon).toBe('copy')
+    expect(find(items, 'copy-path').icon).toBe('copy')
+  })
+
+  it('closes the panel on every one of the five: none of them asks a second time', () => {
+    const group = ['cut', 'copy', 'paste', 'duplicate', 'rename']
+    const items = fileMenuItems({ target: 'file', canPaste: true })
+    for (const kind of group) expect(find(items, kind).keepOpen).toBeUndefined()
   })
 })
 

@@ -225,6 +225,8 @@ import { RAIL_EXPAND, headerLabel, nextFromHeader, nextFromRail } from './leftCh
 import { folderRefusedHasReset, folderRefusedNotice } from './folderAccess.js'
 import {
   basenameOf,
+  copyEntry,
+  copyErrorText,
   createDir,
   createFile,
   fileErrorText,
@@ -232,8 +234,12 @@ import {
   isStubPath,
   listDir,
   makeErrorText,
+  moveEntry,
   refreshDirs,
+  renameEntry,
+  renameErrorText,
   saveErrorText,
+  setClipboard,
   setRoot,
   statFiles,
   trashErrorText,
@@ -263,6 +269,7 @@ import {
   openFile,
   promote,
   reloadTab,
+  renameTab,
   restoreTabs,
   saveTab,
   saveTabs,
@@ -3591,14 +3598,198 @@ async function deleteEntry(path) {
   await listDir(parentOf(path))
 }
 
+/* What an entry that has just appeared earns on screen, for the two verbs that
+   produce one out of another: the folder it landed in is re-read — the tree has
+   no watcher, so whoever changed a folder re-reads it — the row is selected,
+   and a file opens as a permanent tab rather than a preview, since it was asked
+   for a moment ago and a tab the next click would replace is not what somebody
+   wants. A folder is expanded instead, which is the same answer in the tree's
+   own terms.
+
+   Deliberately not shared with the tail of `makeEntry`, which reads almost the
+   same and differs in the one thing that matters: that verb *knows* which of
+   the two it made and this one has to ask. A copy answers with a path and
+   nothing else, so which it is comes off the listing just read — and a folder
+   made by hand is expanded without being selected, where one pasted is both,
+   because a paste is a destination somebody chose and a new folder is a place
+   they are about to fill. */
+async function revealMade(path, dir) {
+  await listDir(dir)
+  project.selectedPath = path
+  const made = filesState.dirs.get(dir)?.entries.find((entry) => entry.path === path)
+  /* Nothing at all when the listing did not come back — a refused read, or a
+     read of that folder already in flight, which `listDir` declines to start a
+     second time. `openFile` on a guess would open a tab over a folder and show
+     `notAFile` in it; the row is selected either way, and the next window focus
+     brings the listing. */
+  if (!made) return
+  if (made.kind === 'dir') {
+    if (!project.expanded.includes(path)) project.expanded.push(path)
+    await listDir(path)
+  } else {
+    openFile(path, { permanent: true })
+  }
+}
+
+/* The tidying a move or a rename owes, and the whole of what makes it different
+   from a delete: the file is still there.
+
+   Open tabs follow it. `renameTab` changes the id and moves the buffer whole —
+   unsaved text, `mtime` and dirtiness included — because the file has not
+   changed and neither has its timestamp, so the buffer is as valid as it was a
+   moment ago. Closing them the way `deleteEntry` closes them was the
+   alternative and it throws away somebody's place in a file for nothing.
+
+   Diff tabs are the one thing closed rather than carried. Their left-hand side
+   is `vcs_file_at_head`, where the file is still under the name it had, so a
+   diff that followed the move would be a diff against the wrong thing. They are
+   found exactly as `deleteEntry` finds them — through `diffTabs`, converted
+   into the tree's path space with `relativeTo`, never against the bare
+   `tab.path`, which is relative to a repository and not to the project — and
+   the reasoning there covers this line too.
+
+   `expanded` and `selectedPath` are settings, and both would otherwise keep
+   naming a path that is not there: harmless on screen and permanent in
+   `settings.json`. They are rewritten rather than dropped, since the folder
+   they named is open and still is. */
+function followMove(from, to) {
+  const under = (other) => other === from || other.startsWith(`${from}/`)
+  const moved = (other) => `${to}${other.slice(from.length)}`
+  /* Taken before anything moves: `tabList` is computed off the very list
+     `renameTab` splices, and `diffTabs` is the list `closeDiff` splices. */
+  const moving = tabList.value
+    .filter((tab) => (tab.kind === 'file' || tab.kind === 'preview') && under(tab.id))
+    .map((tab) => tab.id)
+  const closingDiffs = diffTabs
+    .filter((tab) => {
+      const rel = relativeTo(filesState.root, `${tab.repo}/${tab.path}`)
+      return rel !== null && under(rel)
+    })
+    .map((tab) => tab.id)
+  for (const id of moving) renameTab(id, moved(id))
+  for (const id of closingDiffs) closeDiff(id)
+  for (let i = 0; i < project.expanded.length; i += 1) {
+    if (under(project.expanded[i])) project.expanded[i] = moved(project.expanded[i])
+  }
+  if (project.selectedPath && under(project.selectedPath)) {
+    project.selectedPath = moved(project.selectedPath)
+  }
+}
+
+/* Paste, which is a copy or a move depending on what put the record there. The
+   record itself is `filesState.clipboard` and the only place it is read.
+
+   One path out of the array, because the tree selects one entry: the shape is
+   plural so that multiple selection does not change it later, and taking the
+   first is what the rest of this will do until it arrives.
+
+   The destination was checked before the menu was drawn — `canPasteInto` greys
+   the row for a folder inside what was copied — and it is checked again in
+   Rust. That is not the same check twice for nothing: the first is a label
+   somebody reads instead of a click that fails, and the second is the one that
+   stays true when a symlink is in the path. */
+async function pasteInto(dir) {
+  const record = filesState.clipboard
+  const source = record?.paths[0]
+  if (!source) return
+  const cut = record.mode === 'cut'
+  try {
+    const made = cut ? await moveEntry(source, dir) : await copyEntry(source, dir)
+    if (cut) {
+      followMove(source, made)
+      /* Both folders, since nothing else will: the one that lost a row and, in
+         `revealMade`, the one that gained it. */
+      await listDir(parentOf(source))
+    }
+    await revealMade(made, dir)
+  } catch (error) {
+    sayFileMenu({
+      tone: 'error',
+      title: cut ? 'Nothing was moved' : 'Nothing was pasted',
+      description: copyErrorText(error)
+    })
+  }
+}
+
+/* Duplicate: a copy into the folder the entry is already in, in one action and
+   with no clipboard in it at all — which is why it neither reads the record nor
+   replaces it, and why a pending cut survives one.
+
+   The name is the back end's: nothing here overwrites and nothing asks, so
+   `report.md` beside a `report.md` becomes `report copy.md`, then
+   `report copy 2.md`. */
+async function duplicateEntry(path) {
+  const dir = parentOf(path)
+  try {
+    await revealMade(await copyEntry(path, dir), dir)
+  } catch (error) {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Nothing was duplicated',
+      description: copyErrorText(error)
+    })
+  }
+}
+
+/* The new name the draft row was typed with, and the rule about it is
+   `newEntry.js`'s — the same one `makeEntry` applies and for the same reason:
+   an empty field is somebody who changed their mind and is answered with
+   silence, and a name no entry can carry is answered here rather than by a trip
+   across the IPC.
+
+   A third answer this one has and making does not: the name typed back exactly
+   as it was. `files_rename` would refuse it as `alreadyExists`, which is true
+   and would put a red toast over a change nobody made, so it is a cancel. The
+   comparison is against the **trimmed** name, since a person who typed
+   " a.txt " over `a.txt` changed nothing either.
+
+   Nothing is opened and nothing is selected that was not: the entry was already
+   on screen, and the tab over it — if there was one — has followed it. */
+async function renameEntryTo(path, typed) {
+  const { verdict, name } = checkNewName(typed)
+  if (verdict === 'nothing' || name === basenameOf(path)) return
+  if (verdict === 'refused') {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Nothing was renamed',
+      description: renameErrorText({ kind: 'badName' })
+    })
+    return
+  }
+  try {
+    const made = await renameEntry(path, name)
+    followMove(path, made)
+    await listDir(parentOf(path))
+  } catch (error) {
+    sayFileMenu({
+      tone: 'error',
+      title: 'Nothing was renamed',
+      description: renameErrorText(error)
+    })
+  }
+}
+
 const onFileAction = async ({ kind, path, target, name }) => {
   const root = filesState.root
   if (kind === 'create-file' || kind === 'create-dir') {
     /* `path` is the folder the draft row sat in — the tree worked that out when
        it opened the field, since that is where the row was drawn. */
     await makeEntry(kind === 'create-dir' ? 'dir' : 'file', path, name)
+  } else if (kind === 'commit-rename') {
+    /* `path` is the entry the draft row was drawn over, and `name` is what was
+       typed into it — the same shape the two making verbs come back in. */
+    await renameEntryTo(path, name)
   } else if (kind === 'delete') {
     await deleteEntry(path)
+  } else if (kind === 'copy' || kind === 'cut') {
+    /* No disk and no await: cutting a folder of any size is a record, which is
+       what makes it instant and what makes changing one's mind free. The row is
+       drawn muted from here until the record is used or replaced. */
+    setClipboard([path], kind)
+  } else if (kind === 'paste') {
+    await pasteInto(folderOf({ path, target }))
+  } else if (kind === 'duplicate') {
+    await duplicateEntry(path)
   } else if (kind === 'open-terminal') {
     await newTerminal(folderOf({ path, target }))
   } else if (kind === 'reveal') {
@@ -3617,8 +3808,9 @@ const onFileAction = async ({ kind, path, target, name }) => {
   } else if (kind === 'attach') {
     await attachToAgent(absolutePath(root, path))
   }
-  /* `new-file` and `new-folder` never arrive here: they put a field in the tree
-     and come back later as `create-file` or `create-dir` with a name. */
+  /* `new-file`, `new-folder` and `rename` never arrive here: all three put a
+     field in the tree and come back later as `create-file`, `create-dir` or
+     `commit-rename` with a name. */
 }
 
 /* One question for all unsaved tabs. It comes up in three places and the
@@ -4268,6 +4460,7 @@ const toastStackStyle = {
                 :selected-path="project.selectedPath ?? undefined"
                 :can-attach="attachTarget !== null"
                 :has-live-agent="hasLiveAgent"
+                :clipboard="filesState.clipboard"
                 @toggle="toggleDir"
                 @select="onSelectFile"
                 @open="onOpenFile"

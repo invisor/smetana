@@ -22,10 +22,20 @@
    a click elsewhere is a field nothing on screen explains, and because the tree
    redraws under it whenever `catchUp` re-lists the folder. The name goes up raw:
    what a name typed here comes to is `newEntry.js`'s, which is a rule and lives
-   where a test can reach it. */
+   where a test can reach it.
+
+   Renaming is the same row and deliberately not a component of its own, drawn
+   **in place of** the row it is about rather than beside it. Everything above
+   holds word for word — a modal in the middle of the screen cannot say which
+   entry is being renamed, and the row's own position can — and the whole of the
+   difference is `value`: the field opens filled, with the part before the
+   extension selected. That selection is `renameName.js`'s rule and is what VS
+   Code selects, for the reason it selects it: `report.md` becoming
+   `summary.md` should not be a retype of `.md` as well. */
 import { computed, onMounted, ref } from 'vue'
 import { fileIconUrl, folderIconUrl } from '../../catppuccinIcon.js'
 import { documentTheme } from '../../documentTheme.js'
+import { stemRange } from './renameName.js'
 
 const props = defineProps({
   /* 'file' or 'dir' — which verb opened this, and so which glyph and which
@@ -34,6 +44,11 @@ const props = defineProps({
   /* How deep the row sits, in the same units `FileTreeRow` counts: the folder
      this is being made in, plus one. */
   depth: { type: Number, default: 0 },
+  /* The name the field opens with, and the one thing that tells a rename from a
+     making: empty is a new entry, anything else is the name of an entry that
+     already exists. Read once, on mount — the field is the person's from that
+     moment, and a prop changing under a half-typed name would take it away. */
+  value: { type: String, default: '' },
   /* Off in the gallery and nowhere else. In the app the field takes the
      keyboard the instant it appears — that is the whole gesture — but the
      gallery draws this row on a page of eighty other components, and a field
@@ -45,8 +60,16 @@ const props = defineProps({
 
 const emit = defineEmits(['commit', 'cancel'])
 
-const name = ref('')
+const name = ref(props.value)
 const field = ref(null)
+
+/* Which of the two the row is, for the words a screen reader is given. Nothing
+   visible depends on it: the field is filled in one case and empty in the
+   other, which is what a person sees. */
+const fieldLabel = computed(() => {
+  if (props.value) return props.kind === 'dir' ? 'Folder name' : 'File name'
+  return props.kind === 'dir' ? 'New folder name' : 'New file name'
+})
 
 /* One way out, taken once. Enter removes the field, and the blur that follows
    would otherwise arrive as a cancel a moment after the commit — and a cancel
@@ -60,7 +83,14 @@ const leave = (how, value) => {
 }
 
 onMounted(() => {
-  if (props.focusOnMount) field.value?.focus()
+  if (!props.focusOnMount) return
+  field.value?.focus()
+  /* After the focus and not before it: focusing a field selects all of it in
+     every browser, so a selection set first would be replaced by the whole
+     name. Only for a rename — `focus()` on an empty field has nothing to
+     select and `setSelectionRange` on it would be a no-op with an edge case
+     for company. */
+  if (props.value) field.value?.setSelectionRange(...stemRange(props.value))
 })
 
 const iconUrl = computed(() =>
@@ -118,7 +148,7 @@ const fieldStyle = {
       type="text"
       spellcheck="false"
       autocomplete="off"
-      :aria-label="kind === 'dir' ? 'New folder name' : 'New file name'"
+      :aria-label="fieldLabel"
       :placeholder="kind === 'dir' ? 'Folder name' : 'File name'"
       :style="fieldStyle"
       @keydown.enter.prevent="leave('commit', name)"
