@@ -98,12 +98,13 @@ since the log directory was not there either. Live-checked against this reposito
 worktree: the same list as the main checkout, in the same reflog order, with HEAD still reading
 per-worktree.
 
-The counters used to sit next to it and are along the bottom of the window now — `shell/StatusFooter.vue`,
-which took the project's own state off the window's title bar. Both are live, and neither of them is
-this store's. The uncommitted files are `dirtyCount` in `stores/vcs.js` — the length of the change list the Git panel draws for the
-repository selected there, so the number in the strip is the number of rows in the panel. The running
-agents are `liveAgentCount` in `stores/terminals.js` — the sessions that have not exited, plus the
-starts the worker has not answered for yet. Both are computeds in their stores rather than in
+The counters used to sit next to it and are along the bottom of the window now, in
+`shell/StatusFooter.vue`, which took the project's own state off the window's title bar. Both are
+live, and neither of them is this store's. The uncommitted files are `dirtyCount` in
+`stores/vcs.js` — the length of the change list the Git panel draws for the repository selected
+there, so the number in the strip is the number of rows in the panel. The running agents are
+`liveAgentCount` in `stores/terminals.js` — the sessions that have not exited, plus the starts the
+worker has not answered for yet. Both are computeds in their stores rather than in
 `DesktopApp.vue`, which is a rule about testability and not about tidiness: no test in this
 repository can reach a `.vue` file.
 

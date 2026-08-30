@@ -2797,9 +2797,13 @@ const menuTargetStyle = {
 
            The last three are the headline, which none of the others draw — the
            empty case is the common one and has to be seen as the strip closing
-           up rather than as a gap. Narrow the window on the live one: the
-           sentence is what gives way, and the subscription and both counters
-           keep their letters. -->
+           up rather than as a gap. The live one is also where the strip is
+           narrowed: the app's own window stops at 1024px and nothing has to
+           give up anything there, so this takes a browser dragged to about half
+           that. What must happen then is that the sentence ellipsises and goes,
+           while the subscription keeps every letter of `Claude Code Session
+           Week` and both counters keep their numbers — the sentence is the only
+           thing on the strip written to be lost. -->
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }">
         <!-- Both counters plural. -->
         <StatusFooter :usage="galleryUsage[0]" :dirty-count="12" :agents-active="3" />

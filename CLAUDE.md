@@ -98,9 +98,11 @@ something looks odd, the design system is the source of truth — match it rathe
 `src/main.js` → `src/App.vue` → either `views/DesktopApp.vue` (the three-column shell: worktree
 files + agents, tab bar over the kanban, task inspector) or `views/Gallery.vue`
 (code-split, never in the app bundle). The board is live tracker data, and so are the file tree, the
-file tabs, the agents, the branch in the scope bar and the sidebar's Git tab. What is left on the
-screen — the scope bar's dirty-file and agent counters among it — is still fixture state in
-`views/desktopAppData.js`. The right column used to end in a log pane fed from that same file; it is
+file tabs, the agents, the branch in the scope bar, the sidebar's Git tab and the status footer's two
+counters — `dirtyCount` in `stores/vcs.js`, `liveAgentCount` in `stores/terminals.js`. What is on the
+screen is no longer `views/desktopAppData.js`'s: that file is the mock backend's board, which is what
+a browser sees in place of a tracker, plus the log lines the gallery draws, and `DesktopApp.vue` does
+not read it at all. The right column used to end in a log pane fed from that same file; it is
 gone, because invented output under a real issue claimed the app knew something it did not, and a
 session's actual output is the terminal tab. `LogView` itself stays in the library and in the
 gallery — the component is fine, the fixture in the product was not.

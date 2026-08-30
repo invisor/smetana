@@ -151,13 +151,13 @@ export const vcsState = reactive({
 /* How many files in the selected repository are uncommitted — the status
    footer's uncommitted-files counter. Every kind of change counts as one file:
    staged, unstaged, untracked and conflicted alike, because that is exactly
-   what the panel's own change list draws, so the number in the bar is the
+   what the panel's own change list draws, so the number in the strip is the
    number of rows in the panel and a person can check it by looking rather than
    by counting in their head. A counter that quietly left the untracked files out
    would be a difference nobody could explain without a tooltip.
 
    `null`, never `0`, for a tree that could not be read — the rule `tree` itself
-   keeps above. An unread tree and a clean one are opposite facts, and the bar
+   keeps above. An unread tree and a clean one are opposite facts, and the strip
    answers a clean one by drawing nothing and an unread one by drawing nothing
    either; what it must not do is claim a repository with unknown contents is
    tidy. The counter is hidden for anything not greater than zero, so `null` is

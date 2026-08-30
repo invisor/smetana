@@ -1234,10 +1234,10 @@ describe('elapsed time', () => {
   })
 })
 
-/* The scope bar's second counter, which is this list minus the rows that have
-   finished. Three cases carry the whole rule: what stops counting, what keeps
+/* The status footer's second counter, which is this list minus the rows that
+   have finished. Three cases carry the whole rule: what stops counting, what keeps
    counting when it would be easiest to drop, and whose starts count. */
-describe('the live agent count in the scope bar', () => {
+describe('the live agent count in the status footer', () => {
   it('an agent that has exited is a row to read, not one that is running', async () => {
     const { stores, emit, nextTick } = await ready()
     expect(stores.terminals.liveAgentCount.value).toBe(1)
@@ -1332,7 +1332,7 @@ describe('the live agent count in the scope bar', () => {
   })
 })
 
-/* The same agents split for the scope bar's headline. What these are here to
+/* The same agents split for the status footer's headline. What these are here to
    hold is the pair of promises the sentence makes: a shell can never produce
    either half of it, and the number in "N agents running" is the number in the
    counter drawn beside it. */
@@ -1376,7 +1376,7 @@ describe('the agent counts behind the headline', () => {
      nothing is waiting, and in that case it must read exactly what the `bot`
      counter one gap away reads, tooltip and all. An idle agent — a `ready` row,
      one sitting at its prompt between turns — is the case that had them apart. */
-  it('the live half equals the scope bar counter whenever nothing is waiting', async () => {
+  it('the live half equals the status footer counter whenever nothing is waiting', async () => {
     const { ipc, stores, emit, nextTick } = await ready()
     ipc.on('terminal_create', () => new Promise(() => {}))
 

@@ -113,12 +113,22 @@ const barStyle = {
    and a run's stop button would have been a button inside a button — invalid,
    and behaved differently in each of the three webviews this app runs in. The
    row inside still stretches rather than centring, so what a person presses and
-   what the hint opens over are the same shape. */
+   what the hint opens over are the same shape.
+
+   It does not shrink, and that is what decides which half of the strip gives
+   way when there is not enough room for both. Two figures and the name of the
+   agent they belong to are short and are the same length at every reading;
+   there is nothing here to ellipsise that would not simply be lost, while the
+   other end holds a sentence written to be the thing that goes. Left
+   shrinkable, this row is what collapsed — a flex container's min-content size
+   takes the largest of its items' contributions, and the counters over there
+   contribute an unshrinkable one, so the block at the other end had no give in
+   it at all and every pixel came out of `Claude Code` instead. */
 const fillStyle = {
   display: 'inline-flex',
   alignItems: 'stretch',
   alignSelf: 'stretch',
-  flex: '0 1 auto',
+  flex: '0 0 auto',
   minWidth: 0
 }
 /* The row carries the padding, the cursor and the ring, and none of the three
@@ -142,6 +152,13 @@ const rowStyle = {
   minWidth: 0,
   padding: '0 var(--space-5)',
   cursor: 'pointer',
+  /* Nothing of this row may be painted outside it. The row is inflexible, so
+     this is a floor under a mistake rather than an everyday clip: an ancestor
+     narrower than the words would otherwise have them drawn across the
+     project's state at the other end, two sentences in one place with no rule
+     between them. It does not touch the ring below — `overflow` clips an
+     element's content, never the element's own outline. */
+  overflow: 'hidden',
   outlineOffset: 'calc(var(--border-w-strong) * -1)'
 }
 /* `Icon` takes its size as an SVG attribute, which cannot be a custom property,
@@ -179,24 +196,36 @@ const segStyle = { whiteSpace: 'nowrap', flex: '0 0 auto' }
    it. The padding is its own for the reason the row's is — the bar carries the
    ground and nothing else.
 
-   No `minWidth: 0` here, and that is the whole of how the strip gives way. A
-   flex item's automatic minimum is its min-content width, and the headline
-   inside clips its own overflow, so that minimum comes to the counters and the
-   run segments — exactly the floor this group must not shrink past. The shrink
-   factor is far above the 1 the subscription row has, so a narrow window takes
-   its space from here first, and inside here the headline is the only thing
-   with anything to give. */
+   This is the half that gives way, and with the subscription's row unable to
+   shrink it is the only one: every pixel a narrow strip is short comes out of
+   here. `minWidth: 0` is what makes that possible at all. A flex item's
+   automatic minimum is its min-content width, and a row flex container's
+   min-content size is the largest contribution over its items rather than the
+   sum of what each could give up — the counters and the run segments cannot
+   shrink, so that largest is effectively the whole of what this block draws,
+   and left at `auto` the block would be immovable while the row beside it
+   collapsed instead. Which is exactly what it did.
+
+   The floor is one level down instead, and it is a better one: the counters
+   and the run segments are ordinary flex items with `min-width: auto`, so they
+   keep their letters, and the headline is the only thing in here with anything
+   to give. */
 const stateStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
-  flex: '0 100 auto',
+  flex: '0 1 auto',
+  minWidth: 0,
   paddingRight: 'var(--space-5)'
 }
 
 /* The one segment on this strip that is a sentence rather than a name or a
-   number, which is why it is the one that ellipsises: at 900px the
-   subscription and both counters keep their letters and this gives way.
+   number, which is why it is the one that ellipsises. It is the only item in
+   the block that can: the shrink factor is far above the 1 the counters and the
+   run segments have, and `minWidth: 0` with a clipped overflow is what lets it
+   go all the way to nothing while they keep their letters. The app's own window
+   stops at 1024px (`tauri.conf.json`), so this is reached in earnest only where
+   a browser can be dragged narrower — which is `?view=gallery`.
 
    Loud takes the attention colour and the glyph below with it. Colour alone is
    what `status/status.js` refuses everywhere else, and a headline saying
