@@ -1374,8 +1374,9 @@ describe('the git panel store', () => {
 })
 
 /* The status footer's first counter. It reads the very list the panel draws,
-   and these three cases are the whole of the rule: every kind of change counts,
-   nothing to commit is zero, and a tree nobody could read is not zero. */
+   and these three cases are the whole of the rule: every kind of change
+   counts, nothing to commit is zero, and a tree nobody could read is not
+   zero. */
 describe('the uncommitted file count in the status footer', () => {
   const load = async (statusReply) => {
     const { stores, ipc } = await loadStores()

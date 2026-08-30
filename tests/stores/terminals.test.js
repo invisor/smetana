@@ -1235,8 +1235,8 @@ describe('elapsed time', () => {
 })
 
 /* The status footer's second counter, which is this list minus the rows that
-   have finished. Three cases carry the whole rule: what stops counting, what keeps
-   counting when it would be easiest to drop, and whose starts count. */
+   have finished. Three cases carry the whole rule: what stops counting, what
+   keeps counting when it would be easiest to drop, and whose starts count. */
 describe('the live agent count in the status footer', () => {
   it('an agent that has exited is a row to read, not one that is running', async () => {
     const { stores, emit, nextTick } = await ready()
