@@ -10,9 +10,23 @@
 //! other. Two of the three carry ceilings of their own (`MAX_COPY_ENTRIES`,
 //! `MAX_COPY_BYTES`) for the reason every ceiling here exists: there is no
 //! progress bar, no cancel and no watcher, so an unbounded copy is a frozen
-//! panel with nothing on screen to say why. Nothing any of them does ever
-//! overwrites anything and nothing ever asks — a name already taken means the
-//! newcomer takes the next one, `report copy.md` and then `report copy 2.md`.
+//! panel with nothing on screen to say why. A name already taken is never
+//! overwritten and never asked about — the newcomer takes the next name,
+//! `report copy.md` and then `report copy 2.md`.
+//!
+//! **With one exception, and it is the property that costs somebody a file, so
+//! it is written here and not only where it lives.** A copy claims a name by
+//! *trying* to make the entry — `create_new`, `create_dir`, `symlink` all
+//! refuse when something is there — and cannot overwrite anything, whoever else
+//! is writing into the folder. A **move** cannot be built that way: `fs::rename`
+//! replaces whatever is at the destination without a word, and a conditional
+//! rename exists on Linux alone (`renameat2`), so `put_move` looks first and
+//! renames second and there is a window between the two. `rename_entry` carries
+//! the same window for the same reason. What closes it in practice is that the
+//! loop only reaches a second name because the first was taken — and what does
+//! not close it is anything in this module, which is why an agent writing into
+//! the destination folder at that instant is a real, if narrow, way to lose a
+//! file.
 //!
 //! **A listing is a `read_dir` and one spawn of git.** It was only the first for
 //! most of this module's life, and `fs.rs`'s header still opens on what follows

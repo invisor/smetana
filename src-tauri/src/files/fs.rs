@@ -170,6 +170,7 @@ pub fn create_dir(root: &Path, dir: &str, name: &str) -> Result<String, FilesErr
 
 /// Whether a name was already taken. `Made` means the entry is there and the
 /// work behind it is done.
+#[derive(Debug)]
 enum Attempt {
     Made,
     Taken,
@@ -219,6 +220,24 @@ fn take_free_name(
     Err(FilesError::AlreadyExists(child_path(dst_rel, &names[0])))
 }
 
+/// An absolute path met inside a walk, said in the terms the caller used: the
+/// relative path they asked about, plus whatever is under it. A refusal has to
+/// name something a person can find in the tree.
+fn under(rel: &str, top: &Path, path: &Path) -> String {
+    let Ok(tail) = path.strip_prefix(top) else {
+        return path.to_string_lossy().into_owned();
+    };
+    // Component by component rather than a separator swap: a backslash is an
+    // ordinary character in a name on unix, and `child_path` says why every
+    // path leaving this module joins with `/`.
+    let parts: Vec<String> =
+        tail.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
+    if parts.is_empty() {
+        return rel.to_owned();
+    }
+    child_path(rel, &parts.join("/"))
+}
+
 /// What a copy would come to — entries and bytes — counted from the metadata
 /// before a single byte is written, so a refusal leaves nothing half-done.
 ///
@@ -229,14 +248,46 @@ fn take_free_name(
 /// The ceiling is checked as the children are pushed and not only as they are
 /// popped, which is what keeps a folder of a million names from being held in
 /// memory on the way to being refused.
+///
+/// **Anything that is not a file, a folder or a link is refused here, and that
+/// is the one refusal in this walk with a hang behind it.** A named pipe is
+/// zero bytes and one entry, so no ceiling covers it, and `list_dir` draws it
+/// as an ordinary `File` row somebody can drag — but `fs::copy` opens the
+/// source, and opening a FIFO blocks until a writer turns up. That is a
+/// `spawn_blocking` worker parked for the life of the process and an IPC
+/// promise that never resolves: no progress, no cancel, no error, which is the
+/// exact failure the ceilings exist to prevent. A socket, a device node and a
+/// door are the same shape of thing. `tracker/backup.rs` meets them too and
+/// passes over them, which is right there — a backup that refused a repair over
+/// a stray socket would refuse it to the people who came for it — and wrong
+/// here, where the person asked for *this* folder and a copy quietly missing
+/// part of it is the worse answer.
+///
+/// The path in the refusal is the offending entry's and not the top of the
+/// walk, since "not a file" about a folder somebody can plainly see is not
+/// something anybody can act on.
 fn measure(path: &Path, rel: &str) -> Result<(), FilesError> {
     let mut entries: usize = 0;
     let mut bytes: u64 = 0;
     let mut pending = vec![path.to_owned()];
     while let Some(next) = pending.pop() {
-        let meta = fs::symlink_metadata(&next).map_err(|err| io_error(rel, &err))?;
+        let meta = match fs::symlink_metadata(&next) {
+            Ok(meta) => meta,
+            // An entry that went away between being pushed and being looked at.
+            // This app supervises agents writing into the very tree being
+            // copied, so a folder changing under a metadata walk is the
+            // ordinary case; refusing the whole copy over it would name the
+            // top-level source, which is still there, and say it is missing.
+            // `tracker/backup.rs` passes over the same case for the same
+            // reason. Every other stat error still ends the walk.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(io_error(rel, &err)),
+        };
         entries += 1;
         let kind = meta.file_type();
+        if !kind.is_file() && !kind.is_dir() && !kind.is_symlink() {
+            return Err(FilesError::NotAFile(under(rel, path, &next)));
+        }
         if kind.is_symlink() {
             // One entry, no bytes and nothing under it.
         } else if kind.is_dir() {
@@ -312,15 +363,23 @@ fn put_copy(
             }
             Err(err) => return Err(io_error(rel, &err)),
         }
-        if let Err(err) = copy_tree(src, target) {
+        if let Err(err) = copy_children(src, target) {
             let _ = fs::remove_dir_all(target);
             return Err(io_error(rel, &err));
         }
         return Ok(Attempt::Made);
     }
-    // An ordinary file: `create_new` claims the name, and `fs::copy` then fills
-    // the empty file it left — which is also what carries the permissions over,
-    // so an executable script is still executable after being copied.
+    // Everything that is left has to be an ordinary file, and the check is not
+    // a formality: `fs::copy` opens the source, and opening a named pipe blocks
+    // until a writer appears — the hang `measure` refuses a moment earlier.
+    // This is the same refusal made against the metadata this call was handed,
+    // so a source swapped for a FIFO between the two is caught here.
+    if !kind.is_file() {
+        return Err(FilesError::NotAFile(rel.to_owned()));
+    }
+    // `create_new` claims the name, and `fs::copy` then fills the empty file it
+    // left — which is also what carries the permissions over, so an executable
+    // script is still executable after being copied.
     match fs::File::options().write(true).create_new(true).open(target) {
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Ok(Attempt::Taken),
@@ -339,7 +398,22 @@ fn put_copy(
 /// recreated as a link, so nothing is ever walked through, and the ceiling
 /// `measure` put on the whole copy has already been passed by the time this
 /// runs.
-fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+///
+/// **Not to be reconciled with the `copy_tree` in `tracker/backup.rs`, which is
+/// why this one does not share its name.** The two take opposite positions on
+/// the one question that matters, and each is right where it stands: that one
+/// *follows* a directory link and keeps a visited set, because a backup missing
+/// whatever a link pointed at would claim to be complete and would not be; this
+/// one never follows one, because the tree draws a link as an ordinary row and
+/// a copy that resolved it would put somebody's real file under a name they
+/// meant as a pointer. A later sweep making the two agree would reintroduce
+/// whichever defect the other was written against.
+///
+/// Anything that is neither a file, a folder nor a link is refused — the same
+/// stand `measure` takes, and here for the entries `measure` could not have
+/// seen: a pipe made inside the tree while it was being copied. The refusal is
+/// what stops `fs::copy` opening it and never coming back.
+fn copy_children(src: &Path, dst: &Path) -> std::io::Result<()> {
     for item in fs::read_dir(src)? {
         let item = item?;
         let from = item.path();
@@ -349,9 +423,14 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
             copy_link(&from, &to)?;
         } else if kind.is_dir() {
             fs::create_dir(&to)?;
-            copy_tree(&from, &to)?;
-        } else {
+            copy_children(&from, &to)?;
+        } else if kind.is_file() {
             fs::copy(&from, &to)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{}: not a file, a folder or a link", from.display()),
+            ));
         }
     }
     Ok(())
@@ -519,6 +598,15 @@ pub fn move_entry(root: &Path, src_rel: &str, dst_dir_rel: &str) -> Result<Strin
 /// ordinary refusal here and not a second candidate: somebody typed this one,
 /// and quietly renaming to something else would be an answer to a question they
 /// did not ask.
+///
+/// It carries `put_move`'s window and for `put_move`'s reason, which is stated
+/// here rather than left to be inferred from the shape: the name is looked at
+/// and then renamed onto, where every verb that *makes* something claims the
+/// name by trying. `rename` replaces whatever is at the destination without a
+/// word, and the conditional form is Linux's alone (`renameat2`), so something
+/// arriving at that name between the two calls is replaced. The refusal
+/// `resolve_new_within` makes is the check, and it is not atomic with the
+/// rename that follows it.
 pub fn rename_entry(root: &Path, rel: &str, name: &str) -> Result<String, FilesError> {
     let src = resolve_leaf_within(root, rel)?;
     if src.symlink_metadata().is_err() {
@@ -1655,6 +1743,156 @@ mod tests {
             fs::read_dir(root.join("dst")).unwrap().next().is_none(),
             "the destination is as empty as it was before either attempt"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A closure run with a deadline over it, because two of the tests below
+    /// are not about a wrong answer but about **no answer at all** — a copy
+    /// that opens a named pipe blocks until a writer appears, which would hang
+    /// the whole suite rather than fail one test in it. The thread is left
+    /// where it is if the deadline passes: it is blocked in the kernel and the
+    /// process is about to report a failure anyway.
+    #[cfg(unix)]
+    fn within_ten_seconds<T: Send + 'static>(
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(work());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10)).ok()
+    }
+
+    /// A named pipe is one entry and zero bytes, so no ceiling covers it, and
+    /// `list_dir` draws it as an ordinary `File` row somebody can drag onto a
+    /// folder. `fs::copy` would open it and wait for a writer that is never
+    /// coming — a blocking-pool worker parked for the life of the process and
+    /// an IPC promise that never resolves.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_is_refused_and_never_opened_and_waited_on() {
+        let root = scratch("copy-fifo");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::create_dir_all(root.join("folder")).unwrap();
+
+        // mkfifo(1) is on every unix this app is built for; a machine without
+        // it has nothing to make a pipe with and nothing to conclude either.
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("pipe"))
+            .arg(root.join("folder/pipe"))
+            .status();
+        if !matches!(made, Ok(status) if status.success()) {
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+
+        let named = {
+            let root = root.clone();
+            within_ten_seconds(move || copy_entry(&root, "pipe", "dst").err().map(|e| e.kind()))
+        };
+        let inside = {
+            let root = root.clone();
+            within_ten_seconds(move || {
+                copy_entry(&root, "folder", "dst").err().map(|e| (e.kind(), e.to_string()))
+            })
+        };
+
+        assert_eq!(
+            named,
+            Some(Some("notAFile")),
+            "a pipe named outright: None here means the copy never came back"
+        );
+        let inside = inside.expect("the copy of the folder holding a pipe never came back");
+        let (kind, said) = inside.expect("a folder holding a pipe cannot be copied");
+        assert_eq!(kind, "notAFile", "a pipe met inside a folder, the row nobody dragged");
+        assert!(
+            said.contains("folder/pipe"),
+            "the refusal names the offending entry and not the folder somebody can plainly see: {said}"
+        );
+        assert!(
+            fs::read_dir(root.join("dst")).unwrap().next().is_none(),
+            "the walk refuses before a byte is written, so nothing was made"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The fallback `rename` sends here when the two paths are on different
+    /// filesystems, called directly: `EXDEV` cannot be provoked on one
+    /// filesystem, and this is the only function in the module that copies and
+    /// then deletes, which is the ordering worth pinning. A folder, so the
+    /// delete under test is the recursive one.
+    #[test]
+    fn the_cross_device_fallback_copies_and_then_really_deletes() {
+        let root = scratch("exdev-done");
+        fs::create_dir_all(root.join("src/deep")).unwrap();
+        fs::write(root.join("src/deep/a.txt"), "x\n").unwrap();
+        fs::create_dir_all(root.join("dst")).unwrap();
+        let src = root.join("src");
+        let meta = src.symlink_metadata().unwrap();
+
+        let done = move_across_devices(&src, "src", &meta, &root.join("dst/src"), "dst/src").unwrap();
+
+        assert!(matches!(done, Attempt::Made));
+        assert_eq!(fs::read_to_string(root.join("dst/src/deep/a.txt")).unwrap(), "x\n");
+        assert!(
+            root.join("src").symlink_metadata().is_err(),
+            "a move leaves nothing behind, and a real delete rather than the trash: \
+             half of it in somebody's Trash reads as half done"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The other half of the same ordering: the copy is what goes first, so a
+    /// copy that failed must leave the source exactly where it was. Deleting
+    /// first would be somebody's folder gone with nothing to put back.
+    #[cfg(unix)]
+    #[test]
+    fn a_cross_device_move_that_could_not_copy_leaves_the_source_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch("exdev-failed");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::write(root.join("a.txt"), "somebody's work\n").unwrap();
+        fs::set_permissions(root.join("a.txt"), fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(root.join("a.txt")).is_ok() {
+            // Running as root, where the permissions mean nothing.
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        let src = root.join("a.txt");
+        let meta = src.symlink_metadata().unwrap();
+
+        let err = move_across_devices(&src, "a.txt", &meta, &root.join("dst/a.txt"), "dst/a.txt");
+
+        fs::set_permissions(root.join("a.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(err.is_err(), "an unreadable source cannot be copied: {err:?}");
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "somebody's work\n",
+            "and the delete is downstream of the copy, so it never happened"
+        );
+        assert!(!root.join("dst/a.txt").exists(), "nor is a half-made copy left at the far end");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The name taken at the far end is not the fallback's to overwrite either:
+    /// it answers `Taken`, the loop above it moves to the next candidate, and
+    /// the source is still there to be moved.
+    #[test]
+    fn a_cross_device_move_onto_a_taken_name_touches_neither_side() {
+        let root = scratch("exdev-taken");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::write(root.join("a.txt"), "mine\n").unwrap();
+        fs::write(root.join("dst/a.txt"), "somebody else's\n").unwrap();
+        let src = root.join("a.txt");
+        let meta = src.symlink_metadata().unwrap();
+
+        let done =
+            move_across_devices(&src, "a.txt", &meta, &root.join("dst/a.txt"), "dst/a.txt").unwrap();
+
+        assert!(matches!(done, Attempt::Taken));
+        assert_eq!(fs::read_to_string(root.join("dst/a.txt")).unwrap(), "somebody else's\n");
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "mine\n");
         let _ = fs::remove_dir_all(&root);
     }
 
