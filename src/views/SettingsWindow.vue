@@ -84,6 +84,10 @@ const view = reactive({
   taskLanguage: 'en',
   commitLanguage: 'en',
   reportLanguage: 'en',
+  /* The person's own standing instruction, empty as it ships — see
+     `agentPrompt` in `stores/settings.js` for why empty is the whole of
+     today's behaviour rather than a placeholder. */
+  agentPrompt: '',
   /* The board's four, flat in the same message the rest ride in — see
      `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
      the same reason the agent and the languages above are shipped values: this
@@ -532,6 +536,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :task-language="view.taskLanguage"
           :commit-language="view.commitLanguage"
           :report-language="view.reportLanguage"
+          :agent-prompt="view.agentPrompt"
           :show-report="view.notificationShowReport"
           :usage="usage.reading"
           :busy="usage.busy"
@@ -541,6 +546,7 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:task-language="change({ taskLanguage: $event })"
           @update:commit-language="change({ commitLanguage: $event })"
           @update:report-language="change({ reportLanguage: $event })"
+          @update:agent-prompt="change({ agentPrompt: $event })"
           @refresh="readUsage()"
         />
         <KanbanSettings

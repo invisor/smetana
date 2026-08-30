@@ -1597,6 +1597,10 @@ const galleryAgentLanguage = ref('ru')
 const galleryTaskLanguage = ref('zh-Hans')
 const galleryCommitLanguage = ref('ja')
 const galleryReportLanguage = ref('de')
+/* A standing instruction with something in it, since the empty state of this
+   field is its placeholder and the filled one is the layout worth checking:
+   six lines of somebody's own prose in a column of its own. */
+const galleryAgentPrompt = ref('Talk to me briefly. This machine has no Docker.')
 /* The subscription block. A reading rather than one of the two empty states:
    those are a sentence each, while this is the shape with a layout to check —
    two rows, the line about what a run would do, and a live Refresh beside the
@@ -4130,12 +4134,14 @@ const menuTargetStyle = {
             :task-language="galleryTaskLanguage"
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
+            :agent-prompt="galleryAgentPrompt"
             :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
             @update:agent-language="galleryAgentLanguage = $event"
             @update:task-language="galleryTaskLanguage = $event"
             @update:commit-language="galleryCommitLanguage = $event"
             @update:report-language="galleryReportLanguage = $event"
+            @update:agent-prompt="galleryAgentPrompt = $event"
           />
         </div>
         <!-- The same tab with Show run report off on the General tab, which is

@@ -36,12 +36,21 @@
    sentence in it belongs to `usage.js`, since a `.vue` file is the one thing no
    test here can reach.
 
+   The standing instruction under the languages travels that same road, and it
+   is the fifth field of that family: `terminal::service` reads it off the file
+   when it builds a session, so it never crosses the IPC as an argument either.
+   Which sessions it reaches is Rust's decision and not this component's —
+   `agents::prompt::talks_to_a_person` — and a run's batches are deliberately
+   outside it: nobody is in a run's conversation to correct an instruction
+   written for one.
+
    Plan and Status are gone rather than kept as dashes: `/usage` reports two
    percentages and two reset times and says nothing at all about a tariff, so
    those two rows could only ever have stayed empty. */
 import { computed } from 'vue'
 import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
+import Textarea from '../core/Textarea.vue'
 import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
@@ -58,6 +67,11 @@ const props = defineProps({
   taskLanguage: { type: String, default: 'en' },
   commitLanguage: { type: String, default: 'en' },
   reportLanguage: { type: String, default: 'en' },
+  /* The person's own standing instruction, put in front of every agent session
+     they talk to. Empty is the ordinary state and adds nothing to a prompt.
+     Which sessions it reaches is `agents::prompt::talks_to_a_person` in Rust —
+     this component only draws the field. */
+  agentPrompt: { type: String, default: '' },
   /* Whether **Show run report** is on, which lives on the General tab and is
      `view.notificationShowReport` in `SettingsWindow.vue`. Read and never
      emitted back: this tab does not own it, it only draws the Report language
@@ -85,6 +99,7 @@ const emit = defineEmits([
   'update:taskLanguage',
   'update:commitLanguage',
   'update:reportLanguage',
+  'update:agentPrompt',
   'refresh'
 ])
 
@@ -137,6 +152,14 @@ const LANGUAGES = [
    growing it. In `ch` like the rest of this window, so the column grows with
    the app-wide font size instead of clipping at the top of the range. */
 const CONTROL_WIDTH = '30ch'
+
+/* The one row on this tab that is not a dropdown, and the one that does not
+   share the column above: six lines of somebody's own prose need room to be
+   read back, and a 30ch field would wrap every sentence twice. `SettingsRow`
+   takes the width as a prop for exactly this, so the labels stay aligned with
+   every row above rather than a second component being invented. In `ch` for
+   the reason the width above is. */
+const PROMPT_WIDTH = '48ch'
 
 /* What the block below is headed, and it names **whoever answered the probe**
    rather than whoever is showing in the picker above. The two can differ:
@@ -290,6 +313,25 @@ const errorStyle = {
           :options="LANGUAGES"
           :disabled="!props.showReport"
           @update:model-value="emit('update:reportLanguage', $event)"
+        />
+      </SettingsRow>
+    </SettingsGroup>
+
+    <!-- Its own group rather than a row inside Languages, because it is not a
+         language; and a group rather than a bare row, because the field needs a
+         caption saying what it is for, which is the one thing the tab's shape
+         above reserves a group for. -->
+    <SettingsGroup label="Standing instruction">
+      <SettingsRow
+        label="Every session"
+        description="Put in front of every agent session you talk to, and in front of none of a run's batches. Takes effect on the next session started."
+        :control-width="PROMPT_WIDTH"
+      >
+        <Textarea
+          :model-value="props.agentPrompt"
+          :rows="6"
+          placeholder="Anything you want said in every session — how to talk to you, what this machine has, what to leave alone."
+          @update:model-value="emit('update:agentPrompt', $event)"
         />
       </SettingsRow>
     </SettingsGroup>
