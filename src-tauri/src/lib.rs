@@ -249,6 +249,7 @@ pub fn run() {
       vcs::commands::vcs_repos,
       vcs::commands::vcs_status,
       vcs::commands::vcs_branches,
+      vcs::commands::vcs_remote_branches,
       vcs::commands::vcs_tracking,
       vcs::commands::vcs_fetch,
       vcs::commands::vcs_pull,
