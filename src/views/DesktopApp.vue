@@ -2376,8 +2376,19 @@ const openNewTask = (parent = null, draft = null) => {
 
    A card's "follow-up" deliberately does not come through here: that gesture is
    about a particular issue, and starting it from somebody else's kept sentences
-   would answer a question they did not ask. */
-const newTask = () => openNewTask(null, taskDrafts.get(activePath.value) ?? null)
+   would answer a question they did not ask.
+
+   Nothing is handed to a window that is already standing, and that guard is not
+   defensive tidiness — it is the same one `restoreTaskDraft` makes twice, for
+   the same reason. These windows are deliberately not modal (`window.rs`), the
+   "+" is never disabled, and pressing it while the dialog is up is a gesture
+   `serveDialog` already answers by bringing the window forward: the guest is
+   never remounted, so it would receive an announcement naming pictures it is
+   already holding and read them back in a second time — the strip drawing each
+   twice, and the filed task naming the same image twice to the agent. A window
+   that is up holds those words already; there is nothing to give it. */
+const newTask = () =>
+  openNewTask(null, openDialogs.has('new-task') ? null : (taskDrafts.get(activePath.value) ?? null))
 
 /* Where the whole-column press stands. bd's own word, untranslated, because
    `deferred` is not one of the three statuses the tracker store renames and it
