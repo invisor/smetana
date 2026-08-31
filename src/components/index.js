@@ -90,6 +90,7 @@ export { default as FileTreeRow } from './files/FileTreeRow.vue'
 
 // git
 export { default as BranchList } from './git/BranchList.vue'
+export { default as BranchPicker } from './git/BranchPicker.vue'
 export { default as ChangeList } from './git/ChangeList.vue'
 export { default as CommitBox } from './git/CommitBox.vue'
 export { default as CompareList } from './git/CompareList.vue'
@@ -102,6 +103,19 @@ export { default as ReviewChangesDialog } from './git/ReviewChangesDialog.vue'
 export { default as SectionHeader } from './git/SectionHeader.vue'
 export { branchMenuItems } from './git/branchMenu.js'
 export { branchNameError, canCreate } from './git/branchName.js'
+export {
+  BRANCH_FILTER_LABEL,
+  NO_BRANCH_MATCHES,
+  PICKER_KEY_HINT,
+  branchCountLabel,
+  branchMeta,
+  fetchedLabel,
+  matchingBranches,
+  pickerRows,
+  repoCountLabel,
+  shortAge,
+  stepCursor
+} from './git/branchPicker.js'
 export {
   MAX_FAVORITES,
   branchRows,
