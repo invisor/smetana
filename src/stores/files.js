@@ -9,7 +9,7 @@
    button. */
 import { reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { STUB_MARK } from '../paths.js'
+import { absolutePath, STUB_MARK } from '../paths.js'
 
 export const filesState = reactive({
   /* The active project's absolute path. Every other path in this store is
@@ -22,9 +22,9 @@ export const filesState = reactive({
      does not start: expand-collapse-expand must not produce three requests. */
   loading: new Set(),
   /* What Cut or Copy in the tree put here, or null: `{ paths, mode }`, `mode`
-     being 'copy' or 'cut'. The tree's own clipboard and not the machine's — the
-     system pasteboard is a later piece of work, and this record is what the
-     five verbs in the menu run on.
+     being 'copy' or 'cut'. The tree's own clipboard and not the machine's, and
+     the only one of the two that knows about a cut — see `systemClipboard`
+     below for why that matters.
 
      `paths` is an array although the tree selects one entry at a time, so that
      multiple selection — out of scope here and asked for often — does not
@@ -33,6 +33,25 @@ export const filesState = reactive({
      `setRoot` throws the record away: they name nothing in the project being
      moved to. */
   clipboard: null,
+  /* What this app last saw on the **machine's** clipboard: `{ paths, mode }`
+     with absolute paths, and `{ paths: [], mode: 'copy' }` when there is
+     nothing on it or it would not answer — a clipboard that refuses is an
+     ordinary outcome here and never an error.
+
+     It is a mirror rather than the truth, and it is kept for one thing: the
+     menu has to know whether Paste is worth offering before anything is
+     picked, and asking the operating system while a panel is being drawn is
+     not on. What refreshes it is the window-focus sweep and the tree's menu
+     opening — the same freshness model the tree itself has, for the same
+     reason: there is no watcher here either. A paste re-reads for itself, so
+     the decision that matters is never made from this copy.
+
+     Absolute and deliberately not the tree's spelling: a path here was put on
+     the clipboard by Finder or by Explorer or by this app, and it may name
+     somewhere else on the disk entirely — which is an ordinary paste and not a
+     refusal. That is also why `setRoot` leaves it alone where it throws the
+     record above away: the machine's clipboard is not about a project. */
+  systemClipboard: { paths: [], mode: 'copy' },
   lastError: null
 })
 
@@ -248,7 +267,9 @@ export function setRoot(path) {
   filesState.dirs = new Map()
   /* Every path in the record is relative to the root that is going away, so in
      the project being moved to it names either nothing or, worse, something
-     else entirely. */
+     else entirely. `systemClipboard` is deliberately left standing beside it:
+     its paths are absolute and its subject is the machine, which did not change
+     because somebody opened another project. */
   filesState.clipboard = null
   /* The instance is deliberately not replaced: otherwise the finally of a read
      already in flight would clear the mark of somebody else's just-started
@@ -362,6 +383,27 @@ export async function copyEntry(src, dstDir) {
   }
 }
 
+/* The same copy, from a path that is **not** in this project — the paste of
+   something copied in Finder or in Explorer, which ordinarily lives somewhere
+   else on the disk entirely.
+
+   `src` is absolute and `dstDir` is a tree path, and the asymmetry is the whole
+   of it: only the destination is checked against the root, because a source
+   outside the project is what a paste from the system clipboard normally is.
+   Everything else is `copyEntry`'s — nothing is overwritten, a folder that
+   holds the destination is still refused, and the ceiling still counts before a
+   byte is written. A command of its own rather than a flag, so that "the source
+   is unchecked here" is something a reader meets rather than discovers. */
+export async function copyExternalEntry(src, dstDir) {
+  try {
+    return await invoke('files_copy_external', { root: filesState.root, src, dstDir })
+  } catch (err) {
+    const error = normalize(err)
+    console.error(`[files] could not copy ${src} into ${dstDir || '(root)'}:`, error)
+    throw error
+  }
+}
+
 /* The same journey with nothing left behind, and the one verb here that empties
    the clipboard.
 
@@ -396,19 +438,81 @@ export async function renameEntry(path, name) {
   }
 }
 
-/* What Cut and Copy do, and the whole of it: a record, no disk and no await.
-   Nothing is read or written until a paste, which is what makes cutting a
-   folder of any size instant and what makes changing one's mind free.
+/* What Cut and Copy do: a record, and the same paths onto the machine's own
+   clipboard so that what was copied in the tree can be pasted in Finder.
+
+   No disk either way. The record is set before the first await, which is what
+   keeps cutting a folder of any size instant and changing one's mind free; the
+   trip to the system clipboard happens behind it and is the only reason this
+   is a promise at all. A caller that does not await it loses nothing but the
+   ordering.
+
+   **A refusal from the system clipboard is swallowed on purpose.** The record
+   above is what a paste inside the tree runs on, and a clipboard that would not
+   take the paths is not a reason to refuse a copy that has otherwise happened —
+   the same standing the whole of `files/clipboard.rs` takes. What it costs is
+   named rather than hidden: the mirror is set to what was *offered* whether or
+   not it landed, so the menu goes on offering Paste, while a paste re-reads the
+   real clipboard and would then find whatever is actually on it. In
+   `npm run dev` that is every call, since `mockBackend.js` refuses every write.
 
    A second copy replaces the first rather than adding to it — one clipboard,
    the way every clipboard is — and that is also what takes the muting off a row
    cut a moment ago. */
-export function setClipboard(paths, mode) {
-  filesState.clipboard = { paths: [...paths], mode }
+export async function setClipboard(paths, mode) {
+  const relative = [...paths]
+  filesState.clipboard = { paths: relative, mode }
+  const absolute = relative.map((path) => absolutePath(filesState.root, path))
+  filesState.systemClipboard = { paths: absolute, mode }
+  try {
+    await invoke('files_clipboard_write', { paths: absolute, mode })
+  } catch (err) {
+    warnAboutTheClipboard('could not be written to', err)
+  }
 }
 
 export function clearClipboard() {
   filesState.clipboard = null
+}
+
+/* What is on the machine's clipboard now, as absolute paths. Answers
+   `{ paths: [], mode: 'copy' }` for everything that is not a file list —
+   nothing on the clipboard, text on it, a platform that would not say, a
+   browser with no back end at all — because none of those is an error a person
+   should be shown: the paste then rides on the tree's own record, which is the
+   position `files/clipboard.rs` takes on its own side of the IPC.
+
+   The mirror in `filesState` is updated on the way through, so the menu drawn
+   next is drawn from this answer. */
+export async function readSystemClipboard() {
+  try {
+    const answer = await invoke('files_clipboard_read')
+    const record = {
+      paths: [...(answer?.paths ?? [])],
+      mode: answer?.mode === 'cut' ? 'cut' : 'copy'
+    }
+    filesState.systemClipboard = record
+    return record
+  } catch (err) {
+    warnAboutTheClipboard('could not be read', err)
+    const empty = { paths: [], mode: 'copy' }
+    filesState.systemClipboard = empty
+    return empty
+  }
+}
+
+/* Once per session, and the reason is the same one `mark_git_ignored` has in
+   Rust for latching its own warning: this is asked on every window focus and
+   every time the tree's menu opens, so a machine where the clipboard refuses —
+   a browser, most of all, where `mockBackend.js` refuses every write — would
+   otherwise print the same line for ever and drown whatever is worth reading.
+   The first line is the whole of the diagnosis; a second would add a
+   timestamp. */
+let clipboardWarned = false
+function warnAboutTheClipboard(what, error) {
+  if (clipboardWarned) return
+  clipboardWarned = true
+  console.warn(`[files] the system clipboard ${what}; the tree's own record stands in:`, error)
 }
 
 /* Into the system trash, where it can be got back from. The name says so: a

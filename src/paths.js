@@ -85,6 +85,35 @@ export function relativeTo(root, path) {
   return full.startsWith(`${base}/`) ? full.slice(base.length + 1) : null
 }
 
+/* The whole path, given the project's root and a path inside it — `relativeTo`
+   the other way round, and here for the same reason it is: two parts of the
+   front end want it at once. The file tree's menu wants it for the verbs that
+   leave this window, since a path handed to `revealItemInDir` names whatever
+   sits under the process's own working directory otherwise; and
+   `stores/files.js` wants it for the system clipboard, which has no notion of
+   a project and takes absolute paths in both directions.
+
+   The separator is the root's own and never the tree's. Everything relative in
+   `stores/files.js` is written with `/` whatever the platform, while the root
+   arrives from Rust in the platform's form — so a path copied on Windows would
+   read `C:\Users\you\dev\app/src/main.rs` if the two were simply joined. The
+   root is the only evidence here of which system this is, which is why the
+   question is asked of it rather than of the navigator: a root holding a
+   backslash and no forward slash is a Windows path and nothing else is.
+
+   No root is answered with the path unchanged rather than with a guess: that
+   is the state before a project is open, and a path invented there would name
+   something under whichever folder the app was launched from. */
+const separatorOf = (root) => (root.includes('\\') && !root.includes('/') ? '\\' : '/')
+
+export function absolutePath(root, path = '') {
+  if (!root) return path
+  const sep = separatorOf(root)
+  const base = root.replace(/[/\\]+$/, '')
+  if (!path) return base || root
+  return `${base}${sep}${path.split('/').join(sep)}`
+}
+
 /* The mark on the "…N more" stub row a truncated directory listing ends with,
    and the test for one. A zero byte, because no filesystem lets one into a
    name, so a real path cannot collide with a stub's.

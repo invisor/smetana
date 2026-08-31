@@ -201,13 +201,15 @@ import {
 } from '../stores/runs.js'
 import { initUpdates } from '../stores/updates.js'
 import { liveCheckBlock } from '../components/run/browserTools.js'
-import { absolutePath, folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
+import { folderOf, parentOf, relativePath } from '../components/files/fileMenu.js'
+import { pasteSource } from '../components/files/fileClipboard.js'
 import { checkNewName } from '../components/files/newEntry.js'
-/* One import straight from `src/paths.js` rather than through a store: the
-   conversion below is between two path spaces and belongs to neither of the
-   stores that hold them. `tabs.js` reaches for the same function for the same
-   join. */
-import { relativeTo } from '../paths.js'
+/* Two imports straight from `src/paths.js` rather than through a store: both
+   are conversions between two path spaces and belong to neither of the stores
+   that hold them. `tabs.js` reaches for `relativeTo` for the same join, and
+   `absolutePath` sat in `fileMenu.js` until the system clipboard wanted it
+   too. */
+import { absolutePath, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
@@ -227,6 +229,7 @@ import {
   basenameOf,
   copyEntry,
   copyErrorText,
+  copyExternalEntry,
   createDir,
   createFile,
   fileErrorText,
@@ -235,6 +238,7 @@ import {
   listDir,
   makeErrorText,
   moveEntry,
+  readSystemClipboard,
   refreshDirs,
   renameEntry,
   renameErrorText,
@@ -1700,6 +1704,12 @@ const catchUp = async () => {
      other window and leaves this one holding a card about a folder that has
      just been emptied. Focus is when this app learns about all of those. */
   measureStorage(activePath.value)
+  /* And the machine's clipboard, which is written to from outside this window
+     more often than anything else here: copying a file in Finder means leaving
+     this app and coming back, and coming back is this event. Not awaited, like
+     its neighbours — the tree's Paste row un-greys when the answer lands — and
+     it cannot fail in a way anybody sees (`stores/files.js`). */
+  readSystemClipboard()
 
   const open = [...project.openTabs]
   if (!open.length) return
@@ -3691,8 +3701,66 @@ function followMove(from, to) {
   return reopened
 }
 
-/* Paste, which is a copy or a move depending on what put the record there. The
-   record itself is `filesState.clipboard` and the only place it is read.
+/* Which of the two clipboards a paste would act on — `pasteChoice` in the
+   absolute space the choice is made in, and `pasteRecord` the same answer put
+   back into the tree's own, which is what the tree is drawn from.
+
+   The conversion out and back is not ceremony: the two clipboards do not speak
+   the same language. `filesState.clipboard` holds paths relative to the
+   project, because everything in that store does; the machine's holds absolute
+   ones, because a clipboard has no notion of a project. They can only be
+   compared in one of the two, and it has to be the absolute one — the other
+   cannot say "somewhere else on the disk", which is exactly what a file copied
+   in Finder usually is.
+
+   A path that comes back `null` from `relativeTo` is outside the project and is
+   kept absolute. That is an ordinary paste — the file is copied **into** the
+   project, which is what a paste means — and it is also why `canPasteInto`
+   answers `ok` for one: an absolute path is not a prefix of any folder in the
+   tree, so no row is greyed over it. That is the allowed direction of the two
+   copies of that rule disagreeing; Rust's `refuse_into_self` still refuses a
+   folder from outside that holds the project.
+
+   Both halves of the tree read this rather than the raw record: what Paste is
+   offered for, and which rows are drawn muted for a pending cut. A cut in the
+   tree followed by a copy in Finder means the cut is not what will happen next,
+   and a row still drawn muted would be a promise nothing was going to keep. */
+function pasteChoice() {
+  const internal = filesState.clipboard
+  return pasteSource({
+    internal: internal && {
+      paths: internal.paths.map((path) => absolutePath(filesState.root, path)),
+      mode: internal.mode
+    },
+    system: filesState.systemClipboard
+  })
+}
+
+const pasteRecord = computed(() => {
+  const chosen = pasteChoice()
+  if (!chosen) return null
+  return {
+    paths: chosen.paths.map((path) => relativeTo(filesState.root, path) ?? path),
+    mode: chosen.mode
+  }
+})
+
+/* Paste, which is a copy or a move depending on what put the record there, and
+   which of the two clipboards is the one holding it.
+
+   The system clipboard is re-read here rather than taken from the mirror the
+   menu was drawn from, because this is the moment the answer has to be right:
+   somebody may have copied something in Finder between opening the panel and
+   picking the row, and the mirror is refreshed only on window focus and when
+   the menu opens.
+
+   **A source outside the project is copied and never moved**, whatever mode the
+   platform stated. Windows and Linux both have a cut for files and both can say
+   so, and honouring it would mean deleting a file this app has made no promises
+   about, outside every check `files/fs.rs` makes — for a gesture made in
+   another program. The file lands either way; what is left behind is the
+   original, which is the smaller of the two mistakes. macOS cannot reach this
+   at all, having no cut for files.
 
    One path out of the array, because the tree selects one entry: the shape is
    plural so that multiple selection does not change it later, and taking the
@@ -3704,18 +3772,27 @@ function followMove(from, to) {
    somebody reads instead of a click that fails, and the second is the one that
    stays true when a symlink is in the path. */
 async function pasteInto(dir) {
-  const record = filesState.clipboard
+  await readSystemClipboard()
+  const record = pasteChoice()
   const source = record?.paths[0]
   if (!source) return
-  const cut = record.mode === 'cut'
+  /* The one question that decides which of the three calls this is. `null` is
+     an ordinary answer and means the source is not in this project at all. */
+  const inside = relativeTo(filesState.root, source)
+  const cut = record.mode === 'cut' && inside !== null
   try {
-    const made = cut ? await moveEntry(source, dir) : await copyEntry(source, dir)
+    const made =
+      inside === null
+        ? await copyExternalEntry(source, dir)
+        : cut
+          ? await moveEntry(inside, dir)
+          : await copyEntry(inside, dir)
     let reopened = []
     if (cut) {
-      reopened = followMove(source, made)
+      reopened = followMove(inside, made)
       /* Both folders, since nothing else will: the one that lost a row and, in
          `revealMade`, the one that gained it. */
-      await listDir(parentOf(source))
+      await listDir(parentOf(inside))
     }
     await revealMade(made, dir)
     /* Every folder that was open under what moved, at its new path — see
@@ -3819,10 +3896,13 @@ const onFileAction = async ({ kind, path, target, name }) => {
   } else if (kind === 'delete') {
     await deleteEntry(path)
   } else if (kind === 'copy' || kind === 'cut') {
-    /* No disk and no await: cutting a folder of any size is a record, which is
-       what makes it instant and what makes changing one's mind free. The row is
-       drawn muted from here until the record is used or replaced. */
-    setClipboard([path], kind)
+    /* No disk: cutting a folder of any size is a record, which is what makes it
+       instant and what makes changing one's mind free. The row is drawn muted
+       from the moment `setClipboard` returns, which is before the await inside
+       it. What is awaited is the trip to the machine's clipboard, so that a
+       copy here can be pasted in Finder — and a refusal there is swallowed,
+       since the record is what a paste inside the tree runs on. */
+    await setClipboard([path], kind)
   } else if (kind === 'paste') {
     await pasteInto(folderOf({ path, target }))
   } else if (kind === 'duplicate') {
@@ -4497,10 +4577,11 @@ const toastStackStyle = {
                 :selected-path="project.selectedPath ?? undefined"
                 :can-attach="attachTarget !== null"
                 :has-live-agent="hasLiveAgent"
-                :clipboard="filesState.clipboard"
+                :clipboard="pasteRecord"
                 @toggle="toggleDir"
                 @select="onSelectFile"
                 @open="onOpenFile"
+                @menu="readSystemClipboard"
                 @action="onFileAction"
               />
               <GitPanel
