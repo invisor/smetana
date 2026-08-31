@@ -141,17 +141,31 @@ const fillStyle = {
      read later as the thing holding the row's width. */
   flex: '0 0 auto'
 }
-/* The row carries the cursor and the ring, and it deliberately does not carry
-   the padding: that is the bar's now, so the control begins where the words do.
-   It used to be here, which made the gutter between the window's edge and the
-   words pressable and hoverable — and that gutter is the window's bottom-left
-   corner, the easiest target on the whole screen to hit, which is what the
-   arrangement was for. It was the wrong thing to buy with it: what opened there
-   was a hint about the subscription over ground that draws none of it, and a
-   press asked the harness for a reading nobody had aimed at. The trigger is the
-   words instead, and the corner is chrome. The cursor stops at the same edge,
-   for the reason it followed the old one: an affordance over ground that does
-   not answer a press is the affordance lying about where the control is.
+/* The row carries the cursor, the ring and a small inset, and the inset is the
+   ring's bed rather than the strip's gutter. The gutter is the bar's — 12px of
+   it, and it used to be here, which made the ground between the window's edge
+   and the words pressable and hoverable. That ground is the window's
+   bottom-left corner, the easiest target on the whole screen to hit, which is
+   what the arrangement was for, and it was the wrong thing to buy with it: what
+   opened there was a hint about the subscription over ground that draws none of
+   it, and a press asked the harness for a reading nobody had aimed at. The
+   trigger is the words instead, and the corner is chrome the control does not
+   reach. The cursor stops at the same edge, for the reason it followed the old
+   one: an affordance over ground that does not answer a press is the affordance
+   lying about where the control is.
+
+   What is left here is 4px, and it is the ring's and not the gutter's: a third
+   of what the bar carries, sitting against the words rather than out at the
+   window's edge, so the corner stays dead and the extra hoverable ground is
+   inside the hint's own subject. `base.css` draws `:focus-visible` as a 2px
+   ring and the offset below pulls it 2px inward, so over zero horizontal
+   padding the band lands on the ink: tabbing to the row cut the right stroke
+   and the lower dot off the `%` of `Week 78%`, which reads as a truncated
+   figure rather than as focus. 4px puts the band in its own two pixels and
+   leaves two of clearance either side. Measured on screen in all four theme ×
+   density combinations, not derived from the stylesheet — the left end looked
+   fine either way, since a lucide glyph's ink starts a pixel inside its box and
+   text has no such margin, so the defect is at the trailing figure alone.
 
    No `flex` on the row either, and its absence is the same decision seen from
    the other side: the row used to grow, which is what spread it across the bar.
@@ -170,6 +184,7 @@ const rowStyle = {
   alignItems: 'center',
   gap: 'var(--space-4)',
   minWidth: 0,
+  padding: '0 var(--space-2)',
   cursor: 'pointer',
   /* Nothing of this row may be painted outside it. The row is inflexible, so
      this is a floor under a mistake rather than an everyday clip: an ancestor
