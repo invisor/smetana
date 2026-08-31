@@ -147,17 +147,30 @@ pub fn parse_packed_refs(contents: &str) -> Vec<String> {
 
 /// The same file, with each branch's commit still attached: `(name, sha)`.
 ///
-/// The parser lives here and `parse_packed_refs` is a projection of it rather
-/// than a second pass over the same lines — the header, the `^` continuation
-/// and the `refs/heads/` prefix are one rule, and two copies of it would agree
-/// until somebody fixed one.
+/// The reading is `parse_packed_under`'s and this is `refs/heads/` handed to
+/// it, with `parse_packed_refs` above a projection of this rather than a second
+/// pass over the same lines: the file's format is one rule, and copies of it
+/// would agree until somebody fixed one of them.
 pub fn parse_packed_heads(contents: &str) -> Vec<(String, String)> {
+    parse_packed_under(contents, HEADS)
+}
+
+/// The same file read for whichever ref prefix is wanted, which comes off the
+/// names on the way out.
+///
+/// A prefix per caller rather than a parser per caller — the local list asks
+/// for `refs/heads/`, `remote_branches` for `refs/remotes/<remote>/`, and
+/// whatever the next one wants. The format itself is what stays here: the `#`
+/// header, the `^<sha>` continuation with no ref name on it at all, and
+/// `<sha> <ref>` for everything else. It is one rule, and a second copy of it
+/// would agree with this one until somebody fixed one.
+fn parse_packed_under(contents: &str, prefix: &str) -> Vec<(String, String)> {
     contents
         .lines()
         .filter(|line| !line.starts_with('#') && !line.starts_with('^'))
         .filter_map(|line| line.split_once(' '))
         .filter_map(|(sha, name)| {
-            name.trim().strip_prefix(HEADS).map(|name| (name.to_owned(), sha.trim().to_owned()))
+            name.trim().strip_prefix(prefix).map(|name| (name.to_owned(), sha.trim().to_owned()))
         })
         .collect()
 }
@@ -351,6 +364,60 @@ pub fn branches_with_recency(project: &Path) -> Vec<(String, Option<i64>)> {
     out.dedup();
     let logs = common.join("logs/refs/heads");
     out.into_iter().map(|name| { let at = touched_at(&logs, &name); (name, at) }).collect()
+}
+
+/// The prefix every remote-tracking ref carries, before the remote's own name.
+const REMOTES: &str = "refs/remotes/";
+
+/// What `origin/HEAD` is called under the remote's prefix.
+///
+/// It is a symbolic ref naming the remote's default branch, not a branch of its
+/// own, so it is dropped rather than offered: it stands for a branch that is
+/// already in the list beside it, and a second entry meaning "one of these" is
+/// nothing anybody can check out or compare against on purpose.
+const REMOTE_HEAD: &str = "HEAD";
+
+/// What one remote is known to have, as of the last fetch: `main`, not
+/// `origin/main`.
+///
+/// The same two sources as the local list beside it, read the same way and for
+/// the same reasons — loose refs under `refs/remotes/<remote>/`, with the
+/// directories folded back into the name, and then `packed-refs`, because a
+/// freshly cloned repository has the whole of `origin` packed and not one loose
+/// file to find. Both out of the **common** directory through `parse_commondir`,
+/// which is what lets a project opened as a linked worktree see the whole
+/// repository's remote refs instead of nothing at all.
+///
+/// The prefix comes off because it is on every one of them and says nothing;
+/// whoever builds a ref for git puts it back, and what a person picks from is a
+/// name.
+///
+/// Ordered alphabetically and deliberately not by recency, which is the one
+/// place this parts company with the local list: the reflog says when *this
+/// machine* last moved a branch, and nothing on this machine has ever moved a
+/// remote-tracking ref except a fetch, so a recency order here would rank forty
+/// branches by when somebody last ran `git fetch` — one moment, for all of them.
+///
+/// Nothing here is an error and nothing here runs: a folder outside git, a
+/// repository nobody has fetched into, a remote called something else, refs that
+/// cannot be read — every one of them is the empty list, which is the same
+/// promise `branches_with_recency` makes and what lets a caller ask on every
+/// window focus.
+pub fn remote_branches(dir: &Path, remote: &str) -> Vec<String> {
+    let Some(git) = git_dir(dir) else { return Vec::new() };
+    let common = common_dir(&git);
+    let prefix = format!("{REMOTES}{remote}/");
+    let mut out = Vec::new();
+    loose_branches(&common.join(&prefix), "", &mut out);
+    if let Ok(packed) = std::fs::read_to_string(common.join("packed-refs")) {
+        out.extend(parse_packed_under(&packed, &prefix).into_iter().map(|(name, _)| name));
+    }
+    out.retain(|name| name != REMOTE_HEAD);
+    // A ref can be loose and packed at once — git leaves the packed copy behind
+    // when a fetch moves the branch — and it is one branch to everybody else.
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The commit a loose ref names, or nothing.
@@ -677,6 +744,85 @@ c0ffee refs/remotes/origin/main
 
         assert_eq!(branches(&dir), vec!["main".to_string()]);
         fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_remotes_loose_refs_come_back_without_the_remote_on_them() {
+        let dir = scratch("remote-loose");
+        let origin = dir.join(".git/refs/remotes/origin");
+        fs::create_dir_all(origin.join("feature")).expect("create refs/remotes/origin/feature");
+        fs::write(origin.join("main"), "a1b2c3\n").expect("write main");
+        fs::write(origin.join("feature/one"), "d4e5f6\n").expect("write the nested ref");
+        // git writes this one as a loose symbolic ref on clone; it names the
+        // default branch and is not a branch.
+        fs::write(origin.join("HEAD"), "ref: refs/remotes/origin/main\n").expect("write origin/HEAD");
+        // Another remote's refs live in the same tree and are not this remote's.
+        let other = dir.join(".git/refs/remotes/upstream");
+        fs::create_dir_all(&other).expect("create the other remote");
+        fs::write(other.join("main"), "0f0f0f\n").expect("write the other remote's ref");
+
+        assert_eq!(remote_branches(&dir, "origin"), vec!["feature/one".to_string(), "main".to_string()]);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_packed_repository_still_says_what_origin_has() {
+        // A fresh clone has the whole of `origin` packed and not one loose file
+        // to find, so a reader that skipped this file would offer nothing at all.
+        let dir = scratch("remote-packed");
+        fs::create_dir_all(dir.join(".git")).expect("create .git");
+        let packed = "\
+# pack-refs with: peeled fully-peeled sorted
+a1b2c3 refs/heads/main
+d4e5f6 refs/remotes/origin/main
+0f0f0f refs/remotes/origin/release/7
+c0ffee refs/remotes/origin/HEAD
+beadfe refs/remotes/upstream/main
+99aabb refs/tags/v1.0.0
+^1122334455667788
+";
+        fs::write(dir.join(".git/packed-refs"), packed).expect("write packed-refs");
+
+        assert_eq!(remote_branches(&dir, "origin"), vec!["main".to_string(), "release/7".to_string()]);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_remote_branch_that_is_loose_and_packed_at_once_is_offered_once() {
+        // What a fetch leaves behind: the branch moved, so git wrote a loose
+        // ref, and the packed copy from the clone is still in the file.
+        let dir = scratch("remote-dup");
+        fs::create_dir_all(dir.join(".git/refs/remotes/origin")).expect("create refs/remotes/origin");
+        fs::write(dir.join(".git/refs/remotes/origin/main"), "a1b2c3\n").expect("write the loose ref");
+        fs::write(dir.join(".git/packed-refs"), "d4e5f6 refs/remotes/origin/main\n").expect("write packed");
+
+        assert_eq!(remote_branches(&dir, "origin"), vec!["main".to_string()]);
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_folder_that_is_not_there_simply_has_no_remote_branches() {
+        // Never a refusal and never a panic, exactly as the local list beside
+        // it: a directory nobody created is an empty list.
+        let dir = scratch_path("remote-missing");
+        assert!(remote_branches(&dir, "origin").is_empty());
+    }
+
+    #[test]
+    fn a_worktree_sees_the_whole_repositorys_remote_branches() {
+        // `refs/remotes/` is shared, so reading it next to the worktree's own
+        // HEAD would find nothing — the bug `parse_commondir` exists to stop,
+        // here for the second list rather than the first.
+        let (root, repo, linked) = linked_worktree("worktree-remotes", None);
+        let origin = repo.join(".git/refs/remotes/origin");
+        fs::create_dir_all(&origin).expect("create refs/remotes/origin");
+        fs::write(origin.join("main"), "a1b2c3\n").expect("write the ref");
+        fs::write(repo.join(".git/packed-refs"), "c0ffee refs/remotes/origin/develop\n").expect("write packed");
+
+        let expected = vec!["develop".to_string(), "main".to_string()];
+        assert_eq!(remote_branches(&linked, "origin"), expected);
+        assert_eq!(remote_branches(&repo, "origin"), expected);
+        fs::remove_dir_all(&root).expect("remove the temp directory");
     }
 
     #[test]

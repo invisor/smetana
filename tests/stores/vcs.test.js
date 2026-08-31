@@ -191,6 +191,43 @@ describe('the git panel store', () => {
     expect(stores.vcs.vcsState.branches).toEqual(branchesOf('backend'))
   })
 
+  /* The second branch list, which nothing on screen reads yet: what `origin` is
+     known to have, for a caller that names its own repository rather than
+     taking the one the panel is pointed at. It lands beside `branches` and not
+     in it — a remote branch and a local one of the same name are two different
+     things to check out. */
+  it('the branches origin has arrive in a list of their own', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_remote_branches', ['develop', 'feature/one', 'main'])
+
+    await stores.vcs.loadRemoteBranches('/p/admin')
+
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(['develop', 'feature/one', 'main'])
+    /* The repository asked about is the one named in the call, and the names
+       arrive without `origin/` on them: the prefix is the caller's to add back
+       when it builds a ref for git. */
+    expect(ipc.calls('vcs_remote_branches')).toEqual([{ repo: '/p/admin' }])
+    expect(stores.vcs.vcsState.branches).toEqual([])
+  })
+
+  /* `vcs_remote_branches` refuses nothing, so a rejection is the call itself
+     giving way — and what must not survive it is the list read before. Branches
+     that may no longer be there, offered under a read that failed, is worse than
+     an empty list, which is what a repository nobody has fetched into already
+     looks like. */
+  it('a remote branch list that failed leaves nothing standing in for one', async () => {
+    const { stores, ipc } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.on('vcs_remote_branches', ['main'])
+    await stores.vcs.loadRemoteBranches('/p/admin')
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(['main'])
+
+    ipc.fail('vcs_remote_branches', 'the transport gave way')
+    await stores.vcs.loadRemoteBranches('/p/admin')
+
+    expect(stores.vcs.vcsState.remoteBranches).toEqual([])
+  })
+
   /* A repository whose HEAD moves when git is told to move it, so a checkout
      can be watched from every place that draws the branch: the repository row,
      the branch list's mark, and the scope bar one store over. */
