@@ -3751,13 +3751,13 @@ function noteBoard(project) {
 /* A kept draft put back on screen.
 
    Called from the ground watcher below rather than from a watcher of its own,
-   and that is what makes `canRestore`'s second condition work: the board does
-   not arrive with the switch, so `projectColumns` lands a moment later — and
-   since the columns are part of that watcher's world, it fires again when they
-   do. The first pass after a switch usually refuses; the one after it opens the
-   window. Without that, the window would be opened before the board and closed
-   on the spot by the very watcher that opened it, with a second notice about a
-   window nobody ever saw.
+   and that is what makes `canRestore`'s two conditions about the board work at
+   all: the board does not arrive with the switch, so it lands a moment later —
+   and since the columns and the issues are part of that watcher's world, it
+   fires again when it does. The pass that sees the switch refuses; a later one
+   opens the window. Without that, the window would be opened before the board
+   and closed on the spot by the very watcher that opened it, with a second
+   notice about a window nobody ever saw.
 
    The wait is on the closing of whatever that same pass closed: the window this
    opens carries the same Rust label as the one that is going, and a destroy and
