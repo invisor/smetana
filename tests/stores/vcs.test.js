@@ -71,6 +71,12 @@ const branchesOf = (repo) => [
   { name: `${repo}/other`, current: false }
 ]
 
+/* And the same again for what `origin` has, since the store holds one such list
+   for the whole project: a list naming the repository it was read from is the
+   only way an assertion can tell one repository's remote branches from
+   another's. */
+const remoteOf = (repo) => [`${repo}/main`, `${repo}/release`]
+
 describe('the git panel store', () => {
   /* The same guard git.js, terminals.js and runs.js carry. Two calls can be in
      flight with no ordering guarantee on which invoke resolves first, and
@@ -255,6 +261,84 @@ describe('the git panel store', () => {
     await stores.vcs.loadRemoteBranches('/p/admin')
 
     expect(stores.vcs.vcsState.remoteBranches).toEqual([])
+  })
+
+  /* The pair-guard `loadStatus` and `loadBranchList` above already carry,
+     reached one call further out: this loader is told which repository to ask
+     about rather than reading `vcsState.selected`, so two repositories of one
+     project can be in flight at once and the project half of the guard sees
+     nothing wrong with either. Without the second half the slower answer wins
+     over the later question, and the list left standing is one nobody asked
+     for — with nothing in the store able to say so, which is the difference
+     from every other list here. */
+  it('a slow remote branch list for a repository already left is dropped', async () => {
+    const { stores, ipc, nextTick } = await loadStores()
+    ipc.on('vcs_repos', answer(siblings))
+    ipc.on('vcs_status', (args) => treeOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
+    ipc.on('vcs_branches', (args) => branchesOf(args.repo === '/p/admin' ? 'admin' : 'backend'))
+    ipc.on('vcs_tracking', [])
+    await stores.vcs.loadRepos('/p')
+
+    let releaseAdmin
+    const admin = new Promise((resolve) => {
+      releaseAdmin = () => resolve(remoteOf('admin'))
+    })
+    ipc.on('vcs_remote_branches', (args) =>
+      args.repo === '/p/admin' ? admin : remoteOf('backend')
+    )
+
+    const first = stores.vcs.loadRemoteBranches('/p/admin')
+    const second = stores.vcs.loadRemoteBranches('/p/backend')
+    await second
+    releaseAdmin()
+    await first
+    await nextTick()
+
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteOf('backend'))
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBe('/p/backend')
+  })
+
+  /* The same guard's other half, built like the two stale-response tests above
+     it: a deferred answer let go after the window has moved on. Here what it
+     moved on to is another project, so the repository asked about is still the
+     last one asked about and the project is the only thing that can drop the
+     answer. */
+  it('a slow remote branch list for a project already left is dropped', async () => {
+    const { stores, ipc, nextTick } = await loadStores()
+    await openPanel(stores, ipc, cleanTree)
+
+    let releaseOld
+    const old = new Promise((resolve) => {
+      releaseOld = () => resolve(remoteOf('old'))
+    })
+    ipc.on('vcs_remote_branches', old)
+    const first = stores.vcs.loadRemoteBranches('/p/.')
+
+    await stores.vcs.loadRepos('/new')
+    releaseOld()
+    await first
+    await nextTick()
+
+    expect(stores.vcs.vcsState.remoteBranches).toEqual([])
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBeNull()
+  })
+
+  /* And the leak the guard cannot answer, because nothing arrives late in it:
+     a project switch that succeeds never calls this loader at all, so a list
+     read in the project being left would simply stay until somebody asked
+     again. `reset()` covers only a window left with no project. */
+  it('the branches origin had go with the project they were about', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, cleanTree)
+    ipc.on('vcs_remote_branches', remoteOf('p'))
+    await stores.vcs.loadRemoteBranches('/p/.')
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteOf('p'))
+
+    await stores.vcs.loadRepos('/new')
+
+    expect(stores.vcs.vcsState.project).toBe('/new')
+    expect(stores.vcs.vcsState.remoteBranches).toEqual([])
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBeNull()
   })
 
   /* A repository whose HEAD moves when git is told to move it, so a checkout

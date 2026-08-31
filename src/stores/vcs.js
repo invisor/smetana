@@ -82,6 +82,16 @@ export const vcsState = reactive({
      no use for a list of what the remote has. An empty list is the ordinary
      answer for a repository nobody has fetched into. */
   remoteBranches: [],
+  /* Which repository the list above is about, or null when it is empty. Every
+     other list in this object is about `selected` and needs no such field;
+     this one is about whatever repository a caller named, which is a fact
+     nothing else here records — so without it a reader holding a path has no
+     way to ask whether the list in front of it is the one it asked for.
+
+     Written in the same assignment as the list itself, never before it and
+     never after: the two are one statement, and a field naming a repository
+     whose answer has not landed yet is the very lie it exists to prevent. */
+  remoteBranchesRepo: null,
   /* Where each local branch stands against its upstream, keyed by branch name:
      `{ upstream, ahead, behind, gone }` as `vcs_tracking` answers. Keyed rather
      than listed because every reader has a name in its hand — a row, or the
@@ -311,6 +321,19 @@ export async function loadRepos(project) {
     if (vcsState.project !== project) return
     vcsState.repos = answer.repos ?? []
     vcsState.unlisted = answer.unlisted ?? []
+    /* Cleared here and not only in the catch and in `reset()`, which between
+       them cover a read that failed and a window left with no project at all —
+       and leave out the ordinary case, moving from one project to another,
+       since `reset()` runs only when the new project is falsy. Without this a
+       repository of the project being left goes on holding this list until
+       somebody asks again, which is a leak across the very boundary the guard
+       above exists to keep. `branches` is short of nothing here only because
+       `selectRepo` → `loadBranchList` runs on every one of these and either
+       replaces that list or empties it; this path calls `loadRemoteBranches`
+       nowhere, by design — that loader is asked for a repository of somebody
+       else's choosing, not for the one the panel settled on. */
+    vcsState.remoteBranches = []
+    vcsState.remoteBranchesRepo = null
     await selectRepo(pickRepo(vcsState.repos, settings.project.selectedRepo))
   } catch (err) {
     if (vcsState.project !== project) return
@@ -332,6 +355,7 @@ export async function loadRepos(project) {
        one nothing on screen names. Both lists, for the one reason. */
     vcsState.branches = []
     vcsState.remoteBranches = []
+    vcsState.remoteBranchesRepo = null
     vcsState.error = asError(err)
   } finally {
     if (vcsState.project === project) vcsState.loading = false
@@ -467,19 +491,35 @@ async function loadBranchList() {
   }
 }
 
+/* The repository `loadRemoteBranches` was last asked about, which is the second
+   half of that read's guard and nothing else — never what the list in the store
+   is about, which is `vcsState.remoteBranchesRepo`. The two differ for exactly
+   the length of one call, and that gap is the whole race: while an answer is in
+   flight this names the repository somebody wants and the store still names the
+   one it has.
+
+   Module state rather than a field, for the reason `fetchedAt` above is: it is
+   about a call in flight and not about anything drawn, and a reactive field
+   nothing reads is a field the next reader has to work out the meaning of.
+   Deliberately not lowered by `reset()` or by a project switch — a stale answer
+   crossing one of those is what the project half of the guard is for, and a
+   fresh call raises this again before its own await in any case. */
+let remoteBranchesAsked = null
+
 /* What `origin` is known to have in one repository, as of the last fetch.
 
    The repository is an argument rather than `vcsState.selected`, and that is
    what this read is for: the caller naming it has chosen a repository of its own
    and need not be looking at the Git panel at all.
 
-   So the guard is the project alone, which is the whole of the pair there is
-   here. `loadBranchList` checks the repository beside it because it reads
-   `vcsState.selected` itself and a slow answer could land under another
-   repository's name; this one was told which repository to ask about, and a
-   caller that has moved on asks again by name. The project still has to be
-   checked, since a window that has left a project must not fill a list about one
-   of its repositories.
+   Guarded on the pair, project and repository, exactly as `loadStatus`,
+   `loadBranchList` and `loadTracking` are — a repository changing under one
+   project is the same race as the project changing, and this store answers it
+   the same way everywhere. What differs is only where the second half of the
+   pair is read from. Those three take it off `vcsState.selected`, which
+   `selectRepo` writes synchronously before any await; nothing writes such a
+   token for this loader, because the repository never comes from the store at
+   all, so `remoteBranchesAsked` below is it.
 
    `loading` is untouched, for `loadBranchList`'s reason: this read costs no
    process at all — files off the disk through `git.rs` — so there is nothing for
@@ -487,16 +527,19 @@ async function loadBranchList() {
    whichever finishes first clears it under the other. */
 export async function loadRemoteBranches(repo) {
   const { project } = vcsState
+  remoteBranchesAsked = repo || null
   if (!repo) {
     vcsState.remoteBranches = []
+    vcsState.remoteBranchesRepo = null
     return
   }
   try {
     const branches = await invoke('vcs_remote_branches', { repo })
-    if (vcsState.project !== project) return
+    if (vcsState.project !== project || remoteBranchesAsked !== repo) return
     vcsState.remoteBranches = branches
+    vcsState.remoteBranchesRepo = repo
   } catch (err) {
-    if (vcsState.project !== project) return
+    if (vcsState.project !== project || remoteBranchesAsked !== repo) return
     /* `vcs_remote_branches` answers with a list for everything it can read and
        refuses nothing, so reaching here means the call itself failed. An empty
        list is what a repository nobody has fetched into already gives, and it is
@@ -505,6 +548,7 @@ export async function loadRemoteBranches(repo) {
        failure of a read nothing on screen announces belongs. */
     console.error('[vcs] listing remote branches failed:', err)
     vcsState.remoteBranches = []
+    vcsState.remoteBranchesRepo = null
   }
 }
 
@@ -1100,6 +1144,7 @@ function reset() {
   vcsState.tree = null
   vcsState.branches = []
   vcsState.remoteBranches = []
+  vcsState.remoteBranchesRepo = null
   vcsState.tracking = {}
   vcsState.error = null
   vcsState.writeError = null
