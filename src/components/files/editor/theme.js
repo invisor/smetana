@@ -12,21 +12,47 @@
    EditorView.darkTheme facet, which the base themes of the search panel and of
    special-character rendering watch — and they would start substituting their
    own hardcoded colours through the &light / &dark placeholders. So the theme
-   below is exhaustive: everything the base themes would paint themselves is
-   repainted with a token.
+   below has to answer for everything the base themes would paint themselves,
+   and repaint it with a token. Two rules where it does not yet are named at the
+   end of this note.
 
-   Exhaustive means at the base theme's own specificity, and naming the class is
-   not enough. Anything written through &light / &dark carries the placeholder's
-   class in the selector, so those rules are at least one class deeper than a
-   plain one of ours — and the selection layer's are five deep. Naming the same
-   class more shallowly loses, whatever order the sheets reach the document in,
-   and for a long time the selection was drawn in @codemirror/view's own lilac
-   because of it. See the selection block below for what that shape has to be.
+   Answering means naming the class at a depth that wins, and for nearly every
+   rule here that depth is the plain one. buildTheme's finish() *replaces*
+   &light and &dark with the placeholder's class rather than adding it to the
+   theme's own (@codemirror/view/dist/index.js, the sel.replace in finish), so a
+   base `&light X` rule and a plain `X` of ours compile to exactly the same
+   depth — measured from the mounted sheet for .cm-content, .cm-gutters,
+   .cm-activeLine, .cm-specialChar, .cm-panels and .cm-textfield, every one of
+   them an exact tie. A tie is settled by the order the style modules reach the
+   document, ours is mounted last, and ours wins: the same derivation the
+   `conflict` block below sets out at length, and the same conclusion.
+
+   So a rule here needs the base's own shape only where the base's own selector
+   is strictly deeper than a plain one, and there is one such family: the
+   selection layer while the field has the focus, five classes against a plain
+   rule's two. It is the one place a plain rule was ever losing. See the
+   selection block below for what that shape has to be.
 
    Bracket matching is repainted for a different reason: its base in
    @codemirror/language is a flat, unconditional colour that never looks at the
    darkTheme facet at all — so it would have to be overridden in any case,
-   regardless of this flag. */
+   regardless of this flag.
+
+   The two rules outside the claim, both older than this note and both filed as
+   work of their own rather than fixed here, so that the claim above stops
+   promising what the file does not deliver:
+
+   - a **pressed** search-panel button still takes the base theme's gradient.
+     `&light .cm-button` in @codemirror/view nests an `&:active` inside itself,
+     which compiles a class deeper than the plain `.cm-button` below, so the
+     `backgroundImage: 'none'` there covers the resting button and not the
+     pressed one — and the comment above that block is wrong to say the gradient
+     is suppressed outright.
+   - a **non-matching** bracket keeps the ground @codemirror/language gives it
+     (`&.cm-focused .cm-nonmatchingBracket` in its own base theme). That one is
+     not a depth argument at all: the rule below sits at the same depth and
+     answers the colour only, never the background, so there is nothing for it
+     to win. */
 import { EditorView } from '@codemirror/view'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
@@ -82,11 +108,11 @@ const chrome = EditorView.theme({
      `&light.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground`
      for one that has it — two classes deep and five. Both go through &light,
      which with the darkTheme facet down (see the top of this file) is the branch
-     the editor always takes, so both are that package's own hardcoded hexes and
-     both are what a tie would go to. What was here was a single two-class
-     rule, and it lost the focused case outright: selecting a whole file painted
-     it in the base theme's lilac, in both app themes, with the text no longer
-     readable over it.
+     the editor always takes, so both are that package's own hardcoded colours.
+     What was here was a single two-class rule. It tied with the first, which
+     our mount order won, and lost the second outright: selecting a whole file
+     painted it in the base theme's lilac, in both app themes, with the text no
+     longer readable over it. Only the focused state was ever wrong.
 
      So each is answered at its own shape, plus one class. `.cm-layer` is that
      class and it is the same element — LayerView puts cm-layer and
