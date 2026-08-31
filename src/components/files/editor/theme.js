@@ -15,6 +15,14 @@
    below is exhaustive: everything the base themes would paint themselves is
    repainted with a token.
 
+   Exhaustive means at the base theme's own specificity, and naming the class is
+   not enough. Anything written through &light / &dark carries the placeholder's
+   class in the selector, so those rules are at least one class deeper than a
+   plain one of ours — and the selection layer's are five deep. Naming the same
+   class more shallowly loses, whatever order the sheets reach the document in,
+   and for a long time the selection was drawn in @codemirror/view's own lilac
+   because of it. See the selection block below for what that shape has to be.
+
    Bracket matching is repainted for a different reason: its base in
    @codemirror/language is a flat, unconditional colour that never looks at the
    darkTheme facet at all — so it would have to be overridden in any case,
@@ -68,7 +76,35 @@ const chrome = EditorView.theme({
     borderLeftColor: 'var(--editor-cursor)',
     borderLeftWidth: 'var(--border-w-strong)'
   },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+  /* The selection, and it is two rules because @codemirror/view's base theme
+     paints it with two: `&light .cm-selectionBackground` for a field that has
+     lost the focus, and
+     `&light.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground`
+     for one that has it — two classes deep and five. Both go through &light,
+     which with the darkTheme facet down (see the top of this file) is the branch
+     the editor always takes, so both are that package's own hardcoded hexes and
+     both are what a tie would go to. What was here was a single two-class
+     rule, and it lost the focused case outright: selecting a whole file painted
+     it in the base theme's lilac, in both app themes, with the text no longer
+     readable over it.
+
+     So each is answered at its own shape, plus one class. `.cm-layer` is that
+     class and it is the same element — LayerView puts cm-layer and
+     cm-selectionLayer on the one div it appends to the scroller — which carries
+     both rules past the base's rather than level with it, so neither depends on
+     our style module being mounted after the base one. !important was the other
+     way and is forbidden here.
+
+     They are two keys and deliberately not one comma list, which is what
+     style-mod would have emitted as a single rule with two selectors. Browsers
+     take such a rule's specificity from whichever of its selectors matched, and
+     happy-dom — the DOM this repository's tests run in — takes it from the first
+     one written, so a list would have been a rule that behaves one way in the
+     product and another way anywhere it could be checked. */
+  '.cm-layer.cm-selectionLayer .cm-selectionBackground': {
+    backgroundColor: 'var(--editor-selection)'
+  },
+  '&.cm-focused > .cm-scroller > .cm-layer.cm-selectionLayer .cm-selectionBackground': {
     backgroundColor: 'var(--editor-selection)'
   },
   '.cm-selectionMatch': { backgroundColor: 'var(--editor-selection-match)' },
