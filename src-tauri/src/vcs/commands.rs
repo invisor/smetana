@@ -1527,8 +1527,17 @@ mod tests {
         let repo = conflicting("in-progress-stale");
         // A rebase that stops, is resolved, and is carried to the end. This is
         // what leaves `REBASE_HEAD` behind.
+        //
+        // **The backend is pinned rather than read off the machine**, the rule
+        // `conflicting` states about the branch name: `apply` sweeps
+        // `REBASE_HEAD` on `--continue` where the default `merge` does not, so
+        // a contributor with `rebase.backend = apply` in their global config
+        // would fail this test over their own configuration. `-c` beats a
+        // config file at every level, and pinning the start is enough — the
+        // backend is settled when the rebase begins and `--continue` reads it
+        // back out of the state git kept.
         run::git_write(&repo, &["checkout", "-q", "feature"]).expect("onto feature");
-        let _ = run::git_write(&repo, &["rebase", "main"]);
+        let _ = run::git_write(&repo, &["-c", "rebase.backend=merge", "rebase", "main"]);
         fs::write(repo.join("f.txt"), "resolved\n").expect("resolve");
         run::git_write(&repo, &["add", "f.txt"]).expect("stage the resolution");
         run::git_write(&repo, &["-c", "core.editor=true", "rebase", "--continue"])
@@ -1574,5 +1583,34 @@ mod tests {
         assert_eq!(in_progress(&repo).expect("ask git"), None);
 
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **A folder git cannot read is a refusal and never "no rebase".**
+    ///
+    /// The rebase arm reads exit 128 as its answer, which is git's *generic*
+    /// fatal code, and git exits 128 for **both** questions here ("fatal: not a
+    /// git repository"). What keeps that from turning a repository nobody can
+    /// read into a confident `None` — a panel drawing no button and saying
+    /// nothing about why — is that some question in this function still refuses
+    /// it, and until this test nothing mechanical held that.
+    ///
+    /// Measured, so the guarantee is not overstated: **swapping the order of
+    /// the two arms alone does not break it**, because the merge question then
+    /// refuses a step later and the answer is the same. What breaks it is
+    /// dropping the `MERGE_HEAD` question, or loosening the exit code it takes
+    /// as an answer so that it stops refusing — both of which fail here.
+    ///
+    /// The idiom is `a_folder_outside_git_has_no_branches_and_no_error`'s, and
+    /// the opposite answer on purpose: that command promises never to refuse,
+    /// and this one carries git's own words.
+    #[test]
+    fn a_folder_outside_git_is_refused_rather_than_called_idle() {
+        let root = scratch("in-progress-no-git");
+
+        let refused = in_progress(&root).expect_err("git cannot read this folder");
+
+        assert_eq!(refused.kind(), "git");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
