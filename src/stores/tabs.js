@@ -422,6 +422,53 @@ export function closeTab(path) {
   }
 }
 
+/* One open tab whose file has been renamed or moved: the id changes and nothing
+   else does.
+
+   The buffer travels whole — text, `original`, `mtime`, `error`, `saveError`,
+   `stale` and `loading` — and that is the decision rather than an omission. The
+   alternative was closing the tab, the way a delete closes it, and it throws
+   away a person's place in the file for nothing: unlike a delete the file is
+   still there, its `mtime` has not moved, and the buffer is as valid as it was
+   a moment ago. A tab that was dirty is still dirty afterwards, and the next
+   Cmd+S writes what was typed to the new path.
+
+   The entry in the arranged order comes along too — `replaceInOrder`, the same
+   function the preview slot uses, which also takes out an older mention of the
+   incoming path so that `orderTabs` cannot read the tab at two positions.
+
+   `to` is expected to be free: `files_rename` refuses a name already taken and
+   `files_move` lands on one nothing is standing on, so a tab already open under
+   it would be a tab over a file that has just been replaced. It is answered by
+   doing nothing rather than by merging two buffers into one, since there is no
+   right answer to which of the two texts survives.
+
+   A folder move is this function once per open tab under it: the mapping from
+   old path to new is the caller's, because only the caller knows which folder
+   moved where. */
+export function renameTab(from, to) {
+  const state = project()
+  if (from === to) return
+  const at = state.openTabs.indexOf(from)
+  if (at === -1 || state.openTabs.includes(to)) return
+  state.openTabs.splice(at, 1, to)
+  replaceInOrder(state, from, to)
+  const buffer = buffers.get(from)
+  if (buffer) {
+    buffers.set(to, buffer)
+    buffers.delete(from)
+    /* A read still in flight was fired against the old path and its guard on
+       the way back is `buffers.has(from)`, which is false from this line on —
+       so it would land nowhere and the tab would sit at `loading` for ever,
+       read-only and empty. Asking again under the new name is the whole of the
+       repair, and the window it covers is the milliseconds between opening a
+       file and renaming it. */
+    if (buffer.loading) load(to)
+  }
+  if (state.previewTab === from) state.previewTab = to
+  if (state.activeTab === from) state.activeTab = to
+}
+
 /* A changed file from the Git panel, opened as a diff: HEAD on the left, the
    working tree on the right.
 

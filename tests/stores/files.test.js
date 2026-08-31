@@ -37,6 +37,33 @@ describe('error texts', () => {
     expect(files.fileErrorText({ kind: 'tooBig' })).toBe('That is too much to copy at once.')
   })
 
+  it('a copy speaks about copying, in words of its own', () => {
+    // The two kinds only these verbs can produce. `Could not copy it.` is the
+    // fallback, and it is not the sentence either of them deserves.
+    expect(files.copyErrorText({ kind: 'intoSelf' })).toBe('A folder cannot go inside itself.')
+    expect(files.copyErrorText({ kind: 'tooBig' })).toBe('That folder is too big to copy here.')
+    expect(files.copyErrorText({ kind: 'something-new' })).toBe('Could not copy it.')
+  })
+
+  it('a rename speaks about renaming, and borrows only the two sentences about a name', () => {
+    // `alreadyExists` in a copy is about a landing spot the app chose; here it
+    // is about the word somebody typed, which is the whole reason the two verbs
+    // do not share a table.
+    expect(files.renameErrorText({ kind: 'alreadyExists' })).toBe(
+      files.makeErrorText({ kind: 'alreadyExists' })
+    )
+    expect(files.renameErrorText({ kind: 'badName' })).toBe(files.makeErrorText({ kind: 'badName' }))
+    expect(files.renameErrorText({ kind: 'denied' })).toBe('No permission to rename it.')
+    expect(files.renameErrorText({ kind: 'something-new' })).toBe('Could not rename it.')
+  })
+
+  it('no refusal of a copy or a rename falls back to a sentence about reading a file', () => {
+    for (const kind of ['notFound', 'denied', 'outside', 'io', 'something-new']) {
+      expect(files.copyErrorText({ kind })).not.toMatch(/read this file/)
+      expect(files.renameErrorText({ kind })).not.toMatch(/read this file/)
+    }
+  })
+
   it('a write speaks about writing, not about reading', () => {
     expect(files.saveErrorText({ kind: 'denied' })).toBe('No permission to write this file.')
   })
@@ -249,6 +276,107 @@ describe('createFile, createDir and trashPath', () => {
       kind: 'denied',
       message: 'src/main.rs'
     })
+  })
+})
+
+describe('the clipboard, and the three verbs that move bytes', () => {
+  it('remembers what was copied, and keeps it after a paste', async () => {
+    // VS Code keeps it too, and it is what makes pasting one thing into three
+    // folders one gesture repeated rather than three copies.
+    ipc.on('files_copy', 'lib/a.txt')
+    files.setClipboard(['src/a.txt'], 'copy')
+
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/a.txt'], mode: 'copy' })
+    await files.copyEntry('src/a.txt', 'lib')
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/a.txt'], mode: 'copy' })
+  })
+
+  it('remembers what was cut, and forgets it once it has been moved', async () => {
+    ipc.on('files_move', 'lib/a.txt')
+    files.setClipboard(['src/a.txt'], 'cut')
+
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/a.txt'], mode: 'cut' })
+    await files.moveEntry('src/a.txt', 'lib')
+    expect(files.filesState.clipboard).toBe(null)
+  })
+
+  it('leaves a pending cut alone when something else is what moved', async () => {
+    ipc.on('files_move', 'lib/b.txt')
+    files.setClipboard(['src/a.txt'], 'cut')
+
+    await files.moveEntry('src/b.txt', 'lib')
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/a.txt'], mode: 'cut' })
+  })
+
+  it('keeps the record after a move that was refused, so the row stays muted', async () => {
+    ipc.fail('files_move', { kind: 'denied', message: 'lib' })
+    files.setClipboard(['src/a.txt'], 'cut')
+
+    await expect(files.moveEntry('src/a.txt', 'lib')).rejects.toMatchObject({ kind: 'denied' })
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/a.txt'], mode: 'cut' })
+  })
+
+  it('holds a copy of the list it was given rather than the caller\'s own array', async () => {
+    const paths = ['src/a.txt']
+    files.setClipboard(paths, 'copy')
+    paths.push('src/b.txt')
+
+    expect(files.filesState.clipboard.paths).toEqual(['src/a.txt'])
+  })
+
+  it('a second copy replaces the first: there is one clipboard, the way there always is', () => {
+    files.setClipboard(['src/a.txt'], 'cut')
+    files.setClipboard(['src/b.txt'], 'copy')
+
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/b.txt'], mode: 'copy' })
+    files.clearClipboard()
+    expect(files.filesState.clipboard).toBe(null)
+  })
+
+  it('throws the record away with the project, since every path in it was relative to that root', () => {
+    files.setClipboard(['src/a.txt'], 'copy')
+    files.setRoot('/other')
+
+    expect(files.filesState.clipboard).toBe(null)
+  })
+
+  it('sends the tree path and the destination folder to files_copy', async () => {
+    ipc.on('files_copy', 'lib/a.txt')
+
+    await expect(files.copyEntry('src/a.txt', 'lib')).resolves.toBe('lib/a.txt')
+    expect(ipc.calls('files_copy')).toEqual([{ root: '/project', src: 'src/a.txt', dstDir: 'lib' }])
+  })
+
+  it('sends the same pair to files_move, and answers with where it landed', async () => {
+    ipc.on('files_move', 'lib/a.txt')
+
+    await expect(files.moveEntry('src/a.txt', 'lib')).resolves.toBe('lib/a.txt')
+    expect(ipc.calls('files_move')).toEqual([{ root: '/project', src: 'src/a.txt', dstDir: 'lib' }])
+  })
+
+  it('sends a path and a name apart to files_rename, which is what the check in Rust is made of', async () => {
+    ipc.on('files_rename', 'src/b.txt')
+
+    await expect(files.renameEntry('src/a.txt', 'b.txt')).resolves.toBe('src/b.txt')
+    expect(ipc.calls('files_rename')).toEqual([
+      { root: '/project', path: 'src/a.txt', name: 'b.txt' }
+    ])
+  })
+
+  it('a refusal is thrown rather than parked in lastError, since somebody asked for it just now', async () => {
+    ipc.fail('files_copy', { kind: 'intoSelf', message: 'src/a' })
+
+    await expect(files.copyEntry('src/a', 'src/a/b')).rejects.toEqual({
+      kind: 'intoSelf',
+      message: 'src/a'
+    })
+    expect(files.filesState.lastError).toBe(null)
+  })
+
+  it('a delivery error is reduced to the io kind, which is what npm run dev answers', async () => {
+    ipc.fail('files_rename', new Error('mockBackend: "files_rename" is not implemented'))
+
+    await expect(files.renameEntry('src/a.txt', 'b.txt')).rejects.toMatchObject({ kind: 'io' })
   })
 })
 

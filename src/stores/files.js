@@ -21,6 +21,18 @@ export const filesState = reactive({
   /* The directories currently being read. A second read of the same directory
      does not start: expand-collapse-expand must not produce three requests. */
   loading: new Set(),
+  /* What Cut or Copy in the tree put here, or null: `{ paths, mode }`, `mode`
+     being 'copy' or 'cut'. The tree's own clipboard and not the machine's — the
+     system pasteboard is a later piece of work, and this record is what the
+     five verbs in the menu run on.
+
+     `paths` is an array although the tree selects one entry at a time, so that
+     multiple selection — out of scope here and asked for often — does not
+     change the shape of what everything downstream reads. The paths are
+     relative to `root`, like every other path in this store, which is also why
+     `setRoot` throws the record away: they name nothing in the project being
+     moved to. */
+  clipboard: null,
   lastError: null
 })
 
@@ -63,14 +75,14 @@ const ERRORS = {
      see MAKE_ERRORS, which is where a person actually meets them. */
   alreadyExists: NAME_TAKEN,
   badName: NAME_REFUSED,
-  /* And the last two, from `files_copy` and `files_move`, which nothing on
-     screen calls yet — the menu that will is a later task. They are written now
-     for the reason the four above them are: an unknown kind falls back
-     silently, so a refused folder copy would read "Could not read this file."
-     with no error anywhere and both suites green. `intoSelf` is a folder
-     dropped onto itself or onto something under it; `tooBig` is the ceiling on
-     a copy, 10 000 entries or 1 GiB, which exists because there is no progress
-     bar here and no way to cancel. */
+  /* And the last two, from `files_copy` and `files_move`. They are here for the
+     reason the four above them are — this table is the fallback every kind that
+     crosses the IPC lands in, and one missing from it falls back silently to a
+     sentence about reading a file — while where a person actually meets them is
+     COPY_ERRORS below. `intoSelf` is a folder dropped onto itself or onto
+     something under it; `tooBig` is the ceiling on a copy, 10 000 entries or
+     1 GiB, which exists because there is no progress bar here and no way to
+     cancel. */
   intoSelf: 'A folder cannot be put inside itself.',
   tooBig: 'That is too much to copy at once.',
   io: 'Could not read this file.'
@@ -80,11 +92,18 @@ export function fileErrorText(error) {
   return ERRORS[error?.kind] ?? ERRORS.io
 }
 
-/* The same error kinds, but for writes. A separate map rather than a shared
-   one: "No permission to read this file." after a refused Cmd+S describes
-   something other than what happened, and the person looks for the cause in the
-   wrong place. There is deliberately no `stale` key here — a stale mtime is
-   handled by its own branch with buttons. */
+/* The same error kinds, but for writes.
+
+   The tables here are named by the verb each speaks for and none of them is
+   numbered: an ordinal is written once while the list keeps growing under it,
+   and this file carried two "fifth"s at the same time before the habit was
+   dropped.
+
+   A separate map rather than a shared one: "No permission to read this file."
+   after a refused Cmd+S describes something other than what happened, and the
+   person looks for the cause in the wrong place. There is deliberately no
+   `stale` key here — a stale mtime is handled by its own branch with
+   buttons. */
 const SAVE_ERRORS = {
   notFound: 'This file is gone from disk — nothing was written.',
   denied: 'No permission to write this file.',
@@ -97,9 +116,9 @@ export function saveErrorText(error) {
   return SAVE_ERRORS[error?.kind] ?? SAVE_ERRORS.io
 }
 
-/* And a third map, for directories. A person sees a directory read refusal as
-   a toast, and "This file is gone from disk." under a folder's name describes
-   something other than what happened. */
+/* And one for directories. A person sees a directory read refusal as a toast,
+   and "This file is gone from disk." under a folder's name describes something
+   other than what happened. */
 const DIR_ERRORS = {
   notFound: 'This folder is gone from disk.',
   denied: 'No permission to read this folder.',
@@ -112,8 +131,8 @@ export function dirErrorText(error) {
   return DIR_ERRORS[error?.kind] ?? DIR_ERRORS.io
 }
 
-/* A fourth, for making a file or a folder. The two kinds above it are the whole
-   reason it exists — nothing else in this store can be refused because a name
+/* One for making a file or a folder. The two kinds at the top of it are the
+   whole reason it exists — nothing else in this store can be refused because a name
    is taken — and the rest of it says "nothing was created", which is true of
    every refusal here: `resolve_new_within` decides before anything is opened,
    and `create_new` is the one call that could have raced, so there is no
@@ -132,7 +151,51 @@ export function makeErrorText(error) {
   return MAKE_ERRORS[error?.kind] ?? MAKE_ERRORS.io
 }
 
-/* And a fifth, for the one verb that destroys. `badName` covers two things here
+/* One for the three verbs that move bytes: copy, move, and the paste and
+   duplicate built on them. Separate from the making table above for the reason
+   that one is separate from the reading one — "nothing was created" describes
+   something other than a refused paste, and a person looks for the cause in the
+   wrong place. The two kinds at the top are its own and reach no other table a
+   person sees: a folder dropped into itself, and the ceiling on a copy
+   (10 000 entries or 1 GiB), which exists because there is no progress bar here
+   and nothing to cancel with. */
+const COPY_ERRORS = {
+  intoSelf: 'A folder cannot go inside itself.',
+  tooBig: 'That folder is too big to copy here.',
+  alreadyExists: NAME_TAKEN,
+  badName: NAME_REFUSED,
+  notFound: 'That is gone from disk.',
+  denied: 'No permission to write there.',
+  notAFile: 'That is not a folder.',
+  outside: 'That path is outside the project.',
+  io: 'Could not copy it.'
+}
+
+export function copyErrorText(error) {
+  return COPY_ERRORS[error?.kind] ?? COPY_ERRORS.io
+}
+
+/* And one for the verb whose argument is a name somebody typed. It borrows the
+   making table's two sentences about a name, which is the whole
+   reason it is not the copy table — `alreadyExists` there is about a landing
+   spot the app chose and here it is about the word in the field — and it says
+   "nothing was renamed" everywhere else, because a `rename` either happened or
+   did not and there is no half-renamed state to describe. */
+const RENAME_ERRORS = {
+  alreadyExists: NAME_TAKEN,
+  badName: NAME_REFUSED,
+  notFound: 'That is gone from disk — nothing was renamed.',
+  denied: 'No permission to rename it.',
+  notAFile: 'That is not a folder — nothing was renamed.',
+  outside: 'That path is outside the project — nothing was renamed.',
+  io: 'Could not rename it.'
+}
+
+export function renameErrorText(error) {
+  return RENAME_ERRORS[error?.kind] ?? RENAME_ERRORS.io
+}
+
+/* And one for the verb that destroys. `badName` covers two things here
    and neither is a name somebody typed, which is why it does not borrow the
    making table's sentence: the project's own root, by whichever spelling
    reached the command, and a last segment Rust will not take as a name. The
@@ -183,6 +246,10 @@ function report(where, error) {
 export function setRoot(path) {
   filesState.root = path
   filesState.dirs = new Map()
+  /* Every path in the record is relative to the root that is going away, so in
+     the project being moved to it names either nothing or, worse, something
+     else entirely. */
+  filesState.clipboard = null
   /* The instance is deliberately not replaced: otherwise the finally of a read
      already in flight would clear the mark of somebody else's just-started
      request on the new Set. */
@@ -273,6 +340,75 @@ export async function createDir(dir, name) {
     console.error(`[files] could not create the folder ${dir || '(root)'}/${name}:`, error)
     throw error
   }
+}
+
+/* A copy of one entry into a folder, answering the path it landed on — which
+   need not be the name it came in with: nothing here overwrites and nothing
+   asks, so `report.md` into a folder that has one becomes `report copy.md`
+   (`copy_candidates` in `files/model.rs`). Duplicate is this same call with the
+   entry's own folder as the destination, which is why there is no third
+   command for it.
+
+   The clipboard is deliberately untouched by a copy. VS Code keeps what was
+   copied after a paste, and it is the behaviour that makes pasting the same
+   thing into three folders one gesture repeated rather than three copies. */
+export async function copyEntry(src, dstDir) {
+  try {
+    return await invoke('files_copy', { root: filesState.root, src, dstDir })
+  } catch (err) {
+    const error = normalize(err)
+    console.error(`[files] could not copy ${src} into ${dstDir || '(root)'}:`, error)
+    throw error
+  }
+}
+
+/* The same journey with nothing left behind, and the one verb here that empties
+   the clipboard.
+
+   It empties it only when the record is about the path that just moved, which
+   is what makes the emptying mean something: a cut entry is drawn muted until
+   the clipboard is used or replaced, and after this call the entry is not where
+   the record says it is. A move of something else — a drag, one day — leaves a
+   pending cut alone. */
+export async function moveEntry(src, dstDir) {
+  try {
+    const made = await invoke('files_move', { root: filesState.root, src, dstDir })
+    if (filesState.clipboard?.paths.includes(src)) filesState.clipboard = null
+    return made
+  } catch (err) {
+    const error = normalize(err)
+    console.error(`[files] could not move ${src} into ${dstDir || '(root)'}:`, error)
+    throw error
+  }
+}
+
+/* A new name in the folder the entry is already in. A path and a name rather
+   than two paths, because the name is what has to be checked — the same split
+   `createFile` and `createDir` are built on, and `files/fs.rs` explains why the
+   split *is* the check. */
+export async function renameEntry(path, name) {
+  try {
+    return await invoke('files_rename', { root: filesState.root, path, name })
+  } catch (err) {
+    const error = normalize(err)
+    console.error(`[files] could not rename ${path} to ${name}:`, error)
+    throw error
+  }
+}
+
+/* What Cut and Copy do, and the whole of it: a record, no disk and no await.
+   Nothing is read or written until a paste, which is what makes cutting a
+   folder of any size instant and what makes changing one's mind free.
+
+   A second copy replaces the first rather than adding to it — one clipboard,
+   the way every clipboard is — and that is also what takes the muting off a row
+   cut a moment ago. */
+export function setClipboard(paths, mode) {
+  filesState.clipboard = { paths: [...paths], mode }
+}
+
+export function clearClipboard() {
+  filesState.clipboard = null
 }
 
 /* Into the system trash, where it can be got back from. The name says so: a

@@ -5,7 +5,7 @@
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
-import { fileMenuItems } from '../components/files/fileMenu.js'
+import { FILE_MENU_W, fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import {
   copyNoun as copyVerbNoun,
@@ -694,6 +694,14 @@ const galleryTree = MOCK_TREE[''].map((node) =>
   node.kind === 'dir' ? { ...node, children: MOCK_TREE[node.path] ?? [] } : node
 )
 const galleryTreeExpanded = { src: true }
+
+/* A pending cut, for the first of the three trees below. It is what wires the
+   whole path together on this page — the record goes in as a prop, the row it
+   names is drawn muted, and the tree's own menu offers Paste rather than
+   greying it — where the section under this one draws the muted row by hand.
+   Two of the three trees are left with no record on purpose, so the greyed
+   Paste and the live one are side by side. */
+const galleryClipboard = { paths: ['src/agent.rs'], mode: 'cut' }
 
 /* Four of the answers the footer strip has to draw, since a state is not a prop
    somebody can flip on this page: a reading in the middle band with both halves
@@ -1817,13 +1825,46 @@ const fileMenuBoxStyle = {
    puts inside itself anyway. The unarmed list is beside it, because what has to
    be read here is the difference between the two: one row's words, in the same
    place, in the same tone. */
-const FILE_MENU = fileMenuItems({ target: 'file', canAttach: true, hasLiveAgent: true })
+const FILE_MENU = fileMenuItems({
+  target: 'file',
+  canAttach: true,
+  hasLiveAgent: true,
+  canPaste: true
+})
 const ARMED_FILE_MENU = fileMenuItems({
   target: 'file',
   canAttach: true,
   hasLiveAgent: true,
+  canPaste: true,
   confirmingDelete: true
 })
+/* Paste in each of the two states it is refused in. It is the one row of the
+   clipboard group that is greyed rather than absent, and both of its reasons
+   are written into the label itself — a row here clips rather than wraps and
+   has no tooltip, so the width is what has to hold the longer sentence. The
+   second is drawn on a folder because it is the only place it can happen: a
+   folder is what a folder can be pasted into. */
+const NOTHING_COPIED_FILE_MENU = fileMenuItems({
+  target: 'file',
+  canAttach: true,
+  hasLiveAgent: true
+})
+const PASTE_INTO_SELF_FILE_MENU = fileMenuItems({
+  target: 'dir',
+  canAttach: true,
+  hasLiveAgent: true,
+  pasteReason: 'intoSelf'
+})
+
+/* The box the two fixture trees above sit in. It was written inline twice and
+   is one constant now that there are two of them: a box that differed between
+   the making states and the cut ones would put the two sets of rows at
+   different widths, which is the one thing this section is for comparing. */
+const fileTreeStatesStyle = {
+  width: '240px',
+  border: 'var(--border-w) solid var(--border)',
+  borderRadius: 'var(--radius-3)'
+}
 
 const menuTargetStyle = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2863,8 +2904,16 @@ const menuTargetStyle = {
 
          All three are taller than their trees on purpose: the space below the
          last row opens the root's menu, which is the one without Attach to
-         agent or Delete on it, and the only way to reach the second half of
-         this menu in a project whose first screen is nothing but folders. -->
+         agent or Delete on it — and, of the clipboard group, with Paste alone
+         on it — and the only way to reach the second half of this menu in a
+         project whose first screen is nothing but folders.
+
+         The first tree is also the one with something on the clipboard: the row
+         it names is drawn muted, its menu offers Paste, and the other two grey
+         that row with the reason in its label. Paste on a folder inside what
+         was cut is the second reason and cannot be reached here, since
+         `src/agent.rs` is a file with nothing under it; it is drawn by hand in
+         the section below. -->
     <section :style="sectionStyle">
       <div :style="headStyle">File tree menu</div>
       <div :style="rowStyle">
@@ -2875,6 +2924,7 @@ const menuTargetStyle = {
             selected-path="Cargo.toml"
             can-attach
             has-live-agent
+            :clipboard="galleryClipboard"
             @action="() => {}"
           />
         </div>
@@ -2898,30 +2948,56 @@ const menuTargetStyle = {
       </div>
     </section>
 
-    <!-- The two halves of the menu that write to disk, in the states they are
-         hard to reach in a browser: the draft row, which in the app appears
-         only after a pick, and Delete asking a second time, which needs a panel
-         that has stayed open through one.
+    <!-- Every state of the tree that writes to disk, in the forms they are hard
+         to reach in a browser: the draft row, which in the app appears only
+         after a pick; the same row filled for a rename; a row that has been
+         cut; and Delete asking a second time, which needs a panel that has
+         stayed open through one pick.
 
          The draft rows are drawn between ordinary tree rows on purpose — this
          section exists to check one thing, that the row is a place in the tree
          and not something floating over it. Height, indent per level and type
          have to match the rows above and below exactly, in both densities and
          both themes; a field built out of `Input` would be `--control-h` tall
-         and would say so by pushing everything under it down. -->
+         and would say so by pushing everything under it down. The rename row is
+         the same check with the field full: a name of any length must not push
+         the row wider or taller than the ones it sits between.
+
+         What this page cannot show is the selection inside the rename field.
+         `focusOnMount` is off here for the reason that prop's own comment gives
+         — a field that focuses itself scrolls this page to itself on load —
+         and a selection is only painted in a focused field. The rule behind it
+         is `renameName.js`'s and is checked by its own test.
+
+         The second box is the cut row, which is the one thing on screen that
+         says a cut is pending: nothing has happened on disk, so the muting is
+         the whole of the signal. It is drawn on a file, on a folder and on the
+         selected row, because the selected surface underneath is where a
+         dimming is easiest to get wrong. -->
     <section :style="sectionStyle">
-      <div :style="headStyle">File tree: making and deleting</div>
+      <div :style="headStyle">File tree: making, renaming and deleting</div>
       <div :style="rowStyle">
-        <div :style="{ width: '240px', border: 'var(--border-w) solid var(--border)', borderRadius: 'var(--radius-3)' }">
+        <div :style="fileTreeStatesStyle">
           <FileTreeRow name="src" kind="dir" :depth="0" expanded />
           <FileTreeDraftRow kind="file" :depth="1" :focus-on-mount="false" />
           <FileTreeRow name="App.vue" kind="file" :depth="1" />
+          <FileTreeDraftRow kind="file" :depth="1" value="report.md" :focus-on-mount="false" />
           <FileTreeRow name="main.js" kind="file" :depth="1" />
           <FileTreeDraftRow kind="dir" :depth="0" :focus-on-mount="false" />
           <FileTreeRow name="Cargo.toml" kind="file" :depth="0" selected />
         </div>
-        <ContextMenu :items="FILE_MENU" :width="300" />
-        <ContextMenu :items="ARMED_FILE_MENU" :width="300" />
+        <div :style="fileTreeStatesStyle">
+          <FileTreeRow name="src" kind="dir" :depth="0" expanded />
+          <FileTreeRow name="App.vue" kind="file" :depth="1" cut />
+          <FileTreeRow name="main.js" kind="file" :depth="1" />
+          <FileTreeRow name="node_modules" kind="dir" :depth="0" git="ignored" cut />
+          <FileTreeRow name="docs" kind="dir" :depth="0" cut />
+          <FileTreeRow name="Cargo.toml" kind="file" :depth="0" selected cut />
+        </div>
+        <ContextMenu :items="FILE_MENU" :width="FILE_MENU_W" />
+        <ContextMenu :items="ARMED_FILE_MENU" :width="FILE_MENU_W" />
+        <ContextMenu :items="NOTHING_COPIED_FILE_MENU" :width="FILE_MENU_W" />
+        <ContextMenu :items="PASTE_INTO_SELF_FILE_MENU" :width="FILE_MENU_W" />
       </div>
     </section>
 

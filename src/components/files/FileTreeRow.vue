@@ -25,7 +25,17 @@ const props = defineProps({
   /* Whether the tree's one context menu is currently open on this row. The row
      does not decide it: `PointerMenu` hands the panel's key back with the pick
      and clears it on close, so the highlight and the panel cannot come apart. */
-  menuOpen: { type: Boolean, default: false }
+  menuOpen: { type: Boolean, default: false },
+  /* Whether this row is what Cut put on the tree's clipboard. It is drawn
+     muted until the clipboard is used or replaced — VS Code's signal, and the
+     only thing on screen that says a cut is pending, since nothing has happened
+     on disk yet.
+
+     `--attn-quiet-opacity`, the token the `quiet` attention level already
+     spends: a second colour for this would be a colour with no meaning in a
+     system where the saturated range belongs to status, and dimming is what
+     this app already means by "spoken for, not now". */
+  cut: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['toggle', 'select', 'open', 'menu'])
@@ -60,7 +70,11 @@ const style = computed(() => ({
       ? 'var(--surface-hover)'
       : 'transparent',
   color: props.git === 'ignored' ? 'var(--text-muted)' : 'var(--text-primary)',
-  opacity: props.git === 'ignored' ? 0.7 : 1,
+  /* The cut wins over the ignored row's own dimming rather than multiplying
+     with it: two reasons to be faint would leave an ignored file that has been
+     cut fainter than either, and nothing on screen to say which of the two it
+     is. */
+  opacity: props.cut ? 'var(--attn-quiet-opacity)' : props.git === 'ignored' ? 0.7 : 1,
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
   cursor: 'default',
   transition: 'var(--transition-control)'

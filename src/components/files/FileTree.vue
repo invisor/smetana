@@ -18,7 +18,8 @@ import { computed, ref } from 'vue'
 import FileTreeRow from './FileTreeRow.vue'
 import FileTreeDraftRow from './FileTreeDraftRow.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
-import { fileMenuItems, folderOf } from './fileMenu.js'
+import { FILE_MENU_W, fileMenuItems, folderOf } from './fileMenu.js'
+import { canPasteInto } from './fileClipboard.js'
 import { isStubPath } from '../../paths.js'
 
 const props = defineProps({
@@ -36,21 +37,48 @@ const props = defineProps({
   /* Whether there is a live agent here *at all*, selected or not. It changes no
      row's state, only which of the two reasons the greyed one gives: something
      to pick, or nothing to pick. */
-  hasLiveAgent: { type: Boolean, default: false }
+  hasLiveAgent: { type: Boolean, default: false },
+  /* What Cut or Copy put on the tree's clipboard, or null: `{ paths, mode }`,
+     straight from `filesState`. Two things read it and nothing else does —
+     whether Paste is offered on the folder the menu is open over, and which
+     rows are drawn muted. The record itself is the store's; this component only
+     draws what it says. */
+  clipboard: { type: Object, default: null }
 })
 
 const emit = defineEmits(['toggle', 'select', 'open', 'action'])
 
-/* The entry being named, or null: `{ dir, kind }` — which folder it is going
-   into and whether it is a file or a folder. It is this component's own state
-   and deliberately not a node in `nodes`: the tree is rebuilt from `files_list`
-   every time `catchUp` re-reads a folder on window focus, and a draft mixed into
-   that list would vanish under somebody's hands mid-word.
+/* The entry being named, or null. Two shapes, and the `kind` tells them apart:
+
+     `{ key, kind: 'file' | 'dir', dir }`   a new entry in that folder
+     `{ key, kind: 'rename', path, value }` a new name for the entry at `path`
+
+   The first is drawn first among its folder's contents; the second is drawn
+   **in place of** the row it is about, which is the whole of what says which
+   entry is being renamed.
+
+   `key` is what the cancel is checked against rather than the folder or the
+   path, because it is the one field both shapes have and the one the row is
+   keyed by: a draft replaced by another unmounts the first field, and a browser
+   firing that field's `blur` on the way out would otherwise cancel the draft
+   that replaced it.
+
+   It is this component's own state and deliberately not a node in `nodes`: the
+   tree is rebuilt from `files_list` every time `catchUp` re-reads a folder on
+   window focus, and a draft mixed into that list would vanish under somebody's
+   hands mid-word.
 
    It is one at a time, for the same reason the menu is one panel: a second
    field opened while the first is still being typed into is two answers to one
    question, and the first would be abandoned with no way to say so. */
 const draft = ref(null)
+
+/* The paths a pending Cut named, as a set for the walk below. A copy is not in
+   it: nothing about a copied row changes, because nothing is going to happen to
+   it. */
+const cutPaths = computed(() =>
+  props.clipboard?.mode === 'cut' ? new Set(props.clipboard.paths) : new Set()
+)
 
 /* Flattened to a single list so the tree can be virtualised later without
    restructuring the markup. */
@@ -64,24 +92,38 @@ const rows = computed(() => {
        the sorted position of a name nobody has finished typing moves on every
        keystroke, and a field that walks down the tree under the fingers is
        unusable. VS Code puts it here too. */
-    if (draft.value?.dir === dir) {
-      /* A zero byte in the key, the same trick the “…N more” stub uses: no
-         filesystem lets that character into a name, so a folder holding a file
-         actually called `draft` still cannot collide with this row. */
-      out.push({ draft: true, key: `${dir}\u0000draft`, dir, depth, kind: draft.value.kind })
+    if (draft.value && draft.value.kind !== 'rename' && draft.value.dir === dir) {
+      out.push({ draft: true, key: draft.value.key, depth, kind: draft.value.kind, value: '' })
     }
     for (const n of list) {
       const open = !!props.expanded[n.path] && Array.isArray(n.children)
-      out.push({
-        path: n.path,
-        name: n.name,
-        depth,
-        kind: n.kind || 'file',
-        expanded: open,
-        selected: n.path === props.selectedPath,
-        git: n.git,
-        readOnly: !!n.readOnly
-      })
+      if (draft.value?.kind === 'rename' && draft.value.path === n.path) {
+        /* The field takes the row's place and its indent, and the folder's
+           contents stay where they are underneath: a subtree that vanished
+           while its folder was being renamed and came back on Esc would be the
+           tree moving for a reason nobody asked about. The `kind` here is the
+           entry's own — the draft record carries `'rename'` in that field, and
+           what the row needs is the glyph. */
+        out.push({
+          draft: true,
+          key: draft.value.key,
+          depth,
+          kind: n.kind || 'file',
+          value: draft.value.value
+        })
+      } else {
+        out.push({
+          path: n.path,
+          name: n.name,
+          depth,
+          kind: n.kind || 'file',
+          expanded: open,
+          selected: n.path === props.selectedPath,
+          git: n.git,
+          readOnly: !!n.readOnly,
+          cut: cutPaths.value.has(n.path)
+        })
+      }
       if (n.kind === 'dir' && open && n.children) walk(n.children, depth + 1, n.path)
     }
   }
@@ -94,14 +136,6 @@ const menu = ref(null)
    highlighted while the panel is up. `PointerMenu` clears it on close however
    the menu leaves, which is what keeps the highlight and the panel together. */
 const menuFor = ref(null)
-
-/* A ceiling rather than a width — the panel is as wide as its widest row wants
-   to be, so the ordinary menu is nowhere near this. It is measured against the
-   one row that needs it: `ContextMenu` clips a label rather than wrapping it and
-   gives a row no tooltip, and "Attach to agent — no agent to type into" is the
-   whole reason that item is greyed. At the default type scale it comes to 292px
-   in comfortable density, and this is that with a little room over it. */
-const MENU_W = 300
 
 /* What the open menu is about: a file, a folder, or the project's own root,
    which is what the space below the last row names. Kept beside the path rather
@@ -117,12 +151,26 @@ const menuTarget = ref('root')
    unarmed, and nothing but a second pick on the armed row deletes anything. */
 const confirmingDelete = ref(false)
 
+/* Whether the folder this menu is about can take what is on the clipboard, and
+   why not when it cannot. The rule is `fileClipboard.js`'s, asked here about
+   the same folder the verb would act in — `folderOf`, the answer Open in
+   terminal and the making rows already use — so the row that is greyed and the
+   call that would be made are talking about one place. */
+const paste = computed(() =>
+  canPasteInto({
+    clipboard: props.clipboard,
+    folder: folderOf({ path: menuFor.value ?? '', target: menuTarget.value })
+  })
+)
+
 const items = computed(() =>
   fileMenuItems({
     target: menuTarget.value,
     canAttach: props.canAttach,
     hasLiveAgent: props.hasLiveAgent,
     confirmingDelete: confirmingDelete.value,
+    canPaste: paste.value.ok,
+    pasteReason: paste.value.reason,
     /* Read here rather than in the pure module, which is what keeps the choice
        of noun testable: `fileManagerName` is a function of this string. */
     userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent
@@ -167,15 +215,43 @@ const openRootMenu = (event) => {
 const startDraft = (kind, path) => {
   const dir = folderOf({ path, target: menuTarget.value })
   if (dir !== '' && !props.expanded[dir]) emit('toggle', dir)
-  draft.value = { dir, kind }
+  /* A zero byte in the key, the same trick the “…N more” stub uses: no
+     filesystem lets that character into a name, so a folder holding a file
+     actually called `draft` still cannot collide with this row. */
+  draft.value = { key: `${dir}\u0000draft`, kind, dir }
 }
 
-/* Esc, or the field losing the keyboard. The folder travels with it and is
-   checked, because a draft moved from one folder to another unmounts the first
-   field, and a browser that fires that field's `blur` on the way out would
-   otherwise cancel the draft that replaced it. */
-const cancelDraft = (dir) => {
-  if (draft.value?.dir === dir) draft.value = null
+/* Rename, which leaves this component no more than the two making verbs do:
+   what it puts on screen is the same field, filled, where the row was. The name
+   it opens with is the row's own, read from the tree rather than carried by the
+   menu — the pick hands over a path, and the name is the last segment of it,
+   which is exactly what a rename is about.
+
+   `DesktopApp.vue` hears about it later, as `commit-rename` with a name in
+   hand, so nothing has to be undone if the person changes their mind. */
+const startRename = (path) => {
+  const row = rows.value.find((r) => r.path === path)
+  if (!row) return
+  /* `target` travels with the draft because the pick that opens it and the
+     commit that closes it are separated by however long somebody types, and by
+     then `menuTarget` is about a panel that has gone. It is the row's own kind
+     and never a constant: nothing reads it today, and a value that is wrong on
+     every folder is a trap for whoever reads it first. */
+  draft.value = {
+    key: `${path}\u0000rename`,
+    kind: 'rename',
+    path,
+    value: row.name,
+    target: row.kind === 'dir' ? 'dir' : 'file'
+  }
+}
+
+/* Esc, or the field losing the keyboard. The draft's key travels with it and is
+   checked, because a draft replaced by another unmounts the first field, and a
+   browser that fires that field's `blur` on the way out would otherwise cancel
+   the draft that replaced it. */
+const cancelDraft = (key) => {
+  if (draft.value?.key === key) draft.value = null
 }
 
 /* Enter in the field. The name goes up as it was typed: what it comes to is
@@ -188,6 +264,15 @@ const commitDraft = (name) => {
   const pending = draft.value
   draft.value = null
   if (!pending) return
+  if (pending.kind === 'rename') {
+    /* The name goes up raw, exactly as the two making verbs send theirs: what a
+       typed name comes to — and a name typed back unchanged, which is a cancel
+       rather than a rename — is `newEntry.js`'s rule and `DesktopApp.vue`'s to
+       apply, because the answers that are not a rename are a toast's business
+       and toasts live there. */
+    emit('action', { kind: 'commit-rename', path: pending.path, target: pending.target, name })
+    return
+  }
   emit('action', {
     kind: pending.kind === 'dir' ? 'create-dir' : 'create-file',
     path: pending.dir,
@@ -220,6 +305,7 @@ const commitDraft = (name) => {
 const pick = (item, path) => {
   if (item.kind === 'new-file') return startDraft('file', path)
   if (item.kind === 'new-folder') return startDraft('dir', path)
+  if (item.kind === 'rename') return startRename(path)
   if (item.kind === 'delete' && item.keepOpen) {
     confirmingDelete.value = true
     return
@@ -257,8 +343,9 @@ const rootStyle = {
         v-if="r.draft"
         :kind="r.kind"
         :depth="r.depth"
+        :value="r.value"
         @commit="commitDraft"
-        @cancel="cancelDraft(r.dir)"
+        @cancel="cancelDraft(r.key)"
       />
       <FileTreeRow
         v-else
@@ -270,6 +357,6 @@ const rootStyle = {
         @menu="openRowMenu(r, $event)"
       />
     </template>
-    <PointerMenu ref="menu" :items="items" :width="MENU_W" @select="pick" @close="onMenuClose" />
+    <PointerMenu ref="menu" :items="items" :width="FILE_MENU_W" @select="pick" @close="onMenuClose" />
   </div>
 </template>

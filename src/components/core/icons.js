@@ -22,9 +22,11 @@ import {
   ChevronRight,
   ChevronsRight,
   CircleDashed,
+  ClipboardPaste,
   Clock,
   Columns3,
   Copy,
+  CopyPlus,
   CornerDownRight,
   Dot,
   Ellipsis,
@@ -61,10 +63,12 @@ import {
   PanelRightOpen,
   Paperclip,
   Pause,
+  Pencil,
   Pin,
   Play,
   Plus,
   RefreshCw,
+  Scissors,
   Search,
   Settings,
   Settings2,
@@ -142,6 +146,18 @@ export const iconNodes = {
      entirely. */
   'file-plus': FilePlus,
   'folder-plus': FolderPlus,
+  /* The same menu's clipboard group. The scissors and the clipboard with an
+     arrow into it are what every file manager on every platform draws for cut
+     and paste, and this menu is not the place to be original about either.
+     Duplicate is the copy glyph with a plus on it and not `copy` itself: Copy
+     and Copy path already stand three rows apart under that one, and a third
+     row wearing it would leave the group told apart by its labels alone.
+     Rename is the bare pencil rather than `file-pen`, which is a page with a
+     pen on it — the row acts on a folder as readily as on a file. */
+  scissors: Scissors,
+  'clipboard-paste': ClipboardPaste,
+  'copy-plus': CopyPlus,
+  pencil: Pencil,
 
   // status
   'triangle-alert': TriangleAlert,
