@@ -15,6 +15,7 @@ import { EditorState } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, indentOnInput, indentUnit } from '@codemirror/language'
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search'
+import { conflictHighlight } from './conflictHighlight.js'
 import { editorTheme } from './theme.js'
 
 /* Escape opens the Tab exit for two seconds — otherwise a keyboard user is
@@ -66,6 +67,9 @@ export function editorExtensions() {
       ...historyKeymap,
       ...defaultKeymap
     ]),
+    /* One line, and it reaches all three places a file is drawn: this list
+       builds `FileEditor` and both panes of `DiffView`. */
+    conflictHighlight(),
     editorTheme
   ]
 }

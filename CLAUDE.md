@@ -254,7 +254,7 @@ fresh graph: `resetModules` recreates `vue` too, and another instance's `nextTic
 scheduler, so a test awaiting it would wait for a tick that never comes.
 
 Not covered, deliberately: `.vue` files and the CodeMirror wiring (`editor/theme.js`,
-`extensions.js`, `compartments.js`), and, for the same reason, `TerminalView.vue` and
+`extensions.js`, `compartments.js`, `conflictHighlight.js`), and, for the same reason, `TerminalView.vue` and
 `terminal/theme.js` — all of it is DOM, and it is checked by eye through `?view=gallery`.
 
 ### Styling: inline style objects, never CSS classes

@@ -20,6 +20,24 @@
   --diff-removed-bg:#fbe4e0;--diff-removed-gutter:#c94a34;--diff-removed-fg:#8f2a1c;
   --diff-changed-bg:#fbf0da;--diff-changed-gutter:#b96a06;--diff-changed-fg:#7a4708;
 
+  /* The two sides of a merge conflict, in the editor and in the diff. Opaque
+     rather than a tint: color-mix() is out on the chrome100/safari15 target,
+     and a translucent stripe inside the merge view would blend with the diff
+     ground beneath it into a third colour nobody chose. Teal and blue, kept
+     clear of the green and red the diff already spends.
+
+     The current side is measured against three neighbours rather than picked,
+     because the light theme is where they crowd: #dbeeec was tried first and
+     stood at 1.02 contrast against --diff-added-bg — all but the same
+     lightness, and both pale desaturated green-teals — so in the working tree's
+     pane of a diff, which is where a click from the Git panel lands, the band
+     all but vanished into the added-line ground under it. What fixed it was
+     lightness and chroma, not hue alone: L* 92.7 to 88.3, C* 6.7 to 11.1, which
+     is the chroma --diff-added-bg already carries, so the two read as equally
+     deliberate bands 56 degrees of hue apart. The dark pair was measured too
+     and stands as it was. */
+  --conflict-current-bg:#c4e4e2;--conflict-incoming-bg:#dde6f6;
+
   --git-modified:#b96a06;--git-added:#48762f;--git-deleted:#b23a28;
   --git-untracked:#13707a;--git-ignored:#9aa6aa;--git-conflict:#8a3a96;
 }
@@ -43,6 +61,8 @@
   --diff-added-bg:#132218;--diff-added-gutter:#5b8f3d;--diff-added-fg:#a8d693;
   --diff-removed-bg:#25150f;--diff-removed-gutter:#c94a34;--diff-removed-fg:#ff9384;
   --diff-changed-bg:#221a0d;--diff-changed-gutter:#b96a06;--diff-changed-fg:#f2c86a;
+
+  --conflict-current-bg:#0f2426;--conflict-incoming-bg:#111d2e;
 
   --git-modified:#e0b152;--git-added:#8fbf7a;--git-deleted:#e8796b;
   --git-untracked:#6bc5ce;--git-ignored:#5b6771;--git-conflict:#c58bd6;

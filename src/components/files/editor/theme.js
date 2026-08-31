@@ -205,6 +205,47 @@ const diff = EditorView.theme({
   '.cm-mergeSpacer': { backgroundColor: 'var(--editor-gutter-bg)' }
 })
 
+/* The conflict markers a merge leaves in a file, drawn as structure rather than
+   as text — `conflictHighlight.js` puts the classes on the lines, this says what
+   they come to. The current side takes one ground and the incoming side
+   another, because telling the two apart is the whole point; the four marker
+   lines take the conflict's colour and no ground of their own.
+
+   Reusing `--diff-added-bg` / `--diff-removed-bg` was rejected: in this same
+   window those two already mean "added" and "removed". Painting both sides
+   `--git-conflict` was rejected for the opposite reason — it would say there is
+   a conflict and refuse to say which side is which.
+
+   **The selectors carry `.cm-content` for the cascade, and that is load-bearing
+   rather than tidy.** Inside `DiffView` the very same `.cm-line` element already
+   carries `cm-changedLine`, painted above by `&.cm-merge-b .cm-changedLine` —
+   which, after `buildTheme` prefixes it with the theme's own class, is three
+   classes deep. A rule written as `.cm-line.cm-sm-conflict-current` is three
+   deep too, and an exact tie is settled by the order the style modules reach the
+   document. That order is **the reverse of this array**: `updateStyleModules`
+   mounts `facet.concat(baseTheme).reverse()`, and style-mod gives precedence to
+   whatever is later in the array it is handed — so a block placed *after* `diff`
+   here has its rules inserted *before* diff's and loses every tie. Measured, not
+   assumed. `.cm-content` makes it four deep, which wins outright and keeps
+   winning whatever order these three constants are assembled in.
+
+   The colour of a marker line has to reach the spans inside it as well as the
+   line: the language mode has already coloured `<<<<<<< HEAD` as operators and
+   an identifier, and a colour on the line alone is inherited text that every one
+   of those spans overrides. */
+const conflict = EditorView.theme({
+  '.cm-content .cm-line.cm-sm-conflict-current': {
+    backgroundColor: 'var(--conflict-current-bg)'
+  },
+  '.cm-content .cm-line.cm-sm-conflict-incoming': {
+    backgroundColor: 'var(--conflict-incoming-bg)'
+  },
+  '.cm-content .cm-line.cm-sm-conflict-marker, .cm-content .cm-line.cm-sm-conflict-marker span': {
+    color: 'var(--git-conflict)',
+    fontWeight: 'var(--weight-medium)'
+  }
+})
+
 /* Italics only where they carry markup meaning (markdown emphasis). Comments
    are not italicised: the system has no type-style token for it, and inventing
    a value is exactly what is forbidden. */
@@ -225,8 +266,10 @@ const syntax = HighlightStyle.define([
   { tag: [t.emphasis], fontStyle: 'italic' }
 ])
 
-/* The diff rules ride with the rest rather than as an extension of their own:
-   the classes they name appear in a merge view and nowhere else, so an ordinary
-   editor carries a handful of rules that match nothing, against the alternative
-   of two theme exports that could be assembled in the wrong order. */
-export const editorTheme = [chrome, diff, syntaxHighlighting(syntax)]
+/* The diff and conflict rules ride with the rest rather than as extensions of
+   their own: the classes they name appear in a merge view and in a file left
+   mid-merge, so an ordinary editor carries a handful of rules that match
+   nothing, against the alternative of three theme exports that could be
+   assembled in the wrong order. The order below decides nothing on its own —
+   see the note above `conflict` for why, and for why that is deliberate. */
+export const editorTheme = [chrome, diff, conflict, syntaxHighlighting(syntax)]
