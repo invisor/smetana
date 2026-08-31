@@ -36,7 +36,11 @@ const props = defineProps({
      Read once, when the dialog opens: a live value would refill the fields
      under somebody's hands, since the app window announces its props again on
      every change. */
-  draft: { type: Object, default: null }
+  draft: { type: Object, default: null },
+  /* Whether the pictures that draft names are still being read back into the
+     list above. The host owns both the list and this, for the same reason it
+     owns `dragging`. See `reportDraft` for the one thing it decides. */
+  restoringImages: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['close', 'submit', 'attach', 'files', 'remove', 'draft'])
@@ -133,7 +137,16 @@ const reportDraft = () => {
       text: text.value,
       issue_type: issueType.value === 'auto' ? null : issueType.value,
       priority: priority.value === 'auto' ? null : Number(priority.value),
-      images: props.attachments.map((item) => item.path),
+      /* The kept list while the pictures are still arriving, and the real one
+         after. Each restored picture is a round trip, so a report sent in the
+         middle of that would hand back a draft with half its images — narrowing
+         the record this window was rebuilt from, and losing those paths for good
+         if the project changed a moment later. Once the host says it has
+         finished, what the list holds is the truth, including a picture cleared
+         from the Storage tab in between and one the person took out. */
+      images: props.restoringImages
+        ? (props.draft?.images ?? [])
+        : props.attachments.map((item) => item.path),
       /* What the screen says, not what the refs hold — the same reading
          `submit` sends, so a restored dialog cannot come back promising a
          stage nobody asked for. */
@@ -156,7 +169,11 @@ watch(
     brainstorm,
     spec,
     plan,
-    () => props.attachments.map((item) => item.path).join('\n')
+    () => props.attachments.map((item) => item.path).join('\n'),
+    /* The restore finishing is itself news: if every picture in it failed to
+       come back, the list never changed and nothing above this line would fire,
+       leaving the app window holding paths that no longer read. */
+    () => props.restoringImages
   ],
   reportDraft
 )

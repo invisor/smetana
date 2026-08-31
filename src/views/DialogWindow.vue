@@ -133,6 +133,17 @@ const answerHere = {
   remove: (path) => attachments.value?.removeAttachment(path)
 }
 
+/* Whether those pictures are still on their way, which the guest has to be told
+   rather than left to infer from the list.
+
+   Each one is a command and a round trip, so for a moment after the window
+   reopens the list is short or empty — and the guest reports what it holds to
+   the app window on a debounce of its own. Without this it would report the
+   restored draft with the pictures missing, narrowing the very record it was
+   just rebuilt from, and a project switch inside that moment would lose those
+   paths for good. They are the one part of a draft nobody can retype. */
+const restoringImages = ref(false)
+
 /* The props the app window is feeding this dialog. `open` is forced true: a
    window that exists is open, and that prop only ever meant "is the scrim
    up".
@@ -143,7 +154,10 @@ const answerHere = {
    is the same string that `Modal` was already being given. */
 const incoming = shallowRef({})
 const guestProps = computed(() => {
-  const announced = { ...incoming.value, open: true }
+  /* `restoringImages` rides with the announcement rather than with the images
+     below it, because it has to be true in the moment before the store exists —
+     which is exactly the branch that returns early. */
+  const announced = { ...incoming.value, open: true, restoringImages: restoringImages.value }
   /* The images are this window's own state and are laid over the announcement
      rather than taken from it — the app window has none of them to send. It
      announces `busy`, `status`, `parent` and `title` for this kind and nothing
@@ -179,11 +193,25 @@ let restoredImages = false
 watchEffect(() => {
   const paths = incoming.value?.draft?.images
   const store = attachments.value
-  if (restoredImages || !store || !paths?.length) return
+  if (restoredImages || !paths?.length) return
+  /* Said as soon as the draft is known to name pictures, and deliberately
+     before the store has landed: the gap this closes starts at the first
+     announcement, not at the first command. */
+  restoringImages.value = true
+  if (!store) return
   restoredImages = true
-  store.restorePaths(paths).catch((err) => {
-    console.warn('[dialog-window] the draft’s pictures did not come back:', err)
-  })
+  store
+    .restorePaths(paths)
+    .catch((err) => {
+      console.warn('[dialog-window] the draft’s pictures did not come back:', err)
+    })
+    /* Whatever happened, the list is now as complete as it is going to get: a
+       picture cleared from the Storage tab in between is dropped by
+       `restorePaths` and reported as missing, and the draft has to be allowed
+       to say so rather than claiming it for ever. */
+    .finally(() => {
+      restoringImages.value = false
+    })
 })
 
 /* Whether this window has heard what it is drawing yet.
