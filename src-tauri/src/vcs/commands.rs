@@ -45,7 +45,7 @@ where
     tokio::task::spawn_blocking(work).await.unwrap_or_else(|err| Err(VcsError::Io(err.to_string())))
 }
 
-/// The same, for the three commands documented as never refusing.
+/// The same, for the commands documented as never refusing.
 ///
 /// They have no error to return and that promise is load-bearing — a project
 /// holding a folder that is not a repository still draws a list — so a join
@@ -60,7 +60,7 @@ where
 /// "no", loudly. Nothing on screen can carry it, since the shape of the answer
 /// has no room for a refusal, so it goes where a developer will find it — and
 /// the caller names itself, because `JoinError`'s own text carries a task id
-/// and the panic and never the command, which in a wrapper three of them share
+/// and the panic and never the command, which in a wrapper they all share
 /// would leave the line unable to say which read gave way.
 async fn off_the_runtime_or_empty<T, F>(read: &'static str, work: F) -> T
 where
@@ -127,6 +127,36 @@ fn working_tree(repo: &Path) -> Result<WorkingTree, VcsError> {
 #[tauri::command]
 pub async fn vcs_branches(repo: String) -> Vec<Branch> {
     off_the_runtime_or_empty("vcs_branches", move || branch_list(Path::new(&repo))).await
+}
+
+/// The branches `origin` is known to have, as of the last fetch.
+///
+/// **`origin` and no other remote**, and that is the app rather than this
+/// command being narrow: nowhere in it is there a notion of a second remote, so
+/// a `remote` argument would be a vocabulary neither side could yet say a word
+/// about — one more thing to pass through and nothing to pass.
+///
+/// This one spawns nothing either, for `vcs_branches`' reason and through the
+/// same file: `git::remote_branches` reads `refs/remotes/origin/` and
+/// `packed-refs` off the disk, out of the common directory, so a linked
+/// worktree answers for the whole repository.
+///
+/// **Beside `vcs_branches` rather than inside it.** That command promises two
+/// things — it runs no process and it cannot refuse — and both are kept here, so
+/// the split is not about either: it is that a remote branch and a local one of
+/// the same name are two different things to check out, and one list holding
+/// both could not say which a name was. The caller picks a side before it picks
+/// a name.
+///
+/// Never a refusal: a folder outside git, a repository nobody has fetched into,
+/// a clone with no `origin` at all — every one of them is the empty list, which
+/// is an ordinary answer and not an error.
+#[tauri::command]
+pub async fn vcs_remote_branches(repo: String) -> Vec<String> {
+    off_the_runtime_or_empty("vcs_remote_branches", move || {
+        git::remote_branches(Path::new(&repo), "origin")
+    })
+    .await
 }
 
 /// Where every local branch stands against its upstream, in one process.

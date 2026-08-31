@@ -267,6 +267,12 @@ const workOf = (intent) => {
   if (intent.kind === 'resumeSession') {
     return { kind: 'resumeSession', title: intent.title ?? null }
   }
+  /* The report's path alone, exactly as `Intent::work` sends it on: the pairs
+     are the agent's briefing, and this is what the tab opened afterwards is
+     found by. */
+  if (intent.kind === 'reviewBranch') {
+    return { kind: 'reviewBranch', report: intent.report }
+  }
   if (intent.kind === 'newTask') {
     return {
       kind: 'newTask',

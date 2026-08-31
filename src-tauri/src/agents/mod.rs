@@ -131,6 +131,37 @@ pub struct TaskDraft {
     pub parent: Option<String>,
 }
 
+/// One repository's share of a branch review: what is compared, and against
+/// what. A list of these is the whole of what `Intent::ReviewBranch` was asked
+/// to look at.
+///
+/// `base` and `head` are refs in the spelling git itself takes — `main` for a
+/// local branch, `origin/main` for a remote-tracking one — and the choice
+/// between the two is settled before anything reaches here. Nothing downstream
+/// re-reads a branch list or guesses at a remote: a pair that named "the
+/// branch" rather than a ref would mean something different the next time
+/// somebody fetched.
+///
+/// The `rename_all` is inert today and is written all the same. Nothing here
+/// is two words, and the camelCase of a single lower-case word is itself, so
+/// the attribute could be deleted with nothing on either side of the wire
+/// changing. It is here for the field added later, which should not have to
+/// remember it. `Intent::RepairTracker`'s variant-level copy is a different
+/// case and not a precedent for this one: it earns its place on `bd_version`,
+/// a name that genuinely moves. And this is not a guard — the three fields are
+/// `String` with no `serde(default)`, so a rename that was needed and missing
+/// would be serde refusing the payload by name rather than anything silent.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewPair {
+    /// The repository's absolute path. A project can hold several and the
+    /// session's own directory is the project rather than any one of them, so
+    /// a pair that left this out would name no repository at all.
+    pub repo: String,
+    pub base: String,
+    pub head: String,
+}
+
 /// Why a session is being started. The front end sends this; every profile
 /// turns the same value into its own command line.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -288,6 +319,32 @@ pub enum Intent {
     /// `.smetana/project.toml`. Started from the dialog a person gets when
     /// they add a project, and from the project row afterwards.
     Setup,
+    /// Review what one branch adds to another — in one repository or in
+    /// several — and write the result up for somebody to read afterwards.
+    ///
+    /// It carries the whole of what it was asked to look at rather than a
+    /// reference to it, which is the rule `Intent::Run` already holds: the
+    /// window that started this can be closed and the selection moved while
+    /// the session is still reading, so a briefing that is not complete at the
+    /// moment it is sent is never going to be completed.
+    ///
+    /// It neither writes to the tracker nor commits: it writes two files under
+    /// `.smetana/reviews/` and touches nothing else. That much it shares with
+    /// `Setup`, `RepairTracker` and `ResumeSession`, and the sentence that said
+    /// otherwise here was simply wrong. **What is its own is that it says so:**
+    /// `prompt.rs`'s `writes_to_the_tracker` and `commits_to_git` both name it
+    /// in a `false` arm rather than letting it fall through the way the other
+    /// three do — because its prompt promises the agent it will file nothing
+    /// and commit nothing, and a promise kept by an absence somewhere else is
+    /// one the next reader cannot check.
+    ReviewBranch {
+        pairs: Vec<ReviewPair>,
+        /// The report's path relative to the project, without an extension:
+        /// the agent writes `<report>.md` and `<report>.html`. The app chooses
+        /// the name rather than the agent, so that the tab it opens afterwards
+        /// is at a path the app already knows.
+        report: String,
+    },
     /// One batch of a run. Started by `runs::service`, never by a person
     /// directly — which is why it carries the whole of what the run was asked
     /// to do rather than a reference to it: the session may outlive a settings
@@ -375,6 +432,11 @@ impl Intent {
             // second caption nobody asked for.
             Intent::ResumeSession { title, .. } => W::ResumeSession { title: title.clone() },
             Intent::Setup => W::Setup,
+            // The report's path and not the pairs, which is the reading a
+            // conflict's file list gets: the row draws where the answer is
+            // going to be, and the refs are the briefing — a review of four
+            // repositories has eight of them, and a row is 252px wide.
+            Intent::ReviewBranch { report, .. } => W::ReviewBranch { report: report.clone() },
             Intent::Run { .. } => W::Run,
         }
     }
@@ -967,6 +1029,73 @@ mod tests {
         assert_eq!(
             intent.work(),
             W::ResolveConflict { repo: "/p/backend".into(), theirs: "develop".into() }
+        );
+    }
+
+    #[test]
+    fn a_review_intent_deserializes_from_the_front_ends_json() {
+        // Two repositories and both spellings a ref arrives in, because the
+        // local/remote choice is settled before this payload is built and the
+        // two have to survive the trip unchanged.
+        //
+        // What this does **not** test is `ReviewPair`'s own `rename_all`, and
+        // saying so is the point of the paragraph. `repo`, `base` and `head`
+        // are single lower-case words, whose camelCase is themselves, so the
+        // attribute is inert today and the whole of this test passes byte for
+        // byte with it deleted. It is written all the same, and that is the
+        // struct's own doc rather than a guard: the first two-word field added
+        // there should not have to remember it. Nor could a missing rename
+        // fail quietly here — the three fields are `String` with no
+        // `serde(default)`, so serde refuses the payload by name.
+        let json = r#"{
+            "kind": "reviewBranch",
+            "pairs": [
+                {"repo": "/p/backend", "base": "main", "head": "feature/smetana-pf40"},
+                {"repo": "/p/frontend", "base": "origin/develop", "head": "origin/spike"}
+            ],
+            "report": ".smetana/reviews/2026-08-31-pf40"
+        }"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::ReviewBranch { pairs, report } => {
+                assert_eq!(
+                    pairs,
+                    [
+                        ReviewPair {
+                            repo: "/p/backend".into(),
+                            base: "main".into(),
+                            head: "feature/smetana-pf40".into(),
+                        },
+                        ReviewPair {
+                            repo: "/p/frontend".into(),
+                            base: "origin/develop".into(),
+                            head: "origin/spike".into(),
+                        },
+                    ]
+                );
+                assert_eq!(report, ".smetana/reviews/2026-08-31-pf40");
+            }
+            other => panic!("expected ReviewBranch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_review_intent_carries_the_report_path_and_leaves_the_pairs_behind() {
+        use crate::terminal::model::SessionWork as W;
+        let intent = Intent::ReviewBranch {
+            pairs: vec![ReviewPair {
+                repo: "/p/backend".into(),
+                base: "main".into(),
+                head: "feature/smetana-pf40".into(),
+            }],
+            report: ".smetana/reviews/2026-08-31-pf40".into(),
+        };
+        // The path is where the answer will be and is what the tab opened
+        // afterwards is found by; the refs are the agent's briefing, the same
+        // reading a conflict's file list gets.
+        assert_eq!(
+            intent.work(),
+            W::ReviewBranch { report: ".smetana/reviews/2026-08-31-pf40".into() }
         );
     }
 
