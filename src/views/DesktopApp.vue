@@ -590,7 +590,7 @@ async function newTerminal(cwd = null) {
 const onNewTab = (item) => {
   if (item.kind === 'agent') newAgent()
   else if (item.kind === 'terminal') newTerminal()
-  else if (item.kind === 'task') openNewTask()
+  else if (item.kind === 'task') newTask()
   /* The fourth row, and the second door into the branch-review window: no name
      to start from, so the table opens as one empty row on the repository the
      Git panel is showing. */
@@ -753,7 +753,20 @@ function serveDialog(kind, { ground, props: propsFor, onResult, forget = null })
   collect(watchEffect(() => announceDialogProps(kind, propsFor())))
   const failed = (err) => console.warn('[app] the dialog window will not be answered:', err)
   watchDialogHello(kind, () => announceDialogProps(kind, propsFor())).then(collect, failed)
-  watchDialogResult(kind, onResult).then(collect, failed)
+  /* Guarded by the service's own flag rather than by the unlisten alone, and
+     that is what makes the one distinction this app now rests on a fact instead
+     of a race. Rust answers **every** destroyed dialog window with
+     `{"name":"close"}` on this channel, the app's own tidying included; the
+     unlisten `listen` hands back only *starts* an `invoke`, so this handler is
+     still live for the length of that round trip. A `close` slipping through it
+     would run the caller's own close path — for `new-task`, throwing away the
+     draft a notification has just promised to keep. `closed` is set
+     synchronously by `stopServing` and is false when the person uses the
+     frame's cross, so it separates the two with no timing in it. */
+  watchDialogResult(kind, (name, payload) => {
+    if (service.closed) return
+    onResult(name, payload)
+  }).then(collect, failed)
 
   openDialogs.set(kind, service)
   openDialogWindow(kind, dialogWidth(kind))
@@ -2349,6 +2362,23 @@ const openNewTask = (parent = null, draft = null) => {
   })
 }
 
+/* The "+ New task" button, the tab bar's menu row — the doors somebody presses
+   themselves, as opposed to the restore below, which presses none.
+
+   They hand over the kept draft, and that is the whole of this function. A
+   person who has been told their words were kept and who then presses the
+   button they know about would otherwise get an empty window, and the first
+   character they typed into it would overwrite the draft on the next debounce:
+   their sentences gone, silently, straight after a notice saying they were not.
+   Nothing has to be undone for the two cases that must stay empty — the frame's
+   cross and a filed task both take the entry out of the map before this can
+   read it, so `get` answers `undefined` and the window opens blank.
+
+   A card's "follow-up" deliberately does not come through here: that gesture is
+   about a particular issue, and starting it from somebody else's kept sentences
+   would answer a question they did not ask. */
+const newTask = () => openNewTask(null, taskDrafts.get(activePath.value) ?? null)
+
 /* Where the whole-column press stands. bd's own word, untranslated, because
    `deferred` is not one of the three statuses the tracker store renames and it
    reaches the board exactly as bd spells it.
@@ -3766,13 +3796,19 @@ async function restoreTaskDraft(closing) {
   const project = activePath.value
   const draft = taskDrafts.get(project)
   if (openDialogs.has('new-task')) return
-  const world = {
+  /* Not called `world`, deliberately, though it is the same sort of thing: the
+     ground watcher below builds one under that name and this is **not** it —
+     that one's columns are a `Set`, it carries no `column` and no
+     `boardArrived`, and handing it here would refuse every restore for ever
+     without a word. `canRestore` takes either shape of columns for the same
+     reason; the name is the other half of not inviting the mistake. */
+  const stand = {
     project,
     columns: projectColumns.value,
     column: ADD_TO,
     boardArrived: trackerState.generation > generationAtSwitch
   }
-  if (!canRestore(draft, world)) return
+  if (!canRestore(draft, stand)) return
   await closing
   /* The world moves while that resolves — somebody switching twice quickly, or
      pressing "+ New task" in the meantime. */
@@ -5345,7 +5381,7 @@ const toastStackStyle = {
           :run-blocked-reason="runBlockedReason"
           :promote-from="PROMOTE_FROM"
           @select="selectFromBoard"
-          @add="openNewTask()"
+          @add="newTask()"
           @run="openRun({ kind: 'queue' })"
           @promote="openPromote"
           @task-action="onTaskAction"
