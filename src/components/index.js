@@ -120,6 +120,7 @@ export {
   toggleChanges
 } from './git/changesFold.js'
 export { canCommit, canSuggest, commitHint, commitLabel } from './git/commitBox.js'
+export { conflictsFirst } from './git/conflictsFirst.js'
 export { failureTextStyle, failureTitleStyle } from './git/failureStyle.js'
 export { gitActions } from './git/gitActions.js'
 export { BRANCH_ROWS, filler, resolveDrag } from './git/sectionHeights.js'

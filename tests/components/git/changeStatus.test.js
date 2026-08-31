@@ -2,12 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { changeStatus } from '../../../src/components/git/changeStatus.js'
 
 describe('what a changed file is captioned with', () => {
-  it('gives each kind its own letter and its own word', () => {
+  it('gives each kind its own mark and its own word', () => {
     expect(changeStatus('modified').letter).toBe('M')
     expect(changeStatus('untracked').letter).toBe('U')
     expect(changeStatus('deleted').letter).toBe('D')
     expect(changeStatus('renamed').letter).toBe('R')
-    expect(changeStatus('conflicted').letter).toBe('C')
+  })
+
+  /* The conflict is the one row marked with something other than a letter, and
+     it is the tree's own `!` (`files/FileTreeRow.vue`). The word stays: a bare
+     `!` reads as nothing at all to a screen reader. */
+  it('marks a conflict the way the file tree does, and still names it', () => {
+    expect(changeStatus('conflicted').letter).toBe('!')
+    expect(changeStatus('conflicted').label).toBe('Conflicted')
   })
 
   it('captions in sentence case, the way the rest of the app does', () => {

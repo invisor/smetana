@@ -96,23 +96,39 @@ replaced by the first — a stored value is a hint, never the truth, the rule `c
 `changeStatus.js` saying what a change is captioned with. Four of its eight kinds — modified, added,
 deleted, untracked — take the `--git-*` token the file tree already marks that file with
 (`files/FileTreeRow.vue`), which is the whole of the agreement between the two: renamed, copied and
-type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares
-`--git-conflict` while the letters differ, `C` here against the tree's `!`. Borrowing the four rather
-than inventing a palette is the point; claiming the two lists match everywhere would not be true. The
-icon between the letter and the name is borrowed the same way — `src/catppuccinIcon.js`, the tree's
-own table — and it is the third mark on a row that already carries a staged tick and a coloured
-letter, which is the most this row can hold. Unlike the other two it is in colours this app did not
-choose, and the cost is measured: on a modified `.js` the status letter and the icon are within one
-degree of hue of each other. It was accepted with the set; if this row is ever trimmed back, that
-glyph is the first thing to go.
-Each section has **its own empty state and they say different things** — no git on this machine
-(naming what was looked for), no repository in this folder, nothing uncommitted in this repository:
-one blank area for all three would be a panel saying nothing three different ways. Freshness is
-window focus (`catchUp`), the project switch (`projects.js`, after the new layout has landed, since
-the remembered repository lives in it) and the refresh button in the panel header. **No watcher, and
-do not add one**: a third watcher subsystem would fire on every write inside `node_modules` and
-`target`, and the price of the sweep is named — while an agent works, this list is as stale as the
-file tree beside it.
+type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares both
+`--git-conflict` and the tree's `!` — the one kind here whose mark is not a letter. Sharing the mark
+and the token is as far as it goes: the tree colours the mark, the panel colours the whole row, and
+the keys still differ (`conflict` in the tree, `conflicted` here, after Rust's `ChangeKind` through
+serde). Borrowing the four rather than inventing a palette is the point; claiming the two lists
+match everywhere would not be true.
+
+**A conflicted file is drawn loud, and in three ways rather than one**: `conflictsFirst.js`, the
+pure rule beside `changeStatus.js`, lifts every conflict to the top of the list; the mark is `!`;
+and `--git-conflict` is taken by the whole row — mark, name and directory — rather than by the mark
+alone. A merge that stopped leaves the one row nobody may miss, and one coloured letter among a
+column of letters, sitting wherever `git status --porcelain=v2` happened to put it, was not enough
+to say so. Three things it is deliberately not: red, since `--status-failed-*` is a fallen run and
+the footer and the board are on the same screen; a sort, since `conflictsFirst` is a **stable
+partition** that keeps git's own order inside both groups, which is what the list showed before the
+rule existed; and a change of background — hover and selection stay a step of surface, the way every
+interaction in this system is. The ordering lives in `ChangeList.vue`'s computed and not in
+`stores/vcs.js`: `dirtyCount` is `tree.changes.length` and is indifferent to order, and a store that
+reordered would be deciding for every reader of the tree rather than for this one list.
+
+The icon between the mark and the name is borrowed the same way — `src/catppuccinIcon.js`, the
+tree's own table — and it is the third thing on a row that already carries a staged tick and a
+coloured mark, which is the most this row can hold. Unlike the other two it is in colours this app
+did not choose, and the cost is measured: on a modified `.js` the status letter and the icon are
+within one degree of hue of each other. It was accepted with the set; if this row is ever trimmed
+back, that glyph is the first thing to go. Each section has **its own empty state and they say
+different things** — no git on this machine (naming what was looked for), no repository in this
+folder, nothing uncommitted in this repository: one blank area for all three would be a panel saying
+nothing three different ways. Freshness is window focus (`catchUp`), the project switch
+(`projects.js`, after the new layout has landed, since the remembered repository lives in it) and
+the refresh button in the panel header. **No watcher, and do not add one**: a third watcher
+subsystem would fire on every write inside `node_modules` and `target`, and the price of the sweep
+is named — while an agent works, this list is as stale as the file tree beside it.
 
 The list is **read from outside this panel too**: `dirtyCount`, the status footer's uncommitted-files
 counter (`.claude/rules/git-head.md`). It is deliberately nothing more than `tree.changes.length` —
