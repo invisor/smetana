@@ -20,7 +20,14 @@ import FileTreeDraftRow from './FileTreeDraftRow.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
 import { FILE_MENU_W, fileMenuItems, folderOf } from './fileMenu.js'
 import { canPasteInto } from './fileClipboard.js'
+import { fileTreeVerb } from './fileTreeKeys.js'
 import { isStubPath } from '../../paths.js'
+
+/* Read once and handed to both rules that want it — which of the two Enter
+   means here, and what the platform calls the thing Reveal opens. It cannot
+   change under a running window, and asking `navigator` from a pure module is
+   exactly what those modules exist not to do. */
+const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent
 
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
@@ -46,6 +53,12 @@ const props = defineProps({
   clipboard: { type: Object, default: null }
 })
 
+/* `select` carries the row's kind beside its path, and the two other row events
+   do not need one. A folder is selected by a click now as well as opened by
+   one — the keyboard's verbs are about the selected row, so a folder that could
+   never become the selection could never be pasted into — and the caller has to
+   tell the two apart: a folder is the selection and nothing else, while a file
+   is also a tab to open. */
 const emit = defineEmits(['toggle', 'select', 'open', 'action'])
 
 /* The entry being named, or null. Two shapes, and the `kind` tells them apart:
@@ -173,7 +186,7 @@ const items = computed(() =>
     pasteReason: paste.value.reason,
     /* Read here rather than in the pure module, which is what keeps the choice
        of noun testable: `fileManagerName` is a function of this string. */
-    userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent
+    userAgent
   })
 )
 
@@ -321,6 +334,56 @@ const onMenuClose = () => {
   confirmingDelete.value = false
 }
 
+/* The same five verbs from the keyboard, and the same events out: a key press
+   here becomes the `action` the menu row of that name already emits, with the
+   same `kind`, the same `path` and the same `target`, so `DesktopApp.vue` gains
+   no branch and the two gestures cannot come to mean different things. Rename
+   is the one that never leaves — it calls `startRename`, the very function the
+   menu's Rename row calls, for the same reason.
+
+   **On the panel and deliberately not on the window.** Cmd+S, Cmd+F and the
+   palette hang off `window` in `DesktopApp.vue` and are right to: nothing else
+   in the app answers those. Cmd+C is the opposite case — CodeMirror and xterm
+   live in this same window and people copy text out of both constantly, so a
+   window-level listener here would take copying away from the editor and the
+   terminal to serve a tree that may not even be on screen. Hung here, the
+   handler runs only when the focus is already inside the tree, which is a row,
+   which is the thing the verb is about.
+
+   The rename field is inside this element too, and it is the one child that has
+   to be left entirely alone: its Enter commits the name and its Cmd+C copies
+   the text somebody is editing, and both bubble up to here — the field cancels
+   the default without stopping propagation, the same shape `onFindKey` records
+   about `@codemirror/search`. Unguarded, Enter in the field committed a rename
+   and immediately opened another.
+
+   Which row the verb is about is the selection and not the focus, because the
+   selection is the one of the two that is drawn: a person can see which row a
+   Paste will land in before pressing anything. The two are the same row in
+   practice — a click selects the row it focuses, and the roving tabindex puts
+   the tab stop on the selection — and where they are not, the visible one wins.
+
+   `preventDefault` last and only for a press that meant something, so every
+   other key is left exactly as it was: the webview's own Cmd+C still copies
+   whatever text is selected when nothing in the tree is. */
+const onKeydown = (event) => {
+  if (event.target?.closest?.('input, textarea')) return
+  const verb = fileTreeVerb(event, { userAgent })
+  if (!verb) return
+  const path = props.selectedPath
+  if (!path || isStubPath(path)) return
+  /* The row itself, for `target` — a folder takes what is pasted and a file
+     hands it to the folder it sits in, which is `folderOf`'s reading of the
+     pair and the same one the menu's pick sends. A selection whose folder is
+     closed has no row at all, and no verb: there is nothing on screen to have
+     meant. */
+  const row = rows.value.find((r) => r.path === path)
+  if (!row) return
+  event.preventDefault()
+  if (verb === 'rename') return startRename(path)
+  emit('action', { kind: verb, path, target: row.kind === 'dir' ? 'dir' : 'file' })
+}
+
 const rootStyle = {
   display: 'flex',
   flexDirection: 'column',
@@ -333,7 +396,7 @@ const rootStyle = {
 </script>
 
 <template>
-  <div role="tree" :style="rootStyle" @contextmenu="openRootMenu">
+  <div role="tree" :style="rootStyle" @contextmenu="openRootMenu" @keydown="onKeydown">
     <template v-for="r in rows" :key="r.key ?? r.path">
       <!-- The draft is a row of the same list rather than something drawn over
            it: that is what puts it at the depth of the folder it is going into
@@ -352,7 +415,7 @@ const rootStyle = {
         v-bind="r"
         :menu-open="menuFor === r.path"
         @toggle="$emit('toggle', r.path)"
-        @select="$emit('select', r.path)"
+        @select="$emit('select', r.path, r.kind)"
         @open="$emit('open', r.path)"
         @menu="openRowMenu(r, $event)"
       />

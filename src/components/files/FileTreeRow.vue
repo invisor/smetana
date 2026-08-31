@@ -43,6 +43,17 @@ const emit = defineEmits(['toggle', 'select', 'open', 'menu'])
 const hover = ref(false)
 const g = computed(() => (props.git ? GIT[props.git] : null))
 
+/* The roving tabindex. The selected row is the tree's one tab stop and every
+   other row is reachable by a click alone, so one Tab out of the panel beside
+   this one lands on the selection rather than walking a thousand rows a press
+   at a time — which is the whole reason a tree does this rather than making
+   every row tabbable.
+
+   With nothing selected the tree has no tab stop at all, and that costs
+   nothing: every shortcut the panel answers is about the selected row, so a row
+   focused with no selection behind it would answer to none of them. */
+const tabIndex = computed(() => (props.selected ? 0 : -1))
+
 /* What the name is, drawn — a `data:` URL rather than a glyph name, since the
    set's colours live inside the SVG. Reading `documentTheme` here is what makes
    the row repaint when the theme flips: the URL is rebuilt against the other
@@ -89,7 +100,27 @@ const nameStyle = computed(() => ({
   textDecoration: props.git === 'deleted' ? 'line-through' : undefined
 }))
 
-const onClick = () => emit(props.kind === 'dir' ? 'toggle' : 'select')
+/* A click selects the row, and a folder is opened or closed as well as being
+   selected. The folder half is what the keyboard needs and it used to be the
+   only half: a folder click toggled and nothing more, so a folder could never
+   become the selection — which is fine while the verbs come off a secondary
+   click, since that one carries its own path, and impossible the moment they
+   come off the keyboard, where the selection is the only thing saying what a
+   Paste is about. Selecting a folder was already a state this app reaches —
+   `revealMade` in `DesktopApp.vue` leaves the selection on a folder that has
+   just been pasted — so it is a gesture that was missing rather than a state
+   that is new.
+
+   The row also takes the keyboard, which is the other half of the same
+   sentence: the tree's `keydown` handler sits on the panel and never on the
+   window, so a row nobody has focused is a row no shortcut can reach. Browsers
+   focus a `tabindex="-1"` element on a click of their own accord; doing it here
+   as well costs one call and makes the gesture the same on all three. */
+const onClick = (event) => {
+  event.currentTarget?.focus?.()
+  emit('select')
+  if (props.kind === 'dir') emit('toggle')
+}
 
 /* A double click on a file opens it as a permanent tab — the same as in VS
    Code. No delay is needed: the first click has already opened the preview and
@@ -122,7 +153,7 @@ const onContextMenu = (event) => {
     role="treeitem"
     :aria-expanded="kind === 'dir' ? expanded : undefined"
     :aria-selected="selected"
-    :tabindex="selected ? 0 : -1"
+    :tabindex="tabIndex"
     :style="style"
     @mouseenter="hover = true"
     @mouseleave="hover = false"
