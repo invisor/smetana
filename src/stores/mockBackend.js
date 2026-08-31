@@ -47,11 +47,22 @@ const DEPENDENCY_EDGES = {
    of a repository — the browser is the only place that lower group and its
    notes can be seen at all, since there is no Rust worker here to walk
    anybody's repositories. */
+/* Epoch seconds, that long ago. The stamps below are ages rather than dates
+   for the reason every other time in this file is relative: a fixture written
+   as a date is a branch that reads as three years old on the day somebody opens
+   the browser, and what these fields are drawn as is "2h". */
+const secondsAgo = (seconds) => Math.floor(Date.now() / 1000) - seconds
+
 const MOCK_TARGET_BRANCHES = [
-  { name: 'main', missing_in: [] },
-  { name: 'staging', missing_in: [] },
-  { name: 'feature/runs-project-config', missing_in: [] },
-  { name: 'release/7', missing_in: ['admin', 'extension'] }
+  /* `at` is the stamp `git::combine` ordered this list by, carried out
+     so a row can be captioned with it — the newest first, which is the order
+     the real answer arrives in. `release/7` has none: a branch no repository
+     has a reflog for is the fresh-clone case, and it is what the alphabetical
+     tail of that order is made of. */
+  { name: 'main', missing_in: [], at: secondsAgo(2 * 3600) },
+  { name: 'staging', missing_in: [], at: secondsAgo(26 * 3600) },
+  { name: 'feature/runs-project-config', missing_in: [], at: secondsAgo(5 * 86400) },
+  { name: 'release/7', missing_in: ['admin', 'extension'], at: null }
 ]
 
 /* The selected repository's branches. Hoisted out of the `vcs_branches` answer
@@ -1134,7 +1145,28 @@ export function installMockBackend() {
        side switch, and a fixture where both lists matched would draw a window
        in which it did not appear to do anything. */
     if (command === 'vcs_remote_branches') {
-      return ['develop', 'feat/worktree-rename', 'main', 'spike/origin-only']
+      /* A name and the stamp of the fetch that last moved it, alphabetically —
+         `git::RemoteBranch`. `spike/origin-only` carries none, which is the
+         ordinary answer for a ref no fetch has ever written a log line for and
+         the one a caption has to survive. */
+      return [
+        { name: 'develop', at: secondsAgo(40 * 60) },
+        { name: 'feat/worktree-rename', at: secondsAgo(3 * 3600) },
+        { name: 'main', at: secondsAgo(11 * 86400) },
+        { name: 'spike/origin-only', at: null }
+      ]
+    }
+    /* When this repository last fetched — the modification time of its
+       `FETCH_HEAD`. A read like the two above it, files off the disk and no
+       process, so it answers here rather than falling through to the refusal.
+
+       Deliberately answered even though `vcs_fetch` below is not: the two are
+       opposite kinds of call. Reaching a remote is something a browser cannot
+       do and must be seen failing; when this machine last reached one is a
+       stat, and a browser refusing it would draw "fetched" with nothing after
+       it in a window whose whole subject is how fresh the refs are. */
+    if (command === 'vcs_last_fetch') {
+      return secondsAgo(2 * 60)
     }
     /* Where those branches stand against their upstreams, which is the one read
        of this panel whose answer nothing on disk could give: it is a process,

@@ -198,10 +198,19 @@ pub fn parse_reflog_time(line: &str) -> Option<i64> {
 /// When this machine last moved a branch, from its own reflog.
 ///
 /// The whole file is read for its last line, which sounds worse than it is:
-/// these are a few kilobytes each, git expires them at ninety days, and the
-/// list is built once when the run dialog opens rather than on every window
-/// focus the way the scope bar's HEAD is. Reading backwards from the end would
-/// buy nothing measurable and cost a seek loop over a text format.
+/// these are a few kilobytes each and git expires them at ninety days. Reading
+/// backwards from the end would buy nothing measurable and cost a seek loop
+/// over a text format.
+///
+/// **Two callers now, and neither is a loop.** `branches_with_recency` reads
+/// one per local branch when the run dialog opens, and `remote_branches` reads
+/// one per remote-tracking ref when the branch review window asks what `origin`
+/// holds — a few dozen small files on a person's press, rather than on every
+/// window focus the way the scope bar's HEAD is. What that costs scales with
+/// the number of branches and not with the size of the repository, which is why
+/// it is affordable at all; `remote_branches`' own header promises an answer
+/// cheap enough for a caller to ask for on a focus, and this read is the part
+/// of that promise worth measuring if anything ever takes it up on it.
 fn touched_at(logs: &Path, branch: &str) -> Option<i64> {
     let contents = std::fs::read_to_string(logs.join(branch)).ok()?;
     contents.lines().rev().find_map(parse_reflog_time)
@@ -254,6 +263,28 @@ pub struct BranchOption {
     /// order and therefore the project's own statement about what depends on
     /// what.
     pub missing_in: Vec<String>,
+    /// When this branch was last touched on this machine, in epoch seconds, or
+    /// `None` for a branch no repository has a reflog for — a fresh clone, and
+    /// the alphabetical tail `by_recency` describes.
+    ///
+    /// **It is the very number the list is ordered by**, read back out of the
+    /// map `combine` built rather than gathered a second time: a list sorted by
+    /// one stamp and captioned with another is a list that disagrees with
+    /// itself, and nothing on screen could say which of the two was wrong.
+    /// Across repositories it is the newest of them, for the reason `combine`
+    /// gives — `develop` opened an hour ago in one and a month ago in another
+    /// is an hour old, because it is one branch to the person merging into it.
+    ///
+    /// **`at` on the wire, and `touched_at` here.** The short name is epic
+    /// smetana-im0c's contract, which the component drawing these rows reads by
+    /// name; the long one is the truthful one for a field that is a reflog
+    /// stamp rather than a commit date, and it is what a reader of this file
+    /// sees. Neither struct in this file carries a `rename_all`, so without the
+    /// attribute what crosses IPC is the identifier — and a front end reading
+    /// `at` off it would get `undefined`, draw no age on any row, throw nothing
+    /// and fail no test on either side.
+    #[serde(rename = "at")]
+    pub touched_at: Option<i64>,
 }
 
 /// One list per repository, folded into one list of options.
@@ -304,7 +335,11 @@ pub fn combine(per_repo: Vec<(String, Vec<(String, Option<i64>)>)>) -> Vec<Branc
     for group in [complete, partial] {
         for name in by_recency(group) {
             let missing_in = missing_for(&name);
-            out.push(BranchOption { name, missing_in });
+            // `best` is where the ordering above came from, so reading the
+            // stamp back out of it is what keeps the caption and the order one
+            // fact rather than two.
+            let touched_at = best.get(&name).copied().flatten();
+            out.push(BranchOption { name, missing_in, touched_at });
         }
     }
     out
@@ -377,6 +412,35 @@ const REMOTES: &str = "refs/remotes/";
 /// nothing anybody can check out or compare against on purpose.
 const REMOTE_HEAD: &str = "HEAD";
 
+/// One branch `origin` is known to have, and when this machine last saw it
+/// move.
+///
+/// A record rather than a bare name because a list of remote branches is drawn
+/// with the age of each beside it, and the name alone cannot say it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RemoteBranch {
+    /// Without the remote's prefix: `main`, not `origin/main`.
+    pub name: String,
+    /// The last entry in this ref's own reflog, in epoch seconds, or `None`.
+    ///
+    /// **It is when a fetch last moved this branch here, which is the closest
+    /// thing on the disk to when it last moved on the server** — nothing else
+    /// on this machine ever writes a remote-tracking ref. `None` is the
+    /// ordinary answer rather than a failure: a fresh clone has the whole of
+    /// `origin` packed with no reflog behind any of it, and a repository whose
+    /// `core.logAllRefUpdates` is off never writes one at all. The caller draws
+    /// no age for it, which is what "unknown" looks like.
+    ///
+    /// Read the same way `branches_with_recency` reads the local side, out of
+    /// the same `logs/` tree one prefix over, so the two stamps mean the same
+    /// kind of thing and neither costs a process.
+    ///
+    /// `at` on the wire, for the reason `BranchOption::touched_at` gives: one
+    /// contract, said the same way by both lists a person picks a branch from.
+    #[serde(rename = "at")]
+    pub touched_at: Option<i64>,
+}
+
 /// What one remote is known to have, as of the last fetch: `main`, not
 /// `origin/main`.
 ///
@@ -397,13 +461,16 @@ const REMOTE_HEAD: &str = "HEAD";
 /// machine* last moved a branch, and nothing on this machine has ever moved a
 /// remote-tracking ref except a fetch, so a recency order here would rank forty
 /// branches by when somebody last ran `git fetch` — one moment, for all of them.
+/// Each name still carries that stamp — see `RemoteBranch::touched_at` — because
+/// an age drawn beside a name is a different question from an order over the
+/// list, and the second argument is not a reason to withhold the first.
 ///
 /// Nothing here is an error and nothing here runs: a folder outside git, a
 /// repository nobody has fetched into, a remote called something else, refs that
 /// cannot be read — every one of them is the empty list, which is the same
 /// promise `branches_with_recency` makes and what lets a caller ask on every
 /// window focus.
-pub fn remote_branches(dir: &Path, remote: &str) -> Vec<String> {
+pub fn remote_branches(dir: &Path, remote: &str) -> Vec<RemoteBranch> {
     let Some(git) = git_dir(dir) else { return Vec::new() };
     let common = common_dir(&git);
     let prefix = format!("{REMOTES}{remote}/");
@@ -417,7 +484,72 @@ pub fn remote_branches(dir: &Path, remote: &str) -> Vec<String> {
     // when a fetch moves the branch — and it is one branch to everybody else.
     out.sort();
     out.dedup();
-    out
+    // The remote's own logs, out of the common directory like everything else
+    // here: `logs/refs/remotes/<remote>/`, which is `logs/` over the very
+    // prefix the refs were read under.
+    let logs = common.join("logs").join(prefix.trim_end_matches('/'));
+    out.into_iter()
+        .map(|name| {
+            let touched_at = touched_at(&logs, &name);
+            RemoteBranch { name, touched_at }
+        })
+        .collect()
+}
+
+/// The name of the file every `git fetch` rewrites.
+///
+/// It is a **per-worktree** file — git keeps it beside HEAD rather than in the
+/// common directory — which is why [`last_fetch`] looks in both places.
+const FETCH_HEAD: &str = "FETCH_HEAD";
+
+/// When this repository last fetched, in epoch seconds, or `None`.
+///
+/// **The modification time of `FETCH_HEAD`, and there is deliberately nothing
+/// else it could be.** Every `git fetch` rewrites that file whether or not a
+/// single ref moved, so it is the one record of "we asked the remote" that
+/// survives restarting the app — where the store's own throttle is a `Map` that
+/// goes with the process. A remote-tracking ref's own stamp cannot answer this:
+/// a fetch that brought nothing back moves no ref at all, and a person reading
+/// "fetched 2m ago" is asking about the question rather than about the answer.
+///
+/// Both directories are looked in and the **newest** wins. A fetch run inside a
+/// linked worktree writes into that worktree's git directory, one run in the
+/// main checkout writes into the common one, and either updates the same
+/// remote-tracking refs — so a reader that knew only one of the two would
+/// report a repository as never fetched on the strength of which checkout
+/// somebody happened to be standing in. In an ordinary clone the two are one
+/// directory and the answer is one file read twice.
+///
+/// **What it answers is a floor rather than the whole truth**, and the gap is
+/// worth naming: a fetch run in a *sibling* worktree writes into that
+/// worktree's own git directory, which is not one of the two read here, so a
+/// repository somebody fetched five minutes ago in another checkout can report
+/// an hour. Closing that means listing `.git/worktrees/` and stat-ing every
+/// entry, on a read that happens per repository every time a window opens, to
+/// correct a number nobody acts on except by reading it. Under-reporting is
+/// also the safe direction: an age that is too old says "ask again", where one
+/// that is too fresh promises the refs are newer than they are.
+///
+/// `None` is a repository nobody has ever fetched in, a folder that is not a
+/// repository at all, and a file this process cannot stat — the same "nothing
+/// here is an error" the rest of this file keeps, and the caller draws no time
+/// at all for it.
+pub fn last_fetch(project: &Path) -> Option<i64> {
+    let dir = git_dir(project)?;
+    let common = common_dir(&dir);
+    [&dir, &common].into_iter().filter_map(|at| modified_at(&at.join(FETCH_HEAD))).max()
+}
+
+/// A file's modification time in epoch seconds, or nothing at all.
+///
+/// Everything the platform cannot answer is `None` rather than a guess: no such
+/// file, a stat that was refused, a filesystem with no modification time, and a
+/// stamp from before 1970 or past the end of an `i64` — which is a clock
+/// somebody has set, not a fetch.
+fn modified_at(path: &Path) -> Option<i64> {
+    let at = std::fs::metadata(path).ok()?.modified().ok()?;
+    let since = at.duration_since(std::time::UNIX_EPOCH).ok()?;
+    i64::try_from(since.as_secs()).ok()
 }
 
 /// The commit a loose ref names, or nothing.
@@ -509,6 +641,12 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create the temp directory");
         dir
+    }
+
+    /// The names out of `remote_branches`' records, for the tests that are
+    /// about which branches came back rather than about how old they are.
+    fn names(list: Vec<RemoteBranch>) -> Vec<String> {
+        list.into_iter().map(|branch| branch.name).collect()
     }
 
     #[test]
@@ -761,7 +899,7 @@ c0ffee refs/remotes/origin/main
         fs::create_dir_all(&other).expect("create the other remote");
         fs::write(other.join("main"), "0f0f0f\n").expect("write the other remote's ref");
 
-        assert_eq!(remote_branches(&dir, "origin"), vec!["feature/one".to_string(), "main".to_string()]);
+        assert_eq!(names(remote_branches(&dir, "origin")), vec!["feature/one".to_string(), "main".to_string()]);
         fs::remove_dir_all(&dir).expect("remove the temp directory");
     }
 
@@ -783,7 +921,7 @@ beadfe refs/remotes/upstream/main
 ";
         fs::write(dir.join(".git/packed-refs"), packed).expect("write packed-refs");
 
-        assert_eq!(remote_branches(&dir, "origin"), vec!["main".to_string(), "release/7".to_string()]);
+        assert_eq!(names(remote_branches(&dir, "origin")), vec!["main".to_string(), "release/7".to_string()]);
         fs::remove_dir_all(&dir).expect("remove the temp directory");
     }
 
@@ -796,7 +934,7 @@ beadfe refs/remotes/upstream/main
         fs::write(dir.join(".git/refs/remotes/origin/main"), "a1b2c3\n").expect("write the loose ref");
         fs::write(dir.join(".git/packed-refs"), "d4e5f6 refs/remotes/origin/main\n").expect("write packed");
 
-        assert_eq!(remote_branches(&dir, "origin"), vec!["main".to_string()]);
+        assert_eq!(names(remote_branches(&dir, "origin")), vec!["main".to_string()]);
         fs::remove_dir_all(&dir).expect("remove the temp directory");
     }
 
@@ -820,9 +958,128 @@ beadfe refs/remotes/upstream/main
         fs::write(repo.join(".git/packed-refs"), "c0ffee refs/remotes/origin/develop\n").expect("write packed");
 
         let expected = vec!["develop".to_string(), "main".to_string()];
-        assert_eq!(remote_branches(&linked, "origin"), expected);
-        assert_eq!(remote_branches(&repo, "origin"), expected);
+        assert_eq!(names(remote_branches(&linked, "origin")), expected);
+        assert_eq!(names(remote_branches(&repo, "origin")), expected);
         fs::remove_dir_all(&root).expect("remove the temp directory");
+    }
+
+    /// **The one thing about these two structs that neither side can check
+    /// alone.** The front end reads the stamp as `at` — epic smetana-im0c's
+    /// contract — while the field is `touched_at` here, and nothing but the
+    /// `serde` attribute joins the two. Get it wrong and every row draws no age
+    /// at all: `undefined` throws nothing, fails no test on either side, and
+    /// shows only after both halves have been reviewed and merged. So the wire
+    /// name is asserted as a wire name, over the serialiser Tauri itself uses.
+    #[test]
+    fn the_stamp_reaches_the_front_end_under_the_name_it_reads() {
+        let local = serde_json::to_string(&BranchOption {
+            name: "main".into(),
+            missing_in: vec![],
+            touched_at: Some(1_700_000_000),
+        })
+        .expect("serialize a branch option");
+        assert!(local.contains(r#""at":1700000000"#), "{local}");
+
+        let remote =
+            serde_json::to_string(&RemoteBranch { name: "main".into(), touched_at: None })
+                .expect("serialize a remote branch");
+        assert!(remote.contains(r#""at":null"#), "{remote}");
+
+        // And the Rust identifier stays behind, on both: a front end reading
+        // `at` off a payload that says `touched_at` gets nothing.
+        assert!(!local.contains("touched_at"), "{local}");
+        assert!(!remote.contains("touched_at"), "{remote}");
+        // The field beside it is snake_case and untouched, which is what the
+        // front end already reads it as.
+        assert!(local.contains(r#""missing_in":[]"#), "{local}");
+    }
+
+    #[test]
+    fn a_remote_branch_carries_the_stamp_of_the_fetch_that_last_moved_it() {
+        // The one thing on the disk that says how old a branch on the server
+        // is, and it is per ref: a fetch writes a log line only for the refs
+        // that actually moved. A branch with no log of its own is `None` and
+        // not a zero — the fresh-clone case, where the caller draws no age at
+        // all rather than an age of never.
+        let dir = scratch("remote-stamps");
+        let origin = dir.join(".git/refs/remotes/origin");
+        fs::create_dir_all(&origin).expect("create refs/remotes/origin");
+        fs::write(origin.join("main"), "a1b2c3\n").expect("write main");
+        fs::write(origin.join("quiet"), "d4e5f6\n").expect("write the branch with no log");
+        let logs = dir.join(".git/logs/refs/remotes/origin");
+        fs::create_dir_all(&logs).expect("create the remote logs");
+        fs::write(
+            logs.join("main"),
+            "0000000 a1b2c3 flexo <f@e.com> 1700000000 +0300\tfetch origin: fast-forward\n",
+        )
+        .expect("write main's log");
+
+        let out = remote_branches(&dir, "origin");
+        assert_eq!(
+            out,
+            vec![
+                RemoteBranch { name: "main".into(), touched_at: Some(1_700_000_000) },
+                RemoteBranch { name: "quiet".into(), touched_at: None },
+            ]
+        );
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    /// Stamp a file's modification time, so the fetch-time tests below assert a
+    /// number rather than "somewhere near now" — which would pass against a
+    /// function that answered with the clock and never read the file at all.
+    fn stamp(path: &Path, at: u64) {
+        let file = fs::File::options().write(true).open(path).expect("open the file to stamp it");
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(at);
+        file.set_times(fs::FileTimes::new().set_modified(when)).expect("stamp the file");
+    }
+
+    #[test]
+    fn the_last_fetch_is_when_fetch_head_was_last_written() {
+        let dir = scratch("fetch-clone");
+        fs::create_dir_all(dir.join(".git")).expect("create .git");
+        // Nobody has fetched here yet, which is an ordinary state and not a
+        // failure — the caller draws no time for it.
+        assert_eq!(last_fetch(&dir), None);
+
+        fs::write(dir.join(".git/FETCH_HEAD"), "a1b2c3\tbranch 'main' of git@example.com\n")
+            .expect("write FETCH_HEAD");
+        stamp(&dir.join(".git/FETCH_HEAD"), 1_700_000_000);
+
+        assert_eq!(last_fetch(&dir), Some(1_700_000_000));
+        fs::remove_dir_all(&dir).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_worktrees_last_fetch_is_the_newest_of_its_own_and_the_repositorys() {
+        // `FETCH_HEAD` is per worktree, so a fetch run in the main checkout
+        // lands in the common directory and one run here lands beside this
+        // worktree's HEAD — and either brought this worktree's remote-tracking
+        // refs up to date. Reading one of the two would report a repository as
+        // never fetched on the strength of where somebody was standing.
+        let (root, repo, linked) = linked_worktree("fetch-worktree", None);
+        let wt_git = repo.join(".git/worktrees/wt");
+        assert_eq!(last_fetch(&linked), None);
+
+        fs::write(repo.join(".git/FETCH_HEAD"), "a1b2c3\n").expect("write the shared FETCH_HEAD");
+        stamp(&repo.join(".git/FETCH_HEAD"), 1_700_000_000);
+        assert_eq!(last_fetch(&linked), Some(1_700_000_000));
+        assert_eq!(last_fetch(&repo), Some(1_700_000_000));
+
+        fs::write(wt_git.join("FETCH_HEAD"), "d4e5f6\n").expect("write the worktree's FETCH_HEAD");
+        stamp(&wt_git.join("FETCH_HEAD"), 1_700_000_900);
+        assert_eq!(last_fetch(&linked), Some(1_700_000_900));
+        // The main checkout cannot see the worktree's own file and says so with
+        // its own, older, answer.
+        assert_eq!(last_fetch(&repo), Some(1_700_000_000));
+
+        fs::remove_dir_all(&root).expect("remove the temp directory");
+    }
+
+    #[test]
+    fn a_folder_that_is_not_a_repository_has_never_fetched() {
+        let dir = scratch_path("fetch-missing");
+        assert_eq!(last_fetch(&dir), None);
     }
 
     #[test]
@@ -917,8 +1174,14 @@ beadfe refs/remotes/upstream/main
         assert_eq!(
             out,
             vec![
-                BranchOption { name: "develop".into(), missing_in: vec![] },
-                BranchOption { name: "release/7".into(), missing_in: vec!["admin".into()] },
+                // `develop` is 20 in one repository and 10 in the other, and
+                // the newest of the two is what the row is captioned with.
+                BranchOption { name: "develop".into(), missing_in: vec![], touched_at: Some(20) },
+                BranchOption {
+                    name: "release/7".into(),
+                    missing_in: vec!["admin".into()],
+                    touched_at: Some(30),
+                },
             ]
         );
     }
@@ -934,6 +1197,12 @@ beadfe refs/remotes/upstream/main
             ("admin".into(), vec![("stale".into(), Some(20)), ("develop".into(), Some(99))]),
         ]);
         assert_eq!(out.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["develop", "stale"]);
+        // And the stamp each row carries is the very one that decided the
+        // order: 99 rather than the 10 the first repository knew about.
+        assert_eq!(
+            out.iter().map(|o| o.touched_at).collect::<Vec<_>>(),
+            [Some(99), Some(50)]
+        );
     }
 
     #[test]
@@ -945,6 +1214,9 @@ beadfe refs/remotes/upstream/main
             vec![("zeta".into(), Some(1)), ("beta".into(), None), ("alpha".into(), None)],
         )]);
         assert_eq!(out.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["zeta", "alpha", "beta"]);
+        // Nothing is invented for the tail: a branch with no reflog has no age
+        // to draw, which is not the same as an age of zero.
+        assert_eq!(out.iter().map(|o| o.touched_at).collect::<Vec<_>>(), [Some(1), None, None]);
     }
 
     #[test]

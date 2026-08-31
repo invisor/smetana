@@ -82,6 +82,33 @@ export const vcsState = reactive({
      no use for a list of what the remote has. An empty list is the ordinary
      answer for a repository nobody has fetched into. */
   remoteBranches: [],
+  /* When each of those branches was last moved here, keyed by name: epoch
+     seconds, or null for a branch nothing on this machine has a record of —
+     everything in a fresh clone, where the whole of `origin` is packed with no
+     reflog behind it. `vcs_remote_branches` answers with the pair and this is
+     the half the names above are not.
+
+     Keyed rather than carried on the names, and that is the compatibility this
+     field exists for: `remoteBranches` is a list of **strings** that two
+     callers already spread and hand to a `Dropdown`, and records in its place
+     would break both of them. A reader that wants an age has a name in its hand
+     anyway, exactly as `tracking` above assumed.
+
+     A name with no entry and a name whose entry is null mean the same thing —
+     nothing is known about its age — and the caption draws neither. */
+  remoteBranchTimes: {},
+  /* When that repository last fetched: epoch seconds, or null. The modification
+     time of its `FETCH_HEAD`, which is what `vcs_last_fetch` reads and the one
+     record of a fetch that outlives the app — `fetchedAt` below is a throttle
+     and goes with the process.
+
+     Beside the two lists above rather than keyed by repository, because it is
+     part of the same one answer: it is about `remoteBranchesRepo` and about no
+     other repository, and it is read and let go with the names it was asked
+     for. Null is an ordinary answer — nobody has fetched here, the folder is
+     not a repository, the file could not be read — and all three draw no time
+     rather than a stale one. */
+  remoteFetchedAt: null,
   /* Which repository the list above is about, or null when it is empty. Every
      other list in this object is about `selected` and needs no such field;
      this one is about whatever repository a caller named, which is a fact
@@ -89,8 +116,11 @@ export const vcsState = reactive({
      way to ask whether the list in front of it is the one it asked for.
 
      Written in the same assignment as the list itself, never before it and
-     never after: the two are one statement, and a field naming a repository
-     whose answer has not landed yet is the very lie it exists to prevent. */
+     never after: the four are one statement, and a field naming a repository
+     whose answer has not landed yet is the very lie it exists to prevent. What
+     that reaches is everything asked for in one go — the names, their stamps
+     and the fetch time — since a stamp left standing beside another
+     repository's names is that same lie one field along. */
   remoteBranchesRepo: null,
   /* Where each local branch stands against its upstream, keyed by branch name:
      `{ upstream, ahead, behind, gone }` as `vcs_tracking` answers. Keyed rather
@@ -332,8 +362,7 @@ export async function loadRepos(project) {
        replaces that list or empties it; this path calls `loadRemoteBranches`
        nowhere, by design — that loader is asked for a repository of somebody
        else's choosing, not for the one the panel settled on. */
-    vcsState.remoteBranches = []
-    vcsState.remoteBranchesRepo = null
+    forgetRemoteBranches()
     await selectRepo(pickRepo(vcsState.repos, settings.project.selectedRepo))
   } catch (err) {
     if (vcsState.project !== project) return
@@ -354,8 +383,7 @@ export async function loadRepos(project) {
     /* With no repository left to be about, a branch list read a moment ago is
        one nothing on screen names. Both lists, for the one reason. */
     vcsState.branches = []
-    vcsState.remoteBranches = []
-    vcsState.remoteBranchesRepo = null
+    forgetRemoteBranches()
     vcsState.error = asError(err)
   } finally {
     if (vcsState.project === project) vcsState.loading = false
@@ -506,6 +534,23 @@ async function loadBranchList() {
    fresh call raises this again before its own await in any case. */
 let remoteBranchesAsked = null
 
+/* Let go of everything the last `loadRemoteBranches` answered with.
+
+   One function rather than the four lines written out in each of the five
+   places that drop this answer, and it is the mechanical half of the rule the
+   fields above state: the names, their stamps, the fetch time and the
+   repository all four are about are one statement, so a place that cleared
+   three of them would leave one repository's stamps standing under the next
+   repository's name — the very defect `remoteBranchesRepo` was added for, one
+   field along. Adding a fifth field to this answer means adding it here, and
+   nowhere else. */
+function forgetRemoteBranches() {
+  vcsState.remoteBranches = []
+  vcsState.remoteBranchTimes = {}
+  vcsState.remoteFetchedAt = null
+  vcsState.remoteBranchesRepo = null
+}
+
 /* What `origin` is known to have in one repository, as of the last fetch.
 
    The repository is an argument rather than `vcsState.selected`, and that is
@@ -524,31 +569,56 @@ let remoteBranchesAsked = null
    `loading` is untouched, for `loadBranchList`'s reason: this read costs no
    process at all — files off the disk through `git.rs` — so there is nothing for
    a person to wait through, and two functions setting one boolean means
-   whichever finishes first clears it under the other. */
+   whichever finishes first clears it under the other.
+
+   **Two commands and one answer.** `vcs_last_fetch` is asked here rather than by
+   a loader of its own because it is a fact about this same repository at this
+   same moment, and the four fields it lands in are guarded as one: a fetch time
+   read on its own schedule would be the one thing in this answer free to be
+   about another repository. Together rather than in turn, since neither waits on
+   the other, and a failure in either drops both — the two are one read of one
+   repository, and half of it is not a state this store keeps. */
 export async function loadRemoteBranches(repo) {
   const { project } = vcsState
   remoteBranchesAsked = repo || null
   if (!repo) {
-    vcsState.remoteBranches = []
-    vcsState.remoteBranchesRepo = null
+    forgetRemoteBranches()
     return
   }
   try {
-    const branches = await invoke('vcs_remote_branches', { repo })
+    /* `lastFetch` and not `fetchedAt`, which is the throttle `Map` at the top
+       of this file — the very thing the field's own comment contrasts this with.
+       Shadowing it here breaks nothing today and would hand the next edit that
+       reached for `fetchedAt.get(repo)` inside this function a number. */
+    const [branches, lastFetch] = await Promise.all([
+      invoke('vcs_remote_branches', { repo }),
+      invoke('vcs_last_fetch', { repo })
+    ])
     if (vcsState.project !== project || remoteBranchesAsked !== repo) return
-    vcsState.remoteBranches = branches
+    /* The names on their own, which is what this field has always held and what
+       two callers spread into a `Dropdown`'s options; the stamps arrive beside
+       them keyed by name rather than in their place. All four assignments are
+       one statement — see `remoteBranchesRepo`. */
+    vcsState.remoteBranches = branches.map((branch) => branch.name)
+    vcsState.remoteBranchTimes = Object.fromEntries(
+      /* `at` is the field's name on the wire — `git::RemoteBranch` renames it
+         there, and the epic's contract is what both lists a person picks a
+         branch from are read by. */
+      branches.map((branch) => [branch.name, branch.at ?? null])
+    )
+    vcsState.remoteFetchedAt = lastFetch ?? null
     vcsState.remoteBranchesRepo = repo
   } catch (err) {
     if (vcsState.project !== project || remoteBranchesAsked !== repo) return
-    /* `vcs_remote_branches` answers with a list for everything it can read and
-       refuses nothing, so reaching here means the call itself failed. An empty
-       list is what a repository nobody has fetched into already gives, and it is
-       the right thing to be left holding: a list of branches that may no longer
-       be there is worse than none. The raw text stays in the console, where the
-       failure of a read nothing on screen announces belongs. */
+    /* Neither command refuses anything — both answer with what they could read
+       — so reaching here means a call itself failed. An empty list is what a
+       repository nobody has fetched into already gives, and it is the right
+       thing to be left holding: a list of branches that may no longer be there
+       is worse than none, and a fetch time with no list under it would be a
+       freshness claimed about nothing. The raw text stays in the console, where
+       the failure of a read nothing on screen announces belongs. */
     console.error('[vcs] listing remote branches failed:', err)
-    vcsState.remoteBranches = []
-    vcsState.remoteBranchesRepo = null
+    forgetRemoteBranches()
   }
 }
 
@@ -1143,8 +1213,7 @@ function reset() {
   vcsState.selected = null
   vcsState.tree = null
   vcsState.branches = []
-  vcsState.remoteBranches = []
-  vcsState.remoteBranchesRepo = null
+  forgetRemoteBranches()
   vcsState.tracking = {}
   vcsState.error = null
   vcsState.writeError = null

@@ -38,9 +38,15 @@ partial, and calls `by_recency` once on each group. Its one new judgement is whe
 freshness comes from across repositories — `develop` opened an hour ago in `backend` and a month ago
 in `admin` is an hour old, because it is one branch to the person merging into it, and taking the
 first repository's answer, or the least of them, would bury the branch somebody is actually in.
-`BranchOption { name, missing_in }` is what a folded list is made of: a name, and the repositories
-from `[project].repos` that do not have it, in the order those repositories were given. An empty
-`missing_in` means every one of them has it.
+`BranchOption { name, missing_in, touched_at }` is what a folded list is made of: a name, the
+repositories from `[project].repos` that do not have it, in the order those repositories were given,
+and the stamp the list was ordered by. An empty `missing_in` means every one of them has it. The
+stamp crosses IPC as **`at`** — `#[serde(rename)]`, since the short name is the epic's contract and
+the long one is the truthful one for a reflog time — and it is read back out of the map `combine`
+already sorted by rather than gathered a second time. Why that matters, what `None` means, and where
+the two other ages on that screen come from is the last section of `.claude/rules/vcs-panel.md`:
+this file covers `git.rs` and that one covers the panel those numbers are drawn in, so a session
+holding only this rule should open that section before changing any of the three.
 
 **There is a third reader of those same refs, and it asks a narrower question**: `task_work(project,
 id)` answers where one tracker task's work was left — its branch, and the commit at the tip of it —
