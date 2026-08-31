@@ -33,7 +33,15 @@ const END = '>>>>>>>'
    a row of `=` under a heading is as likely to be eight as seven, so the count
    is the only thing separating the two. A bare marker with nothing after it is
    a marker — git writes `=======` that way always, and `<<<<<<<` that way when
-   the label is empty. */
+   the label is empty.
+
+   "The end of the line" is the end of the string handed in, and the caller is
+   what makes that the same thing: CodeMirror splits on /\r\n?|\n/, so a line
+   never arrives carrying its terminator. A `=======\r` would fail this check —
+   the string is eight long and the eighth character is not a space — and that is
+   stated rather than handled, because the only way to reach it is to hand this
+   module lines some other splitter produced. Split on the line break, not on
+   "\n" alone, and the question does not arise. */
 const isMarker = (line, marker) =>
   line.startsWith(marker) && (line.length === marker.length || line[marker.length] === ' ')
 

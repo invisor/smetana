@@ -476,7 +476,29 @@ The field itself is CodeMirror 6, assembled by hand under `src/components/files/
 linter and code folding), `languages.js` (a map from file extension to a dynamic `import()`, one
 chunk per language, loaded the first time a file of that type opens and cached after) and `states.js`
 (a non-reactive `Map` from path to `{ state, scrollTop }`, so a tab keeps its caret, selection, undo
-history and scroll position across being switched away from and back).
+history and scroll position across being switched away from and back). Two more sit beside them and
+are one feature between them: `conflictBlocks.js` and `conflictHighlight.js`, which draw the markers
+a merge leaves in a file as a block rather than as text — the current side on one ground, the incoming
+side on another, the four marker lines in `--git-conflict`.
+
+The split between the two is this family's usual one. `conflictBlocks.js` is the whole of the rule and
+is pure — no Vue, no DOM, no CodeMirror — and answers one question: which lines of a file are the
+`<<<<<<<`, the optional diff3 `|||||||`, the `=======` and the `>>>>>>>` of a block, given that a block
+counts only when the full sequence appears in order and a marker is exactly seven characters followed
+by a space or the end of the line. Without both halves of that a `=======` under a setext heading in
+Markdown would paint half a file as somebody else's merge. `conflictHighlight.js` is a `ViewPlugin`
+over it and holds no rule of its own, because a plugin is DOM and no runner here can reach one.
+
+**It is keyed on the text and deliberately not on git's status**, which is what makes one line in
+`extensions.js` enough: a file is drawn in three places — the editor and both panes of the diff — and
+only one of the three has a repository behind it, while the markers are visible in all three. A click
+on a conflicted row in the Git panel opens the diff, so keying on status would have missed the place
+the feature is actually met. VS Code keys on the same thing.
+
+What is deliberately **not** here is any way to resolve one: no Accept current, incoming or both, and
+no path in this feature that writes a file. Resolving is `ConflictModal`'s and the agent's — see
+`.claude/rules/vcs-panel.md` — and a second, manual road to the same place is a product decision
+rather than a consequence of wanting to see the conflict.
 
 The theme is one theme for both app themes and both densities. Every value in it is a token
 reference, so the browser repaints it on its own when `data-theme` changes — the editor is never

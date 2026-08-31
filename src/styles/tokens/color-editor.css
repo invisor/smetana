@@ -24,8 +24,19 @@
      rather than a tint: color-mix() is out on the chrome100/safari15 target,
      and a translucent stripe inside the merge view would blend with the diff
      ground beneath it into a third colour nobody chose. Teal and blue, kept
-     clear of the green and red the diff already spends. */
-  --conflict-current-bg:#dbeeec;--conflict-incoming-bg:#dde6f6;
+     clear of the green and red the diff already spends.
+
+     The current side is measured against three neighbours rather than picked,
+     because the light theme is where they crowd: #dbeeec was tried first and
+     stood at 1.02 contrast against --diff-added-bg — all but the same
+     lightness, and both pale desaturated green-teals — so in the working tree's
+     pane of a diff, which is where a click from the Git panel lands, the band
+     all but vanished into the added-line ground under it. What fixed it was
+     lightness and chroma, not hue alone: L* 92.7 to 88.3, C* 6.7 to 11.1, which
+     is the chroma --diff-added-bg already carries, so the two read as equally
+     deliberate bands 56 degrees of hue apart. The dark pair was measured too
+     and stands as it was. */
+  --conflict-current-bg:#c4e4e2;--conflict-incoming-bg:#dde6f6;
 
   --git-modified:#b96a06;--git-added:#48762f;--git-deleted:#b23a28;
   --git-untracked:#13707a;--git-ignored:#9aa6aa;--git-conflict:#8a3a96;
