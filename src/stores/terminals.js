@@ -17,6 +17,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { basename } from '../paths.js'
+import { dropSpaceFromPlatform, viewportPoint } from '../components/terminal/dropPoint.js'
 /* The audible half of what the app has to say. Here rather than in a watcher
    over the session list, because the list holds the active project only and the
    marks below hold every project — and somebody supervising two overnight is
@@ -1026,6 +1027,31 @@ export async function resize(id, cols, rows) {
   }
 }
 
+/* Which units the drag-drop event's position arrives in, asked once per window
+   and kept: it is a fact about the build, not about the drag, and it cannot
+   change while the app is running. The subscription below waits for the answer
+   before it starts listening rather than converting a point it cannot read —
+   the wait is one round trip at mount, long before anybody picks a file up.
+
+   The fallback for a command that is not there lives in `dropSpaceFromPlatform`
+   and nowhere else, so a browser and an unknown answer are the same case.
+
+   In this store rather than in app.js, where the other compile-time fact
+   (`window_chrome`) lives: that one is about the window every view is drawn in,
+   this one is about the units of an event only this file reads. */
+let askedDropSpace = null
+function dropSpace() {
+  if (!askedDropSpace) {
+    askedDropSpace = invoke('drag_drop_space')
+      .catch((err) => {
+        console.debug('[terminals] nothing to ask which units a drop arrives in:', err)
+        return null
+      })
+      .then(dropSpaceFromPlatform)
+  }
+  return askedDropSpace
+}
+
 /* A file dragged over the window, and where it was let go.
 
    Tauri intercepts file drops before the webview sees them — `dragDropEnabled`
@@ -1035,11 +1061,12 @@ export async function resize(id, cols, rows) {
    `watchDrops` in attachments.js, which is the same event read for the other
    consumer: only a store may import Tauri.
 
-   What this hands over is a point in CSS pixels and the paths, and no opinion
-   about whose drop it is. `payload.position` is physical, so it is divided by
-   the device pixel ratio here — the one place that knows the event's units —
-   and what comes out is measured from the top left of the viewport, which is
-   exactly the coordinate space `document.elementFromPoint` reads. Deciding
+   What this hands over is a point in CSS pixels from the top left of the
+   viewport — exactly the space `document.elementFromPoint` reads — and the
+   paths, and no opinion about whose drop it is. Tauri calls the position
+   physical on every platform and on macOS and Linux it is not:
+   `components/terminal/dropPoint.js` holds the whole of that argument and does
+   the arithmetic, this file only asks which of the two arrived. Deciding
    whether the point is inside a particular pane is the pane's own business, and
    has to be: two subscribers on one window event need no arbiter as long as a
    hit test cannot give them both the same drop, and it cannot.
@@ -1061,20 +1088,22 @@ export function watchSessionDrops({ over, leave, drop } = {}) {
   }
   let stop = null
   let stopped = false
-  webview
-    .onDragDropEvent(({ payload }) => {
-      /* Anything that is not the drag being over the window ends it, which is
-         `leave` and also whatever a future Tauri adds beside it: forgetting the
-         response is the safe reading of an event this code does not know. */
-      if (payload.type !== 'enter' && payload.type !== 'over' && payload.type !== 'drop') {
-        leave?.()
-        return
-      }
-      const { x, y } = payload.position.toLogical(window.devicePixelRatio)
-      const at = { x, y, paths: payload.paths ?? null }
-      if (payload.type === 'drop') drop?.(at)
-      else over?.(at)
-    })
+  dropSpace()
+    .then((space) =>
+      webview.onDragDropEvent(({ payload }) => {
+        /* Anything that is not the drag being over the window ends it, which is
+           `leave` and also whatever a future Tauri adds beside it: forgetting the
+           response is the safe reading of an event this code does not know. */
+        if (payload.type !== 'enter' && payload.type !== 'over' && payload.type !== 'drop') {
+          leave?.()
+          return
+        }
+        const { x, y } = viewportPoint(payload.position, space, window.devicePixelRatio)
+        const at = { x, y, paths: payload.paths ?? null }
+        if (payload.type === 'drop') drop?.(at)
+        else over?.(at)
+      })
+    )
     .then((unlisten) => {
       stop = unlisten
       /* The view unmounted while the subscription was still on its way. */

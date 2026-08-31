@@ -45,6 +45,12 @@ async function ready() {
   loaded.ipc.on('terminal_detach', null)
   loaded.ipc.on('terminal_write', null)
   loaded.ipc.on('terminal_resize', null)
+  /* Which units a drop's position arrives in. Registered here and not only in
+     the drop tests because the subscription asks before it listens, and an
+     unregistered command is a throw the store would have to swallow in every
+     test that watches. Windows' answer is the default so that a test saying
+     nothing gets the reading every platform used to get. */
+  loaded.ipc.on('drag_drop_space', 'physical')
   await loaded.stores.terminals.initTerminals()
   await loaded.stores.terminals.loadSessions('/p')
   return loaded
@@ -1494,17 +1500,52 @@ describe('drops on the window', () => {
     expect(seen).toEqual([{ type: 'drop', x: 40, y: 60, paths: ['/tmp/a.png'] }])
   })
 
-  /* The event's position is physical and `document.elementFromPoint` reads CSS
-     pixels, so the conversion happens here — the one place that knows which
-     units arrived. On a retina screen an unconverted point lands at twice the
-     distance from the corner, which on a three-column window is a different
+  /* `document.elementFromPoint` reads CSS pixels, so the conversion happens here
+     — the one place that knows which units arrived. Where the event is really
+     in device pixels, an unconverted point lands at twice the distance from the
+     corner on a retina screen, which on a three-column window is a different
      panel altogether. */
-  it('turns the physical point into CSS pixels', async () => {
-    const { stores, emit } = await ready()
+  it('turns a physical point into CSS pixels', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('drag_drop_space', 'physical')
     vi.stubGlobal('devicePixelRatio', 2)
-    const { seen } = await watch(stores)
+    const { seen } = await watch(loaded.stores)
 
-    await emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 40, y: 60 } })
+    await loaded.emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 40, y: 60 } })
+    await settle()
+    vi.unstubAllGlobals()
+
+    expect(seen).toEqual([{ type: 'drop', x: 20, y: 30, paths: ['/tmp/a.png'] }])
+  })
+
+  /* And where it is not. Tauri types the position physical everywhere, but wry
+     passes the toolkit's own numbers through unscaled, and AppKit's points and
+     GTK's widget coordinates are already the webview's CSS pixels. Halving one
+     of those was the whole of smetana-uoux: the agent panel answered a drag
+     only where the halved point happened to land back inside it. */
+  it('leaves a logical point where it arrived, whatever the device pixel ratio', async () => {
+    const loaded = await ready()
+    loaded.ipc.on('drag_drop_space', 'logical')
+    vi.stubGlobal('devicePixelRatio', 2)
+    const { seen } = await watch(loaded.stores)
+
+    await loaded.emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 40, y: 60 } })
+    await settle()
+    vi.unstubAllGlobals()
+
+    expect(seen).toEqual([{ type: 'drop', x: 40, y: 60, paths: ['/tmp/a.png'] }])
+  })
+
+  /* A word from a back end this front end does not know, and a back end that is
+     not there at all, are the same case: the point is read the way every
+     platform used to read it rather than not read at all. */
+  it('an answer nobody knows is read as physical', async () => {
+    const loaded = await ready()
+    loaded.ipc.fail('drag_drop_space', new Error('no such command'))
+    vi.stubGlobal('devicePixelRatio', 2)
+    const { seen } = await watch(loaded.stores)
+
+    await loaded.emit('tauri://drag-drop', { paths: ['/tmp/a.png'], position: { x: 40, y: 60 } })
     await settle()
     vi.unstubAllGlobals()
 
