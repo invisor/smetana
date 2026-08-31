@@ -18,6 +18,35 @@ const answer = (repos, unlisted = []) => ({ repos, unlisted })
 
 const cleanTree = { branch: 'main', detached: null, changes: [] }
 
+/* A tree git left mid-operation: unmerged paths and nothing else. The kind is
+   `conflicted` — Rust's `ChangeKind::Conflicted` through serde — which is the
+   one word `loadStatus` filters on to decide whether to ask git anything at
+   all. */
+const conflictedTree = (...paths) => ({
+  branch: 'main',
+  detached: null,
+  changes: (paths.length ? paths : ['src/one.js']).map((path) => ({
+    path,
+    origPath: null,
+    kind: 'conflicted',
+    staged: false,
+    unstaged: true
+  }))
+})
+
+/* Bring the panel up over one repository, answering every command it reads on
+   the way. `progress` is what `vcs_in_progress` replies, or `undefined` to
+   leave that command unregistered — which is how a test asserts it was never
+   asked, since the mock throws for a command nobody registered. */
+const openPanel = async (stores, ipc, tree, progress) => {
+  ipc.on('vcs_repos', (args) => answer(repoIn(args.project)))
+  ipc.on('vcs_status', tree)
+  ipc.on('vcs_branches', [])
+  ipc.on('vcs_tracking', [])
+  if (progress !== undefined) ipc.on('vcs_in_progress', progress)
+  await stores.vcs.loadRepos('/p')
+}
+
 /* Two repositories under one project — the workspace the discovery arm in
    `vcs/repos.rs` exists for, and the only shape in which one project's own
    repositories can race each other. */
@@ -245,6 +274,21 @@ describe('the git panel store', () => {
       branch = args.branch
       return null
     })
+  }
+
+  /* What the repository becomes once a write has stopped on a conflict: git
+     leaves the unmerged paths standing, and the refresh that follows the write
+     reads them. A fixture answering a clean tree there would be a repository
+     git never produces — and since `loadStatus` re-derives the record off the
+     tree, it would take the record away as fast as the write put it there.
+
+     `progress` is what the probe over that tree answers. A rebase's `theirs` is
+     `null` on purpose: the branch it is going onto is readable nowhere a git
+     process can see, which is the whole reason the press's own knowledge has to
+     survive the refresh. */
+  const stopsOn = (ipc, files, progress) => {
+    ipc.on('vcs_status', () => conflictedTree(...files))
+    ipc.on('vcs_in_progress', progress)
   }
 
   /* The scope bar's branch is `git.js`'s and is refreshed by window focus and
@@ -610,6 +654,7 @@ describe('the git panel store', () => {
     /* What a repository mid-rebase actually answers: no branch at all. */
     ipc.on('git_head', () => ({ branch: null, detached: 'a1b2c3d' }))
     await stores.vcs.loadRepos('/p')
+    stopsOn(ipc, ['src/one.rs', 'src/two.rs'], { op: 'rebase', ours: 'main', theirs: null })
 
     await stores.vcs.rebase('develop')
 
@@ -636,6 +681,7 @@ describe('the git panel store', () => {
     switching(ipc)
     ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.rs'] })
     await stores.vcs.loadRepos('/p')
+    stopsOn(ipc, ['src/one.rs'], { op: 'merge', ours: 'main', theirs: 'develop' })
 
     await stores.vcs.merge('develop')
     await stores.vcs.refresh()
@@ -646,11 +692,19 @@ describe('the git panel store', () => {
 
   /* Both doors of a conflict act on the project it happened in, so neither
      means anything after a switch: the abort would name a repository nobody is
-     looking at and the agent would be started in the wrong project. */
+     looking at and the agent would be started in the wrong project. The
+     arriving project is then read on its own — its repository has nothing
+     unmerged in it, which is the ordinary case, and the record it gets is the
+     one its own tree earns. */
   it('a conflict does not follow the person into another project', async () => {
     const { stores, ipc } = await loadStores()
-    switching(ipc)
-    ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.rs'] })
+    ipc.on('vcs_repos', (args) => answer(repoIn(args.project)))
+    ipc.on('vcs_status', (args) => (args.repo === '/p/.' ? conflictedTree() : cleanTree))
+    ipc.on('vcs_in_progress', { op: 'merge', ours: 'main', theirs: 'develop' })
+    ipc.on('vcs_branches', [])
+    ipc.on('vcs_tracking', [])
+    ipc.on('git_head', null)
+    ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.js'] })
     await stores.vcs.loadRepos('/p')
     await stores.vcs.merge('develop')
     expect(stores.vcs.vcsState.conflict).not.toBe(null)
@@ -666,8 +720,16 @@ describe('the git panel store', () => {
     const { stores, ipc } = await loadStores()
     switching(ipc)
     ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.rs'] })
-    ipc.on('vcs_abort', null)
     await stores.vcs.loadRepos('/p')
+    stopsOn(ipc, ['src/one.rs'], { op: 'merge', ours: 'main', theirs: 'develop' })
+    /* The abort is what puts the tree back, so the tree answers as git would on
+       either side of it — unmerged until then, clean after. */
+    let aborted = false
+    ipc.on('vcs_status', () => (aborted ? cleanTree : conflictedTree('src/one.rs')))
+    ipc.on('vcs_abort', () => {
+      aborted = true
+      return null
+    })
     await stores.vcs.merge('develop')
 
     await stores.vcs.abortConflict()
@@ -691,6 +753,7 @@ describe('the git panel store', () => {
       message: 'fatal: There is no merge to abort (MERGE_HEAD missing).'
     })
     await stores.vcs.loadRepos('/p')
+    stopsOn(ipc, ['src/one.rs'], { op: 'merge', ours: 'main', theirs: 'develop' })
     await stores.vcs.merge('develop')
 
     await stores.vcs.abortConflict()
@@ -701,6 +764,138 @@ describe('the git panel store', () => {
       message: 'fatal: There is no merge to abort (MERGE_HEAD missing).'
     })
     expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* A repository somebody left mid-merge — from a terminal, before the app was
+     started, or by an agent in the same tree. Nothing in this session ran the
+     merge, so the tree and the probe over it are the only sources there are. */
+  it('reads a stopped merge off a conflicted tree', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, conflictedTree(), {
+      op: 'merge',
+      ours: 'main',
+      theirs: 'feature'
+    })
+
+    expect(stores.vcs.vcsState.conflict).toEqual({
+      repo: '/p/.',
+      op: 'merge',
+      ours: 'main',
+      theirs: 'feature',
+      files: ['src/one.js']
+    })
+    /* Read and not raised: a tree nobody touched in this session gets a button,
+       never a dialog over the panel somebody just opened. */
+    expect(stores.vcs.vcsState.conflictOpen).toBe(false)
+  })
+
+  it('asks git nothing about a clean tree', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, cleanTree)
+
+    expect(ipc.calls('vcs_in_progress')).toEqual([])
+    expect(stores.vcs.vcsState.conflict).toBe(null)
+  })
+
+  /* A cherry-pick, a revert, a stash pop, a `checkout --merge`: unmerged paths
+     with neither of the dialog's two doors true. The probe says so and the
+     panel draws no button. */
+  it('holds no record when neither operation is in progress', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, conflictedTree(), null)
+
+    expect(ipc.calls('vcs_in_progress')).toEqual([{ repo: '/p/.' }])
+    expect(stores.vcs.vcsState.conflict).toBe(null)
+    expect(stores.vcs.vcsState.conflictOpen).toBe(false)
+  })
+
+  /* The whole point of splitting the flag off the record: "Resolve with an
+     agent" takes the dialog down and leaves the tree exactly as git left it, so
+     the way back in has to survive it. */
+  it('keeps the record when the dialog is dismissed', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, conflictedTree(), {
+      op: 'merge',
+      ours: 'main',
+      theirs: 'feature'
+    })
+
+    stores.vcs.openConflict()
+    expect(stores.vcs.vcsState.conflictOpen).toBe(true)
+
+    stores.vcs.dismissConflict()
+    expect(stores.vcs.vcsState.conflictOpen).toBe(false)
+    expect(stores.vcs.vcsState.conflict).not.toBe(null)
+  })
+
+  it('opens the dialog by itself when a merge it ran stopped on a conflict', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, conflictedTree(), {
+      op: 'merge',
+      ours: 'main',
+      theirs: 'feature'
+    })
+    ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.js'] })
+    ipc.on('git_head', null)
+
+    await stores.vcs.merge('feature')
+
+    expect(stores.vcs.vcsState.conflictOpen).toBe(true)
+    expect(stores.vcs.vcsState.conflict.op).toBe('merge')
+  })
+
+  /* The press knew what the rebase was onto; the probe never can, because a
+     stopped rebase leaves HEAD detached. The refresh that follows the press
+     must not overwrite the name with nothing. */
+  it('keeps the branch a rebase is onto when the probe cannot name it', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, conflictedTree(), {
+      op: 'rebase',
+      ours: 'feature',
+      theirs: null
+    })
+    ipc.on('vcs_rebase', { kind: 'conflict', files: ['src/one.js'] })
+    ipc.on('git_head', null)
+
+    await stores.vcs.rebase('main')
+
+    expect(stores.vcs.vcsState.conflict.theirs).toBe('main')
+  })
+
+  /* The agent finished, or somebody aborted in a terminal: the next status read
+     shows a clean tree and the button has to go with it. */
+  it('forgets the conflict when the tree comes back clean', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, conflictedTree(), {
+      op: 'merge',
+      ours: 'main',
+      theirs: 'feature'
+    })
+    expect(stores.vcs.vcsState.conflict).not.toBe(null)
+
+    ipc.on('vcs_status', cleanTree)
+    await stores.vcs.refresh()
+
+    expect(stores.vcs.vcsState.conflict).toBe(null)
+    expect(stores.vcs.vcsState.conflictOpen).toBe(false)
+  })
+
+  /* git declining to answer is not git saying there is nothing. A probe that
+     failed leaves the record where it was, because the other arm is a button
+     that vanishes under the pointer over a tree that is still conflicted. */
+  it('a probe that failed leaves the record standing', async () => {
+    const { stores, ipc } = await loadStores()
+    await openPanel(stores, ipc, conflictedTree(), {
+      op: 'merge',
+      ours: 'main',
+      theirs: 'feature'
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('vcs_in_progress', { kind: 'noGit', message: 'git is not on this machine' })
+
+    await stores.vcs.refresh()
+
+    expect(stores.vcs.vcsState.conflict?.op).toBe('merge')
   })
 
   /* One at a time across all three writes and not one apiece: what a second
@@ -1272,6 +1467,11 @@ describe('the git panel store', () => {
     ipc.on('vcs_pull', { kind: 'conflict', files: ['src/lib.rs'] })
 
     await stores.vcs.loadRepos('/p')
+    /* The probe over the tree the pull left names no `theirs` at all: a pull
+       merges a **remote** ref, and `name-rev --refs=refs/heads/*` has no local
+       branch to answer with. So `origin/main` survives only because the press
+       knew it, which is the rule `conflictRecord` is. */
+    stopsOn(ipc, ['src/lib.rs'], { op: 'merge', ours: 'main', theirs: null })
     await stores.vcs.pull()
 
     expect(stores.vcs.vcsState.conflict).toMatchObject({
