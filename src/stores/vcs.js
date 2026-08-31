@@ -927,6 +927,34 @@ export async function fetchNow() {
   }
 }
 
+/* A fetch in a repository somebody named, for a caller that is not this panel.
+
+   The branch review window is the one, and the reason it needs a fetch at all
+   is the reason `origin/main` is worth naming as a side of a pair: what that
+   ref points at is only as current as the last fetch, so a review of it drawn
+   under a branch name somebody pushed this morning would be about the wrong
+   commit with nothing anywhere saying so.
+
+   Quiet, unlike `fetchNow` above, and the difference is where the failure is
+   drawn rather than whether anybody pressed anything. This one *was* pressed —
+   but the window that pressed it says so itself, in its own sentence, beside
+   the table the review is about; `writeError` would put "Git did not reach the
+   remote" over a branch list nobody was looking at, about a repository that may
+   not even be the selected one.
+
+   It joins the call already in flight rather than being refused by it, exactly
+   as `fetchNow` does and for that function's reason: what this caller is
+   waiting for is the answer that call is about to bring back.
+
+   `true` when the fetch worked and `false` when it did not, which is what lets
+   the window name the repositories it could not reach — and go ahead anyway. */
+export async function fetchIn(repo) {
+  if (!repo) return false
+  const inFlight = fetching.get(repo)
+  if (inFlight) return await inFlight
+  return await fetchRepo(repo, false)
+}
+
 /* `git fetch --prune` in one repository, and what to do with the answer.
 
    The one place the network call is written, shared by the sweep and by the

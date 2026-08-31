@@ -14,10 +14,21 @@
    whose main action is missing from its own menu reads as a place that cannot
    do it.
 
-   Beside the switch sits the one item that only reads: comparing this branch
+   Beside the switch sit the two items that only read: comparing this branch
    with the one the repository is on, which opens a window and touches the
-   repository not at all. It is a verb about a different branch like the switch
-   above it, which is why it is in that group and not in the writes' one.
+   repository not at all, and asking an agent to review what it changed. Both
+   are verbs about a different branch like the switch above them, which is why
+   they are in that group and not in the writes' one.
+
+   **Compare shows and Review judges**, and the two rows stay two rows for that
+   reason. The comparison is a diff viewer against HEAD and nothing else; the
+   review picks a reference branch and a branch to check — in one repository or
+   in several, each side local or `origin` — and puts an agent on the difference
+   with a written report at the end. Folding them together was considered and
+   dropped: the compare window is built throughout on the pair being
+   (HEAD, one branch), from the shas it resolves once to what its own header
+   says, and a second base would change every one of those decisions in a window
+   that does its own job perfectly well.
 
    Beside the comparison sits the one item that touches git not at all: marking
    this branch so the panel keeps it above the tree. It is a write to
@@ -68,7 +79,16 @@
    refuses it at all. Its neighbour the comparison still reads the repository,
    so a branch has no difference from itself to draw and the current row refuses
    it; this one writes a preference and reads nothing, so it stays live on every
-   row in every state. */
+   row in every state.
+
+   The review is the **fifth**, and it shares the fourth's reach rather than
+   widening it: nothing refuses it either. It reads, it writes only inside
+   `.smetana/`, and it takes no git lock — so neither a run, nor an operation in
+   flight, nor the row being the branch already checked out has anything to
+   refuse. The current branch does not refuse it the way it refuses the
+   comparison: a review whose two sides are the same ref is a table somebody can
+   look at and change, and whether it is worth running is visible in the window
+   itself rather than decided by a grey menu row. */
 
 /* What refuses the whole menu, in order of what is worth saying. Both mean "not
    now" rather than "not this row", which is what puts either at the very top. */
@@ -104,6 +124,26 @@ export function branchMenuItems({
        being the branch already checked out: a branch has no difference from
        itself to draw. */
     { kind: 'compare', label: 'Compare with the current branch', icon: 'git-compare', disabled: current },
+    /* The other reader, and the one item in this menu that carries an ellipsis.
+       That is a deliberate exception and it is the only one: the note on
+       `New branch from this` below says this app spends no ellipsis at all, on
+       the grounds that one row keeping a convention nobody else keeps reads as
+       a typo. It is kept here by a person's own choice, made with that
+       objection in front of them — every other row in this menu is over in a
+       second, and this one opens a form and then starts an agent, which is a
+       difference worth saying on the row. If the convention is ever levelled
+       across the app, this is the row it was broken for.
+
+       Nothing refuses it: it reads, it writes only inside `.smetana/`, and it
+       takes no git lock. Not even the current branch, unlike the comparison
+       above — a review of a branch against itself is a table with both sides on
+       one ref, which somebody can see and change in the window. */
+    {
+      kind: 'review',
+      label: 'Review this branch…',
+      icon: 'search-check',
+      disabled: false
+    },
     /* The one item in this menu that asks git for nothing. It writes a line in
        `settings.json` and moves a row up the list, so there is nothing for a
        run, an operation in flight or the tick on this row to refuse. `disabled`

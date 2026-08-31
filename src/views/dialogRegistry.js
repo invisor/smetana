@@ -14,10 +14,11 @@
    underneath; a window somebody can push aside and click past has no such
    promise. */
 
-/* The ten, and the width each one's window gets. Every one of them drew at
+/* The eleven, and the width each one's window gets. Ten of them drew at
    `Modal`'s default 440 as a modal, and there is no reason for that to change
    just because the frame did — the numbers are here so that a dialog which
-   outgrows it has somewhere to say so. */
+   outgrows it has somewhere to say so, and `review-changes` is the first that
+   does. */
 const REGISTRY = {
   run: { width: 440, ground: ['project'] },
   'new-task': { width: 440, ground: ['project', 'column'] },
@@ -51,7 +52,26 @@ const REGISTRY = {
      a check that never fires. What answers that case instead is the delete
      itself: `sessions_delete` says the transcript is no longer on disk, and the
      person reads it as a sentence rather than as a window vanishing. */
-  'delete-session': { width: 440, ground: ['project'] }
+  'delete-session': { width: 440, ground: ['project'] },
+  /* Choosing what an agent reviews: a table of repositories, each with a
+     reference branch and a branch to check, and each side either the local
+     branch or what `origin` has.
+
+     **720 and not 440**, which is what the width field was put here for: the
+     row is a repository name and four controls, and at 440 every one of them
+     would be a dropdown too narrow to read a branch name in.
+
+     Its ground is the project and nothing else, and that is a decision rather
+     than a gap. This window is about the project's repositories as a set rather
+     than about any one of them, so a repository going is a row leaving the
+     table and not a window that has lost its reason to be open — which is the
+     opposite of `new-branch` and `delete-branch` beside it, whose every write
+     resolves against whichever repository the Git panel has selected at the
+     moment it is pressed. Nothing here is resolved that way: each row carries
+     the repository it is about. And the branch is not ground either, for the
+     same reason — a row whose branch has gone is a pair git will refuse in its
+     own words, which is a better answer than a half-filled table vanishing. */
+  'review-changes': { width: 720, ground: ['project'] }
 }
 
 export const DIALOG_KINDS = Object.keys(REGISTRY)
@@ -83,7 +103,8 @@ const DIALOG_NOUN = {
   'project-settings': 'project settings',
   'delete-task': 'delete',
   'ready-task': 'move to ready',
-  'delete-session': 'delete session'
+  'delete-session': 'delete session',
+  'review-changes': 'review changes'
 }
 
 const REASON_CLAUSE = {

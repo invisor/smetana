@@ -10,6 +10,7 @@ describe('branchMenuItems', () => {
     expect(verbs(branchMenuItems()).map((it) => it.kind)).toEqual([
       'checkout',
       'compare',
+      'review',
       'favorite',
       'merge',
       'rebase',
@@ -27,7 +28,12 @@ describe('branchMenuItems', () => {
   it('keeps the two writes apart from the switch', () => {
     const items = branchMenuItems()
     const at = items.findIndex((it) => it.type === 'separator')
-    expect(items.slice(0, at).map((it) => it.kind)).toEqual(['checkout', 'compare', 'favorite'])
+    expect(items.slice(0, at).map((it) => it.kind)).toEqual([
+      'checkout',
+      'compare',
+      'review',
+      'favorite'
+    ])
     expect(items[at + 1].kind).toBe('merge')
   })
 
@@ -37,6 +43,7 @@ describe('branchMenuItems', () => {
     expect(verbs(branchMenuItems()).map((it) => it.icon)).toEqual([
       'git-branch',
       'git-compare',
+      'search-check',
       'star',
       'git-merge',
       'git-graph',
@@ -48,6 +55,42 @@ describe('branchMenuItems', () => {
   it('offers the comparison beside the switch', () => {
     const kinds = verbs(branchMenuItems()).map((it) => it.kind)
     expect(kinds.slice(0, 2)).toEqual(['checkout', 'compare'])
+  })
+
+  /* Compare shows and Review judges: two rows in one group, both readers, and
+     the review directly under the comparison because that is where somebody
+     looking for "what did this branch do" will already be looking. */
+  it('puts the review directly under the comparison', () => {
+    const kinds = verbs(branchMenuItems()).map((it) => it.kind)
+    expect(kinds.slice(1, 3)).toEqual(['compare', 'review'])
+  })
+
+  /* The one ellipsis in this app, and it is a deliberate exception rather than
+     a slip: every other row of this menu is over in a second, and this one
+     opens a form and then starts an agent. `branchMenu.js`'s own note says so,
+     which is what stops it being levelled away by somebody tidying. */
+  it('carries the one ellipsis this app spends', () => {
+    const labels = verbs(branchMenuItems()).map((it) => it.label)
+    expect(labels.filter((label) => label.endsWith('…'))).toEqual(['Review this branch…'])
+  })
+
+  /* The fifth reach of refusal, and it shares the fourth's: nothing refuses it.
+     It reads, it writes only inside `.smetana/` and it takes no git lock — so
+     not a run, not an operation in flight, and not the row being the branch
+     already checked out. That last is where it parts company with the
+     comparison directly above it. */
+  it('leaves the review live in every state there is', () => {
+    for (const at of [
+      {},
+      { current: true },
+      { allowed: false },
+      { busy: true },
+      { allowed: false, busy: true },
+      { current: true, allowed: false, busy: true }
+    ]) {
+      const item = verbs(branchMenuItems(at)).find((it) => it.kind === 'review')
+      expect(item.disabled).toBe(false)
+    }
   })
 
   /* The one item in this menu that asks git for nothing: it writes a line in
@@ -178,9 +221,13 @@ describe('branchMenuItems', () => {
   it('says the run on the current branch, since the run is what refuses the lot', () => {
     const items = branchMenuItems({ current: true, allowed: false, busy: true })
     expect(caption(items)).toBe('A run is going in this project')
-    /* Every verb but the favourite, which is the one thing here a run has no
-       claim on: it writes a preference and asks git for nothing. */
-    expect(verbs(items).filter((it) => !it.disabled).map((it) => it.kind)).toEqual(['favorite'])
+    /* Every verb but the two a run has no claim on: the review, which reads and
+       writes only inside `.smetana/`, and the favourite, which writes a
+       preference and asks git for nothing. */
+    expect(verbs(items).filter((it) => !it.disabled).map((it) => it.kind)).toEqual([
+      'review',
+      'favorite'
+    ])
   })
 
   it('says a run before it says git is busy, since the run is the longer wait', () => {
