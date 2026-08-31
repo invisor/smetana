@@ -69,6 +69,12 @@ impl Profile for Codex {
         let resolving = matches!(launch.intent, Intent::ResolveTask { .. })
             .then(|| read_skill(&launch.skills.smetana, "resolving-questions"))
             .flatten();
+        // The whole of what a branch review does, so it is read whenever one is
+        // being started and never otherwise — the same reading `resolving`
+        // above gets.
+        let reviewing_branch = matches!(launch.intent, Intent::ReviewBranch { .. })
+            .then(|| read_skill(&launch.skills.smetana, "reviewing-branch-changes"))
+            .flatten();
         let brainstorming_text =
             discussing.then(|| read_skill(&launch.skills.superpowers, "brainstorming")).flatten();
         let plans_text =
@@ -98,6 +104,7 @@ impl Profile for Codex {
             resolving: resolving.as_deref(),
             brainstorming: brainstorming_text.as_deref(),
             plans: plans_text.as_deref(),
+            reviewing_branch: reviewing_branch.as_deref(),
         };
         if let Some(built) = prompt::build(
             &launch.intent,
