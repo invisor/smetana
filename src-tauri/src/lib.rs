@@ -242,6 +242,7 @@ pub fn run() {
       files::commands::files_clipboard_write,
       files::commands::files_clipboard_read,
       attachments::attachment_import,
+      attachments::attachment_reopen,
       attachments::attachment_write,
       attachments::attachments_survey,
       attachments::attachments_clean,

@@ -133,6 +133,17 @@ const answerHere = {
   remove: (path) => attachments.value?.removeAttachment(path)
 }
 
+/* Whether those pictures are still on their way, which the guest has to be told
+   rather than left to infer from the list.
+
+   Each one is a command and a round trip, so for a moment after the window
+   reopens the list is short or empty — and the guest reports what it holds to
+   the app window on a debounce of its own. Without this it would report the
+   restored draft with the pictures missing, narrowing the very record it was
+   just rebuilt from, and a project switch inside that moment would lose those
+   paths for good. They are the one part of a draft nobody can retype. */
+const restoringImages = ref(false)
+
 /* The props the app window is feeding this dialog. `open` is forced true: a
    window that exists is open, and that prop only ever meant "is the scrim
    up".
@@ -143,7 +154,10 @@ const answerHere = {
    is the same string that `Modal` was already being given. */
 const incoming = shallowRef({})
 const guestProps = computed(() => {
-  const announced = { ...incoming.value, open: true }
+  /* `restoringImages` rides with the announcement rather than with the images
+     below it, because it has to be true in the moment before the store exists —
+     which is exactly the branch that returns early. */
+  const announced = { ...incoming.value, open: true, restoringImages: restoringImages.value }
   /* The images are this window's own state and are laid over the announcement
      rather than taken from it — the app window has none of them to send. It
      announces `busy`, `status`, `parent` and `title` for this kind and nothing
@@ -158,6 +172,47 @@ const guestProps = computed(() => {
   }
 })
 const title = computed(() => incoming.value.title ?? 'Smetana')
+
+/* The pictures a restored draft names, read back into this window's own list.
+
+   Here rather than beside `holdAttachments` above, which is where it belongs by
+   subject: a `watchEffect` runs the moment it is created, and `incoming` is
+   declared between the two.
+
+   Once, and the guard is what makes it once: the app window announces its props
+   again on every change, and a second pass would attach the same files a second
+   time. `attachments` is a `shallowRef` filled by the dynamic import above, so
+   this runs again when the store lands rather than racing it.
+
+   `restorePaths` and not an import: the files are in the store already, and
+   nothing in this app takes an attachment off disk except the Storage tab's own
+   button, so importing would leave one more copy of every picture behind on
+   every switch. */
+let restoredImages = false
+
+watchEffect(() => {
+  const paths = incoming.value?.draft?.images
+  const store = attachments.value
+  if (restoredImages || !paths?.length) return
+  /* Said as soon as the draft is known to name pictures, and deliberately
+     before the store has landed: the gap this closes starts at the first
+     announcement, not at the first command. */
+  restoringImages.value = true
+  if (!store) return
+  restoredImages = true
+  store
+    .restorePaths(paths)
+    .catch((err) => {
+      console.warn('[dialog-window] the draft’s pictures did not come back:', err)
+    })
+    /* Whatever happened, the list is now as complete as it is going to get: a
+       picture cleared from the Storage tab in between is dropped by
+       `restorePaths` and reported as missing, and the draft has to be allowed
+       to say so rather than claiming it for ever. */
+    .finally(() => {
+      restoringImages.value = false
+    })
+})
 
 /* Whether this window has heard what it is drawing yet.
 
@@ -202,8 +257,15 @@ const stopWaiting = setTimeout(() => {
    person finishing with a dialog: it says which branch was picked on the
    checked side of a lone row, and what comes back is the whole table rebuilt
    around it — the rule that builds one lives in `reviewRows.js`, outside every
-   `.vue` file, and is called by the app window. */
-const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save', 'branch']
+   `.vue` file, and is called by the app window.
+
+   `draft` is `new-task`'s, and it is the one name here that is not an answer at
+   all: it is the dialog saying what is in it right now, so that a window closed
+   by a project switch does not take the person's words with it. It travels
+   rather than being answered here — a draft outlives the window it was written
+   in, so the only side that can hold one is the side that is still there
+   afterwards, and it keeps them per project. */
+const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save', 'branch', 'draft']
 
 /* And the three that deliberately do not travel: `new-task`'s images, answered
    in this window by the store above. They are a separate list rather than a

@@ -219,6 +219,11 @@ pub enum AttachmentError {
     TooLarge { name: String, bytes: u64 },
     #[error("{0} is not a PNG, JPEG, GIF or WebP image")]
     NotAnImage(String),
+    /// A path that is not this app's to read. Only `attachment_reopen` sends
+    /// it: everything it may legitimately be handed came out of the store, so
+    /// anything else is a mistake rather than a refusal a person can act on.
+    #[error("{0} is not in this app's attachment store")]
+    NotStored(String),
     /// Only the tidy-up ever sends this. Which pictures are still wanted is
     /// read off a project's board, so with no project open the question has no
     /// answer — and answering "nothing to delete" would be a guess dressed as a
@@ -242,6 +247,7 @@ impl AttachmentError {
         match self {
             Self::TooLarge { .. } => "tooLarge",
             Self::NotAnImage(_) => "notAnImage",
+            Self::NotStored(_) => "notStored",
             Self::NoProject => "noProject",
             Self::NoBoard => "noBoard",
             Self::Io(_) => "io",
@@ -625,6 +631,48 @@ pub async fn attachment_import(app: AppHandle, path: String) -> Result<Attachmen
     let bytes = std::fs::read(&source).map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
     let dir = store_dir(&app, current_project(&app).await.as_deref())?;
     save_into(&dir, name.as_deref(), bytes, &stamp())
+}
+
+/// A picture already in the store, read again.
+///
+/// `attachment_import` with the copy taken out. The one caller is a New task
+/// window being rebuilt after a project switch: the draft it is restored from
+/// carries paths, the strip draws thumbnails, and the webview cannot read a file
+/// it did not open — so the bytes come back the same way they do from an import.
+/// Copying instead would leave a second file behind on every switch, and nothing
+/// in this app deletes an attachment except the Storage tab's own button.
+#[tauri::command]
+pub async fn attachment_reopen(app: AppHandle, path: String) -> Result<Attachment, AttachmentError> {
+    let source = PathBuf::from(&path);
+    if !cleanup::in_store(&store_root(&app)?, &source) {
+        return Err(AttachmentError::NotStored(path));
+    }
+    let name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.clone());
+    let meta = std::fs::metadata(&source)
+        .map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
+    if !meta.is_file() {
+        return Err(AttachmentError::NotAnImage(name));
+    }
+    // The same ceiling the import applies, read from the metadata for the same
+    // reason: a file that grew past it is refused without being read in.
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err(AttachmentError::TooLarge { name, bytes: meta.len() });
+    }
+    let bytes =
+        std::fs::read(&source).map_err(|err| AttachmentError::Io(format!("{path}: {err}")))?;
+    let Some(format) = sniff(&bytes) else {
+        return Err(AttachmentError::NotAnImage(name));
+    };
+    Ok(Attachment {
+        path,
+        name,
+        bytes: bytes.len() as u64,
+        mime: format.mime().to_owned(),
+        data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+    })
 }
 
 /// Bytes the webview is holding — a paste, and nothing else can produce them:

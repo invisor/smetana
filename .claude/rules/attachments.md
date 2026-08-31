@@ -18,8 +18,9 @@ A screenshot is the fastest way to say what is wrong, so the new-task dialog tak
 `components/kanban/AttachmentStrip.vue`, plus the Storage tab of the settings window
 (`components/settings/StorageSettings.vue` over the pure `settings/storage.js`). The Rust side is the
 same no-worker shape as `files/` and `git.rs`, for the same reason — writing a couple of megabytes
-guards no state — and it is four commands over pure functions that carry the tests: `mod.rs` is the
-disk and the vocabulary, `cleanup.rs` is the whole of the deleting rule with no filesystem in it.
+guards no state — and it is five commands over pure functions that carry the tests: `mod.rs` is the
+disk and the vocabulary, `cleanup.rs` is the whole of the deleting rule with no filesystem in it,
+plus the one rule about where a path this store reads may point.
 
 Three gestures put a picture in the list and they arrive as only two kinds of thing. A file already
 on disk arrives as a path and Rust copies it (`attachment_import`); the clipboard exists inside the
@@ -38,6 +39,18 @@ subscribes `watchDrops` to that window with an `accepting` that is simply `true`
 not import this store at all; what still reaches it from the app window is `surveyStorage`, through
 `notifications.js`, which is a question about a folder and not about the list. Only the paths travel
 back, in `submit`.
+
+There is a second way a path comes back into that list, and it exists because the window can be
+destroyed with a draft still in it. A project switch closes the New task window
+(`views/dialogRegistry.js`), and what the app window keeps behind is the draft's *paths* — never its
+bytes: `restorePaths` in this store walks them when the window is rebuilt, and `attachment_reopen`
+reads one of those files back out of the store and answers with the record an import answers with, so
+the strip draws the same thumbnail and no second copy is written. That matters more here than
+anywhere: nothing in this app deletes an attachment except the Storage tab's button, so a re-import
+would leave one more file on disk per switch, for good. Its argument is confined to `store_root()` by
+`cleanup::in_store`, pure and tested with no filesystem under it — everything that command may
+legitimately be handed came out of this store to begin with. `taskDraft.js` beside `NewTaskModal.vue`
+is what says when a draft may come back at all.
 
 **No drop is heard twice, and the reason is the webviews rather than anything in this file.** The only
 other subscriber to a window's drag-drop event in the whole tree is `watchSessionDrops` in

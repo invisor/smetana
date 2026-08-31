@@ -131,6 +131,31 @@ export async function importPaths(paths) {
   }
 }
 
+/* Pictures that are already in the store, put back on screen.
+
+   The one caller is a New task window rebuilt from a draft after a project
+   switch (`views/DialogWindow.vue`): what the app window kept is paths, and the
+   strip draws thumbnails, so the bytes have to be read again. `attachment_reopen`
+   rather than `attachment_import` — the file is in the store already, and
+   importing it would write a second copy of it on every switch, which nothing in
+   this app but the Storage tab's button would ever take away again.
+
+   One at a time and in order, and a refusal left on screen, for the reasons
+   `importPaths` gives directly above: the list a person put together has an
+   order, and a picture that did not come back — cleared from the Storage tab in
+   between, most likely — must not be silent. The rest of the list still
+   arrives. */
+export async function restorePaths(paths) {
+  begin()
+  for (const path of paths) {
+    try {
+      add(await invoke('attachment_reopen', { path }))
+    } catch (err) {
+      fail(err)
+    }
+  }
+}
+
 /* Where the panel opens, and why that is this store's business rather than the
    panel's own. Handed no `defaultPath`, macOS opens where it was left last, and
    with no such memory yet it opens in Recents — every application's files at
