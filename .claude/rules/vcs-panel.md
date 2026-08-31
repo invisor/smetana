@@ -351,13 +351,20 @@ current branch, exactly as before. It sits inside the row's `--row-h` and adds n
 `box-sizing: border-box` — so the arithmetic over `BRANCH_ROWS` is untouched.
 
 **The mark is a star in the leading icon's place, not a sixth glyph.** It replaces `git-branch` at
-the same `MARK` size in the same `--text-muted`, and the reason is arithmetic rather than taste: an
-icon added in front of the name would put the marked rows' names out of line with every other row's
-in a column about 252px wide. What was rejected with it: a star button appearing on the row under the
-pointer, which is exactly the control-per-row-per-verb this section already took out once when merge
-and rebase went into the menu; and no mark at all, on the argument that the position says it —
-position says a row is at the top and says nothing about why, or about where to go to take the mark
-off.
+the same `MARK` size, and the reason is arithmetic rather than taste: an icon added in front of the
+name would put the marked rows' names out of line with every other row's in a column about 252px
+wide. What it does not share with the glyph it stands in for is the colour: the star is drawn
+filled, in `--branch-favorite-fg`, the one yellow in the system and the only colour this panel draws
+that is not about tracking. Both `color` and `fill` are set on it, because `Icon` strokes every
+glyph in `currentColor` over `fill="none"` and filling alone leaves a yellow body inside a grey
+outline. The token is in `tokens/color-surfaces.css` beside the system's other one-off colours, not
+in `color-status.css` — a marked branch is neither a status nor a step on the attention ladder — and
+its own comment carries the measurements, including why the light value has to be dark gold and why
+its hue sits inside the needs-you guard band on purpose. What was rejected with it: a star button
+appearing on the row under the pointer, which is exactly the control-per-row-per-verb this section
+already took out once when merge and rebase went into the menu; and no mark at all, on the argument
+that the position says it — position says a row is at the top and says nothing about why, or about
+where to go to take the mark off.
 
 The list is `settings.project.favoriteBranches`, beside `branchFolders` and per project on that
 field's argument: which names are worth keeping in reach is a fact about a repository and its naming
