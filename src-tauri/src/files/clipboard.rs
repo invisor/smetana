@@ -124,14 +124,6 @@ fn parse_gnome_copied_files(text: &str) -> (&'static str, Vec<String>) {
     (mode, lines.map(str::to_owned).collect())
 }
 
-/// Where the work is done, and the one thing that differs by platform besides
-/// the format itself.
-///
-/// On Linux it is the main thread, because GTK's clipboard belongs to the
-/// window loop and nothing else may touch it; the caller is already on the
-/// blocking pool (`off_the_runtime` in `commands.rs`), so blocking that thread
-/// on the answer parks nothing the app needs. Everywhere else the call is made
-/// where it stands.
 /// How long the main thread is given to come back with an answer, and the one
 /// ceiling in this module.
 ///
@@ -151,6 +143,14 @@ fn parse_gnome_copied_files(text: &str) -> (&'static str, Vec<String>) {
 #[cfg(target_os = "linux")]
 const MAIN_THREAD_BUDGET: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// Where the work is done, and the one thing that differs by platform besides
+/// the format itself.
+///
+/// On Linux it is the main thread, because GTK's clipboard belongs to the
+/// window loop and nothing else may touch it; the caller is already on the
+/// blocking pool (`off_the_runtime` in `commands.rs`), so blocking that thread
+/// on the answer parks nothing the app needs. Everywhere else the call is made
+/// where it stands.
 #[cfg(target_os = "linux")]
 fn dispatch<T, F>(app: &tauri::AppHandle, work: F) -> Result<T, FilesError>
 where

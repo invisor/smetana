@@ -339,9 +339,10 @@ three. That channel is the module's one ceiling and the reason is the usual one:
 `gtk_clipboard_wait_for_contents` runs a nested main loop until another program answers and takes no
 timeout, so what is bounded is this side — half a second, after which the caller reads "no files" —
 because the alternative is a blocking-pool worker parked for the life of the process by a clipboard
-owner that never replies, on a call made at every window focus and every context menu. None of it is checkable in `npm run dev`: `mockBackend.js` refuses the write and deliberately
-declines to invent a fixture for the read, which is the one read in that file that goes unanswered
-and carries its own note saying why.
+owner that never replies, on a call made at every window focus and every context menu. None of it is
+checkable in `npm run dev`: `mockBackend.js` refuses the write and deliberately declines to invent a
+fixture for the read, which is the one read in that file that goes unanswered and carries its own
+note saying why.
 
 **After a move or a rename, open tabs follow the file** (`renameTab` in `stores/tabs.js`): the id
 changes and the buffer travels whole, unsaved text, `mtime` and dirtiness included, because unlike a
