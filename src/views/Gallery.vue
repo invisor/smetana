@@ -3920,19 +3920,28 @@ const menuTargetStyle = {
         </div>
       </div>
       <!-- The conflict dialog, which is the only thing in this section that is
-           not a panel. Four frames, because all four states are reachable in a
-           second and none of them can be looked at any other way: a merge, a
-           rebase — the branches swap sides in the sentence, and getting that
-           backwards would send an agent the wrong way round — an abort in
-           flight, and an abort git refused.
+           not a panel. Five frames, because every one of these states is
+           reachable in a second and none of them can be looked at any other
+           way: a merge, a rebase — the branches swap sides in the sentence, and
+           getting that backwards would send an agent the wrong way round — a
+           rebase whose onto no git process can name, an abort in flight, and an
+           abort git refused.
 
-           The thing to check in every one of them: there is no close button in
-           the corner and no third way out. That is the whole design, since a
-           conflicted tree behind a closed dialog is a state the panel promises
-           to show and cannot draw. -->
+           The thing to check in every one of them: there **is** a close cross
+           in the corner now, in both ways of opening this dialog alike, because
+           the panel draws `Resolve conflicts` for as long as the tree is
+           conflicted and a closed dialog is no longer a lost state. And in the
+           fourth frame: the sentence ends on the branch with no trailing
+           preposition and no empty mono span after it. -->
       <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
         <div :style="{ position: 'relative', width: '560px', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
-          <ConflictModal v-bind="CONFLICT" :open="true" @resolve="() => {}" @abort="() => {}" />
+          <ConflictModal
+            v-bind="CONFLICT"
+            :open="true"
+            @resolve="() => {}"
+            @abort="() => {}"
+            @close="() => {}"
+          />
         </div>
         <div :style="{ position: 'relative', width: '560px', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
           <ConflictModal
@@ -3940,13 +3949,36 @@ const menuTargetStyle = {
             :open="true"
             @resolve="() => {}"
             @abort="() => {}"
+            @close="() => {}"
+          />
+        </div>
+        <!-- A rebase whose onto is unknown, which is what the panel holds for
+             every rebase it did not start itself: `name-rev` answers
+             `undefined` for a HEAD detached part-way through one, and the only
+             other source is a file under `.git/` the module does not read. The
+             sentence has to end on the branch. -->
+        <div :style="{ position: 'relative', width: '560px', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+          <ConflictModal
+            v-bind="{ ...CONFLICT, op: 'rebase', theirs: null }"
+            :open="true"
+            @resolve="() => {}"
+            @abort="() => {}"
+            @close="() => {}"
           />
         </div>
         <div :style="{ position: 'relative', width: '560px', height: '420px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
-          <ConflictModal v-bind="CONFLICT" :open="true" busy @resolve="() => {}" @abort="() => {}" />
+          <ConflictModal
+            v-bind="CONFLICT"
+            :open="true"
+            busy
+            @resolve="() => {}"
+            @abort="() => {}"
+            @close="() => {}"
+          />
         </div>
-        <!-- git refusing the abort itself, drawn inside the dialog: there is
-             no dismiss, so a message anywhere else is one nobody can see. -->
+        <!-- git refusing the abort itself, drawn inside the dialog: the abort
+             was pressed here, so a message anywhere else would sit under the
+             dialog it is about. -->
         <div :style="{ position: 'relative', width: '560px', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
           <ConflictModal
             v-bind="CONFLICT"
@@ -3954,6 +3986,7 @@ const menuTargetStyle = {
             :error="{ kind: 'git', message: 'fatal: There is no merge to abort (MERGE_HEAD missing).' }"
             @resolve="() => {}"
             @abort="() => {}"
+            @close="() => {}"
           />
         </div>
       </div>
