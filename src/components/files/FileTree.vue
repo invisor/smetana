@@ -38,15 +38,34 @@ const props = defineProps({
      row's state, only which of the two reasons the greyed one gives: something
      to pick, or nothing to pick. */
   hasLiveAgent: { type: Boolean, default: false },
-  /* What Cut or Copy put on the tree's clipboard, or null: `{ paths, mode }`,
-     straight from `filesState`. Two things read it and nothing else does —
-     whether Paste is offered on the folder the menu is open over, and which
-     rows are drawn muted. The record itself is the store's; this component only
-     draws what it says. */
+  /* What a paste would act on right now, or null: `{ paths, mode }`, in the
+     tree's own path space. Two things read it and nothing else does — whether
+     Paste is offered on the folder the menu is open over, and which rows are
+     drawn muted for a pending cut.
+
+     It is **not** `filesState.clipboard` and has not been since the machine's
+     own clipboard joined in: there are two clipboards, and which of them a
+     paste takes is `fileClipboard.js`'s `pasteSource`, applied in
+     `DesktopApp.vue` where both are known. That is what makes the muting
+     honest — a cut in the tree followed by a copy in Finder is a cut that will
+     not happen, and a row still drawn muted would be promising otherwise.
+
+     A path in it may be **absolute**, naming somewhere outside the project
+     entirely, which is what a file copied in Finder ordinarily is. Nothing here
+     has to know: it matches no row, so it mutes nothing, and `canPasteInto` is
+     written to let it through. */
   clipboard: { type: Object, default: null }
 })
 
-const emit = defineEmits(['toggle', 'select', 'open', 'action'])
+/* `menu` carries nothing and is not about a verb: it says the panel is being
+   opened, so that whoever owns the stores can make sure what the rows are drawn
+   from is current. Only the machine's clipboard needs it — everything else on
+   this menu is about a row the tree already has in hand — and it is emitted
+   rather than read here for the rule this component is built on: a component
+   that imported a store would be the second exception to a rule with exactly
+   one. The panel opens either way and the items redraw when the answer lands,
+   which is what keeps a slow clipboard from delaying the menu. */
+const emit = defineEmits(['toggle', 'select', 'open', 'menu', 'action'])
 
 /* The entry being named, or null. Two shapes, and the `kind` tells them apart:
 
@@ -183,6 +202,7 @@ const openRowMenu = (row, event) => {
      would offer to copy a path with a zero byte in it. Silence rather than a
      menu of greyed rows: the row is a count, not a thing with actions. */
   if (isStubPath(row.path)) return
+  emit('menu')
   menuFor.value = row.path
   menuTarget.value = row.kind === 'dir' ? 'dir' : 'file'
   menu.value?.open(event, row.path)
@@ -195,6 +215,7 @@ const openRowMenu = (row, event) => {
    that, so this only ever runs on space no row occupies. */
 const openRootMenu = (event) => {
   event.preventDefault()
+  emit('menu')
   menuFor.value = ''
   menuTarget.value = 'root'
   menu.value?.open(event, '')

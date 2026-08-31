@@ -56,7 +56,28 @@
 //! That is precisely why `files_list` runs its work on the **blocking pool** and
 //! not in the body of its `async fn`: see `commands.rs`, and `vcs/commands.rs`
 //! for the rule it follows. None of it can fail in a way a person sees.
+//!
+//! **`clipboard.rs` is the one file here that is not about this project's
+//! files**, and that is what puts it beside them rather than under `vcs/` or in
+//! a module of its own: it is the machine's clipboard, holding absolute paths
+//! that may name anything on the disk, and the only reason it exists is that a
+//! paste in the tree has to be able to land a file somebody copied in Finder.
+//! It is also the only file here that talks to a platform API rather than to
+//! `std::fs` — three of them, one per platform, none interchangeable with
+//! another. Its header carries the formats and the reasons; what matters from
+//! out here is that **it is allowed to fail and nothing above it is**. A
+//! clipboard that will not answer answers an empty list, and the paste rides on
+//! the tree's own record, which is `stores/files.js`'s half.
+//!
+//! **`copy_external_entry` in `fs.rs` is the other half of that**, and it is the
+//! one call in this module whose source is not checked against the project root.
+//! That is the point rather than an omission: a file copied in Finder is
+//! ordinarily somewhere else entirely, and copying it **into** the project is
+//! what a paste means. Only the destination is resolved with `resolve_within`,
+//! and everything else — the containment check, the ceiling, the free name, a
+//! link copied as a link — is the same code `copy_entry` runs.
 
+pub mod clipboard;
 pub mod commands;
 pub mod fs;
 pub mod model;

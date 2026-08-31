@@ -1226,7 +1226,16 @@ export function installMockBackend() {
        the rejection below. There is no PTY in a browser, and a session handed
        back with nothing behind it would put a row in the agents panel or a tab
        in the centre whose terminal could never say a word. The loud refusal is
-       the honest answer, and it is the same one every write gets. */
+       the honest answer, and it is the same one every write gets.
+
+       `files_clipboard_read` is the odd one in that list, because it is a
+       **read** and every other read here answers. A fixture for it would be a
+       list of absolute paths naming files that are not on this machine, which
+       would un-grey Paste in the file tree over a file that cannot be pasted —
+       and `files_copy_external` behind it refuses here like every other write.
+       So it falls through too, which is exactly what a machine with nothing on
+       its clipboard looks like to `stores/files.js`: an empty list, one warning
+       in the console, and the tree's own record carrying the paste. */
     // Any write command (tracker_update/close/reopen, files_write, and
     // whatever appears later) has to reject explicitly rather than silently
     // return a plausible but foreign issue — otherwise a "write" in the browser

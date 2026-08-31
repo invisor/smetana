@@ -466,21 +466,99 @@ fn copy_link(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// and the first of those that is still free wins.
 pub fn copy_entry(root: &Path, src_rel: &str, dst_dir_rel: &str) -> Result<String, FilesError> {
     let src = resolve_leaf_within(root, src_rel)?;
-    let meta = src.symlink_metadata().map_err(|err| io_error(src_rel, &err))?;
     let dst = resolve_within(root, dst_dir_rel)?;
+    let (_, name) = split_leaf(src_rel);
+    copy_into(&src, src_rel, name, &dst, dst_dir_rel)
+}
+
+/// The same copy, from a path that is **not** in the project and is not
+/// expected to be.
+///
+/// This is the one call in this module that does not resolve its source against
+/// the root, and it is the point of the call rather than a hole in it: the path
+/// comes off the system clipboard — Finder, Explorer, a file manager — so it
+/// ordinarily names somewhere else on the disk entirely, and copying it *into*
+/// the project is exactly what a paste means. Refusing it as `outside` would
+/// refuse the ordinary case.
+///
+/// What is still checked is everything that protects the project: the
+/// destination is `resolve_within`'s, a folder that holds the destination is
+/// still refused with `intoSelf` — an external source can be an ancestor of the
+/// project, which is the same cycle by a longer road — the ceiling still counts
+/// before a byte is written, and the landing name is still claimed by trying.
+///
+/// It is a command of its own and not a flag on `files_copy` for the reason the
+/// three verbs are three: what a caller has to know about this one is that its
+/// source is unchecked, and a parameter that turns the check off is a thing to
+/// discover rather than a thing to read.
+pub fn copy_external_entry(
+    root: &Path,
+    src_abs: &str,
+    dst_dir_rel: &str,
+) -> Result<String, FilesError> {
+    let src = outside_leaf(src_abs)?;
+    // `file_name` and not `split_leaf`, which splits on `/` alone because every
+    // path the tree makes is written that way — this one is the platform's, so
+    // on Windows the whole of `C:\a\b.txt` would come back as the name.
+    let Some(name) = src.file_name().and_then(|name| name.to_str()) else {
+        return Err(FilesError::BadName(src_abs.to_owned()));
+    };
+    let dst = resolve_within(root, dst_dir_rel)?;
+    copy_into(&src, src_abs, name, &dst, dst_dir_rel)
+}
+
+/// An absolute path from outside the project, with its **last component left
+/// exactly as it was given** — `resolve_leaf_within`'s shape without the
+/// containment check, and for the same reason in the same place: the parent is
+/// canonicalized so a `..` cannot survive the join, and the leaf is not, so a
+/// link is copied as a link rather than as whatever it points at.
+///
+/// Anything relative is refused. There is nothing for it to be relative *to*:
+/// the process's own working directory is wherever the app was launched from,
+/// which names something different on every machine and nothing anybody chose.
+fn outside_leaf(path: &str) -> Result<PathBuf, FilesError> {
+    let full = PathBuf::from(path);
+    if !full.is_absolute() {
+        return Err(FilesError::Outside(path.to_owned()));
+    }
+    let (Some(parent), Some(name)) = (full.parent(), full.file_name()) else {
+        // A filesystem root has no last component, so there is nothing here to
+        // copy — and a whole volume would be over the ceiling in any case.
+        return Err(FilesError::BadName(path.to_owned()));
+    };
+    let parent = parent.canonicalize().map_err(|err| io_error(path, &err))?;
+    Ok(parent.join(name))
+}
+
+/// The whole of a copy once both ends are known: the checks, the ceiling and
+/// the landing name.
+///
+/// `said` is what a refusal names the source as, and it differs by caller —
+/// a path in the tree for `copy_entry`, an absolute one for
+/// `copy_external_entry` — because a refusal has to name something the person
+/// can find. `name` is separate from it for the same reason: one of the two
+/// callers has a path written with `/` whatever the platform, and the other has
+/// the platform's own.
+fn copy_into(
+    src: &Path,
+    said: &str,
+    name: &str,
+    dst: &Path,
+    dst_dir_rel: &str,
+) -> Result<String, FilesError> {
+    let meta = src.symlink_metadata().map_err(|err| io_error(said, &err))?;
     if !dst.is_dir() {
         return Err(FilesError::NotAFile(dst_dir_rel.to_owned()));
     }
     // A link is copied as a link, so a link to a folder walks nowhere and has
     // nothing to be put inside of; only a real folder can swallow itself.
     if meta.file_type().is_dir() {
-        refuse_into_self(&src, src_rel, &dst)?;
+        refuse_into_self(src, said, dst)?;
     }
-    measure(&src, src_rel)?;
+    measure(src, said)?;
 
-    let (_, name) = split_leaf(src_rel);
     let names = landing_names(name, meta.file_type().is_dir());
-    take_free_name(&dst, dst_dir_rel, &names, |target, rel| put_copy(&src, &meta, target, rel))
+    take_free_name(dst, dst_dir_rel, &names, |target, rel| put_copy(src, &meta, target, rel))
 }
 
 /// EXDEV on unix, `ERROR_NOT_SAME_DEVICE` on Windows: the destination is on
@@ -2271,6 +2349,86 @@ mod tests {
 
         assert!(listing.entries.is_empty());
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The whole point of the external copy: the source is outside the project
+    /// and that is not a refusal but the ordinary case, since a file copied in
+    /// Finder is ordinarily somewhere else on the disk entirely.
+    #[test]
+    fn a_file_from_outside_the_project_is_copied_into_it() {
+        let root = scratch("external-copy");
+        let elsewhere = scratch("external-copy-source");
+        fs::create_dir_all(root.join("dst")).unwrap();
+        fs::write(elsewhere.join("b.png"), "bytes\n").unwrap();
+
+        let rel =
+            copy_external_entry(&root, elsewhere.join("b.png").to_str().unwrap(), "dst").unwrap();
+
+        assert_eq!(rel, "dst/b.png");
+        assert_eq!(fs::read_to_string(root.join("dst/b.png")).unwrap(), "bytes\n");
+        assert!(elsewhere.join("b.png").exists(), "a copy leaves the source where it was");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&elsewhere);
+    }
+
+    /// The naming rule is the same rule: this call goes through `copy_into`
+    /// exactly as `copy_entry` does, so nothing is overwritten here either.
+    #[test]
+    fn a_name_already_taken_takes_the_next_one_from_outside_too() {
+        let root = scratch("external-copy-name");
+        let elsewhere = scratch("external-copy-name-source");
+        fs::write(root.join("a.txt"), "mine\n").unwrap();
+        fs::write(elsewhere.join("a.txt"), "theirs\n").unwrap();
+
+        let rel = copy_external_entry(&root, elsewhere.join("a.txt").to_str().unwrap(), "").unwrap();
+
+        assert_eq!(rel, "a copy.txt");
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "mine\n");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&elsewhere);
+    }
+
+    /// Only the source is unchecked. The destination is `resolve_within`'s, as
+    /// it is for every other command in this module.
+    #[test]
+    fn the_destination_of_an_external_copy_is_still_inside_the_project() {
+        let root = scratch("external-copy-dst");
+        let elsewhere = scratch("external-copy-dst-source");
+        fs::write(elsewhere.join("a.txt"), "x\n").unwrap();
+
+        let err = copy_external_entry(&root, elsewhere.join("a.txt").to_str().unwrap(), "../away")
+            .unwrap_err();
+
+        assert_eq!(err.kind(), "outside");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&elsewhere);
+    }
+
+    /// A folder from outside that *holds* the project is the same cycle
+    /// `refuse_into_self` refuses inside it, by a longer road: copying it into
+    /// the project would be a folder growing inside itself until the disk
+    /// filled up.
+    #[test]
+    fn a_folder_from_outside_that_holds_the_project_is_refused() {
+        let outer = scratch("external-copy-ancestor");
+        let root = outer.join("project");
+        fs::create_dir_all(root.join("dst")).unwrap();
+
+        let err = copy_external_entry(&root, outer.to_str().unwrap(), "dst").unwrap_err();
+
+        assert_eq!(err.kind(), "intoSelf");
+        let _ = fs::remove_dir_all(&outer);
+    }
+
+    /// There is nothing for a relative path to be relative *to*: the process's
+    /// working directory is wherever the app was launched from, which is not
+    /// somewhere anybody chose.
+    #[test]
+    fn a_relative_source_is_refused_rather_than_guessed_at() {
+        let root = scratch("external-copy-relative");
+
+        assert_eq!(copy_external_entry(&root, "a.txt", "").unwrap_err().kind(), "outside");
         let _ = fs::remove_dir_all(&root);
     }
 }

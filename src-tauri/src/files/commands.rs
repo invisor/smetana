@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use super::clipboard::{self, ClipboardFiles};
 use super::fs;
 use super::model::{FileText, FilesError, Listing, Stat};
 
@@ -32,11 +33,20 @@ use super::model::{FileText, FilesError, Listing, Stat};
 /// network mount. That is a worker parked on a copy while the board, the
 /// terminals and the editor wait behind it.
 ///
-/// The other five need nothing. None of them waits on a child — the trash is
-/// the `trash` crate through `NsFileManager` rather than the `osascript` Finder
-/// method, which `fs.rs` chose for its own reasons and which happens to keep
-/// this true as well — and `files_rename` is one `rename` syscall, the same
-/// order of cost as `files_create`, however large the folder behind it.
+/// The two clipboard commands take it for a third reason, and it is a lock
+/// rather than a quantity of work: on Windows the clipboard is opened
+/// process-wide and every other program on the machine waits behind it, and on
+/// Linux the call is handed to the main thread and this thread blocks on the
+/// answer (`files/clipboard.rs`). Neither is long, and neither is a thing to do
+/// on a worker the whole app is polled on.
+///
+/// The rest need nothing, and the list of them is the file below rather than a
+/// number written here — an ordinal is written once and the list keeps growing
+/// under it. None of them waits on a child: the trash is the `trash` crate
+/// through `NsFileManager` rather than the `osascript` Finder method, which
+/// `fs.rs` chose for its own reasons and which happens to keep this true as
+/// well, and `files_rename` is one `rename` syscall, the same order of cost as
+/// `files_create`, however large the folder behind it.
 async fn off_the_runtime<T, F>(work: F) -> Result<T, FilesError>
 where
     F: FnOnce() -> Result<T, FilesError> + Send + 'static,
@@ -105,6 +115,28 @@ pub async fn files_copy(root: String, src: String, dst_dir: String) -> Result<St
     off_the_runtime(move || fs::copy_entry(&PathBuf::from(root), &src, &dst_dir)).await
 }
 
+/// A copy of something that is **not** in the project into a folder that is —
+/// the paste of a file somebody copied in Finder or in Explorer.
+///
+/// `src` is absolute and is deliberately not resolved against `root`: a path
+/// off the system clipboard ordinarily names somewhere else on the disk, and
+/// copying it into the project is what a paste means. The destination is
+/// checked exactly as every other command here checks it. See
+/// `fs::copy_external_entry` for what is still refused, which is everything
+/// that protects the project.
+///
+/// Off the runtime for `files_copy`'s reason, and rather more so: the source may
+/// be on a network share or a mounted phone, where the ceiling's worth of bytes
+/// is a great deal more than a second.
+#[tauri::command]
+pub async fn files_copy_external(
+    root: String,
+    src: String,
+    dst_dir: String,
+) -> Result<String, FilesError> {
+    off_the_runtime(move || fs::copy_external_entry(&PathBuf::from(root), &src, &dst_dir)).await
+}
+
 /// The same journey with nothing left behind. Dropped into the folder it is
 /// already in, it answers with the path it came in with and touches nothing.
 #[tauri::command]
@@ -130,4 +162,26 @@ pub async fn files_rename(
 #[tauri::command]
 pub async fn files_trash(root: String, path: String) -> Result<(), FilesError> {
     fs::move_to_trash(&PathBuf::from(root), &path)
+}
+
+/// The paths onto the machine's own clipboard, so that a copy in the tree can
+/// be pasted in Finder. Absolute, because a clipboard is not about a project.
+///
+/// Off the runtime because a clipboard call is a platform call with a lock
+/// behind it — on Windows it is a process-wide one, and on Linux it hops to the
+/// main thread and waits for the answer (`files/clipboard.rs`).
+#[tauri::command]
+pub async fn files_clipboard_write(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+    mode: String,
+) -> Result<(), FilesError> {
+    off_the_runtime(move || clipboard::write_files(&app, &paths, &mode)).await
+}
+
+/// And what is on it now. A clipboard holding no files at all answers an empty
+/// list rather than a refusal: that is not an error, it is Tuesday.
+#[tauri::command]
+pub async fn files_clipboard_read(app: tauri::AppHandle) -> Result<ClipboardFiles, FilesError> {
+    off_the_runtime(move || clipboard::read_files(&app)).await
 }

@@ -10,6 +10,13 @@ beforeEach(async () => {
   ipc = loaded.ipc
   files = loaded.stores.files
   files.setRoot('/project')
+  /* Cut and Copy write to the machine's clipboard as well as to the record, so
+     every test that touches either goes through this one. It is registered here
+     rather than in each of them because a command nobody registered throws, and
+     `setClipboard` swallows a refusal — which would leave the tests about the
+     record silently exercising the failure path instead of the ordinary one.
+     The two tests that are about a refusal register their own. */
+  ipc.on('files_clipboard_write', null)
 })
 
 describe('error texts', () => {
@@ -516,5 +523,152 @@ describe('treeNodes', () => {
 
     expect(nodes[0].git).toBe(undefined)
     expect(nodes[1].git).toBe(undefined)
+  })
+})
+
+describe('the machine\'s clipboard', () => {
+  it('puts absolute paths on it when something is copied in the tree', async () => {
+    // The record stays relative, like everything else in this store; the
+    // clipboard is not about a project and takes whole paths.
+    await files.setClipboard(['src/a.txt'], 'copy')
+
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/a.txt'], mode: 'copy' })
+    expect(ipc.calls('files_clipboard_write')).toEqual([
+      { paths: ['/project/src/a.txt'], mode: 'copy' }
+    ])
+  })
+
+  it('sends the mode along, for the platforms that have somewhere to put one', async () => {
+    await files.setClipboard(['src/a.txt'], 'cut')
+
+    expect(ipc.calls('files_clipboard_write')).toEqual([
+      { paths: ['/project/src/a.txt'], mode: 'cut' }
+    ])
+  })
+
+  it('sets the record before it goes anywhere, so cutting is instant', () => {
+    // No await: the record is what the tree draws from, and a folder of any
+    // size is cut without touching the disk.
+    files.setClipboard(['src/a'], 'cut')
+
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/a'], mode: 'cut' })
+  })
+
+  it('keeps the copy when the clipboard refuses it, since the record is what a paste runs on', async () => {
+    ipc.fail('files_clipboard_write', { kind: 'io', message: 'no pasteboard here' })
+
+    await expect(files.setClipboard(['src/a.txt'], 'copy')).resolves.toBeUndefined()
+    expect(files.filesState.clipboard).toEqual({ paths: ['src/a.txt'], mode: 'copy' })
+  })
+
+  it('reads what is on it as absolute paths and one of two words for the mode', async () => {
+    ipc.on('files_clipboard_read', { paths: ['/elsewhere/b.png'], mode: 'cut' })
+
+    await expect(files.readSystemClipboard()).resolves.toEqual({
+      paths: ['/elsewhere/b.png'],
+      mode: 'cut'
+    })
+    expect(files.filesState.systemClipboard).toEqual({ paths: ['/elsewhere/b.png'], mode: 'cut' })
+  })
+
+  it('reads a mode no platform states as a copy', async () => {
+    // macOS states none at all, because Finder has no cut for files.
+    ipc.on('files_clipboard_read', { paths: ['/elsewhere/b.png'], mode: 'link' })
+
+    await expect(files.readSystemClipboard()).resolves.toEqual({
+      paths: ['/elsewhere/b.png'],
+      mode: 'copy'
+    })
+  })
+
+  it('answers an empty list when the clipboard will not be read, rather than refusing', async () => {
+    // A browser is exactly this: `mockBackend.js` refuses every write command
+    // it does not know. The paste then rides on the tree's own record.
+    ipc.fail('files_clipboard_read', new Error('mockBackend: "files_clipboard_read" is not implemented'))
+
+    await expect(files.readSystemClipboard()).resolves.toEqual({ paths: [], mode: 'copy' })
+    expect(files.filesState.systemClipboard).toEqual({ paths: [], mode: 'copy' })
+  })
+
+  it('forgets what it last saw when a read fails, so a stale list cannot win a paste', async () => {
+    ipc.on('files_clipboard_read', { paths: ['/elsewhere/b.png'], mode: 'copy' })
+    await files.readSystemClipboard()
+
+    ipc.fail('files_clipboard_read', { kind: 'io', message: 'gone' })
+    await files.readSystemClipboard()
+
+    expect(files.filesState.systemClipboard).toEqual({ paths: [], mode: 'copy' })
+  })
+
+  it('survives the project changing, because the machine did not change with it', async () => {
+    ipc.on('files_clipboard_read', { paths: ['/elsewhere/b.png'], mode: 'copy' })
+    await files.readSystemClipboard()
+
+    files.setRoot('/other')
+
+    expect(files.filesState.clipboard).toBe(null)
+    expect(files.filesState.systemClipboard).toEqual({ paths: ['/elsewhere/b.png'], mode: 'copy' })
+  })
+
+  it('remembers what a move used up, so the leftover on the machine cannot win a paste', async () => {
+    // Nothing empties the machine's clipboard here on purpose: a write of no
+    // paths clears it outright, and the person's copied text would go with it.
+    ipc.on('files_move', 'lib/a.txt')
+    await files.setClipboard(['src/a.txt'], 'cut')
+
+    await files.moveEntry('src/a.txt', 'lib')
+
+    expect(files.filesState.clipboard).toBe(null)
+    expect(files.filesState.clipboardSpent).toEqual(['/project/src/a.txt'])
+    expect(files.filesState.systemClipboard).toEqual({
+      paths: ['/project/src/a.txt'],
+      mode: 'cut'
+    })
+    expect(ipc.calls('files_clipboard_write')).toHaveLength(1)
+  })
+
+  it('a fresh copy makes what the last move used up beside the point', async () => {
+    ipc.on('files_move', 'lib/a.txt')
+    await files.setClipboard(['src/a.txt'], 'cut')
+    await files.moveEntry('src/a.txt', 'lib')
+
+    await files.setClipboard(['src/b.txt'], 'copy')
+
+    expect(files.filesState.clipboardSpent).toEqual([])
+  })
+
+  it('a move that was refused uses nothing up, so the row stays cut and pasteable', async () => {
+    ipc.fail('files_move', { kind: 'denied', message: 'lib' })
+    await files.setClipboard(['src/a.txt'], 'cut')
+
+    await expect(files.moveEntry('src/a.txt', 'lib')).rejects.toMatchObject({ kind: 'denied' })
+    expect(files.filesState.clipboardSpent).toEqual([])
+  })
+
+  it('a move of something else uses nothing up either', async () => {
+    ipc.on('files_move', 'lib/b.txt')
+    await files.setClipboard(['src/a.txt'], 'cut')
+
+    await files.moveEntry('src/b.txt', 'lib')
+
+    expect(files.filesState.clipboardSpent).toEqual([])
+  })
+
+  it('copies a path from outside the project in, with only the destination in the tree', async () => {
+    ipc.on('files_copy_external', 'lib/b.png')
+
+    await expect(files.copyExternalEntry('/elsewhere/b.png', 'lib')).resolves.toBe('lib/b.png')
+    expect(ipc.calls('files_copy_external')).toEqual([
+      { root: '/project', src: '/elsewhere/b.png', dstDir: 'lib' }
+    ])
+  })
+
+  it('throws an external copy\'s refusal rather than parking it, since somebody asked just now', async () => {
+    ipc.fail('files_copy_external', { kind: 'denied', message: 'lib' })
+
+    await expect(files.copyExternalEntry('/elsewhere/b.png', 'lib')).rejects.toMatchObject({
+      kind: 'denied'
+    })
+    expect(files.filesState.lastError).toBe(null)
   })
 })

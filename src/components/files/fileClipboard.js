@@ -23,11 +23,73 @@
 
    The reason travels as a machine-readable string and never as a sentence: the
    words are `fileMenu.js`'s, which is the file that has to fit them into a row
-   that clips rather than wraps. */
+   that clips rather than wraps.
+
+   A path here may also be **absolute**, naming somewhere outside the project
+   entirely, which is what a file copied in Finder ordinarily is — see
+   `pasteSource` below. Nothing special is done for one and nothing needs to be:
+   an absolute path is not a prefix of any folder in the tree, so it greys
+   nothing, which is the direction these two copies of the rule are allowed to
+   disagree in. Rust is what refuses the case this cannot see — a folder from
+   outside that *holds* the project. */
 export function canPasteInto({ clipboard = null, folder = '' } = {}) {
   const paths = clipboard?.paths ?? []
   if (paths.length === 0) return { ok: false, reason: 'empty' }
   const inside = paths.some((path) => folder === path || folder.startsWith(`${path}/`))
   if (inside) return { ok: false, reason: 'intoSelf' }
   return { ok: true, reason: null }
+}
+
+/* Which of the two clipboards a paste acts on, when they disagree.
+
+   There are two, and they are not the same kind of thing. The tree's own
+   record (`filesState.clipboard`) is the only one that knows an entry was
+   **cut**, because on macOS there is no cut for files at all — Finder decides
+   the move at paste time with Cmd+Opt+V and writes nothing to the pasteboard.
+   The machine's holds whatever was last copied anywhere, which is the whole
+   point of it.
+
+   Three answers, and the middle one is the design. Copying inside the tree
+   writes to the system clipboard as well, so at the moment of a paste the two
+   normally name the same paths — and when they do, the internal record wins,
+   because it is the one carrying the mode. When they disagree, something was
+   copied somewhere else more recently, and that is what the person means to
+   paste; it arrives as a copy unless the platform stated otherwise, which
+   Windows and Linux can and macOS cannot.
+
+   `spent` is the fourth answer and the one that is not about a disagreement at
+   all: the paths of a record a **move has already used up**. Cut and paste
+   empties the tree's record, and nothing empties the machine's — it still
+   carries the absolute path the cut wrote there, naming a file that is not at
+   that path any more. Without this line the two would then "disagree", the
+   system side would win by the rule above, and the tree would draw a lit Paste
+   over a file that has moved: a refusal on macOS, where the mode reads as a
+   copy, and worse on Windows and Linux, where the clipboard still says `cut`
+   and anything that recreates a file at the old name — an agent writing into
+   the very tree this app supervises — would be moved instead.
+
+   The record standing down rather than the clipboard being emptied is
+   deliberate, and it is the whole reason this is a rule here and not a call to
+   the platform: writing an empty list would clear the machine's clipboard
+   outright, and somebody's copied *text* would vanish as a side effect of a
+   paste in a file tree.
+
+   Both sides are absolute here and deliberately not in the tree's spelling:
+   the system clipboard has no notion of a project, and a path from it may name
+   somewhere else on the disk entirely, which is an ordinary paste and not an
+   error. Turning the answer back into a tree path — or finding that it is not
+   in this project — is the caller's, where the root is known. */
+export function pasteSource({ internal = null, system = null, spent = [] } = {}) {
+  const systemPaths = system?.paths ?? []
+  if (systemPaths.length === 0) return internal ?? null
+  if (sameList(internal?.paths ?? [], systemPaths)) return internal
+  if (sameList(spent ?? [], systemPaths)) return internal ?? null
+  return { paths: [...systemPaths], mode: system.mode === 'cut' ? 'cut' : 'copy' }
+}
+
+/* Two lists of paths naming the same things in the same order. Order counts
+   because the two sides are written from one another: what the tree put on the
+   clipboard comes back in the order it went. */
+function sameList(one, other) {
+  return one.length === other.length && one.every((path, at) => path === other[at])
 }

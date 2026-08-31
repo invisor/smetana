@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { iconNodes } from '../../../src/components/core/icons.js'
 import {
   FILE_MENU_W,
-  absolutePath,
   fileManagerName,
   fileMenuItems,
   folderOf,
@@ -344,34 +343,6 @@ describe('parentOf', () => {
     expect(parentOf('src/components')).toBe('src')
     expect(parentOf('Cargo.toml')).toBe('')
     expect(parentOf('')).toBe('')
-  })
-})
-
-describe('absolutePath', () => {
-  it('joins the project root and the tree path', () => {
-    expect(absolutePath('/Users/you/dev/app', 'src/main.rs')).toBe('/Users/you/dev/app/src/main.rs')
-  })
-
-  it('is the root itself for the root', () => {
-    expect(absolutePath('/Users/you/dev/app', '')).toBe('/Users/you/dev/app')
-  })
-
-  it('does not double a separator the root already ends in', () => {
-    expect(absolutePath('/Users/you/dev/app/', 'src')).toBe('/Users/you/dev/app/src')
-  })
-
-  it('writes a Windows path in one separator rather than two', () => {
-    // Everything relative in stores/files.js is written with "/" whatever the
-    // platform, and the root arrives from Rust in the platform's own form.
-    expect(absolutePath('C:\\Users\\you\\app', 'src/main.rs')).toBe('C:\\Users\\you\\app\\src\\main.rs')
-  })
-
-  it('keeps a forward slash for a root that has one, whatever else it holds', () => {
-    expect(absolutePath('/Users/you/a\\b', 'src')).toBe('/Users/you/a\\b/src')
-  })
-
-  it('is the path alone when there is no project to hang it off', () => {
-    expect(absolutePath(null, 'src/main.rs')).toBe('src/main.rs')
   })
 })
 
