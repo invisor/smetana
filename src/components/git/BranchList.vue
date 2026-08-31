@@ -28,12 +28,13 @@
    Merging and rebasing used to be two buttons that appeared on the row under
    the pointer, which is a control per row per verb in a panel that also draws a
    file tree, a change list and a commit box; they are `branchMenu.js`'s items
-   now and the row draws its name, its mark and nothing else. What that costs is real and worth writing down: a right-click
-   is a gesture somebody has to know about, and nothing on the row says the two
-   verbs exist. The menu is `PointerMenu`, the same panel on the same gesture as
-   the project list one level up, which is the closest thing to a hint there is
-   — and since the switch left the single click, it is also where the name of
-   that act is written down.
+   now and the row draws its name, its mark and nothing else. What that costs is
+   real and worth writing down: a right-click is a gesture somebody has to know
+   about, and nothing on the row says the two verbs exist. The menu is
+   `PointerMenu`, the same panel on the same gesture as the project list one
+   level up, which is the closest thing to a hint there is — and since the
+   switch left the single click, it is also where the name of that act is
+   written down.
 
    The order is `git::by_recency`'s and is drawn exactly as it arrives — the
    branch somebody merges into every day is nowhere in particular
@@ -316,6 +317,16 @@ const rowStyle = (branch) => ({
         ? 'var(--surface-hover)'
         : 'transparent',
   cursor: blocked.value && !branch.current ? 'not-allowed' : 'default',
+  /* The row switches on a double click, and a double click on text is also
+     how a browser selects a word — so without this the second press left the
+     leaf highlighted in `--selection-bg` until somebody clicked elsewhere,
+     over a row whose surface is already saying something about hover and the
+     current branch. Taken off the row and nothing else in this panel: the
+     names in the change list and in the tree are still selectable, and this
+     one is only unselectable because the gesture on top of it needs the
+     press. `agent/LogLine.vue` and `agent/CodeBlock.vue` do the same for the
+     gutter they draw beside text somebody is meant to copy. */
+  userSelect: 'none',
   /* The rule under the **last** row of the top block, the same hairline
      `SectionHeader` draws above a caption and for the same reason: without it
      those rows read as more rows of the list rather than as the thing the list

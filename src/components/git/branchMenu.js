@@ -8,7 +8,7 @@
 
    It holds the three things a branch row has always been able to do — two of
    them used to be buttons that appeared on the row under the pointer, and the
-   third was the row's own click, which had no name anywhere on screen and now
+   third was the row's own gesture, which had no name anywhere on screen and now
    has one. That is the whole reason the menu carries a verb it did not have to:
    a menu is where a person goes to find out what a place can do, and a place
    whose main action is missing from its own menu reads as a place that cannot
