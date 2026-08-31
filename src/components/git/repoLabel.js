@@ -38,7 +38,11 @@ export function repoLabel(repo) {
    saying where it is — so the review window's table, which lists every
    repository of a project at once, needs the second half of the answer.
 
-   Four shapes, in the order they are asked for. The project root itself draws
+   Five shapes, in the order they are asked for. A repository that reached this
+   rule without a path draws nothing at all: a cell of a table is not the place
+   to announce that a field was empty, and every other answer here would be a
+   sentence built around a value that was never there — `./undefined` says
+   something false about where a repository is. The project root itself draws
    `./`, because the row is about the project and a reader already knows which
    one is open. Something inside the project draws the same mark and the path
    under it — `./services/backend` — which is short, and which says at a glance
@@ -55,18 +59,27 @@ export function repoLabel(repo) {
    folder, which is what makes the second question a second call and not a
    second rule.
 
-   The home folder arrives as an argument and is never read here, because
-   nothing in this app knows it yet — neither `src/` nor `src-tauri/src/` asks
-   the system for one — and a rule that went looking would need Tauri, which is
-   the one import that would put this file out of reach of every test in the
-   repository. Without the argument the third shape simply does not apply and an
-   outside repository draws its absolute path, which is true rather than merely
-   shorter.
+   The home folder arrives as an argument and is never read here. Nothing in
+   `src/` knows one — no command the front end calls today answers with it — and
+   a rule that went looking would need Tauri, which is the one import that would
+   put this file out of reach of every test in the repository.
+
+   The Rust side has been asking the question for a while, which is the half of
+   this worth knowing before writing a fifth reader of the environment:
+   `tracker::access::home()` is the one that carries a name, and
+   `agents::library`, `sessions::read` and `runs::browser` each read `HOME`
+   directly beside it. None of them is exposed over IPC, and `access::home` has
+   one caller, on a macOS-only path, which is why it is marked `dead_code`
+   everywhere else — so what is missing is a command handing that answer to the
+   front end, not a way to find it. Without the
+   argument the tilde shape simply does not apply and an outside repository
+   draws its absolute path, which is true rather than merely shorter.
 
    The separator is `/` in everything this builds, because that is what
    `relativeTo` normalises to and what a path drawn under `./` or `~/` is read
    as on every system. The absolute fallback keeps the platform's own form: it
-   is the path itself, not a path this rule composed. */
+   is the path itself less a trailing separator, not a path this rule
+   composed. */
 export function repoPath(root, path, home = null) {
   const full = typeof path === 'string' ? path : ''
   if (!full) return ''
