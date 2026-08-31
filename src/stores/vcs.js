@@ -28,6 +28,11 @@ import { settings } from './settings.js'
    rules live beside the part of the interface they are about, and nothing in
    them is Vue. */
 import { publishes } from '../components/git/tracking.js'
+/* The other rule out of that same family, and here for the same reason: what
+   the panel holds about a conflicted tree is joined from two sources that know
+   different things, and the whole of that join is a pure module a test can
+   reach. */
+import { conflictRecord } from '../components/git/conflictRecord.js'
 
 export const vcsState = reactive({
   /* The project the rest of this object is about. Also the guard token: every
@@ -116,20 +121,39 @@ export const vcsState = reactive({
      for that reason: they leave from the section header rather than from a row,
      and the row they are about is the one with the tick. */
   busy: null,
-  /* A merge or a rebase that stopped on conflicts, which is an outcome and not
-     a failure — hence its own field beside `writeError` rather than in it.
+  /* A merge or a rebase this repository is part-way through, with unmerged
+     paths in the tree, which is an outcome and not a failure — hence its own
+     field beside `writeError` rather than in it.
      `{ repo, op, ours, theirs, files }`: the repository it happened in, which
      of the two operations it was, the branch this repository was on, the branch
      that was being brought in, and every path git left unmerged.
 
-     The modal drawn from it has no dismiss, and that is the point of keeping
-     the record here rather than in a component: a conflicted tree behind a
-     closed dialog is a state this panel promises to show and cannot draw. It
-     leaves on one of the two doors and nowhere else. */
+     **Two sources fill it and they know different things.** A merge or a
+     rebase this app ran answers `conflict` and records both branches, since
+     the person picked the second one off a row. Everything else — a tree left
+     conflicted before the app started, a merge run in a terminal, an agent's
+     session in the same tree — is read afterwards by `vcs_in_progress`, which
+     is exact about the operation and best-effort about the names.
+     `components/git/conflictRecord.js` is the rule that joins them.
+
+     It is a fact about the **selected** repository and is re-derived on every
+     status read, which is what makes the button honest: it stands for exactly
+     as long as the tree is conflicted, and goes when the tree is not. */
   conflict: null,
+  /* Whether the dialog is on screen, which is a different question from
+     whether there is a conflict.
+
+     They used to be one field, and that is what made resolving with an agent a
+     one-way door: taking the dialog down meant forgetting the tree, so a
+     session that stopped early left a conflicted repository with nothing to
+     press. Now the record stays and this flag falls — a merge this app ran
+     raises it, the panel's own `Resolve conflicts` button raises it again, and
+     closing lowers it. */
+  conflictOpen: false,
   /* Git's refusal of the abort, drawn **inside** that modal. Its own field for
-     one reason: the dialog cannot be dismissed, so a message put in the panel
-     behind it would be one nobody could see. */
+     one reason: the message belongs to the dialog the abort was pressed in,
+     and one put in the panel behind it would sit under a dialog that is still
+     open. */
   conflictError: null,
   /* The commit message somebody is part-way through writing, by repository
      path. Kept per repository because a project is often several of them and
@@ -247,12 +271,13 @@ function pickRepo(repos, remembered) {
 export async function loadRepos(project) {
   /* A conflict belongs to a repository of one project, and both its doors act
      on that project: the abort names that repository, and the agent is started
-     there. Somebody who has moved on gets neither, so the dialog goes with the
-     project rather than hanging over the next one. `refresh()` comes back
-     through here with the same project and leaves it standing, which is what
-     lets a conflict survive the refresh that follows the merge that made it. */
+     there. Somebody who has moved on gets neither, so the record and the dialog
+     go with the project rather than hanging over the next one. `refresh()`
+     comes back through here with the same project and leaves it standing, which
+     is what lets a conflict survive the refresh that follows the merge that
+     made it — and `loadStatus` re-derives it below in any case. */
   if (project !== vcsState.project) {
-    dismissConflict()
+    clearConflict()
     /* The drafts go with the project they were about. `refresh()` comes back
        through here with the same project and leaves them standing, which is
        what lets a message survive the refresh a failed commit is followed
@@ -323,9 +348,11 @@ export async function selectRepo(path) {
   settings.project.selectedRepo = path
   /* Git's last refusal went with the repository it was about: a message saying
      a branch is checked out in another worktree, left standing over the branch
-     list of the repository next door, would be a statement about neither. A
-     conflict is deliberately not cleared here — it is a tree somebody still has
-     to answer for, and its own record names the repository it belongs to. */
+     list of the repository next door, would be a statement about neither. The
+     conflict is deliberately not cleared here either, and for a different
+     reason: `loadStatus` below re-derives it for whichever repository is now
+     selected, so clearing it here would only make the panel blink through a
+     state it is about to answer properly. */
   vcsState.writeError = null
   await Promise.all([loadStatus(), loadBranchList(), loadTracking()])
 }
@@ -355,6 +382,7 @@ async function loadStatus() {
        never `0`: not knowing is not a clean tree. */
     vcsState.tree = tree
     vcsState.error = null
+    await readConflict(project, selected, tree)
   } catch (err) {
     if (vcsState.project !== project || vcsState.selected !== selected) return
     vcsState.tree = null
@@ -362,6 +390,49 @@ async function loadStatus() {
   } finally {
     if (vcsState.project === project && vcsState.selected === selected) vcsState.loading = false
   }
+}
+
+/* What the tree alone cannot say: which operation left it conflicted, and the
+   branches it is between.
+
+   **Asked only of a tree that already shows unmerged paths.** A clean
+   repository pays no process for it, which matters because this runs on every
+   window focus, and it also means the common answer costs an `Array.filter`
+   and nothing else.
+
+   Guarded on the same `(project, selected)` pair as the read above and for the
+   same reason: an answer arriving after somebody moved on would put one
+   repository's operation under another repository's name.
+
+   A probe that failed leaves the record alone rather than clearing it: git
+   declining to answer is not git saying there is nothing, and the honest cost
+   of the other arm is a button that vanishes under the pointer. */
+async function readConflict(project, selected, tree) {
+  const files = tree.changes.filter((change) => change.kind === 'conflicted').map((c) => c.path)
+  if (!files.length) {
+    clearConflict()
+    return
+  }
+  let progress = null
+  try {
+    progress = await invoke('vcs_in_progress', { repo: selected })
+  } catch (err) {
+    console.error('[vcs] asking git what is in progress failed:', err)
+    return
+  }
+  if (vcsState.project !== project || vcsState.selected !== selected) return
+  const record = conflictRecord({ repo: selected, files, progress, previous: vcsState.conflict })
+  vcsState.conflict = record
+  if (!record) vcsState.conflictOpen = false
+}
+
+/* The record and everything drawn from it, gone: a tree that is not conflicted
+   any more, or a project that is not this one. Deliberately not
+   `dismissConflict`, which now only closes. */
+function clearConflict() {
+  vcsState.conflict = null
+  vcsState.conflictError = null
+  vcsState.conflictOpen = false
 }
 
 /* The selected repository's branches.
@@ -548,6 +619,12 @@ async function write(op, branch, call, theirs = branch) {
         files: outcome.files ?? []
       }
       vcsState.conflictError = null
+      /* Raised here and nowhere else on this path: a merge somebody pressed is
+         the one case where the dialog is what they are waiting for, so it
+         comes up by itself. Every other way a conflicted tree is discovered —
+         the probe below, a restart, a terminal — leaves the flag down and puts
+         the panel's button there instead. */
+      vcsState.conflictOpen = true
     }
     await refresh()
     /* Awaited, unlike the sweep in `catchUp` that fires the same call and walks
@@ -786,7 +863,7 @@ export async function abortConflict() {
   vcsState.conflictError = null
   try {
     await invoke('vcs_abort', { repo: conflict.repo, op: conflict.op })
-    vcsState.conflict = null
+    clearConflict()
     if (vcsState.project !== project) return
     await refresh()
     await loadHead(project)
@@ -797,14 +874,29 @@ export async function abortConflict() {
   }
 }
 
-/* The second door: an agent session on the conflicted tree, which is left
-   exactly as git left it — so all this does is take the dialog down.
+/* Take the dialog down and **keep** the record.
 
-   Starting the session is `DesktopApp.vue`'s, because it is also a switch to
-   the agents side tab and to the terminal in the centre, and no store in this
-   app opens a tab. */
+   The second door out of a conflict — an agent session on the tree, which is
+   left exactly as git left it — comes through here, and so does the close
+   cross. Starting the session is `DesktopApp.vue`'s, because it is also a
+   switch to the agents side tab and to the terminal in the centre, and no
+   store in this app opens a tab.
+
+   This used to forget the conflict, and that was the bug: "Resolve with an
+   agent" leaves the tree exactly as git left it, so a session that stopped
+   early left a conflicted repository the panel could see and not act on. The
+   record now goes only when the tree is clean or the project changes. */
 export function dismissConflict() {
-  vcsState.conflict = null
+  vcsState.conflictOpen = false
+  vcsState.conflictError = null
+}
+
+/* The way back in, which is the panel's `Resolve conflicts` button. It opens
+   nothing on its own — there is a record or there is not, and the button is
+   drawn from the same fact. */
+export function openConflict() {
+  if (!vcsState.conflict) return
+  vcsState.conflictOpen = true
   vcsState.conflictError = null
 }
 
@@ -1018,6 +1110,7 @@ function reset() {
      that project comes back. */
   vcsState.conflict = null
   vcsState.conflictError = null
+  vcsState.conflictOpen = false
   /* The drafts go with the project they were about. Keeping them would mean a
      sentence about another project's work sitting over this one's file list,
      one keystroke away from being committed there. */

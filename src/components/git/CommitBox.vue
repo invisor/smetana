@@ -75,10 +75,14 @@ const props = defineProps({
      `settings.json`, beside the two section heights of this same panel, which
      are counts of rows for the same reason. A caller that passes nothing gets
      the two rows this field was fixed at before it could be dragged. */
-  rows: { type: Number, default: DEFAULT_ROWS }
+  rows: { type: Number, default: DEFAULT_ROWS },
+  /* How many paths git left unmerged in this repository, and whether it is
+     part-way through a merge or a rebase at all — zero means either. The panel
+     works both out; this component only draws the button. */
+  conflicts: { type: Number, default: 0 }
 })
 
-const emit = defineEmits(['update:modelValue', 'commit', 'suggest', 'resize'])
+const emit = defineEmits(['update:modelValue', 'commit', 'suggest', 'resize', 'resolveConflicts'])
 
 const working = computed(() => Boolean(props.busy))
 
@@ -257,6 +261,25 @@ const errorStyle = {
       @dragend="onDragEnd"
       @reset="emit('resize', DEFAULT_ROWS)"
     />
+    <!-- Above the commit button, because a conflicted tree is what has to be
+         answered before committing is worth thinking about — and git refuses a
+         commit with unmerged paths anyway, so the button under this one is one
+         git would decline.
+
+         Secondary and not primary: the commit is what this box is for, and two
+         primary buttons stacked in one column is a choice nobody made. It is
+         gated by nothing — neither `gitActions.js` nor `busy` — because
+         pressing it opens a dialog and writes nothing, and that dialog's own
+         two buttons are already held while git works. -->
+    <Button
+      v-if="conflicts"
+      variant="secondary"
+      icon="git-merge"
+      full-width
+      @click="emit('resolveConflicts')"
+    >
+      Resolve conflicts
+    </Button>
     <!-- The hint hangs on a wrapper rather than on the button: a disabled
          button takes no pointer events of its own, so a tooltip inside it would
          have nothing to open on in exactly the state that needs explaining. And

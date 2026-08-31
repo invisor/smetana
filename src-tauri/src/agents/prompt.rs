@@ -1072,9 +1072,19 @@ fn resolve_conflict(
     // than a made-up one, and the sentence still has to be true without it.
     let ours = if ours.trim().is_empty() { "the branch it is on" } else { ours };
     let _ = write!(out, "Finish a git {} in {repo}.\n\n", op.word());
-    let _ = match op {
-        OpKind::Merge => write!(out, "It is merging {theirs} into {ours}. "),
-        OpKind::Rebase => write!(out, "It is rebasing {ours} onto {theirs}. "),
+    // A branch the panel could not name sends an empty string rather than a
+    // made-up one — the rule `ours` above already follows — and the sentence
+    // has to be true without it. The two unknown arms differ because the two
+    // operations do: a merge with no incoming name is still a merge into a
+    // branch that is named, while a rebase with no onto has nothing left to
+    // point at, so it says where to look instead of trailing off.
+    let _ = match (op, theirs.trim().is_empty()) {
+        (OpKind::Merge, false) => write!(out, "It is merging {theirs} into {ours}. "),
+        (OpKind::Merge, true) => write!(out, "It is merging another branch into {ours}. "),
+        (OpKind::Rebase, false) => write!(out, "It is rebasing {ours} onto {theirs}. "),
+        (OpKind::Rebase, true) => {
+            write!(out, "It is rebasing {ours}; run `git status` in the repository to see onto what. ")
+        }
     };
     out.push_str(CONFLICT);
     out.push_str("\n\nThe conflicted files:\n\n");
@@ -2326,6 +2336,36 @@ mod tests {
             build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, nothing(), &english(), "")
                 .unwrap();
         assert!(text.contains("merging develop into the branch it is on"), "{text}");
+    }
+
+    #[test]
+    fn resolve_conflict_says_a_rebase_with_no_onto_without_naming_one() {
+        // A stopped rebase leaves HEAD detached and the branch it is being
+        // rebased onto readable nowhere a git process can see, so the panel
+        // sends nothing rather than a guess — and the sentence still has to be
+        // true.
+        let prompt = resolve_conflict(
+            "/w/api",
+            crate::vcs::model::OpKind::Rebase,
+            "feature",
+            "",
+            &["src/one.rs".to_string()],
+        );
+        assert!(prompt.contains("It is rebasing feature;"), "{prompt}");
+        assert!(!prompt.contains("onto ."), "{prompt}");
+        assert!(!prompt.contains("onto  "), "{prompt}");
+    }
+
+    #[test]
+    fn resolve_conflict_says_a_merge_with_no_incoming_branch() {
+        let prompt = resolve_conflict(
+            "/w/api",
+            crate::vcs::model::OpKind::Merge,
+            "main",
+            "",
+            &["src/one.rs".to_string()],
+        );
+        assert!(prompt.contains("It is merging another branch into main."), "{prompt}");
     }
 
     #[test]

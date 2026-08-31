@@ -1076,6 +1076,22 @@ export function installMockBackend() {
         ]
       }
     }
+    /* What git is part-way through, asked of the tree above the moment it shows
+       an unmerged path — which the fixture's last row is. A **read** that
+       changes nothing, so it answers here rather than falling through to the
+       refusal, and without it every status read in a browser would log a
+       failure and the `Resolve conflicts` button could never be looked at
+       outside the isolated gallery frame. This project has no component runner,
+       so the running app shell is where that button's place above the commit —
+       under both densities, inside the real fold heights — is checked at all.
+
+       `merge`, and the two branches the fixture beside it already names: the
+       tree says it is on `feat/worktree-rename`, and `develop` is the other
+       branch `MOCK_BRANCHES` offers. A rebase would be the more interesting
+       shape and would be a lie about this fixture, whose HEAD is attached. */
+    if (command === 'vcs_in_progress') {
+      return { op: 'merge', ours: 'feat/worktree-rename', theirs: 'develop' }
+    }
     /* The commit-message button. A read like the three above — it runs `git
        diff` and a model, and changes nothing — so it answers here rather than
        falling through to the refusal, which is what lets the field, the

@@ -191,6 +191,7 @@ import {
   loadRemoteBranches,
   loadRepos,
   merge,
+  openConflict,
   pull,
   push,
   rebase,
@@ -1304,8 +1305,11 @@ const setFavoriteBranches = (favorites) => {
    store cannot open a tab or move a side tab, and everything else about the
    conflict is already in `vcsState`.
 
-   The dialog is taken down first and the tree is left exactly as git left it —
-   that is the whole of what this door does to the repository. Then it is the
+   The dialog is closed first and the tree is left exactly as git left it —
+   that is the whole of what this door does to the repository. **Closed and not
+   forgotten**: the record stays, so the panel goes on drawing `Resolve
+   conflicts` for as long as the tree is conflicted, which is the way back in
+   for a session that stopped early or resolved the wrong way. Then it is the
    same three lines "Ask agent to edit" is: the agents panel, the terminal in
    the centre, and one session.
 
@@ -1326,7 +1330,12 @@ const resolveConflictWithAgent = async () => {
       repo: conflict.repo,
       op: conflict.op,
       ours: conflict.ours ?? '',
-      theirs: conflict.theirs,
+      /* An unknown branch crosses as the empty string, the way `ours` above
+         already does: `Intent::ResolveConflict` takes two `String`s, and
+         `prompt.rs::resolve_conflict` has an arm for each of them being empty.
+         A rebase this app did not start has no `theirs` at all — the branch it
+         is going onto is readable nowhere a git process can see. */
+      theirs: conflict.theirs ?? '',
       files: conflict.files
     })
   } catch {
@@ -4929,6 +4938,8 @@ const toastStackStyle = {
                 :message="draftMessage()"
                 :suggesting="vcsState.suggesting"
                 :suggest-error="vcsState.suggestError"
+                :conflicts="vcsState.conflict ? vcsState.conflict.files.length : 0"
+                @resolve-conflicts="openConflict"
                 @toggle="toggleGitSection"
                 @toggle-folder="toggleBranchFolders"
                 @favorite="setFavoriteBranches"
@@ -5012,12 +5023,14 @@ const toastStackStyle = {
             />
           </template>
         </TabBar>
-        <!-- A merge or a rebase that stopped on conflicts. It has no dismiss
-             and takes no `close`: the two doors are the only ways out, because
-             a conflicted tree behind a closed dialog is a state the panel
-             promises to show and has nothing to draw it with. Everything in it
-             comes from the record the store made when git answered, including
-             which repository — the panel's selection can have moved since. -->
+        <!-- A merge or a rebase that stopped on conflicts. It closes now, and
+             `dismissConflict` is what closing means: the record stays, the
+             panel goes on drawing `Resolve conflicts` above the commit button
+             for as long as the tree is conflicted, and pressing that is
+             `openConflict`. There was no dismiss while there was no way back
+             in; there is one, so a dialog with no exit would only be a trap.
+             Everything drawn in it comes from that record — including which
+             repository, since the panel's selection can have moved since. -->
         <!-- Every dialog of this app but two is a window of its own now,
              opened above by `openRun`, `openNewTask`, `openNewBranch`,
              `openDeleteBranch`, `openPromote`, `openSetup`,
@@ -5033,7 +5046,7 @@ const toastStackStyle = {
              window somebody can push aside and click past is the one thing
              neither may be. -->
         <ConflictModal
-          v-if="vcsState.conflict"
+          v-if="vcsState.conflictOpen && vcsState.conflict"
           :open="true"
           :op="vcsState.conflict.op"
           :repo="vcsState.conflict.repo"
@@ -5044,6 +5057,7 @@ const toastStackStyle = {
           :error="vcsState.conflictError"
           @resolve="resolveConflictWithAgent"
           @abort="abortConflict"
+          @close="dismissConflict"
         />
         <Modal
           v-if="unsaved"

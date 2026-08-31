@@ -34,7 +34,7 @@ git lives in this app finds two answers.
 
 | file | what it does |
 |---|---|
-| `model.rs` | `Repo`, `Change`, `ChangeKind`, `WorkingTree`, `Branch`, `OpKind`, `MergeOutcome`, `VcsError`, the **pure** parse of `git status --porcelain=v2 -z --branch` and the reading of a conflict off it; the tests are here |
+| `model.rs` | `Repo`, `Change`, `ChangeKind`, `WorkingTree`, `Branch`, `OpKind`, `MergeOutcome`, `InProgress`, `VcsError`, the **pure** parse of `git status --porcelain=v2 -z --branch`, the reading of a conflict off it and `branch_from_name_rev`; the tests are here |
 | `repos.rs` | what a project is made of — the pure rule, split from the directory read |
 | `run.rs` | the only file that touches the OS |
 | `commands.rs` | thin `#[tauri::command]`s, shaped like `files/`'s |
@@ -99,7 +99,10 @@ is selected is remembered per project as `selectedRepo` in `settings.json`, vali
 replaced by the first — a stored value is a hint, never the truth, the rule `columnOrder.js` states.
 `components/git/` draws it: `GitPanel.vue` over `RepoList.vue`, `ChangeList.vue` and
 `BranchList.vue`, with the pure
-`changeStatus.js` saying what a change is captioned with. Four of its eight kinds — modified, added,
+`changeStatus.js` saying what a change is captioned with. It is one of the pure rules in that
+directory, and the directory is the list rather than a number written here: two others are named
+below — `conflictsFirst.js`, which lifts a conflict to the top of the list, and `conflictRecord.js`,
+which says what the panel holds about a conflicted tree. Four of its eight kinds — modified, added,
 deleted, untracked — take the `--git-*` token the file tree already marks that file with
 (`files/FileTreeRow.vue`), which is the whole of the agreement between the two: renamed, copied and
 type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares both
@@ -643,17 +646,27 @@ conflicting merge in the same tree between the pre-read and the spawn leaves the
 the "after" unmerged, and its conflict is attributed to us exactly as the one-read version attributed
 every one. The window is the tens of milliseconds between two `git status` calls against a failure
 that used to be certain, and no arithmetic over those two lists closes it: only asking git what is
-*in progress* would — a `MERGE_HEAD` / `rebase-merge` probe — which is a file read in the module
-whose header forbids one, and deliberately not taken.
+*in progress* does. **That probe is taken, and it is `vcs_in_progress`** — described under the
+button below. This paragraph used to end by dismissing it as "a file read in the module whose header
+forbids one", and that was about stat-ing `.git/MERGE_HEAD` directly; `git rev-parse -q --verify
+MERGE_HEAD` is `run.rs` spawning git, which is the one thing this module exists to do, so the rule
+stands untouched. What has not changed is this comparison: `write()` still attributes a conflict by
+the two moments, because the probe answers what git is doing and not who asked it to.
 
-**What the app then offers is two doors and no third**, because there is no merge editor here and
-this epic adds none: `ConflictModal.vue` has no close button, and `overlays/Modal.vue` closes on
-neither Escape nor the scrim, so `closable: false` is the whole of it. A conflicted tree behind a
-closed dialog is a state this panel promises to show and cannot draw. **Abort** is `git merge
---abort` or `git rebase --abort` — nothing was committed, so nothing is lost — and git's refusal of
-the abort is drawn *inside* the dialog, since a message behind a dialog with no dismiss is one nobody
-can see. **Resolve with an agent** is `Intent::ResolveConflict`, the same idiom "Ask agent to edit"
-and "Answer questions" already use, with the tree left exactly as git left it.
+**What the app then offers is two doors and a way out**, because there is no merge editor here and
+none has been added: `ConflictModal.vue` is `closable: true`, and `overlays/Modal.vue` closes on
+neither Escape nor the scrim, so the cross in the header is the whole of it. **That is a reversal,
+and the sentence it replaced was right when it was written**: a conflicted tree behind a closed
+dialog was a state this panel promised to show and could not, because there was no way back in. The
+button below is the way back in, standing for exactly as long as the tree is conflicted, so a closed
+dialog is no longer a lost state and a dialog somebody opened out of curiosity with no exit would be
+a trap. It closes in **both** ways of opening it — the one that appears by itself after a merge and
+the one the button opens — because a window that sometimes closes and sometimes does not is one
+nobody learns. **Abort** is `git merge --abort` or `git rebase --abort` — nothing was committed, so
+nothing is lost — and git's refusal of the abort is drawn *inside* the dialog, since the abort was
+pressed there and a message behind it would sit under the dialog it is about. **Resolve with an
+agent** is `Intent::ResolveConflict`, the same idiom "Ask agent to edit" and "Answer questions"
+already use, with the tree left exactly as git left it.
 
 That intent carries the whole of the moment — the repository, which of the two operations, both
 branches and every conflicted path — where `ResolveTask` deliberately carries almost nothing: a
@@ -668,6 +681,65 @@ is about a *task's* worktrees, its gates and its fast-forward — so the instruc
 rebase, never `--abort`. That last is a named refusal rather than a silence, because an agent that
 tidies up by aborting has undone the only thing it was asked to do and leaves a clean tree behind,
 which is the one way this fails that looks like success.
+
+**The way back in is `Resolve conflicts`, a button `CommitBox.vue` draws on its own row directly
+above the commit button.** Above it because a conflicted tree is what has to be answered before
+committing is worth thinking about, and git refuses a commit with unmerged paths anyway; secondary
+rather than primary, since the commit is what that box is for; and gated by **nothing** — neither
+`gitActions.js` nor `busy` — because pressing it opens a dialog and writes nothing, while the
+dialog's own two buttons are already held while git works. It exists because the dialog used to be
+reachable only from the instant a merge this app ran answered `conflict`, which left three ordinary
+states with a conflicted tree the panel could see and not act on: after "Resolve with an agent" took
+the dialog down, after a restart over a repository left mid-merge, and after a merge or a rebase
+started in a terminal or by an agent in the same tree — which this document already names as the
+ordinary case here.
+
+It is drawn from `vcsState.conflict`, and **that record is re-derived on every status read** rather
+than remembered from a write: `loadStatus` calls `vcs_in_progress` — but **only for a tree that
+already shows unmerged paths**, so a clean repository pays no process for it, which matters because
+this runs on every window focus. `conflictOpen` is a second field beside it and the split is the
+whole fix: the record says there is a conflict, the flag says the dialog is on screen, so
+`dismissConflict` closes without forgetting and the record goes only when the tree comes back clean
+or the project changes. Two sources fill one record and they know different things — the press that
+started a rebase knew both branches, the probe cannot — so `components/git/conflictRecord.js` is the
+pure rule that joins them: a name already held survives a probe that answered nothing, and only for
+the **same repository and the same operation**, while the paths are always the tree's own.
+
+**`op` is exact and the two names are best-effort, by construction.** `vcs_in_progress` asks
+`rev-parse -q --verify MERGE_HEAD` through `run::git_maybe(…, 1)`, since exit 1 for an absent ref is
+a question's answer rather than a refusal; `symbolic-ref` and `name-rev` give the names, and
+`model::branch_from_name_rev` is the pure reading of one `name-rev` line — `undefined` is no name,
+and `feature~1` is a branch and a distance from it.
+
+**The rebase arm is asked as `git rebase --show-current-patch`, and the ref it obviously wanted is
+the defect that bought the question.** git writes `REBASE_HEAD` when a rebase stops and — on the
+default `--merge` backend and on `-i`, though not on `--apply` — **never removes it**, so
+`rev-parse -q --verify REBASE_HEAD` answers yes for the rest of that repository's life from the first
+rebase anybody finished with `--continue`. That is exactly the workflow this feature exists for, and
+the shipped effect was every later conflicted tree with no `MERGE_HEAD` being called a rebase: the
+button over a `git cherry-pick`, an `Abort` that ran `git rebase --abort` and died with "No rebase in
+progress?", and an agent with write access briefed to "Finish a git rebase" over a tree that was
+mid-cherry-pick. `--show-current-patch` is about the operation rather than about a file git forgot to
+sweep up — exit 0 while a rebase is stopped on all three backends, 128 when there is none — and
+`REBASE_HEAD` stays only as the **name** source it was always reliable for. Reading 128 as an answer
+is safe **in this position alone**, because a repository git cannot read has already refused at the
+`MERGE_HEAD` call above. The rule this states for anything added here later: **a ref that exists is
+not an operation in progress**, and the two questions have different answers for as long as git keeps
+sweeping up unevenly. `vcs::commands`'s tests drive it against a real repository for that reason —
+nothing fed a prepared answer could have seen it. **A rebase's onto is not obtainable
+at all**: `name-rev` on HEAD answers `undefined` the moment one commit has been applied, and the only
+other source is `.git/rebase-merge/onto`, which is the file read this module does not do. So an
+unknown branch travels as nothing rather than as a guess, and both the dialog and
+`prompt.rs::resolve_conflict` have an arm that reads correctly without it. The accepted cost is one
+sentence: selecting another repository and coming back re-derives the record from that repository's
+own tree, so a rebase's `theirs` is then unknown.
+
+**A conflicted tree with neither operation in progress deliberately gets no button.** `git
+cherry-pick`, `git revert`, `git stash pop` and `git checkout --merge` all leave unmerged paths, and
+neither of the dialog's doors is true for any of them — `git merge --abort` is not the abort, and
+"finish the merge" is not the work. The probe answers nothing, there is no button, and the change
+list goes on drawing those rows in `--git-conflict`, which is what this panel already promises for a
+state it cannot act on.
 
 ## The remote: what is behind, and the two verbs that reach it
 

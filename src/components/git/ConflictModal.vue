@@ -6,12 +6,16 @@
    until it is answered: the repository is mid-operation, and every other write
    in the panel is refused while it stands.
 
-   **There is no third door and no dismiss.** No close button (`closable` is
-   false), and `overlays/Modal.vue` listens for neither Escape nor a press on
-   the scrim, so nothing else has to be suppressed here. That is deliberate: a
-   conflicted tree behind a closed dialog is a state this panel promises to show
-   and cannot — nothing in the app draws a conflicted file, and the changes list
-   would say `C` beside three rows with no way back to what caused it.
+   **It closes now, and that is a reversal worth its own sentence.** It used to
+   have no dismiss, because a conflicted tree behind a closed dialog was a
+   state the panel promised to show and could not — there was no way back in.
+   `CommitBox` now draws `Resolve conflicts` for exactly as long as the tree is
+   conflicted, so a closed dialog is no longer a lost one, and a dialog somebody
+   opened out of curiosity with no way out is a trap. It closes in **both**
+   cases — the one that appears by itself after a merge and the one the button
+   opens — because a window that sometimes closes and sometimes does not is one
+   nobody learns. `overlays/Modal.vue` still listens for neither Escape nor a
+   press on the scrim, so the cross is the whole of it.
 
    The app cannot resolve a conflict either: there is no merge editor here and
    this epic does not add one. So the two doors are the only two things it can
@@ -46,8 +50,12 @@ const props = defineProps({
      stopped on a conflict leaves HEAD detached, so afterwards there is no
      branch to ask about. Null where the list had not landed yet. */
   ours: { type: String, default: null },
-  /* The branch being brought in, or the one being rebased onto. */
-  theirs: { type: String, default: '' },
+  /* The branch being brought in, or the one being rebased onto. **Null is an
+     ordinary answer for a rebase**: a stopped rebase leaves HEAD detached and
+     the branch it is going onto readable nowhere a git process can see, so the
+     panel sends nothing rather than a guess and the sentence below drops the
+     clause instead of naming an empty string. */
+  theirs: { type: String, default: null },
   /* Every path git left unmerged, repository-relative. All of them are drawn:
      the number is what somebody weighs the two doors with, and a list cut off
      at three would hide exactly the case where aborting is the sane answer. */
@@ -57,12 +65,12 @@ const props = defineProps({
      could genuinely lose something. */
   busy: { type: Boolean, default: false },
   /* Git's refusal of the abort, `{ kind, message }`. Drawn inside the dialog
-     because the dialog has no dismiss — a message put in the panel behind it
-     would be one nobody could see. */
+     because the abort was pressed here — a message put in the panel behind it
+     would sit under a dialog that is still open. */
   error: { type: Object, default: null }
 })
 
-defineEmits(['resolve', 'abort'])
+defineEmits(['resolve', 'abort', 'close'])
 
 const title = computed(() =>
   props.op === 'rebase' ? 'Rebase stopped on a conflict' : 'Merge stopped on a conflict'
@@ -110,23 +118,27 @@ const count = computed(() =>
 </script>
 
 <template>
-  <Modal :open="open" :closable="false" :title="title" :width="480">
+  <Modal :open="open" :closable="true" :title="title" :width="480" @close="$emit('close')">
     <div :style="bodyStyle">
       <!-- Which operation, in the branches' own order: a merge brings `theirs`
            into `ours`, a rebase moves `ours` onto `theirs`, and a sentence that
-           got that backwards would send an agent the wrong way round. The
-           branch this repository was on can be unknown — a repository whose
-           list had not landed — and the sentence says the operation either
-           way rather than inventing a name for it. -->
+           got that backwards would send an agent the wrong way round. Either
+           branch can be unknown — a repository whose list had not landed, or a
+           stopped rebase, whose onto no git process will name — and the
+           sentence drops the clause rather than inventing a name for it or
+           trailing off into an empty mono span. -->
       <div>
         <template v-if="op === 'rebase'">
           Git stopped rebasing
           <span v-if="ours" :style="idStyle">{{ ours }}</span>
           <template v-else>this branch</template>
-          onto <span :style="idStyle">{{ theirs }}</span>.
+          <template v-if="theirs">
+            onto <span :style="idStyle">{{ theirs }}</span></template>.
         </template>
         <template v-else>
-          Git stopped merging <span :style="idStyle">{{ theirs }}</span>
+          Git stopped merging
+          <span v-if="theirs" :style="idStyle">{{ theirs }}</span>
+          <template v-else>another branch</template>
           <template v-if="ours">
             into <span :style="idStyle">{{ ours }}</span>
           </template>.
