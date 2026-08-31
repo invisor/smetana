@@ -57,18 +57,39 @@ export function canPasteInto({ clipboard = null, folder = '' } = {}) {
    paste; it arrives as a copy unless the platform stated otherwise, which
    Windows and Linux can and macOS cannot.
 
+   `spent` is the fourth answer and the one that is not about a disagreement at
+   all: the paths of a record a **move has already used up**. Cut and paste
+   empties the tree's record, and nothing empties the machine's — it still
+   carries the absolute path the cut wrote there, naming a file that is not at
+   that path any more. Without this line the two would then "disagree", the
+   system side would win by the rule above, and the tree would draw a lit Paste
+   over a file that has moved: a refusal on macOS, where the mode reads as a
+   copy, and worse on Windows and Linux, where the clipboard still says `cut`
+   and anything that recreates a file at the old name — an agent writing into
+   the very tree this app supervises — would be moved instead.
+
+   The record standing down rather than the clipboard being emptied is
+   deliberate, and it is the whole reason this is a rule here and not a call to
+   the platform: writing an empty list would clear the machine's clipboard
+   outright, and somebody's copied *text* would vanish as a side effect of a
+   paste in a file tree.
+
    Both sides are absolute here and deliberately not in the tree's spelling:
    the system clipboard has no notion of a project, and a path from it may name
    somewhere else on the disk entirely, which is an ordinary paste and not an
    error. Turning the answer back into a tree path — or finding that it is not
    in this project — is the caller's, where the root is known. */
-export function pasteSource({ internal = null, system = null } = {}) {
+export function pasteSource({ internal = null, system = null, spent = [] } = {}) {
   const systemPaths = system?.paths ?? []
   if (systemPaths.length === 0) return internal ?? null
-  const internalPaths = internal?.paths ?? []
-  const same =
-    internalPaths.length === systemPaths.length &&
-    internalPaths.every((path, at) => path === systemPaths[at])
-  if (same) return internal
+  if (sameList(internal?.paths ?? [], systemPaths)) return internal
+  if (sameList(spent ?? [], systemPaths)) return internal ?? null
   return { paths: [...systemPaths], mode: system.mode === 'cut' ? 'cut' : 'copy' }
+}
+
+/* Two lists of paths naming the same things in the same order. Order counts
+   because the two sides are written from one another: what the tree put on the
+   clipboard comes back in the order it went. */
+function sameList(one, other) {
+  return one.length === other.length && one.every((path, at) => path === other[at])
 }

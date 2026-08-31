@@ -128,6 +128,42 @@ describe('pasteSource', () => {
     })
   })
 
+  it('stands down when the system clipboard is only echoing what a move used up', () => {
+    /* Cut and paste empties the tree's record and nothing empties the
+       machine's, so it goes on naming a file that is not there any more. Left
+       to the rule above, the two would "disagree" and the stale side would
+       win — a lit Paste over a file that has moved, and on the platforms whose
+       clipboard also still says `cut`, a silent move of anything that turns up
+       under the old name. */
+    const system = { paths: ['/p/src/a.txt'], mode: 'cut' }
+    expect(pasteSource({ internal: null, system, spent: ['/p/src/a.txt'] })).toBe(null)
+  })
+
+  it('still takes the system clipboard when it names something other than what was used up', () => {
+    const system = { paths: ['/elsewhere/b.png'], mode: 'copy' }
+    expect(pasteSource({ internal: null, system, spent: ['/p/src/a.txt'] })).toEqual({
+      paths: ['/elsewhere/b.png'],
+      mode: 'copy'
+    })
+  })
+
+  it('prefers a record that names those paths again over calling them used up', () => {
+    // A copy after a move puts the same file back on both clipboards, and
+    // `setClipboard` empties the spent list for exactly this reason. The
+    // ordering is pinned here so the two cannot drift.
+    const internal = { paths: ['/p/src/a.txt'], mode: 'copy' }
+    const system = { paths: ['/p/src/a.txt'], mode: 'copy' }
+    expect(pasteSource({ internal, system, spent: ['/p/src/a.txt'] })).toEqual(internal)
+  })
+
+  it('is unmoved by a spent list that is not the whole of what is on the clipboard', () => {
+    const system = { paths: ['/p/src/a.txt', '/p/src/b.txt'], mode: 'copy' }
+    expect(pasteSource({ internal: null, system, spent: ['/p/src/a.txt'] })).toEqual({
+      paths: ['/p/src/a.txt', '/p/src/b.txt'],
+      mode: 'copy'
+    })
+  })
+
   it('hands back a list of its own rather than the system clipboard\'s array', () => {
     const paths = ['/elsewhere/b.png']
     const chosen = pasteSource({ internal: null, system: { paths, mode: 'copy' } })

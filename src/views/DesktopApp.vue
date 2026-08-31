@@ -3732,7 +3732,8 @@ function pasteChoice() {
       paths: internal.paths.map((path) => absolutePath(filesState.root, path)),
       mode: internal.mode
     },
-    system: filesState.systemClipboard
+    system: filesState.systemClipboard,
+    spent: filesState.clipboardSpent
   })
 }
 

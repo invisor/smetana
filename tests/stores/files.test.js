@@ -610,6 +610,50 @@ describe('the machine\'s clipboard', () => {
     expect(files.filesState.systemClipboard).toEqual({ paths: ['/elsewhere/b.png'], mode: 'copy' })
   })
 
+  it('remembers what a move used up, so the leftover on the machine cannot win a paste', async () => {
+    // Nothing empties the machine's clipboard here on purpose: a write of no
+    // paths clears it outright, and the person's copied text would go with it.
+    ipc.on('files_move', 'lib/a.txt')
+    await files.setClipboard(['src/a.txt'], 'cut')
+
+    await files.moveEntry('src/a.txt', 'lib')
+
+    expect(files.filesState.clipboard).toBe(null)
+    expect(files.filesState.clipboardSpent).toEqual(['/project/src/a.txt'])
+    expect(files.filesState.systemClipboard).toEqual({
+      paths: ['/project/src/a.txt'],
+      mode: 'cut'
+    })
+    expect(ipc.calls('files_clipboard_write')).toHaveLength(1)
+  })
+
+  it('a fresh copy makes what the last move used up beside the point', async () => {
+    ipc.on('files_move', 'lib/a.txt')
+    await files.setClipboard(['src/a.txt'], 'cut')
+    await files.moveEntry('src/a.txt', 'lib')
+
+    await files.setClipboard(['src/b.txt'], 'copy')
+
+    expect(files.filesState.clipboardSpent).toEqual([])
+  })
+
+  it('a move that was refused uses nothing up, so the row stays cut and pasteable', async () => {
+    ipc.fail('files_move', { kind: 'denied', message: 'lib' })
+    await files.setClipboard(['src/a.txt'], 'cut')
+
+    await expect(files.moveEntry('src/a.txt', 'lib')).rejects.toMatchObject({ kind: 'denied' })
+    expect(files.filesState.clipboardSpent).toEqual([])
+  })
+
+  it('a move of something else uses nothing up either', async () => {
+    ipc.on('files_move', 'lib/b.txt')
+    await files.setClipboard(['src/a.txt'], 'cut')
+
+    await files.moveEntry('src/b.txt', 'lib')
+
+    expect(files.filesState.clipboardSpent).toEqual([])
+  })
+
   it('copies a path from outside the project in, with only the destination in the tree', async () => {
     ipc.on('files_copy_external', 'lib/b.png')
 

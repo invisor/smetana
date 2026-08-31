@@ -132,6 +132,25 @@ fn parse_gnome_copied_files(text: &str) -> (&'static str, Vec<String>) {
 /// blocking pool (`off_the_runtime` in `commands.rs`), so blocking that thread
 /// on the answer parks nothing the app needs. Everywhere else the call is made
 /// where it stands.
+/// How long the main thread is given to come back with an answer, and the one
+/// ceiling in this module.
+///
+/// It is here because the GTK call underneath cannot be bounded from Rust at
+/// all: `gtk_clipboard_wait_for_contents` runs a nested main loop until the
+/// clipboard's *owner* — another program entirely — answers, and there is no
+/// timeout to pass it. What can be bounded is this side of the channel, and
+/// that is worth doing on its own: without it a clipboard owner that never
+/// answers parks a blocking-pool worker for the life of the process, and this
+/// is asked on every window focus and every context menu.
+///
+/// Half a second, because of when the answer is wanted rather than because of
+/// what the call costs. It is read while a menu is opening; a reply that
+/// arrives later than that has missed the panel it was for, and the row is
+/// drawn from the last answer either way. An ordinary local clipboard replies
+/// in single-digit milliseconds.
+#[cfg(target_os = "linux")]
+const MAIN_THREAD_BUDGET: std::time::Duration = std::time::Duration::from_millis(500);
+
 #[cfg(target_os = "linux")]
 fn dispatch<T, F>(app: &tauri::AppHandle, work: F) -> Result<T, FilesError>
 where
@@ -145,7 +164,12 @@ where
         let _ = answer.send(work());
     })
     .map_err(|err| FilesError::Io(format!("the clipboard could not be reached: {err}")))?;
-    wait.recv().map_err(|_| FilesError::Io("the clipboard did not answer".to_owned()))?
+    // Giving up on the answer is not giving up on the work: the closure is the
+    // main thread's now and runs whenever it gets there. What is bought is this
+    // thread, and the caller reads the refusal as "no files", which is what
+    // every other failure here reads as.
+    wait.recv_timeout(MAIN_THREAD_BUDGET)
+        .map_err(|_| FilesError::Io("the clipboard did not answer in time".to_owned()))?
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -230,6 +254,17 @@ mod platform {
                 // `NSURL` rather than being unescaped by hand: `%20` in a path
                 // with a space in it is the ordinary case, not the exotic one.
                 let Some(url) = NSURL::URLWithString(&text) else { continue };
+                // An item can carry `public.file-url` and hold something that
+                // is not one: `NSURL` parses `https://example.com/foo` happily
+                // and answers a `path` of `/foo`, and a relative string parses
+                // to a relative path. Either would travel on to
+                // `files_copy_external` and come back as a refusal a person
+                // sees, over a clipboard they had no reason to think was
+                // broken. Passed over instead, which is what the paragraph
+                // above promises about an item carrying something else.
+                if !url.isFileURL() {
+                    continue;
+                }
                 let Some(path) = url.path() else { continue };
                 paths.push(path.to_string());
             }
@@ -244,7 +279,7 @@ mod platform {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
     use windows::core::w;
-    use windows::Win32::Foundation::{HANDLE, HGLOBAL};
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
     use windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, RegisterClipboardFormatW,
         SetClipboardData,
@@ -300,8 +335,10 @@ mod platform {
             fWide: true.into(),
         };
         let mut block = Vec::with_capacity(std::mem::size_of::<DROPFILES>() + names.len() * 2);
-        // SAFETY: `DROPFILES` is `repr(C, packed)` over integers alone, so its
-        // bytes are exactly what the shell expects to read back.
+        // SAFETY: `DROPFILES` is `repr(C, packed(1))` over integers alone —
+        // `POINT` is two `i32` and `BOOL` is a newtype over one — so it holds
+        // no padding and no pointer, and its bytes are exactly what the shell
+        // expects to read back.
         block.extend_from_slice(unsafe {
             std::slice::from_raw_parts(
                 std::ptr::addr_of!(header).cast::<u8>(),
@@ -314,24 +351,55 @@ mod platform {
         block
     }
 
-    /// One block of bytes onto the clipboard under one format. The memory is
-    /// the clipboard's from the moment `SetClipboardData` succeeds, which is
-    /// why nothing here frees it.
+    /// A block of global memory **this process still owns**, and a guard for the
+    /// one moment it stops owning it.
+    ///
+    /// `SetClipboardData` takes the block over on success and only then. Every
+    /// path before that point — a lock that failed, a clipboard that refused —
+    /// leaves the memory ours, and memory nobody frees is leaked for the life
+    /// of the process. So the block is a value with a `Drop`, and `given_away`
+    /// is the one call that stops the free from happening.
+    struct Block(HGLOBAL);
+
+    impl Block {
+        /// What `SetClipboardData` takes: the same pointer, in the type that
+        /// call is written in.
+        fn handle(&self) -> HANDLE {
+            HANDLE(self.0 .0)
+        }
+
+        /// Ownership has passed to the clipboard, so the drop must not run.
+        fn given_away(self) {
+            std::mem::forget(self);
+        }
+    }
+
+    impl Drop for Block {
+        fn drop(&mut self) {
+            let _ = unsafe { GlobalFree(Some(self.0)) };
+        }
+    }
+
+    /// One block of bytes onto the clipboard under one format.
     fn put(format: u32, bytes: &[u8]) -> Result<(), FilesError> {
-        let block = unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes.len()) }.map_err(|err| {
+        let block = Block(unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes.len()) }.map_err(|err| {
             FilesError::Io(format!("the clipboard block could not be allocated: {err}"))
-        })?;
-        let target = unsafe { GlobalLock(block) };
+        })?);
+        let target = unsafe { GlobalLock(block.0) };
         if target.is_null() {
             return Err(FilesError::Io("the clipboard block could not be locked".to_owned()));
         }
         // SAFETY: the block was just allocated at `bytes.len()` and is locked.
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), target.cast::<u8>(), bytes.len()) };
         // Answers `Err` when the lock count reaches zero, which is this call.
-        let _ = unsafe { GlobalUnlock(block) };
-        unsafe { SetClipboardData(format, Some(HANDLE(block.0))) }
-            .map_err(|err| FilesError::Io(format!("the clipboard refused the block: {err}")))?;
-        Ok(())
+        let _ = unsafe { GlobalUnlock(block.0) };
+        match unsafe { SetClipboardData(format, Some(block.handle())) } {
+            Ok(_) => {
+                block.given_away();
+                Ok(())
+            }
+            Err(err) => Err(FilesError::Io(format!("the clipboard refused the block: {err}"))),
+        }
     }
 
     /// The format Explorer states a cut in. It is registered rather than

@@ -52,6 +52,23 @@ export const filesState = reactive({
      refusal. That is also why `setRoot` leaves it alone where it throws the
      record above away: the machine's clipboard is not about a project. */
   systemClipboard: { paths: [], mode: 'copy' },
+  /* The absolute paths of a record a **move has already used up**, or an empty
+     list. Cut and paste empties `clipboard` above, and nothing empties the
+     machine's: it goes on carrying the path the cut wrote there, naming a file
+     that is not at that path any more. This is what lets `pasteSource` tell
+     that leftover from a fresh copy somebody made elsewhere, so the tree stops
+     offering to paste something that has already moved.
+
+     Emptying the machine's clipboard instead is the version that was not
+     written, and it is worth saying why: `files_clipboard_write` with no paths
+     calls `clearContents` / `EmptyClipboard` / `clear`, so a paste in a file
+     tree would throw away whatever text the person had copied. Standing down
+     costs nothing and takes nothing away.
+
+     Absolute, like `systemClipboard`, because that is the only thing it is ever
+     compared against. `setClipboard` empties it: a new copy makes what the last
+     move consumed beside the point. */
+  clipboardSpent: [],
   lastError: null
 })
 
@@ -267,9 +284,9 @@ export function setRoot(path) {
   filesState.dirs = new Map()
   /* Every path in the record is relative to the root that is going away, so in
      the project being moved to it names either nothing or, worse, something
-     else entirely. `systemClipboard` is deliberately left standing beside it:
-     its paths are absolute and its subject is the machine, which did not change
-     because somebody opened another project. */
+     else entirely. `systemClipboard` and `clipboardSpent` are deliberately left
+     standing beside it: their paths are absolute and their subject is the
+     machine, which did not change because somebody opened another project. */
   filesState.clipboard = null
   /* The instance is deliberately not replaced: otherwise the finally of a read
      already in flight would clear the mark of somebody else's just-started
@@ -415,7 +432,19 @@ export async function copyExternalEntry(src, dstDir) {
 export async function moveEntry(src, dstDir) {
   try {
     const made = await invoke('files_move', { root: filesState.root, src, dstDir })
-    if (filesState.clipboard?.paths.includes(src)) filesState.clipboard = null
+    if (filesState.clipboard?.paths.includes(src)) {
+      /* The record is used up, and so is the copy of it sitting on the
+         machine's clipboard — which nothing here empties, because emptying it
+         would take the person's copied text with it. Remembered instead, so
+         `pasteSource` can tell that leftover from something copied elsewhere
+         since; see `clipboardSpent`. Taken from the record rather than from
+         `systemClipboard`, because the record is what `setClipboard` wrote from
+         and the mirror may have been refreshed in between. */
+      filesState.clipboardSpent = filesState.clipboard.paths.map((path) =>
+        absolutePath(filesState.root, path)
+      )
+      filesState.clipboard = null
+    }
     return made
   } catch (err) {
     const error = normalize(err)
@@ -464,6 +493,9 @@ export async function setClipboard(paths, mode) {
   filesState.clipboard = { paths: relative, mode }
   const absolute = relative.map((path) => absolutePath(filesState.root, path))
   filesState.systemClipboard = { paths: absolute, mode }
+  /* Whatever an earlier move used up is beside the point now: this is what the
+     machine's clipboard holds, and it has not been pasted anywhere. */
+  filesState.clipboardSpent = []
   try {
     await invoke('files_clipboard_write', { paths: absolute, mode })
   } catch (err) {

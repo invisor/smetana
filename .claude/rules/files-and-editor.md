@@ -16,8 +16,8 @@ logic (entry sorting, the `..` check, the name check, the binary sniff, the ceil
 per directory, 2 MB per file) and carries most of the tests; `fs.rs` is the disk; `commands.rs` is
 thin commands over it — the reads (`files_list`, `files_read`, `files_stat`) and the writes
 (`files_write`, `files_create`, `files_mkdir`, `files_trash`, `files_copy`, `files_copy_external`,
-`files_move`, `files_rename`). `clipboard.rs` is a fifth file and the one that is not about this
-project's files at all — see the end of this document.
+`files_move`, `files_rename`). `clipboard.rs` is the one file in that directory
+that is not about this project's files at all — see the end of this document.
 
 **Four of those are four verbs and not one with a flag**, and the split is by what the argument
 is. `files_rename` takes a **name**, so what checks it is `resolve_new_within` — the folder-and-name
@@ -293,6 +293,18 @@ carries the mode; anything else is the system's, as a copy unless the platform s
 middle line is the design — the two normally agree, and when they do not, somebody copied something
 else more recently and that is what they mean to paste.
 
+**A fourth branch is about neither clipboard being wrong, and it is the one that is easy to leave
+out.** Cut and paste empties the tree's record and nothing empties the machine's, which goes on
+carrying the absolute path the cut wrote there — naming a file that has moved. Those two would then
+"disagree", the stale side would win, and the tree would draw a lit Paste over something that is not
+there: a refusal on macOS, and worse on Windows and Linux, where the clipboard still says `cut`, so
+anything that recreates a file under the old name — an agent writing into the very tree this app
+supervises — would be moved instead. So `moveEntry` remembers what it used up in
+`filesState.clipboardSpent`, and `pasteSource` reads a system record equal to it as spent. **Emptying
+the machine's clipboard is deliberately not the answer**: a write of no paths calls `clearContents` /
+`EmptyClipboard` / `clear`, and somebody's copied *text* would vanish as a side effect of a paste in
+a file tree.
+
 The two do not speak the same language, and the conversion is `DesktopApp.vue`'s: the record is
 relative to the project because everything in that store is, the machine's is absolute because a
 clipboard has no notion of a project, and they can only be compared in the second — the first cannot
@@ -323,7 +335,11 @@ which is the standing `list_dir` takes towards a folder outside git, and a write
 fail the copy that asked for it. And **on Linux the calls have to be on the main thread**, because
 GTK's clipboard belongs to the window loop — `AppHandle::run_on_main_thread` with the answer coming
 back over a channel, which is why both commands take an `AppHandle` they use on one platform in
-three. None of it is checkable in `npm run dev`: `mockBackend.js` refuses the write and deliberately
+three. That channel is the module's one ceiling and the reason is the usual one:
+`gtk_clipboard_wait_for_contents` runs a nested main loop until another program answers and takes no
+timeout, so what is bounded is this side — half a second, after which the caller reads "no files" —
+because the alternative is a blocking-pool worker parked for the life of the process by a clipboard
+owner that never replies, on a call made at every window focus and every context menu. None of it is checkable in `npm run dev`: `mockBackend.js` refuses the write and deliberately
 declines to invent a fixture for the read, which is the one read in that file that goes unanswered
 and carries its own note saying why.
 
