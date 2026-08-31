@@ -24,6 +24,7 @@ import {
   CircleDashed,
   ClipboardPaste,
   Clock,
+  Cloud,
   Columns3,
   Copy,
   CopyPlus,
@@ -109,6 +110,13 @@ export const iconNodes = {
   // scope
   'git-branch': GitBranch,
   'git-branch-plus': GitBranchPlus,
+  /* A branch as `origin` has it, in `git/BranchPicker.vue`'s list. The picker
+     draws every branch twice — the local one under `git-branch` and the
+     `origin/` one under this — so the glyph is what tells the pair apart at a
+     glance, before the muted prefix beside it is read. A cloud rather than an
+     arrow: the arrows are the panel's pull and push, which are things that
+     happen, and this only says where a branch lives. */
+  cloud: Cloud,
   'git-merge': GitMerge,
   /* Rebase, beside merge in the branch list. Lucide ships no rebase glyph, and
      of what it does ship this is the one about the *shape* of the history —

@@ -25,6 +25,7 @@ import {
   Assignee,
   AttachmentStrip,
   BranchList,
+  BranchPicker,
   BranchSelect,
   Button,
   ChangeList,
@@ -1286,6 +1287,39 @@ const LONG_BRANCHES = [
   { name: 'fix/smetana-qw6-run-settings-shadowed-project', current: false },
   { name: 'staging', current: false }
 ]
+
+/* What `BranchPicker` is handed: `target_branches`' answer with the branch's
+   own last touch in `at`, in epoch seconds. Twelve branches, because the list
+   is capped at nine rows and a fixture short enough to fit would say nothing
+   about the scrolling or about the highlight being pulled back into view.
+
+   Measured against the clock rather than written as fixed dates: the meta line
+   is an age, and a date from the day this page was written would read `2y` by
+   the time anybody looks. The long name is the whole point of the component —
+   `feature/smetana-4nsa-remote-branches-repo` has to be readable end to end at
+   the review window's own 720px, which is what the first frame below is. */
+const PICKER_NOW = Math.floor(Date.now() / 1000)
+const PICKER_HOUR = 3600
+const PICKER_BRANCHES = [
+  { name: 'feature/smetana-4nsa-remote-branches-repo', missing_in: [], at: PICKER_NOW - 2 * PICKER_HOUR },
+  { name: 'main', missing_in: [], at: PICKER_NOW - 26 * PICKER_HOUR },
+  { name: 'develop', missing_in: ['admin'], at: PICKER_NOW - 3 * 24 * PICKER_HOUR },
+  { name: 'staging', missing_in: [], at: PICKER_NOW - 40 * 60 },
+  { name: 'release/7', missing_in: ['admin', 'extension'], at: PICKER_NOW - 9 * 24 * PICKER_HOUR },
+  { name: 'feature/smetana-8ok-git-panel-branches', missing_in: [], at: PICKER_NOW - 5 * PICKER_HOUR },
+  { name: 'fix/smetana-qw6-run-settings-shadowed-project', missing_in: ['extension'], at: PICKER_NOW - 60 * 24 * PICKER_HOUR },
+  /* One branch with no timestamp at all, which is what a list from before that
+     field existed looks like: its meta line has to come out one piece shorter
+     and never `NaN`. */
+  { name: 'spike/auth', missing_in: ['admin', 'extension'] },
+  { name: 'feat/worktree-rename', missing_in: [], at: PICKER_NOW - 11 * PICKER_HOUR },
+  { name: 'chore/bump-tauri', missing_in: [], at: PICKER_NOW - 30 * 24 * PICKER_HOUR },
+  { name: 'fix/legacy/warehouse-geocode', missing_in: ['admin'], at: PICKER_NOW - 200 * 24 * PICKER_HOUR },
+  { name: 'docs/release-notes', missing_in: [], at: PICKER_NOW - 20 }
+]
+/* Live, so the highlight, the filter and the keyboard can actually be tried:
+   click into the field, walk with the arrows and press Enter. */
+const pickerChoice = ref({ name: 'main', origin: false })
 
 /* git's own sentence, verbatim from a repository where a second worktree held
    the branch — which is exactly what a run's provisioning phase leaves behind,
@@ -3996,6 +4030,61 @@ const menuTargetStyle = {
             :error="{ kind: 'git', message: 'fatal: There is no merge to abort (MERGE_HEAD missing).' }"
             @resolve="() => {}"
             @abort="() => {}"
+            @close="() => {}"
+          />
+        </div>
+      </div>
+      <!-- The branch picker, which is the review window's list of branches and
+           the one control in this section that is deliberately **not** a
+           popover: it sits in the flow, so a window whose height is computed
+           from its content cannot clip it. The frame is 720 wide because that
+           is what the review window is, and the first thing to check in it is
+           `feature/smetana-4nsa-remote-branches-repo` at the top of the list —
+           whole, in one line, with its meta still on the row.
+
+           The rest of what this frame is for: the list stops at nine rows and
+           scrolls inside itself, so the footer stays visible in both densities
+           and at `--ui-scale` 1.2; every branch appears twice, itself and then
+           `origin/` in a muted prefix under the cloud; and the arrows move the
+           highlight with the row pulled back into view at either end, Enter
+           takes it, Escape reports a close. -->
+      <div :style="{ display: 'flex', gap: 'var(--space-6)', alignItems: 'flex-start', flexWrap: 'wrap' }">
+        <div :style="{ width: '720px' }">
+          <BranchPicker
+            :branches="PICKER_BRANCHES"
+            :repos="6"
+            :fetched-at="PICKER_NOW - 120"
+            :now="PICKER_NOW"
+            :selected="pickerChoice.name"
+            :selected-origin="pickerChoice.origin"
+            scope="Applies to 6 repositories"
+            @select="pickerChoice = $event"
+            @close="() => {}"
+          />
+        </div>
+        <!-- The same component told nothing it does not have to be: no
+             repository count, no fetch time, and one branch in the list with no
+             timestamp of its own. Every meta line here has to come out shorter
+             by a piece rather than carrying `NaN`, `Invalid Date` or a gap
+             between two separators — and the footer's right-hand end is empty,
+             which is the ordinary state when nobody has said what the choice
+             applies to. -->
+        <div :style="{ width: '720px' }">
+          <BranchPicker :branches="PICKER_BRANCHES.slice(0, 3)" :now="PICKER_NOW" @close="() => {}" />
+        </div>
+        <!-- At a side panel's width, which is not where this component is used
+             and is where its one wrapping rule is visible: a name wider than
+             the list wraps and takes the row's height with it, since the row
+             declares a floor rather than a height. Nothing is ellipsised
+             anywhere in this component, deliberately. -->
+        <div :style="{ width: 'var(--panel-right-w)' }">
+          <BranchPicker
+            :branches="PICKER_BRANCHES.slice(0, 4)"
+            :repos="6"
+            :fetched-at="PICKER_NOW - 120"
+            :now="PICKER_NOW"
+            selected="main"
+            scope="1 repository"
             @close="() => {}"
           />
         </div>
