@@ -1164,7 +1164,9 @@ fn repair_tracker(dir: &str, bd_version: &str, command: &str, stderr: &str) -> S
 /// differently: `prefers-color-scheme` is the browser's, `[data-theme]` is
 /// this app's tab, and the app's answer has to win in both directions.
 ///
-/// Said here **and** in the skill, in the same words. Nothing mechanical reads
+/// The requirement here and in the skill in the same words; the skill adds the
+/// method and the reasoning, so the two paragraphs differ by that much and no
+/// more. Nothing mechanical reads
 /// a skill file, so an agent reasoning from the skill and an agent reasoning
 /// from the prompt have to arrive at the same document.
 fn review_branch(
@@ -1197,14 +1199,18 @@ fn review_branch(
          two forms, at those paths relative to the project. The HTML one is drawn inside Smetana \
          in a sandboxed frame, so it has to carry its own styling and reach nowhere outside \
          itself: no external stylesheet, no font from a network, no script and no image.\n\n\
-         It has to be a whole page with an explicit <html> tag, not a fragment: Smetana draws it \
-         in a frame whose DOM it cannot reach, so it hands the document its theme by writing a \
-         data-theme attribute onto that tag, and a document with no root tag is never handed \
-         one. Declare the palette four times over, in this order: the light one on a bare :root, \
-         the dark one under @media (prefers-color-scheme: dark), then :root[data-theme=\"dark\"] \
-         and :root[data-theme=\"light\"]. The first pair is for a browser, which has nothing of \
-         ours loaded and only the machine's answer to go on; the second is for a tab of this \
-         app, and it has to win in both directions — so guard the media query with \
+         It has to be a whole page — <!doctype html> and an explicit <html> tag — not a \
+         fragment: Smetana draws it in a frame whose DOM it cannot reach, so it hands the \
+         document its theme by writing a data-theme attribute onto that tag, and a document \
+         with no root tag is never handed one. Declare the palette four times over, in this \
+         order: the light one on a bare :root, the dark one under \
+         @media (prefers-color-scheme: dark), then :root[data-theme=\"dark\"] and \
+         :root[data-theme=\"light\"]. Each block also sets color-scheme beside the colours, \
+         light or dark to match: the frame's scrollbar and every default the user agent paints, \
+         selection among them, follow that rather than your rules, so without it a dark report \
+         comes with a light scrollbar down its side. The first pair is for a browser, which has \
+         nothing of ours loaded and only the machine's answer to go on; the second is for a tab \
+         of this app, and it has to win in both directions — so guard the media query with \
          :not([data-theme=\"light\"]) and write the two attribute blocks after it."
     );
     out.push_str("\n\n");
@@ -2234,22 +2240,33 @@ mod tests {
         // where we are the writer and no prompt is involved.
         for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
             let text = review_prompt(delivery);
+            assert!(text.contains("<!doctype html>"), "the doctype: {text}");
             assert!(text.contains("<html>"), "the root tag: {text}");
             assert!(text.contains("data-theme"), "the attribute this app hands it: {text}");
             assert!(
                 text.contains("prefers-color-scheme"),
                 "the query a browser reads: {text}"
             );
-            // Each of the four blocks by its selector, so that dropping one of
-            // the pair still fails here.
-            for selector in [
-                ":root",
-                "@media (prefers-color-scheme: dark)",
-                ":root[data-theme=\"dark\"]",
-                ":root[data-theme=\"light\"]",
-            ] {
+            // The bare root by the phrase that asks for it rather than by
+            // `":root"`, which is a substring of both attribute selectors below
+            // and so could never fail on its own.
+            assert!(text.contains("on a bare :root"), "the bare root block: {text}");
+            // The attribute pair by selector, so that dropping one of the two
+            // still fails here. The media query is covered by the bare
+            // `prefers-color-scheme` above, which survives the paragraph being
+            // reflowed; asserting its spacing would pin the prose instead.
+            for selector in [":root[data-theme=\"dark\"]", ":root[data-theme=\"light\"]"] {
                 assert!(text.contains(selector), "{selector} is not asked for: {text}");
             }
+            // `color-scheme` is the one declaration in a block that is not a
+            // colour, and it is what the frame's scrollbar and the user agent's
+            // own defaults follow. Pinned by the sentence that asks for it: the
+            // bare name is a substring of `prefers-color-scheme`.
+            assert!(
+                text.contains("also sets color-scheme"),
+                "the declaration the scrollbar follows: {text}"
+            );
+            assert!(text.contains("scrollbar"), "what going without it looks like: {text}");
             // The guard, which is redundant by design and kept for saying which
             // reader the query is for.
             assert!(
