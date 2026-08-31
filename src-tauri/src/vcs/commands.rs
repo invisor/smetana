@@ -465,58 +465,89 @@ pub async fn vcs_abort(repo: String, op: OpKind) -> Result<(), VcsError> {
 /// exists to do, where stat-ing `.git/MERGE_HEAD` would be a second way of
 /// knowing the same fact and a second way of being wrong about it.
 ///
-/// **`rev-parse -q --verify` exits 1 for a ref that is not there**, which is an
-/// answer and not a refusal — the one case `git_maybe` was written for. Every
-/// other non-zero exit still carries git's own stderr.
-///
 /// Called only for a tree that already shows unmerged paths, so a clean
 /// repository — nearly every repository, nearly always — pays no process for
 /// it. That is the caller's rule and not this function's: asked of a clean
 /// tree it simply answers `None`.
 #[tauri::command]
 pub async fn vcs_in_progress(repo: String) -> Result<Option<InProgress>, VcsError> {
-    off_the_runtime(move || {
-        let repo = Path::new(&repo);
-        let named = |rev: &str| -> Result<Option<String>, VcsError> {
-            let line =
-                run::git_maybe(repo, &["name-rev", "--name-only", "--refs=refs/heads/*", rev], 1)?;
-            Ok(line.as_deref().and_then(model::branch_from_name_rev))
-        };
-        // A merge first, because it is the one whose two names are both exact.
-        // `MERGE_HEAD` is the commit being brought in, and during a merge HEAD
-        // is still on the branch it is being brought into.
-        if run::git_maybe(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"], 1)?.is_some() {
-            let head = run::git_maybe(repo, &["symbolic-ref", "--short", "-q", "HEAD"], 1)?;
-            let ours =
-                head.map(|line| line.trim().to_string()).filter(|name| !name.is_empty());
-            return Ok(Some(InProgress {
-                op: OpKind::Merge,
-                ours,
-                theirs: named("MERGE_HEAD")?,
-            }));
-        }
-        // `REBASE_HEAD` is set by both backends — the default `--merge` and
-        // `--apply` alike — and is the commit git stopped on, which belongs to
-        // the branch being rebased. So it names `ours` and never `theirs`.
-        if run::git_maybe(repo, &["rev-parse", "-q", "--verify", "REBASE_HEAD"], 1)?.is_some() {
-            // The onto is deliberately left unknown. `name-rev` on HEAD answers
-            // `undefined` the moment one commit has been applied, and the only
-            // remaining source is `.git/rebase-merge/onto` — the file read this
-            // module does not do. Both the dialog and the prompt read correctly
-            // without it; a guess would read correctly and be false.
-            return Ok(Some(InProgress {
-                op: OpKind::Rebase,
-                ours: named("REBASE_HEAD")?,
-                theirs: None,
-            }));
-        }
-        // A tree can be conflicted with neither of these in progress — a
-        // cherry-pick, a revert, a stash pop, a `checkout --merge`. Neither of
-        // the dialog's two doors is true for those, so "nothing" is the honest
-        // answer and the panel draws no button.
-        Ok(None)
-    })
-    .await
+    off_the_runtime(move || in_progress(Path::new(&repo))).await
+}
+
+/// The questions themselves, split from the command so the tests at the foot of
+/// this file can drive them against a real repository — which this one needs
+/// more than any other here, because what it is about is **what git leaves
+/// behind**, and no argument list inspected on its own would have caught it.
+///
+/// **A ref that exists is not an operation in progress, and that distinction
+/// cost a defect.** The first version asked `rev-parse -q --verify REBASE_HEAD`
+/// and read an answer as "a rebase is going on". git writes `REBASE_HEAD` when a
+/// rebase stops and — on the default `--merge` backend and on `-i`, though not
+/// on `--apply` — **never removes it**, so from the first rebase somebody
+/// finished with `--continue` onward that question answers yes forever. Every
+/// later conflicted tree with no `MERGE_HEAD` was then called a rebase: the
+/// panel drew the button over a `git cherry-pick`, `Abort` ran `git rebase
+/// --abort` and died with "No rebase in progress?", and "Resolve with an agent"
+/// briefed an agent with write access to say "Finish a git rebase" over a tree
+/// that was mid-cherry-pick. The trigger is exactly the workflow this feature
+/// exists for.
+///
+/// So the rebase arm is gated on `git rebase --show-current-patch`, which is a
+/// question about the operation rather than about a file git forgot to sweep up:
+/// measured on git 2.34.1 it exits 0 while a rebase is stopped on all three
+/// backends (`--merge`, `--apply`, `-i`) and 128 when there is none, stale
+/// `REBASE_HEAD` beside a conflicted cherry-pick included. `REBASE_HEAD` stays,
+/// but only as the **name** source it was always reliable for.
+///
+/// Two things about the exit codes are load-bearing. `rev-parse -q --verify`
+/// exits 1 for a ref that is not there, which is an answer and not a refusal —
+/// the one case `git_maybe` was written for. And 128 is git's *generic* fatal
+/// code, which is only safe to read as "no rebase" **in this position**: a
+/// repository git cannot read at all has already refused at the `MERGE_HEAD`
+/// call above, which exits 128 there and comes back as `VcsError::Git` carrying
+/// git's own words.
+///
+/// The one cost worth naming is that `--show-current-patch` prints the patch of
+/// the commit git stopped on, and `git_maybe` keeps standard output. It is one
+/// commit's diff, read and dropped, on a path only a conflicted tree reaches.
+fn in_progress(repo: &Path) -> Result<Option<InProgress>, VcsError> {
+    let named = |rev: &str| -> Result<Option<String>, VcsError> {
+        let line =
+            run::git_maybe(repo, &["name-rev", "--name-only", "--refs=refs/heads/*", rev], 1)?;
+        Ok(line.as_deref().and_then(model::branch_from_name_rev))
+    };
+    // A merge first, because it is the one whose two names are both exact.
+    // `MERGE_HEAD` is the commit being brought in, and during a merge HEAD is
+    // still on the branch it is being brought into. This ref git does sweep up,
+    // and the operation has no other trace to ask about.
+    if run::git_maybe(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"], 1)?.is_some() {
+        let head = run::git_maybe(repo, &["symbolic-ref", "--short", "-q", "HEAD"], 1)?;
+        let ours = head.map(|line| line.trim().to_string()).filter(|name| !name.is_empty());
+        return Ok(Some(InProgress { op: OpKind::Merge, ours, theirs: named("MERGE_HEAD")? }));
+    }
+    // Is a rebase actually going on — see the header for why the ref alone is
+    // not that question.
+    if run::git_maybe(repo, &["rebase", "--show-current-patch"], 128)?.is_some() {
+        // `REBASE_HEAD` is the commit git stopped on, which belongs to the
+        // branch being rebased. So it names `ours` and never `theirs`, and a
+        // rebase that is genuinely in progress always has it.
+        //
+        // The onto is deliberately left unknown. `name-rev` on HEAD answers
+        // `undefined` the moment one commit has been applied, and the only
+        // remaining source is `.git/rebase-merge/onto` — the file read this
+        // module does not do. Both the dialog and the prompt read correctly
+        // without it; a guess would read correctly and be false.
+        return Ok(Some(InProgress {
+            op: OpKind::Rebase,
+            ours: named("REBASE_HEAD")?,
+            theirs: None,
+        }));
+    }
+    // A tree can be conflicted with neither of these in progress — a
+    // cherry-pick, a revert, a stash pop, a `checkout --merge`. Neither of the
+    // dialog's two doors is true for those, so "nothing" is the honest answer
+    // and the panel draws no button.
+    Ok(None)
 }
 
 /// Everything the panel is drawing, as one commit.
@@ -1421,6 +1452,126 @@ mod tests {
         let refused = delete_branch(&repo, "never-existed", false).expect_err("no such branch");
 
         assert_eq!(refused.kind(), "git");
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A repository with two branches whose one file disagrees, so a merge, a
+    /// rebase or a cherry-pick between them all conflict. `main` is named
+    /// explicitly rather than left to the machine's `init.defaultBranch`: a
+    /// test that read the branch off the machine would be reporting on the
+    /// machine.
+    fn conflicting(name: &str) -> PathBuf {
+        let repo = repository(name);
+        run::git_write(&repo, &["checkout", "-q", "-b", "main"]).expect("name the branch");
+        fs::write(repo.join("f.txt"), "base\n").expect("write the file");
+        run::git_write(&repo, &["add", "-A"]).expect("stage");
+        run::git_write(&repo, &["commit", "-m", "base"]).expect("commit the base");
+        run::git_write(&repo, &["checkout", "-q", "-b", "feature"]).expect("cut feature");
+        fs::write(repo.join("f.txt"), "feature\n").expect("edit on feature");
+        run::git_write(&repo, &["commit", "-am", "feature"]).expect("commit on feature");
+        run::git_write(&repo, &["checkout", "-q", "main"]).expect("back to main");
+        fs::write(repo.join("f.txt"), "main\n").expect("edit on main");
+        run::git_write(&repo, &["commit", "-am", "main"]).expect("commit on main");
+        repo
+    }
+
+    /// git stopped a merge: both names are exact, because HEAD is still on the
+    /// branch being merged into and `MERGE_HEAD` is the commit coming in.
+    #[test]
+    fn a_stopped_merge_is_read_with_both_of_its_branches() {
+        let repo = conflicting("in-progress-merge");
+        let _ = run::git_write(&repo, &["merge", "feature"]);
+
+        let answer = in_progress(&repo).expect("ask git").expect("a merge is in progress");
+
+        assert_eq!(answer.op, OpKind::Merge);
+        assert_eq!(answer.ours.as_deref(), Some("main"));
+        assert_eq!(answer.theirs.as_deref(), Some("feature"));
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// git stopped a rebase: the operation is exact and `ours` is the branch
+    /// whose commit is being applied. The onto is `None` by construction — see
+    /// `in_progress`.
+    #[test]
+    fn a_stopped_rebase_is_read_with_the_branch_it_is_moving() {
+        let repo = conflicting("in-progress-rebase");
+        run::git_write(&repo, &["checkout", "-q", "feature"]).expect("onto feature");
+        let _ = run::git_write(&repo, &["rebase", "main"]);
+
+        let answer = in_progress(&repo).expect("ask git").expect("a rebase is in progress");
+
+        assert_eq!(answer.op, OpKind::Rebase);
+        assert_eq!(answer.ours.as_deref(), Some("feature"));
+        assert_eq!(answer.theirs, None);
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **The one this function exists in its current shape for.** git writes
+    /// `.git/REBASE_HEAD` when a rebase stops and never removes it on the
+    /// default backend, so a repository where anybody has ever finished a
+    /// rebase with `--continue` answers `rev-parse -q --verify REBASE_HEAD`
+    /// with a sha for the rest of its life. Asked that question alone, every
+    /// later conflicted tree with no `MERGE_HEAD` reads as a rebase — and this
+    /// tree is a `git cherry-pick`, where `git rebase --abort` fails with "No
+    /// rebase in progress?" and "finish the rebase" is not the work.
+    ///
+    /// The whole point is that it is driven against real git: the stale file is
+    /// git's own behaviour, and nothing that fed this function a prepared
+    /// answer could see it.
+    #[test]
+    fn a_finished_rebase_does_not_make_the_next_conflict_a_rebase() {
+        let repo = conflicting("in-progress-stale");
+        // A rebase that stops, is resolved, and is carried to the end. This is
+        // what leaves `REBASE_HEAD` behind.
+        run::git_write(&repo, &["checkout", "-q", "feature"]).expect("onto feature");
+        let _ = run::git_write(&repo, &["rebase", "main"]);
+        fs::write(repo.join("f.txt"), "resolved\n").expect("resolve");
+        run::git_write(&repo, &["add", "f.txt"]).expect("stage the resolution");
+        run::git_write(&repo, &["-c", "core.editor=true", "rebase", "--continue"])
+            .expect("finish the rebase");
+        assert!(
+            run::git_maybe(&repo, &["rev-parse", "-q", "--verify", "REBASE_HEAD"], 1)
+                .expect("ask git")
+                .is_some(),
+            "this test is pointless unless git left REBASE_HEAD behind"
+        );
+        assert_eq!(in_progress(&repo).expect("ask git"), None, "the rebase is over");
+
+        // Now a cherry-pick that conflicts, with that stale ref still there.
+        // Cut from **before** main's own commit, so the patch it carries is
+        // against a line main has since changed and git has to stop.
+        run::git_write(&repo, &["checkout", "-q", "-b", "side", "main~1"]).expect("cut side");
+        fs::write(repo.join("f.txt"), "side\n").expect("edit on side");
+        run::git_write(&repo, &["commit", "-am", "side"]).expect("commit on side");
+        run::git_write(&repo, &["checkout", "-q", "main"]).expect("back to main");
+        let _ = run::git_write(&repo, &["cherry-pick", "side"]);
+        let tree = working_tree(&repo).expect("read the tree");
+        assert!(
+            tree.changes.iter().any(|c| c.kind == ChangeKind::Conflicted),
+            "the cherry-pick should have left the tree conflicted: {:?}",
+            tree.changes
+        );
+
+        assert_eq!(
+            in_progress(&repo).expect("ask git"),
+            None,
+            "a cherry-pick is neither of the two operations this dialog has doors for"
+        );
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A repository sitting still. The caller never asks this of a clean tree,
+    /// but the function's own answer for one is stated rather than assumed.
+    #[test]
+    fn a_repository_in_the_middle_of_nothing_answers_nothing() {
+        let repo = conflicting("in-progress-clean");
+
+        assert_eq!(in_progress(&repo).expect("ask git"), None);
 
         let _ = fs::remove_dir_all(&repo);
     }

@@ -99,9 +99,10 @@ is selected is remembered per project as `selectedRepo` in `settings.json`, vali
 replaced by the first — a stored value is a hint, never the truth, the rule `columnOrder.js` states.
 `components/git/` draws it: `GitPanel.vue` over `RepoList.vue`, `ChangeList.vue` and
 `BranchList.vue`, with the pure
-`changeStatus.js` saying what a change is captioned with — one of three pure rules in that directory
-named here, beside `conflictsFirst.js`, which lifts a conflict to the top of the list, and
-`conflictRecord.js`, which says what the panel holds about a conflicted tree. Four of its eight kinds — modified, added,
+`changeStatus.js` saying what a change is captioned with. It is one of the pure rules in that
+directory, and the directory is the list rather than a number written here: two others are named
+below — `conflictsFirst.js`, which lifts a conflict to the top of the list, and `conflictRecord.js`,
+which says what the panel holds about a conflicted tree. Four of its eight kinds — modified, added,
 deleted, untracked — take the `--git-*` token the file tree already marks that file with
 (`files/FileTreeRow.vue`), which is the whole of the agreement between the two: renamed, copied and
 type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares both
@@ -705,10 +706,27 @@ pure rule that joins them: a name already held survives a probe that answered no
 the **same repository and the same operation**, while the paths are always the tree's own.
 
 **`op` is exact and the two names are best-effort, by construction.** `vcs_in_progress` asks
-`rev-parse -q --verify MERGE_HEAD` and then `REBASE_HEAD` through `run::git_maybe(…, 1)`, since exit
-1 for an absent ref is a question's answer rather than a refusal; `symbolic-ref` and `name-rev` give
-the names, and `model::branch_from_name_rev` is the pure reading of one `name-rev` line — `undefined`
-is no name, and `feature~1` is a branch and a distance from it. **A rebase's onto is not obtainable
+`rev-parse -q --verify MERGE_HEAD` through `run::git_maybe(…, 1)`, since exit 1 for an absent ref is
+a question's answer rather than a refusal; `symbolic-ref` and `name-rev` give the names, and
+`model::branch_from_name_rev` is the pure reading of one `name-rev` line — `undefined` is no name,
+and `feature~1` is a branch and a distance from it.
+
+**The rebase arm is asked as `git rebase --show-current-patch`, and the ref it obviously wanted is
+the defect that bought the question.** git writes `REBASE_HEAD` when a rebase stops and — on the
+default `--merge` backend and on `-i`, though not on `--apply` — **never removes it**, so
+`rev-parse -q --verify REBASE_HEAD` answers yes for the rest of that repository's life from the first
+rebase anybody finished with `--continue`. That is exactly the workflow this feature exists for, and
+the shipped effect was every later conflicted tree with no `MERGE_HEAD` being called a rebase: the
+button over a `git cherry-pick`, an `Abort` that ran `git rebase --abort` and died with "No rebase in
+progress?", and an agent with write access briefed to "Finish a git rebase" over a tree that was
+mid-cherry-pick. `--show-current-patch` is about the operation rather than about a file git forgot to
+sweep up — exit 0 while a rebase is stopped on all three backends, 128 when there is none — and
+`REBASE_HEAD` stays only as the **name** source it was always reliable for. Reading 128 as an answer
+is safe **in this position alone**, because a repository git cannot read has already refused at the
+`MERGE_HEAD` call above. The rule this states for anything added here later: **a ref that exists is
+not an operation in progress**, and the two questions have different answers for as long as git keeps
+sweeping up unevenly. `vcs::commands`'s tests drive it against a real repository for that reason —
+nothing fed a prepared answer could have seen it. **A rebase's onto is not obtainable
 at all**: `name-rev` on HEAD answers `undefined` the moment one commit has been applied, and the only
 other source is `.git/rebase-merge/onto`, which is the file read this module does not do. So an
 unknown branch travels as nothing rather than as a guess, and both the dialog and
