@@ -242,7 +242,7 @@ export function fetchingCaption(repos) {
    keeps that honest.
 
    It is the window's half. The same repositories ride into the intent through
-   `fetchFailures` below, so the report says it too — a person who did not see
+   `fetchFailures`, so the report says it too — a person who did not see
    this caption or the toast behind it would otherwise have nothing to learn it
    from. */
 export function fetchFailedCaption(names) {

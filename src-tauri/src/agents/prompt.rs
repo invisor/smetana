@@ -2041,8 +2041,13 @@ mod tests {
                 report: ".smetana/reviews/2026-08-31-pf40".into(),
                 fetch_failed: Vec::new(),
             },
-            // And the sentence about a fetch that did not work, which is one
-            // more paragraph spliced between the pairs and the report's path.
+            // A review carrying that sentence too. This walk reads the last
+            // characters of a prompt and nothing else, so what it covers here
+            // is the ending — which the entry above already reaches, since the
+            // sentence is spliced into the middle. That the splice lands where
+            // it should is held by the two tests further down, not here. It is
+            // walked all the same, so that a later change putting anything of
+            // this variant at the end meets the check rather than missing it.
             review_with_a_failed_fetch(),
             new_task(Stage::Auto),
             new_task(Stage::On),
