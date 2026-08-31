@@ -813,8 +813,8 @@ fn body(
         // decision rather than a wildcard.
         Intent::ResumeSession { .. } => None,
         Intent::Setup => Some(setup(delivery, skills, facts)),
-        Intent::ReviewBranch { pairs, report } => {
-            Some(review_branch(pairs, report, delivery, skills, text.reviewing_branch))
+        Intent::ReviewBranch { pairs, report, fetch_failed } => {
+            Some(review_branch(pairs, report, fetch_failed, delivery, skills, text.reviewing_branch))
         }
         Intent::Run { settings, reports, batch, remove_worktrees } => {
             Some(run(settings, reports, *batch, *remove_worktrees, delivery, skills))
@@ -1148,6 +1148,14 @@ fn repair_tracker(dir: &str, bd_version: &str, command: &str, stderr: &str) -> S
 /// intent is built, and an agent resolving it a second time here would be
 /// answering a question that already has an answer.
 ///
+/// A repository whose fetch did not work is named under that list, and this
+/// is the second half of a decision the window made on its own: **a failed
+/// fetch does not call the review off**, so what is owed is a sentence. The
+/// window drew one and a toast outlived it, but neither reaches the report —
+/// and a stale `origin/main` reads exactly like a fresh one, so an agent told
+/// nothing has no way to find out. The sentence is printed only when there is
+/// one to print.
+///
 /// Both files are named with their extensions rather than left to the skill,
 /// and that is the one thing in this prompt the app depends on: it composed
 /// that path itself and opens the report at it afterwards, so an agent that
@@ -1155,6 +1163,7 @@ fn repair_tracker(dir: &str, bd_version: &str, command: &str, stderr: &str) -> S
 fn review_branch(
     pairs: &[ReviewPair],
     report: &str,
+    fetch_failed: &[String],
     delivery: SkillDelivery,
     skills: &Skills,
     reviewing_branch: Option<&str>,
@@ -1175,6 +1184,24 @@ fn review_branch(
                 let _ = writeln!(out, "{}: {} → {}", pair.repo, pair.base, pair.head);
             }
         }
+    }
+    // And only when there is something to say. A review where every fetch
+    // worked is one where `origin/…` is as current as it can be, and a
+    // sentence about staleness under it would teach an agent to doubt a ref
+    // that is fine — which is why the empty case is its own test rather than
+    // an obvious consequence.
+    if !fetch_failed.is_empty() {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        let _ = writeln!(
+            out,
+            "\norigin could not be reached for {} before this review started. An `origin/` ref \
+             there is what this machine last fetched and may be behind what the remote holds \
+             now, so say so in the report rather than presenting that side of the comparison as \
+             current.",
+            fetch_failed.join(", ")
+        );
     }
     let _ = write!(
         out,
@@ -2012,7 +2039,11 @@ mod tests {
             Intent::ReviewBranch {
                 pairs: Vec::new(),
                 report: ".smetana/reviews/2026-08-31-pf40".into(),
+                fetch_failed: Vec::new(),
             },
+            // And the sentence about a fetch that did not work, which is one
+            // more paragraph spliced between the pairs and the report's path.
+            review_with_a_failed_fetch(),
             new_task(Stage::Auto),
             new_task(Stage::On),
             new_task(Stage::Off),
@@ -2152,6 +2183,25 @@ mod tests {
                 },
             ],
             report: ".smetana/reviews/2026-08-31-pf40".into(),
+            // Every fetch worked, which is the ordinary case and the one the
+            // whole of the rest of this file's review coverage runs under —
+            // so a sentence about a stale origin appearing in any of those
+            // prompts would be a sentence appearing where nothing failed.
+            fetch_failed: Vec::new(),
+        }
+    }
+
+    /// The same review, with origin unreachable in one of the two
+    /// repositories. The list is paths and not the names the window draws,
+    /// because the lines above it are keyed by path.
+    fn review_with_a_failed_fetch() -> Intent {
+        match review() {
+            Intent::ReviewBranch { pairs, report, .. } => Intent::ReviewBranch {
+                pairs,
+                report,
+                fetch_failed: vec!["/p/frontend".into()],
+            },
+            other => unreachable!("review() built {other:?}"),
         }
     }
 
@@ -2230,6 +2280,60 @@ mod tests {
     }
 
     #[test]
+    fn a_review_prompt_names_the_repositories_origin_was_not_reached_in() {
+        // The whole point of the field. The window says this to whoever is
+        // watching and a toast outlives the window, but a person who saw
+        // neither reads the report instead — and `origin/develop` a week old
+        // is indistinguishable from `origin/develop` a minute old. So the
+        // sentence has to be in the briefing, naming the repository by the
+        // same path the line above it is keyed by.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = build(
+                &review_with_a_failed_fetch(),
+                delivery,
+                ImageDelivery::InPrompt,
+                &skills(),
+                None,
+                every_skill(),
+                &english(),
+                "",
+            )
+            .unwrap();
+            assert!(
+                text.contains("origin could not be reached for /p/frontend"),
+                "the repository whose fetch failed: {text}"
+            );
+            // And what that means for the reader of the report, which is the
+            // half a bare list of names would leave unsaid.
+            assert!(text.contains("say so in the report"), "{text}");
+            // The pairs are still all there: the sentence is spliced between
+            // the list and the report's path, not in place of either.
+            assert!(
+                text.contains("/p/frontend: origin/develop → origin/spike"),
+                "the pair is still listed: {text}"
+            );
+            assert!(
+                text.contains(".smetana/reviews/2026-08-31-pf40.html"),
+                "the report is still named: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_review_whose_fetches_all_worked_says_nothing_about_a_stale_origin() {
+        // Its own test rather than a consequence somebody reads off the one
+        // above: an unconditional sentence would tell every review that its
+        // `origin/` refs might be behind, which is the same silence in the
+        // other direction — a warning that is always there is one nobody acts
+        // on.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = review_prompt(delivery);
+            assert!(!text.contains("origin could not be reached"), "{text}");
+            assert!(!text.contains("may be behind what the remote holds"), "{text}");
+        }
+    }
+
+    #[test]
     fn a_review_is_told_it_files_nothing_and_commits_nothing() {
         // The two prohibitions are the reason `REVIEW_BRANCH` is a constant at
         // all: an inline harness may find no skill text, and a model that has
@@ -2253,6 +2357,7 @@ mod tests {
         let intent = Intent::ReviewBranch {
             pairs: Vec::new(),
             report: ".smetana/reviews/2026-08-31-pf40".into(),
+            fetch_failed: Vec::new(),
         };
         let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
             .unwrap();
