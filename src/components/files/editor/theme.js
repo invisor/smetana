@@ -24,14 +24,27 @@
    depth — measured from the mounted sheet for .cm-content, .cm-gutters,
    .cm-activeLine, .cm-specialChar, .cm-panels and .cm-textfield, every one of
    them an exact tie. A tie is settled by the order the style modules reach the
-   document, ours is mounted last, and ours wins: the same derivation the
-   `conflict` block below sets out at length, and the same conclusion.
+   document, and ours is mounted after every one of the base themes — they are
+   all at Prec.lowest — so ours wins: the same derivation the `conflict` block
+   below sets out at length, and the same conclusion. Ours is not mounted *last* —
+   a stronger claim than the argument needs, and not a true one: drawSelection
+   raises rules at Prec.highest that come after it, and they touch ::selection
+   and caret-color only and contest nothing this theme sets.
 
-   So a rule here needs the base's own shape only where the base's own selector
-   is strictly deeper than a plain one, and there is one such family: the
-   selection layer while the field has the focus, five classes against a plain
-   rule's two. It is the one place a plain rule was ever losing. See the
-   selection block below for what that shape has to be.
+   So a rule here needs the base's own shape wherever the base's own selector is
+   strictly deeper than a plain one, and the family that matters for this note is
+   the selection layer while the field has the focus, five classes against a
+   plain rule's two — see the selection block below for the shape it has to take.
+
+   It is not the only place a plain rule of ours is out-specified, and none of
+   this is a list to stop looking at. The pressed search-panel button in the
+   first bullet below is a second, and it is live. The `&.cm-gutters-before` and
+   `&.cm-gutters-after` that @codemirror/view nests inside `&light .cm-gutters`
+   are a third, a class deeper than the plain gutter rule below and setting a
+   border width there; they are harmless, but only because the border-style tie
+   at plain depth goes to us and a width on a style of none paints nothing.
+   Measure against the mounted sheet before taking a plain rule here for a
+   winning one.
 
    Bracket matching is repainted for a different reason: its base in
    @codemirror/language is a flat, unconditional colour that never looks at the
