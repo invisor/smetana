@@ -51,13 +51,13 @@ export function repoLabel(repo) {
    shell has been writing for decades. Anything else draws its absolute path
    unchanged: there is nothing shorter that is still true.
 
-   `relativeTo` answers the first two and the third, and it is asked twice
-   rather than reimplemented once — `src/paths.js` exists because "is this path
-   inside that one" had been written out three times and the copies disagreed.
-   `''` for the folder itself, the path under it for something inside, `null`
-   for outside: the same three answers serve the project root and the home
-   folder, which is what makes the second question a second call and not a
-   second rule.
+   `relativeTo` answers the root, the inside and the tilde shapes, and it is
+   asked twice rather than reimplemented once — `src/paths.js` exists because
+   "is this path inside that one" had been written out three times and the
+   copies disagreed. `''` for the folder itself, the path under it for something
+   inside, `null` for outside: the same three answers serve the project root and
+   the home folder, which is what makes the second question a second call and
+   not a second rule.
 
    The home folder arrives as an argument and is never read here. Nothing in
    `src/` knows one — no command the front end calls today answers with it — and
@@ -68,12 +68,12 @@ export function repoLabel(repo) {
    this worth knowing before writing a fifth reader of the environment:
    `tracker::access::home()` is the one that carries a name, and
    `agents::library`, `sessions::read` and `runs::browser` each read `HOME`
-   directly beside it. None of them is exposed over IPC, and `access::home` has
-   one caller, on a macOS-only path, which is why it is marked `dead_code`
-   everywhere else — so what is missing is a command handing that answer to the
-   front end, not a way to find it. Without the
-   argument the tilde shape simply does not apply and an outside repository
-   draws its absolute path, which is true rather than merely shorter.
+   directly beside it. None of them answers over IPC — `tracker_access_repair`
+   calls `access::home()` on every platform, and returns only which of three
+   sentences to draw — so what is missing is a command handing that answer to
+   the front end, not a way to find it. Without the argument the tilde shape
+   simply does not apply and an outside repository draws its absolute path,
+   which is true rather than merely shorter.
 
    The separator is `/` in everything this builds, because that is what
    `relativeTo` normalises to and what a path drawn under `./` or `~/` is read
