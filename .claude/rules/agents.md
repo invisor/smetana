@@ -282,9 +282,13 @@ everybody else costs the language rules nothing.
 `talks_to_a_person` is the predicate, and unlike `writes_to_the_tracker`, `commits_to_git` and
 `leaves_a_run_report` it is written as a **negation** — `!matches!(intent, Intent::Run { .. })`. Two
 reasons. Those three name a capability a session *has*, and a positive list is the honest shape for
-that; this one names the **absence of a listener**, so a list of the eight conversations would be the
-complement of the rule rather than the rule. And a variant added to `Intent` later is, on the
-evidence of all ten there are, another conversation: the negation hands it the instruction for free,
+that; this one names the **absence of a listener**, so a list of the conversations would be the
+complement of the rule rather than the rule. Neither this paragraph nor the predicate's own doc
+writes the count down, on the reasoning `commits_to_git`'s comment already carries: a number is wrong
+the next time an intent is added and nothing fails when it goes stale — both of them had come to say
+"the eight" over nine of them by the time `ReviewBranch` landed. And a variant added to `Intent`
+later is, on the evidence of every variant there is, another conversation: the negation hands it the
+instruction for free,
 which is the right default, since an instruction reaching one more conversation is benign and missing
 one is the bug the field exists to fix. A positive list would leave a new variant out silently — the
 same quiet drift this file records about `RESUMES_BY_ID`. `Intent::Run` is the one exclusion: nobody
@@ -314,10 +318,12 @@ Two directories under `src-tauri/resources/` are the library itself, both bundle
 `smetana/` is ours — the directory is the list, for the reason the test-count note under Commands
 gives — laid out as a plugin in its own right (`.claude-plugin/plugin.json`, `skills/<name>/SKILL.md`)
 because that is what `--plugin-dir` accepts and what makes them answer to `smetana:filing-a-task` and
-the rest. Four intents name one apiece: filing names `filing-a-task`, a parked task's questions name
-`resolving-questions`, setting a project up names `project-setup`, a run's batch names
-`running-tasks` — and that last one is the process the rest hang off, since an agent carrying out a
-batch reaches `provisioning`, `reviewing`, `merging` and `live-checking` because `running-tasks`
+the rest. The intents that name one apiece are `NewTask`, which names `filing-a-task`;
+`ResolveTask`, which names `resolving-questions`; `Setup`, which names `project-setup`; `Run`, whose
+batch names `running-tasks`; and `ReviewBranch`, which names `reviewing-branch-changes`. Named rather
+than counted, for the reason the count above was dropped, and because the list is what a reader came
+here for anyway. `running-tasks` is the one the rest hang off, since an agent carrying out a batch
+reaches `provisioning`, `reviewing`, `merging` and `live-checking` because `running-tasks`
 sends it to them, not because the prompt lists them. That is the point of a library over a longer
 prompt: the prompt names an entry point and the library carries the depth. `superpowers/` is a
 committed copy of that plugin, 668 K of markdown under MIT, with its own `LICENSE` and a

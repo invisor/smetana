@@ -142,6 +142,15 @@ pub enum SessionWork {
     /// rather than inventing a name for it.
     ResumeSession { title: Option<String> },
     Setup,
+    /// A branch review, by the path its report is written to, and the one work
+    /// in this list that names a file which does not exist yet: the two
+    /// documents appear when the agent is finished, and this is where the app
+    /// looks for them.
+    ///
+    /// The pairs stay behind, the way `ResolveConflict`'s conflicted paths do.
+    /// They are the agent's briefing, and a review of several repositories
+    /// carries two refs each — nothing a row 252px wide has anywhere to put.
+    ReviewBranch { report: String },
     /// One batch of a run. Which issues it has taken is not known here and
     /// cannot be: the agent claims them by running `bd update --claim` itself,
     /// and nothing reports that back. The front end crosses the run's session
@@ -190,6 +199,7 @@ pub enum WorkKind {
     RepairTracker,
     ResumeSession,
     Setup,
+    ReviewBranch,
     Run,
     Shell,
 }
@@ -208,6 +218,7 @@ impl SessionWork {
             SessionWork::RepairTracker => WorkKind::RepairTracker,
             SessionWork::ResumeSession { .. } => WorkKind::ResumeSession,
             SessionWork::Setup => WorkKind::Setup,
+            SessionWork::ReviewBranch { .. } => WorkKind::ReviewBranch,
             SessionWork::Run => WorkKind::Run,
             SessionWork::Shell => WorkKind::Shell,
         }
@@ -534,6 +545,9 @@ mod tests {
                 SessionWork::ResumeSession { title: Some("Move the card to done".into()) }
             }
             WorkKind::Setup => SessionWork::Setup,
+            WorkKind::ReviewBranch => {
+                SessionWork::ReviewBranch { report: ".smetana/reviews/2026-08-31-main".into() }
+            }
             WorkKind::Run => SessionWork::Run,
             WorkKind::Shell => SessionWork::Shell,
         }
@@ -561,6 +575,7 @@ mod tests {
             WorkKind::RepairTracker,
             WorkKind::ResumeSession,
             WorkKind::Setup,
+            WorkKind::ReviewBranch,
             WorkKind::Run,
             WorkKind::Shell,
         ];

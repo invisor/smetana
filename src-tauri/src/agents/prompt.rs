@@ -5,7 +5,9 @@ use std::fmt::Write;
 use std::path::Path;
 
 use super::library::Skills;
-use super::{cascade, ImageDelivery, Intent, Languages, SkillDelivery, Stage, TaskDraft};
+use super::{
+    cascade, ImageDelivery, Intent, Languages, ReviewPair, SkillDelivery, Stage, TaskDraft,
+};
 use crate::runs::model::{RunMode, RunScope, RunSettings};
 
 /// The sentence that makes the agent talk the task through. It has to stand on
@@ -40,6 +42,11 @@ pub struct SkillText<'a> {
     /// `On` after the cascade — an `Auto` is handed the path instead, so a
     /// stage the agent may decline costs one line rather than 7 KB.
     pub plans: Option<&'a str>,
+    /// The app's own reviewing-branch-changes skill. Read whenever a branch
+    /// review is being started, for the reason `resolving` is: it is the whole
+    /// of what the session was opened to do, so there is no branch in which it
+    /// goes unread.
+    pub reviewing_branch: Option<&'a str>,
 }
 
 /// The standard every filed task is held to, said in the prompt rather than
@@ -346,6 +353,23 @@ const SETUP: &str = "Work out what this project is made of and write .smetana/pr
      the file Smetana reads before it runs anything here. Check the commands before you write \
      them in, and ask me about anything the folder does not answer.";
 
+/// What a branch review is, said in the prompt rather than left to the skill,
+/// and the reason is `SETUP`'s: an `Inline` harness may find no skill text at
+/// all, and a session that could not read one must still know what it was
+/// started for and what it is not allowed to do.
+///
+/// The two prohibitions are the sentence that earns this constant, and the
+/// reason is what this session is doing rather than what the other intents are:
+/// every other intent that reads code either files an issue or makes a commit,
+/// and a model that has just read a diff is one step from "I will just fix
+/// this". So the boundary is stated here, in front of the work, rather than
+/// only in a skill that may never be delivered.
+const REVIEW_BRANCH: &str =
+    "Review what one branch adds to another and write the result up for somebody to read \
+     afterwards. Nothing is being merged here and there is no task behind it: the report is \
+     the whole of what this session produces. File nothing in the tracker, run no bd command \
+     that writes, and make no commit — the only thing you write is the report itself.";
+
 /// The language the agent talks to the person in, and it goes into every
 /// intent — `Bare` included, which is why that one no longer opens on nothing.
 ///
@@ -439,18 +463,30 @@ fn task_language(language: &str) -> String {
 /// wanted to, since bd is what is broken. Telling any of them how to word one
 /// would be prose about something that is not going to happen.
 ///
+/// `ReviewBranch` stays out too, and it is the one that is **written down**
+/// rather than left to the fall-through — which is why this is a `match` and
+/// no longer a `matches!`. The other four are quiet about it because nothing
+/// else in the app claims otherwise; a review's prompt says in its first
+/// paragraph that it files nothing, and a reader checking that claim against
+/// this function has to find it answered rather than absent.
+///
 /// `FixTask` is in for one sentence of its prompt: it leaves a note on the
 /// issue saying what was put right, and a note is prose somebody reads.
 fn writes_to_the_tracker(intent: &Intent) -> bool {
-    matches!(
-        intent,
+    match intent {
         Intent::NewTask { .. }
-            | Intent::EditTask { .. }
-            | Intent::ResolveTask { .. }
-            | Intent::FixTask { .. }
-            | Intent::Run { .. }
-            | Intent::Bare
-    )
+        | Intent::EditTask { .. }
+        | Intent::ResolveTask { .. }
+        | Intent::FixTask { .. }
+        | Intent::Run { .. }
+        | Intent::Bare => true,
+        // Written out rather than left to the fall-through every other `false`
+        // here comes from. A branch review is the one intent whose own prompt
+        // promises it files nothing, and a promise made in one file and kept by
+        // an absence in another is a promise the next reader cannot check.
+        Intent::ReviewBranch { .. } => false,
+        _ => false,
+    }
 }
 
 /// The language a git commit message is written in, and it goes only where the
@@ -512,19 +548,30 @@ fn commit_language(language: &str) -> String {
 /// the whole difference between it and the `EditTask` in the paragraph below.
 ///
 /// The rest are out because they do not touch a repository at all — the
-/// `matches!` below is the list, and a number written here would be wrong the
+/// `match` below is the list, and a number written here would be wrong the
 /// next time somebody adds an intent, which is how this comment came to say
-/// "the other four" over five of them. `NewTask`, `EditTask` and `ResolveTask`
+/// "the other four" over five of them. `ReviewBranch` is the one of them
+/// spelled out instead of falling through, for the reason
+/// `writes_to_the_tracker` gives: it reads a diff and its prompt forbids it a
+/// commit outright, and that is the intent somebody will come here to check.
+/// `NewTask`, `EditTask` and `ResolveTask`
 /// write into bd, and what `NewTask` puts on disk goes under `.smetana/`, which
 /// `runs::gitignore` keeps out of the repository. `Setup` writes one toml file
 /// in the same folder. `RepairTracker` works on `.beads`, which bd owns and
 /// commits for itself. Putting the paragraph in every intent instead would open
 /// a filing session with three paragraphs about language in front of the work.
 fn commits_to_git(intent: &Intent) -> bool {
-    matches!(
-        intent,
-        Intent::Run { .. } | Intent::ResolveConflict { .. } | Intent::FixTask { .. } | Intent::Bare
-    )
+    match intent {
+        Intent::Run { .. }
+        | Intent::ResolveConflict { .. }
+        | Intent::FixTask { .. }
+        | Intent::Bare => true,
+        // Named for the reason it is named one function up: the review prompt
+        // forbids a commit in so many words, and the predicate behind that
+        // sentence has to say the same thing where somebody would look for it.
+        Intent::ReviewBranch { .. } => false,
+        _ => false,
+    }
 }
 
 /// The language a run's report is written in, and it moves the prose of the
@@ -593,15 +640,18 @@ const STANDING: &str =
 /// Whether somebody is in this session to be talked to, which is the whole of
 /// what `agentPrompt` is about.
 ///
-/// A negation rather than a list of the eight, and deliberately. The three
-/// predicates above each name a capability a session *has* — it writes into bd,
-/// it commits, it leaves a report — and a positive list is the honest shape for
-/// those. This one names the **absence of a listener**, so a list of eight
-/// would be the complement of the rule rather than the rule, and a reader would
-/// have to work out what the eight had in common.
+/// A negation rather than a list of the conversations, and deliberately. The
+/// three predicates above each name a capability a session *has* — it writes
+/// into bd, it commits, it leaves a report — and a positive list is the honest
+/// shape for those. This one names the **absence of a listener**, so a list of
+/// them would be the complement of the rule rather than the rule, and a reader
+/// would have to work out what they had in common. No count is written here,
+/// for the reason `commits_to_git` gives above: a number is wrong the next time
+/// an intent is added and nothing fails when it goes stale — this paragraph
+/// had come to say "the eight" over nine of them.
 ///
 /// The second reason is the one that matters in a year. A variant added to
-/// `Intent` later is, on the evidence of all ten there are, another
+/// `Intent` later is, on the evidence of every variant there is, another
 /// conversation, and a negation hands it the person's instruction for free.
 /// That is the right default here: an instruction reaching one more
 /// conversation is benign, and missing one is the bug this field exists to fix.
@@ -763,6 +813,9 @@ fn body(
         // decision rather than a wildcard.
         Intent::ResumeSession { .. } => None,
         Intent::Setup => Some(setup(delivery, skills, facts)),
+        Intent::ReviewBranch { pairs, report } => {
+            Some(review_branch(pairs, report, delivery, skills, text.reviewing_branch))
+        }
         Intent::Run { settings, reports, batch, remove_worktrees } => {
             Some(run(settings, reports, *batch, *remove_worktrees, delivery, skills))
         }
@@ -1071,6 +1124,77 @@ fn repair_tracker(dir: &str, bd_version: &str, command: &str, stderr: &str) -> S
     out
 }
 
+/// What a session opens on when it is sent to review a branch.
+///
+/// Everything variable is named here and nothing about how to review is: the
+/// pairs and the report's path belong to this one session and are in no file,
+/// while the method is the same every time and is the skill's. That is the
+/// same split `run` holds one function up.
+///
+/// One line per repository, `<repo>: <base> → <head>`, because a project can
+/// hold several and a review that ran in one of them is not the review that
+/// was asked for. The refs travel exactly as they arrived — `main` or
+/// `origin/main` — since which of the two was meant is settled before the
+/// intent is built, and an agent resolving it a second time here would be
+/// answering a question that already has an answer.
+///
+/// Both files are named with their extensions rather than left to the skill,
+/// and that is the one thing in this prompt the app depends on: it composed
+/// that path itself and opens the report at it afterwards, so an agent that
+/// wrote only one of the two would leave a tab pointing at nothing.
+fn review_branch(
+    pairs: &[ReviewPair],
+    report: &str,
+    delivery: SkillDelivery,
+    skills: &Skills,
+    reviewing_branch: Option<&str>,
+) -> String {
+    let mut out = String::from(REVIEW_BRANCH);
+    // A review with nothing to compare is not something this app builds — the
+    // window that starts one cannot offer an empty list — but the prompt still
+    // has to be a set of true sentences rather than a heading with a gap under
+    // it, which is the reading `repair_tracker` takes of an empty stderr.
+    match pairs.is_empty() {
+        true => out.push_str(
+            "\n\nNothing was named to compare. Say so and stop, rather than guessing at a \
+             repository or at a ref.",
+        ),
+        false => {
+            out.push_str("\n\nWhat to review, one line per repository:\n\n");
+            for pair in pairs {
+                let _ = writeln!(out, "{}: {} → {}", pair.repo, pair.base, pair.head);
+            }
+        }
+    }
+    let _ = write!(
+        out,
+        "\nWrite the report to {report}.md and {report}.html — both of them, the same review in \
+         two forms, at those paths relative to the project. The HTML one is drawn inside Smetana \
+         in a sandboxed frame, so it has to carry its own styling and reach nowhere outside \
+         itself: no external stylesheet, no font from a network, no script and no image."
+    );
+    out.push_str("\n\n");
+    match delivery {
+        SkillDelivery::PluginDir => {
+            out.push_str("Use the smetana:reviewing-branch-changes skill — it is the method.");
+        }
+        SkillDelivery::Inline => match reviewing_branch {
+            // The body, not the path, for the reason `resolve_task` gives: this
+            // skill is the whole of what the session was started to do, so
+            // there is no branch in which it goes unread.
+            Some(process) => {
+                out.push_str("The method:\n\n");
+                out.push_str(process);
+            }
+            None => {
+                let skill = skills.smetana.join("skills/reviewing-branch-changes/SKILL.md");
+                let _ = write!(out, "The method is at {} — read it first.", skill.display());
+            }
+        },
+    }
+    out
+}
+
 fn setup(delivery: SkillDelivery, skills: &Skills, facts: Option<&str>) -> String {
     let mut out = String::from(SETUP);
     out.push_str("\n\n");
@@ -1376,6 +1500,11 @@ mod tests {
     const FILING: &str = "# Filing a task\n\nThe title says what needs doing.";
     const RESOLVING: &str = "# Resolving\n\nEverything below the last resolved line is open.";
     const PLANS: &str = "# Writing plans\n\nEvery step names the file it touches.";
+    /* No `## ` heading in it, deliberately: the two tests that walk every
+       intent for a translated section heading read the whole prompt, and a
+       fixture carrying one would fail them for a session that files nothing. */
+    const REVIEWING_BRANCH: &str =
+        "# Reviewing branch changes\n\nRead the file, not the diff.";
 
     /// The shipped pair: both settings on their default. What almost every
     /// test here is about is not the language, so this is the fixture that
@@ -1398,7 +1527,13 @@ mod tests {
     /// Nothing read: what a PluginDir harness always gets, and what an Inline
     /// harness gets when the files cannot be read.
     fn nothing() -> SkillText<'static> {
-        SkillText { filing: None, resolving: None, brainstorming: None, plans: None }
+        SkillText {
+            filing: None,
+            resolving: None,
+            brainstorming: None,
+            plans: None,
+            reviewing_branch: None,
+        }
     }
 
     fn every_skill() -> SkillText<'static> {
@@ -1407,6 +1542,7 @@ mod tests {
             resolving: Some(RESOLVING),
             brainstorming: Some(BRAINSTORMING),
             plans: Some(PLANS),
+            reviewing_branch: Some(REVIEWING_BRANCH),
         }
     }
 
@@ -1858,6 +1994,15 @@ mod tests {
                 stderr: String::new(),
             },
             Intent::Setup,
+            review(),
+            // The other hole in a review's briefing, walked for the reason the
+            // two repair holes above are: with no pair the whole list and its
+            // heading disappear, and the sentence that replaces them is one
+            // more place a prompt could be left hanging.
+            Intent::ReviewBranch {
+                pairs: Vec::new(),
+                report: ".smetana/reviews/2026-08-31-pf40".into(),
+            },
             new_task(Stage::Auto),
             new_task(Stage::On),
             new_task(Stage::Off),
@@ -1977,6 +2122,132 @@ mod tests {
             theirs: "develop".into(),
             files: vec!["src/one.rs".into(), "src/two.rs".into()],
         }
+    }
+
+    /// Two repositories, four refs, and both spellings a ref arrives in — a
+    /// local branch and a remote-tracking one — since the choice between them
+    /// is made before the intent is built and both have to survive the trip.
+    fn review() -> Intent {
+        Intent::ReviewBranch {
+            pairs: vec![
+                ReviewPair {
+                    repo: "/p/backend".into(),
+                    base: "main".into(),
+                    head: "feature/smetana-pf40".into(),
+                },
+                ReviewPair {
+                    repo: "/p/frontend".into(),
+                    base: "origin/develop".into(),
+                    head: "origin/spike".into(),
+                },
+            ],
+            report: ".smetana/reviews/2026-08-31-pf40".into(),
+        }
+    }
+
+    fn review_prompt(delivery: SkillDelivery) -> String {
+        build(&review(), delivery, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
+            .unwrap()
+    }
+
+    #[test]
+    fn a_review_prompt_names_every_pair_and_both_report_files() {
+        // The whole line per repository rather than the four refs on their own,
+        // and that is what makes a dropped pair fail here: a walk that only
+        // looked for `main` and `origin/develop` would still pass with the two
+        // heads attached to the wrong repositories, or with one pair rendered
+        // and the other's refs mentioned anywhere at all.
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = review_prompt(delivery);
+            assert!(
+                text.contains("/p/backend: main → feature/smetana-pf40"),
+                "the first pair: {text}"
+            );
+            assert!(
+                text.contains("/p/frontend: origin/develop → origin/spike"),
+                "the second pair: {text}"
+            );
+            // Each ref on its own as well, so that a change to the line's shape
+            // has to face the question of whether all four still travel.
+            for git_ref in ["main", "feature/smetana-pf40", "origin/develop", "origin/spike"] {
+                assert!(text.contains(git_ref), "{git_ref} is not in the prompt: {text}");
+            }
+            // Both files, with their extensions: the app composed this path and
+            // opens the report at it, so one written and not the other is a tab
+            // pointing at nothing.
+            assert!(
+                text.contains(".smetana/reviews/2026-08-31-pf40.md"),
+                "the markdown report: {text}"
+            );
+            assert!(
+                text.contains(".smetana/reviews/2026-08-31-pf40.html"),
+                "the html report: {text}"
+            );
+            // And what the frame it is drawn in cannot do for it.
+            assert!(text.contains("sandboxed frame"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_review_prompt_names_the_skill_and_carries_it_when_it_has_to() {
+        // The split every skill in this file is delivered by: a plugin harness
+        // is told the name and fetches it, an inline one is handed the text,
+        // and an inline one that could not read the file is handed the path so
+        // that the session is not left with the rule and none of the method.
+        assert!(
+            review_prompt(SkillDelivery::PluginDir).contains("smetana:reviewing-branch-changes"),
+            "{}",
+            review_prompt(SkillDelivery::PluginDir)
+        );
+        assert!(review_prompt(SkillDelivery::Inline).contains(REVIEWING_BRANCH), "the body");
+
+        let no_skill = build(
+            &review(),
+            SkillDelivery::Inline,
+            ImageDelivery::InPrompt,
+            &skills(),
+            None,
+            nothing(),
+            &english(),
+            "",
+        )
+        .unwrap();
+        assert!(
+            no_skill
+                .contains("/app/resources/smetana/skills/reviewing-branch-changes/SKILL.md"),
+            "{no_skill}"
+        );
+    }
+
+    #[test]
+    fn a_review_is_told_it_files_nothing_and_commits_nothing() {
+        // The two prohibitions are the reason `REVIEW_BRANCH` is a constant at
+        // all: an inline harness may find no skill text, and a model that has
+        // just read a diff is one step from filing the findings itself. The
+        // predicates are asserted beside the prose so that a change to either
+        // has to face the other.
+        assert!(!writes_to_the_tracker(&review()), "a review files nothing");
+        assert!(!commits_to_git(&review()), "a review commits nothing");
+        for delivery in [SkillDelivery::PluginDir, SkillDelivery::Inline] {
+            let text = review_prompt(delivery);
+            assert!(text.contains("File nothing in the tracker"), "{text}");
+            assert!(text.contains("make no commit"), "{text}");
+        }
+    }
+
+    /// A review that was handed no pair is not something the app builds, and
+    /// the prompt still has to be true rather than a heading with a gap under
+    /// it — the same hole `repair_tracker` fills for an empty stderr.
+    #[test]
+    fn a_review_with_no_pair_says_so_rather_than_drawing_an_empty_list() {
+        let intent = Intent::ReviewBranch {
+            pairs: Vec::new(),
+            report: ".smetana/reviews/2026-08-31-pf40".into(),
+        };
+        let text = build(&intent, SkillDelivery::PluginDir, ImageDelivery::InPrompt, &skills(), None, every_skill(), &english(), "")
+            .unwrap();
+        assert!(text.contains("Nothing was named to compare"), "{text}");
+        assert!(!text.contains("What to review"), "no heading over nothing: {text}");
     }
 
     fn conflict_prompt(op: crate::vcs::model::OpKind, delivery: SkillDelivery) -> String {
@@ -2655,6 +2926,7 @@ mod tests {
             Intent::ResolveTask { id: "x-1".into(), title: "T".into() },
             Intent::FixTask { id: "x-1".into(), title: "T".into() },
             repair(),
+            review(),
             new_task(Stage::Auto),
             new_task(Stage::On),
             new_task(Stage::Off),

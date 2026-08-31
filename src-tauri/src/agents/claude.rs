@@ -85,8 +85,13 @@ impl Profile for Claude {
         // harder reason: Claude Code has no flag for one. It opens an image
         // when the prompt names its path, which is what `ImageDelivery::InPrompt`
         // — the default this profile keeps — asks `prompt.rs` to write.
-        let text =
-            prompt::SkillText { filing: None, resolving: None, brainstorming: None, plans: None };
+        let text = prompt::SkillText {
+            filing: None,
+            resolving: None,
+            brainstorming: None,
+            plans: None,
+            reviewing_branch: None,
+        };
         if let Some(built) = prompt::build(
             &launch.intent,
             self.delivery(),

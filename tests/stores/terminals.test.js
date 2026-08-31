@@ -859,6 +859,64 @@ describe('starting a session', () => {
     })
   })
 
+  /* A branch review is the newest arm of `workOf`, and the one with nothing on
+     screen behind it yet: no caption of its own, no panel, no menu row that
+     starts one. So the mirror is all there is to check, and this is the only
+     place anything checks it — `Intent::work` in Rust answers
+     `SessionWork::ReviewBranch { report }` and a `workOf` that had not been
+     told would answer `{ kind: 'reviewBranch' }` with the path missing, which
+     is exactly what the tab opened afterwards is found by.
+
+     The pairs are the other half. They are the agent's briefing and are drawn
+     nowhere, so they must not be in the work — and they must be in the intent,
+     whole, because the prompt names every one of them. */
+  it("a branch review's placeholder carries the report path and nothing else", async () => {
+    const { ipc, stores } = await ready()
+    let answer
+    ipc.on('terminal_create', () => new Promise((resolve) => (answer = resolve)))
+
+    const pairs = [
+      { repo: '/p/backend', base: 'main', head: 'feature/smetana-pf40' },
+      { repo: '/p/frontend', base: 'origin/develop', head: 'origin/spike' }
+    ]
+    const started = stores.terminals.createSession('/p', {
+      kind: 'reviewBranch',
+      pairs,
+      report: '.smetana/reviews/2026-08-31-pf40'
+    })
+
+    expect(stores.terminals.terminalState.starting.at(-1).work).toEqual({
+      kind: 'reviewBranch',
+      report: '.smetana/reviews/2026-08-31-pf40'
+    })
+
+    // The whole of the intent goes over the wire, pairs included: the prompt
+    // lists them one line per repository, and a review that lost one would be
+    // a review of somewhere else.
+    expect(ipc.calls('terminal_create').at(-1)).toEqual({
+      project: '/p',
+      agent: 'claude',
+      intent: {
+        kind: 'reviewBranch',
+        pairs,
+        report: '.smetana/reviews/2026-08-31-pf40'
+      }
+    })
+
+    answer(
+      session({
+        id: 9,
+        work: { kind: 'reviewBranch', report: '.smetana/reviews/2026-08-31-pf40' }
+      })
+    )
+    await started
+
+    expect(stores.terminals.terminalState.sessions.at(-1).work).toEqual({
+      kind: 'reviewBranch',
+      report: '.smetana/reviews/2026-08-31-pf40'
+    })
+  })
+
   /* The same handover for a fix, and the reason to walk it a second time is
      `workOf`: it mirrors `Intent::work` in Rust by hand, so a variant added
      there and forgotten here would caption the placeholder as a bare agent for
