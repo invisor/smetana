@@ -121,10 +121,16 @@ const REASON_CLAUSE = {
   branch: 'the branch it was about is gone'
 }
 
-export function stalenessMessage(kind, reason) {
+/* `kept` is the New task dialog's, and it is an argument rather than something
+   worked out from the kind: what the app window holds after this window goes is
+   a draft that was reported before the switch, and whether there is one is a
+   fact only the caller has. A promise made from the kind alone would be made to
+   somebody who typed a sentence and switched inside the reporting debounce. */
+export function stalenessMessage(kind, reason, kept = false) {
   const noun = DIALOG_NOUN[kind] ?? 'dialog'
   const clause = REASON_CLAUSE[reason] ?? 'what it was about is gone'
-  return `The ${noun} dialog closed: ${clause}.`
+  const notice = `The ${noun} dialog closed: ${clause}.`
+  return kept ? `${notice} What you wrote is kept.` : notice
 }
 
 /* Which of the open dialog windows have lost their ground.
