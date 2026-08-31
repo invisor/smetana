@@ -10,7 +10,7 @@ import {
 } from '../../src/views/dialogRegistry.js'
 
 describe('the dialog registry', () => {
-  it('holds the ten kinds that became windows', () => {
+  it('holds the eleven kinds that became windows', () => {
     expect([...DIALOG_KINDS].sort()).toEqual([
       'delete-branch',
       'delete-session',
@@ -20,9 +20,21 @@ describe('the dialog registry', () => {
       'project-settings',
       'promote-column',
       'ready-task',
+      'review-changes',
       'run',
       'setup-project'
     ])
+  })
+
+  /* The branch-review window: the first dialog that outgrew `Modal`'s default,
+     which is what the width field was put in the registry for. Its ground is
+     the project alone — it is about the project's repositories as a set, so one
+     of them going is a row leaving the table rather than a window that has lost
+     its subject. */
+  it('gives the review window the project as its ground and a width of its own', () => {
+    expect(isDialogKind('review-changes')).toBe(true)
+    expect(dialogGround('review-changes')).toEqual(['project'])
+    expect(dialogWidth('review-changes')).toBe(720)
   })
 
   it('refuses a name it has never heard of', () => {

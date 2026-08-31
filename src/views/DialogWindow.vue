@@ -32,6 +32,7 @@ import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import ProjectSettingsModal from '../components/run/ProjectSettingsModal.vue'
 import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
 import ReadyTaskModal from '../components/kanban/ReadyTaskModal.vue'
+import ReviewChangesDialog from '../components/git/ReviewChangesDialog.vue'
 import RunModal from '../components/run/RunModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import { dialogWidth, isDialogKind } from './dialogRegistry.js'
@@ -72,7 +73,8 @@ const COMPONENTS = {
   'project-settings': ProjectSettingsModal,
   'delete-task': DeleteTaskModal,
   'ready-task': ReadyTaskModal,
-  'delete-session': DeleteSessionModal
+  'delete-session': DeleteSessionModal,
+  'review-changes': ReviewChangesDialog
 }
 
 const component = computed(() => COMPONENTS[props.kind] ?? null)
@@ -190,12 +192,18 @@ const stopWaiting = setTimeout(() => {
   told.value = true
 }, FIRST_PAINT_WAIT)
 
-/* Every emit the ten guests have between them that crosses back to the app
+/* Every emit the eleven guests have between them that crosses back to the app
    window, forwarded by name. A list rather than a wildcard because listeners
    need names, and because a name that is not here is a message that would
    silently go nowhere. A name here that a guest does not declare costs nothing:
-   it falls through as an inert listener for a DOM event that never fires. */
-const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save']
+   it falls through as an inert listener for a DOM event that never fires.
+
+   `branch` is the review window's, and it is the one name here that is not a
+   person finishing with a dialog: it says which branch was picked on the
+   checked side of a lone row, and what comes back is the whole table rebuilt
+   around it — the rule that builds one lives in `reviewRows.js`, outside every
+   `.vue` file, and is called by the app window. */
+const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save', 'branch']
 
 /* And the three that deliberately do not travel: `new-task`'s images, answered
    in this window by the store above. They are a separate list rather than a

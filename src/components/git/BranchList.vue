@@ -140,6 +140,11 @@ const props = defineProps({
 const emit = defineEmits([
   'checkout',
   'compare',
+  /* The other reader, and the one that does not stop at this repository: it
+     opens the window that picks a reference branch and a branch to check, in
+     every repository of the project at once. Compare shows and Review judges,
+     which is why they are two verbs and not one. */
+  'review',
   /* The whole new list, resolved by `branchTree.js`, exactly as `toggle-folder`
      carries one: the panel is told what the list became rather than working it
      out, so the rule stays in the file a test can reach. */
@@ -215,12 +220,14 @@ const openMenu = (row, event) => {
 /* The branch is handed back with the pick rather than read from `menuFor`,
    which closing has already cleared — see `PointerMenu`'s header. Written out
    rather than emitted as `item.kind`: the kinds and the events happen to be the
-   same five words today, and a rule file free to add a sixth verb must not be
-   able to make this component emit something nobody declared. The fifth arrived
-   exactly that way, which is this comment having been right. */
+   same words today, and a rule file free to add another verb must not be able
+   to make this component emit something nobody declared. Two of them have
+   arrived exactly that way since, which is this comment having been right
+   twice. */
 const pick = (item, name) => {
   if (item.kind === 'checkout') emit('checkout', name)
   else if (item.kind === 'compare') emit('compare', name)
+  else if (item.kind === 'review') emit('review', name)
   else if (item.kind === 'favorite') emit('favorite', toggleFavorite(props.favorites, name))
   else if (item.kind === 'merge') emit('merge', name)
   else if (item.kind === 'rebase') emit('rebase', name)
