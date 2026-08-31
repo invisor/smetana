@@ -241,6 +241,52 @@ impl OpKind {
     }
 }
 
+/// What git is part-way through in a repository, and the two branches it is
+/// between.
+///
+/// **`op` is the load-bearing field and the only one that is always exact.** It
+/// decides which `--abort` `vcs_abort` runs and which operation the agent's
+/// prompt is told to finish, and both are wrong in a way nobody can recover
+/// from if it is guessed. The two names are best-effort by construction: a
+/// merge yields both, while a stopped rebase leaves HEAD detached and the
+/// branch it is being rebased **onto** readable nowhere a git process can see
+/// it — only in a file under `.git/`, which this module does not read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InProgress {
+    pub op: OpKind,
+    /// The branch this repository is on, or was on before a rebase detached it.
+    pub ours: Option<String>,
+    /// The branch being merged in. Always `None` for a rebase — see above.
+    pub theirs: Option<String>,
+}
+
+/// One line of `git name-rev --name-only` → the branch it names, or nothing.
+///
+/// Pure, and here rather than in `commands.rs` for the reason every rule in
+/// this file is: it is the whole of a decision, and a decision under test is
+/// one that cannot quietly change.
+///
+/// Two answers are not names. `undefined` is git's own word for "no branch
+/// describes this commit", which is exactly what it says of a HEAD detached
+/// part-way through a rebase — reading it as a branch would put the literal
+/// word `undefined` into a dialog and into an agent's prompt. And `feature~1`
+/// is a branch **and a distance from it**: git will not take the whole string
+/// as a branch, and a sentence naming it would be naming a commit.
+pub fn branch_from_name_rev(line: &str) -> Option<String> {
+    let name = line.trim();
+    if name.is_empty() || name == "undefined" {
+        return None;
+    }
+    let end = name.find(['~', '^']).unwrap_or(name.len());
+    let branch = &name[..end];
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
+    }
+}
+
 /// What a merge or a rebase came to.
 ///
 /// A conflict is an **outcome and not a failure**: nothing was lost, nothing
@@ -931,6 +977,45 @@ mod tests {
             assert_eq!(op.word(), word);
         }
         assert!(serde_json::from_str::<OpKind>(r#""cherryPick""#).is_err());
+    }
+
+    #[test]
+    fn branch_from_name_rev_reads_a_plain_name() {
+        assert_eq!(branch_from_name_rev("feature\n"), Some("feature".to_string()));
+    }
+
+    /// `name-rev` answers a branch and how far the commit is from it. Only the
+    /// branch is a name this app can put in a sentence or hand to git.
+    #[test]
+    fn branch_from_name_rev_drops_the_distance_suffix() {
+        assert_eq!(branch_from_name_rev("feature~1"), Some("feature".to_string()));
+        assert_eq!(branch_from_name_rev("feature^2"), Some("feature".to_string()));
+        assert_eq!(branch_from_name_rev("release/2.0~3\n"), Some("release/2.0".to_string()));
+    }
+
+    /// git's own word for "no branch describes this commit", which is what it
+    /// answers for a HEAD detached part-way through a rebase.
+    #[test]
+    fn branch_from_name_rev_reads_undefined_as_no_name() {
+        assert_eq!(branch_from_name_rev("undefined\n"), None);
+    }
+
+    #[test]
+    fn branch_from_name_rev_reads_nothing_as_no_name() {
+        assert_eq!(branch_from_name_rev(""), None);
+        assert_eq!(branch_from_name_rev("   \n"), None);
+        assert_eq!(branch_from_name_rev("~1"), None);
+    }
+
+    #[test]
+    fn in_progress_serializes_with_the_names_the_front_end_reads() {
+        let json = serde_json::to_string(&InProgress {
+            op: OpKind::Rebase,
+            ours: Some("feature".into()),
+            theirs: None,
+        })
+        .expect("serializes");
+        assert_eq!(json, r#"{"op":"rebase","ours":"feature","theirs":null}"#);
     }
 
     /// An unknown record type is git's business, not ours: skipping it loses
