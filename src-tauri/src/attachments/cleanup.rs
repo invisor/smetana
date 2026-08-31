@@ -74,6 +74,33 @@ pub fn plain_name(name: &str) -> bool {
         && !name.contains('\0')
 }
 
+/// Whether a path names one of this store's own files.
+///
+/// The one caller is `attachment_reopen`, whose only legitimate argument is a
+/// path that came out of this store in the first place. It is not here because
+/// the front end is untrusted — `attachment_import` already reads whatever a
+/// person picked anywhere on the machine — but because a command with exactly
+/// one argument shape should say so, and saying it in a pure function is what
+/// makes it checkable with no filesystem under it.
+///
+/// `..` and `.` are refused outright rather than resolved: resolving is the
+/// filesystem's job, and this rule has to hold before anything is opened.
+///
+/// The segments are read off the string rather than off `components()`, and
+/// that is the one non-obvious line here. `components()` normalises a `.` in
+/// the middle of a path away entirely — `/store/./shot.png` and
+/// `/store/shot.png` are the same sequence to it — so a check written against
+/// it would silently never fire for half of what this refuses. The raw split
+/// sees both, and a lossy conversion cannot invent a `.` segment that was not
+/// there, so nothing is accepted that would otherwise have been refused.
+pub fn in_store(root: &Path, path: &Path) -> bool {
+    let plain = path
+        .to_string_lossy()
+        .split(['/', '\\'])
+        .all(|part| part != "." && part != "..");
+    plain && path != root && path.starts_with(root)
+}
+
 /// One file in the store, as the rule sees it: what it is called inside its
 /// directory, the absolute path that would have reached an agent, and its size.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,5 +406,25 @@ mod tests {
         assert!(!plain_name(""));
         assert!(!plain_name("../../keys.png"));
         assert!(!plain_name("sub/shot.png"));
+    }
+
+    #[test]
+    fn in_store_takes_this_store_s_own_files() {
+        let root = Path::new("/data/attachments");
+        assert!(in_store(root, Path::new("/data/attachments/app-1f2e/20260831-shot.png")));
+        // A picture attached with no project open lands in the root itself.
+        assert!(in_store(root, Path::new("/data/attachments/20260831-shot.png")));
+    }
+
+    #[test]
+    fn in_store_refuses_anything_that_is_not_one() {
+        let root = Path::new("/data/attachments");
+        assert!(!in_store(root, Path::new("/Users/you/Downloads/shot.png")));
+        // Climbing out of the store is refused as a path, without asking the
+        // filesystem anything: this rule has to hold with no disk under it.
+        assert!(!in_store(root, Path::new("/data/attachments/../../etc/passwd")));
+        assert!(!in_store(root, Path::new("/data/attachments/./shot.png")));
+        // The directory is not one of its own files.
+        assert!(!in_store(root, root));
     }
 }
