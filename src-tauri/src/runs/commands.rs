@@ -439,7 +439,11 @@ mod tests {
         repo(&root, "backend", "develop");
         config(&root, "[project]\nrepos = [\"backend\", \"beckend\"]\n");
         let out = target_branches(root.to_string_lossy().into_owned());
-        assert_eq!(out, vec![crate::git::BranchOption { name: "develop".into(), missing_in: vec![] }]);
+        // The stamp is a real reflog's and is nothing this test can name, so
+        // the two fields it is about are named instead.
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].name, "develop");
+        assert!(out[0].missing_in.is_empty(), "{out:?}");
         let _ = fs::remove_dir_all(&root);
     }
 }
