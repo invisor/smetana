@@ -29,7 +29,7 @@
    below sets out at length, and the same conclusion. Ours is not mounted *last* —
    a stronger claim than the argument needs, and not a true one: drawSelection
    raises rules at Prec.highest that come after it, and they touch ::selection
-   and caret-color only and contest nothing this theme sets.
+   and caret-color only, neither of which turns on mount order.
 
    So a rule here needs the base's own shape wherever the base's own selector is
    strictly deeper than a plain one, and the family that matters for this note is
