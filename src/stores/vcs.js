@@ -63,6 +63,20 @@ export const vcsState = reactive({
      that a repository nobody has committed to still has something to merge
      into. */
   branches: [],
+  /* What `origin` is known to have, as of the last fetch: plain names, sorted,
+     with the `origin/` already off — `vcs_remote_branches` answers that way, and
+     whoever builds a ref for git is the side that puts the prefix back.
+
+     Beside `branches` rather than folded into it, which is the seam Rust is
+     split on too: a remote branch and a local one of the same name are two
+     different things to check out or to read a diff against, and one list
+     holding both could not say which a name was.
+
+     Loaded on request rather than with the panel, and by nothing on screen yet:
+     the branch review window is what asked for it, and the Git panel itself has
+     no use for a list of what the remote has. An empty list is the ordinary
+     answer for a repository nobody has fetched into. */
+  remoteBranches: [],
   /* Where each local branch stands against its upstream, keyed by branch name:
      `{ upstream, ahead, behind, gone }` as `vcs_tracking` answers. Keyed rather
      than listed because every reader has a name in its hand — a row, or the
@@ -290,8 +304,9 @@ export async function loadRepos(project) {
     vcsState.unlisted = []
     vcsState.tree = null
     /* With no repository left to be about, a branch list read a moment ago is
-       one nothing on screen names. */
+       one nothing on screen names. Both lists, for the one reason. */
     vcsState.branches = []
+    vcsState.remoteBranches = []
     vcsState.error = asError(err)
   } finally {
     if (vcsState.project === project) vcsState.loading = false
@@ -378,6 +393,47 @@ async function loadBranchList() {
        `vcs_status` beside it is what puts a message on screen. */
     console.error('[vcs] listing branches failed:', err)
     vcsState.branches = []
+  }
+}
+
+/* What `origin` is known to have in one repository, as of the last fetch.
+
+   The repository is an argument rather than `vcsState.selected`, and that is
+   what this read is for: the caller naming it has chosen a repository of its own
+   and need not be looking at the Git panel at all.
+
+   So the guard is the project alone, which is the whole of the pair there is
+   here. `loadBranchList` checks the repository beside it because it reads
+   `vcsState.selected` itself and a slow answer could land under another
+   repository's name; this one was told which repository to ask about, and a
+   caller that has moved on asks again by name. The project still has to be
+   checked, since a window that has left a project must not fill a list about one
+   of its repositories.
+
+   `loading` is untouched, for `loadBranchList`'s reason: this read costs no
+   process at all — files off the disk through `git.rs` — so there is nothing for
+   a person to wait through, and two functions setting one boolean means
+   whichever finishes first clears it under the other. */
+export async function loadRemoteBranches(repo) {
+  const { project } = vcsState
+  if (!repo) {
+    vcsState.remoteBranches = []
+    return
+  }
+  try {
+    const branches = await invoke('vcs_remote_branches', { repo })
+    if (vcsState.project !== project) return
+    vcsState.remoteBranches = branches
+  } catch (err) {
+    if (vcsState.project !== project) return
+    /* `vcs_remote_branches` answers with a list for everything it can read and
+       refuses nothing, so reaching here means the call itself failed. An empty
+       list is what a repository nobody has fetched into already gives, and it is
+       the right thing to be left holding: a list of branches that may no longer
+       be there is worse than none. The raw text stays in the console, where the
+       failure of a read nothing on screen announces belongs. */
+    console.error('[vcs] listing remote branches failed:', err)
+    vcsState.remoteBranches = []
   }
 }
 
@@ -923,6 +979,7 @@ function reset() {
   vcsState.selected = null
   vcsState.tree = null
   vcsState.branches = []
+  vcsState.remoteBranches = []
   vcsState.tracking = {}
   vcsState.error = null
   vcsState.writeError = null
