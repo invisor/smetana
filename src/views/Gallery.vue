@@ -3625,8 +3625,8 @@ const menuTargetStyle = {
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <ChangeList :changes="CHANGES" selected="src/stores/vcs.js" />
         </div>
-        <!-- The commit box in its four states, at the panel's own width. Live
-             first: type into it and the button comes alive with the count of
+        <!-- The commit box in its several states, at the panel's own width.
+             Live first: type into it and the button comes alive with the count of
              what it would take, press the sparkle and the fixture message
              arrives, and drag the separator under the field to make it taller —
              double click hands back the two rows it ships at. -->
@@ -3667,6 +3667,16 @@ const menuTargetStyle = {
             :actions="RUN_GOING"
             :suggest-error="{ kind: 'noAgent', message: 'Smetana looked for claude on your PATH and found nothing.' }"
           />
+        </div>
+        <!-- A repository git left mid-merge. `Resolve conflicts` sits on its
+             own row directly above the commit button, full width and
+             secondary — the commit is what this box is for, and two primary
+             buttons stacked in one column is a choice nobody made. It is gated
+             by nothing: pressing it opens a dialog and writes nothing. What to
+             check beside it is that neither button loses its row height under
+             the compact density and that neither overflows the box. -->
+        <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
+          <CommitBox :changes="6" branch="main" :conflicts="3" @resolve-conflicts="() => {}" />
         </div>
         <div :style="{ width: '252px', border: 'var(--border-w) solid var(--border)' }">
           <BranchList :branches="BRANCHES" />

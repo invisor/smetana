@@ -162,6 +162,13 @@ const props = defineProps({
   message: { type: String, default: '' },
   suggesting: { type: Boolean, default: false },
   suggestError: { type: Object, default: null },
+  /* How many unmerged paths the selected repository has, where git is also
+     part-way through a merge or a rebase — the store's `conflict` record, whose
+     absence is the whole of when the button is not drawn. Not counted off
+     `changes` here: a tree can be conflicted with neither operation in
+     progress (a cherry-pick, a stash pop), and the dialog this opens would be
+     wrong about both of its doors there. */
+  conflicts: { type: Number, default: 0 },
   /* How the three sections are folded and how tall two of them were dragged to,
      as `settings.layout.gitSections` keeps it: `reposRows` and `branchRows` in
      rows, or null for "never dragged", plus a flag apiece. Global rather than
@@ -220,6 +227,10 @@ const emit = defineEmits([
   'fetch',
   'commit',
   'suggest',
+  /* The way back into the conflict dialog, from the button `CommitBox` draws
+     above the commit. Absent from `WRITE_REFUSED` below for `compare`'s reason:
+     it opens a dialog and asks git for nothing this panel then has to draw. */
+  'resolveConflicts',
   'message',
   'open',
   'toggle',
@@ -761,9 +772,11 @@ const onReset = (section) => emit('resize', { section, rows: null })
           :suggesting="suggesting"
           :suggest-error="suggestError"
           :rows="fold.commitRows"
+          :conflicts="conflicts"
           @update:model-value="$emit('message', $event)"
           @commit="$emit('commit')"
           @suggest="$emit('suggest')"
+          @resolve-conflicts="$emit('resolveConflicts')"
           @resize="$emit('resize', { section: 'commit', rows: $event })"
         />
         <div v-if="failure" :style="failureStyle">
