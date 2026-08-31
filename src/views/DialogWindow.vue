@@ -159,6 +159,33 @@ const guestProps = computed(() => {
 })
 const title = computed(() => incoming.value.title ?? 'Smetana')
 
+/* The pictures a restored draft names, read back into this window's own list.
+
+   Here rather than beside `holdAttachments` above, which is where it belongs by
+   subject: a `watchEffect` runs the moment it is created, and `incoming` is
+   declared between the two.
+
+   Once, and the guard is what makes it once: the app window announces its props
+   again on every change, and a second pass would attach the same files a second
+   time. `attachments` is a `shallowRef` filled by the dynamic import above, so
+   this runs again when the store lands rather than racing it.
+
+   `restorePaths` and not an import: the files are in the store already, and
+   nothing in this app takes an attachment off disk except the Storage tab's own
+   button, so importing would leave one more copy of every picture behind on
+   every switch. */
+let restoredImages = false
+
+watchEffect(() => {
+  const paths = incoming.value?.draft?.images
+  const store = attachments.value
+  if (restoredImages || !store || !paths?.length) return
+  restoredImages = true
+  store.restorePaths(paths).catch((err) => {
+    console.warn('[dialog-window] the draft’s pictures did not come back:', err)
+  })
+})
+
 /* Whether this window has heard what it is drawing yet.
 
    It gates two things, and the second was learned from a dialog that lost its
@@ -202,8 +229,15 @@ const stopWaiting = setTimeout(() => {
    person finishing with a dialog: it says which branch was picked on the
    checked side of a lone row, and what comes back is the whole table rebuilt
    around it — the rule that builds one lives in `reviewRows.js`, outside every
-   `.vue` file, and is called by the app window. */
-const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save', 'branch']
+   `.vue` file, and is called by the app window.
+
+   `draft` is `new-task`'s, and it is the one name here that is not an answer at
+   all: it is the dialog saying what is in it right now, so that a window closed
+   by a project switch does not take the person's words with it. It travels
+   rather than being answered here — a draft outlives the window it was written
+   in, so the only side that can hold one is the side that is still there
+   afterwards, and it keeps them per project. */
+const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save', 'branch', 'draft']
 
 /* And the three that deliberately do not travel: `new-task`'s images, answered
    in this window by the store above. They are a separate list rather than a
