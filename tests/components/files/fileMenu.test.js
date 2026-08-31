@@ -40,6 +40,11 @@ describe('FILE_MENU_W', () => {
        behind it to recover the rest from. */
     const longest = [
       ...fileMenuItems({ target: 'file' }),
+      /* With a live agent that is not the selected one, which is the only way
+         to reach the second of Attach to agent's two sentences: it is one of
+         the four labels in the file that carry a reason, and a set built
+         without it would leave that one unmeasured. */
+      ...fileMenuItems({ target: 'file', hasLiveAgent: true }),
       ...fileMenuItems({ target: 'dir', pasteReason: 'intoSelf' }),
       ...fileMenuItems({ target: 'file', confirmingDelete: true }),
       ...fileMenuItems({ target: 'root' })

@@ -3719,9 +3719,16 @@ async function pasteInto(dir) {
     }
     await revealMade(made, dir)
     /* Every folder that was open under what moved, at its new path — see
-       `followMove`. The one `revealMade` has just read is skipped rather than
-       read twice. */
-    for (const open of reopened) if (open !== made) await listDir(open)
+       `followMove`. `revealMade` has usually just read one of them, and it is
+       read again rather than skipped: it returns without reading whenever the
+       destination listing did not come back, which is reachable while a
+       window-focus sweep holds that folder, and skipping on the strength of a
+       read that may not have happened would leave standing exactly the dead
+       first click this loop exists to kill. Asking `filesState.dirs` instead
+       would answer yes for a listing left over from an earlier entry at the
+       same path. One extra `files_list` on a folder just read is the cheaper
+       of the two mistakes. */
+    for (const open of reopened) await listDir(open)
   } catch (error) {
     /* The destination is re-read even though nothing was supposed to happen,
        because on one path something may have: a move across filesystems is a

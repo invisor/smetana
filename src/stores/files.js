@@ -94,10 +94,10 @@ export function fileErrorText(error) {
 
 /* The same error kinds, but for writes.
 
-   This is the first of the tables that follow the one above, and none of them
-   is numbered: each is named by the verb it speaks for, because an ordinal is
-   written once and the list keeps growing under it — this file carried two
-   "fifth"s at the same time before the habit was dropped.
+   The tables here are named by the verb each speaks for and none of them is
+   numbered: an ordinal is written once while the list keeps growing under it,
+   and this file carried two "fifth"s at the same time before the habit was
+   dropped.
 
    A separate map rather than a shared one: "No permission to read this file."
    after a refused Cmd+S describes something other than what happened, and the
