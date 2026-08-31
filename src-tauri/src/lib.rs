@@ -248,6 +248,7 @@ pub fn run() {
       git::git_head,
       vcs::commands::vcs_repos,
       vcs::commands::vcs_status,
+      vcs::commands::vcs_in_progress,
       vcs::commands::vcs_branches,
       vcs::commands::vcs_remote_branches,
       vcs::commands::vcs_tracking,

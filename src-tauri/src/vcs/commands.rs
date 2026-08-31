@@ -7,8 +7,8 @@
 use std::path::Path;
 
 use super::model::{
-    parse_name_status, Branch, ChangeKind, Comparison, MergeOutcome, OpKind, ProjectRepos, Tracking,
-    VcsError, WorkingTree,
+    parse_name_status, Branch, ChangeKind, Comparison, InProgress, MergeOutcome, OpKind,
+    ProjectRepos, Tracking, VcsError, WorkingTree,
 };
 use super::run::Attempt;
 use super::{model, repos, run};
@@ -455,6 +455,68 @@ pub async fn vcs_push(repo: String, set_upstream: bool) -> Result<(), VcsError> 
 #[tauri::command]
 pub async fn vcs_abort(repo: String, op: OpKind) -> Result<(), VcsError> {
     off_the_runtime(move || run::git_write(Path::new(&repo), &[op.word(), "--abort"])).await
+}
+
+/// Which operation, if any, this repository is part-way through.
+///
+/// **Asked of git as a process and never read off the disk.** `vcs/`'s header
+/// forbids a file read and that is not being relaxed here: `git rev-parse -q
+/// --verify MERGE_HEAD` is `run.rs` spawning git, the one thing this module
+/// exists to do, where stat-ing `.git/MERGE_HEAD` would be a second way of
+/// knowing the same fact and a second way of being wrong about it.
+///
+/// **`rev-parse -q --verify` exits 1 for a ref that is not there**, which is an
+/// answer and not a refusal — the one case `git_maybe` was written for. Every
+/// other non-zero exit still carries git's own stderr.
+///
+/// Called only for a tree that already shows unmerged paths, so a clean
+/// repository — nearly every repository, nearly always — pays no process for
+/// it. That is the caller's rule and not this function's: asked of a clean
+/// tree it simply answers `None`.
+#[tauri::command]
+pub async fn vcs_in_progress(repo: String) -> Result<Option<InProgress>, VcsError> {
+    off_the_runtime(move || {
+        let repo = Path::new(&repo);
+        let named = |rev: &str| -> Result<Option<String>, VcsError> {
+            let line =
+                run::git_maybe(repo, &["name-rev", "--name-only", "--refs=refs/heads/*", rev], 1)?;
+            Ok(line.as_deref().and_then(model::branch_from_name_rev))
+        };
+        // A merge first, because it is the one whose two names are both exact.
+        // `MERGE_HEAD` is the commit being brought in, and during a merge HEAD
+        // is still on the branch it is being brought into.
+        if run::git_maybe(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"], 1)?.is_some() {
+            let head = run::git_maybe(repo, &["symbolic-ref", "--short", "-q", "HEAD"], 1)?;
+            let ours =
+                head.map(|line| line.trim().to_string()).filter(|name| !name.is_empty());
+            return Ok(Some(InProgress {
+                op: OpKind::Merge,
+                ours,
+                theirs: named("MERGE_HEAD")?,
+            }));
+        }
+        // `REBASE_HEAD` is set by both backends — the default `--merge` and
+        // `--apply` alike — and is the commit git stopped on, which belongs to
+        // the branch being rebased. So it names `ours` and never `theirs`.
+        if run::git_maybe(repo, &["rev-parse", "-q", "--verify", "REBASE_HEAD"], 1)?.is_some() {
+            // The onto is deliberately left unknown. `name-rev` on HEAD answers
+            // `undefined` the moment one commit has been applied, and the only
+            // remaining source is `.git/rebase-merge/onto` — the file read this
+            // module does not do. Both the dialog and the prompt read correctly
+            // without it; a guess would read correctly and be false.
+            return Ok(Some(InProgress {
+                op: OpKind::Rebase,
+                ours: named("REBASE_HEAD")?,
+                theirs: None,
+            }));
+        }
+        // A tree can be conflicted with neither of these in progress — a
+        // cherry-pick, a revert, a stash pop, a `checkout --merge`. Neither of
+        // the dialog's two doors is true for those, so "nothing" is the honest
+        // answer and the panel draws no button.
+        Ok(None)
+    })
+    .await
 }
 
 /// Everything the panel is drawing, as one commit.
