@@ -3720,6 +3720,34 @@ function sayFileMenu(toast) {
 
 onUnmounted(() => clearTimeout(fileMenuToastTimer))
 
+/* Whether the board on screen came back *after* the project changed, rather
+   than being the previous project's still standing there.
+
+   It is a fact the restore below cannot do without and cannot get from the
+   columns. `settings.activeProject` moves the instant somebody clicks a row and
+   the board answering for it is a `tracker_set_project` away — seconds, over a
+   couple of directory reads — so for that whole gap the active project is the
+   new one and the columns are the old one's. Almost every board has a `ready`,
+   so the columns cheerfully answer yes on behalf of a project nobody is looking
+   at any more.
+
+   The generation is what settles it, and it is the tracker store's own word for
+   this: the worker's counter grows on every board it sends and never rolls
+   back (`tracker/store.rs` says so in as many words), so a number larger than
+   the one standing when the project changed can only mean a board that arrived
+   since. A switch whose board never arrives — bd missing, a damaged `.beads` —
+   never advances it, and nothing is restored, which is this repository's own
+   rule about anything unobservable reading as no. The draft is not lost by it:
+   it stays in the map until a board does arrive. */
+let seenProject = null
+let generationAtSwitch = 0
+
+function noteBoard(project) {
+  if (project === seenProject) return
+  seenProject = project
+  generationAtSwitch = trackerState.generation
+}
+
 /* A kept draft put back on screen.
 
    Called from the ground watcher below rather than from a watcher of its own,
@@ -3738,7 +3766,13 @@ async function restoreTaskDraft(closing) {
   const project = activePath.value
   const draft = taskDrafts.get(project)
   if (openDialogs.has('new-task')) return
-  if (!canRestore(draft, { project, columns: projectColumns.value, column: ADD_TO })) return
+  const world = {
+    project,
+    columns: projectColumns.value,
+    column: ADD_TO,
+    boardArrived: trackerState.generation > generationAtSwitch
+  }
+  if (!canRestore(draft, world)) return
   await closing
   /* The world moves while that resolves — somebody switching twice quickly, or
      pressing "+ New task" in the meantime. */
@@ -3778,6 +3812,9 @@ watch(
     branches: new Set(vcsState.branches.map((branch) => branch.name))
   }),
   (world) => {
+    /* First, and before anything may be restored: this is what marks where the
+       board stood when the project moved. */
+    noteBoard(world.project)
     /* No `if (!openDialogs.size) return` here any more: the restore below runs
        when there is nothing open at all, which is the whole case it exists for.
 

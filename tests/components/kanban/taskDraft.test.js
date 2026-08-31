@@ -30,7 +30,12 @@ describe('draftIsEmpty', () => {
 })
 
 describe('canRestore', () => {
-  const world = { project: '/work/app', columns: ['ready', 'done'], column: 'ready' }
+  const world = {
+    project: '/work/app',
+    columns: ['ready', 'done'],
+    column: 'ready',
+    boardArrived: true
+  }
 
   it('puts a draft back in the project it was written for', () => {
     expect(canRestore(draft(), world)).toBe(true)
@@ -57,5 +62,13 @@ describe('canRestore', () => {
      ground watcher, including the ones where no project is open at all. */
   it('has nowhere to put one back when no project is open', () => {
     expect(canRestore(draft(), { ...world, project: null })).toBe(false)
+  })
+
+  /* The trap the columns check alone walks into. Between the click and the new
+     board there are seconds in which the active project is the new one and the
+     columns are still the old one's — and the old one's `ready` would answer
+     yes on behalf of a board nobody is looking at any more. */
+  it('will not read the previous project’s leftover columns as this one’s board', () => {
+    expect(canRestore(draft(), { ...world, boardArrived: false })).toBe(false)
   })
 })

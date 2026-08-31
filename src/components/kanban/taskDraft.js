@@ -24,13 +24,24 @@ export function draftIsEmpty(draft) {
   return typed.length === 0 && !(draft.images?.length > 0)
 }
 
-/* Whether this draft may be put back right now. Two conditions, and the second
-   is the one that is easy to miss: a project switch does not deliver a board
-   instantly, and a window opened before its column exists is closed again by
-   the very watcher that opened it, with a second notice about a window nobody
-   ever saw. */
-export function canRestore(draft, { project, columns, column }) {
+/* Whether this draft may be put back right now.
+
+   Three conditions, and the last two are one worry seen from both sides: a
+   project switch does not deliver a board instantly, and a window opened before
+   its column exists is closed again by the very watcher that opened it, with a
+   second notice about a window nobody ever saw.
+
+   `columns` alone does not settle that, which is the part worth reading twice.
+   The active project changes the moment somebody clicks a row, and the board
+   answering for it lands a couple of seconds later — so in between, the columns
+   on screen are the *previous* project's, and they will very often carry a
+   `ready` of their own. Asking them is then asking the wrong board a question it
+   is happy to answer. `boardArrived` is the caller's word for "what is on screen
+   came back after the switch, not before it"; without it this rule reads a
+   leftover as an arrival. */
+export function canRestore(draft, { project, columns, column, boardArrived }) {
   if (draftIsEmpty(draft)) return false
   if (!project || draft.project !== project) return false
+  if (!boardArrived) return false
   return Array.isArray(columns) && columns.includes(column)
 }
