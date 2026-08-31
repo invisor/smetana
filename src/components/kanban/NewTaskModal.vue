@@ -27,10 +27,19 @@ const props = defineProps({
      The title is here and does not cross to Rust. The agent reads the issue
      itself; this is for the person, who may well have opened the menu on the
      wrong card and has no other way to find out. */
-  parent: { type: Object, default: null }
+  parent: { type: Object, default: null },
+  /* A draft this window is being reopened with, or null for an ordinary
+     opening. The app window keeps one per project when a project switch closes
+     this window, and hands it back when the person returns — `taskDraft.js`
+     beside this file says what the record is and when one may come back.
+
+     Read once, when the dialog opens: a live value would refill the fields
+     under somebody's hands, since the app window announces its props again on
+     every change. */
+  draft: { type: Object, default: null }
 })
 
-const emit = defineEmits(['close', 'submit', 'attach', 'files', 'remove'])
+const emit = defineEmits(['close', 'submit', 'attach', 'files', 'remove', 'draft'])
 
 /* The types and priorities are the ones bd understands, each behind an Auto
    that leaves the choice to the agent — which has read the text of the task,
@@ -77,16 +86,95 @@ const stages = computed(() => cascade(brainstorm.value, spec.value, plan.value))
    and on again is a fresh decision about the spec, not a return to an old one.
    Resetting the spec cascades into the plan through the second watcher, and
    the plan is reset here as well so the chain never depends on the spec having
-   happened to change. */
+   happened to change.
+
+   Both stand down while a kept draft is being put back: seeding all three
+   stages in one tick would otherwise fire both and throw two of the three
+   away, which is the one trap in restoring a draft at all. */
+
+/* Whether the fields are being filled from a kept draft rather than typed by
+   somebody. Dropped a tick after the seeding, once the two watchers below have
+   run and returned early. */
+const seeding = ref(false)
+
 watch(brainstorm, () => {
+  if (seeding.value) return
   spec.value = DEFAULT_STAGE
   plan.value = DEFAULT_STAGE
 })
 watch(spec, () => {
+  if (seeding.value) return
   plan.value = DEFAULT_STAGE
 })
 
 const valid = computed(() => text.value.trim().length > 0)
+
+/* What the app window is told, so that a window closed by a project switch does
+   not take the person's words with it. The same record `submit` sends, with the
+   parent whole rather than as an id — the title is drawn here and the app window
+   is the side that has it — and with the images as paths, never as bytes: the
+   bytes would be megabytes of base64 through an IPC event on every keystroke,
+   and two copies of every picture resident at once.
+
+   Debounced, so a burst of typing is one message rather than one per keystroke.
+   The cost of that is stated where it is paid: somebody who types a sentence and
+   switches project inside a quarter of a second has genuinely kept nothing, and
+   the app window's notice reads accordingly. */
+const DRAFT_DEBOUNCE = 250
+let draftTimer = null
+
+const reportDraft = () => {
+  clearTimeout(draftTimer)
+  draftTimer = setTimeout(() => {
+    /* A closing dialog resets its fields, and the report of that reset is not
+       news about a draft — it is the window being cleared on the way out. */
+    if (!props.open) return
+    emit('draft', {
+      text: text.value,
+      issue_type: issueType.value === 'auto' ? null : issueType.value,
+      priority: priority.value === 'auto' ? null : Number(priority.value),
+      images: props.attachments.map((item) => item.path),
+      /* What the screen says, not what the refs hold — the same reading
+         `submit` sends, so a restored dialog cannot come back promising a
+         stage nobody asked for. */
+      brainstorm: brainstorm.value,
+      spec: stages.value.spec.value,
+      plan: stages.value.plan.value,
+      parent: props.parent ?? null
+    })
+  }, DRAFT_DEBOUNCE)
+}
+
+/* The images are watched by their paths rather than by the array: the store
+   pushes onto the list it already handed over, so the array's identity never
+   changes when a picture is added, and a watcher on it would never fire. */
+watch(
+  [
+    text,
+    issueType,
+    priority,
+    brainstorm,
+    spec,
+    plan,
+    () => props.attachments.map((item) => item.path).join('\n')
+  ],
+  reportDraft
+)
+
+/* A kept draft put back into the fields, in one go and with the cascade above
+   held off for the length of it. */
+const seed = (draft) => {
+  seeding.value = true
+  text.value = draft.text ?? ''
+  issueType.value = draft.issue_type ?? 'auto'
+  priority.value = draft.priority == null ? 'auto' : String(draft.priority)
+  brainstorm.value = draft.brainstorm ?? DEFAULT_STAGE
+  spec.value = draft.spec ?? DEFAULT_STAGE
+  plan.value = draft.plan ?? DEFAULT_STAGE
+  nextTick(() => {
+    seeding.value = false
+  })
+}
 
 /* Under a parent the column is not the person's to know: a follow-up lands in
    Blocked or in Ready depending on what the parent is doing, so promising
@@ -101,6 +189,11 @@ const intro = computed(() => {
 
 const submit = () => {
   if (!valid.value || props.busy) return
+  /* A window that is filing has nothing left to report. Without this a person
+     who typed and pressed Create inside the debounce would have the pending
+     report land *after* the submit — putting a draft of the task they just
+     filed back into the app window's map, to reappear on the next switch. */
+  clearTimeout(draftTimer)
   emit('submit', {
     text: text.value.trim(),
     issue_type: issueType.value === 'auto' ? null : issueType.value,
@@ -166,6 +259,10 @@ watch(
   async (isOpen) => {
     if (isOpen) {
       document.addEventListener('paste', onPaste)
+      /* Before the focus and before anything is awaited: the fields are what
+         this window is, and a person who sees it empty for a frame and full the
+         next has watched their own words arrive as if from somewhere else. */
+      if (props.draft) seed(props.draft)
       await nextTick()
       /* preventScroll because focusing an element scrolls whatever contains it
          into view, and this dialog is not always the only thing on the page:
@@ -195,8 +292,12 @@ watch(
 
 /* A dialog unmounted while open would otherwise leave the listener behind on
    the document, and every paste in the app after it would reach a component
-   nobody can see. */
-onBeforeUnmount(() => document.removeEventListener('paste', onPaste))
+   nobody can see. The draft's timer goes the same way and for the same shape of
+   reason: it would fire into a component that is no longer there. */
+onBeforeUnmount(() => {
+  document.removeEventListener('paste', onPaste)
+  clearTimeout(draftTimer)
+})
 
 const fields = { display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }
 const row = { display: 'flex', gap: 'var(--space-4)' }
