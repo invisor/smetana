@@ -139,6 +139,17 @@ describe('ground that has gone', () => {
     expect(stalenessMessage('new-branch', 'repo')).toBe(
       'The new branch dialog closed: the Git panel moved to another repository.'
     )
+    /* The one dialog whose closing costs the person something. The sentence is
+       only added when there is a draft behind it, which is why it is an
+       argument rather than a fact about the kind: reporting is debounced, so a
+       window typed into and switched away from inside a quarter of a second
+       genuinely kept nothing. */
+    expect(stalenessMessage('new-task', 'project', true)).toBe(
+      'The new task dialog closed: the project changed. What you wrote is kept.'
+    )
+    expect(stalenessMessage('new-task', 'project')).toBe(
+      'The new task dialog closed: the project changed.'
+    )
   })
 })
 

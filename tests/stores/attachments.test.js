@@ -337,4 +337,62 @@ describe('images attached to a task that has not been filed', () => {
     stores.attachments.clearAttachments()
     expect(stores.attachments.attachmentsState.items).toEqual([])
   })
+
+  it('a draft that came back names its pictures and they are read, not copied', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('attachment_reopen', ({ path }) => stored(path.split('/').pop()))
+
+    await stores.attachments.restorePaths([
+      '/data/attachments/app-1f2e/mock.png',
+      '/data/attachments/app-1f2e/shot.png'
+    ])
+
+    /* Reading, never importing: an import would write a second copy of a file
+       that is already in the store, on every switch, and nothing in this app
+       but the Storage tab's button ever takes one away. */
+    expect(ipc.calls('attachment_import')).toEqual([])
+    expect(ipc.calls('attachment_reopen')).toEqual([
+      { path: '/data/attachments/app-1f2e/mock.png' },
+      { path: '/data/attachments/app-1f2e/shot.png' }
+    ])
+    expect(stores.attachments.attachmentsState.items.map((item) => item.name)).toEqual([
+      'mock.png',
+      'shot.png'
+    ])
+  })
+
+  it('a picture cleared from the store in the meantime drops out and says so', async () => {
+    const { ipc, stores } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.fail('attachment_reopen', {
+      kind: 'io',
+      message: '/data/attachments/app-1f2e/gone.png: no such file'
+    })
+
+    await stores.attachments.restorePaths(['/data/attachments/app-1f2e/gone.png'])
+
+    expect(stores.attachments.attachmentsState.items).toEqual([])
+    expect(stores.attachments.attachmentsState.lastError).toBe(
+      '/data/attachments/app-1f2e/gone.png: no such file'
+    )
+  })
+
+  /* One picture gone does not take the others with it: the window comes back
+     with what is still there, and the line says what did not. */
+  it('the rest of a restored list still comes back around a missing one', async () => {
+    const { ipc, stores } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.on('attachment_reopen', ({ path }) => {
+      if (path.endsWith('gone.png')) throw { kind: 'io', message: 'gone.png: no such file' }
+      return stored(path.split('/').pop())
+    })
+
+    await stores.attachments.restorePaths(['/s/one.png', '/s/gone.png', '/s/two.png'])
+
+    expect(stores.attachments.attachmentsState.items.map((i) => i.name)).toEqual([
+      'one.png',
+      'two.png'
+    ])
+    expect(stores.attachments.attachmentsState.lastError).toBe('gone.png: no such file')
+  })
 })
