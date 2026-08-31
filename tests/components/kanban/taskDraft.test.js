@@ -64,6 +64,16 @@ describe('canRestore', () => {
     expect(canRestore(draft(), { ...world, project: null })).toBe(false)
   })
 
+  /* The board's columns reach this rule as a list here and as a `Set` in the
+     watcher next door, and the two objects are near enough alike to be handed
+     to the wrong one. Read as a list, a `Set` says the column is missing and
+     the window never comes back — with nothing on screen and nothing in any
+     gate to say why. */
+  it('reads a set of columns as readily as a list of them', () => {
+    expect(canRestore(draft(), { ...world, columns: new Set(['ready', 'done']) })).toBe(true)
+    expect(canRestore(draft(), { ...world, columns: new Set(['done']) })).toBe(false)
+  })
+
   /* The trap the columns check alone walks into. Between the click and the new
      board there are seconds in which the active project is the new one and the
      columns are still the old one's — and the old one's `ready` would answer

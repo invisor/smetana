@@ -92,7 +92,10 @@ pub fn plain_name(name: &str) -> bool {
 /// `/store/shot.png` are the same sequence to it — so a check written against
 /// it would silently never fire for half of what this refuses. The raw split
 /// sees both, and a lossy conversion cannot invent a `.` segment that was not
-/// there, so nothing is accepted that would otherwise have been refused.
+/// there, so nothing is accepted that would otherwise have been refused. It is
+/// the same `split(['/', '\\'])` idiom, for the same reason, that
+/// `files::model::reject_traversal` cuts a relative path with — this is that
+/// rule's absolute-path half rather than a second opinion about it.
 pub fn in_store(root: &Path, path: &Path) -> bool {
     let plain = path
         .to_string_lossy()

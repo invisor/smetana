@@ -38,10 +38,19 @@ export function draftIsEmpty(draft) {
    `ready` of their own. Asking them is then asking the wrong board a question it
    is happy to answer. `boardArrived` is the caller's word for "what is on screen
    came back after the switch, not before it"; without it this rule reads a
-   leftover as an arrival. */
+   leftover as an arrival.
+
+   `columns` is taken as either a list or a `Set`, and that is not generality
+   for its own sake: the app window builds a `world` for `stalenessOf` forty
+   lines away whose `columns` is a `Set`, and the shapes are close enough that
+   the two will be offered to each other. A `Set` read as a list would answer
+   "the board has no such column" for ever, silently, and no gate in this
+   repository could see it. Answering both is a line; being wrong here is a
+   window that never comes back and nobody knowing why. */
 export function canRestore(draft, { project, columns, column, boardArrived }) {
   if (draftIsEmpty(draft)) return false
   if (!project || draft.project !== project) return false
   if (!boardArrived) return false
+  if (columns instanceof Set) return columns.has(column)
   return Array.isArray(columns) && columns.includes(column)
 }
