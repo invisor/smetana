@@ -6,16 +6,22 @@
    The second reason is that there are two call sites, the app and the gallery,
    and two copies of the words would be two answers to what the menu says.
 
-   Three rows, and the third is a different kind of thing from the first two.
-   `agent` and `terminal` each open a tab in the centre column; `task` opens the
-   new-task dialog over whatever tab is already there. That is why it comes
-   last — a dialog pushed above the two rows that are used every day would move
-   their keyboard order for the sake of the one that has another door already,
-   the `+` above the `ready` column on the board. It is deliberately the same
-   dialog rather than one of its own: two ways of filing a task would be two
-   dialogs drifting apart within the month. No separator marks the boundary
-   either — over three rows it divides the menu louder than it divides the
-   meaning.
+   Four rows, and the last two are a different kind of thing from the first two.
+   `agent` and `terminal` each open a tab in the centre column; `task` and
+   `review` open a dialog window over whatever tab is already there. That is why
+   they come last — a dialog pushed above the two rows that are used every day
+   would move their keyboard order for the sake of one that has another door
+   already: the `+` above the `ready` column on the board for the task, and a
+   branch row's own menu for the review. Both are deliberately the same dialogs
+   those other doors open rather than ones of their own: two ways of filing a
+   task, or of asking for a review, would be two dialogs drifting apart within
+   the month. No separator marks the boundary either — over four rows it divides
+   the menu louder than it divides the meaning.
+
+   `review` opens the branch-review window with one empty row on the repository
+   the Git panel is showing, where the branch row's menu opens it with the
+   branch already filled in and a row for every repository that has it. The two
+   doors differ in what they start with and in nothing else.
 
    Which harness runs is not asked here: the agent comes from `settings.json`,
    exactly as it does for the "+ New agent" row of the Agents panel, and this
@@ -30,5 +36,10 @@
 export const NEW_TAB_ITEMS = [
   { kind: 'agent', label: 'New agent', icon: 'bot' },
   { kind: 'terminal', label: 'New terminal', icon: 'terminal' },
-  { kind: 'task', label: 'New task', icon: 'square-check' }
+  { kind: 'task', label: 'New task', icon: 'square-check' },
+  /* The magnifier with a tick: the same glyph the branch row's own
+     `Review this branch…` carries, so the two doors into one window are marked
+     the same way. Kept in the `New …` shape the other three are in, since what
+     it opens is a review that does not exist yet. */
+  { kind: 'review', label: 'New review', icon: 'search-check' }
 ]

@@ -1,9 +1,19 @@
 <script setup>
 /* The uncommitted files of one repository.
 
-   What a row says is `changeStatus.js`'s, not this file's: a `.vue` file is
-   the one thing no test here can reach, so the letter, the word and the token
-   live outside it.
+   What a row says is `changeStatus.js`'s, not this file's, and what order the
+   rows come in is `conflictsFirst.js`'s: a `.vue` file is the one thing no test
+   here can reach, so the mark, the word, the token and the ordering all live
+   outside it.
+
+   A conflicted file is drawn loud, and in three ways rather than one: it is
+   lifted to the top of the list, its mark is `!`, and `--git-conflict` is taken
+   by the whole row — the mark, the name and the directory — instead of by the
+   mark alone. The colour is the token the design system already chose for this
+   fact and the file tree already draws with; it is deliberately not the red of
+   `--status-failed-*`, which on the same screen belongs to a run that fell
+   over. Background, hover and selection are untouched by all of this:
+   interaction in this system is a step of surface, never a change of colour.
 
    A click opens the file as a diff in the centre column — one gesture and no
    second one: there is no preview here the way the file tree has one, since a
@@ -28,6 +38,7 @@ import { basename } from '../../paths.js'
 import { fileIconUrl, folderIconUrl } from '../../catppuccinIcon.js'
 import { documentTheme } from '../../documentTheme.js'
 import { changeStatus } from './changeStatus.js'
+import { conflictsFirst } from './conflictsFirst.js'
 
 const props = defineProps({
   changes: { type: Array, default: () => [] },
@@ -37,6 +48,13 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['open'])
+
+/* The order is this component's and not the store's: `dirtyCount` counts
+   `tree.changes` and is indifferent to it, and a store that reordered would be
+   deciding for every reader of the tree rather than for this list. */
+const rows = computed(() => conflictsFirst(props.changes))
+
+const conflicted = (change) => change.kind === 'conflicted'
 
 /* A folder has no file behind it, so its row stays inert rather than opening a
    diff of a name. */
@@ -74,7 +92,9 @@ const rowStyle = (change) => ({
   height: 'var(--row-h)',
   padding: '0 var(--space-5)',
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)',
-  color: 'var(--text-primary)',
+  /* The name is drawn in the row's own colour, so a conflict is coloured
+     throughout rather than in the one mark somebody has to find first. */
+  color: conflicted(change) ? 'var(--git-conflict)' : 'var(--text-primary)',
   background:
     change.path === props.selected
       ? 'var(--surface-selected)'
@@ -131,14 +151,16 @@ const icon = (change) =>
    identifier. The name does not shrink and the directory does, so a deep path
    loses its middle rather than the thing being named. */
 const nameStyle = { flex: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
-const pathStyle = {
+const pathStyle = (change) => ({
   flex: '0 1 auto',
   minWidth: 0,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
-  color: 'var(--text-muted)'
-}
+  /* The directory follows the row: muted is what keeps the name ahead of it on
+     an ordinary row, and on a conflicted one the whole line is the mark. */
+  color: conflicted(change) ? 'var(--git-conflict)' : 'var(--text-muted)'
+})
 
 /* `--untracked-files=normal` is git's own default and this panel's — `all`
    would walk into every untracked directory — so an untracked folder arrives as
@@ -164,7 +186,7 @@ const empty = computed(() => props.changes.length === 0)
 <template>
   <div>
     <div
-      v-for="change in changes"
+      v-for="change in rows"
       :key="change.path"
       :style="rowStyle(change)"
       v-bind="interactiveFor(change.path).handlers"
@@ -186,7 +208,7 @@ const empty = computed(() => props.changes.length === 0)
       >{{ changeStatus(change.kind).letter }}</span>
       <img :src="icon(change)" alt="" :width="MARK + 2" :height="MARK + 2" :style="{ display: 'block', flex: 'none' }" />
       <span :style="nameStyle">{{ label(change.path) }}</span>
-      <span :style="pathStyle">{{ [directory(change.path), from(change)].filter(Boolean).join(' ') }}</span>
+      <span :style="pathStyle(change)">{{ [directory(change.path), from(change)].filter(Boolean).join(' ') }}</span>
     </div>
     <!-- Its own sentence: a repository with nothing changed in it is a fact
          worth stating, and it is not the same fact as a folder that holds no

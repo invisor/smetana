@@ -98,6 +98,7 @@ export { default as DeleteBranchModal } from './git/DeleteBranchModal.vue'
 export { default as GitPanel } from './git/GitPanel.vue'
 export { default as NewBranchModal } from './git/NewBranchModal.vue'
 export { default as RepoList } from './git/RepoList.vue'
+export { default as ReviewChangesDialog } from './git/ReviewChangesDialog.vue'
 export { default as SectionHeader } from './git/SectionHeader.vue'
 export { branchMenuItems } from './git/branchMenu.js'
 export { branchNameError, canCreate } from './git/branchName.js'
@@ -120,8 +121,23 @@ export {
   toggleChanges
 } from './git/changesFold.js'
 export { canCommit, canSuggest, commitHint, commitLabel } from './git/commitBox.js'
+export { conflictsFirst } from './git/conflictsFirst.js'
 export { failureTextStyle, failureTitleStyle } from './git/failureStyle.js'
 export { gitActions } from './git/gitActions.js'
+export {
+  LOCAL,
+  ORIGIN,
+  canReview,
+  fetchFailedCaption,
+  fetchTargets,
+  fetchingCaption,
+  localNames,
+  refOf,
+  reportPath,
+  reviewPairs,
+  reviewRows,
+  withoutCaption
+} from './git/reviewRows.js'
 export { BRANCH_ROWS, filler, resolveDrag } from './git/sectionHeights.js'
 export { AHEAD_TOKEN, BEHIND_TOKEN, folderBehind, pullAction, pushAction, trackingMark } from './git/tracking.js'
 

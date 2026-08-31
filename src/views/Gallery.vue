@@ -76,6 +76,7 @@ import {
   PromoteColumnModal,
   ReadyTaskModal,
   RepoList,
+  ReviewChangesDialog,
   ScopeIndicator,
   SectionHeader,
   SegmentedTabs,
@@ -1086,6 +1087,41 @@ const BRANCHES = [
   { name: 'feature/smetana-8ok-git-panel-branches', current: false },
   { name: 'release/7', current: false }
 ]
+
+/* The branch-review window's table, and what fills it. Two rows and three
+   repositories on purpose: the third is what `Add a repository` offers and what
+   the line under the table is about. The two sides differ between the rows, so
+   both spellings of a side are on the page at once. */
+const REVIEW_REPOS = [
+  { name: '.', path: '/Users/you/dev/smetana' },
+  { name: 'admin', path: '/Users/you/dev/smetana/admin' },
+  { name: 'extension', path: '/Users/you/dev/smetana/extension' }
+]
+const REVIEW_ROWS = [
+  {
+    repo: '/Users/you/dev/smetana',
+    name: '.',
+    base: 'main',
+    baseSide: 'local',
+    head: 'release/7',
+    headSide: 'local'
+  },
+  {
+    repo: '/Users/you/dev/smetana/admin',
+    name: 'admin',
+    base: 'main',
+    baseSide: 'origin',
+    head: 'release/7',
+    headSide: 'local'
+  }
+]
+/* Deliberately not the local list: `spike/origin-only` has never been checked
+   out here and `release/7` has never been pushed, which is the whole reason the
+   side switch exists. */
+const REVIEW_REMOTE = {
+  '/Users/you/dev/smetana': ['main', 'staging', 'spike/origin-only'],
+  '/Users/you/dev/smetana/admin': ['main', 'spike/origin-only']
+}
 
 /* The verdict a live run produces, taken from the rule itself rather than
    written out here: a frame quoting a sentence by hand is a copy that goes on
@@ -2442,6 +2478,58 @@ const menuTargetStyle = {
           @confirm="() => {}"
         />
       </div>
+      <!-- Choosing what an agent reviews. Live, because the table is the whole
+           of this window: change a side to `origin` and the list beside it
+           becomes the other list, take a row out and `Add a repository` grows
+           the name back, empty a side and Review goes dead.
+
+           Two rows rather than one, since a project made of several
+           repositories is what the table exists for; the third repository is
+           deliberately out of the table so that both of the things that depend
+           on it are on screen — the picker that offers only what is missing,
+           and the one line under the table naming the repository the branch is
+           not in. The frame is wide, because the window is 720 in the app and a
+           440 frame here would be a picture of a dialog nobody will ever
+           see. -->
+      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ReviewChangesDialog
+          :open="true"
+          branch="release/7"
+          :rows="REVIEW_ROWS"
+          :repos="REVIEW_REPOS"
+          :branches="everywhere('main', 'staging', 'release/7')"
+          :remote="REVIEW_REMOTE"
+          :without="['extension']"
+          default-base="main"
+          @close="() => {}"
+          @branch="() => {}"
+          @submit="() => {}"
+        />
+      </div>
+      <!-- The same window while it is fetching. It is on screen for as long as
+           `git fetch` takes in every repository with an `origin` side, which is
+           up to a minute, and it is the only thing saying why the button has
+           gone quiet — so it is a state worth being able to look at rather than
+           one to catch by timing. Beside it the sentence a fetch that failed
+           leaves behind, which does not call the review off. -->
+      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ReviewChangesDialog
+          :open="true"
+          branch="release/7"
+          :rows="REVIEW_ROWS"
+          :repos="REVIEW_REPOS"
+          :branches="everywhere('main', 'staging', 'release/7')"
+          :remote="REVIEW_REMOTE"
+          :without="['extension']"
+          default-base="main"
+          :fetching="['/Users/you/dev/smetana/admin']"
+          :fetch-failed="['extension']"
+          busy
+          @close="() => {}"
+          @branch="() => {}"
+          @submit="() => {}"
+        />
+      </div>
       <!-- Three, because the fields differ between them: solo is offered for a
            single task and refused for a queue, and that is the model's rule
            rather than the dialog's to soften. The second also carries a refusal
@@ -2798,7 +2886,7 @@ const menuTargetStyle = {
              about those tabs and has to stay beside them however many files are
              open. -->
         <template #afterPinned>
-          <MenuButton icon="plus" label="New agent, terminal or task" :items="NEW_TAB_ITEMS" :width="180" />
+          <MenuButton icon="plus" label="New agent, terminal, task or review" :items="NEW_TAB_ITEMS" :width="180" />
         </template>
       </TabBar>
 

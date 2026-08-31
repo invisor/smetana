@@ -14,6 +14,12 @@ paths:
   # session handed the prose is never shown the code.
   - "src/views/DesktopApp.vue"
   - "src/views/dialogRegistry.js"
+  # The `+` menu over the kanban, which is the second door into the branch
+  # review window. It draws no branch row either, and it is here for the reason
+  # the two lines above are: the section below states its fourth row as fact,
+  # and without this a session editing the file that owns that row is never
+  # handed the prose describing what it opens.
+  - "src/components/shell/newTabMenu.js"
 ---
 
 # The Git panel: what only the binary can answer
@@ -96,23 +102,39 @@ replaced by the first — a stored value is a hint, never the truth, the rule `c
 `changeStatus.js` saying what a change is captioned with. Four of its eight kinds — modified, added,
 deleted, untracked — take the `--git-*` token the file tree already marks that file with
 (`files/FileTreeRow.vue`), which is the whole of the agreement between the two: renamed, copied and
-type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares
-`--git-conflict` while the letters differ, `C` here against the tree's `!`. Borrowing the four rather
-than inventing a palette is the point; claiming the two lists match everywhere would not be true. The
-icon between the letter and the name is borrowed the same way — `src/catppuccinIcon.js`, the tree's
-own table — and it is the third mark on a row that already carries a staged tick and a coloured
-letter, which is the most this row can hold. Unlike the other two it is in colours this app did not
-choose, and the cost is measured: on a modified `.js` the status letter and the icon are within one
-degree of hue of each other. It was accepted with the set; if this row is ever trimmed back, that
-glyph is the first thing to go.
-Each section has **its own empty state and they say different things** — no git on this machine
-(naming what was looked for), no repository in this folder, nothing uncommitted in this repository:
-one blank area for all three would be a panel saying nothing three different ways. Freshness is
-window focus (`catchUp`), the project switch (`projects.js`, after the new layout has landed, since
-the remembered repository lives in it) and the refresh button in the panel header. **No watcher, and
-do not add one**: a third watcher subsystem would fire on every write inside `node_modules` and
-`target`, and the price of the sweep is named — while an agent works, this list is as stale as the
-file tree beside it.
+type-changed have no token there and take the neutral `--type-plain-fg`, and a conflict shares both
+`--git-conflict` and the tree's `!` — the one kind here whose mark is not a letter. Sharing the mark
+and the token is as far as it goes: the tree colours the mark, the panel colours the whole row, and
+the keys still differ (`conflict` in the tree, `conflicted` here, after Rust's `ChangeKind` through
+serde). Borrowing the four rather than inventing a palette is the point; claiming the two lists
+match everywhere would not be true.
+
+**A conflicted file is drawn loud, and in three ways rather than one**: `conflictsFirst.js`, the
+pure rule beside `changeStatus.js`, lifts every conflict to the top of the list; the mark is `!`;
+and `--git-conflict` is taken by the whole row — mark, name and directory — rather than by the mark
+alone. A merge that stopped leaves the one row nobody may miss, and one coloured letter among a
+column of letters, sitting wherever `git status --porcelain=v2` happened to put it, was not enough
+to say so. Three things it is deliberately not: red, since `--status-failed-*` is a fallen run and
+the footer and the board are on the same screen; a sort, since `conflictsFirst` is a **stable
+partition** that keeps git's own order inside both groups, which is what the list showed before the
+rule existed; and a change of background — hover and selection stay a step of surface, the way every
+interaction in this system is. The ordering lives in `ChangeList.vue`'s computed and not in
+`stores/vcs.js`: `dirtyCount` is `tree.changes.length` and is indifferent to order, and a store that
+reordered would be deciding for every reader of the tree rather than for this one list.
+
+The icon between the mark and the name is borrowed the same way — `src/catppuccinIcon.js`, the
+tree's own table — and it is the third thing on a row that already carries a staged tick and a
+coloured mark, which is the most this row can hold. Unlike the other two it is in colours this app
+did not choose, and the cost is measured: on a modified `.js` the status letter and the icon are
+within one degree of hue of each other. It was accepted with the set; if this row is ever trimmed
+back, that glyph is the first thing to go. Each section has **its own empty state and they say
+different things** — no git on this machine (naming what was looked for), no repository in this
+folder, nothing uncommitted in this repository: one blank area for all three would be a panel saying
+nothing three different ways. Freshness is window focus (`catchUp`), the project switch
+(`projects.js`, after the new layout has landed, since the remembered repository lives in it) and
+the refresh button in the panel header. **No watcher, and do not add one**: a third watcher
+subsystem would fire on every write inside `node_modules` and `target`, and the price of the sweep
+is named — while an agent works, this list is as stale as the file tree beside it.
 
 The list is **read from outside this panel too**: `dirtyCount`, the status footer's uncommitted-files
 counter (`.claude/rules/git-head.md`). It is deliberately nothing more than `tree.changes.length` —
@@ -1072,3 +1094,153 @@ already cost this module once. `DiffView`'s column captions became props for thi
 to what they were hardcoded as, so the diff tab passes neither and did not change; the store's
 `missingLeft` is bound to the prop's existing name `missingAtHead`, which means what it has always
 meant — the left side has no such file.
+
+## Reviewing what a branch changed
+
+**Compare shows and Review judges**, and that sentence is the whole reason the branch row's menu now
+carries two readers instead of one. The comparison above it is a diff viewer: one repository, one
+pair, and the pair is always (HEAD, the row) — resolved to shas once, named in the window's own
+header, and every decision in `CompareWindow.vue` rests on it. The review picks **a reference branch
+and a branch to check**, in one repository or in several at once, with each side of each pair either
+the local branch or what `origin` has, and then puts an agent on the difference with a written report
+at the end. Folding the two together was considered and dropped: a second base changes every one of
+the compare window's decisions, in a window that does its own job perfectly well.
+
+**One window, two doors.** `Review this branch…` on a branch row knows the name, and the table opens
+as one row per repository of the project that has a branch of that name. `New review`, the fourth row
+of the `+` menu over the kanban (`shell/newTabMenu.js`), knows nothing, and the table opens as one row
+on the repository the Git panel is showing with its checked side empty — pick a name there and the
+rest of the table is built by the very same rule. The two doors differ in what they start with and in
+nothing else, which is what keeps them one feature rather than two that drift.
+
+`Review this branch…` is **the one ellipsis in this application**, and it is a deliberate exception
+recorded in `branchMenu.js` beside the note that says this app spends none. That note stands: a lone
+row keeping a convention nobody else keeps reads as a typo. It was overruled here by the person whose
+menu it is, with the objection in front of them, on the ground that every other row of this menu is
+over in a second and this one opens a form and then starts an agent. If the convention is ever
+levelled across the app, this is the row it was broken for.
+
+**Nothing refuses the item — it is `branchMenu.js`'s fifth reach and it shares the fourth's.** It
+reads, it writes only inside `.smetana/`, and it takes no git lock, so a run in the project, an
+operation in flight and the tick on the row all have nothing to refuse. That last is where it parts
+company with the comparison directly above it: a branch has no difference from *itself* to draw, but
+a review whose two sides are one ref is a table somebody can look at and change, and whether it is
+worth running is visible in the window rather than decided by a grey menu row.
+
+### The table, and why a row is a pair
+
+`?view=dialog&kind=review-changes`, `components/git/ReviewChangesDialog.vue` over
+`views/DialogWindow.vue`, **720 wide** — the first dialog to outgrow `Modal`'s 440, which is what the
+width field in `views/dialogRegistry.js` was put there for. Rust needed no change at all:
+`dialog_window_open` takes the width as a parameter and checks the shape of a kind's name rather than
+holding a second copy of the list.
+
+**A row is one repository, one reference branch and one branch to check.** What was asked for is that
+the number of bases always equals the number of branches under review, and making the row the pair
+means there is no arrangement of this table where the two differ — a base cannot be added without the
+branch beside it. That is a property of the shape rather than a rule checked on submission, and the
+difference matters: a rule can be forgotten and a shape cannot.
+
+The ground is `['project']` and deliberately not the repository, which is the opposite of `new-branch`
+and `delete-branch` beside it. Those two are grounded on the selected repository because every write in
+`stores/vcs.js` resolves which repository it runs in at the moment it is pressed, and a window with no
+scrim can be left standing while somebody clicks another row. Nothing here is resolved that way: each
+row carries the repository it is about. So a repository going is a row leaving the table, and only the
+project going closes the window. The branch is not ground either — a row whose branch has gone is a
+pair git refuses in its own words, which is a better answer than a half-filled table vanishing.
+
+**Where the lists come from.** The repositories are `vcsState.repos`, already loaded by the panel.
+Which branches exist across the whole project, and which repositories each is short of, is the
+existing `runs::commands::target_branches` — `{ name, missing_in }` apiece — which already answers the
+entire multi-repository question, so nothing here walks a project a second time. `DesktopApp.vue`
+awaits that call **before** it builds a table rather than after, unlike the run dialog's own late
+`loadBranches`: that window fills a field and can do it when the list lands, where this window *is*
+the list, and a table built from a list that has not arrived reads as a branch no repository has —
+an empty window with a sentence under it saying something untrue. What `origin` holds is
+`loadRemoteBranches(repo)`, one repository at a time and copied out as each answer lands, because that
+store field is a single list written for a caller looking at one repository. Sequential and not
+parallel for exactly that reason; it costs nothing worth parallelising, since `vcs_remote_branches`
+spawns no process at all.
+
+**A repository the branch is missing from gets no row**, and is named in **one line under the table**
+rather than in a row of its own — `withoutCaption` in `components/git/reviewRows.js`. A repository
+without such a branch is not an error and not a broken row: it is a fact, said once, and somebody who
+wants it in the review adds it by hand with the name the branch goes by there. `Add a repository`
+offers only what is not already in the table, since a second row for one repository is a pair this
+window has no way to mean.
+
+**`local` and `origin` resolve to a ref and to nothing cleverer**: `main` on one side, `origin/main`
+on the other, settled here once so that nothing downstream re-reads a branch list or guesses at a
+remote. `origin` and no other remote — there is no notion of a second one anywhere in this app, and
+inventing one for a case nobody has asked about would be a second vocabulary. The two sides draw
+different lists on purpose: the local one is `target_branches`' answer filtered to that repository,
+the origin one is that repository's own read, and a name in one and not the other is the ordinary case
+— a branch that lives only on the server, and a branch nobody has ever pushed.
+
+**The table is held in the component and seeded from the prop rather than driven by it.** Every prop
+of a dialog window arrives over IPC and is re-announced whenever anything else about the window
+changes, so a fully driven table would put a round trip between opening a dropdown and seeing the
+answer, and would wipe a half-filled row every time an unrelated prop moved. The announcement is
+adopted only when its *contents* differ from what is on screen — an identity watch would fire on every
+announcement, since IPC rebuilds the objects on the way through. The one message that goes back up
+before Review is the branch picked on the checked side of a **lone** row: that is what turns the
+`New review` door into the same table the menu opens, and building a table is `reviewRows.js`' job
+rather than a component's, for the reason that whole family exists.
+
+**That message carries the base beside the name**, and it is worth knowing why rather than reading as
+belt and braces. The columns run Repository, Base, To check, and the `New review` door opens with the
+base filled and the head empty — so the ordinary way through this window is left to right, base and
+then branch. A message carrying only the name had the rebuilt table put the *default* base back over
+whatever had just been chosen, at the instant attention had moved to the next column, and the review
+then ran against a comparison nobody asked for. It goes in as `pickBranch`'s `remembered`, its first
+term, which is also what makes it safe with no check of its own: a name that has since left the list
+is skipped there like any other.
+
+The origin sweep behind the window carries **a generation counter and not only a check that the
+window is open**, and those are two different questions. `serveDialog` lets a kind that is already
+open be reopened — it replaces the service and brings the window forward, and it stops nothing the
+previous opening started — so without the counter two sweeps run at once against a store field that
+holds one list, and one repository's origin branches land under another repository's key.
+
+### What Review does, in the order it has to happen in
+
+**The fetch is first and is not optional.** A side reading `origin/main` is only as current as the last
+fetch, so without one the report would be about a commit nobody asked about — and nothing on screen
+would have said so, which is the silent kind of failure. `stores/vcs.js` grew `fetchIn(repo)` for it:
+the panel's own `fetchRepo` under a name a caller outside the panel can reach, joining a call already
+in flight the way `fetchNow` does, and **quiet** — the window says so itself, beside the table the
+review is about, where `writeError` would draw "Git did not reach the remote" over a branch list
+nobody was looking at, about a repository that may not even be the selected one. **A failed fetch does
+not call the review off**: what `origin` holds on this machine is still readable, merely older, and
+stopping would trade a slightly stale review for none. The repositories that could not be reached are
+named in the window while it is up and in a toast that outlives it.
+
+Then the pairs, then `reportPath(the first row's branch, now)` — `.smetana/reviews/2026-08-31-1345-…`,
+without an extension, because the agent writes `<path>.md` and `<path>.html` and the app composed the
+path so that the tab it opens afterwards is somewhere it already knows. The branch's own name and not
+the ref it resolved to: `origin-feature-x` would be naming a remote in a filename. The name is reduced
+to `a-z0-9` and hyphens, which is not tidiness — it lands in a path, a branch name may hold a slash, a
+space, a hash or a word in another alphabet, and any of those is either a directory nobody asked for
+or a filename an OS argues about. A name that reduces to nothing at all is `review`, since a path
+ending in the minute is a file named after a clock.
+
+Then `createSession(project, { kind: 'reviewBranch', pairs, report })` — an ordinary agent session, a
+tab in the centre column, in the harness `settings.json` names, exactly like `New agent`. And only
+then does the window close, which is the opposite of every other write behind a dialog in
+`DesktopApp.vue` and shares its reason with `delete-branch`: what the window is drawing while this runs
+— the fetch, and then which repositories it could not reach — is said nowhere else, so closing first
+would close over the only report of it.
+
+**What this feature deliberately does not do.** It computes no diff of its own: `vcs_compare` is
+untouched and the window shows a pair rather than the difference between them, because a preview would
+cost a git process per row on every change of every dropdown to show a number the report names properly
+a minute later, and because reading the files whole and grepping for their uses is what the agent's own
+terminal is for. It files nothing in the tracker, and it sends the report nowhere — no comment on a
+pull request, no upload, nothing on a network. Opening the report in a tab is a separate task; what is
+owed here is that the path is computed and travels in the intent.
+
+One thing the design asked for that this could not do, and it is worth knowing before somebody looks
+for it: the sentence about a failed fetch was to ride into the prompt as well as onto the screen, so
+that the report could say so about itself. `Intent::ReviewBranch` carries `pairs` and `report` and
+nothing else, and the Rust side was explicitly out of scope, so there is no field for it. The sentence
+is on screen and in a toast; the prompt does not carry it.

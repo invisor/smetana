@@ -70,6 +70,7 @@ import {
   RefreshCw,
   Scissors,
   Search,
+  SearchCheck,
   Settings,
   Settings2,
   SlidersHorizontal,
@@ -213,6 +214,13 @@ export const iconNodes = {
   // on an issue wants.
   'square-pen': SquarePen,
   search: Search,
+  /* Reviewing what a branch changed: the magnifier with a tick on it. Both doors
+     into that window carry it — the branch row's `Review this branch…` and the
+     `+` menu's `New review` — so the two read as one act reached two ways.
+     Deliberately not `git-compare`, which is taken by the diff tab and by the
+     comparison sitting directly above the review in the very same menu: those
+     two show a difference, and this one judges it. */
+  'search-check': SearchCheck,
   'refresh-cw': RefreshCw,
   copy: Copy,
 
