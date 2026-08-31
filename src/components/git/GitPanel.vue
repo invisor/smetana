@@ -196,6 +196,12 @@ const emit = defineEmits([
      `gitActions.js`, it cannot stop mid-tree, and what it opens is a window of
      its own. */
   'compare',
+  /* The second reader, and the widest thing this panel opens: the window that
+     picks a reference branch and a branch to check, in every repository of the
+     project at once, and puts an agent on the difference. Absent from
+     `WRITE_REFUSED` below for `compare`'s reason — it asks git for nothing this
+     panel then has to draw. */
+  'review',
   /* The other item that never reaches git. It carries the resolved list rather
      than the name, exactly as `toggle-folder` does, so the rule lives in
      `branchTree.js` where a test can read it. It is absent from `WRITE_REFUSED`
@@ -874,6 +880,7 @@ const onReset = (section) => emit('resize', { section, rows: null })
             :busy="busy"
             @checkout="$emit('checkout', $event)"
             @compare="$emit('compare', $event)"
+            @review="$emit('review', $event)"
             @favorite="$emit('favorite', $event)"
             @merge="$emit('merge', $event)"
             @rebase="$emit('rebase', $event)"

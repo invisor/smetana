@@ -234,6 +234,62 @@ const DIALOG_PROPS = {
       size: 2_884_016
     },
     busy: false
+  },
+  /* Choosing what an agent reviews. Two rows rather than one, because a project
+     made of several repositories is the case this table exists for and the one
+     a single-repository machine can never show — the paths are the two
+     `vcs_repos` answers with, so the window and the panel behind it agree about
+     what this project is made of.
+
+     The two sides are deliberately not the same: the first row reads a local
+     base against a local branch, the second an origin base against a local one,
+     which is what puts both spellings of a side on the screen at once. And the
+     third repository of `repos` is not in the table at all, so both of the
+     controls that depend on that are reachable — `Add a repository`, which
+     offers only what is not there yet, and the line under the table naming the
+     repository the branch is missing from.
+
+     `branches` is `MOCK_TARGET_BRANCHES` above rather than the panel's list,
+     for the `run` fixture's reason: the table is filled from that same command,
+     and a window offering branches the project behind it does not have would be
+     two fixtures disagreeing about one project. `remote` is keyed by path, as
+     the app window's own announcement is. */
+  'review-changes': {
+    title: 'Review changes',
+    branch: 'release/7',
+    rows: [
+      {
+        repo: '/Users/you/dev/smetana',
+        name: '.',
+        base: 'main',
+        baseSide: 'local',
+        head: 'release/7',
+        headSide: 'local'
+      },
+      {
+        repo: '/Users/you/dev/smetana/admin',
+        name: 'admin',
+        base: 'main',
+        baseSide: 'origin',
+        head: 'release/7',
+        headSide: 'local'
+      }
+    ],
+    repos: [
+      { name: '.', path: '/Users/you/dev/smetana' },
+      { name: 'admin', path: '/Users/you/dev/smetana/admin' },
+      { name: 'extension', path: '/Users/you/dev/smetana/extension' }
+    ],
+    branches: MOCK_TARGET_BRANCHES,
+    remote: {
+      '/Users/you/dev/smetana': ['main', 'staging', 'release/7'],
+      '/Users/you/dev/smetana/admin': ['main', 'feature/runs-project-config']
+    },
+    without: ['extension'],
+    defaultBase: 'main',
+    fetching: [],
+    fetchFailed: [],
+    busy: false
   }
 }
 
@@ -1046,6 +1102,19 @@ export function installMockBackend() {
        where it has four frames of its own. */
     if (command === 'vcs_branches') {
       return MOCK_BRANCHES
+    }
+    /* What `origin` is known to have, which the branch-review window reads one
+       repository at a time. A read like `vcs_branches` beside it — file reads
+       out of `refs/remotes/origin/`, no process — so it answers here rather than
+       falling through to the refusal.
+
+       Deliberately not the same list as `vcs_branches`: `release/7` is local
+       and has never been pushed, and `spike/origin-only` lives on the server
+       and has never been checked out here. Those two are the whole point of the
+       side switch, and a fixture where both lists matched would draw a window
+       in which it did not appear to do anything. */
+    if (command === 'vcs_remote_branches') {
+      return ['develop', 'feat/worktree-rename', 'main', 'spike/origin-only']
     }
     /* Where those branches stand against their upstreams, which is the one read
        of this panel whose answer nothing on disk could give: it is a process,
