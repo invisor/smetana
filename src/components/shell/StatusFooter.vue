@@ -23,12 +23,12 @@ import { usageAgentLabel, usageSegments, usageTooltip } from './usageFooter.js'
    take another row's height from the board for content that is empty at both
    ends most of the time.
 
-   The subscription keeps the left end, and with it the window's bottom-left
-   corner — the easiest target on the screen, which the row below moves its own
-   padding inside the bar to keep. The reverse arrangement reads better in
-   theory, the changing half first, and costs that corner; on macOS it would
-   also put the press target in the bottom-right, which is the window's resize
-   area.
+   The subscription keeps the left end, which is the end of the strip nearest
+   the easiest target on the screen — though not the corner itself: the bar's
+   own gutter sits between the two, deliberately, since a press on empty ground
+   would open a hint about nothing. The reverse arrangement reads better in
+   theory, the changing half first, and costs that; on macOS it would also put
+   the press target in the bottom-right, which is the window's resize area.
 
    Presentational, like every component here: the window does the asking, so
    this renders in `?view=gallery` with nothing behind it, and every choice
@@ -93,11 +93,19 @@ const agentsTip = computed(() => agentsLabel(props.agentsActive))
    a rule on top where that one has a rule underneath. **No token of its own:**
    the two strips are the same kind of thing, and a `--footer-bar-h` defined to
    the same two numbers would be a second value to keep in step with the first,
-   in both densities, for a difference nobody could see. */
+   in both densities, for a difference nobody could see.
+
+   The left inset is the bar's, and that is a decision rather than tidiness: on
+   the row below it was part of the control, so the window's bottom-left corner
+   answered a press and opened the subscription's hint over empty ground. A
+   gutter is chrome, so it belongs to the thing that draws the ground. Only the
+   left one is here — the block at the other end carries its own, and a
+   symmetrical padding on the bar would inset that block twice. */
 const barStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
+  paddingLeft: 'var(--space-5)',
   height: 'var(--scope-bar-h)',
   flex: '0 0 auto',
   background: 'var(--scope-bar)',
@@ -133,13 +141,38 @@ const fillStyle = {
      read later as the thing holding the row's width. */
   flex: '0 0 auto'
 }
-/* The row carries the padding, the cursor and the ring, and none of the three
-   is arbitrary. The padding is here rather than on the bar because the bar is
-   not the control: left there, it would be a gutter between the window's edge
-   and the words, neither pressable nor hoverable — and that gutter is the
-   window's bottom-left corner, the easiest target on the whole screen to hit.
-   The cursor follows it for the same reason: an affordance over ground that
-   does not answer a press is the affordance lying about where the control is.
+/* The row carries the cursor, the ring and a small inset, and the inset is the
+   ring's bed rather than the strip's gutter. The gutter is the bar's — 12px of
+   it, and it used to be here, which made the ground between the window's edge
+   and the words pressable and hoverable. That ground is the window's
+   bottom-left corner, the easiest target on the whole screen to hit, which is
+   what the arrangement was for, and it was the wrong thing to buy with it: what
+   opened there was a hint about the subscription over ground that draws none of
+   it, and a press asked the harness for a reading nobody had aimed at. The
+   trigger is the words instead, and the corner is chrome the control does not
+   reach. The cursor stops at the same edge, for the reason it followed the old
+   one: an affordance over ground that does not answer a press is the affordance
+   lying about where the control is.
+
+   What is left here is 4px, and it is the ring's and not the gutter's: a third
+   of what the bar carries, sitting against the words rather than out at the
+   window's edge, so the corner stays dead and the extra hoverable ground is
+   inside the hint's own subject. `base.css` draws `:focus-visible` as a 2px
+   ring and the offset below pulls it 2px inward, so over zero horizontal
+   padding the band lands on the ink: tabbing to the row cut the right stroke
+   and the lower dot off the `%` of `Week 78%`, which reads as a truncated
+   figure rather than as focus. 4px puts the band in its own two pixels and
+   leaves two of clearance either side. Measured on screen in all four theme ×
+   density combinations, not derived from the stylesheet — the left end looked
+   fine either way, since a lucide glyph's ink starts a pixel inside its box and
+   text has no such margin, so the defect is at the trailing figure alone.
+
+   No `flex` on the row either, and its absence is the same decision seen from
+   the other side: the row used to grow, which is what spread it across the bar.
+   The trigger above is content-sized now (`flex: '0 0 auto'`), so its content
+   box is this row's own width and there is never free space for a grow factor
+   to take. Put back, it would be a declaration doing nothing, read later as the
+   thing holding the strip's left end open.
 
    The ring is pulled inside its own edge. `base.css` draws `:focus-visible`
    with `outline-offset: 1px`, and this row's bottom edge is the window's, under
@@ -150,9 +183,8 @@ const rowStyle = {
   display: 'flex',
   alignItems: 'center',
   gap: 'var(--space-4)',
-  flex: '1 1 auto',
   minWidth: 0,
-  padding: '0 var(--space-5)',
+  padding: '0 var(--space-2)',
   cursor: 'pointer',
   /* Nothing of this row may be painted outside it. The row is inflexible, so
      this is a floor under a mistake rather than an everyday clip: an ancestor
@@ -195,8 +227,10 @@ const segStyle = { whiteSpace: 'nowrap', flex: '0 0 auto' }
 
 /* The other end of the strip: everything about this project rather than about
    the machine, and a sibling of the trigger above rather than anything inside
-   it. The padding is its own for the reason the row's is — the bar carries the
-   ground and nothing else.
+   it. The right inset is its own, and stays here now that the left one is the
+   bar's: the bar insets the end where a control would otherwise swallow the
+   gutter, and nothing at this end is a control, so its padding belongs to the
+   block that draws there. On the bar as well it would be counted twice.
 
    This is the half that gives way, and with the subscription's row unable to
    shrink it is the only one: every pixel a narrow strip is short comes out of
@@ -266,9 +300,10 @@ const counterItem = { flex: '0 0 auto' }
 </script>
 
 <template>
-  <!-- The bar carries the ground, the height and the rule, and nothing else:
-       the one control on it is the subscription's row, and the project's state
-       at the other end is not a control at all. -->
+  <!-- The bar carries the ground, the height, the rule and the gutter at the
+       window's left edge: the one control on it is the subscription's row,
+       which starts where its words do, and the project's state at the other end
+       is not a control at all. -->
   <div :style="barStyle">
     <!-- Empty is a real answer from `usageTooltip` — a reading in a band this
          build cannot name, printing no reset times, leaves nothing true to say —
@@ -305,7 +340,8 @@ const counterItem = { flex: '0 0 auto' }
     </component>
 
     <!-- The two ends are pushed apart rather than spaced: the subscription
-         keeps the window's corner, and the project's state keeps the other. -->
+         keeps the left end of the strip and the project's state the right, each
+         behind the bar's own gutter rather than against the window's edge. -->
     <span :style="{ flex: 1 }" />
 
     <!-- What this project is doing, in the order it stood in the scope bar.
