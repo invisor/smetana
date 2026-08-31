@@ -1312,8 +1312,26 @@ pull request, no upload, nothing on a network. Opening the report in a tab is `D
 review session's own exit and through the same `openFile` the file tree calls; what is owed here is
 that the path is computed and travels in the intent.
 
-One thing the design asked for that this could not do, and it is worth knowing before somebody looks
-for it: the sentence about a failed fetch was to ride into the prompt as well as onto the screen, so
-that the report could say so about itself. `Intent::ReviewBranch` carries `pairs` and `report` and
-nothing else, and the Rust side was explicitly out of scope, so there is no field for it. The sentence
-is on screen and in a toast; the prompt does not carry it.
+**The sentence about a failed fetch reaches the prompt as well as the screen**, which is what lets the
+report say so about itself. It did not at first — `Intent::ReviewBranch` carried `pairs` and `report`
+and nothing else, the Rust side was out of scope for the window's own task, and this paragraph stood
+here naming the gap. What the gap cost is worth keeping now that it is closed: a person who never saw
+the toast had nothing anywhere to learn it from, since a path carries no such mark and an
+`origin/main` a week old reads exactly like one a minute old — which is a silent failure inside the
+one step the fetch exists to prevent.
+
+`fetch_failed: Vec<String>` is the third field of the variant, `#[serde(default)]` so an intent
+written before it existed still starts a session, and the variant carries a `rename_all` of its own
+because the enum's renames the *variants* — without it `fetchFailed` never arrives, the prompt goes
+out silent and both suites stay green, which is the defect `Intent::RepairTracker` already paid for.
+`prompt.rs::review_branch` prints one sentence under the table of pairs, and **only when there is one
+to print**: an unconditional warning would tell every review its refs might be stale, which is the
+same silence pointing the other way.
+
+**It travels in paths and the window draws names, and both are one list.** `fetchFailures` in
+`components/git/reviewRows.js` is the rule — the verdicts `Promise.all` handed back, joined to the
+targets they are about — and `startReview` maps its answer through `reviewRepoName` for the caption
+and the toast while sending the answer itself into the intent. Paths, because the prompt keys its
+lines by the path a `ReviewPair` names a repository by and a second vocabulary would be asking the
+agent to match the two. One list read twice is what keeps what a person saw and what the agent was
+told from disagreeing; two walks of the same array could drift, and the drift would be invisible.

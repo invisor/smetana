@@ -150,6 +150,28 @@ export function fetchTargets(rows) {
   return wanted
 }
 
+/* Which of the repositories that were fetched did not answer.
+
+   `reached` is what `Promise.all` handed back over `targets`, one verdict
+   apiece and in that order, and joining the two is the whole of this function.
+   It is a rule rather than a line in the view for the reason this whole family
+   exists — a `.vue` file is the one thing no test in this repository can reach
+   — and, more than that, because **two different readers are drawn from what
+   it answers**: the sentence in the window and the toast behind it, and the
+   list that rides into the intent so the report can say so about itself. One
+   list read twice cannot disagree with itself; two walks of the same array
+   could, and the disagreement would be invisible — a review whose report says
+   origin was current when the window had just said it was not.
+
+   It answers in **paths**, which is what a row carries, what a `ReviewPair`
+   names a repository by and what the prompt lists them in. The names the
+   window draws are that same list mapped through the panel's repositories,
+   which is a rendering of this answer rather than a second one. */
+export function fetchFailures(targets, reached) {
+  const verdicts = list(reached)
+  return list(targets).filter((_, at) => !verdicts[at])
+}
+
 const pad = (n) => String(n).padStart(2, '0')
 
 /* Where the report goes, relative to the project and without an extension: the
@@ -217,7 +239,12 @@ export function fetchingCaption(repos) {
    sentence and not a refusal: what `origin` holds on this machine is still
    readable, it is merely older than the remote, and stopping here would trade a
    review that is slightly behind for no review at all. The sentence is what
-   keeps that honest. */
+   keeps that honest.
+
+   It is the window's half. The same repositories ride into the intent through
+   `fetchFailures`, so the report says it too — a person who did not see
+   this caption or the toast behind it would otherwise have nothing to learn it
+   from. */
 export function fetchFailedCaption(names) {
   const all = list(names).filter(Boolean)
   if (!all.length) return ''

@@ -4,6 +4,7 @@ import {
   ORIGIN,
   canReview,
   fetchFailedCaption,
+  fetchFailures,
   fetchTargets,
   fetchingCaption,
   localNames,
@@ -223,6 +224,34 @@ describe('fetchTargets', () => {
         { repo: '/p/admin', baseSide: LOCAL, headSide: LOCAL }
       ])
     ).toEqual(['/p'])
+  })
+})
+
+describe('fetchFailures', () => {
+  /* The verdicts arrive as `Promise.all` left them — one per target, in the
+     order the targets were fetched in — and the answer is the paths, because
+     that is what a row carries, what a pair names a repository by and what the
+     prompt lists them in. The window's names are this list rendered, never a
+     second walk of the same array. */
+  it('keeps the targets whose fetch did not answer, in order', () => {
+    expect(fetchFailures(['/p', '/p/admin', '/p/shared'], [true, false, false])).toEqual([
+      '/p/admin',
+      '/p/shared'
+    ])
+  })
+
+  it('answers nothing when every fetch worked', () => {
+    expect(fetchFailures(['/p', '/p/admin'], [true, true])).toEqual([])
+    expect(fetchFailures([], [])).toEqual([])
+  })
+
+  /* A verdict that is missing is not a fetch that worked: a shorter list than
+     the targets it is about can only mean something went wrong on the way, and
+     reading the hole as a success is the one way this feature goes quiet in
+     exactly the case it exists for. */
+  it('reads a missing verdict as a repository that was not reached', () => {
+    expect(fetchFailures(['/p', '/p/admin'], [true])).toEqual(['/p/admin'])
+    expect(fetchFailures(['/p'], null)).toEqual(['/p'])
   })
 })
 

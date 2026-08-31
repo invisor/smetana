@@ -129,6 +129,7 @@ export {
   ORIGIN,
   canReview,
   fetchFailedCaption,
+  fetchFailures,
   fetchTargets,
   fetchingCaption,
   localNames,

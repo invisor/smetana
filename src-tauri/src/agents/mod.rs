@@ -148,7 +148,8 @@ pub struct TaskDraft {
 /// changing. It is here for the field added later, which should not have to
 /// remember it. `Intent::RepairTracker`'s variant-level copy is a different
 /// case and not a precedent for this one: it earns its place on `bd_version`,
-/// a name that genuinely moves. And this is not a guard — the three fields are
+/// a name that genuinely moves, and so does `ReviewBranch`'s own, added with
+/// `fetch_failed`. And this is not a guard — the three fields are
 /// `String` with no `serde(default)`, so a rename that was needed and missing
 /// would be serde refusing the payload by name rather than anything silent.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -337,6 +338,14 @@ pub enum Intent {
     /// three do — because its prompt promises the agent it will file nothing
     /// and commit nothing, and a promise kept by an absence somewhere else is
     /// one the next reader cannot check.
+    ///
+    /// The variant carries a `rename_all` of its own, and it is load-bearing
+    /// rather than decorative: the enum's renames the *variants*, so a struct
+    /// variant's fields need their own or `fetch_failed` never matches the
+    /// wire's `fetchFailed`. With `serde(default)` beside it that failure is
+    /// silent — the field arrives empty, the prompt says nothing, and both
+    /// suites stay green. `RepairTracker` above paid for exactly that once.
+    #[serde(rename_all = "camelCase")]
     ReviewBranch {
         pairs: Vec<ReviewPair>,
         /// The report's path relative to the project, without an extension:
@@ -344,6 +353,30 @@ pub enum Intent {
         /// the name rather than the agent, so that the tab it opens afterwards
         /// is at a path the app already knows.
         report: String,
+        /// The repositories whose `git fetch` did not work in the moment
+        /// before this review was started, named by the same absolute path a
+        /// `ReviewPair` names one by.
+        ///
+        /// **A failed fetch does not call the review off** — what `origin`
+        /// holds on this machine is still readable, merely older — so what is
+        /// owed is a sentence rather than a refusal. That sentence was on
+        /// screen and in a toast from the day the window shipped, and nowhere
+        /// else: somebody who never saw the toast had nothing in the report to
+        /// learn it from, and an `origin/main` a week old reads exactly like
+        /// one a minute old. This field is the half that reaches the prompt,
+        /// so that the report can say so about itself.
+        ///
+        /// Paths and **not** the names the window draws, because the prompt
+        /// lists the pairs by path and a sentence naming repositories in a
+        /// second vocabulary would be asking the agent to match the two. The
+        /// front end derives the names it shows from this very list, which is
+        /// what keeps what a person read and what the agent was told from
+        /// disagreeing.
+        ///
+        /// `default` for the reason `TaskDraft::parent` carries: a payload
+        /// written before this field existed must still start a session.
+        #[serde(default)]
+        fetch_failed: Vec<String>,
     },
     /// One batch of a run. Started by `runs::service`, never by a person
     /// directly — which is why it carries the whole of what the run was asked
@@ -1057,7 +1090,14 @@ mod tests {
         }"#;
         let intent: Intent = serde_json::from_str(json).expect("deserializes");
         match intent {
-            Intent::ReviewBranch { pairs, report } => {
+            Intent::ReviewBranch { pairs, report, fetch_failed } => {
+                // The payload above is the shape this intent shipped in, with
+                // no `fetchFailed` in it at all, and it still has to start a
+                // session: `serde(default)` is what makes that true and this
+                // is where it is held. A review whose fetches all worked sends
+                // the same thing, so the empty list is the ordinary case as
+                // well as the old one.
+                assert!(fetch_failed.is_empty(), "no field is no failed fetch");
                 assert_eq!(
                     pairs,
                     [
@@ -1080,6 +1120,32 @@ mod tests {
     }
 
     #[test]
+    fn a_review_intent_carries_the_repositories_whose_fetch_did_not_work() {
+        // `fetchFailed` and not `fetch_failed`: the field is two words, so
+        // this is the first thing in `ReviewBranch` that the variant's own
+        // `rename_all` is actually needed for. Without it serde reads the
+        // camelCase key as unknown, `default` fills the field with nothing,
+        // and the prompt goes out silent about a stale origin with every test
+        // in this file still passing — which is why the assertion below is on
+        // the contents rather than on the payload being accepted.
+        let json = r#"{
+            "kind": "reviewBranch",
+            "pairs": [
+                {"repo": "/p/backend", "base": "origin/main", "head": "feature/smetana-cnk5"}
+            ],
+            "report": ".smetana/reviews/2026-08-31-cnk5",
+            "fetchFailed": ["/p/backend", "/p/shared"]
+        }"#;
+        let intent: Intent = serde_json::from_str(json).expect("deserializes");
+        match intent {
+            Intent::ReviewBranch { fetch_failed, .. } => {
+                assert_eq!(fetch_failed, ["/p/backend", "/p/shared"]);
+            }
+            other => panic!("expected ReviewBranch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_review_intent_carries_the_report_path_and_leaves_the_pairs_behind() {
         use crate::terminal::model::SessionWork as W;
         let intent = Intent::ReviewBranch {
@@ -1089,10 +1155,13 @@ mod tests {
                 head: "feature/smetana-pf40".into(),
             }],
             report: ".smetana/reviews/2026-08-31-pf40".into(),
+            fetch_failed: vec!["/p/backend".into()],
         };
         // The path is where the answer will be and is what the tab opened
         // afterwards is found by; the refs are the agent's briefing, the same
-        // reading a conflict's file list gets.
+        // reading a conflict's file list gets, and so is the list of fetches
+        // that did not work — the tab is opened at a path and knows nothing
+        // about how current the refs behind it were.
         assert_eq!(
             intent.work(),
             W::ReviewBranch { report: ".smetana/reviews/2026-08-31-pf40".into() }

@@ -27,6 +27,7 @@ import { gitActions } from '../components/git/gitActions.js'
    reason that whole family is: a `.vue` file is the one thing no test in this
    repository can reach. */
 import {
+  fetchFailures,
   fetchTargets,
   reportPath,
   reviewPairs,
@@ -1174,6 +1175,12 @@ async function startReview(rows) {
   if (!path || !list.length || reviewStarting.value) return
   reviewStarting.value = true
   reviewFetchFailed.value = []
+  /* The repositories origin could not be reached in, by path, and the one
+     answer three readers are drawn from: the sentence under the table, the
+     toast that outlives the window, and the intent. It is declared out here
+     rather than inside the branch below because the intent is built after it
+     — a review where nothing had to be fetched simply carries none. */
+  let missed = []
   try {
     const targets = fetchTargets(list)
     if (targets.length) {
@@ -1184,13 +1191,19 @@ async function startReview(rows) {
          repository, which is the only sharing there is between them. */
       const reached = await Promise.all(targets.map((repo) => fetchIn(repo)))
       reviewFetching.value = []
-      const missed = targets.filter((_, at) => !reached[at]).map(reviewRepoName)
-      reviewFetchFailed.value = missed
+      missed = fetchFailures(targets, reached)
+      /* The window and the toast speak in names — they are what
+         `[project].repos` holds and what the table draws — and the intent
+         speaks in paths, because that is how the prompt lists a pair's
+         repository. Both are this one list, so there is no arrangement of
+         them in which the person and the agent are told about different
+         repositories. */
+      reviewFetchFailed.value = missed.map(reviewRepoName)
       if (missed.length) {
         sayFileMenu({
           tone: 'info',
           title: 'Origin was not reached everywhere',
-          description: `The review reads what origin was last known to have in ${missed.join(', ')}.`
+          description: `The review reads what origin was last known to have in ${reviewFetchFailed.value.join(', ')}.`
         })
       }
     }
@@ -1211,7 +1224,16 @@ async function startReview(rows) {
       project.sideTab = 'agents'
       project.activeTab = 'terminal'
     }
-    await createSession(path, { kind: 'reviewBranch', pairs: reviewPairs(list), report })
+    /* `fetchFailed` rides beside the pairs so that the report can say so about
+       itself. Without it the sentence lived only on screen and in a toast, and
+       somebody who saw neither had nothing to learn it from — an `origin/main`
+       a week old reads exactly like one a minute old. */
+    await createSession(path, {
+      kind: 'reviewBranch',
+      pairs: reviewPairs(list),
+      report,
+      fetchFailed: missed
+    })
     closeDialog('review-changes')
   } catch {
     /* Already reported by `createSession`, which sets `terminalState.lastError`
