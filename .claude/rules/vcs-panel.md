@@ -1335,3 +1335,70 @@ and the toast while sending the answer itself into the intent. Paths, because th
 lines by the path a `ReviewPair` names a repository by and a second vocabulary would be asking the
 agent to match the two. One list read twice is what keeps what a person saw and what the agent was
 told from disagreeing; two walks of the same array could drift, and the drift would be invisible.
+
+### How old a branch is, and when this machine last asked
+
+Three ages, all read off the disk and none of them a process, for a list of branches that draws
+`local · 6 repos · 2h` and `origin · fetched 2m ago` under a name. Nothing draws them yet — the
+component is another task's — and what is settled here is where each number comes from and what it
+is allowed to mean.
+
+**On the wire the stamp is `at`, on both lists**, which is epic smetana-im0c's contract and what the
+component reads by name. In Rust the field is `touched_at` with a `#[serde(rename)]` over it: the
+long name is the honest one for a reflog time and is what a reader of `git.rs` sees, and neither
+struct carries a `rename_all`, so without the attribute the identifier itself would cross and a
+front end reading `at` would get `undefined` — no age on any row, nothing thrown, no test failing on
+either side of the seam. A rename is the one thing here that cannot be checked by either half alone.
+
+**A local branch's age is the number the list was already ordered by, carried out rather than taken
+again.** `git::combine` builds a map of the newest reflog stamp across the repositories that have
+each branch, sorts by it through `by_recency`, and until now threw it away; `BranchOption` has a
+`touched_at` beside `missing_in` now, read back out of that same map. Computing it a second time
+where the caption is drawn is the version that was refused: a list sorted by one number and
+captioned with another disagrees with itself, and nothing on screen could say which of the two was
+wrong. `None` is a branch no repository has a reflog for — the alphabetical tail `by_recency`
+describes, and every branch of a fresh clone. The reflog reader behind it (`touched_at` in `git.rs`)
+has two callers at two cadences now — the run dialog's local list and the review window's remote one
+— and reads one small file per branch in each, which is a cost that grows with the number of
+branches and not with the repository.
+
+**A remote branch's age is its own reflog's last entry**, read out of `logs/refs/remotes/<remote>/`
+exactly as the local side reads `logs/refs/heads/`, so `vcs_remote_branches` answers
+`{ name, touched_at }` apiece where it answered a bare string. It is when a **fetch** last moved that
+ref here, which is the closest thing on this disk to when the branch last moved on the server —
+nothing else on this machine ever writes a remote-tracking ref. `None` is ordinary rather than a
+failure and the caption draws no age at all for it: a fresh clone has the whole of `origin` packed
+with no reflog behind any of it. This does **not** reopen the ordering that section already settled:
+that list stays alphabetical, because an age drawn beside a name is a different question from an
+order over the list.
+
+**When the repository last fetched is the modification time of `FETCH_HEAD`** — `vcs_last_fetch`,
+one more command in `commands.rs` that spawns nothing. Every `git fetch` rewrites that file whether
+or not a ref moved, which is what makes it the question a person is actually asking, and it is the
+only record of a fetch that survives restarting the app: the store's own throttle (`fetchedAt`) is a
+`Map` that goes with the process, and `fetchIn` answers whether one call reached the remote and
+nothing about the ones before it. A remote-tracking ref's stamp cannot stand in for it, since a
+fetch that brought nothing back moves no ref at all. **Both git directories are looked in and the
+newest wins**: `FETCH_HEAD` is per worktree, so a fetch run in a linked worktree lands beside that
+worktree's HEAD and one run in the main checkout lands in the common directory, and either brought
+the same remote-tracking refs up to date — a reader that knew one of the two would report a
+repository as never fetched on the strength of where somebody happened to be standing. In an
+ordinary clone the two are one directory and one file read twice. **The answer is a floor rather
+than the truth**: a fetch run in a *sibling* worktree is invisible from here, since it wrote into
+that worktree's own git directory, so a repository fetched minutes ago elsewhere can report an hour.
+Closing that means listing `.git/worktrees/` and stat-ing every entry on a read taken per repository
+whenever the window opens; under-reporting is also the safe direction, since an age that is too old
+says "ask again" where one that is too fresh promises refs are newer than they are.
+
+**In the store the names stay a list of strings, and that is the constraint the whole shape is built
+around.** `DesktopApp.vue` copies `vcsState.remoteBranches` into a map per repository and
+`ReviewChangesDialog.vue` hands those strings straight to a `Dropdown`'s `options`; records in their
+place would break both. So `loadRemoteBranches` takes the command's records apart and the stamps land
+**beside** the names, in `remoteBranchTimes` keyed by name — a reader wanting an age has a name in
+its hand anyway, the assumption `tracking` already makes — with `remoteFetchedAt` beside them. Those
+two are asked for and let go with the list, in the same assignment as `remoteBranchesRepo` and
+through the one `forgetRemoteBranches` every path calls: a stamp left standing is one repository's
+age under another repository's name, which is the defect that field was added for, one field along.
+The fetch time is asked in the same `Promise.all` as the branches for that reason rather than by a
+loader of its own, and a failure in either drops both — half of this answer is not a state this
+store keeps.

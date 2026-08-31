@@ -74,8 +74,23 @@ const branchesOf = (repo) => [
 /* And the same again for what `origin` has, since the store holds one such list
    for the whole project: a list naming the repository it was read from is the
    only way an assertion can tell one repository's remote branches from
-   another's. */
-const remoteOf = (repo) => [`${repo}/main`, `${repo}/release`]
+   another's.
+
+   `vcs_remote_branches` answers with `{ name, at }` apiece — the epic's own
+   contract, and the name the Rust field is renamed to on the wire — and the
+   stamp names the repository too — a stamp is the field most easily left
+   standing under the wrong name, since nothing about a number looks out of
+   place. `remoteNames` is what the store is expected to hold, which is the
+   names alone. */
+const remoteOf = (repo) => [
+  { name: `${repo}/main`, at: 1000 + repo.length },
+  { name: `${repo}/release`, at: null }
+]
+const remoteNames = (repo) => remoteOf(repo).map((branch) => branch.name)
+
+/* When that repository last fetched, as `vcs_last_fetch` answers: a number that
+   names the repository it is about, for the same reason. */
+const fetchedIn = (repo) => 2000 + repo.length
 
 describe('the git panel store', () => {
   /* The same guard git.js, terminals.js and runs.js carry. Two calls can be in
@@ -233,16 +248,67 @@ describe('the git panel store', () => {
      things to check out. */
   it('the branches origin has arrive in a list of their own', async () => {
     const { stores, ipc } = await loadStores()
-    ipc.on('vcs_remote_branches', ['develop', 'feature/one', 'main'])
+    ipc.on('vcs_remote_branches', [
+      { name: 'develop', at: 1700000000 },
+      { name: 'feature/one', at: null },
+      { name: 'main', at: 1700000900 }
+    ])
+    ipc.on('vcs_last_fetch', 1700001000)
 
     await stores.vcs.loadRemoteBranches('/p/admin')
 
+    /* **Strings, and records nowhere in it.** Two callers spread this list
+       straight into a `Dropdown`'s options, so the shape is the promise: the
+       command's records are taken apart here and the stamps land beside the
+       names, never in their place. */
     expect(stores.vcs.vcsState.remoteBranches).toEqual(['develop', 'feature/one', 'main'])
+    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({
+      develop: 1700000000,
+      'feature/one': null,
+      main: 1700000900
+    })
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBe(1700001000)
     /* The repository asked about is the one named in the call, and the names
        arrive without `origin/` on them: the prefix is the caller's to add back
-       when it builds a ref for git. */
+       when it builds a ref for git. Both reads are about that same repository,
+       which is what lets the four fields be guarded as one answer. */
     expect(ipc.calls('vcs_remote_branches')).toEqual([{ repo: '/p/admin' }])
+    expect(ipc.calls('vcs_last_fetch')).toEqual([{ repo: '/p/admin' }])
     expect(stores.vcs.vcsState.branches).toEqual([])
+  })
+
+  /* A repository nobody has ever fetched in is an ordinary answer and not a
+     failure: `vcs_last_fetch` says null, the names still arrive, and nothing on
+     screen draws a time. The stamps are the same story one field along — a ref
+     no fetch has written a log line for has no age to draw. */
+  it('a repository nobody has fetched in still says what origin has', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_remote_branches', [{ name: 'main', at: null }])
+    ipc.on('vcs_last_fetch', null)
+
+    await stores.vcs.loadRemoteBranches('/p/admin')
+
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(['main'])
+    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({ main: null })
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBeNull()
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBe('/p/admin')
+  })
+
+  /* The two reads are one answer, so half of it is not a state this store
+     keeps: a fetch time standing with no list under it is a freshness claimed
+     about nothing. */
+  it('a fetch time that failed takes the branch list with it', async () => {
+    const { stores, ipc } = await loadStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ipc.on('vcs_remote_branches', remoteOf('admin'))
+    ipc.fail('vcs_last_fetch', 'the transport gave way')
+
+    await stores.vcs.loadRemoteBranches('/p/admin')
+
+    expect(stores.vcs.vcsState.remoteBranches).toEqual([])
+    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({})
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBeNull()
+    expect(stores.vcs.vcsState.remoteBranchesRepo).toBeNull()
   })
 
   /* `vcs_remote_branches` refuses nothing, so a rejection is the call itself
@@ -253,7 +319,8 @@ describe('the git panel store', () => {
   it('a remote branch list that failed leaves nothing standing in for one', async () => {
     const { stores, ipc } = await loadStores()
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    ipc.on('vcs_remote_branches', ['main'])
+    ipc.on('vcs_remote_branches', [{ name: 'main', at: 1700000000 }])
+    ipc.on('vcs_last_fetch', 1700001000)
     await stores.vcs.loadRemoteBranches('/p/admin')
     expect(stores.vcs.vcsState.remoteBranches).toEqual(['main'])
 
@@ -261,6 +328,11 @@ describe('the git panel store', () => {
     await stores.vcs.loadRemoteBranches('/p/admin')
 
     expect(stores.vcs.vcsState.remoteBranches).toEqual([])
+    /* And with them the two fields that are only about a list: a stamp left
+       behind is one repository's age under another repository's name, which is
+       what `remoteBranchesRepo` exists to make impossible. */
+    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({})
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBeNull()
   })
 
   /* The pair-guard `loadStatus` and `loadBranchList` above already carry,
@@ -286,6 +358,7 @@ describe('the git panel store', () => {
     ipc.on('vcs_remote_branches', (args) =>
       args.repo === '/p/admin' ? admin : remoteOf('backend')
     )
+    ipc.on('vcs_last_fetch', (args) => fetchedIn(args.repo === '/p/admin' ? 'admin' : 'backend'))
 
     const first = stores.vcs.loadRemoteBranches('/p/admin')
     const second = stores.vcs.loadRemoteBranches('/p/backend')
@@ -294,8 +367,17 @@ describe('the git panel store', () => {
     await first
     await nextTick()
 
-    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteOf('backend'))
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteNames('backend'))
     expect(stores.vcs.vcsState.remoteBranchesRepo).toBe('/p/backend')
+    /* The whole of the answer is dropped by that same guard and not the names
+       alone: one repository's names beside another's stamps is the defect this
+       field was added for, and a stamp is the half nothing on screen could
+       catch. */
+    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({
+      [remoteNames('backend')[0]]: 1000 + 'backend'.length,
+      [remoteNames('backend')[1]]: null
+    })
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBe(fetchedIn('backend'))
   })
 
   /* The same guard's other half, built like the two stale-response tests above
@@ -312,6 +394,7 @@ describe('the git panel store', () => {
       releaseOld = () => resolve(remoteOf('old'))
     })
     ipc.on('vcs_remote_branches', old)
+    ipc.on('vcs_last_fetch', fetchedIn('old'))
     const first = stores.vcs.loadRemoteBranches('/p/.')
 
     await stores.vcs.loadRepos('/new')
@@ -321,6 +404,8 @@ describe('the git panel store', () => {
 
     expect(stores.vcs.vcsState.remoteBranches).toEqual([])
     expect(stores.vcs.vcsState.remoteBranchesRepo).toBeNull()
+    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({})
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBeNull()
   })
 
   /* And the leak the guard cannot answer, because nothing arrives late in it:
@@ -331,14 +416,21 @@ describe('the git panel store', () => {
     const { stores, ipc } = await loadStores()
     await openPanel(stores, ipc, cleanTree)
     ipc.on('vcs_remote_branches', remoteOf('p'))
+    ipc.on('vcs_last_fetch', fetchedIn('p'))
     await stores.vcs.loadRemoteBranches('/p/.')
-    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteOf('p'))
+    expect(stores.vcs.vcsState.remoteBranches).toEqual(remoteNames('p'))
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBe(fetchedIn('p'))
 
     await stores.vcs.loadRepos('/new')
 
     expect(stores.vcs.vcsState.project).toBe('/new')
     expect(stores.vcs.vcsState.remoteBranches).toEqual([])
     expect(stores.vcs.vcsState.remoteBranchesRepo).toBeNull()
+    /* The stamps and the fetch time go with the project they were about, the
+       same as the names: the leak this test is here for is a field nobody
+       cleared, and a fourth field would leak the same way. */
+    expect(stores.vcs.vcsState.remoteBranchTimes).toEqual({})
+    expect(stores.vcs.vcsState.remoteFetchedAt).toBeNull()
   })
 
   /* A repository whose HEAD moves when git is told to move it, so a checkout

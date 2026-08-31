@@ -151,12 +151,43 @@ pub async fn vcs_branches(repo: String) -> Vec<Branch> {
 /// Never a refusal: a folder outside git, a repository nobody has fetched into,
 /// a clone with no `origin` at all — every one of them is the empty list, which
 /// is an ordinary answer and not an error.
+///
+/// **A name and the stamp of the fetch that last moved it** —
+/// `git::RemoteBranch` — rather than the bare name this answered with before. An
+/// age is drawn beside each of these names now and the name alone cannot say
+/// it. The prefix is still off, so whoever builds a ref for git is still the
+/// side that puts it back.
 #[tauri::command]
-pub async fn vcs_remote_branches(repo: String) -> Vec<String> {
+pub async fn vcs_remote_branches(repo: String) -> Vec<git::RemoteBranch> {
     off_the_runtime_or_empty("vcs_remote_branches", move || {
         git::remote_branches(Path::new(&repo), "origin")
     })
     .await
+}
+
+/// When this repository last fetched, in epoch seconds, or `null`.
+///
+/// **A third command in this file that spawns nothing**, for `vcs_branches`'
+/// reason and through the same file: `git::last_fetch` stats `FETCH_HEAD` in
+/// the repository's git directory and in its common one, which is a disk read
+/// and not a process. Why that file and nothing else — and why both directories
+/// — is written down there.
+///
+/// Beside `vcs_remote_branches` rather than inside it, though the front end asks
+/// the two together: what `origin` holds is a statement about branches and this
+/// is one fact about the repository, true whether or not anybody wanted a list.
+/// Folding it into the list would make it a field repeated on every row, or a
+/// second shape wrapping one — and it would leave a repository with no remote
+/// branches at all with nowhere to say when it last asked.
+///
+/// Never a refusal, and `null` is an ordinary answer with three meanings the
+/// screen draws the same way: nobody has fetched here, this is not a repository,
+/// or the file could not be stat-ed. A time this app is unsure of is worse than
+/// no time, since "fetched 2m ago" is read as a promise that the refs are that
+/// fresh.
+#[tauri::command]
+pub async fn vcs_last_fetch(repo: String) -> Option<i64> {
+    off_the_runtime_or_empty("vcs_last_fetch", move || git::last_fetch(Path::new(&repo))).await
 }
 
 /// Where every local branch stands against its upstream, in one process.
