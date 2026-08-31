@@ -955,7 +955,11 @@ export function installMockBackend() {
        no app data directory to copy an image into, so a thumbnail answered
        here would be a picture of a file that does not exist. The dialog shows
        the refusal in its own error line, which is the one place it would be
-       looked for. */
+       looked for.
+
+       `attachment_reopen` is absent for the same reason and reaches nothing in
+       a browser anyway: it is only ever called for a draft the app window kept
+       across a project switch, and there is no app window here to keep one. */
     /* `run_start` and `run_stop` are deliberately absent: they fall through to
        the refusal at the bottom, like every other write. A run that looked like
        it had started would be worse than none — there is no worker, no session
