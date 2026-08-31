@@ -241,8 +241,8 @@ announced at all because this front end may also simply be older than the worker
 calls. The one translation is `reportTabPath` in `reportTab.js`: the summary's path is absolute
 because a worker that knows nothing of tabs has to name a file on disk, `openTabs` is
 project-relative, and separators are normalised on both sides since `files.js` uses `/` while Rust
-wrote the platform's. It answers `null` rather than guessing for anything not squarely inside this
-project's reports folder.
+wrote the platform's. It answers `null` rather than guessing for anything not squarely inside one of this
+project's document folders.
 
 **The third source is an update that has finished downloading**, and it is the shortest-lived of the
 three: `updateNotification` beside the other two, one card keyed `update:<version>`, made from the

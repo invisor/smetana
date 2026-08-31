@@ -82,6 +82,6 @@ const frameStyle = {
 
 <template>
   <div :style="hostStyle">
-    <iframe :srcdoc="page" sandbox="" title="Run report" :style="frameStyle" />
+    <iframe :srcdoc="page" sandbox="" title="Report" :style="frameStyle" />
   </div>
 </template>

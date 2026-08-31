@@ -54,7 +54,7 @@ import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
 import Button from '../components/core/Button.vue'
 import RunBar from '../components/run/RunBar.vue'
 import ReportView from '../components/run/ReportView.vue'
-import { isReportPath, reportTabPath } from '../components/run/reportTab.js'
+import { isReportPath, reportTabPath, reviewReportTabs } from '../components/run/reportTab.js'
 import { deliveryFor } from '../components/run/reportDelivery.js'
 import TaskInspector from '../components/kanban/TaskInspector.vue'
 import DraftInspector from '../components/kanban/DraftInspector.vue'
@@ -4563,6 +4563,58 @@ watch(stoppedRuns, () => {
     else if (where === 'tab' && showReport(run.summary.report)) markRunDelivered(run.token)
   }
 })
+
+/* The other document a finished session leaves, and a much shorter road than
+   the one above it: a branch review has no switch, no bell and no choice to
+   make. Somebody pressed Review and the report is the whole of what that
+   session produces, so the only question is when, and the answer is the moment
+   the agent exits.
+
+   `reviewReportTabs` is the rule and it is the whole of it — which sessions
+   have a document, and what it is called. Nothing watches `.smetana/reviews/`
+   and nothing asks the disk on a timer: the app named the file before the
+   session started, so the session's own ending is the signal, and a third
+   filesystem watcher is not something this project is willing to grow.
+
+   `openFile` is the file tree's own call, so the tab lands in `openTabs` as an
+   ordinary project-relative path and survives a restart like every other one,
+   and `reportTabActive` above is what makes the centre draw the document rather
+   than its source. Permanent rather than a preview, for the reason `showReport`
+   gives: this is a document somebody asked for by name.
+
+   No file — an agent that fell over, or wrote somewhere else — is not handled
+   here and deliberately: `openFile` meets it exactly as it meets any missing
+   path, with the buffer carrying the read error, and inventing a check here
+   would be a second way of asking whether a file exists.
+
+   The key is the ids, `stoppedRuns`' shape, and `openedReviews` is
+   `decidedRuns`' — `terminalState.sessions` is replaced wholesale on a project
+   switch and read again on a return, so an ending that is already answered for
+   arrives here as often as somebody moves between projects. An ending that
+   landed while another project was on screen opens its tab on the way back
+   instead, which is the first delivery rather than a repeat of one: sessions
+   live in the worker's memory and none of them outlives the app, so there is no
+   last night's document to be surprised by.
+
+   `activePath` is handed to the rule rather than assumed, and that is what
+   makes the paragraph above true: during a move the active project changes
+   before the session list does, so without it an ending arriving in that gap
+   would open a tab into the new project's list, have it overwritten by
+   `applySection`, and be recorded as answered all the same. */
+const finishedReviews = computed(() =>
+  reviewReportTabs(terminalState.sessions, activePath.value)
+)
+const openedReviews = new Set()
+watch(
+  () => finishedReviews.value.map((review) => review.id).join(' '),
+  () => {
+    for (const review of finishedReviews.value) {
+      if (openedReviews.has(review.id)) continue
+      openedReviews.add(review.id)
+      openFile(review.path, { permanent: true })
+    }
+  }
+)
 
 /* ---- styles ---------------------------------------------------------- */
 const rootStyle = {

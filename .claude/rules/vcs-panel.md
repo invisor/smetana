@@ -1236,8 +1236,9 @@ untouched and the window shows a pair rather than the difference between them, b
 cost a git process per row on every change of every dropdown to show a number the report names properly
 a minute later, and because reading the files whole and grepping for their uses is what the agent's own
 terminal is for. It files nothing in the tracker, and it sends the report nowhere — no comment on a
-pull request, no upload, nothing on a network. Opening the report in a tab is a separate task; what is
-owed here is that the path is computed and travels in the intent.
+pull request, no upload, nothing on a network. Opening the report in a tab is `DesktopApp.vue`'s, off the
+review session's own exit and through the same `openFile` the file tree calls; what is owed here is
+that the path is computed and travels in the intent.
 
 One thing the design asked for that this could not do, and it is worth knowing before somebody looks
 for it: the sentence about a failed fetch was to ride into the prompt as well as onto the screen, so
