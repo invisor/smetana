@@ -242,3 +242,69 @@ tauri-plugin-process = "2.3.1"
 # that module still compiles, and is still tested, on every platform.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The system clipboard for **files**, which is three formats and no crate that
+# covers them: `tauri-plugin-clipboard-manager` above stays exactly what it is,
+# the thing that puts a path on the clipboard as text, and has no notion of a
+# file list on any platform. `files/clipboard.rs` carries the formats and the
+# reasoning; what follows is what each half costs.
+#
+# The price, counted against `Cargo.lock` rather than guessed at: **nothing at
+# all, on any of the three**. Every one of these crates is already in the lock
+# file at the version pinned here, pulled in by Tauri or by something under it,
+# and the majors were read off `cargo tree` rather than off the crates' own
+# newest releases for exactly that reason — a `windows` 0.62 here would be the
+# third copy of that family in the tree, and an `objc2` 0.5 a second.
+#
+# macOS: `NSPasteboard` with `public.file-url`. `objc2` 0.6.4, `objc2-app-kit`
+# 0.3.2 and `objc2-foundation` 0.3.2 are already here behind `arboard` — which
+# is the clipboard plugin's — and behind `tauri` itself, whose webview is
+# `objc2-web-kit`.
+#
+# `default-features = false` is what makes the paragraph above true, and it was
+# measured rather than assumed: these crates' `default` is very nearly `all` —
+# every AppKit class there is — and taking it added `objc2-core-video` to the
+# lock file and pulled CloudKit, Core Data, Core Image, Core Text and
+# QuartzCore into `objc2-app-kit`'s feature set for a pasteboard. Named
+# explicitly instead: `NSPasteboard` for the board, `NSPasteboardItem` for
+# reading an item at a time, and `std`, which the two are written against.
+# Cargo unions features across the tree, so nothing else here loses anything by
+# this line.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSPasteboard",
+  "NSPasteboardItem",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSString",
+  "NSURL",
+] }
+
+# Windows: `CF_HDROP` for the paths and the registered `Preferred DropEffect`
+# format for the mode. `windows` 0.61.3 is already in the lock file under `tao`,
+# which is Tauri's window layer — deliberately that one and not the 0.56 under
+# `trash` or the 0.62 under `keepawake`, both of which are a version the rest of
+# the tree is not on. The features are modules of that one crate rather than
+# crates of their own, so they cost compile time on a Windows build and no
+# `[[package]]` entry anywhere.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_UI_Shell",
+] }
+
+# Linux: the GTK clipboard, `text/uri-list` and `x-special/gnome-copied-files`.
+# `gtk` 0.18.2 is already in the lock file under `tao` and `muda` — this app
+# *is* a GTK app on Linux — so naming it here adds nothing to the build but the
+# ability to say so. `gdk` and `glib` come through it rather than being asked
+# for separately, since a second path to the same crates is a second version to
+# keep in step.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"

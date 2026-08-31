@@ -15,10 +15,11 @@ the same reasoning that keeps settings out of a worker. `model.rs` is the vocabu
 logic (entry sorting, the `..` check, the name check, the binary sniff, the ceilings: 1000 entries
 per directory, 2 MB per file) and carries most of the tests; `fs.rs` is the disk; `commands.rs` is
 thin commands over it — the reads (`files_list`, `files_read`, `files_stat`) and the writes
-(`files_write`, `files_create`, `files_mkdir`, `files_trash`, `files_copy`, `files_move`,
-`files_rename`).
+(`files_write`, `files_create`, `files_mkdir`, `files_trash`, `files_copy`, `files_copy_external`,
+`files_move`, `files_rename`). `clipboard.rs` is the one file in that directory
+that is not about this project's files at all — see the end of this document.
 
-**The last three are three verbs and not one with a flag**, and the split is by what the argument
+**Four of those are four verbs and not one with a flag**, and the split is by what the argument
 is. `files_rename` takes a **name**, so what checks it is `resolve_new_within` — the folder-and-name
 split `files_create` is built on, where a name already taken is a plain refusal because somebody
 typed that one. `files_copy` and `files_move` take a **folder**, so what they check instead is that
@@ -26,6 +27,17 @@ one is not inside the other, on the canonicalized pair (`is_inside`) rather than
 strings, which cannot see a symlink pointing back into the folder being dragged. Both of them run
 their work off the runtime, for `files_list`'s rule and different arithmetic: no process, but a walk
 of a folder and then the bytes of it.
+
+`files_copy_external` is the fourth and the one exception in this module to the rule that every path
+is checked against the root: its **source is not**, because the source is a path off the system
+clipboard and a file copied in Finder ordinarily lives somewhere else on the disk entirely — copying
+it *into* the project is what a paste means, so refusing it as `outside` would refuse the ordinary
+case. Only the destination is resolved. Everything else it does is `copy_entry`'s, through the same
+`copy_into`: the ceiling, the free name claimed by trying, a link copied as a link, and
+`refuse_into_self`, which still matters here because an external source can be an *ancestor* of the
+project — the same cycle by a longer road. It is a command of its own rather than a flag on
+`files_copy`, so that "the source is unchecked here" is something a reader meets rather than
+discovers.
 
 Four decisions under them. **Nothing is ever overwritten and nothing is ever asked** — the entry
 keeps its own name where that is free and takes `copy_candidates`' next one where it is not
@@ -269,6 +281,68 @@ it is `files_copy` into the entry's own folder, so a pending cut survives one. W
 offered at all is `files/fileClipboard.js`'s `canPasteInto`, pure and outside the component for the
 family's reason, and it asks the same question `refuse_into_self` asks in Rust — this copy greys the
 row *before* a click, the Rust one is what stays true when a symlink is in the path.
+
+**There are two clipboards, and which of them a paste takes is a rule of its own.** Beside the record
+above sits the machine's own, `filesState.systemClipboard`, and the whole reason the tree has both is
+that only the first knows about a **cut**: Finder has no cut for files at all — the move is decided at
+paste time with Cmd+Opt+V and lives nowhere on the pasteboard — so a mode read back off the system on
+macOS is always `copy`. `pasteSource` in `files/fileClipboard.js` is the choice, pure and tested
+beside `canPasteInto`: nothing on the system clipboard leaves the internal record standing; the same
+paths on both means the internal one, since a copy in the tree writes to both and only one of them
+carries the mode; anything else is the system's, as a copy unless the platform said otherwise. The
+middle line is the design — the two normally agree, and when they do not, somebody copied something
+else more recently and that is what they mean to paste.
+
+**A fourth branch is about neither clipboard being wrong, and it is the one that is easy to leave
+out.** Cut and paste empties the tree's record and nothing empties the machine's, which goes on
+carrying the absolute path the cut wrote there — naming a file that has moved. Those two would then
+"disagree", the stale side would win, and the tree would draw a lit Paste over something that is not
+there: a refusal on macOS, and worse on Windows and Linux, where the clipboard still says `cut`, so
+anything that recreates a file under the old name — an agent writing into the very tree this app
+supervises — would be moved instead. So `moveEntry` remembers what it used up in
+`filesState.clipboardSpent`, and `pasteSource` reads a system record equal to it as spent. **Emptying
+the machine's clipboard is deliberately not the answer**: a write of no paths calls `clearContents` /
+`EmptyClipboard` / `clear`, and somebody's copied *text* would vanish as a side effect of a paste in
+a file tree.
+
+The two do not speak the same language, and the conversion is `DesktopApp.vue`'s: the record is
+relative to the project because everything in that store is, the machine's is absolute because a
+clipboard has no notion of a project, and they can only be compared in the second — the first cannot
+say "somewhere else on the disk", which is exactly what a file copied in Finder usually is. A path
+that comes back outside the project is kept absolute and goes to `files_copy_external`; `canPasteInto`
+lets one through, which is the allowed direction of that rule's two copies disagreeing, and Rust's
+`refuse_into_self` is still what refuses a folder from outside that holds the project. **A source
+outside the project is copied and never moved**, whatever mode the platform stated: honouring a
+foreign cut would mean deleting a file outside every check `fs.rs` makes, for a gesture made in
+another program.
+
+`FileTree` is given that **chosen** record rather than the raw one, and both halves of what it draws
+read it: whether Paste is offered, and which rows are muted. That is what keeps the muting honest — a
+cut in the tree followed by a copy in Finder is a cut that will not happen, and a row still drawn
+muted would be promising otherwise. The mirror it is drawn from is refreshed on window focus and when
+the menu opens (`@menu`, an event carrying nothing), which is the tree's own freshness model; a paste
+re-reads for itself, so the decision that matters is never made from a copy.
+
+`src-tauri/src/files/clipboard.rs` is the other side, and it is **three formats, one per platform,
+none interchangeable**: `NSPasteboard` with `public.file-url` on macOS, `CF_HDROP` plus the registered
+`Preferred DropEffect` on Windows, and the GTK clipboard's `text/uri-list` plus
+`x-special/gnome-copied-files` on Linux. `tauri-plugin-clipboard-manager` is untouched by all of it
+and stays what it was — the thing that puts a path on the clipboard as **text** for the two "Copy
+path" rows — because it has no notion of a file list on any platform, so there was no capability to
+widen. Two properties are worth knowing before changing anything there. **Failure is never fatal**: a
+clipboard that will not answer answers an empty list and the paste rides on the internal record,
+which is the standing `list_dir` takes towards a folder outside git, and a write that fails does not
+fail the copy that asked for it. And **on Linux the calls have to be on the main thread**, because
+GTK's clipboard belongs to the window loop — `AppHandle::run_on_main_thread` with the answer coming
+back over a channel, which is why both commands take an `AppHandle` they use on one platform in
+three. That channel is the module's one ceiling and the reason is the usual one:
+`gtk_clipboard_wait_for_contents` runs a nested main loop until another program answers and takes no
+timeout, so what is bounded is this side — half a second, after which the caller reads "no files" —
+because the alternative is a blocking-pool worker parked for the life of the process by a clipboard
+owner that never replies, on a call made at every window focus and every context menu. None of it is
+checkable in `npm run dev`: `mockBackend.js` refuses the write and deliberately declines to invent a
+fixture for the read, which is the one read in that file that goes unanswered and carries its own
+note saying why.
 
 **After a move or a rename, open tabs follow the file** (`renameTab` in `stores/tabs.js`): the id
 changes and the buffer travels whole, unsaved text, `mtime` and dirtiness included, because unlike a

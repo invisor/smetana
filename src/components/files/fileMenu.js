@@ -24,15 +24,6 @@
    `FileTree.vue` beside the path the menu is open on and cleared by the panel's
    `close`, the one event that arrives however the menu leaves. */
 
-/* The path separator to write an absolute path with. Everything relative in
-   `stores/files.js` uses `/` whatever the platform, and the project's own root
-   arrives from Rust in the platform's form — so a path copied on Windows would
-   read `C:\Users\you\dev\app/src/main.rs` if the two were simply joined. The
-   root is the only evidence available here of which system this is, which is
-   why the question is asked of it rather than of the navigator: a root holding
-   a backslash and no forward slash is a Windows path and nothing else is. */
-const separatorOf = (root) => (root.includes('\\') && !root.includes('/') ? '\\' : '/')
-
 /* What the platform calls the thing that shows a file in its folder. A pure
    function of the user agent rather than `@tauri-apps/plugin-os`, which would be
    a command, a permission and an await for one noun in one label — and would
@@ -256,17 +247,12 @@ export function parentOf(path = '') {
   return cut === -1 ? '' : path.slice(0, cut)
 }
 
-/* The absolute path, for the clipboard and for the file manager. The tree's
-   paths are relative to the project and the two verbs that leave this window
-   want the whole thing: a relative path handed to `revealItemInDir` names
-   whatever happens to sit under the process's own working directory. */
-export function absolutePath(root, path = '') {
-  if (!root) return path
-  const sep = separatorOf(root)
-  const base = root.replace(/[/\\]+$/, '')
-  if (!path) return base || root
-  return `${base}${sep}${path.split('/').join(sep)}`
-}
+/* The absolute path, for the clipboard and for the file manager — this
+   module's own callers, plus `stores/files.js`, which is what moved it up to
+   `src/paths.js`. Re-exported under the name it has always had here, the way
+   `stores/files.js` re-exports `isStubPath`, so no importer of this module
+   moved. */
+export { absolutePath } from '../../paths.js'
 
 /* And the relative one, which the tree already holds — except at the root,
    where the tree's own name for it is the empty string. `.` instead: an empty
