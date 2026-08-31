@@ -195,6 +195,27 @@ export function fileMenuItems({
   ]
 }
 
+/* How wide the panel of these rows may get, exported for `taskMenu.js`'s
+   reason and living here for the same one: the ceiling is a fact about the
+   longest **label**, and the labels are this module's. `FileTree.vue` opens the
+   panel with it and `Gallery.vue` draws the same rows at the same width, where
+   the number was written out by hand in both.
+
+   It is a ceiling and not a width. `ContextMenu` sizes itself by its widest row
+   and clips anything past this with an ellipsis, giving a row no tooltip and no
+   `title` to recover the rest from — so what it has to hold is the two rows
+   that carry their refusal in the label. "Attach to agent — no agent to type
+   into" measured 292px at the default type scale in comfortable density and set
+   this number when it was 300. "Paste — cannot paste a folder into itself" is
+   two characters longer, so it went to 320 rather than clipping the last word
+   off the one sentence that says why a row is off. Room over the longest
+   sentence costs nothing: the panel never grows to reach it.
+
+   Prefixed rather than `MENU_W`, the way `sessionMenu.js` prefixes its own:
+   `Gallery.vue` imports the board's `MENU_W` already, and two menus sharing one
+   number is how a panel gets moved by a rewording somewhere else. */
+export const FILE_MENU_W = 320
+
 /* Which folder a row's verb acts in, as a path relative to the project root —
    `''` being the root itself, which is what `files_list` already calls it and
    what `resolve_within` reads as "no further".

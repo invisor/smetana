@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { iconNodes } from '../../../src/components/core/icons.js'
 import {
+  FILE_MENU_W,
   absolutePath,
   fileManagerName,
   fileMenuItems,
@@ -18,6 +19,37 @@ const separators = (items) => items.filter((i) => i.type === 'separator').length
 const MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15'
 const WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edg/120.0'
 const LINUX = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+
+describe('FILE_MENU_W', () => {
+  it('is one number, and a number rather than a length', () => {
+    // `PointerMenu` hands it to `ContextMenu`'s `width`, a Number prop that goes
+    // into the placement arithmetic: a string of px would clip every long row
+    // silently.
+    expect(typeof FILE_MENU_W).toBe('number')
+    expect(FILE_MENU_W).toBe(320)
+  })
+
+  it('stays wide enough for the longest label on the menu', () => {
+    /* A test cannot measure a font, so what this holds is the arithmetic the
+       ceiling was chosen by: 70px of chrome — the glyph, the gaps and the
+       padding, the figure `sessionMenu.test.js` uses for the same panel — and
+       5.7px a character, which is what this menu's one recorded measurement
+       comes to (292px for the 39 characters of "Attach to agent — no agent to
+       type into"). What it catches is the way this number goes wrong: a refusal
+       reworded longer than the panel it has to be read in, with no tooltip
+       behind it to recover the rest from. */
+    const longest = [
+      ...fileMenuItems({ target: 'file' }),
+      ...fileMenuItems({ target: 'dir', pasteReason: 'intoSelf' }),
+      ...fileMenuItems({ target: 'file', confirmingDelete: true }),
+      ...fileMenuItems({ target: 'root' })
+    ]
+      .filter((item) => item.label)
+      .map((item) => item.label)
+      .reduce((a, b) => (b.length > a.length ? b : a))
+    expect(70 + longest.length * 5.7).toBeLessThan(FILE_MENU_W)
+  })
+})
 
 describe('fileManagerName', () => {
   it('is Finder on macOS', () => {

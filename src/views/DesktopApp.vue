@@ -3651,7 +3651,18 @@ async function revealMade(path, dir) {
    `expanded` and `selectedPath` are settings, and both would otherwise keep
    naming a path that is not there: harmless on screen and permanent in
    `settings.json`. They are rewritten rather than dropped, since the folder
-   they named is open and still is. */
+   they named is open and still is.
+
+   What is handed back is those rewritten folders, and the caller owes every one
+   of them a `listDir`. Nothing else will ever read them: `filesState.dirs` is
+   keyed by path, so a folder renamed from `src/a` to `src/b` is open according
+   to `expanded` and unknown according to `dirs` — `treeNodes` gives it
+   `children: undefined`, the row draws a collapsed chevron, and the click that
+   should open it finds the path already in `expanded` and takes it out instead,
+   so the first click does nothing visible and the second one opens the folder.
+   The focus sweep cannot repair it either, since `refreshDirs` re-reads only
+   what `dirs` already holds. The list is returned rather than read here because
+   a paste has just read one of these folders itself. */
 function followMove(from, to) {
   const under = (other) => other === from || other.startsWith(`${from}/`)
   const moved = (other) => `${to}${other.slice(from.length)}`
@@ -3668,12 +3679,16 @@ function followMove(from, to) {
     .map((tab) => tab.id)
   for (const id of moving) renameTab(id, moved(id))
   for (const id of closingDiffs) closeDiff(id)
+  const reopened = []
   for (let i = 0; i < project.expanded.length; i += 1) {
-    if (under(project.expanded[i])) project.expanded[i] = moved(project.expanded[i])
+    if (!under(project.expanded[i])) continue
+    project.expanded[i] = moved(project.expanded[i])
+    reopened.push(project.expanded[i])
   }
   if (project.selectedPath && under(project.selectedPath)) {
     project.selectedPath = moved(project.selectedPath)
   }
+  return reopened
 }
 
 /* Paste, which is a copy or a move depending on what put the record there. The
@@ -3695,14 +3710,26 @@ async function pasteInto(dir) {
   const cut = record.mode === 'cut'
   try {
     const made = cut ? await moveEntry(source, dir) : await copyEntry(source, dir)
+    let reopened = []
     if (cut) {
-      followMove(source, made)
+      reopened = followMove(source, made)
       /* Both folders, since nothing else will: the one that lost a row and, in
          `revealMade`, the one that gained it. */
       await listDir(parentOf(source))
     }
     await revealMade(made, dir)
+    /* Every folder that was open under what moved, at its new path — see
+       `followMove`. The one `revealMade` has just read is skipped rather than
+       read twice. */
+    for (const open of reopened) if (open !== made) await listDir(open)
   } catch (error) {
+    /* The destination is re-read even though nothing was supposed to happen,
+       because on one path something may have: a move across filesystems is a
+       copy and then a delete (`move_across_devices` in `files/fs.rs`), and a
+       delete that fails leaves the copy standing and answers `io`. A row that
+       is on disk and not in the tree until the next window focus is worse than
+       the toast beside it. */
+    await listDir(dir)
     sayFileMenu({
       tone: 'error',
       title: cut ? 'Nothing was moved' : 'Nothing was pasted',
@@ -3758,8 +3785,11 @@ async function renameEntryTo(path, typed) {
   }
   try {
     const made = await renameEntry(path, name)
-    followMove(path, made)
+    const reopened = followMove(path, made)
     await listDir(parentOf(path))
+    /* The renamed folder itself among them, if it was open: nothing here plays
+       `revealMade`'s part, so this loop is the only read those folders get. */
+    for (const open of reopened) await listDir(open)
   } catch (error) {
     sayFileMenu({
       tone: 'error',

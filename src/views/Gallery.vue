@@ -5,7 +5,7 @@
 import { computed, ref, watchEffect } from 'vue'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { branchMenuItems } from '../components/git/branchMenu.js'
-import { fileMenuItems } from '../components/files/fileMenu.js'
+import { FILE_MENU_W, fileMenuItems } from '../components/files/fileMenu.js'
 import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
 import {
   copyNoun as copyVerbNoun,
@@ -2994,10 +2994,10 @@ const menuTargetStyle = {
           <FileTreeRow name="docs" kind="dir" :depth="0" cut />
           <FileTreeRow name="Cargo.toml" kind="file" :depth="0" selected cut />
         </div>
-        <ContextMenu :items="FILE_MENU" :width="320" />
-        <ContextMenu :items="ARMED_FILE_MENU" :width="320" />
-        <ContextMenu :items="NOTHING_COPIED_FILE_MENU" :width="320" />
-        <ContextMenu :items="PASTE_INTO_SELF_FILE_MENU" :width="320" />
+        <ContextMenu :items="FILE_MENU" :width="FILE_MENU_W" />
+        <ContextMenu :items="ARMED_FILE_MENU" :width="FILE_MENU_W" />
+        <ContextMenu :items="NOTHING_COPIED_FILE_MENU" :width="FILE_MENU_W" />
+        <ContextMenu :items="PASTE_INTO_SELF_FILE_MENU" :width="FILE_MENU_W" />
       </div>
     </section>
 

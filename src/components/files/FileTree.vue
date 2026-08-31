@@ -18,7 +18,7 @@ import { computed, ref } from 'vue'
 import FileTreeRow from './FileTreeRow.vue'
 import FileTreeDraftRow from './FileTreeDraftRow.vue'
 import PointerMenu from '../overlays/PointerMenu.vue'
-import { fileMenuItems, folderOf } from './fileMenu.js'
+import { FILE_MENU_W, fileMenuItems, folderOf } from './fileMenu.js'
 import { canPasteInto } from './fileClipboard.js'
 import { isStubPath } from '../../paths.js'
 
@@ -137,20 +137,6 @@ const menu = ref(null)
    the menu leaves, which is what keeps the highlight and the panel together. */
 const menuFor = ref(null)
 
-/* A ceiling rather than a width — the panel is as wide as its widest row wants
-   to be, so the ordinary menu is nowhere near this and nothing is padded out to
-   reach it. It exists for the rows that carry their refusal in the label, since
-   `ContextMenu` clips a label rather than wrapping it and gives a row no
-   tooltip: a reason past the ceiling is a reason nobody reads.
-
-   The row that sets it is no longer Attach to agent's longer sentence, which
-   measured 292px at the default type scale in comfortable density. "Paste —
-   cannot paste a folder into itself" is two characters longer, so the ceiling
-   went up rather than being left to clip the last word off the one sentence
-   that explains why the row is off. Room over the longest sentence costs
-   nothing: the panel never grows to it. */
-const MENU_W = 320
-
 /* What the open menu is about: a file, a folder, or the project's own root,
    which is what the space below the last row names. Kept beside the path rather
    than worked out from it, because the root is the one target with no row and no
@@ -246,7 +232,18 @@ const startDraft = (kind, path) => {
 const startRename = (path) => {
   const row = rows.value.find((r) => r.path === path)
   if (!row) return
-  draft.value = { key: `${path}\u0000rename`, kind: 'rename', path, value: row.name }
+  /* `target` travels with the draft because the pick that opens it and the
+     commit that closes it are separated by however long somebody types, and by
+     then `menuTarget` is about a panel that has gone. It is the row's own kind
+     and never a constant: nothing reads it today, and a value that is wrong on
+     every folder is a trap for whoever reads it first. */
+  draft.value = {
+    key: `${path}\u0000rename`,
+    kind: 'rename',
+    path,
+    value: row.name,
+    target: row.kind === 'dir' ? 'dir' : 'file'
+  }
 }
 
 /* Esc, or the field losing the keyboard. The draft's key travels with it and is
@@ -273,7 +270,7 @@ const commitDraft = (name) => {
        rather than a rename — is `newEntry.js`'s rule and `DesktopApp.vue`'s to
        apply, because the answers that are not a rename are a toast's business
        and toasts live there. */
-    emit('action', { kind: 'commit-rename', path: pending.path, target: 'file', name })
+    emit('action', { kind: 'commit-rename', path: pending.path, target: pending.target, name })
     return
   }
   emit('action', {
@@ -360,6 +357,6 @@ const rootStyle = {
         @menu="openRowMenu(r, $event)"
       />
     </template>
-    <PointerMenu ref="menu" :items="items" :width="MENU_W" @select="pick" @close="onMenuClose" />
+    <PointerMenu ref="menu" :items="items" :width="FILE_MENU_W" @select="pick" @close="onMenuClose" />
   </div>
 </template>

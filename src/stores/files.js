@@ -92,11 +92,18 @@ export function fileErrorText(error) {
   return ERRORS[error?.kind] ?? ERRORS.io
 }
 
-/* The same error kinds, but for writes. A separate map rather than a shared
-   one: "No permission to read this file." after a refused Cmd+S describes
-   something other than what happened, and the person looks for the cause in the
-   wrong place. There is deliberately no `stale` key here — a stale mtime is
-   handled by its own branch with buttons. */
+/* The same error kinds, but for writes.
+
+   This is the first of the tables that follow the one above, and none of them
+   is numbered: each is named by the verb it speaks for, because an ordinal is
+   written once and the list keeps growing under it — this file carried two
+   "fifth"s at the same time before the habit was dropped.
+
+   A separate map rather than a shared one: "No permission to read this file."
+   after a refused Cmd+S describes something other than what happened, and the
+   person looks for the cause in the wrong place. There is deliberately no
+   `stale` key here — a stale mtime is handled by its own branch with
+   buttons. */
 const SAVE_ERRORS = {
   notFound: 'This file is gone from disk — nothing was written.',
   denied: 'No permission to write this file.',
@@ -109,9 +116,9 @@ export function saveErrorText(error) {
   return SAVE_ERRORS[error?.kind] ?? SAVE_ERRORS.io
 }
 
-/* And a third map, for directories. A person sees a directory read refusal as
-   a toast, and "This file is gone from disk." under a folder's name describes
-   something other than what happened. */
+/* And one for directories. A person sees a directory read refusal as a toast,
+   and "This file is gone from disk." under a folder's name describes something
+   other than what happened. */
 const DIR_ERRORS = {
   notFound: 'This folder is gone from disk.',
   denied: 'No permission to read this folder.',
@@ -124,8 +131,8 @@ export function dirErrorText(error) {
   return DIR_ERRORS[error?.kind] ?? DIR_ERRORS.io
 }
 
-/* A fourth, for making a file or a folder. The two kinds above it are the whole
-   reason it exists — nothing else in this store can be refused because a name
+/* One for making a file or a folder. The two kinds at the top of it are the
+   whole reason it exists — nothing else in this store can be refused because a name
    is taken — and the rest of it says "nothing was created", which is true of
    every refusal here: `resolve_new_within` decides before anything is opened,
    and `create_new` is the one call that could have raced, so there is no
@@ -144,7 +151,7 @@ export function makeErrorText(error) {
   return MAKE_ERRORS[error?.kind] ?? MAKE_ERRORS.io
 }
 
-/* A fifth, for the three verbs that move bytes: copy, move and the paste and
+/* One for the three verbs that move bytes: copy, move, and the paste and
    duplicate built on them. Separate from the making table above for the reason
    that one is separate from the reading one — "nothing was created" describes
    something other than a refused paste, and a person looks for the cause in the
@@ -168,8 +175,8 @@ export function copyErrorText(error) {
   return COPY_ERRORS[error?.kind] ?? COPY_ERRORS.io
 }
 
-/* And a sixth, for the one verb whose argument is a name somebody typed. It
-   borrows the making table's two sentences about a name, which is the whole
+/* And one for the verb whose argument is a name somebody typed. It borrows the
+   making table's two sentences about a name, which is the whole
    reason it is not the copy table — `alreadyExists` there is about a landing
    spot the app chose and here it is about the word in the field — and it says
    "nothing was renamed" everywhere else, because a `rename` either happened or
@@ -188,7 +195,7 @@ export function renameErrorText(error) {
   return RENAME_ERRORS[error?.kind] ?? RENAME_ERRORS.io
 }
 
-/* And a fifth, for the one verb that destroys. `badName` covers two things here
+/* And one for the verb that destroys. `badName` covers two things here
    and neither is a name somebody typed, which is why it does not borrow the
    making table's sentence: the project's own root, by whichever spelling
    reached the command, and a last segment Rust will not take as a name. The
