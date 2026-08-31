@@ -2969,6 +2969,12 @@ const menuTargetStyle = {
          and a selection is only painted in a focused field. The rule behind it
          is `renameName.js`'s and is checked by its own test.
 
+         The selected folder at the foot of the first box is the state the
+         keyboard added: the shortcuts act on the selected row, so a folder had
+         to become selectable for a Paste to have anywhere to land, and the
+         selected surface under a folder's own glyph and chevron is a pairing
+         nothing drew before.
+
          The second box is the cut row, which is the one thing on screen that
          says a cut is pending: nothing has happened on disk, so the muting is
          the whole of the signal. It is drawn on a file, on a folder and on the
@@ -2985,6 +2991,7 @@ const menuTargetStyle = {
           <FileTreeRow name="main.js" kind="file" :depth="1" />
           <FileTreeDraftRow kind="dir" :depth="0" :focus-on-mount="false" />
           <FileTreeRow name="Cargo.toml" kind="file" :depth="0" selected />
+          <FileTreeRow name="tests" kind="dir" :depth="0" selected />
         </div>
         <div :style="fileTreeStatesStyle">
           <FileTreeRow name="src" kind="dir" :depth="0" expanded />

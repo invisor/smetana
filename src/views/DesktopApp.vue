@@ -3331,9 +3331,15 @@ const toggleDir = (path) => {
    tab opened from it would reach settings and stay there forever. We filter it
    out here, in both handlers: the tree knows nothing about the stub and should
    not. */
-const onSelectFile = (path) => {
+const onSelectFile = (path, kind) => {
   if (isStubPath(path)) return
   project.selectedPath = path
+  /* A folder is selected and never opened. The click that selects it also
+     toggles it, which is the whole of what a folder row does, and `openFile` on
+     one would open a tab that reads `notAFile` — the selection is what the
+     keyboard's verbs are about, and that is the only reason a folder is
+     selected at all. */
+  if (kind === 'dir') return
   openFile(path)
 }
 const onOpenFile = (path) => {

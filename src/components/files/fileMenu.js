@@ -34,8 +34,17 @@
    would be true on some. `revealItemInDir` itself works on all three. */
 export function fileManagerName(userAgent = '') {
   if (/windows|win32|win64/i.test(userAgent)) return 'Explorer'
-  if (/mac/i.test(userAgent)) return 'Finder'
+  if (isMacUserAgent(userAgent)) return 'Finder'
   return 'file manager'
+}
+
+/* Whether this is a Mac, asked of the same string and answered in one place
+   because two callers now want it and a second regex over the user agent is how
+   the two come to disagree. `fileTreeKeys.js` is the other one: Enter is rename
+   in Finder and open in every other file manager, so that one key is taken here
+   and nowhere else. */
+export function isMacUserAgent(userAgent = '') {
+  return /mac/i.test(userAgent)
 }
 
 /* Why Attach to agent is refused, written into the label itself. `ContextMenu`
