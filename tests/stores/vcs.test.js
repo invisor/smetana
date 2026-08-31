@@ -692,26 +692,65 @@ describe('the git panel store', () => {
 
   /* Both doors of a conflict act on the project it happened in, so neither
      means anything after a switch: the abort would name a repository nobody is
-     looking at and the agent would be started in the wrong project. The
-     arriving project is then read on its own — its repository has nothing
-     unmerged in it, which is the ordinary case, and the record it gets is the
-     one its own tree earns. */
-  it('a conflict does not follow the person into another project', async () => {
+     looking at and the agent would be started in the wrong project.
+
+     **Both projects are left conflicted on purpose**, so what this pins is that
+     the record on screen is the arriving repository's own: `conflictRecord`
+     refuses to borrow a name across repositories, so the operation and both
+     names have to change with it. What it deliberately does **not** pin is
+     `loadRepos`'s own `clearConflict` — a status read that lands rebuilds the
+     record whatever happened before it, which is the test below. */
+  it('the conflict on screen is the arriving project\'s own', async () => {
     const { stores, ipc } = await loadStores()
     ipc.on('vcs_repos', (args) => answer(repoIn(args.project)))
-    ipc.on('vcs_status', (args) => (args.repo === '/p/.' ? conflictedTree() : cleanTree))
-    ipc.on('vcs_in_progress', { op: 'merge', ours: 'main', theirs: 'develop' })
+    ipc.on('vcs_status', conflictedTree())
+    ipc.on('vcs_in_progress', (args) =>
+      args.repo === '/p/.'
+        ? { op: 'merge', ours: 'main', theirs: 'develop' }
+        : /* The arriving project is mid-rebase, whose onto no probe can name. */
+          { op: 'rebase', ours: 'other-work', theirs: null }
+    )
     ipc.on('vcs_branches', [])
     ipc.on('vcs_tracking', [])
     ipc.on('git_head', null)
     ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.js'] })
     await stores.vcs.loadRepos('/p')
     await stores.vcs.merge('develop')
-    expect(stores.vcs.vcsState.conflict).not.toBe(null)
+    expect(stores.vcs.vcsState.conflict).toMatchObject({ repo: '/p/.', theirs: 'develop' })
 
     await stores.vcs.loadRepos('/other')
 
+    expect(stores.vcs.vcsState.conflict).toMatchObject({
+      repo: '/other/.',
+      op: 'rebase',
+      ours: 'other-work',
+      /* Not `develop`: the record was cleared and rebuilt, and nothing of the
+         departing project's is borrowed into it. */
+      theirs: null
+    })
+  })
+
+  /* And the guard in `loadRepos` itself, which is only observable where the
+     arriving project's status never lands: `readConflict` sits on `loadStatus`'s
+     success path, so a read that failed rebuilds nothing. Without the clear, the
+     departing project's conflict would stand under the arriving project's name
+     — with an abort aimed at a repository nobody is looking at and an agent that
+     would be started in the wrong project. */
+  it('a conflict goes with the project even when the next read fails', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', (args) => answer(repoIn(args.project)))
+    ipc.on('vcs_status', conflictedTree())
+    ipc.on('vcs_in_progress', { op: 'merge', ours: 'main', theirs: 'develop' })
+    ipc.on('vcs_branches', [])
+    ipc.on('vcs_tracking', [])
+    await stores.vcs.loadRepos('/p')
+    expect(stores.vcs.vcsState.conflict).not.toBe(null)
+
+    ipc.fail('vcs_status', { kind: 'noGit', message: 'git is not on this machine' })
+    await stores.vcs.loadRepos('/other')
+
     expect(stores.vcs.vcsState.conflict).toBe(null)
+    expect(stores.vcs.vcsState.conflictOpen).toBe(false)
   })
 
   /* The abort names the operation from the record rather than from anything the
