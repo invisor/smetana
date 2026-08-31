@@ -582,6 +582,46 @@ const editorText = ref('fn main() {\n    println!("hello");\n}\n')
 const editorJs = ref('export function openFile(path, { permanent = false } = {}) {\n  // A single click opens a preview tab.\n  const state = project()\n  return state.openTabs.includes(path)\n}\n')
 const editorMd = ref('# Heading\n\nA paragraph with **strong** and *emphasis*, plus a [link](https://example.com).\n\n- an item\n- another item\n')
 const editorPlain = ref('no language for this extension\nplain text, no colour\n')
+/* A file left mid-merge, and the only fixture on this page whose point is what
+   the editor does *to* the text rather than the text itself. Two blocks, because
+   git writes conflicts in two shapes: a plain one, and diff3's, which adds the
+   common ancestor between `|||||||` and `=======` — that middle section takes no
+   ground of its own and its marker is coloured like the other three.
+
+   The same string feeds a `FileEditor` and a `DiffView` below. Two bindings and
+   not one ref shared: the editor's copy is typed into, and the diff exists to be
+   compared against a fixed HEAD. */
+const CONFLICT_TEXT = `export function timeout(config) {
+<<<<<<< HEAD
+  return config.timeout ?? 30000
+=======
+  return config.timeout ?? 5000
+>>>>>>> fix/timeout-pingdom-alerts
+}
+
+export function retries(config) {
+<<<<<<< HEAD
+  return config.retries ?? 3
+||||||| merged common ancestors
+  return config.retries ?? 1
+=======
+  return config.retries ?? 5
+>>>>>>> fix/timeout-pingdom-alerts
+}
+`
+/* The same file as HEAD has it: no markers, and the current side's values. What
+   this buys is the cascade check — every marker line and both sides are changed
+   lines in the working tree's pane, so the merge view paints them with
+   `--diff-added-bg` and the conflict grounds have to win over it. */
+const CONFLICT_HEAD = `export function timeout(config) {
+  return config.timeout ?? 30000
+}
+
+export function retries(config) {
+  return config.retries ?? 3
+}
+`
+const editorConflict = ref(CONFLICT_TEXT)
 /* One line, far wider than the pane, so the pair of editors below shows both
    positions of the Editor tab's word-wrap switch side by side: the same text
    scrolling sideways and wrapped. Two refs of one string rather than one ref
@@ -3022,6 +3062,13 @@ const menuTargetStyle = {
       <div :style="{ height: '120px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
         <FileEditor v-model="editorPlain" path="notes.unknownext" />
       </div>
+      <!-- The conflict markers as structure: the current side on one stripe, the
+           incoming side on the other, all four marker lines in the conflict
+           colour and a shade heavier. The diff3 block's base section is the one
+           to check for the absence of a ground. -->
+      <div :style="{ height: '260px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <FileEditor v-model="editorConflict" path="src/api/axios.js" />
+      </div>
       <!-- The same long line twice: scrolling sideways, then wrapped. -->
       <div :style="{ height: '100px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
         <FileEditor v-model="editorLongLine" path="src/wide.js" />
@@ -3064,6 +3111,14 @@ const menuTargetStyle = {
       </div>
       <div :style="{ height: '160px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
         <DiffView path="notes/todo.txt" head="" :work="diffNew" missing-at-head />
+      </div>
+      <!-- The same conflicted file as the editor frame above, against the HEAD
+           it was merged into. This is the frame that proves the cascade: in the
+           working tree's pane those lines already carry `cm-changedLine`, so if
+           the conflict grounds are missing here and present up there, the theme
+           rule has lost a specificity argument to the diff. -->
+      <div :style="{ height: '280px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
+        <DiffView path="src/api/axios.js" :head="CONFLICT_HEAD" :work="CONFLICT_TEXT" />
       </div>
       <div :style="{ height: '100px', display: 'flex', border: 'var(--border-w) solid var(--border)' }">
         <DiffView path="assets/logo.png" notice="Binary file — not shown." />

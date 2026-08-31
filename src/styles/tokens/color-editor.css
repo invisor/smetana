@@ -20,6 +20,13 @@
   --diff-removed-bg:#fbe4e0;--diff-removed-gutter:#c94a34;--diff-removed-fg:#8f2a1c;
   --diff-changed-bg:#fbf0da;--diff-changed-gutter:#b96a06;--diff-changed-fg:#7a4708;
 
+  /* The two sides of a merge conflict, in the editor and in the diff. Opaque
+     rather than a tint: color-mix() is out on the chrome100/safari15 target,
+     and a translucent stripe inside the merge view would blend with the diff
+     ground beneath it into a third colour nobody chose. Teal and blue, kept
+     clear of the green and red the diff already spends. */
+  --conflict-current-bg:#dbeeec;--conflict-incoming-bg:#dde6f6;
+
   --git-modified:#b96a06;--git-added:#48762f;--git-deleted:#b23a28;
   --git-untracked:#13707a;--git-ignored:#9aa6aa;--git-conflict:#8a3a96;
 }
@@ -43,6 +50,8 @@
   --diff-added-bg:#132218;--diff-added-gutter:#5b8f3d;--diff-added-fg:#a8d693;
   --diff-removed-bg:#25150f;--diff-removed-gutter:#c94a34;--diff-removed-fg:#ff9384;
   --diff-changed-bg:#221a0d;--diff-changed-gutter:#b96a06;--diff-changed-fg:#f2c86a;
+
+  --conflict-current-bg:#0f2426;--conflict-incoming-bg:#111d2e;
 
   --git-modified:#e0b152;--git-added:#8fbf7a;--git-deleted:#e8796b;
   --git-untracked:#6bc5ce;--git-ignored:#5b6771;--git-conflict:#c58bd6;
