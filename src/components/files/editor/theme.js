@@ -12,13 +12,60 @@
    EditorView.darkTheme facet, which the base themes of the search panel and of
    special-character rendering watch — and they would start substituting their
    own hardcoded colours through the &light / &dark placeholders. So the theme
-   below is exhaustive: everything the base themes would paint themselves is
-   repainted with a token.
+   below has to answer for everything the base themes would paint themselves,
+   and repaint it with a token. Two rules where it does not yet are named at the
+   end of this note.
+
+   Answering means naming the class at a depth that wins, and for nearly every
+   rule here that depth is the plain one. buildTheme's finish() *replaces*
+   &light and &dark with the placeholder's class rather than adding it to the
+   theme's own (@codemirror/view/dist/index.js, the sel.replace in finish), so a
+   base `&light X` rule and a plain `X` of ours compile to exactly the same
+   depth — measured from the mounted sheet for .cm-content, .cm-gutters,
+   .cm-activeLine, .cm-specialChar, .cm-panels and .cm-textfield, every one of
+   them an exact tie. A tie is settled by the order the style modules reach the
+   document, and ours is mounted after every one of the base themes — they are
+   all at Prec.lowest — so ours wins: the same derivation the `conflict` block
+   below sets out at length, and the same conclusion. Ours is not mounted *last* —
+   a stronger claim than the argument needs, and not a true one: drawSelection
+   raises rules at Prec.highest that come after it, and they touch ::selection
+   and caret-color only, neither of which turns on mount order.
+
+   So a rule here needs the base's own shape wherever the base's own selector is
+   strictly deeper than a plain one, and the family that matters for this note is
+   the selection layer while the field has the focus, five classes against a
+   plain rule's two — see the selection block below for the shape it has to take.
+
+   It is not the only place a plain rule of ours is out-specified, and none of
+   this is a list to stop looking at. The pressed search-panel button in the
+   first bullet below is a second, and it is live. The `&.cm-gutters-before` and
+   `&.cm-gutters-after` that @codemirror/view nests inside `&light .cm-gutters`
+   are a third, a class deeper than the plain gutter rule below and setting a
+   border width there; they are harmless, but only because the border-style tie
+   at plain depth goes to us and a width on a style of none paints nothing.
+   Measure against the mounted sheet before taking a plain rule here for a
+   winning one.
 
    Bracket matching is repainted for a different reason: its base in
    @codemirror/language is a flat, unconditional colour that never looks at the
    darkTheme facet at all — so it would have to be overridden in any case,
-   regardless of this flag. */
+   regardless of this flag.
+
+   The two rules outside the claim, both older than this note and both filed as
+   work of their own rather than fixed here, so that the claim above stops
+   promising what the file does not deliver:
+
+   - a **pressed** search-panel button still takes the base theme's gradient.
+     `&light .cm-button` in @codemirror/view nests an `&:active` inside itself,
+     which compiles a class deeper than the plain `.cm-button` below, so the
+     `backgroundImage: 'none'` there covers the resting button and not the
+     pressed one — and the comment above that block is wrong to say the gradient
+     is suppressed outright.
+   - a **non-matching** bracket keeps the ground @codemirror/language gives it
+     (`&.cm-focused .cm-nonmatchingBracket` in its own base theme). That one is
+     not a depth argument at all: the rule below sits at the same depth and
+     answers the colour only, never the background, so there is nothing for it
+     to win. */
 import { EditorView } from '@codemirror/view'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
@@ -68,7 +115,35 @@ const chrome = EditorView.theme({
     borderLeftColor: 'var(--editor-cursor)',
     borderLeftWidth: 'var(--border-w-strong)'
   },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+  /* The selection, and it is two rules because @codemirror/view's base theme
+     paints it with two: `&light .cm-selectionBackground` for a field that has
+     lost the focus, and
+     `&light.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground`
+     for one that has it — two classes deep and five. Both go through &light,
+     which with the darkTheme facet down (see the top of this file) is the branch
+     the editor always takes, so both are that package's own hardcoded colours.
+     What was here was a single two-class rule. It tied with the first, which
+     our mount order won, and lost the second outright: selecting a whole file
+     painted it in the base theme's lilac, in both app themes, with the text no
+     longer readable over it. Only the focused state was ever wrong.
+
+     So each is answered at its own shape, plus one class. `.cm-layer` is that
+     class and it is the same element — LayerView puts cm-layer and
+     cm-selectionLayer on the one div it appends to the scroller — which carries
+     both rules past the base's rather than level with it, so neither depends on
+     our style module being mounted after the base one. !important was the other
+     way and is forbidden here.
+
+     They are two keys and deliberately not one comma list, which is what
+     style-mod would have emitted as a single rule with two selectors. Browsers
+     take such a rule's specificity from whichever of its selectors matched, and
+     happy-dom — the DOM this repository's tests run in — takes it from the first
+     one written, so a list would have been a rule that behaves one way in the
+     product and another way anywhere it could be checked. */
+  '.cm-layer.cm-selectionLayer .cm-selectionBackground': {
+    backgroundColor: 'var(--editor-selection)'
+  },
+  '&.cm-focused > .cm-scroller > .cm-layer.cm-selectionLayer .cm-selectionBackground': {
     backgroundColor: 'var(--editor-selection)'
   },
   '.cm-selectionMatch': { backgroundColor: 'var(--editor-selection-match)' },
