@@ -155,6 +155,41 @@ requirements, not preferences:
 
 The document reaches nowhere at all. Anything it needs, it carries.
 
+**It has to be a whole page — `<!doctype html>` and an explicit `<html>` tag — not a
+fragment.** Smetana draws it in a frame whose DOM it cannot reach, so it hands the document
+its theme by writing a `data-theme` attribute onto that tag, and a document with no root
+tag is never handed one.
+
+Declare the palette four times over, in this order:
+
+```css
+:root { color-scheme: light; /* the light one */ }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; /* the dark one */ }
+}
+:root[data-theme="dark"] { color-scheme: dark; /* the dark one */ }
+:root[data-theme="light"] { color-scheme: light; /* the light one */ }
+```
+
+Each block also sets `color-scheme` beside the colours, light or dark to match: the frame's
+scrollbar and every default the user agent paints, selection among them, follow that rather
+than your rules, so without it a dark report comes with a light scrollbar down its side.
+
+The first pair is for a browser, which has nothing of ours loaded and only the machine's
+answer to go on; the second is for a tab of this app, and it has to win in both directions
+— so guard the media query with `:not([data-theme="light"])` and write the two attribute
+blocks after it. Either of those two carries the hard case on its own — a light app on a
+dark machine — and both are here because they fail differently: the guard says which
+reader the query is for and survives being moved, while source order says nothing and does
+not.
+
+Write the colours as custom properties and refer to them everywhere else, so that a block
+is a list of names redefined rather than the whole stylesheet written out four times.
+**The bare `:root` block is the complete one**, and the three below it only redefine names
+it already declares: a colour whose sole definition sat inside a media query or an
+attribute block would simply be absent for the reader that block does not match, and
+nothing on screen would say a colour had gone missing.
+
 **Escape everything that came out of the repository.** Every code fragment, every file
 name, every branch name, every quoted diff line goes through HTML escaping: `&` first,
 then `<`, `>` and `"`. A single unescaped `<` in a quoted line of code silently eats the

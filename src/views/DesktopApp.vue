@@ -52,6 +52,7 @@ import { MENU_W, taskMenuItems } from '../components/kanban/taskMenu.js'
    the same one the gallery answers with. */
 import { useCopyFeedback } from '../components/core/copyFeedback.js'
 import { promoteTitle, taskCount } from '../components/kanban/promoteTitle.js'
+import { canRestore, draftIsEmpty } from '../components/kanban/taskDraft.js'
 import Button from '../components/core/Button.vue'
 import RunBar from '../components/run/RunBar.vue'
 import ReportView from '../components/run/ReportView.vue'
@@ -590,7 +591,7 @@ async function newTerminal(cwd = null) {
 const onNewTab = (item) => {
   if (item.kind === 'agent') newAgent()
   else if (item.kind === 'terminal') newTerminal()
-  else if (item.kind === 'task') openNewTask()
+  else if (item.kind === 'task') newTask()
   /* The fourth row, and the second door into the branch-review window: no name
      to start from, so the table opens as one empty row on the repository the
      Git panel is showing. */
@@ -699,10 +700,28 @@ const gitWrites = computed(() => gitActions(runsState.runs))
    Each open dialog is served rather than rendered: a `watchEffect` announces its
    props now and again on every change, and that is what makes a live value —
    `busy` while a run starts, a branch list that has just landed — reach a window
-   that is already up. Nothing about a window is stored in `settings.json`: a
-   dialog somebody has half filled in does not survive a project switch, and the
-   store is where the things that do survive live. */
+   that is already up. Nothing about a window is stored in `settings.json`, and
+   one thing about one window is now held in memory beside this map: a task
+   somebody has half written. The window still closes when the project moves —
+   it files into whichever project is active, so it has to — but `taskDrafts`
+   below keeps what was in it, and returning to that project opens it again with
+   the words still there. Surviving a restart is deliberately not offered: this
+   is a rescue from a switch, not a document store. */
 const openDialogs = new Map()
+
+/* Half-written tasks, by the path of the project each belongs to.
+
+   Only the New task dialog has anything to keep: the other ten confirm
+   something the app window already knows, and this one is the only window in
+   the app holding words nobody else has a copy of.
+
+   Entries are dropped when the person closes the window themselves and when a
+   task is actually filed — a window closed by the ground watcher below is the
+   app tidying up after a board that moved, and only a person is allowed to
+   decide about the words in it. A project closed in the list leaves its draft
+   here, which costs one record and is the honest answer anyway: closing a
+   project is not a decision about a task somebody was writing in it. */
+const taskDrafts = new Map()
 
 /* Deliberately a plain `Map` and not a `reactive` one. Nothing draws from it —
    the only reader is the watcher below, and it reads inside its callback rather
@@ -735,7 +754,20 @@ function serveDialog(kind, { ground, props: propsFor, onResult, forget = null })
   collect(watchEffect(() => announceDialogProps(kind, propsFor())))
   const failed = (err) => console.warn('[app] the dialog window will not be answered:', err)
   watchDialogHello(kind, () => announceDialogProps(kind, propsFor())).then(collect, failed)
-  watchDialogResult(kind, onResult).then(collect, failed)
+  /* Guarded by the service's own flag rather than by the unlisten alone, and
+     that is what makes the one distinction this app now rests on a fact instead
+     of a race. Rust answers **every** destroyed dialog window with
+     `{"name":"close"}` on this channel, the app's own tidying included; the
+     unlisten `listen` hands back only *starts* an `invoke`, so this handler is
+     still live for the length of that round trip. A `close` slipping through it
+     would run the caller's own close path — for `new-task`, throwing away the
+     draft a notification has just promised to keep. `closed` is set
+     synchronously by `stopServing` and is false when the person uses the
+     frame's cross, so it separates the two with no timing in it. */
+  watchDialogResult(kind, (name, payload) => {
+    if (service.closed) return
+    onResult(name, payload)
+  }).then(collect, failed)
 
   openDialogs.set(kind, service)
   openDialogWindow(kind, dialogWidth(kind))
@@ -779,10 +811,21 @@ function stopServing(kind, { forget = true } = {}) {
 /* The app window closing a dialog window: the ground went, or the guest asked.
    `closeDialogWindow` is safe to call on a window that is not there — the person
    may have closed it a moment earlier — which is what lets this be the one path
-   for both. */
+   for both.
+
+   `stopServing` first, and that order is load-bearing: Rust answers a destroyed
+   dialog window with a `close` on the result channel, and a listener still
+   standing here would read the app's own tidying as the person's decision. For
+   `new-task` that is now the difference between keeping a draft and throwing it
+   away.
+
+   The promise is handed back for one caller: reopening `new-task` with a
+   restored draft has to wait for this to finish, since both name the same Rust
+   window (`dialog-new-task`) and a destroy and a create issued in one tick leave
+   the order to chance. */
 function closeDialog(kind) {
   stopServing(kind)
-  closeDialogWindow(kind)
+  return closeDialogWindow(kind)
 }
 
 /* Nothing of this window survives it. A dialog window is fed entirely from here,
@@ -2290,28 +2333,84 @@ const creating = ref(false)
    The ground carries the column as well as the project. There is exactly one —
    bd files a new task as open, which the board draws as ready — so a board that
    no longer has it is a board this dialog could not place a card on. */
-const openNewTask = (parent = null) => {
-  followUpParent.value = parent
+const openNewTask = (parent = null, draft = null) => {
+  /* The project this window is for, read once. Everything below is about that
+     project and not about whichever one is active when an answer comes back:
+     the window can outlive a switch by the length of one IPC hop, and a draft
+     filed under the wrong path is a draft that comes back over somebody else's
+     board. */
+  const project = activePath.value
+  followUpParent.value = draft?.parent ?? parent
   serveDialog('new-task', {
-    ground: { project: activePath.value, column: ADD_TO },
+    ground: { project, column: ADD_TO },
     props: () => ({
       title: 'New task',
       busy: creating.value,
       status: ADD_TO,
-      parent: followUpParent.value
+      parent: followUpParent.value,
+      /* Constant on purpose, unlike everything above it: the guest seeds itself
+         from this once, when it opens. A live value would refill the fields
+         under somebody's hands on the next announcement. */
+      draft
     }),
     /* The one moment this window can be sure the attachment folder may have
        grown: the window that writes into it has just stopped being served. It
        used to be a watcher over the store's own list, which this window no
        longer holds — and `forget` covers every way out, the frame's own cross
        and a project switch included. */
-    forget: () => measureStorage(activePath.value),
+    forget: () => measureStorage(project),
     onResult: (name, payload) => {
-      if (name === 'close') closeNewTask()
-      if (name === 'submit') submitNewTask(payload)
+      /* What is in the window right now, kept against a project switch closing
+         it. The ground watcher is the only close that leaves it standing: a
+         `close` here is the person's own decision — their Cancel, or the
+         frame's cross, which Rust answers with this same name — and a submit is
+         the task being filed. */
+      if (name === 'draft') taskDrafts.set(project, { ...payload, project })
+      if (name === 'close') {
+        taskDrafts.delete(project)
+        closeNewTask()
+      }
+      /* Discarded when the task is *filed*, not when the button is pressed. A
+         create that failed leaves the window standing with the words still in
+         it, and that window is exactly the one this whole feature is about —
+         throwing its draft away here would lose the text on the next switch,
+         which is the bug rather than the fix. */
+      if (name === 'submit') {
+        submitNewTask(payload).then((filed) => {
+          if (filed) taskDrafts.delete(project)
+        })
+      }
     }
   })
 }
+
+/* The "+ New task" button, the tab bar's menu row — the doors somebody presses
+   themselves, as opposed to the restore below, which presses none.
+
+   They hand over the kept draft, and that is the whole of this function. A
+   person who has been told their words were kept and who then presses the
+   button they know about would otherwise get an empty window, and the first
+   character they typed into it would overwrite the draft on the next debounce:
+   their sentences gone, silently, straight after a notice saying they were not.
+   Nothing has to be undone for the two cases that must stay empty — the frame's
+   cross and a filed task both take the entry out of the map before this can
+   read it, so `get` answers `undefined` and the window opens blank.
+
+   A card's "follow-up" deliberately does not come through here: that gesture is
+   about a particular issue, and starting it from somebody else's kept sentences
+   would answer a question they did not ask.
+
+   Nothing is handed to a window that is already standing, and that guard is not
+   defensive tidiness — it is the same one `restoreTaskDraft` makes twice, for
+   the same reason. These windows are deliberately not modal (`window.rs`), the
+   "+" is never disabled, and pressing it while the dialog is up is a gesture
+   `serveDialog` already answers by bringing the window forward: the guest is
+   never remounted, so it would receive an announcement naming pictures it is
+   already holding and read them back in a second time — the strip drawing each
+   twice, and the filed task naming the same image twice to the agent. A window
+   that is up holds those words already; there is nothing to give it. */
+const newTask = () =>
+  openNewTask(null, openDialogs.has('new-task') ? null : (taskDrafts.get(activePath.value) ?? null))
 
 /* Where the whole-column press stands. bd's own word, untranslated, because
    `deferred` is not one of the three statuses the tracker store renames and it
@@ -2933,10 +3032,15 @@ const inspectedIssue = computed(() =>
    the dialog is to hand the work over with enough context, and only something
    that has read the repository can turn four sentences into a task worth
    picking up. The card appears when the agent has run bd create — through the
-   watcher, the same as any other change made outside this window. */
+   watcher, the same as any other change made outside this window.
+
+   It answers whether the task was actually filed, which has one caller and one
+   reason: the kept draft is discarded on a filing rather than on a press, so a
+   create that failed leaves the window standing with the words still in it and
+   the draft still behind it. */
 const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
   const path = activePath.value
-  if (!path) return
+  if (!path) return false
   creating.value = true
   project.sideTab = 'agents'
   project.activeTab = 'terminal'
@@ -2965,9 +3069,11 @@ const submitNewTask = async ({ brainstorm, spec, plan, ...draft }) => {
     rightFocus.value = terminalState.activeId
     await started
     closeNewTask()
+    return true
   } catch {
     // already reported by the store; the dialog stays open with the text and
-    // the thumbnails still in it
+    // the thumbnails still in it, and so does the draft behind it
+    return false
   } finally {
     creating.value = false
   }
@@ -3677,6 +3783,72 @@ function sayFileMenu(toast) {
 
 onUnmounted(() => clearTimeout(fileMenuToastTimer))
 
+/* Whether the board on screen came back *after* the project changed, rather
+   than being the previous project's still standing there.
+
+   It is a fact the restore below cannot do without and cannot get from the
+   columns. `settings.activeProject` moves the instant somebody clicks a row and
+   the board answering for it is a `tracker_set_project` away — seconds, over a
+   couple of directory reads — so for that whole gap the active project is the
+   new one and the columns are the old one's. Almost every board has a `ready`,
+   so the columns cheerfully answer yes on behalf of a project nobody is looking
+   at any more.
+
+   The generation is what settles it, and it is the tracker store's own word for
+   this: the worker's counter grows on every board it sends and never rolls
+   back (`tracker/store.rs` says so in as many words), so a number larger than
+   the one standing when the project changed can only mean a board that arrived
+   since. A switch whose board never arrives — bd missing, a damaged `.beads` —
+   never advances it, and nothing is restored, which is this repository's own
+   rule about anything unobservable reading as no. The draft is not lost by it:
+   it stays in the map until a board does arrive. */
+let seenProject = null
+let generationAtSwitch = 0
+
+function noteBoard(project) {
+  if (project === seenProject) return
+  seenProject = project
+  generationAtSwitch = trackerState.generation
+}
+
+/* A kept draft put back on screen.
+
+   Called from the ground watcher below rather than from a watcher of its own,
+   and that is what makes `canRestore`'s two conditions about the board work at
+   all: the board does not arrive with the switch, so it lands a moment later —
+   and since the columns and the issues are part of that watcher's world, it
+   fires again when it does. The pass that sees the switch refuses; a later one
+   opens the window. Without that, the window would be opened before the board
+   and closed on the spot by the very watcher that opened it, with a second
+   notice about a window nobody ever saw.
+
+   The wait is on the closing of whatever that same pass closed: the window this
+   opens carries the same Rust label as the one that is going, and a destroy and
+   a create issued in one tick leave the order to chance. */
+async function restoreTaskDraft(closing) {
+  const project = activePath.value
+  const draft = taskDrafts.get(project)
+  if (openDialogs.has('new-task')) return
+  /* Not called `world`, deliberately, though it is the same sort of thing: the
+     ground watcher below builds one under that name and this is **not** it —
+     that one's columns are a `Set`, it carries no `column` and no
+     `boardArrived`, and handing it here would refuse every restore for ever
+     without a word. `canRestore` takes either shape of columns for the same
+     reason; the name is the other half of not inviting the mistake. */
+  const stand = {
+    project,
+    columns: projectColumns.value,
+    column: ADD_TO,
+    boardArrived: trackerState.generation > generationAtSwitch
+  }
+  if (!canRestore(draft, stand)) return
+  await closing
+  /* The world moves while that resolves — somebody switching twice quickly, or
+     pressing "+ New task" in the meantime. */
+  if (activePath.value !== project || openDialogs.has('new-task')) return
+  openNewTask(draft.parent ?? null, draft)
+}
+
 /* The ground watcher for every dialog window this view has open.
 
    It lives down here rather than beside `serveDialog` because a `watch` runs
@@ -3691,7 +3863,11 @@ onUnmounted(() => clearTimeout(fileMenuToastTimer))
 
    One watcher for every kind rather than one per dialog: the rule is the
    registry's, and a kind added there is covered by this without a line changing
-   here. */
+   here.
+
+   It is also where a New task window comes back, which is the other half of the
+   same event: the switch that closes one is the switch that returns to the
+   project another was written in. `restoreTaskDraft` directly above. */
 watch(
   () => ({
     project: activePath.value,
@@ -3705,17 +3881,35 @@ watch(
     branches: new Set(vcsState.branches.map((branch) => branch.name))
   }),
   (world) => {
-    if (!openDialogs.size) return
+    /* First, and before anything may be restored: this is what marks where the
+       board stood when the project moved. */
+    noteBoard(world.project)
+    /* No `if (!openDialogs.size) return` here any more: the restore below runs
+       when there is nothing open at all, which is the whole case it exists for.
+
+       The closes are collected rather than awaited one by one — what the restore
+       has to wait for is the window carrying its own label being gone. */
+    const closing = []
     for (const [kind, { ground }] of [...openDialogs]) {
       const reason = stalenessOf(kind, ground, world)
       if (!reason) continue
-      closeDialog(kind)
+      /* Nothing takes the draft away here, and that is the whole rule: this
+         path is the app tidying up after a board that moved, and only a person
+         closing the window or a task actually being filed is a decision about
+         the words in it. */
+      closing.push(closeDialog(kind))
+      /* Whether this close left something behind, read from the map rather than
+         from the kind: a New task window typed into and switched away from
+         inside the reporting debounce kept nothing, and must not be told it
+         did. */
+      const kept = kind === 'new-task' && !draftIsEmpty(taskDrafts.get(ground.project))
       /* This view's one ad-hoc toast, whose name records the first thing that
          used it rather than what it is for. Held rather than timed: the window
          vanished while the person was looking somewhere else, so the sentence
          explaining it has to still be there when they look back. */
-      sayFileMenu({ tone: 'info', title: stalenessMessage(kind, reason) })
+      sayFileMenu({ tone: 'info', title: stalenessMessage(kind, reason, kept) })
     }
+    restoreTaskDraft(Promise.all(closing))
   }
 )
 
@@ -5220,7 +5414,7 @@ const toastStackStyle = {
           :run-blocked-reason="runBlockedReason"
           :promote-from="PROMOTE_FROM"
           @select="selectFromBoard"
-          @add="openNewTask()"
+          @add="newTask()"
           @run="openRun({ kind: 'queue' })"
           @promote="openPromote"
           @task-action="onTaskAction"
