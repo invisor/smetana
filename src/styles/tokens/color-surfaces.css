@@ -48,6 +48,21 @@
 
   --scope-bar:#dfe6e6;
   --overlay-scrim:rgba(20,28,28,.38);
+
+  /* The star on a favourite branch row, and the only yellow in the system.
+     Worst measured contrast is 3.32:1, on --surface-active, above the 3:1 floor
+     for non-text graphics on every state a branch row can be in. Light has to be
+     dark gold rather than a bright yellow: yellow is a light hue, so anything
+     holding 3:1 on this paper is dark — #b8860b measures 3.02 on --surface and
+     2.66 on --surface-hover, so do not lighten this.
+     Hue 46 sits inside the needs-you guard band that color-status-generated.css
+     keeps clear, and that is accepted rather than missed: leaving the band means
+     going past 58 degrees, where a light value at 3:1 turns olive and stops being
+     a yellow star. The two are told apart by silhouette and by place, the way the
+     type hues already are — a filled 12px glyph in a branch row's leading-icon
+     column against a bordered badge on the board, and the branch list draws no
+     status colour at all. */
+  --branch-favorite-fg:#957300;
 }
 [data-theme="dark"]{
   --canvas:#10151a;
@@ -92,4 +107,8 @@
 
   --scope-bar:#141a20;
   --overlay-scrim:rgba(4,7,10,.62);
+
+  /* Hue 47, 8.76:1 at its worst (--surface-active); ink lets it be the bright
+     yellow the light theme cannot be. */
+  --branch-favorite-fg:#f2ce4e;
 }

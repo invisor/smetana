@@ -70,10 +70,11 @@
    A marked row draws a star **in the leading icon's place**, instead of
    `git-branch` and at the same size — a sixth glyph in front of the name would
    put the marked rows' names out of line with all the others, which is the one
-   thing this list cannot afford in a column this narrow. The colour is
-   `--text-muted`, the same as the branch glyph it stands in for: it says which
-   rows are marked, and the position at the top of the list has already said why
-   they are there.
+   thing this list cannot afford in a column this narrow. What it does not take
+   from the glyph it stands in for is the colour: the star is filled, in
+   `--branch-favorite-fg`, the one yellow in the system. Position alone says a
+   row is at the top and not why it is there, so the mark has to be legible as a
+   mark — which the muted outline this used to be was not.
 
    A heading can be pressed while a run holds the three writes, and it is
    deliberately not dimmed with the rows: unfolding is reading, not writing, and
@@ -364,6 +365,21 @@ const branchNameStyle = (row) =>
     ? { ...nameStyle, color: `var(${BEHIND_TOKEN})` }
     : nameStyle
 
+/* The leading glyph, which is the branch icon on an ordinary row and the star
+   on a marked one. The star is the only thing in this panel drawn in a colour
+   of its own: `--branch-favorite-fg` is a yellow kept for exactly this mark, so
+   a marked row is readable at a glance without a sixth glyph or a second
+   column. Both `color` and `fill`, and that is the whole trick — `Icon` sets
+   `fill="none"` as a presentation attribute, which any CSS declaration
+   overrides, while the outline is still drawn with `stroke="currentColor"`.
+   Filling alone would leave a yellow body inside a grey outline, which reads as
+   a rendering fault rather than as a filled star. An unmarked row keeps
+   `--text-muted` and no fill at all. */
+const leadStyle = (row) =>
+  row.favorite
+    ? { flex: 'none', color: 'var(--branch-favorite-fg)', fill: 'var(--branch-favorite-fg)' }
+    : { flex: 'none', color: 'var(--text-muted)' }
+
 /* The count beside the arrow, and never the colour alone: the mark has to
    survive a monochrome screen and anybody who does not separate those hues.
    Mono, because it is a measurement. */
@@ -517,11 +533,15 @@ const empty = computed(() => props.branches.length === 0)
           <!-- The star stands **in** the branch glyph's place rather than
                beside it: a sixth icon before the name would shift the marked
                rows' names against every other row's, which is the one thing a
-               column this narrow cannot afford. Same size, same token. -->
+               column this narrow cannot afford. Same size as the glyph it
+               stands in for, but a colour of its own — filled yellow, since
+               position alone cannot say what the mark means and the muted
+               outline it used to be said nothing either. `leadStyle` carries
+               the reason. -->
           <Icon
             :name="row.favorite ? 'star' : 'git-branch'"
             :size="MARK"
-            :style="{ flex: 'none', color: 'var(--text-muted)' }"
+            :style="leadStyle(row)"
             :title="row.favorite ? 'A favourite branch' : undefined"
           />
           <!-- The leaf, with the whole name behind it: under a heading the
