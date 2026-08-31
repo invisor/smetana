@@ -18,11 +18,13 @@
    here so it is not mistaken for an oversight: --card-pad, --panel-pad and
    --tree-indent are padding and indentation by another name and belong with the
    space scale; --resizer-w and the --panel-*-w widths are chrome a person drags
-   rather than type. --log-line-h is the one that looks like it belongs above
-   and does not: it is the line box for --text-code-size, which is pinned by the
-   editor's own font size and which the app-wide factor deliberately never
-   reaches, so scaling the box while the text inside it stayed put is precisely
-   what it must not do. */
+   rather than type. --tooltip-max-w is the one width that goes the other way and
+   scales: it is a measure of a line of text rather than a box anybody drags, and
+   the count of characters it stands for has to survive a larger type.
+   --log-line-h is the one that looks like it belongs above and does not: it is
+   the line box for --text-code-size, which is pinned by the editor's own font
+   size and which the app-wide factor deliberately never reaches, so scaling the
+   box while the text inside it stayed put is precisely what it must not do. */
 :root{
   --space-0:0;--space-1:2px;--space-2:4px;--space-3:6px;--space-4:8px;
   --space-5:12px;--space-6:16px;--space-7:20px;--space-8:24px;--space-9:32px;--space-10:40px;
@@ -42,6 +44,14 @@
   --panel-min-w:180px;
   --panel-left-w:248px;
   --panel-right-w:320px;
+  /* The ceiling on a tooltip's panel, and the one width in this file that grows
+     with the app-wide font size. It is a measure rather than chrome: 320px at
+     --text-xs is about 55-60 characters, which is the line length prose reads
+     at, and it has to stay that many characters when the type grows. The
+     --panel-*-w widths above are the other case and keep their pixels, being
+     chrome a person drags. Density leaves it alone on purpose - how long a line
+     may be is not one of the things density changes. */
+  --tooltip-max-w:calc(320 * var(--ui-scale) * 1px);
   --resizer-w:5px; /* @kind spacing */
   --icon-sm:calc(14 * var(--ui-scale) * 1px);--icon-md:calc(16 * var(--ui-scale) * 1px);--icon-lg:calc(20 * var(--ui-scale) * 1px); /* @kind spacing */
 }

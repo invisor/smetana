@@ -221,11 +221,20 @@ const tipStyle = computed(() => ({
      the ceiling only bites on one that does not, and the labels that do not are
      the ones this panel now carries — an absolute project path, a read-only
      reason, a run blocked by a sentence. `nowrap` drew those straight off the
-     edge of the window, since the clamp in `show` can only move a panel that is
-     narrower than the window it is in. `anywhere` is what breaks a path: it has
-     no spaces to break at. The 2 × EDGE subtracted here is the same margin the
-     clamp keeps, so the widest panel is one the clamp can still place. */
-  maxWidth: `calc(100vw - ${2 * EDGE}px)`,
+     edge of the window, since the clamp in `place` can only move a panel that
+     is narrower than the window it is in. `anywhere` is what breaks a path: it
+     has no spaces to break at.
+
+     Two ceilings, and the panel takes whichever is lower. `--tooltip-max-w` is
+     the one that decides how a hint reads: a line of prose has a length it is
+     comfortable at, and a panel spanning the whole window is one line of text
+     the eye has to travel the screen to follow. It is the system's number
+     rather than this component's, so every one of the app's hints obeys it and
+     none carries a width of its own. The window's own width stays as the second
+     operand because it answers a different question — the 2 × EDGE subtracted
+     there is the same margin the clamp in `place` keeps, so the widest panel is
+     still one the clamp can place, whatever the ceiling above says. */
+  maxWidth: `min(var(--tooltip-max-w), calc(100vw - ${2 * EDGE}px))`,
   overflowWrap: 'anywhere',
   padding: 'var(--space-2) var(--space-4)',
   background: 'var(--surface-overlay)',
