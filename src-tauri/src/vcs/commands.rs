@@ -383,6 +383,37 @@ fn merged_into_head(repo: &Path, branch: &str) -> Result<bool, VcsError> {
     run::git_maybe(repo, &["merge-base", "--is-ancestor", branch, "HEAD"], 1).map(|out| out.is_some())
 }
 
+/// Rename a local branch.
+///
+/// **`-m` and never `-M`**, which is the whole of what this command decides.
+/// The forced form takes a name another branch already holds and writes over
+/// it, which loses commits nobody asked to lose; the plain one refuses, and
+/// git's refusal reaches the panel in git's own words like every other refusal
+/// here. There is no second question to ask, unlike a refused delete: nothing
+/// about this one has a way forward that costs anything.
+///
+/// **No guard on the branch the repository is standing on**, which is where
+/// this parts company with `delete_branch` above. `git branch -m` renames the
+/// branch HEAD is on and HEAD travels with the ref, so a typo in the name of
+/// the branch somebody is working in is the ordinary case rather than the edge
+/// one — there is nothing here for a guard to protect.
+///
+/// `branchName.js` refuses git's documented shapes before the window closes;
+/// this is what refuses the rest — a name already taken, a branch held by
+/// another worktree — and it is the one that decides.
+///
+/// Nothing reaches the remote: the upstream keeps its own name, the new name is
+/// not pushed and the old one is not deleted there. That is a different act with
+/// different consequences and it is not what this offers.
+#[tauri::command]
+pub async fn vcs_rename_branch(repo: String, from: String, to: String) -> Result<(), VcsError> {
+    off_the_runtime(move || rename_branch(Path::new(&repo), &from, &to)).await
+}
+
+fn rename_branch(repo: &Path, from: &str, to: &str) -> Result<(), VcsError> {
+    run::git_write(repo, &["branch", "-m", from, to])
+}
+
 /// Bring another branch's work into the one this repository is on.
 ///
 /// `--no-edit` is the only word added, and it is about not hanging rather than
@@ -1483,6 +1514,73 @@ mod tests {
         let refused = delete_branch(&repo, "never-existed", false).expect_err("no such branch");
 
         assert_eq!(refused.kind(), "git");
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// The ordinary rename: a branch the repository is not standing on. The row
+    /// changes its name and the commit stays exactly where it was — a rename
+    /// moves one ref and touches history not at all, which is the difference
+    /// between this and every other write in this module.
+    ///
+    /// The fixture is the delete tests' above, and it is what these want too: a
+    /// repository on `main`, named rather than left to the machine's
+    /// `init.defaultBranch`, with one commit on it.
+    #[test]
+    fn rename_branch_moves_the_name_and_leaves_the_commit_where_it_was() {
+        let repo = deletable("rename-plain");
+        git(&repo, &["branch", "spike"]);
+        let was = sha(&repo, "spike");
+
+        rename_branch(&repo, "spike", "fix/spike").expect("rename the branch");
+
+        assert!(!names(&repo).iter().any(|name| name == "spike"));
+        assert!(names(&repo).iter().any(|name| name == "fix/spike"));
+        assert_eq!(sha(&repo, "fix/spike"), was);
+        assert_eq!(head_branch(&repo), "main", "the tree did not move");
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// **The current branch is renamable**, which is where this command parts
+    /// company with the delete beside it: `git branch -m` renames the branch
+    /// HEAD is on and HEAD travels with the ref. A typo in the name of the
+    /// branch somebody is working in is the ordinary case, so there is no guard
+    /// here and this is the half that says so.
+    #[test]
+    fn rename_branch_takes_the_branch_the_repository_is_standing_on() {
+        let repo = deletable("rename-current");
+        let was = sha(&repo, "HEAD");
+
+        rename_branch(&repo, "main", "trunk").expect("rename the current branch");
+
+        assert_eq!(head_branch(&repo), "trunk");
+        assert_eq!(sha(&repo, "HEAD"), was, "HEAD travelled with the ref");
+        assert!(!names(&repo).iter().any(|name| name == "main"));
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// `-m` and not `-M`. The forced form would write over the branch that
+    /// already carries the new name and lose its commits; the plain one refuses
+    /// in git's own words, and both branches are still there afterwards with
+    /// what they had.
+    #[test]
+    fn rename_branch_refuses_a_name_another_branch_already_holds() {
+        let repo = deletable("rename-taken");
+        git(&repo, &["branch", "spike"]);
+        git(&repo, &["checkout", "-q", "-b", "taken"]);
+        fs::write(repo.join("b.txt"), "two\n").expect("write");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "two"]);
+        git(&repo, &["checkout", "-q", "main"]);
+        let held = sha(&repo, "taken");
+
+        let refused = rename_branch(&repo, "spike", "taken").expect_err("git refuses this");
+
+        assert_eq!(refused.kind(), "git");
+        assert!(names(&repo).iter().any(|name| name == "spike"), "nothing was renamed");
+        assert_eq!(sha(&repo, "taken"), held, "nothing was written over");
 
         let _ = fs::remove_dir_all(&repo);
     }

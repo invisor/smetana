@@ -854,6 +854,56 @@ export async function deleteBranch(branch, { force = false } = {}) {
   return true
 }
 
+/* Give a local branch another name.
+
+   Through `write` like everything else here, so it takes the same `busy`, lands
+   its refusal in the same block under `GitPanel`'s "Git did not rename the
+   branch", and brings the whole list back afterwards — which is what draws the
+   row under its new name. `busy` is keyed on the **old** name, because that is
+   the row on screen while git works; the new one has no row until the refresh.
+
+   Unlike `deleteBranch` above it does not hand the refusal back out: there is
+   no second question to ask about a rename git declined, so the window closes
+   when the button is pressed and the panel behind it draws git's words the way
+   it draws every other write's.
+
+   The current branch is not refused here and is not refused in Rust either —
+   `git branch -m` renames the branch HEAD is on and HEAD travels with the ref.
+   A typo in the name of the branch somebody is working in is the ordinary case.
+
+   **The favourite mark travels with the name.** `favoriteBranches` in
+   `settings.json` holds names, so a rename that left it alone would unmark a
+   branch somebody marked and leave a pin on a name nothing answers to. It is
+   moved here rather than in Rust for `deleteBranch`'s reason, and under the
+   same guard and for the same one: `write()` answers `true` for a project that
+   moved underneath, `settings.project` is merged in place on a switch, and a
+   name marked in two projects would otherwise be rewritten in the wrong one.
+
+   In place, so the order of the list is what it was — the pin is a row's
+   position as well as its mark. An unmarked branch adds nothing to the list,
+   and the new name cannot end up in it twice: a rename onto a name already
+   pinned (for a branch this repository does not have, which is the only way
+   that list holds one) keeps the first place it stood in and no second. */
+export async function renameBranch({ from, to }) {
+  const wanted = (to ?? '').trim()
+  if (!from || !wanted || wanted === from) return false
+  const of = settings.activeProject
+  const done = await write('rename', from, (repo) =>
+    invoke('vcs_rename_branch', { repo, from, to: wanted })
+  )
+  if (!done) return false
+  const marked = settings.project.favoriteBranches
+  if (settings.activeProject === of && Array.isArray(marked) && marked.includes(from)) {
+    const moved = []
+    for (const name of marked) {
+      const now = name === from ? wanted : name
+      if (!moved.includes(now)) moved.push(now)
+    }
+    settings.project.favoriteBranches = moved
+  }
+  return true
+}
+
 /* Bring the upstream's commits into the branch this repository is on.
 
    Through `write` like every other write here, so it takes the same `busy`, the

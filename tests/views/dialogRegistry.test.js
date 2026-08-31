@@ -10,7 +10,7 @@ import {
 } from '../../src/views/dialogRegistry.js'
 
 describe('the dialog registry', () => {
-  it('holds the eleven kinds that became windows', () => {
+  it('holds the twelve kinds that became windows', () => {
     expect([...DIALOG_KINDS].sort()).toEqual([
       'delete-branch',
       'delete-session',
@@ -20,10 +20,21 @@ describe('the dialog registry', () => {
       'project-settings',
       'promote-column',
       'ready-task',
+      'rename-branch',
       'review-changes',
       'run',
       'setup-project'
     ])
+  })
+
+  /* The rename window stands on the same three as the two branch dialogs beside
+     it: the project, the repository the panel has selected — because
+     `renameBranch` resolves which one it runs in at the moment Rename is
+     pressed — and the branch, which has to still answer to the name this window
+     opened on for `git branch -m` to have anything to move. */
+  it('stands the rename window on the branch and the repository as well', () => {
+    expect(dialogGround('rename-branch')).toEqual(['project', 'repo', 'branch'])
+    expect(dialogWidth('rename-branch')).toBe(440)
   })
 
   /* The branch-review window: the first dialog that outgrew `Modal`'s default,

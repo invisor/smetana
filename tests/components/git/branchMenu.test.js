@@ -12,9 +12,11 @@ describe('branchMenuItems', () => {
       'compare',
       'review',
       'favorite',
+      'copy-name',
       'merge',
       'rebase',
       'new-branch',
+      'rename',
       'delete'
     ])
   })
@@ -32,7 +34,8 @@ describe('branchMenuItems', () => {
       'checkout',
       'compare',
       'review',
-      'favorite'
+      'favorite',
+      'copy-name'
     ])
     expect(items[at + 1].kind).toBe('merge')
   })
@@ -45,9 +48,11 @@ describe('branchMenuItems', () => {
       'git-compare',
       'search-check',
       'star',
+      'copy',
       'git-merge',
       'git-graph',
       'git-branch-plus',
+      'pencil',
       'trash-2'
     ])
   })
@@ -128,7 +133,10 @@ describe('branchMenuItems', () => {
     const items = branchMenuItems()
     expect(items[items.length - 1].kind).toBe('delete')
     expect(items[items.length - 2].type).toBe('separator')
-    expect(items[items.length - 3].kind).toBe('new-branch')
+    /* The group above it is the two items that make a branch or change what it
+       answers to, and the rename is the nearer of them. */
+    expect(items[items.length - 3].kind).toBe('rename')
+    expect(items[items.length - 4].kind).toBe('new-branch')
   })
 
   it('refuses the delete on the branch already checked out', () => {
@@ -182,6 +190,7 @@ describe('branchMenuItems', () => {
       'merge',
       'rebase',
       'new-branch',
+      'rename',
       'delete'
     ])
   })
@@ -195,11 +204,12 @@ describe('branchMenuItems', () => {
      longer than it found it, and the separator is also what says how far the
      caption above the greyed rows reaches. Second from the bottom now that the
      delete has the last group. */
-  it('puts the new branch in a group of its own near the end', () => {
+  it('puts the new branch and the rename in a group of their own near the end', () => {
     const items = branchMenuItems()
     const at = items.findIndex((it) => it.kind === 'new-branch')
     expect(items[at - 1].type).toBe('separator')
-    expect(items[at + 1].type).toBe('separator')
+    expect(items[at + 1].kind).toBe('rename')
+    expect(items[at + 2].type).toBe('separator')
   })
 
   it('greys the whole menu while git is already working', () => {
@@ -210,6 +220,7 @@ describe('branchMenuItems', () => {
       'merge',
       'rebase',
       'new-branch',
+      'rename',
       'delete'
     ])
   })
@@ -226,7 +237,8 @@ describe('branchMenuItems', () => {
        preference and asks git for nothing. */
     expect(verbs(items).filter((it) => !it.disabled).map((it) => it.kind)).toEqual([
       'review',
-      'favorite'
+      'favorite',
+      'copy-name'
     ])
   })
 
@@ -234,5 +246,54 @@ describe('branchMenuItems', () => {
     expect(caption(branchMenuItems({ allowed: false, busy: true }))).toBe(
       'A run is going in this project'
     )
+  })
+
+  /* The one item here that reaches neither git nor `settings.json`. It sits
+     beside the favourite because that is the other item nothing refuses, and
+     because both are about the row rather than about the repository. */
+  it('offers the copy beside the favourite', () => {
+    const kinds = verbs(branchMenuItems()).map((it) => it.kind)
+    expect(kinds.slice(3, 5)).toEqual(['favorite', 'copy-name'])
+    expect(verbs(branchMenuItems()).find((it) => it.kind === 'copy-name').label).toBe(
+      'Copy branch name'
+    )
+  })
+
+  /* Nothing refuses it: it writes nowhere at all, so not a run, not an
+     operation in flight, and not the row being the branch already checked out —
+     the name of the branch you are standing on is as copyable as any other. */
+  it('leaves the copy live in every state there is', () => {
+    for (const at of [
+      {},
+      { current: true },
+      { allowed: false },
+      { busy: true },
+      { current: true, allowed: false, busy: true }
+    ]) {
+      const item = verbs(branchMenuItems(at)).find((it) => it.kind === 'copy-name')
+      expect(item.disabled).toBe(false)
+    }
+  })
+
+  it('names the rename directly under the new branch', () => {
+    const kinds = verbs(branchMenuItems()).map((it) => it.kind)
+    expect(kinds.slice(-3, -1)).toEqual(['new-branch', 'rename'])
+    expect(verbs(branchMenuItems()).find((it) => it.kind === 'rename').label).toBe(
+      'Rename this branch'
+    )
+  })
+
+  /* **The row with the tick can be renamed**, which is where it parts company
+     with the delete two rows down: `git branch -m` renames the branch HEAD is
+     on and HEAD travels with the ref, so a typo in the name of the branch
+     somebody is working in is the ordinary case. It is refused by `held` and by
+     nothing else, exactly like the new branch beside it. */
+  it('leaves the rename live on the branch already checked out', () => {
+    expect(disabledKinds(branchMenuItems({ current: true }))).not.toContain('rename')
+  })
+
+  it('refuses the rename while a run is going and while git is working', () => {
+    expect(disabledKinds(branchMenuItems({ allowed: false }))).toContain('rename')
+    expect(disabledKinds(branchMenuItems({ busy: true }))).toContain('rename')
   })
 })

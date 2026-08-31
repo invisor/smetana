@@ -67,6 +67,7 @@ import {
   MenuButton,
   NewBranchModal,
   Modal,
+  RenameBranchModal,
   PointerMenu,
   NewTaskModal,
   NotificationCard,
@@ -2458,6 +2459,23 @@ const menuTargetStyle = {
            instead of anything about the name. -->
       <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <NewBranchModal :open="true" from="feat/worktree-rename" :branches="BRANCHES" :actions="RUN_GOING" @close="() => {}" @create="() => {}" />
+      </div>
+      <!-- Renaming one, from a row in the branch list. Live, and the field opens
+           filled with the whole name and selected — type one character and the
+           lot is replaced, which is the gesture this dialog is built around.
+           What to check beside that: putting the name back exactly as it was
+           kills the Rename button and draws **no** red line, since an unchanged
+           name is not a mistake; typing `develop` refuses it as taken, while the
+           branch's own name never is. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <RenameBranchModal :open="true" from="feat/worktree-rename" :branches="BRANCHES" @close="() => {}" @rename="() => {}" />
+      </div>
+      <!-- And the same window with a run holding the repository, which is the
+           state it can arrive in without being reopened: the button is dead and
+           the line under the field carries `gitActions.js`'s own sentence
+           instead of anything about the name. -->
+      <div :style="{ position: 'relative', height: '340px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <RenameBranchModal :open="true" from="release/7" :branches="BRANCHES" :actions="RUN_GOING" @close="() => {}" @rename="() => {}" />
       </div>
       <!-- Deleting one, which is the only confirm in this app that asks twice.
            The question first: what a branch is and is not, and one Delete.

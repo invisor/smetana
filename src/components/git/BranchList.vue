@@ -1,18 +1,39 @@
 <script setup>
-/* The local branches of one repository, which of them it is on, and the seven
-   things that can be done from a row: switch to it, compare it with the current
-   branch, mark it as a favourite, merge it into the current branch, rebase the
-   current branch onto it, cut a new branch from it, delete it.
+/* The local branches of one repository, which of them it is on, and the things
+   that can be done from a row: switch to it, compare it with the current
+   branch, ask an agent to review it, mark it as a favourite, put its name on
+   the clipboard, merge it into the current branch, rebase the current branch
+   onto it, cut a new branch from it, rename it, delete it.
 
-   **All seven live in the row's right-click menu**, and the first of them is
-   also the row's own click. Merging and rebasing used to be two buttons that
-   appeared on the row under the pointer, which is a control per row per verb in
-   a panel that also draws a file tree, a change list and a commit box; they are
-   `branchMenu.js`'s items now and the row draws its name, its mark and
-   nothing else. What that costs is real and worth writing down: a right-click
+   **Every one of them lives in the row's right-click menu**, and which they are
+   is `branchMenu.js`'s answer rather than this file's — the list above is that
+   rule's, written out here for a reader and kept nowhere else.
+
+   **The row's own gesture is a double click, and it switches.** A single click
+   does nothing at all, deliberately: this used to be the one place in the app
+   where one click on a row of a list wrote the disk, and it sat next to the
+   gesture that opens the menu — a pointer that missed by a row had already run
+   `git switch`. Nothing was invented to take the single click's place, because
+   selecting a row would be a state no part of this panel reads. Hover and
+   press stay as they were: the row still reads as pressable, and the named way
+   to the same act is the menu's own `Switch to this branch`.
+
+   Nothing captures the pointer here, which is what makes the double click
+   arrive at all — `core/interactive.js` binds `mouseenter`/`mouseleave`/
+   `mousedown`/`mouseup` and takes no capture. `shell/TabBar.vue` built a whole
+   `armed` machine for exactly the opposite case, where a `pointerdown` capture
+   redirected the compatibility mouse events and killed `Tab.vue`'s click and
+   double click both.
+
+   Merging and rebasing used to be two buttons that appeared on the row under
+   the pointer, which is a control per row per verb in a panel that also draws a
+   file tree, a change list and a commit box; they are `branchMenu.js`'s items
+   now and the row draws its name, its mark and nothing else. What that costs is real and worth writing down: a right-click
    is a gesture somebody has to know about, and nothing on the row says the two
    verbs exist. The menu is `PointerMenu`, the same panel on the same gesture as
-   the project list one level up, which is the closest thing to a hint there is.
+   the project list one level up, which is the closest thing to a hint there is
+   — and since the switch left the single click, it is also where the name of
+   that act is written down.
 
    The order is `git::by_recency`'s and is drawn exactly as it arrives — the
    branch somebody merges into every day is nowhere in particular
@@ -97,10 +118,11 @@
    `gitActions.js` family; this file draws its verdict and holds none of it.
 
    Remote branches as rows of their own are still outside this epic, and so is
-   checking one out. So is renaming a branch, and so is every flag
-   and strategy a merge can take: this offers the merge and the rebase git would
-   do by itself, and nothing else. Creating one was outside it too until a row's
-   menu had somewhere to put it. */
+   checking one out — a rename here is local and stops there too: no upstream is
+   renamed, nothing is pushed and nothing on the remote is deleted. So is every
+   flag and strategy a merge can take: this offers the merge and the rebase git
+   would do by itself, and nothing else. Creating one was outside it too until a
+   row's menu had somewhere to put it, and renaming followed the same way. */
 import { computed, ref } from 'vue'
 import Icon from '../core/Icon.vue'
 import Tooltip from '../core/Tooltip.vue'
@@ -149,9 +171,14 @@ const emit = defineEmits([
      carries one: the panel is told what the list became rather than working it
      out, so the rule stays in the file a test can reach. */
   'favorite',
+  /* The whole name of the row, for the clipboard. Whole and never the leaf this
+     row draws: the string is wanted for a git command somewhere else, where
+     `spike` under a `fix/` heading is a name nothing answers to. */
+  'copy-name',
   'merge',
   'rebase',
   'new-branch',
+  'rename',
   'delete',
   'toggle-folder'
 ])
@@ -229,9 +256,11 @@ const pick = (item, name) => {
   else if (item.kind === 'compare') emit('compare', name)
   else if (item.kind === 'review') emit('review', name)
   else if (item.kind === 'favorite') emit('favorite', toggleFavorite(props.favorites, name))
+  else if (item.kind === 'copy-name') emit('copy-name', name)
   else if (item.kind === 'merge') emit('merge', name)
   else if (item.kind === 'rebase') emit('rebase', name)
   else if (item.kind === 'new-branch') emit('new-branch', name)
+  else if (item.kind === 'rename') emit('rename', name)
   else if (item.kind === 'delete') emit('delete', name)
 }
 
@@ -427,6 +456,10 @@ const OPERATIONS = {
      nothing on it saying which branch git is working on is the state this table
      exists to prevent. */
   delete: 'Deleting this branch',
+  /* The other one that leaves from a window, and it is keyed on the name the
+     branch had when git was asked: the row under the spinner is the old name
+     until the refresh brings the list back under the new one. */
+  rename: 'Renaming this branch',
   /* The two that leave from the section header rather than from a row. They
      are about the current branch and `busy` carries its name, so the spinner
      lands on the row with the tick — which is the rule this panel already keeps
@@ -534,7 +567,7 @@ const empty = computed(() => props.branches.length === 0)
           :style="rowStyle(row)"
           :aria-disabled="target(row) ? undefined : 'true'"
           v-bind="target(row) ? interactiveFor(keyOf(row)).handlers : {}"
-          @click="target(row) && $emit('checkout', row.name)"
+          @dblclick="target(row) && $emit('checkout', row.name)"
           @contextmenu.prevent="openMenu(row, $event)"
         >
           <!-- The star stands **in** the branch glyph's place rather than

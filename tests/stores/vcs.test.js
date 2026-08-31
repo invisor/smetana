@@ -701,6 +701,154 @@ describe('the git panel store', () => {
     expect(stores.settings.settings.project.favoriteBranches).toEqual(['spike', 'main'])
   })
 
+  /* The same repository as the delete fixture above, with git answering a
+     rename by giving the row another name — so the list coming back under the
+     new name, and the favourite travelling with it, can be watched from the
+     store. */
+  const renaming = (ipc, refusal = null) => {
+    let names = ['main', 'develop', 'spike']
+    ipc.on('vcs_repos', () => answer([{ name: '.', path: '/p/.', branch: 'main', detached: null }]))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', () => names.map((name) => ({ name, current: name === 'main' })))
+    ipc.on('vcs_tracking', [])
+    ipc.on('git_head', { branch: 'main', detached: null })
+    ipc.on('settings_save', null)
+    if (refusal) ipc.fail('vcs_rename_branch', refusal)
+    else {
+      ipc.on('vcs_rename_branch', (args) => {
+        names = names.map((name) => (name === args.from ? args.to : name))
+        return null
+      })
+    }
+  }
+
+  it('a renamed branch comes back under its new name', async () => {
+    const { stores, ipc } = await loadStores()
+    renaming(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    expect(await stores.vcs.renameBranch({ from: 'spike', to: 'fix/spike' })).toBe(true)
+
+    expect(ipc.calls('vcs_rename_branch')).toEqual([
+      { repo: '/p/.', from: 'spike', to: 'fix/spike' }
+    ])
+    expect(stores.vcs.vcsState.branches.map((b) => b.name)).toContain('fix/spike')
+    expect(stores.vcs.vcsState.branches.map((b) => b.name)).not.toContain('spike')
+    expect(stores.vcs.vcsState.writeError).toBe(null)
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* `favoriteBranches` holds names, so a rename that left it alone would unmark
+     a branch somebody marked and leave a pin on a name nothing answers to. In
+     place, because the pin is the row's position in that list as well as its
+     mark. */
+  it('the favourite mark travels with the name and keeps its place', async () => {
+    const { stores, ipc } = await loadStores()
+    renaming(ipc)
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.project.favoriteBranches = ['spike', 'develop']
+
+    await stores.vcs.renameBranch({ from: 'spike', to: 'fix/spike' })
+
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['fix/spike', 'develop'])
+  })
+
+  it('a branch nobody marked is not added to the favourites by renaming it', async () => {
+    const { stores, ipc } = await loadStores()
+    renaming(ipc)
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.project.favoriteBranches = ['develop']
+
+    await stores.vcs.renameBranch({ from: 'spike', to: 'fix/spike' })
+
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['develop'])
+  })
+
+  /* A pinned name with nothing behind it is an ordinary thing for that list to
+     hold — it draws no row — so a rename onto one must not leave the same name
+     in it twice. */
+  it('does not leave the new name in the favourites twice', async () => {
+    const { stores, ipc } = await loadStores()
+    renaming(ipc)
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.project.favoriteBranches = ['fix/spike', 'spike']
+
+    await stores.vcs.renameBranch({ from: 'spike', to: 'fix/spike' })
+
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['fix/spike'])
+  })
+
+  /* Git's refusal is drawn in the panel under `WRITE_REFUSED.rename` and is
+     **not** thrown to the caller, unlike a refused delete: there is no second
+     question for the window to ask, and the window has closed by then anyway.
+     Nothing is renamed, so nothing in the favourites moves either. */
+  it('a refused rename lands in the panel and changes nothing', async () => {
+    const { stores, ipc } = await loadStores()
+    renaming(ipc, { kind: 'git', message: "fatal: a branch named 'develop' already exists" })
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.project.favoriteBranches = ['spike']
+
+    expect(await stores.vcs.renameBranch({ from: 'spike', to: 'develop' })).toBe(false)
+
+    expect(stores.vcs.vcsState.writeError).toMatchObject({ kind: 'git', op: 'rename' })
+    expect(stores.vcs.vcsState.branches.map((b) => b.name)).toContain('spike')
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['spike'])
+    expect(stores.vcs.vcsState.busy).toBe(null)
+  })
+
+  /* `write()` answers `true` for a project that moved underneath — the branch
+     did move on disk — and `settings.project` is merged in place on a switch.
+     `deleteBranch` above keeps the same guard for the same reason. */
+  it('does not move the name in a project somebody switched to mid-rename', async () => {
+    const { stores, ipc } = await loadStores()
+    let release
+    const held = new Promise((resolve) => {
+      release = () => resolve(null)
+    })
+    renaming(ipc)
+    ipc.on('vcs_rename_branch', () => held)
+    await stores.vcs.loadRepos('/p')
+    stores.settings.settings.activeProject = '/p'
+    stores.settings.settings.project.favoriteBranches = ['spike']
+
+    const renaming_ = stores.vcs.renameBranch({ from: 'spike', to: 'fix/spike' })
+    stores.settings.settings.activeProject = '/other'
+    stores.settings.settings.project.favoriteBranches = ['spike', 'main']
+    stores.vcs.vcsState.project = '/other'
+    release()
+    await renaming_
+
+    expect(stores.settings.settings.project.favoriteBranches).toEqual(['spike', 'main'])
+  })
+
+  /* The unchanged name is what the dialog's dead button already refuses; a
+     caller going round it asks git for nothing either. */
+  it('a rename to the same name, or to nothing, asks git nothing', async () => {
+    const { stores, ipc } = await loadStores()
+    renaming(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    expect(await stores.vcs.renameBranch({ from: 'spike', to: 'spike' })).toBe(false)
+    expect(await stores.vcs.renameBranch({ from: 'spike', to: '  ' })).toBe(false)
+    expect(await stores.vcs.renameBranch({ from: '', to: 'fix/spike' })).toBe(false)
+
+    expect(ipc.calls('vcs_rename_branch')).toEqual([])
+  })
+
+  /* The name is trimmed before it is sent, since that is the name that would be
+     created — the same trim `canRename` judges. */
+  it('sends the trimmed name to git', async () => {
+    const { stores, ipc } = await loadStores()
+    renaming(ipc)
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.renameBranch({ from: 'spike', to: '  fix/spike  ' })
+
+    expect(ipc.calls('vcs_rename_branch')).toEqual([
+      { repo: '/p/.', from: 'spike', to: 'fix/spike' }
+    ])
+  })
+
   it('a delete with no branch asks git nothing', async () => {
     const { stores, ipc } = await loadStores()
     deleting(ipc)

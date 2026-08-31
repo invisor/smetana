@@ -23,7 +23,19 @@ const focus = ref(false)
    wrapper below, not to the input, so the attribute would land on a `div` and
    do nothing at all. */
 const el = ref(null)
-defineExpose({ focus: () => el.value?.focus() })
+/* `select` beside it for the field that opens already filled: a dialog handed
+   the name it is about wants the whole of it taken over by the first keystroke,
+   and a caret parked at one end would make somebody clear it by hand — see
+   `git/RenameBranchModal.vue`, which is what asked for this. It focuses first
+   rather than leaving that to the caller, because a selection in an unfocused
+   field is invisible and the next key goes somewhere else entirely. */
+defineExpose({
+  focus: () => el.value?.focus(),
+  select: () => {
+    el.value?.focus()
+    el.value?.select()
+  }
+})
 const borderColor = computed(() =>
   props.invalid ? 'var(--status-failed-fg)' : focus.value ? 'var(--focus-ring)' : 'var(--border)'
 )

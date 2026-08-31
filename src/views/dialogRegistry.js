@@ -14,11 +14,11 @@
    underneath; a window somebody can push aside and click past has no such
    promise. */
 
-/* The eleven, and the width each one's window gets. Ten of them drew at
-   `Modal`'s default 440 as a modal, and there is no reason for that to change
-   just because the frame did — the numbers are here so that a dialog which
-   outgrows it has somewhere to say so, and `review-changes` is the first that
-   does. */
+/* Every kind, and the width each one's window gets. All but one draw at
+   `Modal`'s default 440, which is what they drew at as modals, and there is no
+   reason for that to change just because the frame did — the numbers are here
+   so that a dialog which outgrows it has somewhere to say so, and
+   `review-changes` is the first and so far the only one that does. */
 const REGISTRY = {
   run: { width: 440, ground: ['project'] },
   'new-task': { width: 440, ground: ['project', 'column'] },
@@ -29,6 +29,13 @@ const REGISTRY = {
      entirely about a branch that exists — one deleted from a terminal while
      this stands open leaves nothing to answer about. */
   'delete-branch': { width: 440, ground: ['project', 'repo', 'branch'] },
+  /* Renaming one. The same ground again and for the same two reasons: the
+     repository because `renameBranch` in `stores/vcs.js` resolves which one it
+     runs in from `vcsState.selected` at the moment Rename is pressed, and the
+     branch because this window is entirely about a branch that exists under the
+     name it opened on — one renamed or deleted from a terminal while this
+     stands open leaves nothing for `git branch -m` to move. */
+  'rename-branch': { width: 440, ground: ['project', 'repo', 'branch'] },
   'promote-column': { width: 440, ground: ['project', 'column'] },
   'setup-project': { width: 440, ground: ['project'] },
   /* Editing `[defaults]` in the project's own `project.toml`. The same ground
@@ -98,6 +105,7 @@ const DIALOG_NOUN = {
   'new-task': 'new task',
   'new-branch': 'new branch',
   'delete-branch': 'delete branch',
+  'rename-branch': 'rename branch',
   'promote-column': 'promote column',
   'setup-project': 'project setup',
   'project-settings': 'project settings',

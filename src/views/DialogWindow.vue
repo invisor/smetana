@@ -32,6 +32,7 @@ import NewTaskModal from '../components/kanban/NewTaskModal.vue'
 import ProjectSettingsModal from '../components/run/ProjectSettingsModal.vue'
 import PromoteColumnModal from '../components/kanban/PromoteColumnModal.vue'
 import ReadyTaskModal from '../components/kanban/ReadyTaskModal.vue'
+import RenameBranchModal from '../components/git/RenameBranchModal.vue'
 import ReviewChangesDialog from '../components/git/ReviewChangesDialog.vue'
 import RunModal from '../components/run/RunModal.vue'
 import SetupProjectModal from '../components/run/SetupProjectModal.vue'
@@ -68,6 +69,7 @@ const COMPONENTS = {
   'new-task': NewTaskModal,
   'new-branch': NewBranchModal,
   'delete-branch': DeleteBranchModal,
+  'rename-branch': RenameBranchModal,
   'promote-column': PromoteColumnModal,
   'setup-project': SetupProjectModal,
   'project-settings': ProjectSettingsModal,
@@ -247,7 +249,7 @@ const stopWaiting = setTimeout(() => {
   told.value = true
 }, FIRST_PAINT_WAIT)
 
-/* Every emit the eleven guests have between them that crosses back to the app
+/* Every emit the guests have between them that crosses back to the app
    window, forwarded by name. A list rather than a wildcard because listeners
    need names, and because a name that is not here is a message that would
    silently go nowhere. A name here that a guest does not declare costs nothing:
@@ -265,7 +267,21 @@ const stopWaiting = setTimeout(() => {
    rather than being answered here — a draft outlives the window it was written
    in, so the only side that can hold one is the side that is still there
    afterwards, and it keeps them per project. */
-const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save', 'branch', 'draft']
+const EMITS = [
+  'close',
+  'confirm',
+  'create',
+  /* The rename window's answer, and a name of its own rather than `confirm` or
+     `submit`: it carries `{ from, to }`, and a verb naming what happens is what
+     the branch beside it in `onResult` reads as. */
+  'rename',
+  'submit',
+  'resolve',
+  'rescope',
+  'save',
+  'branch',
+  'draft'
+]
 
 /* And the three that deliberately do not travel: `new-task`'s images, answered
    in this window by the store above. They are a separate list rather than a

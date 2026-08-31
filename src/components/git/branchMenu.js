@@ -36,15 +36,23 @@
    nothing refuses it — not a run, not an operation in flight, and not the row
    being the branch already checked out.
 
-   The last two are the ones that are not about a branch as it stands: cutting a
-   new one from this row's commit, and deleting this one. They change whether a
-   branch exists at all, and they sit in a group each rather than in one
-   together. `Delete this branch` is last because it is the only item here that
-   loses work, and a destructive row is worth the separator that keeps a roughly
-   aimed pointer off it. The two are also refused differently — cutting from
-   where you are standing is the ordinary case and deleting where you are
-   standing is impossible — so one group holding both would grey half of itself
-   and leave the caption reaching over a live row into a dead one.
+   Beside the favourite sits the one item that reaches nothing at all: putting
+   this branch's **whole** name on the clipboard, because it is wanted for a git
+   command somewhere else. The row draws a leaf under a folder heading, so the
+   name a person can see is not the name they need; this is where the whole one
+   comes from.
+
+   The last three are the ones that are not about a branch as it stands: cutting
+   a new one from this row's commit, renaming this one, and deleting it. They
+   change whether a branch exists at all or what it answers to, and the delete
+   sits in a group of its own rather than with the other two. `Delete this
+   branch` is last because it is the only item here that loses work, and a
+   destructive row is worth the separator that keeps a roughly aimed pointer off
+   it. It is also refused differently — cutting from where you are standing is
+   the ordinary case, renaming where you are standing is what `git branch -m`
+   is for, and deleting where you are standing is impossible — so one group
+   holding all three would grey a third of itself and leave the caption reaching
+   over two live rows into a dead one.
 
    That last property is one this file used to have whole and now has in part,
    which is worth saying plainly rather than leaving to be discovered. Once the
@@ -80,6 +88,11 @@
    so a branch has no difference from itself to draw and the current row refuses
    it; this one writes a preference and reads nothing, so it stays live on every
    row in every state.
+
+   Copying the name shares that reach without widening it either, and it has the
+   plainest claim to it of the three: it writes nothing anywhere, not even a
+   preference, so there is nothing for a run, an operation in flight or the tick
+   on this row to refuse.
 
    The review is the **fifth**, and it shares the fourth's reach rather than
    widening it: nothing refuses it either. It reads, it writes only inside
@@ -159,6 +172,18 @@ export function branchMenuItems({
       icon: 'star',
       disabled: false
     },
+    /* Beside it, and the only item in this menu that reaches neither git nor
+       `settings.json`: it puts the branch's name on the clipboard because
+       somebody needs it for a git command somewhere else. The **whole** name
+       and never the leaf the row draws — `fix/spike` is what a command takes,
+       and `spike` is a string that would fail somewhere the panel cannot see.
+
+       Refused by nothing at all, which is the favourite's reach and for a
+       stronger reason: this writes nothing anywhere. Not a run, not an
+       operation in flight, and not the row being the branch already checked
+       out — the name of the branch you are standing on is exactly as copyable
+       as any other. */
+    { kind: 'copy-name', label: 'Copy branch name', icon: 'copy', disabled: false },
     /* A separator, because the two below are not the same kind of act as the
        one above: switching branches is where you are, merging and rebasing
        change what the branch you are on contains. */
@@ -179,6 +204,20 @@ export function branchMenuItems({
       kind: 'new-branch',
       label: 'New branch from this',
       icon: 'git-branch-plus',
+      disabled: Boolean(held)
+    },
+    /* In that same group and above the separator, because it is the other item
+       that changes what a branch is called rather than what it contains — and
+       it is refused exactly as its neighbour is, by `held` and by nothing else.
+       The row with the tick is deliberately live: `git branch -m` renames the
+       branch HEAD is on and HEAD travels with the ref, so a typo in the name of
+       the branch somebody is working in is the ordinary case rather than the
+       edge one. That is the whole reason it is not down in the delete's group,
+       where `current` refuses everything. */
+    {
+      kind: 'rename',
+      label: 'Rename this branch',
+      icon: 'pencil',
       disabled: Boolean(held)
     },
     { type: 'separator' },
