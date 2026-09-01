@@ -1638,10 +1638,21 @@ async fn headroom(
                     _ = stop.recv() => return None,
                     // The press has to reach a run that is ten minutes into a
                     // sleep, or it would read as having done nothing at all.
-                    // A closed channel resolves immediately and falls through
-                    // to the top of the loop, which is where a run whose worker
-                    // entry has gone belongs anyway.
-                    _ = released.changed() => {}
+                    //
+                    // The error is guarded rather than ignored, and the guard
+                    // is what keeps this arm from being a spin: `changed()` on
+                    // a channel whose sender is gone resolves at once and for
+                    // ever, so an ignored error would send the loop straight
+                    // back to a 60-second probe, over and over. It cannot
+                    // happen — the sender lives in the worker's entry for this
+                    // run, and that entry outlives this task by construction —
+                    // and a run whose entry has gone is over in any case, which
+                    // is what this answers.
+                    changed = released.changed() => {
+                        if changed.is_err() {
+                            return None;
+                        }
+                    }
                 }
             }
             decision => {
