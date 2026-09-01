@@ -199,9 +199,9 @@ on its own. **This runs before you take any new work.**
    unclaimable by everybody for good, and nothing but a person gets it back. That is the
    whole of what this step has to say about it. Who holds it and whether that holder is
    alive is a different question with a different answer, and it is step 3's — handing it
-   to `merging` and walking on was this step's own defect, since `merging` knows one way
-   to take a lock off somebody, an hour on the clock, and that rule is written for a lead
-   sitting and waiting rather than for a run that has already ended holding it
+   to `merging` and walking on was this step's own defect, since the only ground `merging`
+   had then was an hour on the clock, and that rule is written for a lead sitting and
+   waiting rather than for a run that has already ended holding it
    (smetana-0u7). **An issue on this list is not provably an
    orphan.** The assignee is the evidence — `bd show <id>` carries it, and every run
    claims under its own actor — so a `smetana-run-<id>` that is not this run's own
@@ -289,7 +289,7 @@ on its own. **This runs before you take any new work.**
    ```
 
    Open with no assignee → free, nothing to do here; Phase 2 claims it when it gets
-   there. Held → the holder decides it, and there are three answers rather than two.
+   there. Held → the holder decides it, and there are four answers rather than two.
    Look the assignee up in the same `.smetana/runs.json` you read in step 2:
 
    - **A batch of a record whose `writer` is dead.** The app that started it is gone, and
@@ -324,30 +324,73 @@ on its own. **This runs before you take any new work.**
      batch has others; what the lock needs to know is whether the session holding it is
      still merging, and only that session's own group answers that. One file, two
      questions, two fields — and the reason they are not the same field.
-   - **Anything else** — a live group, a batch whose `group` the file does not record, an
-     actor the file names nowhere, no file at all, a file you cannot read. Leave it, and
-     let `merging`'s 60 minutes have it when Phase 2 gets there. A holder you cannot show
+   - **An actor of the form `smetana-run-<n>` that no record in the file names.** The
+     record leaves the file when the run has ended and its processes are shown gone —
+     that is `registry::forget_run`'s condition — so a run killed after it took the
+     lock and before its last command leaves nothing of itself here at all. The absence
+     is the evidence, and it is the commonest way a lock is left standing; reading it as
+     "nothing to go on, wait the hour" served the half-dead run whose record is still on
+     disk and refused to serve the run that finished and went away, which is the case the
+     ground was written for (smetana-fa4u). Three conditions, all three of them, before
+     it counts:
+
+     - **The file was read and parsed.** No `.smetana/runs.json`, or one you cannot read
+       or cannot parse, is the absence of evidence and not evidence of absence — that
+       falls to the last bullet and waits out the hour. Concluding a death from a file
+       you never read is how a lead that is alive and merging loses its lock.
+     - **Its `version` is 1.** Anything else was written by an app this rule knows
+       nothing about, and the list of actors is not yours to read out of a shape you have
+       not seen.
+     - **No record names the actor, anywhere in the file.** Every `batches[].actor` of
+       every record, not the batches of the one record that caught your eye: an actor can
+       sit under any run, and "it is not in the record I looked at" is not "it is
+       nowhere".
+
+     **And only for that shape of name.** `smetana-run-<n>` is minted by the app and by
+     nothing else; the app writes the record when the run starts and takes it away only
+     once the run is over and its processes are gone, so for that one name the file's
+     silence is a fact about the run rather than a gap in the file. A lead somebody
+     started by hand in a terminal holds the lock under a person's name, which this file
+     was never going to carry, so such a holder falls through to the last bullet
+     untouched.
+
+     This is the one place the file's silence answers the two questions differently, and
+     deliberately. Step 2 leaves a **claim** whose actor the file does not name, because
+     taking work off somebody who may still be doing it costs more than waiting. A
+     **lock** is a door held shut against every other lead, and one an ended run is still
+     holding is a door nobody is behind.
+   - **Anything else** — a live group, a batch whose `group` the file does not record, no
+     file at all, a file you cannot read or cannot parse, a file whose `version` is not
+     1, and any holder whose name is not of the `smetana-run-<n>` form. Leave it, and let
+     `merging`'s 60 minutes have it when Phase 2 gets there. A holder you cannot show
      dead is waited for, exactly as a claim you cannot show dead is left in place: the
      lock can be held by a lead somebody started by hand in a terminal, whose actor this
      file was never going to name.
 
+   **Whichever ground it went on, breaking the lock is a report line and never a silent
+   step**, exactly as `merging` says: the actor it was taken from, how old the claim was,
+   and which of the three grounds — the hour, the holder's own process gone, or the run
+   ended and the registry naming it nowhere.
+
    **What you compare a group pid against is the agent, not the app**, and the difference
-   is the whole of that middle branch. A batch's group is the session the run started, so
-   its recorded `command` is `claude` or a login shell and is never Smetana: run step 2's
-   writer recipe over a group pid instead and every live batch on the machine reads as
-   dead, the lock a lead is holding mid-merge is broken under them, and two leads move the
-   target branch at once — the half-merged target the lock exists to prevent, and a worse
-   night than the hour this step was written to save. So the name you compare against is
-   the file's own `group.command` for that batch, and never a notion of what an agent is
-   called.
+   is the whole of the second branch above. A batch's group is the session the run
+   started, so its recorded `command` is `claude` or a login shell and is never Smetana:
+   run step 2's writer recipe over a group pid instead and every live batch on the
+   machine reads as dead, the lock a lead is holding mid-merge is broken under them, and
+   two leads move the target branch at once — the half-merged target the lock exists to
+   prevent, and a worse night than the hour this step was written to save. So the name
+   you compare against is the file's own `group.command` for that batch, and never a
+   notion of what an agent is called.
 
    **A `claude` under that pid is evidence; a `claude` you went looking for is not.** The
    prohibition in step 2 is untouched, because what it forbids is starting at the process
    table and reasoning towards a batch: any of them could be a person's own session, and
    which one it is cannot be recovered from a name or a start time. Here the file hands
    you one pid, and the only question asked is what is under it. Where the record carries
-   no `group` at all, there is no pid to ask about and the answer is the third bullet,
-   not this one.
+   no `group` at all, there is no pid to ask about and the answer is the last bullet, the
+   one that leaves the lock alone — not this one, and not the registry-silence branch
+   either, which is about a record that is not there rather than about a record with a
+   piece missing.
 
    Abandoned → break it now, in `merging`'s order, and do not wait out the hour: the hour
    is for a holder who might still be working. **Take the two facts the report needs off
