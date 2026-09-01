@@ -459,14 +459,16 @@ watch(
       : [told.value, measured.value, viewport.value, title.value],
   async () => {
     if (!told.value || measured.value <= 0) return
-    const latched = await sizeDialogWindow(props.kind, measured.value, viewport.value, title.value)
-    /* Said after the call rather than before it, so that it means what it says:
-       a real measurement has gone over, which is what shows the window. */
-    reported.value = true
-    /* Only ever upwards. A call that failed answers false, and a window already
-       filled must not fall back to measuring itself because one report did not
-       arrive. */
-    if (latched) filled.value = true
+    const answer = await sizeDialogWindow(props.kind, measured.value, viewport.value, title.value)
+    /* Only for a call that arrived. `null` is a call that did not, and the
+       three ways this one can fail — `scale_factor`, `inner_size`, `show` — are
+       all at or before the line that puts the window on screen, so a failed
+       report must not be recorded as one that showed it. */
+    if (answer) reported.value = true
+    /* Only ever upwards. Neither a failed call nor an unlatched answer may
+       un-fill a window that is already filled — the latch is one-way on the
+       other side and this is the same rule on this one. */
+    if (answer?.latched) filled.value = true
   },
   { immediate: true }
 )

@@ -407,11 +407,10 @@ fn window_title(name: &str) -> String {
 
 /// What each open dialog window is doing about its size.
 ///
-/// `baseline` is the size the window was read back at after the last `set_size`
-/// of ours, in physical pixels — `hand_moved` below says why it is read back
-/// rather than remembered from the request. `latched` is one-way: once a hand
-/// has given this window a size, nothing computed ever moves it again, for the
-/// window's whole life.
+/// One entry per open dialog window: the last size known to be ours, how many
+/// events of our own are still owed to us, and the two one-way bits. `latched`
+/// is one-way in the strong sense — once a hand has given this window a size,
+/// nothing computed ever moves it again, for the window's whole life.
 ///
 /// A `BTreeMap` in a `static` rather than managed state, for one reason: it has
 /// to be reachable from a window's event closure, which outlives the call that
@@ -426,6 +425,7 @@ fn window_title(name: &str) -> String {
 /// the next window of that kind, which would then never be sized by anything:
 /// built at the provisional height, refused a `set_size` by the latch, and shown
 /// as a title bar with a scroll bar under it.
+///
 /// **Every size in here is in whole logical points**, which is the unit the
 /// file keeps and the unit `set_size` is given. Physical pixels were the earlier
 /// choice and were wrong for one reason: they change when a window is dragged
@@ -543,8 +543,70 @@ fn was_moved_by_hand(kind: &str) -> bool {
     DIALOG_WINDOWS
         .lock()
         .ok()
-        .and_then(|windows| windows.get(kind).map(|state| state.moved_by_hand))
+        .and_then(|windows| windows.get(kind).map(keeps_its_size_on_close))
         .unwrap_or(false)
+}
+
+/// Whether this kind's window keeps its size when it closes.
+///
+/// `moved_by_hand` and not `latched`, and the difference is the whole of this
+/// function: a window opened at a remembered size is latched from birth, so
+/// asking `latched` here would write its size back on every close — including
+/// the size `remembered_size` had clamped it to for whatever monitor it opened
+/// on. One open and close on a laptop would cut a size dragged out on an
+/// external display down to the laptop's, for good.
+fn keeps_its_size_on_close(state: &DialogWindowState) -> bool {
+    state.moved_by_hand
+}
+
+/// A physical size in whole logical points. A scale factor of zero is not a
+/// thing a display has; treating it as 1 keeps a broken answer from becoming an
+/// infinity.
+fn to_points(physical: (u32, u32), scale: f64) -> (u32, u32) {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    (
+        (physical.0 as f64 / scale).round() as u32,
+        (physical.1 as f64 / scale).round() as u32,
+    )
+}
+
+/// Takes one `Resized` — the physical size the platform reported and the scale
+/// factor it was measured under — decides whether it was the hand, and leaves
+/// the record the next one will be judged against.
+///
+/// **The whole transition is here rather than in the event closure**, and that
+/// is deliberate: a closure needs an `AppHandle`, so no test in this repository
+/// can reach one, which is the Rust shape of the problem `CLAUDE.md` describes
+/// for `.vue` files. Everything a mutation could quietly revert — the
+/// conversion out of pixels, spending one owed event rather than all of them,
+/// which events may move the baseline, and which bit a hand sets — lives in
+/// this function so that a test can hold it to each.
+///
+/// The caller keeps only what it cannot hand over: finding the window and
+/// asking it for its scale factor.
+fn record_resize(state: &mut DialogWindowState, physical: (u32, u32), scale: f64) -> bool {
+    let now = to_points(physical, scale);
+    let hand = resize_is_the_hand(state, now);
+    // A collapsed size is a minimise and says nothing about how big this window
+    // is, so it leaves no record at all: neither a baseline, nor a spent count,
+    // since the events we are owed may still be due.
+    if now.0 != 0 && now.1 != 0 {
+        if state.expecting > 0 {
+            // One of ours. What the window became is the new baseline whatever
+            // we asked for, which is the whole point of counting rather than
+            // comparing.
+            state.expecting -= 1;
+            state.baseline = now;
+        } else if hand {
+            state.latched = true;
+            state.moved_by_hand = true;
+            state.baseline = now;
+        }
+        // Otherwise it is inside the slack of a baseline we already hold, and
+        // that baseline is exactly what must not move: a drag of one point per
+        // event has to accumulate against the last size known to be ours.
+    }
+    hand
 }
 
 /// Whether a `Resized` is somebody dragging the corner rather than this app
@@ -803,9 +865,8 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
                 let Ok(scale) = window.scale_factor() else {
                     return;
                 };
-                let now = size.to_logical::<f64>(scale);
-                let now = (now.width.round() as u32, now.height.round() as u32);
-                // The decision and the record it leaves, under one lock.
+                // The decision and the record it leaves, under one lock, and
+                // all of it in `record_resize` where a test can reach it.
                 //
                 // The latch is set here and the size is written later. The two
                 // are separate on purpose: the phase has to change on the first
@@ -817,29 +878,7 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
                         return;
                     };
                     let state = windows.entry(resized_kind.clone()).or_default();
-                    let hand = resize_is_the_hand(state, now);
-                    // A collapsed size is a minimise and says nothing about how
-                    // big this window is, so it leaves no record at all: neither
-                    // a baseline, nor a spent count, since the events we are
-                    // owed may still be due.
-                    if now.0 != 0 && now.1 != 0 {
-                        if state.expecting > 0 {
-                            // One of ours. What the window became is the new
-                            // baseline whatever we asked for, which is the whole
-                            // point of counting rather than comparing.
-                            state.expecting -= 1;
-                            state.baseline = now;
-                        } else if hand {
-                            state.latched = true;
-                            state.moved_by_hand = true;
-                            state.baseline = now;
-                        }
-                        // Otherwise it is inside the slack of a baseline we
-                        // already hold, and that baseline is exactly what must
-                        // not move: a drag of one point per event has to
-                        // accumulate against the last size known to be ours.
-                    }
-                    hand
+                    record_resize(state, (size.width, size.height), scale)
                 };
                 if !hand {
                     return;
@@ -1044,7 +1083,13 @@ fn height_to_set(content: f64, inner: f64, viewport: f64, ceiling: f64) -> f64 {
     // window should be able to say, and if one ever does, the answer that keeps
     // the footer on screen is no correction rather than a negative one.
     let overhead = (inner - viewport).max(0.0);
-    (content + overhead).min(ceiling)
+    // The floor is the window's own `min_inner_size`, said here as well so that
+    // what is asked for is what the OS is going to do anyway. Without it a run
+    // of distinct sub-floor requests would each be counted as an event owed to
+    // us and none of them answered — the only way in this code to leave
+    // `DialogWindowState::expecting` standing. No dialog in this app draws
+    // content that short, so this is a wedge rather than a fix.
+    (content + overhead).min(ceiling).max(MIN_DIALOG_HEIGHT)
 }
 
 /// Puts a dialog window in the middle of the main window, and in the middle of
@@ -1310,8 +1355,8 @@ pub fn persist_geometry(app: &AppHandle) {
 mod tests {
     use super::{
         compare_query, drag_drop_space, hand_moved, height_to_set, image_query, kind_query,
-        open_entry, remembered_size, resize_is_the_hand, tab_query, window_chrome, window_title,
-        DialogWindowState,
+        keeps_its_size_on_close, open_entry, record_resize, remembered_size, resize_is_the_hand,
+        tab_query, window_chrome, window_title, DialogWindowState,
     };
     use std::collections::BTreeMap;
 
@@ -1469,6 +1514,15 @@ mod tests {
         );
     }
 
+    /// The floor is the same number `min_inner_size` is given, and is here so
+    /// that a request the OS would clamp is not made in the first place: a
+    /// clamped request is answered with no `Resized`, and an event owed and
+    /// never delivered is the one thing that leaves the count standing.
+    #[test]
+    fn nothing_is_asked_for_below_the_floor_the_window_has() {
+        assert_eq!(height_to_set(40.0, 471.0, 439.0, 1276.2), 120.0);
+    }
+
     /// The ceiling is about the window and is applied to the size that is set,
     /// after the overhead rather than before it. Content taller than the screen
     /// is an ordinary outcome: the page scrolls its own body and the footer is
@@ -1485,8 +1539,9 @@ mod tests {
         assert!(!hand_moved((880, 632), (880, 632)));
     }
 
-    /// A point of slack, because a logical size set on one side is read back as
-    /// a physical size on the other and the conversion rounds.
+    /// A point of slack on each axis. Both sides are whole logical points, and
+    /// the point they can differ by is what survives the rounding between them
+    /// and the physical pixels the size was carried in.
     #[test]
     fn a_point_of_rounding_is_not_the_hand() {
         assert!(!hand_moved((880, 632), (881, 631)));
@@ -1551,10 +1606,11 @@ mod tests {
     /// Two `set_size` calls can be outstanding at once, and on GTK the second
     /// can be *asked for* before the first is answered: the event comes back
     /// from the compositor's configure round trip while the next IPC message
-    /// from the webview needs no round trip at all. A flag raised twice and
-    /// spent once would leave the second event judged against the first one's
-    /// baseline, and latch a window nobody touched. Both are owed, so both are
-    /// ours.
+    /// from the webview needs no round trip at all. A count raised twice and
+    /// spent all at once would leave the second event judged against the first
+    /// one's baseline, and latch a window nobody touched. Both are owed, so
+    /// both are ours — and this goes through `record_resize`, so the spending
+    /// is the code's rather than the test's.
     #[test]
     fn two_sizings_in_flight_are_both_ours() {
         let mut state = DialogWindowState {
@@ -1562,27 +1618,92 @@ mod tests {
             expecting: 2,
             ..DialogWindowState::default()
         };
-        assert!(!resize_is_the_hand(&state, (440, 380)), "the first is owed");
-        state.expecting -= 1;
-        state.baseline = (440, 380);
-        assert!(!resize_is_the_hand(&state, (440, 460)), "and so is the second");
-        state.expecting -= 1;
-        state.baseline = (440, 460);
+        assert!(!record_resize(&mut state, (440, 380), 1.0), "the first is owed");
+        assert!(!record_resize(&mut state, (440, 460), 1.0), "and so is the second");
         assert!(
-            resize_is_the_hand(&state, (700, 460)),
+            record_resize(&mut state, (700, 460), 1.0),
             "nothing is owed now, so the next one is judged on its size"
         );
     }
 
     /// A size in points does not change when a window is dragged between
-    /// displays of different scale, and that is why the whole comparison is in
+    /// displays of different scale, and that is why the comparison is in
     /// points: tao raises `ScaleFactorChanged` and then a `Resized` carrying a
-    /// new physical size for an unchanged logical one, which in pixels reads as
-    /// somebody halving the window.
+    /// new physical size for an unchanged logical one, which compared in pixels
+    /// reads as somebody doubling the window.
+    ///
+    /// The scale factor is the argument rather than the caller's business, so
+    /// that this holds the conversion to account and not just the comparison.
     #[test]
     fn crossing_between_displays_of_different_scale_is_not_the_hand() {
-        // 880x632 physical at 2x and 440x316 physical at 1x are one size.
-        assert!(!resize_is_the_hand(&settled((440, 316)), (440, 316)));
+        // A window 440x316 points. On a 1x display that is 440x316 physical; the
+        // same window moved to a 2x display reports 880x632 for the same size.
+        let mut state = settled((440, 316));
+        assert!(
+            !record_resize(&mut state, (880, 632), 2.0),
+            "the same window under a different scale factor is the same size"
+        );
+        assert_eq!(state.baseline, (440, 316), "and nothing about the record changed");
+        assert!(!state.latched);
+    }
+
+    /// A corner dragged a point at a time. No single event leaves the slack, so
+    /// the baseline must not creep along behind it: measured frame to frame,
+    /// a slow drag would never register at all and the window would be fitted
+    /// back out from under the hand.
+    #[test]
+    fn a_slow_drag_accumulates_against_the_last_size_that_was_ours() {
+        let mut state = settled((440, 316));
+        assert!(
+            !record_resize(&mut state, (441, 316), 1.0),
+            "one point is inside the rounding slack"
+        );
+        assert_eq!(state.baseline, (440, 316), "so the baseline stays where it was");
+        assert!(
+            record_resize(&mut state, (442, 316), 1.0),
+            "two points from the last size known to be ours is a hand"
+        );
+        assert_eq!(state.baseline, (442, 316), "and now the hand's size is the record");
+    }
+
+    /// What a hand leaves behind, which is what the close-write asks about.
+    #[test]
+    fn a_hand_is_what_makes_a_size_worth_keeping() {
+        let mut state = settled((440, 316));
+        assert!(!keeps_its_size_on_close(&state), "nothing has moved it yet");
+        assert!(record_resize(&mut state, (700, 316), 1.0));
+        assert!(state.latched, "nothing computed may size it now");
+        assert!(keeps_its_size_on_close(&state), "and its size is worth keeping");
+    }
+
+    /// The case the two bits exist to tell apart. A window opened at a
+    /// remembered size is latched before anybody has touched it, so a close
+    /// that asked `latched` would write back whatever `remembered_size` clamped
+    /// it to on this monitor — quietly cutting a size dragged out on an
+    /// external display down to the laptop's, with no way back.
+    #[test]
+    fn a_window_opened_at_a_remembered_size_writes_nothing_back_on_close() {
+        let mut windows = BTreeMap::new();
+        open_entry(&mut windows, "run", true);
+        let state = windows.get("run").expect("written");
+        assert!(state.latched, "nothing computed may size it");
+        assert!(!keeps_its_size_on_close(state), "but no hand has moved it, so its size is not news");
+    }
+
+    /// A minimise reports a collapsed size and must leave no trace at all —
+    /// not a baseline the next event would be measured against, and not a spent
+    /// count, since the events we are owed may still be due.
+    #[test]
+    fn minimising_leaves_the_record_untouched() {
+        let mut state = DialogWindowState {
+            baseline: (440, 316),
+            expecting: 1,
+            ..DialogWindowState::default()
+        };
+        assert!(!record_resize(&mut state, (0, 0), 1.0));
+        assert_eq!(state.baseline, (440, 316));
+        assert_eq!(state.expecting, 1, "the event we are owed is still owed");
+        assert!(!state.latched);
     }
 
     /// And once it is spent, the next one is judged on its size again.

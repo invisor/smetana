@@ -173,18 +173,24 @@ export async function closeDialogWindow(kind) {
    content's — the second of the two sources `DialogWindow.vue` has for that
    flag, and the one that covers a window dragged while it is open. It costs
    nothing to carry: the page already calls this on every change to its
-   viewport, and a hand on the corner is a change to its viewport. */
+   viewport, and a hand on the corner is a change to its viewport.
+
+   **`null` for a call that failed, an object for one that did not**, and the
+   difference is load-bearing rather than tidy: this same call is the only thing
+   that ever shows a dialog window, so the page has to be able to tell "Rust
+   answered, the window is up and not latched" from "the call did not arrive".
+   A single `false` conflated the two, and a window whose first report errored
+   would have been recorded as shown. */
 export async function sizeDialogWindow(kind, height, viewport, title) {
   try {
     const answer = await invoke('dialog_window_size', { kind, height, viewport, title })
-    /* Whether this window's size is the person's now. `?? false` covers the
-       browser, where the mock answers `null` and nothing is ever dragged. The
-       flag it feeds is one-way on the other side, so a failed call saying
-       "false" cannot un-fill a window that is already filled. */
-    return answer?.latched ?? false
+    /* `?? false` covers the browser, where the mock answers `null` for this
+       command and nothing is ever dragged — a call that arrived and found no
+       window to latch, which is exactly what a browser tab is. */
+    return { latched: answer?.latched ?? false }
   } catch (err) {
     console.warn('[app] the dialog window kept the size it had:', err)
-    return false
+    return null
   }
 }
 
