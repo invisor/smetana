@@ -35,6 +35,7 @@ import Resizer from '../components/shell/Resizer.vue'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { LIST_DEFAULT, STEP, clampListWidth, resolveDrag } from './compareWidth.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
+import { announceWindowReady } from '../stores/app.js'
 import { readSharedSettings, watchSharedSettings } from '../stores/settings.js'
 import {
   aim,
@@ -119,6 +120,16 @@ onMounted(async () => {
     console.warn('[compare-window] the settings could not be read:', err)
   }
   aimAt(props.repo, props.branch)
+  /* And only now: this window is listening, and the pair its URL named is the
+     one it is aimed at. Anything the app sent while it was still loading — a
+     second branch chosen before this window was up — is handed over on this
+     call and lands as an ordinary `compare:show` through the subscription
+     above. The order is the whole of it: before the subscription the event
+     would be lost, and before the line above the URL's pair, which is the older
+     of the two, would be aimed at over the newer one. `stores/app.js` carries
+     the argument; `aim` itself settles what a second pair does to a file
+     somebody is reading. */
+  announceWindowReady()
   window.addEventListener('focus', refresh)
 })
 

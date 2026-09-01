@@ -34,6 +34,7 @@ import {
   watchSharedSettings
 } from '../stores/settings.js'
 import {
+  announceWindowReady,
   appVersion,
   autostartState,
   openExternal,
@@ -261,6 +262,14 @@ onMounted(async () => {
   } catch (err) {
     console.warn('[settings-window] no app window to hear the board columns from:', err)
   }
+  /* And only now: this window is listening, and the section its URL named is
+     the one `tab` was seeded with at setup. A gear pressed on a section while
+     this window was still loading is handed over on this call and lands as an
+     ordinary `settings:show` through the subscription above. The order is the
+     whole of it — before the subscription the event would be lost, and before
+     the seeding the URL's section, which is the older of the two, would be
+     drawn over the newer one. `stores/app.js` carries the argument. */
+  announceWindowReady()
   try {
     const stored = await readSharedSettings()
     /* `promptEdited` as well as `heard`, because this call passes

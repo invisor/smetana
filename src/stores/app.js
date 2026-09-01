@@ -20,7 +20,10 @@ import { CHROME_NONE, chromeFromPlatform } from '../components/shell/windowChrom
 /* Which section the settings window should be showing. Not a setting and not
    part of the three-event contract in `settings.js` — nothing about it reaches
    `settings.json`, and the main window is still the only writer of that file.
-   It is a message about a window, which is what this store is for. */
+   It is a message about a window, which is what this store is for.
+
+   The name is spelled here and once more on the far side, as `show_event` in
+   `src-tauri/src/window.rs`, which is the side that sends it. */
 export const SETTINGS_SHOW = 'settings:show'
 
 /* Opens the settings window on a section, or brings the open one forward — the
@@ -32,8 +35,16 @@ export const SETTINGS_SHOW = 'settings:show'
    the URL it already loads (`?view=settings&tab=storage`), the mechanism
    `?view=` and `?theme=` are built on. A window already open is focused rather
    than rebuilt — that is the whole point of the label — so it never sees a new
-   URL, and the event is the only way to reach it. A fresh window is not
-   listening yet and simply misses the event, having already read the parameter.
+   URL, and `settings:show` is the only way to reach it.
+
+   **That event is sent by Rust and not from here**, which is the one thing about
+   this function worth reading twice. It used to be emitted on the line after
+   the `invoke`, and a window built by this very press had not subscribed yet, so
+   the event went nowhere and the window stayed on the section its URL named.
+   Only Rust knows which of the two branches the press took, so only Rust can
+   hold the message back for a window that is still loading — see
+   `announceWindowReady` below, and the header of `window.rs` for the whole of
+   it.
 
    In a browser there is no window to make: the mock answers, nothing happens,
    and the gear is a no-op. The settings UI is still reachable there, through
@@ -43,15 +54,6 @@ export async function openSettingsWindow(tab = null) {
     await invoke('settings_window_open', { tab })
   } catch (err) {
     console.error('[app] the settings window did not open:', err)
-    return
-  }
-  if (!tab) return
-  try {
-    await emit(SETTINGS_SHOW, { tab })
-  } catch (err) {
-    /* The window is open on whatever it was showing, which is a smaller failure
-       than not opening at all — hence a warning and no further attempt. */
-    console.warn('[app] the settings window was not told which section to show:', err)
   }
 }
 
@@ -271,24 +273,52 @@ export async function openImageWindow(path, name) {
     await invoke('image_window_open', { path, name })
   } catch (err) {
     console.error('[app] the image window did not open:', err)
-    return
-  }
-  try {
-    await emit(IMAGE_SHOW, { path, name })
-  } catch (err) {
-    /* The window is up on whatever it was showing, which is a smaller failure
-       than not opening at all — hence a warning and no second attempt. */
-    console.warn('[app] the image window was not told which picture to show:', err)
   }
 }
 
-/* The image window's half: which picture it has just been asked for. A window
-   that was built by this very click is not listening yet and simply misses the
-   event, having already read the pair off its URL. */
+/* The image window's half: which picture it has just been asked for. The names
+   of the two fields are the other half of a pair — `image_show` in
+   `src-tauri/src/window.rs` writes them, and nothing mechanical holds the two
+   sides together. */
 export async function watchImageShow(onShow) {
   return listen(IMAGE_SHOW, (event) =>
     onShow(event.payload?.path ?? null, event.payload?.name ?? '')
   )
+}
+
+/* ---- a window saying it is ready to be re-aimed ------------------------- */
+/* The second half of the three `*:show` families above, and of `compare:show`
+   in `stores/compare.js`. It is one function for all three because it is one
+   fact — this window has loaded — and Rust reads which window is speaking off
+   the webview's own label rather than from an argument.
+
+   **Why it is needed at all.** An open window is focused rather than reloaded,
+   so what to show next reaches it as an event; but a window exists from the
+   moment it is built, long before its webview has subscribed to anything, and
+   Tauri buffers nothing. A second thumbnail clicked before the image window had
+   loaded therefore set the frame's title and never reached the picture — a
+   window naming one picture and showing another. Rust now holds the last
+   "show this" per window and hands it over on this call.
+
+   **The order the caller has to keep**, and the whole of what a window owes
+   this: announce *after* subscribing, since an event answered into a window
+   that is not listening is the very thing this exists to prevent, and *after*
+   drawing what came in on the URL, since the URL is the older of the two and
+   would otherwise be painted over the newer picture.
+
+   A window that was built rather than re-aimed announces itself too and is
+   answered with silence — Rust holds nothing for it, because what it is showing
+   arrived on its URL. Nothing keeps state here: this store has none, and the
+   holder is one per app rather than one per webview, which is what stops two
+   windows answering the same announcement with different pictures. */
+export async function announceWindowReady() {
+  try {
+    await invoke('window_show_ready')
+  } catch (err) {
+    /* A window on whatever its URL named, which is a smaller failure than not
+       opening at all — hence a warning and no second attempt. */
+    console.warn('[app] the desktop was not told this window is ready:', err)
+  }
 }
 
 /* Whether the app opens itself when the person signs in, and the press that

@@ -70,14 +70,58 @@
 //! `on_window_ready` hook, which used to defeat the `is_visible` test below and
 //! leave a re-opened dialog uncentred.
 //!
-//! One thing travels the other way, and it is the only message this file sends:
-//! a dialog window destroyed by its own frame says so on the channel the
-//! dialog's own answers travel on, because the app window owns every bit of a
-//! dialog's state and would otherwise go on serving a window that is not there.
+//! One thing travels the other way: a dialog window destroyed by its own frame
+//! says so on the channel the dialog's own answers travel on, because the app
+//! window owns every bit of a dialog's state and would otherwise go on serving
+//! a window that is not there.
 //!
 //! The closed list of kinds is the front end's (`src/views/dialogRegistry.js`)
 //! and is deliberately not repeated here; what this side checks is the URL, in
 //! `kind_query`.
+//!
+//! # Re-aiming an open window, and the event that used to be lost
+//!
+//! Three of these windows — settings, compare and image — are focused rather
+//! than reloaded when they are already open, so what they are to show next
+//! reaches them as an event (`settings:show`, `compare:show`, `image:show`) and
+//! never as a URL. That is the decision, not an accident: reloading would throw
+//! away the tab somebody is reading, the file they have open in a comparison,
+//! or the window they have just dragged onto a second monitor and sized.
+//!
+//! The hole it left is that a window exists from the moment it is built, long
+//! before its webview has loaded and subscribed to anything. Tauri buffers no
+//! events, so one sent into that gap is simply gone. The image window showed it
+//! plainest, because its frame title is set on the same branch: the title
+//! changes synchronously and reliably while the picture arrives only by the
+//! event, so clicking a second thumbnail before the window had loaded left a
+//! window **naming one picture and showing another** until it was clicked
+//! again.
+//!
+//! So the sender keeps hold of it. `show_now_or_on_ready` emits the event and
+//! remembers it under the window's label; the window, once it has loaded and
+//! subscribed, calls `window_show_ready`, which emits whatever is being held
+//! for it and forgets it. Only the newest is kept — a window re-aimed three
+//! times before it finished loading wants the third picture and neither of the
+//! other two.
+//!
+//! Nothing is held for a window one of these commands *builds*: what to show is
+//! on the URL it is about to load, and a copy here would be the same picture
+//! read a second time the moment the window announced itself. That is also why
+//! building forgets what is held — the window before it may have been closed
+//! with something still owed to it, and that would reach the new one.
+//!
+//! Held here rather than in the front end because only this side knows which of
+//! the two branches a press took, and because any of the app's webviews can ask
+//! for any of these windows: the new-task window is what opens the image window,
+//! while the app window opens the other two. One holder answers for all of them;
+//! a copy per webview would be several senders answering one announcement with
+//! different pictures.
+//!
+//! Each event name is spelled once per side: `show_event` here, against
+//! `SETTINGS_SHOW` and `IMAGE_SHOW` in `src/stores/app.js` and `COMPARE_SHOW`
+//! in `src/stores/compare.js`. So are the payloads — `settings_show`,
+//! `compare_show` and `image_show` here, against the fields those three
+//! watchers read.
 //!
 //! # The main window's geometry
 //!
@@ -132,11 +176,12 @@
 use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, MutexGuard,
 };
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
 
 use crate::settings;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
@@ -177,6 +222,129 @@ const IMAGE_LABEL: &str = "image";
 /// up unable to talk to anything — which is what to suspect first if a dialog
 /// window opens blank.
 pub(crate) const DIALOG_PREFIX: &str = "dialog-";
+
+/// The last "show this" sent to a window that may not have been listening for
+/// it yet, one entry per window label and only ever the newest.
+///
+/// A `Vec` rather than a map because it holds at most three things — one
+/// settings window, one compare window, one image window — and because
+/// `Vec::new` is a `const fn` where `HashMap::new` is not, which is what lets
+/// this be a plain `static` with no lock-on-first-use around it.
+///
+/// The header of this file carries the whole argument for why anything is held
+/// at all. What is worth repeating here is what is *not* held: nothing for a
+/// dialog window, which already has a handshake of its own — `dialog:hello`
+/// answered by `dialog:props`, in `src/stores/app.js` — and nothing for the
+/// main window, which is never re-aimed.
+static PENDING_SHOW: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
+
+/// The one way in, so that a poisoned lock is answered in one place rather than
+/// three. Poisoning is taken rather than propagated: a panic in one of the four
+/// tiny functions below could only leave the list itself intact, and refusing
+/// every later re-aim over it would cost the feature this whole mechanism is.
+fn pending_show() -> MutexGuard<'static, Vec<(String, Value)>> {
+    PENDING_SHOW
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Which event carries "show this" to a window, from that window's own label:
+/// `settings` becomes `settings:show`, `compare` becomes `compare:show`,
+/// `image` becomes `image:show`.
+///
+/// Derived rather than listed so this side spells the pattern once. The front
+/// end spells the three names once each — `SETTINGS_SHOW` and `IMAGE_SHOW` in
+/// `src/stores/app.js`, `COMPARE_SHOW` in `src/stores/compare.js` — and nothing
+/// mechanical pairs the two sides: a rename on either would not fail, it would
+/// leave an open window that is never re-aimed at all.
+fn show_event(label: &str) -> String {
+    format!("{label}:show")
+}
+
+/// What each of the three windows is told, in the words its own watcher reads:
+/// `tab`, `path` and `name` in `src/stores/app.js`, `repo` and `branch` in
+/// `src/stores/compare.js`. Three functions rather than three `json!` calls at
+/// the call sites so that the shape is written once on this side and a test can
+/// hold it against those watchers — nothing else pairs the two, and a field
+/// renamed on either side costs the feature and fails nothing.
+fn settings_show(tab: &str) -> Value {
+    json!({ "tab": tab })
+}
+
+fn compare_show(repo: &str, branch: &str) -> Value {
+    json!({ "repo": repo, "branch": branch })
+}
+
+fn image_show(path: &str, name: &str) -> Value {
+    json!({ "path": path, "name": name })
+}
+
+/// Keeps the newest, and only the newest: a window re-aimed three times before
+/// it finished loading wants the third picture and neither of the other two.
+fn remember_show(held: &mut Vec<(String, Value)>, label: &str, payload: Value) {
+    match held.iter_mut().find(|(name, _)| name == label) {
+        Some(slot) => slot.1 = payload,
+        None => held.push((label.to_string(), payload)),
+    }
+}
+
+/// Drops what is held for a label without sending it. Called where a window is
+/// about to be built: what it is to show is on the URL it will load, and what
+/// was owed to the window before it is owed to nobody.
+fn forget_show(held: &mut Vec<(String, Value)>, label: &str) {
+    held.retain(|(name, _)| name != label);
+}
+
+/// What is owed to a window that has just announced itself, and nothing on a
+/// second announcement: a window that has taken its picture is listening from
+/// then on, and holding a copy back would re-aim it on its next reload.
+fn take_show(held: &mut Vec<(String, Value)>, label: &str) -> Option<Value> {
+    let at = held.iter().position(|(name, _)| name == label)?;
+    Some(held.remove(at).1)
+}
+
+/// Tells an open window what to show now, and holds on to it in case that
+/// window was built a moment ago and has not subscribed yet.
+///
+/// The event is emitted to every window rather than to the one named, which is
+/// what the front end always did from its side: these three names are each
+/// listened for in exactly one window, so a target would buy nothing and add a
+/// second question about how a target is matched.
+///
+/// A failed emit is a warning and no second attempt. The window is up on
+/// whatever it was showing, which is a smaller failure than not opening at all
+/// — and what is held here is unaffected, so a window still loading is still
+/// told the moment it announces itself.
+fn show_now_or_on_ready(app: &AppHandle, label: &str, payload: Value) {
+    remember_show(&mut pending_show(), label, payload.clone());
+    if let Err(err) = app.emit(&show_event(label), payload) {
+        log::warn!("could not tell the {label} window what to show: {err}");
+    }
+}
+
+/// A window saying it has loaded, subscribed, and spent what came in on its own
+/// URL — so anything held for it may be sent now.
+///
+/// Which window is asking is the webview's own label rather than an argument,
+/// which is one fewer thing a caller can get wrong and one fewer name to keep in
+/// step. A label nothing is held for is the ordinary case — every window that
+/// was built rather than re-aimed announces itself too — and is answered with
+/// silence.
+///
+/// The announcement has to come **after** the window has subscribed and after it
+/// has drawn what its URL named, and both halves are the caller's to get right:
+/// announcing before subscribing would lose the very event this exists to
+/// deliver, and announcing before the URL is spent would let the URL overwrite
+/// the newer picture.
+#[tauri::command]
+pub fn window_show_ready(app: AppHandle, window: Window) -> Result<(), String> {
+    let label = window.label().to_string();
+    let Some(payload) = take_show(&mut pending_show(), &label) else {
+        return Ok(());
+    };
+    app.emit(&show_event(&label), payload)
+        .map_err(|err| err.to_string())
+}
 
 /// Which dialog, as a parameter on the URL the window already loads.
 ///
@@ -271,6 +439,14 @@ fn encode(raw: &str) -> String {
 /// throw away the tab a person is in the middle of reading to show them one they
 /// pressed a button for, and re-ask the app window for everything it holds.
 ///
+/// That message is sent from here rather than from the front end after this
+/// call, and it is held until the window says it is listening: only this side
+/// knows which of the two branches below was taken. The header of this file
+/// carries the whole of it.
+///
+/// No section asked for is no message: the gear opens the settings on the tab
+/// they were left on, which is what an open window is already showing.
+///
 /// Deliberately not `async`: a synchronous command runs on the main thread,
 /// which is where a window is created on every platform this app targets.
 #[tauri::command]
@@ -279,8 +455,15 @@ pub fn settings_window_open(app: AppHandle, tab: Option<String>) -> Result<(), S
         // Minimized counts as open, and focusing a minimized window leaves a
         // person pressing the gear with nothing on screen to show for it.
         let _ = window.unminimize();
+        if let Some(name) = tab.as_deref() {
+            show_now_or_on_ready(&app, SETTINGS_LABEL, settings_show(name));
+        }
         return window.set_focus().map_err(|err| err.to_string());
     }
+
+    // The section is on the URL below, so nothing is owed to the window about
+    // to be built — including anything the window before it never collected.
+    forget_show(&mut pending_show(), SETTINGS_LABEL);
 
     let mut builder = WebviewWindowBuilder::new(
         &app,
@@ -316,8 +499,12 @@ pub fn settings_window_open(app: AppHandle, tab: Option<String>) -> Result<(), S
 pub fn compare_window_open(app: AppHandle, repo: String, branch: String) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(COMPARE_LABEL) {
         let _ = window.unminimize();
+        show_now_or_on_ready(&app, COMPARE_LABEL, compare_show(&repo, &branch));
         return window.set_focus().map_err(|err| err.to_string());
     }
+
+    // The pair is on the URL below: nothing is owed to a window being built.
+    forget_show(&mut pending_show(), COMPARE_LABEL);
 
     let mut builder = WebviewWindowBuilder::new(
         &app,
@@ -344,14 +531,19 @@ pub fn compare_window_open(app: AppHandle, repo: String, branch: String) -> Resu
 /// The picture travels twice for the reason the compare window's pair does: a
 /// window being built reads it off the URL, and an open one is focused rather
 /// than rebuilt, so the only way to re-aim it is an event — `image:show`, on
-/// the channel the app's windows already speak over, sent by the front end
-/// after this call returns. Rebuilding it instead would throw away the window
-/// somebody has just dragged onto their second monitor and sized.
+/// the channel the app's windows already speak over. Rebuilding it instead
+/// would throw away the window somebody has just dragged onto their second
+/// monitor and sized.
 ///
 /// The title is known here, unlike a dialog window's: it arrived with the path.
 /// It is set again on the focus path, since the open window is now showing a
 /// different picture and a frame still naming the previous one would be the
-/// window lying about what is in it.
+/// window lying about what is in it. **This is the pairing the handshake exists
+/// for**: the title is set here, synchronously and reliably, while the picture
+/// used to arrive by an event that a window still loading never heard — so a
+/// second thumbnail clicked quickly enough left the frame naming one picture
+/// over another one. The event is now held until that window says it is
+/// listening; the header of this file carries the rest.
 ///
 /// Built hidden and shown once it is placed, the same order the main window and
 /// the dialog windows use: a window shown first and moved afterwards is a
@@ -366,8 +558,14 @@ pub fn image_window_open(app: AppHandle, path: String, name: String) -> Result<(
     if let Some(window) = app.get_webview_window(IMAGE_LABEL) {
         let _ = window.unminimize();
         let _ = window.set_title(&window_title(&name));
+        show_now_or_on_ready(&app, IMAGE_LABEL, image_show(&path, &name));
         return window.set_focus().map_err(|err| err.to_string());
     }
+
+    // The picture is on the URL below: nothing is owed to a window being built,
+    // and a copy of it here would be the same file read a second time the
+    // moment that window announced itself.
+    forget_show(&mut pending_show(), IMAGE_LABEL);
 
     let mut builder = WebviewWindowBuilder::new(
         &app,
@@ -1354,10 +1552,13 @@ pub fn persist_geometry(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        compare_query, drag_drop_space, hand_moved, height_to_set, image_query, kind_query,
-        keeps_its_size_on_close, open_entry, record_resize, remembered_size, resize_is_the_hand,
-        tab_query, window_chrome, window_title, DialogWindowState,
+        compare_query, compare_show, drag_drop_space, forget_show, hand_moved, height_to_set,
+        image_query, image_show, keeps_its_size_on_close, kind_query, open_entry, record_resize,
+        remember_show, remembered_size, resize_is_the_hand, settings_show, show_event, tab_query,
+        take_show, window_chrome, window_title, COMPARE_LABEL, DialogWindowState, IMAGE_LABEL,
+        SETTINGS_LABEL,
     };
+    use serde_json::{json, Value};
     use std::collections::BTreeMap;
 
     /// The two words this command may answer with, named here in full because
@@ -1780,5 +1981,130 @@ mod tests {
     #[test]
     fn an_impossible_viewport_cannot_shorten_the_window() {
         assert_eq!(height_to_set(471.0, 439.0, 471.0, 1276.2), 471.0);
+    }
+
+    /* The handshake that keeps a `*:show` from being lost. What is tested is the
+       list of what is being held — the whole of the mechanism that does not need
+       a webview to exist. The emit itself, the command's one line and the order
+       the front end announces in are the parts no test in this repository can
+       reach. */
+
+    /// The three names the front end listens for, and the reason the derivation
+    /// is written out here rather than assumed: nothing pairs the two sides, so
+    /// a rename does not fail — it leaves an open window that is never re-aimed.
+    #[test]
+    fn each_window_is_told_on_a_channel_named_after_it() {
+        assert_eq!(show_event(SETTINGS_LABEL), "settings:show");
+        assert_eq!(show_event(COMPARE_LABEL), "compare:show");
+        assert_eq!(show_event(IMAGE_LABEL), "image:show");
+    }
+
+    /// The bug this exists for: a window built a moment ago has not subscribed,
+    /// the event is gone, and what it was told is waiting for it when it says it
+    /// is there.
+    #[test]
+    fn a_window_that_was_not_listening_yet_is_told_when_it_announces_itself() {
+        let mut held: Vec<(String, Value)> = Vec::new();
+        remember_show(&mut held, IMAGE_LABEL, json!({ "path": "/a.png", "name": "a.png" }));
+
+        assert_eq!(
+            take_show(&mut held, IMAGE_LABEL),
+            Some(json!({ "path": "/a.png", "name": "a.png" }))
+        );
+    }
+
+    /// A window re-aimed several times before it finished loading wants the last
+    /// picture and none of the ones before it.
+    #[test]
+    fn only_the_newest_of_several_is_kept() {
+        let mut held: Vec<(String, Value)> = Vec::new();
+        for name in ["a.png", "b.png", "c.png"] {
+            remember_show(&mut held, IMAGE_LABEL, json!({ "path": name, "name": name }));
+        }
+
+        assert_eq!(held.len(), 1, "one window is owed one picture, not three");
+        assert_eq!(
+            take_show(&mut held, IMAGE_LABEL),
+            Some(json!({ "path": "c.png", "name": "c.png" }))
+        );
+    }
+
+    /// Nothing is owed twice. A window that has taken its picture is listening
+    /// from then on, and a copy held back would re-aim it on its next reload.
+    #[test]
+    fn a_second_announcement_is_owed_nothing() {
+        let mut held: Vec<(String, Value)> = Vec::new();
+        remember_show(&mut held, IMAGE_LABEL, json!({ "path": "/a.png", "name": "a.png" }));
+
+        take_show(&mut held, IMAGE_LABEL);
+
+        assert_eq!(take_show(&mut held, IMAGE_LABEL), None);
+    }
+
+    /// The ordinary case, and the one that has to stay silent: every window that
+    /// was *built* rather than re-aimed announces itself too, having already
+    /// read what it is to show off its own URL.
+    #[test]
+    fn a_window_nobody_re_aimed_is_owed_nothing() {
+        let mut held: Vec<(String, Value)> = Vec::new();
+
+        assert_eq!(take_show(&mut held, IMAGE_LABEL), None);
+    }
+
+    /// Building forgets. Otherwise a window closed with something still owed to
+    /// it would hand that on to the next window under the same label, which for
+    /// the image window means opening on one picture and jumping to another.
+    #[test]
+    fn a_window_that_is_built_collects_nothing_the_last_one_left() {
+        let mut held: Vec<(String, Value)> = Vec::new();
+        remember_show(&mut held, IMAGE_LABEL, json!({ "path": "/old.png", "name": "old.png" }));
+
+        forget_show(&mut held, IMAGE_LABEL);
+
+        assert_eq!(take_show(&mut held, IMAGE_LABEL), None);
+    }
+
+    /// One holder for three windows, so each label answers for itself: a
+    /// comparison re-aimed while a picture is waiting must reach the compare
+    /// window and leave the picture where it is.
+    #[test]
+    fn the_three_windows_are_owed_separately() {
+        let mut held: Vec<(String, Value)> = Vec::new();
+        remember_show(&mut held, IMAGE_LABEL, json!({ "path": "/a.png", "name": "a.png" }));
+        remember_show(&mut held, SETTINGS_LABEL, json!({ "tab": "storage" }));
+        remember_show(
+            &mut held,
+            COMPARE_LABEL,
+            json!({ "repo": "/tmp/r", "branch": "feature" }),
+        );
+
+        forget_show(&mut held, SETTINGS_LABEL);
+
+        assert_eq!(take_show(&mut held, SETTINGS_LABEL), None);
+        assert_eq!(
+            take_show(&mut held, COMPARE_LABEL),
+            Some(json!({ "repo": "/tmp/r", "branch": "feature" }))
+        );
+        assert_eq!(
+            take_show(&mut held, IMAGE_LABEL),
+            Some(json!({ "path": "/a.png", "name": "a.png" }))
+        );
+    }
+
+    /// The payload fields, named here because they are the other half of the
+    /// pair `show_event` is one half of: `src/stores/app.js` reads `tab`, `path`
+    /// and `name`, and `src/stores/compare.js` reads `repo` and `branch`. A
+    /// field renamed on one side costs the feature and fails nothing.
+    #[test]
+    fn each_window_is_told_in_the_words_its_watcher_reads() {
+        assert_eq!(settings_show("storage"), json!({ "tab": "storage" }));
+        assert_eq!(
+            compare_show("/tmp/r", "feature"),
+            json!({ "repo": "/tmp/r", "branch": "feature" })
+        );
+        assert_eq!(
+            image_show("/a.png", "a.png"),
+            json!({ "path": "/a.png", "name": "a.png" })
+        );
     }
 }
