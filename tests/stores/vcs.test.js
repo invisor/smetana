@@ -18,6 +18,12 @@ const answer = (repos, unlisted = []) => ({ repos, unlisted })
 
 const cleanTree = { branch: 'main', detached: null, changes: [] }
 
+/* What Rust measured about a write that went through: the commits the other
+   side had that this one did not, and what the working tree became. Every field
+   is an `Option` there, so a fixture leaving one out would be a different case
+   than it reads as. */
+const LANDED = { commits: 3, files: 7, insertions: 41, deletions: 12 }
+
 /* A tree git left mid-operation: unmerged paths and nothing else. The kind is
    `conflicted` — Rust's `ChangeKind::Conflicted` through serde — which is the
    one word `loadStatus` filters on to decide whether to ask git anything at
@@ -953,7 +959,7 @@ describe('the git panel store', () => {
   it('a merge that went through opens nothing and refreshes the panel', async () => {
     const { stores, ipc } = await loadStores()
     switching(ipc)
-    ipc.on('vcs_merge', { kind: 'clean' })
+    ipc.on('vcs_merge', { kind: 'clean', landed: LANDED })
     await stores.vcs.loadRepos('/p')
     const readsBefore = ipc.calls('vcs_repos').length
 
@@ -1269,7 +1275,7 @@ describe('the git panel store', () => {
     switching(ipc)
     await stores.vcs.loadRepos('/p')
     let release
-    ipc.on('vcs_merge', () => new Promise((resolve) => (release = () => resolve({ kind: 'clean' }))))
+    ipc.on('vcs_merge', () => new Promise((resolve) => (release = () => resolve({ kind: 'clean', landed: LANDED }))))
 
     const first = stores.vcs.merge('develop')
     await stores.vcs.checkout('main')
@@ -2020,5 +2026,169 @@ describe('the uncommitted file count in the status footer', () => {
     const vcs = await load((ipc) => ipc.fail('vcs_status', { kind: 'noGit', message: 'git not found' }))
     expect(vcs.vcsState.tree).toBeNull()
     expect(vcs.dirtyCount.value).toBeNull()
+  })
+})
+
+/* The record the corner's phrase is drawn from. The phrase itself is
+   `components/git/writeSummary.js` and is tested there; what is pinned here is
+   that a write leaves behind everything that phrase needs, that two identical
+   writes are two events, and that neither of the loud outcomes leaves anything
+   at all. */
+describe('what a write leaves behind for the corner to say', () => {
+  const onOneRepo = (ipc) => {
+    ipc.on('vcs_repos', answer(repoIn('/p')))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [
+      { name: 'main', current: true },
+      { name: 'develop', current: false }
+    ])
+    ipc.on('vcs_tracking', [])
+    ipc.on('git_head', { branch: 'main', detached: null })
+  }
+
+  it('a clean merge records the whole of what the phrase needs', async () => {
+    const { stores, ipc } = await loadStores()
+    onOneRepo(ipc)
+    ipc.on('vcs_merge', { kind: 'clean', landed: LANDED })
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.merge('develop')
+
+    expect(stores.vcs.vcsState.lastWrite).toMatchObject({
+      op: 'merge',
+      repo: '/p/.',
+      /* Read before git was asked, which is the only moment it can be read: a
+         rebase stopped on a conflict leaves HEAD detached. */
+      ours: 'main',
+      theirs: 'develop',
+      published: false,
+      landed: LANDED
+    })
+    expect(typeof stores.vcs.vcsState.lastWrite.seq).toBe('number')
+  })
+
+  /* Merging the same branch twice in a row is two events with identical
+     contents, and a watcher on the object alone would see one. The counter is
+     the whole of what tells them apart. */
+  it('two merges in a row are two events', async () => {
+    const { stores, ipc } = await loadStores()
+    onOneRepo(ipc)
+    ipc.on('vcs_merge', { kind: 'clean', landed: LANDED })
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.merge('develop')
+    const first = stores.vcs.vcsState.lastWrite.seq
+    await stores.vcs.merge('develop')
+
+    expect(stores.vcs.vcsState.lastWrite.seq).not.toBe(first)
+  })
+
+  /* A conflict is `ConflictModal`'s report and a toast behind it would be a
+     second voice saying less. An operation that did not finish has no answer to
+     what it brought, either. */
+  it('a conflict leaves nothing for the corner', async () => {
+    const { stores, ipc } = await loadStores()
+    onOneRepo(ipc)
+    ipc.on('vcs_status', () => conflictedTree('src/one.rs'))
+    ipc.on('vcs_in_progress', { op: 'merge', ours: 'main', theirs: 'develop' })
+    ipc.on('vcs_merge', { kind: 'conflict', files: ['src/one.rs'] })
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.merge('develop')
+
+    expect(stores.vcs.vcsState.conflict).toBeTruthy()
+    expect(stores.vcs.vcsState.lastWrite).toBe(null)
+  })
+
+  /* A refusal already prints git's own words in the panel and holds them until
+     the next write, rather than for three seconds. */
+  it('a refusal leaves nothing for the corner', async () => {
+    const { stores, ipc } = await loadStores()
+    onOneRepo(ipc)
+    ipc.fail('vcs_merge', { kind: 'git', message: 'error: local changes would be overwritten' })
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.merge('develop')
+
+    expect(stores.vcs.vcsState.writeError?.op).toBe('merge')
+    expect(stores.vcs.vcsState.lastWrite).toBe(null)
+  })
+
+  /* A push is about where the commits went, so the other side is the upstream
+     and not the branch — the same reading a pull takes. */
+  it('a push records the upstream as the other side', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', answer(repoIn('/p')))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'main', current: true }])
+    ipc.on('vcs_tracking', [
+      { branch: 'main', upstream: 'origin/main', ahead: 2, behind: 0, gone: false }
+    ])
+    ipc.on('git_head', { branch: 'main', detached: null })
+    ipc.on('vcs_push', { commits: 2, files: 3, insertions: 9, deletions: 1 })
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.push()
+
+    expect(stores.vcs.vcsState.lastWrite).toMatchObject({
+      op: 'push',
+      ours: 'main',
+      theirs: 'origin/main',
+      published: false,
+      /* `vcs_push` answers the record itself rather than wrapping it in an
+         outcome: there is nothing about a push that can conflict. */
+      landed: { commits: 2, files: 3, insertions: 9, deletions: 1 }
+    })
+  })
+
+  /* A branch nobody has pushed has no upstream to name, which is what
+     `published` says instead — and the record is empty by construction, since
+     there was nothing to measure against. */
+  it('a published branch records that it was published, and nothing measured', async () => {
+    const { stores, ipc } = await loadStores()
+    ipc.on('vcs_repos', answer(repoIn('/p')))
+    ipc.on('vcs_status', cleanTree)
+    ipc.on('vcs_branches', [{ name: 'spike', current: true }])
+    ipc.on('vcs_tracking', [{ branch: 'spike', upstream: null, ahead: 0, behind: 0, gone: false }])
+    ipc.on('git_head', { branch: 'spike', detached: null })
+    ipc.on('vcs_push', { commits: null, files: null, insertions: null, deletions: null })
+    await stores.vcs.loadRepos('/p')
+
+    await stores.vcs.push()
+
+    expect(stores.vcs.vcsState.lastWrite).toMatchObject({
+      op: 'push',
+      ours: 'spike',
+      theirs: null,
+      published: true
+    })
+  })
+
+  /* A phrase about work in a project somebody has left belongs nowhere. */
+  it('the record goes with the project', async () => {
+    const { stores, ipc } = await loadStores()
+    onOneRepo(ipc)
+    ipc.on('vcs_merge', { kind: 'clean', landed: LANDED })
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.merge('develop')
+    expect(stores.vcs.vcsState.lastWrite).toBeTruthy()
+
+    await stores.vcs.loadRepos('/other')
+
+    expect(stores.vcs.vcsState.lastWrite).toBe(null)
+  })
+
+  /* The window closing on the last project goes through `reset()`, which is the
+     other of the two doors out. */
+  it('the record goes when there is no project at all', async () => {
+    const { stores, ipc } = await loadStores()
+    onOneRepo(ipc)
+    ipc.on('vcs_merge', { kind: 'clean', landed: LANDED })
+    await stores.vcs.loadRepos('/p')
+    await stores.vcs.merge('develop')
+
+    await stores.vcs.loadRepos(null)
+
+    expect(stores.vcs.vcsState.lastWrite).toBe(null)
   })
 })

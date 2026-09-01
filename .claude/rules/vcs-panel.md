@@ -34,7 +34,7 @@ git lives in this app finds two answers.
 
 | file | what it does |
 |---|---|
-| `model.rs` | `Repo`, `Change`, `ChangeKind`, `WorkingTree`, `Branch`, `OpKind`, `MergeOutcome`, `InProgress`, `VcsError`, the **pure** parse of `git status --porcelain=v2 -z --branch`, the reading of a conflict off it and `branch_from_name_rev`; the tests are here |
+| `model.rs` | `Repo`, `Change`, `ChangeKind`, `WorkingTree`, `Branch`, `OpKind`, `MergeOutcome`, `Landed`, `InProgress`, `VcsError`, the **pure** parses of `git status --porcelain=v2 -z --branch` and of `git diff --shortstat`, the reading of a conflict off the first and `branch_from_name_rev`; the tests are here |
 | `repos.rs` | what a project is made of — the pure rule, split from the directory read |
 | `run.rs` | the only file that touches the OS |
 | `commands.rs` | thin `#[tauri::command]`s, shaped like `files/`'s |
@@ -475,6 +475,107 @@ read as the first case and come back unfolded on the next start. `branchTree.js`
 against that seed and hands the panel a whole new list, which is what writes the seed out on the
 first press. Nothing reopens a folder afterwards, and it does not need to: the only way to press a
 branch row is to see it, so a branch checked out from this panel was in a folder that was open.
+
+## What a write moved, in the corner
+
+**Success was the one outcome of this panel with no voice.** A conflict opens `ConflictModal` by
+itself, a refusal prints git's own words under "Git did not merge" and holds them until the next
+write — and a merge git carried through said nothing at all. The panel after a merge that brought
+three commits and forty lines looks exactly like the panel after one git answered "Already up to
+date" for, because the branch was merged this morning; the two mean opposite things, and in the
+second the button did nothing and the person is about to go looking for their changes in a branch
+that already has them. So each of the four writes that **carry commits** — merge, rebase, pull, push
+— now drops one `success` `Toast` into the stack in `views/DesktopApp.vue`, which goes out by itself
+after `SAID_TOAST_MS`, the file tree menu's own three seconds. Success leaves on its own and a
+refusal is held: that is the app's rule already, not this feature's.
+
+**Rust measures and the front end words it.** `src-tauri/src/vcs/` is the only place in the tree that
+runs git as a process, and the only place that can read the repository at the two moments this needs
+— immediately before the operation and immediately after. Asked later the front end would be asking
+about a HEAD that has since moved, and an agent committing into the same tree is the ordinary case
+here, so the report would easily be about somebody else's commit. `model::Landed`
+(`{ commits, files, insertions, deletions }`, every field an `Option`) is what crosses:
+`MergeOutcome::Clean` carries one, `vcs_push` answers one where it answered `()`, and
+`MergeOutcome::Conflict` deliberately does not — an operation that did not finish has no answer to
+what it brought.
+
+How each is measured, and the two decisions inside the table rather than the mechanics:
+
+| write | commits | tree delta |
+|---|---|---|
+| merge | `rev-list --count <head before>..<branch>`, the branch resolved **before** | `diff --shortstat <head before> <head after>` |
+| rebase | `rev-list --count <head before>..<onto>`, onto resolved **before** | `diff --shortstat <head before> <head after>` |
+| pull | `rev-list --count <head before>..<upstream>`, the upstream resolved **after** | `diff --shortstat <head before> <head after>` |
+| push | `rev-list --count <upstream>..<head>`, all of it **before** the push | `diff --shortstat <upstream> <head>`, before |
+
+**The commits are counted from the other side and never over the range the operation opened.** The
+obvious `<head before>..<head after>` is wrong twice: after a merge it counts the merge commit git
+had just made itself, and after a rebase it counts the branch's own commits replayed as copies, which
+came from nowhere. "What did that side have that we did not" is one formula honest for all four, and
+the push reads it backwards. **And the pull resolves its upstream afterwards**, because `git pull` is
+a fetch and then a merge: before it runs, `origin/main` is exactly as stale as the last fetch left
+it. The other three resolve before, since their ref is local and the operation ran against the state
+it was in at the start — resolving after would count a commit an agent pushed into that branch while
+the merge was running, which nobody merged.
+
+**A measurement that did not happen is `None`, never an error and never a zero.** A repository with
+no commit has no HEAD, a branch nobody has published has no upstream, and `rev-list` can decline for
+reasons that have nothing to do with the merge that just worked. None of that may turn a success into
+a refusal — `object`, `commits_between` and `tree_delta` in `commands.rs` swallow git's refusal — and
+none of it may become a `0`, since a zero is the whole of "nothing came in" and would be a lie about
+an operation that may have brought everything. An unknown number simply falls out of the sentence.
+
+**The phrase is `components/git/writeSummary.js`** — pure, tested, of the `tracking.js` family and
+there for that family's reason. `writeSummary({ op, ours, theirs, published, landed })` answers
+`{ title, description }`, or `null` for a write this corner says nothing about, **and that `null` is
+the only place the closed list of four is written down**: a checkout, a commit, a branch made,
+renamed or deleted, and an abort all change the repository too and every one of them shows its own
+result in the same moment — the row names the new branch, the change list empties, a row appears or
+goes — so a phrase would add nothing. Sentence case and English like all UI copy; `·` between the
+counters and U+2212 for the minus, as the gallery's own toast has drawn it since before this existed.
+
+| case | title | description |
+|---|---|---|
+| merge, something came | `Merged feature/x` | `3 commits · 7 files · +41 −12` |
+| merge, nothing came | `Nothing to merge` | `feature/x is already in main` |
+| rebase | `Rebased onto main` / `Nothing to replay` | `main has nothing this branch does not` |
+| pull | `Pulled origin/main` / `Nothing to pull` | `main is level with origin/main` |
+| push | `Pushed to origin/x` / `Nothing to push` | `origin/x already has this branch` |
+| push with no upstream | `Published feature/x` | — |
+| nothing measured | the title above | — |
+
+"Nothing came in" is `commits === 0 && files === 0`, **both known**. One unknown number is not
+evidence of an empty merge, so a half-measured record falls back to the plain title and asserts
+neither thing. A single is singular (`1 commit · 1 file`), and the zero half of the line counter falls
+out — git's own `--shortstat` prints only the half that moved. A zero counter is dropped for the same
+reason an unknown one is: the both-zero case has its own sentence, so a zero reaching the counters is
+one half of a record whose other half is unknown, and `0 commits` under a success says less than
+nothing.
+
+**Where it is recorded.** `vcsState.lastWrite = { seq, op, repo, ours, theirs, published, landed }`,
+set in `write()` — the one seam all four pass through — on the success path only and never on a
+conflict, and after the project guard, since a phrase about a merge in a project somebody has left
+belongs nowhere. **`seq` is a counter and not a timestamp**: merging the same branch twice in a row is
+two events with identical contents, and a watcher on the object would see one; a clock would do the
+same job worse, since two calls inside one millisecond are exactly the case it exists for.
+`DesktopApp.vue` watches the counter, holds the phrase in a local `ref` and clears it through
+`SAID_TOAST_MS`. `push` is the one write whose `theirs` is not its `branch` — it is the upstream, the
+same reading a pull takes — and `published` rides beside it, answered by the very `publishes` call
+that chose `--set-upstream`, so the word on the button and the word in the corner cannot disagree.
+
+**Four things were considered and dropped; do not propose them again.** Measuring on the front end
+after the write needs two new commands and asks about a HEAD that may have moved. Computing
+`<head before>..<head after>` after the fact lies for a rebase and attributes the merge commit.
+Writing the outcome into the Git panel itself puts it where somebody may since have selected another
+repository, competing with the refusal block — the corner is what was asked for. Giving it to the
+notification bell breaks that feature's own rule (`.claude/rules/notifications.md`): its list is
+derived from state that is still true, and a finished merge is a past event with nothing to derive
+from, so the card would have to be stored. And a toast held until dismissed is not how success leaves
+in this app.
+
+**The gallery draws both halves** (`views/Gallery.vue`), which is the only way the phrase can be seen
+by eye at all: `mockBackend.js` refuses every git write on purpose, so a browser can never produce
+this toast for real.
 
 ## Deleting a branch
 

@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use super::model::{
-    parse_name_status, Branch, ChangeKind, Comparison, InProgress, MergeOutcome, OpKind,
+    parse_name_status, Branch, ChangeKind, Comparison, InProgress, Landed, MergeOutcome, OpKind,
     ProjectRepos, Tracking, VcsError, WorkingTree,
 };
 use super::run::Attempt;
@@ -427,7 +427,11 @@ fn rename_branch(repo: &Path, from: &str, to: &str) -> Result<(), VcsError> {
 /// A conflict is **not** a failure here — see `attempt`.
 #[tauri::command]
 pub async fn vcs_merge(repo: String, branch: String) -> Result<MergeOutcome, VcsError> {
-    off_the_runtime(move || attempt(Path::new(&repo), &["merge", "--no-edit", &branch])).await
+    off_the_runtime(move || {
+        let dir = Path::new(&repo);
+        attempt(dir, &["merge", "--no-edit", &branch], &local_ref(&branch))
+    })
+    .await
 }
 
 /// Replay this repository's branch on top of another one.
@@ -438,7 +442,7 @@ pub async fn vcs_merge(repo: String, branch: String) -> Result<MergeOutcome, Vcs
 /// one is outside this epic.
 #[tauri::command]
 pub async fn vcs_rebase(repo: String, onto: String) -> Result<MergeOutcome, VcsError> {
-    off_the_runtime(move || attempt(Path::new(&repo), &["rebase", &onto])).await
+    off_the_runtime(move || attempt(Path::new(&repo), &["rebase", &onto], &local_ref(&onto))).await
 }
 
 /// Bring the remote's refs up to date, so the marks mean something.
@@ -473,7 +477,7 @@ pub async fn vcs_fetch(repo: String) -> Result<(), VcsError> {
 pub async fn vcs_pull(repo: String) -> Result<MergeOutcome, VcsError> {
     off_the_runtime(move || {
         let args = &["pull", "--no-rebase", "--no-edit"];
-        attempt_with(Path::new(&repo), args, run::git_network_attempt)
+        attempt_with(Path::new(&repo), args, Other::after(UPSTREAM), run::git_network_attempt)
     })
     .await
 }
@@ -493,15 +497,33 @@ pub async fn vcs_pull(repo: String) -> Result<MergeOutcome, VcsError> {
 /// `origin` is named here because a branch with no upstream has no other answer
 /// to give, and a repository whose remote is called something else is told so
 /// by git.
+/// **The measurement is taken before the push and read backwards**, which is
+/// the one thing about this command that is not obvious. Afterwards the
+/// upstream has been moved to where HEAD is and the same question answers
+/// nothing every time; and the question itself is the mirror of the other three
+/// — what this side has that the other did not — so the range is
+/// `<upstream>..<head>` rather than the other way round.
+///
+/// A branch with no upstream is every field `null` and never a row of zeros:
+/// nothing was measured, and a zero would say the remote already had this
+/// branch, which is the opposite of what publishing one means.
 #[tauri::command]
-pub async fn vcs_push(repo: String, set_upstream: bool) -> Result<(), VcsError> {
+pub async fn vcs_push(repo: String, set_upstream: bool) -> Result<Landed, VcsError> {
     off_the_runtime(move || {
         let dir = Path::new(&repo);
+        let head = object(dir, "HEAD");
+        let upstream = object(dir, UPSTREAM);
+        let sent = landed(
+            dir,
+            (upstream.as_deref(), head.as_deref()),
+            (upstream.as_deref(), head.as_deref()),
+        );
         if set_upstream {
-            run::git_network(dir, &["push", "--set-upstream", "origin", "HEAD"])
+            run::git_network(dir, &["push", "--set-upstream", "origin", "HEAD"])?;
         } else {
-            run::git_network(dir, &["push"])
+            run::git_network(dir, &["push"])?;
         }
+        Ok(sent)
     })
     .await
 }
@@ -767,8 +789,109 @@ fn describe(repo: &Path, language: &str) -> Result<Option<String>, VcsError> {
 /// so what the person gets is git's refusal rather than a second failure about
 /// a status nobody asked for: the first one is what they can act on, and an
 /// unreadable tree is not evidence about what is unmerged in it.
-fn attempt(repo: &Path, args: &[&str]) -> Result<MergeOutcome, VcsError> {
-    attempt_with(repo, args, run::git_attempt)
+fn attempt(repo: &Path, args: &[&str], other: &str) -> Result<MergeOutcome, VcsError> {
+    attempt_with(repo, args, Other::before(other), run::git_attempt)
+}
+
+/// git's own name for the branch the current one tracks. One spelling, because
+/// it is asked in two commands and a second copy is the half that drifts.
+const UPSTREAM: &str = "@{upstream}";
+
+/// A local branch as a full ref.
+///
+/// The name arrives from the front end, and a full ref is what stops one that
+/// begins with a dash being read by `rev-parse` as a flag — the rule
+/// `vcs_compare` already keeps for the branch it resolves. It is also exactly
+/// what git resolves the bare name to, so nothing about the measurement moves.
+fn local_ref(branch: &str) -> String {
+    format!("refs/heads/{branch}")
+}
+
+/// The other side of a write, and **when** it is resolved.
+///
+/// The three local operations resolve it before: their ref is local, and the
+/// operation ran against the state it was in at the start — resolving it
+/// afterwards would count a commit an agent pushed into that branch while the
+/// merge was running, which nobody merged.
+///
+/// A pull is the one that resolves after, and it is a fact about `git pull`
+/// rather than a preference: a pull is a fetch and then a merge, so before it
+/// runs `origin/main` is exactly as stale as the last fetch left it, and a
+/// count against that would report what was already known.
+struct Other<'a> {
+    rev: &'a str,
+    after: bool,
+}
+
+impl<'a> Other<'a> {
+    fn before(rev: &'a str) -> Self {
+        Self { rev, after: false }
+    }
+
+    fn after(rev: &'a str) -> Self {
+        Self { rev, after: true }
+    }
+}
+
+/// What a name resolves to right now, or nothing at all.
+///
+/// **A refusal is swallowed here, and that is the rule for every measurement in
+/// this file.** A repository with no commit in it has no HEAD, a branch nobody
+/// has published has no upstream, and neither of those may turn a merge that
+/// worked into an error. `rev-parse --verify --quiet` exits `NO_SUCH_OBJECT`
+/// for a name that resolves to nothing and says not a word; anything else
+/// non-zero is a repository git could not read, which is a question this
+/// function has no business raising either — the operation it is measuring has
+/// already succeeded.
+fn object(repo: &Path, rev: &str) -> Option<String> {
+    let out = run::git_maybe(repo, &["rev-parse", "--verify", "--quiet", rev], NO_SUCH_OBJECT)
+        .ok()
+        .flatten()?;
+    let name = out.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// How many commits `to` has that `from` does not. `None` for a git that
+/// declined or an answer that is not a number — `object`'s rule, one call over.
+fn commits_between(repo: &Path, from: &str, to: &str) -> Option<u32> {
+    let out = run::git_read(repo, &["rev-list", "--count", &format!("{from}..{to}")]).ok()?;
+    out.trim().parse().ok()
+}
+
+/// Files, insertions and deletions between two trees. The parse is
+/// `model::parse_shortstat`, which is where the three shapes and the one
+/// refusal are written down.
+fn tree_delta(repo: &Path, from: &str, to: &str) -> Option<(u32, u32, u32)> {
+    let out = run::git_read(repo, &["diff", "--shortstat", from, to]).ok()?;
+    model::parse_shortstat(&out)
+}
+
+/// The two measurements as one record: the commits over one range, the tree
+/// delta over another.
+///
+/// **Two ranges and not one**, which is the whole of the table this feature was
+/// designed around. The commits come from the other side — what it had that
+/// this one did not — where the delta is what the working tree actually became,
+/// which is HEAD before against HEAD after. A range whose either end could not
+/// be resolved is not measured at all, and answers `None` rather than nothing
+/// having happened.
+fn landed(
+    repo: &Path,
+    commits: (Option<&str>, Option<&str>),
+    delta: (Option<&str>, Option<&str>),
+) -> Landed {
+    let commits = match commits {
+        (Some(from), Some(to)) => commits_between(repo, from, to),
+        _ => None,
+    };
+    let (files, insertions, deletions) = match delta {
+        (Some(from), Some(to)) => tree_delta(repo, from, to),
+        _ => None,
+    }
+    .map_or((None, None, None), |(files, insertions, deletions)| {
+        (Some(files), Some(insertions), Some(deletions))
+    });
+    Landed { commits, files, insertions, deletions }
 }
 
 /// The tree read before, the operation, the tree read after — and
@@ -776,14 +899,36 @@ fn attempt(repo: &Path, args: &[&str]) -> Result<MergeOutcome, VcsError> {
 /// runner is a parameter because a pull does all of this over the network and
 /// none of the reasoning changes: `git pull`'s non-zero exit is exactly as
 /// ambiguous as `git merge`'s.
+///
+/// **HEAD is read here as well, either side of the write, and this is the only
+/// place it can be.** The front end could ask afterwards and would be asking
+/// about a HEAD that may have moved — an agent committing into the same tree is
+/// the ordinary case in this app — so the answer would be about somebody else's
+/// commit with nothing on screen saying so.
+///
+/// Every one of those reads is allowed to fail without taking the operation
+/// with it: a measurement nobody could take is `None` and never a refusal.
 fn attempt_with(
     repo: &Path,
     args: &[&str],
+    other: Other<'_>,
     run: fn(&Path, &[&str]) -> Result<Attempt, VcsError>,
 ) -> Result<MergeOutcome, VcsError> {
     let before = working_tree(repo).ok();
+    let head_before = object(repo, "HEAD");
+    let other_before = (!other.after).then(|| object(repo, other.rev)).flatten();
     match run(repo, args)? {
-        Attempt::Done => Ok(MergeOutcome::Clean),
+        Attempt::Done => {
+            let theirs = if other.after { object(repo, other.rev) } else { other_before };
+            let head_after = object(repo, "HEAD");
+            Ok(MergeOutcome::Clean {
+                landed: landed(
+                    repo,
+                    (head_before.as_deref(), theirs.as_deref()),
+                    (head_before.as_deref(), head_after.as_deref()),
+                ),
+            })
+        }
         Attempt::Refused(refusal) => {
             let files = working_tree(repo)
                 .map(|after| model::new_conflicts(before.as_ref(), &after))
@@ -1083,6 +1228,106 @@ mod tests {
             .expect("set the email");
         run::git_write(&root, &["config", "user.name", "Test"]).expect("set the name");
         root
+    }
+
+    /// A repository on `main` with one commit, and a `feature` branch holding
+    /// two more. The three tests below are all about what git answers to a
+    /// measurement, so nothing here is prepared: it is a real merge of a real
+    /// branch.
+    fn with_a_branch_to_merge(name: &str) -> PathBuf {
+        let repo = repository(name);
+        fs::write(repo.join("a.txt"), "one\n").expect("write a.txt");
+        run::git_write(&repo, &["add", "a.txt"]).expect("stage a.txt");
+        run::git_write(&repo, &["commit", "-m", "first"]).expect("commit a.txt");
+        // The name git initialises with moves between versions and between
+        // machines; the tests below name this branch, so it is named here.
+        run::git_write(&repo, &["branch", "-M", "main"]).expect("name the branch");
+        run::git_write(&repo, &["checkout", "-b", "feature"]).expect("cut the branch");
+        fs::write(repo.join("b.txt"), "one\ntwo\nthree\n").expect("write b.txt");
+        run::git_write(&repo, &["add", "b.txt"]).expect("stage b.txt");
+        run::git_write(&repo, &["commit", "-m", "second"]).expect("commit b.txt");
+        fs::write(repo.join("c.txt"), "four\n").expect("write c.txt");
+        run::git_write(&repo, &["add", "c.txt"]).expect("stage c.txt");
+        run::git_write(&repo, &["commit", "-m", "third"]).expect("commit c.txt");
+        run::git_write(&repo, &["checkout", "main"]).expect("go back to main");
+        repo
+    }
+
+    /// What the corner's phrase is written from, against real git: the commits
+    /// the other branch had that this one did not, and what the working tree
+    /// actually became.
+    #[test]
+    fn a_merge_reports_what_the_other_branch_brought() {
+        let repo = with_a_branch_to_merge("merge-landed");
+
+        let outcome = attempt(&repo, &["merge", "--no-edit", "feature"], &local_ref("feature"))
+            .expect("merge");
+
+        assert_eq!(
+            outcome,
+            MergeOutcome::Clean {
+                landed: Landed {
+                    commits: Some(2),
+                    files: Some(2),
+                    insertions: Some(4),
+                    deletions: Some(0)
+                }
+            }
+        );
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// The case this whole feature exists for: git answered "Already up to
+    /// date", the panel looks exactly as it did after the merge that worked,
+    /// and the two mean opposite things. Both counters are a real zero here and
+    /// not an unknown, which is what lets the phrase say so.
+    #[test]
+    fn merging_the_same_branch_twice_reports_nothing_the_second_time() {
+        let repo = with_a_branch_to_merge("merge-again");
+        attempt(&repo, &["merge", "--no-edit", "feature"], &local_ref("feature"))
+            .expect("the first merge");
+
+        let outcome = attempt(&repo, &["merge", "--no-edit", "feature"], &local_ref("feature"))
+            .expect("the second merge");
+
+        assert_eq!(
+            outcome,
+            MergeOutcome::Clean {
+                landed: Landed {
+                    commits: Some(0),
+                    files: Some(0),
+                    insertions: Some(0),
+                    deletions: Some(0)
+                }
+            }
+        );
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A branch nobody has published, which is what `vcs_push` measures against
+    /// before it publishes one. **Every field is `null` and not a zero**: a row
+    /// of zeros would say the remote already had this branch, which is the
+    /// opposite of what is about to happen.
+    #[test]
+    fn a_branch_with_no_upstream_measures_nothing_at_all() {
+        let repo = with_a_branch_to_merge("push-unpublished");
+        let head = object(&repo, "HEAD");
+        let upstream = object(&repo, UPSTREAM);
+
+        assert!(head.is_some(), "a repository with a commit in it has a HEAD");
+        assert_eq!(upstream, None, "nothing has been pushed from here");
+        assert_eq!(
+            landed(
+                &repo,
+                (upstream.as_deref(), head.as_deref()),
+                (upstream.as_deref(), head.as_deref())
+            ),
+            Landed::default()
+        );
+
+        let _ = fs::remove_dir_all(&repo);
     }
 
     /// The scope of the button, pinned against git itself: `--all` and not

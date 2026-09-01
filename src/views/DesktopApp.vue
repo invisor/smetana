@@ -23,6 +23,11 @@ import ConflictModal from '../components/git/ConflictModal.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
 import { repoLabel } from '../components/git/repoLabel.js'
+/* The whole of what the corner says about a write git carried through, and the
+   closed list of the writes it says anything about at all. Out of
+   `components/git/` like `gitActions.js` above it and for the same reason: a
+   `.vue` file is the one thing no test in this repository can reach. */
+import { writeSummary } from '../components/git/writeSummary.js'
 /* What the branch-review window is filled with, and what a press of Review
    turns it into. Pure and outside the component that draws it, for the reason
    that whole family is: a `.vue` file is the one thing no test in this
@@ -3858,6 +3863,49 @@ function sayFileMenu(toast) {
 
 onUnmounted(() => clearTimeout(fileMenuToastTimer))
 
+/* What a merge, a rebase, a pull or a push actually moved, in the same corner
+   and for the same three seconds.
+
+   Until this existed a write that git carried through said nothing at all: the
+   panel after a merge that brought three commits looks exactly like the panel
+   after one git answered "Already up to date" for, and the two mean opposite
+   things — in the second the button did nothing and the person is about to go
+   looking for changes in a branch that already has them. The loud outcomes were
+   already covered: a conflict opens `ConflictModal`, a refusal prints git's own
+   words under "Git did not merge", and success was the one outcome with no
+   voice.
+
+   **The watch is on the counter and not on the record.** Merging the same
+   branch twice in a row is two events with identical contents, and a watcher
+   on the object would see one — so `stores/vcs.js` counts writes and this
+   follows the count. A record cleared to `null` moves the counter too, which is
+   what takes the phrase down with the project it was about.
+
+   Success goes away on its own, exactly as the file tree's own toast does: a
+   refusal is held until somebody dismisses it, and this is the other half of
+   that rule rather than a decision of this feature's. */
+const writeNote = ref(null)
+let writeNoteTimer = null
+
+watch(
+  () => vcsState.lastWrite?.seq ?? null,
+  () => {
+    /* `null` for every write that is its own report on screen — a checkout, a
+       commit, a branch made or renamed or deleted, an abort — which is the one
+       list, and it lives in `writeSummary.js` rather than in a condition here. */
+    const said = writeSummary(vcsState.lastWrite)
+    clearTimeout(writeNoteTimer)
+    writeNote.value = said
+    if (said) {
+      writeNoteTimer = setTimeout(() => {
+        writeNote.value = null
+      }, SAID_TOAST_MS)
+    }
+  }
+)
+
+onUnmounted(() => clearTimeout(writeNoteTimer))
+
 /* Whether the board on screen came back *after* the project changed, rather
    than being the previous project's still standing there.
 
@@ -5774,6 +5822,17 @@ const toastStackStyle = {
         :title="fileMenuToast.title"
         :description="fileMenuToast.description"
         @close="fileMenuToast = null"
+      />
+      <!-- What a merge, a rebase, a pull or a push moved, which the panel
+           behind it cannot say: a merge that brought three commits and one git
+           answered "Already up to date" for leave it looking identical. Timed
+           like the toast above, since this is a success. -->
+      <Toast
+        v-if="writeNote"
+        tone="success"
+        :title="writeNote.title"
+        :description="writeNote.description"
+        @close="writeNote = null"
       />
     </div>
   </div>
