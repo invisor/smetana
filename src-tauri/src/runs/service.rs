@@ -999,11 +999,23 @@ async fn drive(
         // that the app is.
         //
         // It is asked *after* the wait rather than reused from the batch's
-        // start, and the difference is the whole point: `Exit` says the direct
-        // child is gone, while `Pty::kill` reaches that child alone and
-        // anything it delegated stays in the group. A sub-agent still merging
-        // is exactly the case the old unconditional refusal was protecting, and
-        // it is the case this reading catches.
+        // start, and that is what makes any release possible at all: at the
+        // start the lead is alive by construction.
+        //
+        // **What is read is the recorded leader, not the group.** `group.pid`
+        // and the stamp beside it are one process, and a process group on Unix
+        // outlives its leader — so a lead that exited while something it
+        // delegated is still merging answers gone here, and the lock is
+        // released under it. That is the limit of this evidence rather than a
+        // hole in the code, and it is named because the write rests on it;
+        // `registry::group_is_dead` carries it too, with the group-wide probe
+        // that would close it (`killpg(pgid, 0)`, `procs.rs`'s to take) and the
+        // reason taking it is a decision of its own.
+        //
+        // What keeps the one ending that *kills* a lead out of this is **order
+        // rather than the reading**: `remove_session` runs further down, after
+        // the release, so on an unanswered question the lead is still sitting
+        // at its dialog when this is asked and `life` comes back `Unproven`.
         let life = batch_life(group.as_ref());
         // Taken once, here, rather than inside the emptiness rule below: the
         // line on the record and the value the decision is made from have to be
@@ -1421,13 +1433,19 @@ fn outcome_of(batch: &Batch) -> BatchOutcome {
 ///
 /// **Whose leftovers reach here is the caller's decision, and it is not "every
 /// batch".** A batch that handed its work back is still alive with a person in
-/// it, so nothing of its is released — the argument that keeps the merge lock
-/// out of `queue::release` is the same one, and it applies to a task claim word
-/// for word. On an unanswered question only the reviewed half comes here, since
-/// `park_claims` owns everything that batch holds `in_progress` bar the merge
-/// lock, which neither path may touch. Every other ending is a dead session and
-/// brings all of its leftovers — the lock among them, refused here by
-/// `queue::release` as it is refused there by `queue::claimed_by`.
+/// it, so nothing of its is released — the sentence that stops `queue::release`
+/// giving back the lock of a batch it cannot show dead applies to a task claim
+/// word for word, and that ending is the one where the agent is alive by
+/// definition rather than merely unproven. On an unanswered question only the
+/// reviewed half comes here, since `park_claims` owns everything that batch
+/// holds `in_progress` bar the merge lock, which nothing on that branch may
+/// park; the lock cannot ride in on the reviewed half either, being held
+/// `in_progress` and never `ready_to_merge`, and its session is still sitting
+/// at its prompt in any case. Every other ending is a dead session and brings
+/// all of its leftovers — **the lock among them**, given back by
+/// `queue::release` where `life` says the app has proved this batch dead and
+/// refused by it where it does not, while `queue::claimed_by` goes on refusing
+/// it outright on the parking path.
 ///
 /// The rule itself is `queue::release` and it is pure: `in_progress` returns to
 /// `open` unclaimed, `ready_to_merge` keeps its status and loses only the claim,

@@ -260,9 +260,18 @@ pub fn claimed_by(issues: &[Issue], actor: &str) -> Vec<String> {
 }
 
 /// One thing a batch's actor was still holding on the board when the batch
-/// ended. Read only, and named in the run's document — the app writes to the
-/// tracker nowhere as part of recovery (`recovery.rs`), so this is evidence for
-/// a person and never a step taken on their behalf.
+/// ended. Named in the run's document, and **also the input the release acts
+/// on** — this was read only when it was written, and smetana-0t4 made it the
+/// set `release` gives back behind every session the run has finished with.
+/// Which of the two a given leftover is for is `service::drive`'s to decide and
+/// not this type's. The `lock` field went the same way at smetana-rxzd and is
+/// no longer named and nothing more: behind a batch the app has proved dead it
+/// is given back like the rest of them.
+///
+/// None of that crosses the boundary `recovery.rs` keeps, which is about what a
+/// *previous* app left — Phase R clears that with the worktrees in front of it
+/// — while a batch of this run's own that ended a moment ago is this run's to
+/// give back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Leftover {
     pub id: String,
@@ -274,6 +283,9 @@ pub struct Leftover {
     /// from every count in this file for that reason. It is exactly the thing
     /// worth naming here, though: a lock left claimed by a dead actor stops the
     /// *next* run rather than this one, and until smetana-pmj nothing said so.
+    /// Naming is no longer all that happens to it — `release` reads this flag,
+    /// and behind a batch the app has proved dead the lock goes back to `open`
+    /// (smetana-rxzd) — but the naming is why the flag exists.
     pub lock: bool,
 }
 

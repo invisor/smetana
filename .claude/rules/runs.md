@@ -234,9 +234,14 @@ between `sweep` and `forget_run` is the same instinct pointed at a third cost he
 session is gone and when the terminal worker could not be asked. And **only the lock this batch's own
 actor holds** is touched, which `left_behind`'s filter on the assignee already guarantees — a lock
 held by a lead somebody started by hand is reachable by nothing the app does. The question is asked
-of the batch's **group** and never of the record's `writer`, and it is asked at the ending rather
-than reused from the start: `Exit` says the direct child is gone, while `Pty::kill` reaches that
-child alone and a delegated sub-agent still merging stays in the group. The release writes
+of the batch's recorded **group leader** and never of the record's `writer`, and it is asked at the
+ending rather than reused from the start, where the lead is alive by construction. What it reads is
+that one process — `group.pid` and the stamp beside it — and not the group, which on Unix outlives
+its leader: a lead that exited while something it delegated is still merging answers gone. That is
+the reach of the evidence, named rather than papered over, and the group-wide probe that would close
+it (`killpg(pgid, 0)`) is a decision of its own for `procs.rs`. What keeps the ending that *kills* a
+lead out of this is order rather than the reading: `remove_session` runs after the release, so on an
+unanswered question the lead is still at its dialog and the answer is `Unproven`. The release writes
 `status: open` and an empty assignee and **no note at all** — the lock's issue carries claims and
 releases and nothing else, because any other write moves `updated_at` and makes a dead claim look
 fresh to every lead waiting out `merging`'s staleness hour. The run's own document carries the
@@ -697,10 +702,10 @@ for, and the writer being alive says only that the app is; the `writer` stays th
 claim, where the question is whether the run still exists to finish what it took. The same reading
 decides the app's own release (smetana-rxzd), which is not a coincidence but the one fact stated
 twice for two readers. Both readings here are the skills' to make and not this side's: the registry
-is a file Phase R and `merging` read, and nothing in it writes to bd. The app's own two bd writes are `park_claims` on the
-unanswered path, which refuses the lock outright through `queue::claimed_by`, and `release_claims`
-behind every session the run has finished with, where `queue::release` gives the lock back to `open`
-on exactly the reading in bold above — the batch's own `group`, read as `Liveness::Dead`
+is a file Phase R and `merging` read, and nothing in it writes to bd. The app's own two bd writes are
+`park_claims` on the unanswered path, which refuses the lock outright through `queue::claimed_by`, and
+`release_claims` behind every session the run has finished with, where `queue::release` gives the lock
+back to `open` on exactly the reading in bold above — the batch's own `group`, read as `Liveness::Dead`
 (smetana-rxzd). So a lock left behind by this app's own killed batch is now usually released by the
 app, and everything else — a lead somebody started by hand, a batch whose group cannot be read — is
 still `smetana:running-tasks` Phase R's or a person's. Both halves were wrong once and each cost its

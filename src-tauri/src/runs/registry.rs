@@ -155,7 +155,20 @@ pub fn liveness(recorded: &Proc, seen: Seen) -> Liveness {
     }
 }
 
-/// Has the app *proved* that a batch's own process group is gone?
+/// Has the app *proved* that the process recorded as a batch's group leader is
+/// gone?
+///
+/// **The question is about that one process and not about the group**, and the
+/// difference is worth stating because a caller acts on the answer. `Proc` is a
+/// pid with the start stamp that survives pid reuse, and `procs::look` asks the
+/// kernel about that pid alone; a process group on Unix outlives its leader, so
+/// a batch whose lead has exited while something it delegated is still running
+/// answers `Gone` here. That is the reach of this evidence rather than a defect
+/// in it — it is the same evidence `sweep` signals by and `forget_run` keeps
+/// records by, and all three want the same one fact. A group-wide answer does
+/// exist, `killpg(pgid, 0)`, and taking it would be a decision of its own in
+/// `procs.rs` beside the subsystem's only `unsafe`; it is deliberately not
+/// taken here.
 ///
 /// The same evidence `forget_run` below conditions on, asked by the one caller
 /// that needs the answer the other way round: that one keeps a batch it cannot
@@ -174,10 +187,10 @@ pub fn liveness(recorded: &Proc, seen: Seen) -> Liveness {
 /// batch for exactly that reason and this refuses it for the same one.
 ///
 /// The caller is `runs::service`, giving back the merge lock a batch died
-/// holding (smetana-rxzd). A group the process table says is gone is not
-/// merging anything, so the half-merged target branch the lock exists to
-/// prevent is not on the table — which is the whole of what makes that release
-/// safe, and why nothing weaker than this may stand in for it.
+/// holding (smetana-rxzd). A lead the process table says is gone is not merging
+/// anything, so the half-merged target branch the lock exists to prevent is not
+/// on the table — which is the whole of what makes that release safe, and why
+/// nothing weaker than this may stand in for it.
 pub fn group_is_dead(group: Option<&Proc>, table: &impl Fn(i32) -> Seen) -> bool {
     match group {
         None => false,
