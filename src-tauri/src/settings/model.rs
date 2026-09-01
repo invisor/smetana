@@ -163,6 +163,74 @@ impl Default for GitSettings {
     }
 }
 
+/// The percentages at which a run holds itself back, and how far.
+///
+/// At the root beside `agent` and the languages rather than under a project,
+/// and for their reason: a subscription belongs to the person and to the CLI
+/// they signed in to, not to one repository. Two of them under one section
+/// because they are one policy read together — the same shape `git` above has.
+///
+/// `0` is **off**, in this file and on the wire between the two windows alike.
+/// The `Option` this schema would normally reach for (see `min_priority`) is
+/// refused here for a mechanical reason: `adopt()` in
+/// `src/views/SettingsWindow.vue` skips any field whose value is `null`, so an
+/// `Option` turned off in the app window would never reach the settings window
+/// and the old number would stay on screen. A zero threshold means "pause when
+/// nothing at all has been used", which is nobody's setting, so the value is
+/// free.
+///
+/// The shipped numbers are today's behaviour exactly and are taken from
+/// `runs::usage` rather than written again here — one number, one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SubscriptionSettings {
+    /// At or above this the run takes no work at all and waits for the reset.
+    pub pause_at: u8,
+    /// At or above this it takes fewer tasks per batch — `REDUCED_MAX_TASKS`,
+    /// which is not a setting.
+    pub reduced_at: u8,
+}
+
+impl Default for SubscriptionSettings {
+    fn default() -> Self {
+        Self {
+            pause_at: crate::runs::usage::PAUSE_THRESHOLD,
+            reduced_at: crate::runs::usage::REDUCED_THRESHOLD,
+        }
+    }
+}
+
+/// The rungs both dropdowns offer, `0` being off. Written out a second time in
+/// `src/components/settings/subscription.js`, which owns the interface's copy,
+/// and the two copies move together. It exists here so that a hand-edited
+/// number cannot reach a `Dropdown` with no such option, which can only draw a
+/// blank.
+pub const SUBSCRIPTION_STEPS: [u8; 9] = [0, 50, 60, 70, 75, 80, 85, 90, 95];
+
+impl SubscriptionSettings {
+    fn validate(&mut self) {
+        let shipped = Self::default();
+        // Off the ladder takes the shipped value rather than being forgotten:
+        // `min_priority` is forgotten because forgetting hands the decision
+        // back to the project's own default, which is a real answer. Here the
+        // only thing to hand it back to would be "off", and silently removing
+        // somebody's protection because a number was junk is the one way this
+        // field must not fail.
+        if !SUBSCRIPTION_STEPS.contains(&self.pause_at) {
+            self.pause_at = shipped.pause_at;
+        }
+        if !SUBSCRIPTION_STEPS.contains(&self.reduced_at) {
+            self.reduced_at = shipped.reduced_at;
+        }
+        // With no room under the pause there is no reading the reduced band
+        // could ever name, so it is turned off rather than moved to a number
+        // nobody chose.
+        if self.pause_at != crate::runs::usage::OFF && self.reduced_at >= self.pause_at {
+            self.reduced_at = crate::runs::usage::OFF;
+        }
+    }
+}
+
 /// What the main window does with the size and position it was left at.
 ///
 /// Global rather than under a project, on `GitSettings`' argument exactly:
@@ -754,6 +822,9 @@ pub struct Settings {
     /// What the Git panel may do on its own. At the root for the reason
     /// `GitSettings` records.
     pub git: GitSettings,
+    /// The percentages at which a run holds itself back. At the root for the
+    /// reason `SubscriptionSettings` records.
+    pub subscription: SubscriptionSettings,
     /// What the main window does with the geometry it was left at. At the root
     /// for the reason `WindowSettings` records.
     pub window: WindowSettings,
@@ -827,6 +898,7 @@ impl Default for Settings {
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
             git: GitSettings::default(),
+            subscription: SubscriptionSettings::default(),
             window: WindowSettings::default(),
             updates: UpdateSettings::default(),
             notifications: NotificationSettings::default(),
@@ -861,6 +933,8 @@ pub struct ResolvedSettings {
     pub kanban: KanbanSettings,
     /// What the Git panel may do on its own. See `Settings::git`.
     pub git: GitSettings,
+    /// The run gate's thresholds. See `Settings::subscription`.
+    pub subscription: SubscriptionSettings,
     /// What the main window does with its geometry. See `Settings::window`.
     pub window: WindowSettings,
     /// Whether the app checks for a newer version by itself. See
@@ -896,6 +970,7 @@ impl Default for ResolvedSettings {
             editor: EditorSettings::default(),
             kanban: KanbanSettings::default(),
             git: GitSettings::default(),
+            subscription: SubscriptionSettings::default(),
             window: WindowSettings::default(),
             updates: UpdateSettings::default(),
             notifications: NotificationSettings::default(),
@@ -944,6 +1019,7 @@ pub fn parse(text: &str) -> Outcome {
         editor: section(&object, "editor"),
         kanban: section(&object, "kanban"),
         git: section(&object, "git"),
+        subscription: section(&object, "subscription"),
         window: section(&object, "window"),
         updates: section(&object, "updates"),
         notifications: section(&object, "notifications"),
@@ -995,6 +1071,7 @@ pub fn resolve(file: &Settings, active: Option<&str>) -> ResolvedSettings {
         editor: file.editor.clone(),
         kanban: file.kanban.clone(),
         git: file.git.clone(),
+        subscription: file.subscription,
         window: file.window.clone(),
         updates: file.updates.clone(),
         notifications: file.notifications.clone(),
@@ -1024,6 +1101,7 @@ pub fn merge(file: &mut Settings, mut resolved: ResolvedSettings, now: String) {
     file.editor = resolved.editor;
     file.kanban = resolved.kanban;
     file.git = resolved.git;
+    file.subscription = resolved.subscription;
     file.window = resolved.window;
     file.updates = resolved.updates;
     file.notifications = resolved.notifications;
@@ -1141,6 +1219,7 @@ impl Settings {
         self.layout.validate();
         self.editor.validate();
         self.kanban.validate();
+        self.subscription.validate();
         self.notifications.validate();
         for state in self.projects.values_mut() {
             state.validate();
@@ -1162,6 +1241,7 @@ impl ResolvedSettings {
         self.layout.validate();
         self.editor.validate();
         self.kanban.validate();
+        self.subscription.validate();
         self.notifications.validate();
         self.project.validate();
         sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
@@ -3031,5 +3111,60 @@ mod tests {
         };
         state.validate();
         assert_eq!(state.run_settings.expect("kept").mode, "solo");
+    }
+
+    #[test]
+    fn the_subscription_thresholds_are_read_and_written() {
+        let text = r#"{"version":1,"subscription":{"pauseAt":0,"reducedAt":50}}"#;
+        let Outcome::Ok(mut settings) = parse(text) else { panic!("the file did not parse") };
+        settings.validate();
+        assert_eq!(settings.subscription.pause_at, 0);
+        assert_eq!(settings.subscription.reduced_at, 50);
+    }
+
+    #[test]
+    fn a_file_written_before_the_subscription_section_keeps_todays_thresholds() {
+        let Outcome::Ok(settings) = parse(r#"{"version":1}"#) else { panic!("the file did not parse") };
+        assert_eq!(settings.subscription.pause_at, 90);
+        assert_eq!(settings.subscription.reduced_at, 75);
+    }
+
+    #[test]
+    fn a_threshold_off_the_ladder_takes_the_shipped_value() {
+        // Forgotten would have to mean "off" here, and turning somebody's
+        // protection off because a hand-edited number was junk is the one
+        // direction this field must never fail in.
+        let text = r#"{"version":1,"subscription":{"pauseAt":63,"reducedAt":200}}"#;
+        let Outcome::Ok(mut settings) = parse(text) else { panic!("the file did not parse") };
+        settings.validate();
+        assert_eq!(settings.subscription.pause_at, 90);
+        assert_eq!(settings.subscription.reduced_at, 75);
+    }
+
+    #[test]
+    fn a_reduced_threshold_at_or_above_the_pause_is_turned_off() {
+        let text = r#"{"version":1,"subscription":{"pauseAt":75,"reducedAt":75}}"#;
+        let Outcome::Ok(mut settings) = parse(text) else { panic!("the file did not parse") };
+        settings.validate();
+        assert_eq!(settings.subscription.pause_at, 75);
+        assert_eq!(settings.subscription.reduced_at, 0);
+    }
+
+    #[test]
+    fn a_reduced_threshold_stands_on_its_own_with_the_pause_off() {
+        let text = r#"{"version":1,"subscription":{"pauseAt":0,"reducedAt":75}}"#;
+        let Outcome::Ok(mut settings) = parse(text) else { panic!("the file did not parse") };
+        settings.validate();
+        assert_eq!(settings.subscription.reduced_at, 75);
+    }
+
+    #[test]
+    fn the_subscription_section_survives_the_round_trip_through_the_window() {
+        let mut file = Settings::default();
+        let mut resolved = resolve(&file, None);
+        resolved.subscription = SubscriptionSettings { pause_at: 95, reduced_at: 0 };
+        merge(&mut file, resolved, "2026-09-01T00:00:00Z".into());
+        assert_eq!(file.subscription.pause_at, 95);
+        assert_eq!(file.subscription.reduced_at, 0);
     }
 }

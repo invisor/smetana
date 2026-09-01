@@ -60,6 +60,27 @@ pub fn agent_prompt(app: &AppHandle) -> String {
     path(app).map(|path| file::agent_prompt(&path)).unwrap_or_default()
 }
 
+/// The run gate's thresholds as `runs::usage` wants them. The schema's type and
+/// the gate's are deliberately two types: one is a file people edit by hand and
+/// has to tolerate anything, the other is a rule with no serde in it.
+///
+/// Beside `agent` above and read the same way, from the disk on each call — and
+/// here, as with `updates_auto_check` below, that is the mechanism rather than
+/// merely acceptable: the run loop asks at every gate check, which is what lets
+/// a threshold moved while a run is paused take effect on *that* run.
+pub fn subscription(app: &AppHandle) -> crate::runs::usage::Limits {
+    subscription_at(path(app).as_deref())
+}
+
+/// The same read, for a caller that already holds the path — the run loop,
+/// which is handed one when it starts and asks the file again at every gate
+/// check. `None` is a platform that will not name a config directory, and it
+/// answers with the shipped thresholds.
+pub fn subscription_at(path: Option<&std::path::Path>) -> crate::runs::usage::Limits {
+    let stored = path.map(file::subscription).unwrap_or_default();
+    crate::runs::usage::Limits { pause_at: stored.pause_at, reduced_at: stored.reduced_at }
+}
+
 /// Whether a run may remove each task's worktree after it is merged and closed.
 ///
 /// Beside `agent` above and read the same way, and by the same caller for the
