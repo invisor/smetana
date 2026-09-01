@@ -187,8 +187,9 @@ const rawTabList = computed(() => [
      first entry; the Agent tab keeps second place because, like the board, a
      project has at most one of it and neither closes by a cross. Both stay
      `kind: 'pinned'`, which is what keeps them a single leading run for
-     `TabBar.vue` and keeps the "+ New agent, terminal or task" button (the
-     `afterPinned` slot) beside the pair rather than adrift among the files. */
+     `TabBar.vue` and keeps the "+ New task, agent, terminal or review" button
+     (the `afterPinned` slot) beside the pair rather than adrift among the
+     files. */
   ...(hasAgentTab.value ? [AGENT_TAB] : []),
   ...project().openTabs.map((path) => {
     const hint = readOnlyHint(buffers.get(path))
