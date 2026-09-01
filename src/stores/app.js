@@ -1,6 +1,7 @@
 /* What the app knows about itself, and what it asks the desktop to do for it:
-   open its own windows — the settings window, and a dialog in a window of its
-   own — and open a link somewhere that is not this webview.
+   open its own windows — the settings window, a dialog in a window of its own,
+   and one attached picture in a window of its own — and open a link somewhere
+   that is not this webview.
 
    A store rather than three lines in a component, for the reason the rest of
    `stores/` exists: these are the only files in `src/` that know Tauri is there,
@@ -219,6 +220,57 @@ export async function emitDialogResult(kind, name, payload) {
   } catch (err) {
     console.error('[app] what the dialog answered did not reach the app window:', err)
   }
+}
+
+/* One attached picture, shown whole in a window of its own.
+
+   Here beside `openSettingsWindow` and the dialog channels for exactly their
+   reason: this is the app asking the desktop to open one of its own windows,
+   which is what this store is for, and the alternative is `@tauri-apps/api`
+   imported inside `AttachmentStrip.vue` — a component that has to stay
+   drawable in `?view=gallery` with nothing behind it.
+
+   The picture travels twice, the way the settings window's section and the
+   compare window's pair do, and both halves are needed for one click to work in
+   both states. A window being built reads the path and the name off the URL
+   Rust wrote (`?view=image&path=…&name=…`); a window already open is focused
+   rather than rebuilt, so an event is the only way to re-aim it.
+
+   What travels is the path and never the bytes. The `url` on an attachment
+   record is a `data:` URL of up to 8 MiB of base64: it fits in no URL, and
+   sending it over the event channel would be eleven megabytes of base64 per
+   click. The window reads the file itself, with the command that already exists
+   for reading one back out of the store.
+
+   In a browser there is no window to make: the mock refuses, this says so once
+   in the console and the dialog carries on. The window itself is still
+   reachable there, through `?view=image&path=…&name=…`, which is how it is
+   checked by eye. */
+export const IMAGE_SHOW = 'image:show'
+
+export async function openImageWindow(path, name) {
+  try {
+    await invoke('image_window_open', { path, name })
+  } catch (err) {
+    console.error('[app] the image window did not open:', err)
+    return
+  }
+  try {
+    await emit(IMAGE_SHOW, { path, name })
+  } catch (err) {
+    /* The window is up on whatever it was showing, which is a smaller failure
+       than not opening at all — hence a warning and no second attempt. */
+    console.warn('[app] the image window was not told which picture to show:', err)
+  }
+}
+
+/* The image window's half: which picture it has just been asked for. A window
+   that was built by this very click is not listening yet and simply misses the
+   event, having already read the pair off its URL. */
+export async function watchImageShow(onShow) {
+  return listen(IMAGE_SHOW, (event) =>
+    onShow(event.payload?.path ?? null, event.payload?.name ?? '')
+  )
 }
 
 /* Whether the app opens itself when the person signs in, and the press that

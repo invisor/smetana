@@ -4,6 +4,7 @@ import DesktopApp from './views/DesktopApp.vue'
 import SettingsWindow from './views/SettingsWindow.vue'
 import CompareWindow from './views/CompareWindow.vue'
 import DialogWindow from './views/DialogWindow.vue'
+import ImageWindow from './views/ImageWindow.vue'
 import { loadSettings, settings } from './stores/settings.js'
 import { readWindowChrome } from './stores/app.js'
 import { CHROME_NONE } from './components/shell/windowChrome.js'
@@ -19,19 +20,21 @@ const Gallery = defineAsyncComponent(() => import('./views/Gallery.vue'))
    without adding chrome the design does not have. An override is never written
    back — one visit to the dev server must not repaint the app forever. */
 const params = new URLSearchParams(window.location.search)
-/* Five views over one bundle. `settings`, `compare` and `dialog` are the app's
-   other OS windows (Rust opens them as `index.html?view=settings`,
-   `index.html?view=compare` and `index.html?view=dialog&kind=<name>`, see
-   `src-tauri/src/window.rs`) and all three are branches here rather than builds
-   of their own for the same reason the gallery is: one front end, one set of
-   tokens, one place a component can break. The last of them is one branch for
-   every dialog of the app rather than one each, which is what `?kind=` is
-   for. */
+/* Six views over one bundle. `settings`, `compare`, `dialog` and `image` are
+   the app's other OS windows (Rust opens them as `index.html?view=settings`,
+   `index.html?view=compare`, `index.html?view=dialog&kind=<name>` and
+   `index.html?view=image&path=…&name=…`, see `src-tauri/src/window.rs`) and all
+   four are branches here rather than builds of their own for the same reason
+   the gallery is: one front end, one set of tokens, one place a component can
+   break. `dialog` is one branch for every dialog of the app rather than one
+   each, which is what `?kind=` is for; `image` is one window per app, re-aimed
+   by an event rather than rebuilt. */
 const view = params.get('view')
 const gallery = ref(view === 'gallery')
 const settingsWindow = ref(view === 'settings')
 const compareWindow = ref(view === 'compare')
 const dialogWindow = ref(view === 'dialog')
+const imageWindow = ref(view === 'image')
 
 const override = (name, allowed) => (allowed.includes(params.get(name)) ? params.get(name) : null)
 const themeOverride = override('theme', ['dark', 'light'])
@@ -54,6 +57,13 @@ const compareBranch = params.get('branch')
    `views/dialogRegistry.js`, and checking a name against it here would be that
    list written out twice. */
 const dialogKind = params.get('kind')
+/* Which picture the image window is showing — `image_window_open`
+   percent-encoded both into the URL it built. Passed through untouched, the way
+   the compare window's pair is: what a stored path and a stored name may hold
+   is the attachment store's business and not this file's, and an already open
+   window is re-aimed by an event rather than by a URL. */
+const imagePath = params.get('path')
+const imageName = params.get('name')
 
 /* Which chrome the window around this page has, which the app window's scope
    bar is the title bar of. Resolved here rather than in `DesktopApp.vue`, and
@@ -63,19 +73,23 @@ const dialogKind = params.get('kind')
    traffic lights on every cold start, which is the one thing this change is
    most on the hook for.
 
-   The other four views never ask. They keep their own title bars — the dialog
+   The other five views never ask. They keep their own title bars — the dialog
    windows deliberately so, since the OS frame there carries the dialog's own
    name — so the answer would be true and useless, and `none` is what they are
    drawn in anyway. */
 const windowChrome = ref(CHROME_NONE)
 
-/* The gallery is a component harness, and none of the three other windows holds
-   this store: all four render straight away. The app waits for the file — a few
+/* The gallery is a component harness, and none of the four other windows holds
+   this store: all five render straight away. The app waits for the file — a few
    milliseconds — rather than painting the default theme and flipping, and the
    chrome is awaited in the same breath because it is wanted at the same moment
    and neither is worth a second wait. */
 const standalone =
-  gallery.value || settingsWindow.value || compareWindow.value || dialogWindow.value
+  gallery.value ||
+  settingsWindow.value ||
+  compareWindow.value ||
+  dialogWindow.value ||
+  imageWindow.value
 const ready = ref(standalone)
 if (!standalone) {
   Promise.all([
@@ -95,7 +109,9 @@ if (!standalone) {
    in one window, one of them feeding a computed nothing renders, is a leak of
    the quiet kind. */
 const prefersDark =
-  settingsWindow.value || compareWindow.value || dialogWindow.value ? ref(false) : usePrefersDark()
+  settingsWindow.value || compareWindow.value || dialogWindow.value || imageWindow.value
+    ? ref(false)
+    : usePrefersDark()
 const theme = computed(
   () =>
     themeOverride ??
@@ -139,6 +155,18 @@ const density = computed(
   <DialogWindow
     v-else-if="dialogWindow"
     :kind="dialogKind"
+    :theme-override="themeOverride"
+    :density-override="densityOverride"
+  />
+  <!-- One attached picture, in a window of its own, on whichever file `?path=`
+       names. Its overrides go in for the reason the three windows above take
+       theirs: it paints its own root from what the app window announces, and
+       without them neither the picture's ground nor its caption could be looked
+       at in the other theme or in compact. -->
+  <ImageWindow
+    v-else-if="imageWindow"
+    :path="imagePath"
+    :name="imageName"
     :theme-override="themeOverride"
     :density-override="densityOverride"
   />

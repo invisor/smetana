@@ -1,11 +1,16 @@
 <script setup>
-import { ref, watch } from 'vue'
 import IconButton from '../core/IconButton.vue'
 import Tooltip from '../core/Tooltip.vue'
-import ImageViewer from '../overlays/ImageViewer.vue'
 
 /* What is attached to a task that has not been filed yet: a row of thumbnails,
-   each with a way to take it back out, and a way to see the picture whole.
+   each with a way to take it back out, and a way to ask for the picture whole.
+
+   Asking is all it does. The picture opens in an OS window of its own, which
+   this component neither builds nor knows about — it says which picture, and
+   its host does the rest. It used to hold the viewer itself, over the scrim of
+   the modal it sat in; when the new-task dialog became a window of its own that
+   scrim went, and an overlay pinned to `inset: 0` was pinned to a 440px window
+   that cannot be resized (smetana-msxp).
 
    The name is a tooltip rather than a caption. By the time a picture reaches
    this strip it has been renamed to a stamped name of the app's own making —
@@ -18,25 +23,17 @@ const props = defineProps({
   disabled: { type: Boolean, default: false }
 })
 
-defineEmits(['remove'])
+/* `view` carries `{ path, name }` and this component does not open anything
+   itself. The picture is shown in an OS window of its own now, and asking for
+   one is `stores/app.js`'s to do — a store import in here would be a component
+   that cannot be drawn in `?view=gallery` with nothing behind it, which is the
+   one form of checking this project has. `views/DialogWindow.vue` answers this
+   emit, exactly as it answers `attach`, `files` and `remove`.
 
-/* Which picture the viewer is open on, or null. It is held here rather than by
-   the dialog above because the cells are this component's and nothing outside
-   it has to know that a picture is being looked at. */
-const viewing = ref(null)
-
-/* A picture that leaves the list takes the viewer with it. Nothing on screen
-   can do that while the viewer is up — the scrim covers the strip and its
-   remove buttons with it — but the list is the caller's, and a viewer left open
-   on a record nobody holds any more would be showing a file that is no longer
-   attached to anything. */
-watch(
-  () => props.items,
-  (items) => {
-    if (viewing.value && !items.some((it) => it.path === viewing.value.path)) viewing.value = null
-  },
-  { deep: true }
-)
+   The path and the name and not the record: the window reads the file itself,
+   and the `url` beside them is up to 8 MiB of base64 that would have to cross
+   two process boundaries to say nothing the path does not. */
+defineEmits(['remove', 'view'])
 
 /* A dimension, like Toast's width and KanbanColumn's — big enough to tell one
    screenshot from another, small enough that four of them fit across the
@@ -114,10 +111,15 @@ const corner = { position: 'absolute', top: 'var(--space-1)', right: 'var(--spac
         <!-- Opening is the picture's own click and not the cell's. The remove
              button lies over the picture as a sibling rather than inside it, so
              its click never reaches here and taking an image out cannot open a
-             viewer on it. Viewing stays available while the dialog is busy
-             filing the task: it reads a picture that is already in hand and
+             window on it. Viewing stays available while the dialog is busy
+             filing the task: it names a picture that is already attached and
              changes nothing, which is the whole of what `disabled` guards. -->
-        <button type="button" :style="thumb" :aria-label="`View ${item.name}`" @click="viewing = item">
+        <button
+          type="button"
+          :style="thumb"
+          :aria-label="`View ${item.name}`"
+          @click="$emit('view', { path: item.path, name: item.name })"
+        >
           <img :src="item.url" :alt="item.name" :style="image" />
         </button>
       </Tooltip>
@@ -133,16 +135,4 @@ const corner = { position: 'absolute', top: 'var(--space-1)', right: 'var(--spac
       </div>
     </div>
   </div>
-  <!-- A sibling of the strip rather than a child of a cell, and neither place
-       is arbitrary. A cell is `position: relative`, so `inset: 0` inside one
-       would cover 64 pixels; the strip's own root scrolls and clips, so an
-       overlay inside it would be cut to the strip. Out here the nearest
-       positioned ancestor is the modal's scrim, and the viewer gets exactly its
-       area: the whole window in the app, the frame in the gallery. -->
-  <ImageViewer
-    v-if="viewing"
-    :url="viewing.url"
-    :name="viewing.name"
-    @close="viewing = null"
-  />
 </template>

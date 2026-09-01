@@ -1,5 +1,5 @@
 //! The app's windows: the settings window, the compare window, the dialog
-//! windows, and the main window's geometry on disk.
+//! windows, the image window, and the main window's geometry on disk.
 //!
 //! # The settings window
 //!
@@ -138,6 +138,19 @@ const SETTINGS_LABEL: &str = "settings";
 /// anything.
 const COMPARE_LABEL: &str = "compare";
 
+/// The image window's label. One per app, the way the two above are one per
+/// app, and the consequence is deliberate: clicking a second thumbnail shows
+/// that picture in this same window rather than opening a second one, so two
+/// screenshots cannot be put side by side. A window per picture would have
+/// bought that and paid for it in windows to close one by one.
+///
+/// It is also the name `capabilities/default.json` has to list. A window not
+/// named there reaches no core plugin at all: it would not hear `image:show`,
+/// could not read its own picture back and could not close itself on Esc — and
+/// nothing in either test suite can see that, since the front end's cannot read
+/// a capability file and Rust's cannot reach a webview.
+const IMAGE_LABEL: &str = "image";
+
 /// A dialog window's label is `dialog-<kind>`: one window per kind, so opening
 /// an open one brings it forward rather than making a second copy, exactly as
 /// the settings window's single label does that for it.
@@ -199,9 +212,26 @@ fn compare_query(repo: &str, branch: &str) -> String {
     format!("&repo={}&branch={}", encode(repo), encode(branch))
 }
 
+/// Which picture, as parameters on the URL the window already loads — the same
+/// mechanism `?view=`, `?theme=` and `?repo=` are built on, and what keeps the
+/// window checkable in `npm run dev` with no Tauri behind it.
+///
+/// Both are percent-encoded rather than validated the way `kind_query` validates
+/// a dialog kind, and for `compare_query`'s reason: a stored path is absolute
+/// and a file name is whatever `stored_name` made of it, so dropping either
+/// would leave a window with nothing to show.
+///
+/// The bytes stay where they are. An attachment's `url` in the front end is a
+/// `data:` URL of up to 8 MiB of base64, which fits in no URL and would be
+/// eleven megabytes over IPC per click; the window reads the file itself with
+/// `attachment_reopen`, which is already confined to the store.
+fn image_query(path: &str, name: &str) -> String {
+    format!("&path={}&name={}", encode(path), encode(name))
+}
+
 /// Percent-encoding, unreserved characters kept. Written out rather than pulled
-/// in: two call sites, and a dependency for eighteen lines is a dependency to
-/// keep in step for eighteen lines.
+/// in: a handful of call sites, and a dependency for eighteen lines is a
+/// dependency to keep in step for eighteen lines.
 fn encode(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for byte in raw.bytes() {
@@ -290,6 +320,72 @@ pub fn compare_window_open(app: AppHandle, repo: String, branch: String) -> Resu
     }
 
     builder.build().map(|_| ()).map_err(|err| err.to_string())
+}
+
+/// Opens the image window on one attached picture, or re-aims the open one.
+///
+/// The picture travels twice for the reason the compare window's pair does: a
+/// window being built reads it off the URL, and an open one is focused rather
+/// than rebuilt, so the only way to re-aim it is an event — `image:show`, on
+/// the channel the app's windows already speak over, sent by the front end
+/// after this call returns. Rebuilding it instead would throw away the window
+/// somebody has just dragged onto their second monitor and sized.
+///
+/// The title is known here, unlike a dialog window's: it arrived with the path.
+/// It is set again on the focus path, since the open window is now showing a
+/// different picture and a frame still naming the previous one would be the
+/// window lying about what is in it.
+///
+/// Built hidden and shown once it is placed, the same order the main window and
+/// the dialog windows use: a window shown first and moved afterwards is a
+/// visible jump. 900x700 is a fixed opening size with a floor under it and the
+/// frame draggable from there — there is no measuring loop here at all, which
+/// is what lets this window be resizable where a dialog window is not.
+///
+/// Deliberately not `async`: a synchronous command runs on the main thread,
+/// which is where a window is created on every platform this app targets.
+#[tauri::command]
+pub fn image_window_open(app: AppHandle, path: String, name: String) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(IMAGE_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.set_title(&window_title(&name));
+        return window.set_focus().map_err(|err| err.to_string());
+    }
+
+    let mut builder = WebviewWindowBuilder::new(
+        &app,
+        IMAGE_LABEL,
+        WebviewUrl::App(format!("index.html?view=image{}", image_query(&path, &name)).into()),
+    )
+    .title(window_title(&name))
+    .inner_size(900.0, 700.0)
+    .min_inner_size(320.0, 240.0)
+    .resizable(true)
+    .visible(false);
+
+    // A child of the main window for the reason the three windows above are
+    // children: a window whose whole purpose is to be looked at beside the
+    // board must not sink behind it on the first click into the board. No main
+    // window is not an error, any more than it is there.
+    if let Some(main) = app.get_webview_window("main") {
+        builder = builder.parent(&main).map_err(|err| err.to_string())?;
+    }
+
+    let window = builder.build().map_err(|err| err.to_string())?;
+    center_over_main(&app, &window);
+    window.show().map_err(|err| err.to_string())
+}
+
+/// What the OS frame carries over a picture. The stored name is the whole of it
+/// — it is what the strip's tooltip says and what the caption under the picture
+/// repeats — and the app's own name is the fall-back for the one case that has
+/// no name at all, since an empty title bar says less than a wrong one.
+fn window_title(name: &str) -> String {
+    if name.is_empty() {
+        "Smetana".to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 /// Opens a dialog window on one kind, or brings the open one forward.
@@ -548,7 +644,10 @@ const FLAGS: StateFlags = StateFlags::all();
 /// keeping none of them, with nothing on screen to say so — the one failure this
 /// codebase refuses everywhere else. The compare window is the same shape one
 /// step further: it can only be re-aimed by an event from the app window, so
-/// after that window is gone it is a comparison nothing can ever change.
+/// after that window is gone it is a comparison nothing can ever change. The
+/// image window is the plainest case of all three: it shows one picture off a
+/// draft in a dialog window that is itself about to be closed here, and nothing
+/// left standing could ever aim it at another one.
 /// Closing them is also what lets the app exit on the last window, the way it
 /// did before there was a second one.
 ///
@@ -564,7 +663,7 @@ pub fn close_children_with_main(app: &AppHandle) {
         if !matches!(event, WindowEvent::Destroyed) {
             return;
         }
-        for label in [SETTINGS_LABEL, COMPARE_LABEL] {
+        for label in [SETTINGS_LABEL, COMPARE_LABEL, IMAGE_LABEL] {
             if let Some(window) = app.get_webview_window(label) {
                 let _ = window.close();
             }
@@ -742,7 +841,10 @@ pub fn persist_geometry(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_query, drag_drop_space, height_to_set, kind_query, tab_query, window_chrome};
+    use super::{
+        compare_query, drag_drop_space, height_to_set, image_query, kind_query, tab_query,
+        window_chrome, window_title,
+    };
 
     /// The two words this command may answer with, named here in full because
     /// they are a contract with `src/components/shell/windowChrome.js` and
@@ -816,6 +918,36 @@ mod tests {
         let query = compare_query("/tmp/r", "x&view=gallery#y=z?q");
         assert_eq!(query.matches('&').count(), 2);
         assert!(!query.contains("view=gallery"));
+    }
+
+    /// A stored path is absolute and holds whatever the person's home folder is
+    /// called, and a stored name is `stored_name`'s own making — so both are
+    /// percent-encoded into the query string rather than validated away.
+    #[test]
+    fn the_picture_rides_as_percent_encoded_parameters() {
+        assert_eq!(
+            image_query("/Users/me/App Support/attachments/a b.png", "a&b.png"),
+            "&path=%2FUsers%2Fme%2FApp%20Support%2Fattachments%2Fa%20b.png&name=a%26b.png"
+        );
+    }
+
+    /// Nothing a caller sends may add a parameter of its own or leave the query
+    /// string — the same rule `compare_query` is held to, on the same grounds.
+    #[test]
+    fn nothing_in_a_picture_name_can_escape_the_query_string() {
+        let query = image_query("/tmp/a b.png", "x&view=gallery#y=z?q");
+        assert_eq!(query.matches('&').count(), 2);
+        assert!(!query.contains("view=gallery"));
+        assert!(!query.contains('#'));
+        assert!(!query.contains('?'));
+    }
+
+    /// The frame says which picture is in the window, and the one case with no
+    /// name to say it with falls back to the app's own rather than to nothing.
+    #[test]
+    fn the_frame_carries_the_file_name() {
+        assert_eq!(window_title("20260806-121314-mock.png"), "20260806-121314-mock.png");
+        assert_eq!(window_title(""), "Smetana");
     }
 
     #[test]

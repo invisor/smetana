@@ -105,13 +105,61 @@ function begin() {
   attachmentsState.lastError = null
 }
 
-function add(attachment) {
-  attachmentsState.items.push({
+/* Rust's record in the shape everything above this file draws from: the base64
+   and the mime become the one `url` a thumbnail and the viewer are both drawn
+   with. Pulled out of `add` because there is now a reader that wants the record
+   and wants nothing kept — see `readAttachment` below. */
+function record(attachment) {
+  return {
     path: attachment.path,
     name: attachment.name,
     bytes: attachment.bytes,
     url: `data:${attachment.mime};base64,${attachment.data}`
-  })
+  }
+}
+
+function add(attachment) {
+  attachmentsState.items.push(record(attachment))
+}
+
+/* One picture, read back out of the store and handed straight to the caller.
+
+   The one caller is the image window (`views/ImageWindow.vue`), which is the
+   only reader of this store that holds nothing: no list, no drop subscription,
+   no `lastError`. That is the whole reason this is a separate export rather
+   than a flag on `restorePaths` — **it must not touch `attachmentsState`.**
+   Adding to the list from a window that draws no list would put a second copy
+   of somebody's draft in a second webview, and the invariant this store is
+   built on (`.claude/rules/attachments.md`) is that the list belongs to the New
+   task window alone. A command is not a subscription, and a read that keeps
+   nothing is not a list.
+
+   What travels to that window is the *path*, never the bytes: `url` here is a
+   `data:` URL of up to `MAX_IMAGE_BYTES` of base64, which fits in no URL and
+   would be eleven megabytes over IPC on every click. `attachment_reopen` is
+   already the command for exactly this — it answers with the record an import
+   answers with and is confined to `store_root()` by `cleanup::in_store` — so
+   nothing new is allowed and no new check on a path is written.
+
+   It rejects rather than swallowing a refusal, unlike the two batches above:
+   there is no list here for the rest of to arrive into, and a file the Storage
+   tab swept in the meantime is the window's whole content. The window draws its
+   own empty state from that.
+
+   **And it logs nothing on the way.** A picture the Storage tab swept while a
+   draft still named it is an ordinary state of this app, not a fault, and it
+   already has somewhere to be said — an empty state carrying the file's name,
+   in the window somebody is looking at. A red line in the console beside it
+   would be the app reporting a bug it does not have. It would also be the
+   *second* line for one failure on the restore path, where `fail` below already
+   writes one and is the half that puts the message on screen. Whoever wants the
+   refusal has it: it comes back in the rejection. */
+export async function readAttachment(path) {
+  try {
+    return record(await invoke('attachment_reopen', { path }))
+  } catch (err) {
+    throw new Error(messageOf(err))
+  }
 }
 
 /* Files already on disk: the picker's answer and a drop's paths.
@@ -149,7 +197,15 @@ export async function restorePaths(paths) {
   begin()
   for (const path of paths) {
     try {
-      add(await invoke('attachment_reopen', { path }))
+      /* Over `readAttachment` above rather than over `invoke` directly, so
+         there is one place that knows how a stored record becomes a thumbnail.
+         The difference between the two is what happens to the answer: that one
+         hands it back and keeps nothing, this one puts it in the list — which
+         is why the push is here and not a second call to `add`, whose argument
+         is Rust's record and not a made-up one. The logging stays here too, in
+         `fail`: one line per refusal, written by the half that also puts the
+         message on screen. */
+      attachmentsState.items.push(await readAttachment(path))
     } catch (err) {
       fail(err)
     }

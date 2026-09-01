@@ -6,6 +6,10 @@ paths:
   # host loads it, subscribes it to that window's drops and answers the three
   # image emits itself. Somebody editing the host has to see this rule.
   - "src/views/DialogWindow.vue"
+  # The store's second consumer, and the one that holds nothing: one picture by
+  # path, no list and no drop. Somebody editing it has to see why that is not a
+  # second owner of the list.
+  - "src/views/ImageWindow.vue"
   - "src/components/kanban/AttachmentStrip.vue"
   - "src/components/settings/StorageSettings.vue"
   - "src/components/settings/storage.js"
@@ -51,6 +55,30 @@ would leave one more file on disk per switch, for good. Its argument is confined
 `cleanup::in_store`, pure and tested with no filesystem under it — everything that command may
 legitimately be handed came out of this store to begin with. `taskDraft.js` beside `NewTaskModal.vue`
 is what says when a draft may come back at all.
+
+**The second reader of this store holds nothing at all, and that is what keeps the rule above
+true.** Clicking a thumbnail shows the picture whole in an OS window of its own —
+`src/views/ImageWindow.vue`, `?view=image`, opened by `window::image_window_open` and labelled
+`image`, one per app and re-aimed by `image:show` rather than rebuilt. That window calls exactly one
+thing here, `readAttachment(path)`: one `attachment_reopen`, the record handed straight back, and
+**nothing written to `attachmentsState`** — no list, no `lastError`, and above all no `watchDrops`.
+The invariant is untouched because a command is not a subscription: the list still belongs to the New
+task window alone, and nothing in the image window's webview can hear a drop or keep one.
+
+**What travels to it is the path, and never the bytes.** A record's `url` is a `data:` URL of up to
+`MAX_IMAGE_BYTES` of base64: it fits in no URL, and putting it on the event channel would be eleven
+megabytes over IPC per click. So Rust percent-encodes the path and the name into the window's URL
+(`image_query`), the window reads the file itself, and `cleanup::in_store` confines that read exactly
+as it already confined the restore path — nothing new is allowed and no second check on a path was
+written. A file the Storage tab swept while the draft still names it is an ordinary outcome and the
+window draws an empty state carrying the name, which is why `readAttachment` rejects rather than
+swallowing the refusal the way `restorePaths` does: there is no list here for the rest of to arrive
+into. The strip itself opens nothing — it emits `view` with `{ path, name }` and `DialogWindow.vue`
+answers it beside `attach`, `files` and `remove`, so `AttachmentStrip.vue` stays drawable in
+`?view=gallery` with no store behind it. Before smetana-msxp the picture was an overlay pinned to
+`inset: 0`; once every dialog became a window of its own that meant the viewport of a 440-point
+window nobody can resize, so "the picture, larger" came out the size of the dialog it was opened
+from.
 
 **No drop is heard twice, and the reason is the webviews rather than anything in this file.** The only
 other subscriber to a window's drag-drop event in the whole tree is `watchSessionDrops` in

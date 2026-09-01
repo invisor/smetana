@@ -377,6 +377,14 @@ export const MOCK_TREE = {
    rather than sniffed: a fixture has no bytes to look at. */
 const MOCK_BINARY = new Set(['src/app-icon.png', 'src/bd-aarch64.tar.gz', 'src/unknown-binary'])
 
+/* An eight-pixel PNG, base64, and the same bytes `ATTACHMENTS[0]` in
+   `views/Gallery.vue` is drawn from. What `attachment_reopen` answers with
+   below, so the image window has something to fit into itself under
+   `npm run dev`. Written out rather than imported from the gallery: that file
+   is code-split and never in the product bundle, and this one is. */
+const MOCK_IMAGE_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR42mPIwwEYhpYEADyoUoFZDU7TAAAAAElFTkSuQmCC'
+
 const MOCK_FILE = `fn main() {\n    println!("hello from the mock backend");\n}\n`
 const MOCK_MTIME = 1754006400000
 
@@ -978,9 +986,37 @@ export function installMockBackend() {
        the refusal in its own error line, which is the one place it would be
        looked for.
 
-       `attachment_reopen` is absent for the same reason and reaches nothing in
-       a browser anyway: it is only ever called for a draft the app window kept
-       across a project switch, and there is no app window here to keep one. */
+       `attachment_reopen` used to be absent beside them, on the argument that
+       it is only ever called for a draft the app window kept across a project
+       switch and there is no app window here to keep one. That stopped being
+       true: the image window (`views/ImageWindow.vue`, `?view=image`) reads its
+       whole content with this one command, so an absent answer would leave the
+       one screen this project can check by eye drawing nothing but its empty
+       state. It is a read, and the policy here is that reads answer.
+
+       The picture is the eight-pixel PNG the gallery's own fixtures are drawn
+       from, deliberately the same bytes rather than a second copy of a
+       different one: what is being looked at is the window around it — the
+       fitting, the caption, the frame — and a fixture smaller than the window
+       is also the case that proves a small picture is not blown up to fill it.
+       Every path answers but one, and the exception is what gives the window's
+       other half a door. The Storage tab's button can sweep a file a draft
+       still names, so the window draws an empty state carrying that name — and
+       with a fixture that answers everything, the one screen this project
+       checks by eye could not reach that state at all. A name beginning
+       `missing` is refused instead, in the shape Rust refuses one: it is not a
+       second policy but the same read answering honestly about a file that is
+       not there, and no path a real store ever produced starts that way
+       (`stored_name` writes a timestamp first). The other emptiness — nothing
+       asked for at all — is `?view=image` with no `path`. */
+    if (command === 'attachment_reopen') {
+      const path = payload?.path ?? ''
+      const name = path.split('/').pop() || 'mock.png'
+      if (name.startsWith('missing')) {
+        throw { kind: 'io', message: `${path}: no such file` }
+      }
+      return { path, name, bytes: 72, mime: 'image/png', data: MOCK_IMAGE_BASE64 }
+    }
     /* `run_start` and `run_stop` are deliberately absent: they fall through to
        the refusal at the bottom, like every other write. A run that looked like
        it had started would be worse than none — there is no worker, no session

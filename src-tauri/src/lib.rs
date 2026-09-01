@@ -289,6 +289,7 @@ pub fn run() {
       window::home_dir,
       window::drag_drop_space,
       window::compare_window_open,
+      window::image_window_open,
       window::dialog_window_open,
       window::dialog_window_close,
       window::dialog_window_size,
