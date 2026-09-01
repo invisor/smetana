@@ -39,7 +39,12 @@ import SetupProjectModal from '../components/run/SetupProjectModal.vue'
 import { dialogWidth, isDialogKind } from './dialogRegistry.js'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
-import { emitDialogResult, sizeDialogWindow, watchDialogProps } from '../stores/app.js'
+import {
+  emitDialogResult,
+  openImageWindow,
+  sizeDialogWindow,
+  watchDialogProps
+} from '../stores/app.js'
 import { readSharedSettings, watchSharedSettings } from '../stores/settings.js'
 
 const props = defineProps({
@@ -125,14 +130,23 @@ async function holdAttachments() {
   stops.push(store.watchDrops(() => true))
 }
 
-/* The three emits a `new-task` guest raises about its images, answered here
-   rather than forwarded. They are the other half of the store living in this
-   window: sending them to the app window would be asking the one process that
-   cannot hear a drop to keep the list that a drop goes into. */
+/* The four emits a `new-task` guest raises about its images, answered here
+   rather than forwarded. Three of them are the other half of the store living
+   in this window: sending them to the app window would be asking the one
+   process that cannot hear a drop to keep the list that a drop goes into.
+
+   `view` is the fourth and is the odd one — it touches no list at all. It asks
+   the desktop for the image window, which is a window of the app the way the
+   settings window is, and it is answered here for a different reason: the strip
+   that raises it has to stay drawable in `?view=gallery` with no store behind
+   it, so it says which picture and nothing more. Crossing to the app window
+   instead would have worked and been longer by a round trip for no gain — the
+   path is in this window's own hands already. */
 const answerHere = {
   attach: () => attachments.value?.pickImages(),
   files: (files) => attachments.value?.attachFiles(files),
-  remove: (path) => attachments.value?.removeAttachment(path)
+  remove: (path) => attachments.value?.removeAttachment(path),
+  view: (picture) => openImageWindow(picture?.path ?? '', picture?.name ?? '')
 }
 
 /* Whether those pictures are still on their way, which the guest has to be told
@@ -283,10 +297,11 @@ const EMITS = [
   'draft'
 ]
 
-/* And the three that deliberately do not travel: `new-task`'s images, answered
-   in this window by the store above. They are a separate list rather than a
-   branch inside the loop below so that the division is a thing somebody reads
-   rather than a condition they have to work out — the app window has no handler
+/* And the four that deliberately do not travel: `new-task`'s images, answered
+   in this window by the store above and, for `view`, by `openImageWindow`. They
+   are a separate list rather than a branch inside the loop below so that the
+   division is a thing somebody reads rather than a condition they have to work
+   out — the app window has no handler
    for any of them, and one of these names appearing in `EMITS` would be a
    button that draws normally and does nothing at all when pressed.
 
@@ -296,7 +311,7 @@ const EMITS = [
    of crossing to the app window — the same silent button, one list over. `kind`
    comes off the URL and never changes for the life of a window, so the question
    is settled once rather than watched. */
-const HOSTED_EMITS = props.kind === 'new-task' ? ['attach', 'files', 'remove'] : []
+const HOSTED_EMITS = props.kind === 'new-task' ? ['attach', 'files', 'remove', 'view'] : []
 
 const on = (name) => `on${name[0].toUpperCase()}${name.slice(1)}`
 const listeners = {

@@ -1,41 +1,43 @@
 <script setup>
-/* One picture, shown whole, over whatever it was opened from.
+/* One picture, shown whole, filling the window it is the whole of.
 
    A thumbnail is a crop — 64 pixels of a screenshot say which one it is and
    nothing about what is in it — so the strip needs a way to see the picture
    itself. This is that way, and it is deliberately the smallest one: the image
-   fitted into the space there is, its name under it, and a way out. No zoom, no
+   fitted into the space there is, its name under it, and Esc. No zoom, no
    panning, no rotation, no saving, and no stepping between the pictures next to
    it. A viewer that pages carries a question this one does not have to answer —
    what it shows when the open picture is taken out of the list — and the strip
-   it was opened from is two clicks away.
+   it was opened from is one window away.
 
-   `position: absolute` rather than `fixed`, which is `Modal.vue`'s own choice
-   and for its reason: `views/Gallery.vue` frames every dialog in a box that is
-   `position: relative` and `overflow: hidden`, and a fixed overlay would climb
-   out of that box and cover the gallery — breaking the one form of checking
-   this project has. Absolute puts it over exactly the area of the nearest
-   positioned ancestor, which is the modal's scrim in the app and the frame in
-   the gallery.
+   **It is the body of an OS window now, and that is its only form.** It used to
+   be an overlay over the new-task modal's scrim, which was right for as long as
+   that dialog was a modal over the board. When every dialog became a window of
+   its own the scrim went with it, and `inset: 0` came to mean the viewport of a
+   440-pixel window that cannot be resized — so "the picture, larger" was the
+   picture at the size of the dialog it was opened from (smetana-msxp). The
+   window it fills now is `views/ImageWindow.vue`, opens at 900x700 and is
+   dragged and resized by its own frame.
 
-   The z-index is `--z-modal` rather than nothing, and that is the one thing
-   here worth reading twice. A descendant of the modal is inside the stacking
-   context its scrim already makes, so painting order settles the question for
-   everything drawn before this in the dialog — but not for what is drawn after
-   it. `Dropdown`'s root is `position: relative`, and the dialog that opens this
-   has five of them below the images: at `z-index: auto` they are painted in
-   tree order after this overlay and would sit on top of the scrim. This is not
-   a new step in the scale — the token is the one its own ancestor uses — and no
-   new one is wanted: `--z-popover` exists for the opposite case, an overlay
-   forced to leave its stacking context. */
+   Three things went with the scrim rather than being kept behind a prop, since
+   a second form nothing in the product draws is a second form nobody checks.
+   There is no close button: the OS frame carries one. A click on the background
+   closes nothing: the empty space around the picture is the only part of this
+   window somebody can take hold of to drag it, and a click that closed the
+   window would make it undraggable. And there is no `z-index`: this is the
+   whole page, with nothing drawn after it to sit on top.
+
+   `position: absolute; inset: 0` stays. In the window that is the whole page,
+   and in `?view=gallery` it is exactly the frame the gallery puts around it —
+   so the same component is checkable in both places, which is the only form of
+   checking this project has for it. */
 import { onBeforeUnmount, watch } from 'vue'
-import IconButton from '../core/IconButton.vue'
 
 const props = defineProps({
   open: { type: Boolean, default: true },
   /* What the picture is drawn from — the `url` of an attachment record, which
-     is already in hand by the time a thumbnail is on screen. Nothing here reads
-     anything off the disk. */
+     the window has already read back out of the store. Nothing here reaches the
+     disk. */
   url: { type: String, required: true },
   /* The stored name, shown under the picture. It is an identifier the app made
      up rather than prose, so it is drawn in mono. */
@@ -44,13 +46,11 @@ const props = defineProps({
 
 const emit = defineEmits(['close'])
 
-/* Esc is free in the tree this opens in: the new-task dialog does not close on
-   it and nothing above it listens for it. The listener is the document's rather
-   than an element's because nothing here takes the keyboard — the focus stays
-   on the thumbnail that opened this, which is where a person wants it back when
-   the picture goes away. Put on at open and taken off at close and at unmount,
-   the way `PointerMenu` does it: a document listener outlives the component
-   that added it. */
+/* Esc closes, and the window it is in answers by closing itself. The listener
+   is the document's rather than an element's because nothing here takes the
+   keyboard — there is nothing in this window to focus. Put on at open and taken
+   off at close and at unmount, the way `PointerMenu` does it: a document
+   listener outlives the component that added it. */
 const onKeydown = (event) => {
   if (event.key !== 'Escape') return
   event.preventDefault()
@@ -68,11 +68,14 @@ watch(
 
 onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 
-const scrimStyle = {
+/* The page this window holds: the app's own ground, the same token every other
+   window of this app paints its root with. The padding is what keeps the
+   picture off the frame — there is no share of the viewport in the ceilings
+   below any more, so the margin is entirely this box's to give. */
+const pageStyle = {
   position: 'absolute',
   inset: 0,
-  zIndex: 'var(--z-modal)',
-  background: 'var(--overlay-scrim)',
+  background: 'var(--canvas)',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
@@ -96,24 +99,24 @@ const frameStyle = {
   justifyContent: 'center'
 }
 
-/* Two ceilings on each axis, and both are needed. The `vw`/`vh` half keeps the
-   picture off the edges of the window in the app, where the overlay is the
-   whole of it; the `100%` half is what holds it inside a frame smaller than the
-   window — the gallery's box, and the modal's own scrim in a narrow window.
-   With `contain` over the smaller of the two, a picture larger than the space
-   is fitted whole and a picture smaller than it is left at its own size: there
-   is no `width` here to stretch it, only a maximum. */
+/* `100%` on both axes, which is the box this component was given and nothing
+   else. It used to be `min(88vw, 100%)`: the viewport share was there to hold
+   the picture off the edges of the *app* window, which this overlay covered
+   whole, and in a window of its own that job belongs to the padding above. With
+   `contain` under the ceiling, a picture larger than the space is fitted whole
+   and a picture smaller than it is left at its own size — there is no `width`
+   here to stretch one, only a maximum. */
 const imageStyle = {
   display: 'block',
-  maxWidth: 'min(88vw, 100%)',
-  maxHeight: 'min(84vh, 100%)',
+  maxWidth: '100%',
+  maxHeight: '100%',
   objectFit: 'contain'
 }
 
-/* The name sits on a surface of its own rather than straight on the scrim, the
-   same answer `TerminalView`'s drop label gives: a scrim is a translucent layer
-   over whatever happens to be under it, so no text colour reads well on it in
-   both themes, and the system has no token for one that would. */
+/* The name on a surface of its own rather than straight on the page. It is an
+   identifier and not prose, and this system draws a standalone identifier as a
+   bordered mono chip — the same shape it had over the scrim, kept because it is
+   what separates the app's stamped file name from the picture above it. */
 const captionStyle = {
   flexShrink: 0,
   maxWidth: '100%',
@@ -126,35 +129,13 @@ const captionStyle = {
   boxShadow: 'var(--shadow-overlay)',
   font: 'var(--weight-regular) var(--text-xs)/var(--leading-normal) var(--font-mono)'
 }
-
-/* `solid` rather than the ghost default: the button stands on the scrim with
-   nothing behind it, and a ghost one would be a glyph floating over a picture. */
-const cornerStyle = {
-  position: 'absolute',
-  top: 'var(--space-4)',
-  right: 'var(--space-4)'
-}
 </script>
 
 <template>
-  <!-- `.self` on both boxes, and that is the whole of "click the darkening to
-       close": the scrim's own padding and the empty space around the picture
-       are two different elements, and a click on the picture, on its name or on
-       the button is not a click on either of them. -->
-  <div
-    v-if="open"
-    role="dialog"
-    aria-modal="true"
-    :aria-label="name || 'Image'"
-    :style="scrimStyle"
-    @click.self="$emit('close')"
-  >
-    <div :style="frameStyle" @click.self="$emit('close')">
+  <div v-if="open" role="group" :aria-label="name || 'Image'" :style="pageStyle">
+    <div :style="frameStyle">
       <img :src="url" :alt="name" :style="imageStyle" />
     </div>
     <div v-if="name" :style="captionStyle">{{ name }}</div>
-    <div :style="cornerStyle">
-      <IconButton icon="x" variant="solid" label="Close" @click="$emit('close')" />
-    </div>
   </div>
 </template>

@@ -43,7 +43,7 @@ const props = defineProps({
   restoringImages: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['close', 'submit', 'attach', 'files', 'remove', 'draft'])
+const emit = defineEmits(['close', 'submit', 'attach', 'files', 'remove', 'view', 'draft'])
 
 /* The types and priorities are the ones bd understands, each behind an Auto
    that leaves the choice to the agent — which has read the text of the task,
@@ -422,7 +422,15 @@ const parentWhy = {
           <Button size="sm" icon="paperclip" :disabled="busy" @click="$emit('attach')">Attach</Button>
           <span :style="hint">{{ dragging ? 'Drop them anywhere' : 'or paste, or drop them on the window' }}</span>
         </div>
-        <AttachmentStrip :items="attachments" :disabled="busy" @remove="$emit('remove', $event)" />
+        <!-- `view` passes straight through, the way `remove` does: what a
+             thumbnail's click means is a window of its own, and the host of
+             this dialog is what opens one. -->
+        <AttachmentStrip
+          :items="attachments"
+          :disabled="busy"
+          @remove="$emit('remove', $event)"
+          @view="$emit('view', $event)"
+        />
         <span v-if="error" :style="errorStyle">{{ error }}</span>
       </div>
       <div :style="row">

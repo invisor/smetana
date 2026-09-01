@@ -67,7 +67,7 @@ reads (`src/App.vue`):
 |---|---|---|
 | `theme` | `dark`, `light` | `dark` |
 | `density` | `comfortable`, `compact` | `comfortable` |
-| `view` | `gallery`, `settings`, `compare`, `dialog` | the app |
+| `view` | `gallery`, `settings`, `compare`, `dialog`, `image` | the app |
 
 `?view=gallery` renders every exported component once (`src/views/Gallery.vue`) — the harness for
 catching a broken component. Check any component change in all four theme × density combinations,
@@ -85,6 +85,9 @@ checked the same way; what it is for is in `.claude/rules/vcs-panel.md`.
 `?view=dialog&kind=<name>` is the fourth, one window kind for every dialog of the app rather than one
 each — the closed list of kinds is `src/views/dialogRegistry.js` and the host is
 `src/views/DialogWindow.vue`, whose own headers carry the reasoning.
+`?view=image&path=…&name=…` is the fifth: one attached picture, shown whole in a resizable window of
+its own (`src/views/ImageWindow.vue`), one per app and re-aimed by an event rather than rebuilt. What
+travels is the path and never the bytes — see `.claude/rules/attachments.md`.
 
 ## Architecture
 

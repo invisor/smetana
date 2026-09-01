@@ -50,6 +50,7 @@ import {
   GitGraph,
   GitMerge,
   HardDrive,
+  ImageOff,
   Inbox,
   Info,
   Layers,
@@ -177,6 +178,11 @@ export const iconNodes = {
   // draws a muted triangle for a folder with no bd tracker, and a red one on
   // its own beside it would leave two states of a project told apart by colour
   // and nothing else. A page silhouette says which of the two is about a file.
+  /* The image window with no picture to show. A crossed-out picture rather
+     than the empty inbox `EmptyState` falls back to: what is missing here is
+     one specific file — swept from the Storage tab while a draft still named
+     it — and an inbox says the opposite, that there is nothing to have. */
+  'image-off': ImageOff,
   'file-x': FileX,
   'loader-circle': LoaderCircle,
   check: Check,

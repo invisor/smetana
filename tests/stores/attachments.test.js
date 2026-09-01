@@ -361,6 +361,52 @@ describe('images attached to a task that has not been filed', () => {
     ])
   })
 
+  /* The image window's whole content, and the one reader of this store that
+     holds nothing. Keeping nothing is the property under test rather than an
+     incidental one: a second copy of the draft's list, in a second webview, is
+     exactly what `.claude/rules/attachments.md` says must not exist. */
+  it('one picture read for the image window comes back and is not kept', async () => {
+    const { ipc, stores } = await loadStores()
+    ipc.on('attachment_reopen', ({ path }) => stored(path.split('/').pop()))
+
+    const picture = await stores.attachments.readAttachment('/data/attachments/app-1f2e/mock.png')
+
+    expect(ipc.calls('attachment_reopen')).toEqual([
+      { path: '/data/attachments/app-1f2e/mock.png' }
+    ])
+    expect(picture).toEqual({
+      path: '/data/attachments/mock.png',
+      name: 'mock.png',
+      bytes: 2,
+      url: 'data:image/png;base64,AQI='
+    })
+    expect(stores.attachments.attachmentsState.items).toEqual([])
+    expect(stores.attachments.attachmentsState.lastError).toBeNull()
+  })
+
+  /* A file the Storage tab swept while a draft still named it. The window draws
+     an empty state from the rejection, so it has to be one — and the list and
+     the line a New task window may be showing at that moment are none of this
+     reader's business. */
+  it('a picture that is no longer in the store is refused and still keeps nothing', async () => {
+    const { ipc, stores } = await loadStores()
+    /* No `console.error` is stubbed here, unlike every refusal above, and that
+       is the point rather than an omission: this reader writes no line at all.
+       The window it answers says so on screen instead, and a red line beside
+       that would be the app reporting a bug it does not have. */
+    ipc.fail('attachment_reopen', {
+      kind: 'io',
+      message: '/data/attachments/app-1f2e/gone.png: no such file'
+    })
+
+    await expect(
+      stores.attachments.readAttachment('/data/attachments/app-1f2e/gone.png')
+    ).rejects.toThrow('/data/attachments/app-1f2e/gone.png: no such file')
+
+    expect(stores.attachments.attachmentsState.items).toEqual([])
+    expect(stores.attachments.attachmentsState.lastError).toBeNull()
+  })
+
   it('a picture cleared from the store in the meantime drops out and says so', async () => {
     const { ipc, stores } = await loadStores()
     vi.spyOn(console, 'error').mockImplementation(() => {})

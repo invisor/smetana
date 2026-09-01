@@ -2304,6 +2304,7 @@ const menuTargetStyle = {
           @attach="() => {}"
           @files="() => {}"
           @remove="() => {}"
+          @view="() => {}"
         />
       </div>
       <!-- The same dialog with nothing attached and something being dragged
@@ -2322,6 +2323,7 @@ const menuTargetStyle = {
           @attach="() => {}"
           @files="() => {}"
           @remove="() => {}"
+          @view="() => {}"
         />
       </div>
       <!-- The same dialog opened from a card's own menu. The parent's title is
@@ -2340,6 +2342,7 @@ const menuTargetStyle = {
           @attach="() => {}"
           @files="() => {}"
           @remove="() => {}"
+          @view="() => {}"
         />
       </div>
       <!-- The three things the whole-column confirm can be saying. The middle
@@ -2426,20 +2429,26 @@ const menuTargetStyle = {
           @resolve="() => {}"
         />
       </div>
-      <!-- Both strips stand in a frame, and the frame is not decoration here.
-           A thumbnail opens the image viewer, which covers the nearest
-           positioned ancestor — the dialog's own scrim in the app. With nothing
-           positioned around the strip there is no such ancestor short of the
-           page, so a click in these two cells would put the viewer over the
-           whole gallery. The box is what the dialog stands in for. -->
+      <!-- Both strips stand in a frame, and the frame is not decoration here:
+           it is the bounded box the strip is drawn against, standing in for the
+           dialog it sits in. The rule being shown is a ceiling — two rows of
+           thumbnails and then it scrolls — and a cell with no bounds would let
+           the strip below simply grow to all fourteen, which is the one state
+           these two cells exist to tell apart.
+           A thumbnail draws nothing here any more. It emits `view` with the
+           picture's path and name, and in the app `views/DialogWindow.vue`
+           answers by asking the desktop for a window of its own
+           (`views/ImageWindow.vue`, whose body is the `ImageViewer` cell far
+           below). The handler in these cells is empty, so a click is inert —
+           there is no overlay left for this frame to contain. -->
       <div :style="{ position: 'relative', width: '340px', height: '260px', padding: 'var(--space-5)', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
-        <AttachmentStrip :items="ATTACHMENTS" @remove="() => {}" />
+        <AttachmentStrip :items="ATTACHMENTS" @remove="() => {}" @view="() => {}" />
       </div>
       <!-- Past two rows the strip scrolls instead of growing: nothing bounds
            how many images are attached, and the dialog has no scrolling of its
            own to absorb them. -->
       <div :style="{ position: 'relative', width: '400px', height: '260px', padding: 'var(--space-5)', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
-        <AttachmentStrip :items="MANY_ATTACHMENTS" @remove="() => {}" />
+        <AttachmentStrip :items="MANY_ATTACHMENTS" @remove="() => {}" @view="() => {}" />
       </div>
       <!-- Both wordings: the first run, which promises a file will appear, and
            the second over a file that is already there, which promises the
@@ -4923,12 +4932,13 @@ const menuTargetStyle = {
           </template>
         </Modal>
       </div>
-      <!-- What a thumbnail in the new-task dialog's images strip opens. Framed
-           the way the dialogs above it are, and for the same reason: the viewer
-           covers the nearest positioned ancestor, so the frame is what stands in
-           for the modal it sits over in the app. A picture larger than the frame
-           is the state worth looking at — fitted whole, nothing cropped off it,
-           and no scrollbar anywhere. -->
+      <!-- What a thumbnail in the new-task dialog's images strip opens, which
+           is a window of its own in the app (`views/ImageWindow.vue`). Framed
+           the way the dialogs above it are: the viewer covers the nearest
+           positioned ancestor, so the frame is what stands in here for that
+           window. A picture larger than the frame is the state worth looking
+           at — fitted whole, nothing cropped off it, and no scrollbar
+           anywhere. -->
       <div :style="{ position: 'relative', height: '320px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ImageViewer :url="WIDE_ATTACHMENT.url" :name="WIDE_ATTACHMENT.name" @close="() => {}" />
       </div>
