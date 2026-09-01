@@ -4511,8 +4511,14 @@ const menuTargetStyle = {
              second is the same state with `speaks` false — the pause glyph and
              its own Stop, and nothing else. Drawn as a row rather than stacked,
              because what is being checked is that the pair reads as one
-             statement and one silent neighbour. -->
-        <div :style="{ display: 'flex', gap: 'var(--space-5)', alignItems: 'center' }">
+             statement and one silent neighbour.
+
+             The gap is `--space-4` and not this section's own `--space-5`,
+             because it stands in for a real one: in the app the segments sit in
+             `StatusFooter`'s status slot, whose row is spaced at `--space-4`.
+             A wider one here would draw the pair further apart than the footer
+             ever does and hide exactly what this cell is for. -->
+        <div :style="{ display: 'flex', gap: 'var(--space-4)', alignItems: 'center' }">
           <RunBar
             :run="runFixture({ kind: 'paused', pct: 90, resets: 'Sep 1 at 6pm (Europe/Moscow)' })"
             @stop="() => {}"
