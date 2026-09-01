@@ -228,7 +228,75 @@ named rather than assumed: **an unreadable answer never blocks a run** — it re
 batch goes at full size, which is where things were before the module existed. The gate runs *before*
 each batch, so the exhausted case costs no session at all. `service.rs` asks the same question again
 after a session exits non-zero, and there it is not a gate but a classification: a spent limit told
-apart from a harness that fell over, from the one source of truth.
+apart from a harness that fell over.
+
+**The bands are the person's now**, `settings.json`'s `subscription` section (`.claude/rules/settings.md`),
+and `decide` takes them as an argument where it used to hold them as two constants.
+`PAUSE_THRESHOLD` and `REDUCED_THRESHOLD` are what ships, not what applies. They are read **off the
+disk at every gate check** rather than snapshotted when the run starts, which is deliberately the
+opposite of what `drive` does with `agent` and `remove_worktrees` — and their argument does not carry
+here. Changing the harness mid-run would make a run ask one subscription about an allowance and spend
+another's; changing a threshold only moves the moment it waits. Somebody watching a paused run and
+lowering the gate wants **that** run to go on, not to stop it and start it again, so the file is
+asked inside the poll loop and a threshold moved overnight takes effect within ten minutes.
+
+Either threshold may be **off**, and off means *do not pre-empt* rather than *do not notice*. That
+distinction is the whole of why there are three functions here rather than one, and it is the easiest
+thing in the module to break by simplifying. `decide` is the person's bands, used by the gate and by
+`report`, which is where the sentence under the percentages on the Agents tab comes from — so what
+that sentence says and what a run actually does cannot disagree. `spent` is a fixed rule at
+`SPENT = 90`, a second constant rather than a reuse of `PAUSE_THRESHOLD` though it ships with the
+same number: that one is a default somebody may move, this one is the app's own reading of "the
+harness will refuse the next session", which is not theirs. **The classification after a non-zero
+exit asks `spent` and nothing else** — had it followed the person's own threshold, turning that
+threshold off would have made every exhausted allowance read as a crash and stopped the run as
+`Crashed` after `MAX_CRASHES`, which is the exact failure this module exists to prevent, arriving
+through the settings window. And `gate` is what the loop calls: `decide`, except that a run whose
+previous batch died on a spent allowance (`LastBatch::Limited`) is held in `Paused` while `spent` is
+true, whatever the thresholds say. Without that half, a run with the gate off would spend a session
+finding the wall, be told `Limited`, come straight back, be told to go, and do it again for as long
+as the queue lasted. `spent(None)` is false, like everything else here: an unreadable probe never
+holds a run up.
+
+**The sentence about the limit is one per footer, not one per run.** The subscription is one per
+machine, so two runs paused seconds apart wrote the same sentence twice, differing only in the minute
+the harness happened to name in each — "resets …" is the harness's own words and the two asked it at
+different seconds. `components/run/limitVoice.js` picks which segment speaks: the first paused run in
+`runsState.runs`, which is the oldest, so the words sit leftmost and do not move as later runs come
+and go. The other paused segments keep the pause glyph and their own Stop button and say nothing —
+dropping them altogether was refused, because that button belongs to that run and would go with it.
+The rule is a pure module rather than a computed in `RunBar.vue` for this file's usual reason: a
+`.vue` is unreachable by every test in the tree.
+
+Beside that one sentence stands **"Run anyway"**, an `IconButton` with `play` — the direct pair of
+the `pause` glyph at the head of the segment. Five things about it, each of which was the other way
+round at some point:
+
+- **It releases every run alive at that moment, not its own.** One reading of one subscription stood
+  them all up, so letting them go one at a time would be work for its own sake. Hence one button, at
+  the one sentence, and `run_release` takes no token where `run_stop` takes one.
+- **The release lasts until each run ends.** A released run stops looking at `pauseAt` for the rest
+  of its life. Lifting it for one batch was refused: the reading stays above the threshold for hours,
+  and somebody would be pressing the button all evening.
+- **Nothing is written to `settings.json`.** It is a flag on the run in the worker — a
+  `watch::Sender<bool>` per `Active`, which both carries the value and wakes the run out of its
+  ten-minute poll, since a release nobody notices for ten minutes reads as a press that did nothing.
+  Making the button a shortcut to `pauseAt = 0` was refused: one press for one evening would have
+  changed the policy for good, and silently.
+- **A run started after the press pauses as usual.** The release belongs to the runs that were alive,
+  which is exactly why it is a flag on each of them rather than state on the app: an app-wide flag
+  would have no moment at which to be cleared.
+- **It does not override a hold on a spent allowance.** `usage::held` is that distinction —
+  `after_limited && spent` — and it rides out on `RunState::Paused { spent }`, because the two pauses
+  are otherwise identical from the front end: both carry a percentage and a reset. Where it is true
+  the button is not drawn at all, since pressing it would let a session through that dies the moment
+  it starts, which is the churn the gate exists to prevent. `gate` reaches the hold whatever
+  `pause_at` says, which is what makes the release structurally unable to override it — the released
+  run has its `pause_at` moved to `OFF` and nothing else.
+
+A released run says nothing special about itself: the bar goes back to the ordinary "Batch N". A
+detail on the model of the reduced batch ("past the limit, 92% used") was refused — that the run is
+going is the whole answer, and the line is spoken for.
 
 `browser.rs` answers the question the config could not: `[live_check].mode = "browser"` says what the
 *project* wants and nothing about the machine the run rides on, so a run with the live check on
