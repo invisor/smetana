@@ -194,14 +194,6 @@ pub fn spent(usage: Option<&Usage>) -> bool {
     usage.and_then(Usage::pct).is_some_and(|pct| pct >= SPENT)
 }
 
-/// What the run loop's gate does with a reading: the person's own bands, unless
-/// the batch before this one died on a spent allowance and the allowance is
-/// still spent.
-///
-/// The second half is what keeps "off" meaning *do not pre-empt* rather than
-/// *do not notice*. Without it a run with the gate off would spend a session
-/// discovering the wall, be told `LastBatch::Limited`, come straight back here,
-/// be told to go, and do it again for as long as the queue lasts.
 /// Whether a pause is the hold above rather than one of the person's own
 /// thresholds — the one distinction the run bar needs, because "Run anyway" is
 /// worth offering for a threshold and worth refusing for a spent allowance,
@@ -219,6 +211,14 @@ pub fn held(usage: Option<&Usage>, after_limited: bool) -> bool {
     after_limited && spent(usage)
 }
 
+/// What the run loop's gate does with a reading: the person's own bands, unless
+/// the batch before this one died on a spent allowance and the allowance is
+/// still spent.
+///
+/// The second half is what keeps "off" meaning *do not pre-empt* rather than
+/// *do not notice*. Without it a run with the gate off would spend a session
+/// discovering the wall, be told `LastBatch::Limited`, come straight back here,
+/// be told to go, and do it again for as long as the queue lasts.
 pub fn gate(usage: Option<&Usage>, limits: Limits, after_limited: bool) -> Decision {
     let decision = decide(usage, limits);
     if !after_limited || matches!(decision, Decision::Pause { .. }) {
