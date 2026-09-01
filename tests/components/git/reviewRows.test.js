@@ -220,16 +220,57 @@ describe('withPick', () => {
     expect(canReview(form)).toBe(true)
   })
 
-  /* And never again after that. Once the table exists it is somebody's: a
-     person changing their mind about which branch to review must not have the
-     rows they added or took out swept away under them. */
-  it('leaves a table that already exists alone when the branch changes', () => {
-    let form = withRepo(opened(), '/p/shared')
-    form = withPick(form, { side: 'head', repoId: null }, local('main'), {
+  /* And every time after that, which is what stops the table claiming things
+     about itself that stopped being true: a rule-following row in a repository
+     that has no such branch is not a smaller review, it is a pair git would
+     refuse. It leaves, and the note under the table names it. */
+  it('rebuilds the rows the rule decides every time the branch changes', () => {
+    const wide = reviewForm(REPOS, 'main', { branches: BRANCHES })
+    expect(wide.repoIds).toEqual(['/p', '/p/admin', '/p/shared'])
+    const narrow = withPick(wide, { side: 'head', repoId: null }, local('feat/x'), {
+      repos: REPOS,
+      branches: BRANCHES
+    })
+    expect(narrow.repoIds).toEqual(['/p', '/p/admin'])
+    expect(missingRepos(REPOS, narrow, { branches: BRANCHES }).map((r) => r.name)).toEqual([
+      'shared'
+    ])
+  })
+
+  /* What the rebuild leaves alone is the whole of its manners: a row that
+     differs carries its own pair and a row somebody added is a decision of
+     theirs, so the rule's head reaches neither. */
+  it('leaves the rows the rule does not decide where they are', () => {
+    let form = withOverride(reviewForm(REPOS, 'main', { branches: BRANCHES }), '/p/shared')
+    form = withPick(form, { side: 'head', repoId: null }, local('feat/x'), {
+      repos: REPOS,
+      branches: BRANCHES
+    })
+    /* `shared` has no `feat/x` and stays all the same: its pair is its own, and
+       the rule's head does not reach it. */
+    expect(form.repoIds).toEqual(['/p', '/p/admin', '/p/shared'])
+    expect(pairOf(form, '/p/shared')).toEqual({ base: local('main'), head: local('main') })
+    /* And it is not named as left out, because it is not left out. */
+    expect(missingRepos(REPOS, form, { branches: BRANCHES })).toEqual([])
+  })
+
+  /* Rows the new branch brings in arrive at the end rather than shuffling the
+     table under somebody's eye. */
+  it('puts the rows a new branch brings in at the end', () => {
+    const form = withPick(opened(), { side: 'head', repoId: null }, local('main'), {
       repos: REPOS,
       branches: BRANCHES
     })
     expect(form.repoIds).toEqual(['/p', '/p/admin', '/p/shared'])
+  })
+
+  /* The base is not what decides which repositories are in the review. */
+  it('leaves the rows alone when the base changes', () => {
+    const form = withPick(opened(), { side: 'base', repoId: null }, origin('develop'), {
+      repos: REPOS,
+      branches: BRANCHES
+    })
+    expect(form.repoIds).toEqual(['/p', '/p/admin'])
   })
 
   it('writes into the override of the row the list was opened for', () => {
@@ -262,18 +303,41 @@ describe('adding and removing a repository', () => {
     expect(form.overrides).toEqual({})
   })
 
-  /* Derived rather than stored: the rule fills the table with the repositories
-     that *have* the branch, so a row without it is one somebody named by hand —
-     and it is the one row the `x` may take out again. */
-  it('reads a row the rule could not have put there as one added by hand', () => {
+  /* Recorded rather than worked out from the branch. It was worked out at
+     first — a row without the rule's branch could only have been named by a
+     person — and the answer moved the moment the rule's head did: the row
+     silently became an ordinary one and lost the `x`, which is the only way a
+     row ever leaves this table. */
+  it('records that a row was added by hand', () => {
     const form = withRepo(opened(), '/p/shared')
-    const context = { branches: BRANCHES }
-    expect(isManual(form, REPOS[2], context)).toBe(true)
-    expect(isManual(form, REPOS[0], context)).toBe(false)
+    expect(form.manual).toEqual(['/p/shared'])
+    expect(isManual(form, '/p/shared')).toBe(true)
+    expect(isManual(form, '/p')).toBe(false)
   })
 
   it('says nothing about a repository that is not in the table at all', () => {
-    expect(isManual(opened(), REPOS[2], { branches: BRANCHES })).toBe(false)
+    expect(isManual(opened(), '/p/shared')).toBe(false)
+  })
+
+  /* And it survives the rule's branch changing under it, which is what the
+     derived answer could not do. */
+  it('keeps a hand-added row its own after the rule changes branch', () => {
+    let form = withRepo(opened(), '/p/shared')
+    form = withPick(form, { side: 'head', repoId: null }, local('main'), {
+      repos: REPOS,
+      branches: BRANCHES
+    })
+    expect(isManual(form, '/p/shared')).toBe(true)
+    expect(form.repoIds).toContain('/p/shared')
+  })
+
+  /* Both facts leave with the row: a pair somebody abandoned, or a badge on a
+     row the rule put there, would come back the next time the same repository
+     was added. */
+  it('forgets the provenance with the row', () => {
+    const form = withoutRepo(withRepo(opened(), '/p/shared'), '/p/shared')
+    expect(form.manual).toEqual([])
+    expect(form.overrides).toEqual({})
   })
 })
 
@@ -418,6 +482,21 @@ describe('branchesIn', () => {
     expect(branchesIn(BRANCHES, 'shared').map((b) => b.name)).toEqual(['main'])
   })
 
+  /* `missing_in` is where a branch is absent across the *project*, and the list
+     this fills subtracts it from however many repositories it is drawn
+     against — one, here. Left in place, a branch absent from two other
+     repositories came out as `local · 0 repos`: the list denying that anybody
+     has the branch, directly under the field saying it is the one being
+     checked. */
+  it('scopes each record to the one repository the list is drawn for', () => {
+    expect(branchesIn(BRANCHES, '.').map((b) => b.missing_in)).toEqual([[], []])
+  })
+
+  it('does not touch the records it was given', () => {
+    branchesIn(BRANCHES, '.')
+    expect(BRANCHES[1].missing_in).toEqual(['shared'])
+  })
+
   it('has nothing to offer before the list has landed', () => {
     expect(branchesIn(null, '.')).toEqual([])
   })
@@ -436,9 +515,14 @@ describe('the words under and around the table', () => {
     expect(pickerScope('backend')).toBe('this repository only · backend')
   })
 
+  /* The verb follows the count, always: `1 follow the rule` over a row saying
+     `follows the rule` is the sort of sentence that makes a person doubt
+     everything else on the screen. */
   it('counts the rows and how many of them follow the rule', () => {
     expect(tableSummary(opened())).toBe('2 · all follow the rule')
-    expect(tableSummary(withOverride(opened(), '/p'))).toBe('2 · 1 follow the rule · 1 differ')
+    expect(tableSummary(withOverride(opened(), '/p'))).toBe('2 · 1 follows the rule · 1 differs')
+    const wide = reviewForm(REPOS, 'main', { branches: BRANCHES })
+    expect(tableSummary(withOverride(wide, '/p'))).toBe('3 · 2 follow the rule · 1 differs')
   })
 
   it('summarises what a press of Review would start', () => {

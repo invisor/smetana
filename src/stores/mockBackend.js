@@ -276,7 +276,8 @@ const DIALOG_PROPS = {
           base: { ref: 'main', remote: true },
           head: { ref: 'feature/runs-project-config', remote: false }
         }
-      }
+      },
+      manual: ['/Users/you/dev/smetana/admin']
     },
     repos: [
       { name: '.', path: '/Users/you/dev/smetana' },

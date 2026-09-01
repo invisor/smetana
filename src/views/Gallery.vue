@@ -1143,7 +1143,8 @@ const REVIEW_FORM = {
       base: { ref: 'main', remote: true },
       head: { ref: 'infra/4nsa-remote-branches', remote: false }
     }
-  }
+  },
+  manual: ['/Users/you/work/smetana-infra']
 }
 /* The `New review` door: a pair with nothing on the checked side, no rows at
    all, and a footer that says `0 pairs` over a Review nobody may press. */
@@ -1151,7 +1152,8 @@ const REVIEW_EMPTY = {
   base: { ref: 'main', remote: false },
   head: null,
   repoIds: [],
-  overrides: {}
+  overrides: {},
+  manual: []
 }
 /* Deliberately not the local list: `spike/origin-only` has never been checked
    out here, which is what a side reading `origin` is for. */
@@ -2565,8 +2567,15 @@ const menuTargetStyle = {
            block. The frame is 720 wide because that is what the window is in
            the app, and tall enough for the branch list, which is this window's
            own ceiling: with the list open the table is not drawn at all, so the
-           height stops growing there whatever the project is made of. -->
-      <div :style="{ position: 'relative', height: '560px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           height stops growing there whatever the project is made of.
+
+           The frames below hold the tallest state each one can reach **plus the
+           scrim's own `8vh` of top inset**, which is a share of the viewport
+           rather than of the frame: outside a dialog window `Modal` places
+           itself against the top of the scrim with that gap above it, so a
+           frame sized to the dialog alone hides its footer at every viewport
+           height, and a frame is a picture of the top half. -->
+      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           :form="REVIEW_FORM"
@@ -2592,7 +2601,7 @@ const menuTargetStyle = {
            paragraph. None of them is an error and none of them is red — a fetch
            that failed leaves the review reading the copy of origin already on
            this disk, which is how old an answer is rather than a failure. -->
-      <div :style="{ position: 'relative', height: '480px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '620px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           :form="REVIEW_FORM"
@@ -2617,7 +2626,7 @@ const menuTargetStyle = {
            Its caption comes from the app window, which is why it is passed as a
            prop: the OS frame draws it, and a title written into the template
            would be silently overdrawn. -->
-      <div :style="{ position: 'relative', height: '360px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           title="New review"

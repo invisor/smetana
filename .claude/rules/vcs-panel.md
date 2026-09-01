@@ -1245,7 +1245,7 @@ this app, and inventing one for a case nobody has asked about would be a second 
 and **while it is open the table is not drawn at all**. So
 the window is about 250px for one repository, about 423px for six with two overrides, and about 514px
 with the list open — and that last number is the ceiling whatever the project is made of, because the
-list stops at nine rows and scrolls inside itself. The height is measured by the `ResizeObserver` in
+list is capped at nine rows' worth of `--row-h` and scrolls inside itself. The height is measured by the `ResizeObserver` in
 `DialogWindow.vue` and reset on every one of those changes; the one thing that would break it is a
 `min-height` on the root, which would have the window measure itself and never shrink again.
 
@@ -1260,10 +1260,23 @@ own, which freezes the rule into it and opens the branch list on its checked sid
 pencil does; the row is a `role="button"` so the keyboard reaches it, and the action is a real button
 inside it, which is why the row's Enter is `.self`.
 
-**Whether a row was added by hand is derived and not stored.** The rule fills the table with the
-repositories that *have* the branch, so a row without it is one somebody named — that is `isManual`,
-and it is what draws the `man` badge and turns the action into the `x`. A fifth field on the form
-would be a second place for the same fact to be wrong in.
+**Whether a row was added by hand is a fact the form carries**, `manual: string[]` beside the three
+fields above — written by `withRepo`, forgotten by `withoutRepo`, and what draws the `man` badge and
+turns the row's action into the `x`. It was derived at first, as "in the table without the rule's
+branch", and that answer moved under a foot it should not: the rule's head changes, and a repository
+somebody had added by hand became an ordinary row, lost the `x` and could not be taken out of the
+review at all — while `reviewPairs` went on sending a pair for a branch that repository does not have.
+Provenance is a fact about what a person did; it does not stop being true when they change their mind
+about the branch.
+
+**A change to the rule's head rebuilds the rule's rows**, and that is `refill` inside `withPick`. The
+rows it leaves alone are the ones the rule does not decide — an override carries its own pair, and a
+hand-added row is somebody's decision — and the rest is the rule's: a repository that has the new
+branch is in, one that does not is out and named in the notes block, which is the sentence this window
+already promises (`No such branch in extension, docs. They are left out of the review.`). Rows that
+stay keep their place and new ones arrive at the end, so the table does not shuffle under somebody's
+eye. On `main` this was the `branch` emit's job, done in the app window; it is one rule in one module
+now, and it runs on the first pick of the `New review` door and on every pick after it alike.
 
 **A repository the branch is missing from gets no row**, and it is named in the notes block rather
 than in a row of its own. `Add a repository` is the last row of the table — an action and not the
@@ -1290,6 +1303,14 @@ scrim can be left standing while somebody clicks another row. Nothing here is re
 row carries the repository it is about. So a repository going is a row leaving the table, and only the
 project going closes the window. The branch is not ground either — a row whose branch has gone is a
 pair git refuses in its own words, which is a better answer than a half-filled form vanishing.
+
+**A list drawn for one row is scoped to that row**, and both halves of the scope have to move
+together. `branchesIn` filters the project-wide answer to the branches that repository has *and*
+empties each record's `missing_in` on the way out, because `branchPicker.js` turns that field into
+`local · 4 repos` by subtracting it from however many repositories the list is drawn against — one,
+here. Left in place it read `local · 0 repos` under the very branch the review is about: the list
+denying that any repository has it. Inside a list about one repository that has the branch, absent
+from nowhere is the honest answer.
 
 **Where the lists come from.** The repositories are `vcsState.repos`, already loaded by the panel.
 Which branches exist across the whole project, and which repositories each is short of, is the
@@ -1335,7 +1356,8 @@ window are that spin at `--dur-pulse` and the controls' own `--dur-fast` state c
 `prefers-reduced-motion` takes the spin away globally.
 
 **`Modal` grew two props for this window and nothing else changed.** `bodyPadding` and
-`footerPadding` default to exactly what they were hardcoded as, so the ten other dialogs pass neither;
+`footerPadding` default to exactly what they were hardcoded as, so the eleven other dialogs pass
+neither;
 720 wide on the padding of a 440 dialog reads as a form that was stretched rather than designed. It is
 the shape `DiffView`'s column captions took for the compare window, one component over.
 

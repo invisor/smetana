@@ -18,6 +18,7 @@
      head:      { ref, remote } | null
      repoIds:   string[]                        the rows, in the order shown
      overrides: { [repoId]: { base, head } }     a row that differs, whole
+     manual:    string[]                        the rows somebody named
 
    **A pair is still indivisible.** There is no arrangement of this form with
    four bases and three branches to check, because neither the rule nor an
@@ -25,6 +26,15 @@
    made by copying the rule rather than by starting an empty one. That is a
    property of the shape rather than a check on the way out, and the difference
    is the same as it always was — a rule can be forgotten and a shape cannot.
+
+   `manual` is the one field that is neither the pair nor the rows: which of
+   those rows somebody put there by hand. It was derived at first — a row
+   without the rule's branch could only have been named by a person — and that
+   answer changes under a foot it should not, since the rule's branch changes.
+   A repository added by hand and then reviewed against another branch lost its
+   badge and, with it, the `x` that is the only way a row ever leaves this
+   table. Provenance is a fact about what somebody did, so it is recorded rather
+   than inferred from a state that moves.
 
    `remote` is the whole of what `local` and `origin` mean here, and it is a
    flag on a side rather than a control of its own: the window draws it as the
@@ -129,7 +139,8 @@ export function reviewForm(repos, branch, options = {}) {
     base,
     head,
     repoIds: head ? repoIdsWith(repos, head, { branches, remote }) : [],
-    overrides: {}
+    overrides: {},
+    manual: []
   }
 }
 
@@ -153,14 +164,14 @@ export function overrideIds(form) {
 /* Whether a row is one somebody put there by hand, which is what earns it the
    `man` badge and the `x` that takes it out again.
 
-   Derived and deliberately not stored: a row the rule could not have produced
-   is a row somebody added. The rule fills the table with the repositories that
-   *have* the branch, so a row without it is one that was named by hand — and
-   the one action that removes a row is therefore the one on a row the rule
-   would not put back. */
-export function isManual(form, repo, context = {}) {
-  if (!repo?.path || !list(form?.repoIds).includes(repo.path)) return false
-  return !hasBranch(repo, form?.head, context)
+   Read off the form and deliberately not worked out from the branch. It was
+   worked out at first — a row without the rule's branch could only have been
+   named by a person — and the answer moved the moment the rule's head did: a
+   hand-added row silently became an ordinary one, lost its `x`, and could not
+   be taken out of the review at all. What a person did does not stop being true
+   when they change their mind about the branch. */
+export function isManual(form, repoId) {
+  return list(form?.manual).includes(repoId)
 }
 
 /* ---- editing the form --------------------------------------------------- */
@@ -174,13 +185,25 @@ const withOverrides = (form, overrides) => ({ ...form, overrides })
    for. `picker` is the component's own `{ side, repoId }` — `repoId` null for
    the project's rule, a path for one row's override.
 
-   The one thing that happens here beyond writing a side: **the first branch on
-   the rule's checked side fills the table.** That is the whole of the
-   `New review` door, and it is here rather than in the component because it is
-   the same rule `reviewForm` opens the other door with. It fires only while the
-   head is still `null`: once the table exists it is somebody's, and a person
-   changing their mind about which branch to review must not have the rows they
-   added or removed swept away under them. */
+   The one thing that happens here beyond writing a side: **a branch on the
+   rule's checked side rebuilds the rule's rows.** That is the `New review` door
+   at its first pick, and it is the same movement every time afterwards, which
+   is what stops the table from claiming things about itself that stopped being
+   true. It is here rather than in the component because it is the same rule
+   `reviewForm` opens the other door with.
+
+   What the rebuild leaves alone is the whole of its manners: a row that differs
+   carries its own pair, and a row somebody added by hand is a decision of
+   theirs — the rule's head does not reach either, so neither moves. Everything
+   else is the rule's own, and a rule-following row in a repository that has no
+   such branch is not a smaller review, it is a pair git would refuse. It leaves
+   the table and `reviewNotes` names it, which is the sentence this window
+   already promises: `No such branch in extension, docs. They are left out of
+   the review.`
+
+   The order is the reading order: rows that stay keep their place, and rows the
+   new branch brings in arrive at the end rather than shuffling the table under
+   somebody's eye. */
 export function withPick(form, picker, value, context = {}) {
   const side = picker?.side === 'base' ? 'base' : 'head'
   const repoId = picker?.repoId ?? null
@@ -189,10 +212,20 @@ export function withPick(form, picker, value, context = {}) {
     return withOverrides(form, { ...form?.overrides, [repoId]: { ...pair, [side]: value } })
   }
   const next = { ...form, [side]: value }
-  if (side === 'head' && form?.head == null) {
-    next.repoIds = repoIdsWith(context.repos, value, context)
-  }
+  if (side === 'head') next.repoIds = refill(form, value, context)
   return next
+}
+
+/* The rows the rule's new branch leaves: the ones that stay, in the order they
+   were in, and then the ones it brings in. A row stays if it is not the rule's
+   to decide — an override or one somebody added — or if the repository has the
+   new branch. */
+function refill(form, head, context = {}) {
+  const found = repoIdsWith(context.repos, head, context)
+  const kept = list(form?.repoIds).filter(
+    (id) => isOverride(form, id) || isManual(form, id) || found.includes(id)
+  )
+  return [...kept, ...found.filter((id) => !kept.includes(id))]
 }
 
 /* A row told to differ: the rule frozen into it, so that changing the rule
@@ -224,15 +257,24 @@ export function withoutOverride(form, repoId) {
    the name it goes by here can be given. */
 export function withRepo(form, repoId) {
   if (!repoId || form?.head == null || list(form?.repoIds).includes(repoId)) return form
-  const added = { ...form, repoIds: [...list(form.repoIds), repoId] }
+  const added = {
+    ...form,
+    repoIds: [...list(form.repoIds), repoId],
+    manual: [...list(form.manual), repoId]
+  }
   return withOverride(added, repoId)
 }
 
-/* And out again, taking its override with it: a pair left behind for a row that
-   is not in the table would come back the next time the same repository was
-   added. */
+/* And out again, taking its override and its provenance with it: either left
+   behind for a row that is not in the table would come back the next time the
+   same repository was added — a pair somebody had abandoned, or a badge on a
+   row the rule put there. */
 export function withoutRepo(form, repoId) {
-  const dropped = { ...form, repoIds: list(form?.repoIds).filter((id) => id !== repoId) }
+  const dropped = {
+    ...form,
+    repoIds: list(form?.repoIds).filter((id) => id !== repoId),
+    manual: list(form?.manual).filter((id) => id !== repoId)
+  }
   return withoutOverride(dropped, repoId)
 }
 
@@ -298,11 +340,21 @@ export function fetchFailures(targets, reached) {
    repositories each branch is short of, so a row's own list is that answer
    filtered by this repository's name rather than a second read per row. The
    records travel whole rather than as names, because the list this fills draws
-   an age and a repository count off them. */
+   an age and a repository count off them.
+
+   **`missing_in` is emptied on the way out, and that is the scope rather than a
+   loss of information.** The field says where a branch is absent *across the
+   project*, and `branchPicker.js` turns it into `local · 4 repos` by subtracting
+   it from however many repositories the list is drawn against. A list drawn for
+   one repository is drawn against one, so a branch absent from two others came
+   out as `local · 0 repos` — the list flatly denying that any repository has the
+   branch, directly under a field saying that branch is what is being checked.
+   Inside a list about one repository that has the branch, the honest answer is
+   that it is absent from nowhere. */
 export function branchesIn(branches, repoName) {
-  return list(branches).filter(
-    (branch) => branch?.name && !list(branch.missing_in).includes(repoName)
-  )
+  return list(branches)
+    .filter((branch) => branch?.name && !list(branch.missing_in).includes(repoName))
+    .map((branch) => ({ ...branch, missing_in: [] }))
 }
 
 /* How fresh the whole project's idea of `origin` is: the oldest of the fetch
@@ -389,6 +441,12 @@ export function pickerScope(repoName = null) {
   return repoName ? `this repository only · ${repoName}` : 'sets every repository below'
 }
 
+/* A number and the word that agrees with it. The verb follows the count, always
+   and everywhere in this window, because `1 follow the rule` over a row saying
+   `follows the rule` is the sort of sentence that makes a person doubt
+   everything else on the screen. */
+const count = (n, one, many) => `${n} ${n === 1 ? one : many}`
+
 /* The right-hand end of the table's heading: how many rows there are and how
    many of them are following the rule. `all follow the rule` rather than
    `6 follow the rule · 0 differ`, because a count of nothing is a fact nobody
@@ -397,10 +455,13 @@ export function tableSummary(form) {
   const rows = list(form?.repoIds).length
   const differ = overrideIds(form).length
   if (!differ) return `${rows} · all follow the rule`
-  return `${rows} · ${rows - differ} follow the rule · ${differ} differ`
+  const following = rows - differ
+  return [
+    String(rows),
+    count(following, 'follows the rule', 'follow the rule'),
+    count(differ, 'differs', 'differ')
+  ].join(' · ')
 }
-
-const count = (n, one, many) => `${n} ${n === 1 ? one : many}`
 
 /* The left-hand end of the footer: what pressing Review would start.
 

@@ -126,7 +126,13 @@ const ARROW = 16
 const PLUS = 14
 const STATUS_GLYPH = 12
 
-const EMPTY = { base: { ref: '', remote: false }, head: null, repoIds: [], overrides: {} }
+const EMPTY = {
+  base: { ref: '', remote: false },
+  head: null,
+  repoIds: [],
+  overrides: {},
+  manual: []
+}
 
 const review = ref(EMPTY)
 /* Which list is open, and what it is for: `{ side, repoId }`, with `repoId`
@@ -186,7 +192,7 @@ const rows = computed(() =>
       name: repoLabel(repo),
       path: where(id),
       override,
-      manual: isManual(review.value, repo, context.value),
+      manual: isManual(review.value, id),
       pair: pairLabel(pairOf(review.value, id)),
       status: rowStatus({
         override,
@@ -711,9 +717,9 @@ const out = () => {
       </div>
 
       <!-- While the list is open the table is not drawn, and that is what keeps
-           this window's height predictable: the list stops at nine rows and
-           scrolls inside itself, so the ceiling is the same whatever the project
-           is made of. -->
+           this window's height predictable: the list is capped at nine rows'
+           worth of `--row-h` and scrolls inside itself, so the ceiling is the
+           same whatever the project is made of. -->
       <BranchPicker
         v-if="picker"
         ref="pickerBox"
