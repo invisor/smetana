@@ -96,6 +96,26 @@ export const sectionLabel = ({ query, answered }) => {
    those against the whole project would answer a question nobody asked. */
 export const counterLabel = (shown, total) => (shown && total ? `${shown} of ${total}` : '')
 
+/* What the wait says while the agent has the question.
+
+   It sits here beside the other two labels rather than in the component for
+   the reason the whole file exists: a `.vue` is the one thing no test in this
+   repository can reach, and this string is the only part of the waiting row
+   that can be got wrong quietly.
+
+   The seconds are the whole of it. The call has a ninety-second deadline
+   (`agents/oneshot.rs`), which is long enough that the question a person is
+   really asking a few seconds in is "is it working or has it hung", and only a
+   number that moves answers that — a fixed "this may take a while" does not
+   tell the two apart. Whole seconds and never a fraction: it is read at a
+   glance, off a row that repaints once a second. Anything unusable — a
+   negative, a `NaN` from arithmetic on a clock that was never started — reads
+   as nought rather than reaching the screen as itself. */
+export const waitingLabel = (seconds) => {
+  const whole = Math.max(0, Math.floor(Number(seconds) || 0))
+  return `Asking the agent… ${whole}s`
+}
+
 /* Wrapping at both ends, so ↓ off the bottom row lands on the first. */
 export const stepIndex = (current, by, length) =>
   length ? (current + by + length) % length : 0
