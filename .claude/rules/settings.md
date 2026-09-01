@@ -29,7 +29,8 @@ works in, `agentPrompt`, the person's own standing instruction for every session
 the board is drawn, `git`, what the app does to a person's repositories without asking each time,
 `window`, whether the main window opens where it was left, `updates`, whether the app asks
 about a newer version by itself, and `notifications`,
-which sound each of the two announcements makes and whether a finished run shows its report. Below that, `openProjects` is the list of projects the window has open,
+which sound each of the two announcements makes and whether a finished run shows its report, and
+`dialogs`, how big each dialog window was dragged to. Below that, `openProjects` is the list of projects the window has open,
 `lastProject` is the one active when it last closed, and `projects` is a map from each project's
 absolute path to its content state (side tab, right tab, active tab, selected task, `recentTasks`,
 selected path, `selectedRepo`, expanded folders, `branchFolders`, `openTabs`, `previewTab`,
@@ -244,7 +245,12 @@ and where it sits is a fact about a person's screen. What the switch reaches is 
 alone; the saving is unconditional in both positions, which is what makes it reversible the way
 somebody expects — off for a week, then on again, and the window comes back where it was rather
 than at the size in `tauri.conf.json`. The mechanism is `skip_initial_state("main")` on
-`tauri-plugin-window-state` rather than its `with_denylist`, and `src-tauri/src/window.rs` carries
+`tauri-plugin-window-state` rather than its `with_denylist`, and it is one half of two: the builder
+also carries `with_filter(|label| !label.starts_with(DIALOG_PREFIX))`, which takes the **dialog**
+windows out of that plugin altogether — not merely out of the restore, but out of the saving and the
+event listeners too, since the filter returns before all three. `dialogs` below is what keeps their
+size instead. `with_filter` and not `with_denylist` because the denylist takes literal labels and
+the closed list of dialog kinds is the front end's. `src-tauri/src/window.rs` carries
 why, together with the consequence that put `"visible": false` in the configuration: windows
 declared there are built *before* the `setup` hook, so a window shown first and restored second is
 a visible jump. **Four** copies of the default, the same four `git.autoFetch` has and for the same
@@ -255,6 +261,37 @@ the other three walks past. It rides the
 flat message as `restoreGeometry`, and `applyPatch` checks the type and nothing else: `false` is
 the whole point of the field, so a coercion would turn a malformed event into a deliberate-looking
 "off".
+
+`dialogs` is the odd section of this file and the one to read before touching it: **it is Rust's,
+and it is the only section Rust writes.** It maps a dialog kind to `{ width, height }` in logical
+points — how big somebody dragged that kind of window — and it is global for `window`'s reason
+exactly, one step further: how big a person likes a window is a fact about their screen and not
+about a repository.
+
+An entry appears **only when a hand has moved a window**, and that is the whole design rather than
+an economy. A kind with no entry opens at the height its content comes to, which is what every
+dialog did before the section existed, so the shipped state is an empty map and today's behaviour
+is what an untouched dialog gets. Deriving the same thing by comparing a stored size against the
+fitted height was considered and dropped: the content changes between openings, so a window nobody
+had touched would look hand-set and freeze at last week's height.
+
+Rust owning it is what keeps it. The field is on `Settings` and deliberately **not** on
+`ResolvedSettings`, so `merge` never assigns it, and since `settings_save` re-reads the file on
+every write the front end's saves carry it through untouched — there is a test on exactly that, and
+without it the first settings write after a resize would forget every remembered size. It is also
+the one place the front end cannot corrupt by offering a field Rust rejects, because the front end
+never offers it at all. The write is a read-modify-write from `file::remember_dialog_size`,
+debounced with the same `SETTLE` the main window's geometry uses, and taken again on
+`CloseRequested` — a drag followed straight away by a close would otherwise wake the debounce to
+find no window and write nothing.
+
+Two bounds, and they are different numbers for different jobs. `MIN_DIALOG_SIDE`/`MAX_DIALOG_SIDE`
+(120 and 10 000) in `settings/model.rs` are what `validate` holds a *stored* entry to: a sanity
+bound on a hand-edited file, dropping one entry and leaving its neighbours, the shape `projects`
+already uses. `MIN_DIALOG_HEIGHT` (120) in `window.rs` is what the *window* is built with, as
+`min_inner_size` beside the kind's registry width — the width its layout was drawn at, so a dialog
+can be made wider but never narrower. The two share a number and not a purpose; neither is the
+other's copy.
 
 `updates` is the fifth global section and holds one field, `autoCheck`, **shipped on** — and it is
 the second switch in this file over whether the app may open a socket by itself, `git.autoFetch`

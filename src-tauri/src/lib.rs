@@ -79,11 +79,13 @@ pub fn run() {
         // takes literal labels and the closed list of dialog kinds is the front
         // end's (`src/views/dialogRegistry.js`).
         //
-        // The prefix is `window::DIALOG_PREFIX` and is written out here rather
-        // than borrowed: that constant is private to its module, and one
-        // literal in a plugin builder is cheaper than widening a module's
-        // surface for a closure.
-        .with_filter(|label| !label.starts_with("dialog-"))
+        // The prefix is named rather than repeated. It is `pub(crate)` for this
+        // one caller and reaches nothing outside the crate, which is the whole
+        // cost; the alternative was a third copy of the literal that builds the
+        // label and reads it back, and a copy that drifted would put these
+        // windows back under the plugin silently — which is the bug this filter
+        // is here to fix.
+        .with_filter(|label| !label.starts_with(crate::window::DIALOG_PREFIX))
         .build(),
     )
     // The login item, and nothing about it in `settings.json`: the operating

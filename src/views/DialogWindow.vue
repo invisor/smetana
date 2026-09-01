@@ -30,7 +30,7 @@
    being as tall as its content. `Modal.vue` is the other half, since it is what
    holds the body and the footer; `src-tauri/src/window.rs` carries the whole
    argument and the one-way latch behind it. */
-import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, watchEffect } from 'vue'
 import DeleteBranchModal from '../components/git/DeleteBranchModal.vue'
 import DeleteSessionModal from '../components/agent/DeleteSessionModal.vue'
 import EmptyState from '../components/core/EmptyState.vue'
@@ -424,15 +424,32 @@ window.addEventListener('resize', readViewport)
    unchanged would otherwise keep the frame it had. Nothing is sent before the
    first measurement — there is no height to send, and this call is also what
    shows the window. */
-watchEffect(async () => {
-  if (told.value && measured.value > 0) {
+/* What a report depends on, and it is not the same thing in the two phases —
+   which is why this is a `watch` over a getter rather than a `watchEffect`: the
+   sources are collected afresh on every run, so the dependency itself changes
+   with the phase.
+
+   Fitting, every change to the measured height or to the viewport has to
+   travel, because that is what sizes the window. Filled, the window's size is
+   the person's and Rust discards both numbers unread — only the title still
+   reaches anything. Without the split, dragging a corner fired one synchronous
+   IPC command per frame, each one asking the window four questions and throwing
+   the answer away. */
+watch(
+  () =>
+    filled.value
+      ? [told.value, title.value]
+      : [told.value, measured.value, viewport.value, title.value],
+  async () => {
+    if (!told.value || measured.value <= 0) return
     const latched = await sizeDialogWindow(props.kind, measured.value, viewport.value, title.value)
     /* Only ever upwards. A call that failed answers false, and a window already
        filled must not fall back to measuring itself because one report did not
        arrive. */
     if (latched) filled.value = true
-  }
-})
+  },
+  { immediate: true }
+)
 
 const stops = []
 
