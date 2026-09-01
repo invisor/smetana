@@ -252,6 +252,28 @@ pub async fn run_stop(handle: State<'_, RunHandle>, token: u64) -> Result<Option
     ask(&handle, |tx| Request::Stop(token, tx)).await
 }
 
+/// Let every run alive right now past its own pause threshold, for the rest of
+/// its life.
+///
+/// **No token, unlike `run_stop` above**, and that is the point rather than an
+/// omission: what stood the runs up is one reading of one subscription, so the
+/// button that answers it answers for all of them. The bar draws it once, beside
+/// the one sentence about the limit — see `limitVoice.js`.
+///
+/// Nothing is written to `settings.json`. A press is an answer to this evening's
+/// reading and not a change of policy; the thresholds are on the Agents tab, and
+/// a button that quietly moved one would be a second way to change a setting
+/// with nothing on screen saying it had.
+///
+/// It does not reach a hold on a spent allowance (`usage::held`) — the gate
+/// keeps that whatever the thresholds say, because a session started into an
+/// exhausted allowance dies at once and the run would spend the night finding
+/// that out. The bar does not offer the button there at all.
+#[tauri::command]
+pub async fn run_release(handle: State<'_, RunHandle>) -> Result<(), RunError> {
+    ask(&handle, Request::Release).await
+}
+
 /// The `run:state` event fires before the webview can subscribe — the same
 /// shape `tracker_health` has, and for the same reason. The set rather than
 /// one run: the project may hold several, and `runs.js` keeps them whole the

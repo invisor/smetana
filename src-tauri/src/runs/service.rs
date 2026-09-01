@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::awake;
 use super::config::{self, ConfigState};
@@ -100,6 +100,19 @@ pub enum Request {
     /// task exists for; `None` back means no such run — it ended and left the
     /// map before the stop arrived, which is a stop with nothing left to do.
     Stop(u64, oneshot::Sender<Option<Run>>),
+    /// Let every run alive right now past its own pause threshold, until each
+    /// of them ends.
+    ///
+    /// No token, unlike `Stop` above, and that is the whole shape of it: what
+    /// stood them all up is one reading of one subscription, so releasing them
+    /// one at a time would be work for its own sake. A run started after this
+    /// arrives is not released — the flag belongs to the runs that were alive,
+    /// and an app-wide one would have no moment at which to be cleared.
+    ///
+    /// Nothing about `settings.json` is touched. This is one evening's answer
+    /// to one reading, and a press that changed a preference for good would be
+    /// a different thing wearing the same button.
+    Release(oneshot::Sender<()>),
     /// Every run in this project still in the map — live, stopping, or stopped
     /// and winding down — oldest first.
     State(String, oneshot::Sender<Vec<Run>>),
@@ -179,6 +192,19 @@ struct Active {
     /// Cancels the loop task. Dropping it is what a stop after the final batch
     /// comes down to.
     stop: mpsc::Sender<()>,
+    /// Whether somebody has pressed "Run anyway" while this run was alive: the
+    /// gate stops applying the person's pause threshold to it, for the rest of
+    /// its life.
+    ///
+    /// A watch rather than a flag the loop polls, because it has to do both
+    /// jobs at once: carry the value, and wake the run out of a ten-minute
+    /// sleep. A run released and left to notice at the next poll would sit
+    /// there for another ten minutes with nothing on screen saying why the
+    /// press did nothing.
+    ///
+    /// Per run and made when the run is spawned, which is what makes a run
+    /// started after the press pause as usual — it gets its own, false.
+    released: watch::Sender<bool>,
 }
 
 /// Sends `Report::Ended` when the loop task ends, whichever way it ends. That
@@ -315,6 +341,21 @@ fn handle(
             // place only — `Report::Ended`, when the loop task is actually gone.
             let _ = tx.send(answer);
         }
+        Request::Release(tx) => {
+            // Every run in the map, including one already stopping: the flag
+            // only ever removes a reason to wait, so a run on its way out is
+            // unaffected by it and there is nothing to be gained by asking
+            // which of them are which. A `send` nobody is listening to is an
+            // ordinary outcome — the loop task may have ended a moment ago.
+            for current in active.values() {
+                let _ = current.released.send(true);
+            }
+            // No `emit` here. The state each run is in is the loop's to
+            // announce, and it does so on the very next turn — it has just been
+            // woken out of the poll. Saying `Working` from this side would be
+            // this task claiming a batch the other one has not taken yet.
+            let _ = tx.send(());
+        }
         Request::Start(project, settings, tx) => {
             // This project's own run over this very scope and nothing else.
             // Another project's is not in the way of anything, and neither is
@@ -371,7 +412,14 @@ fn handle(
             *next_token += 1;
             let run = Run::new(token, project.clone(), settings);
             let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
-            active.insert(token, Active { run: run.clone(), starting: false, stop: stop_tx });
+            // False for every run, whatever any earlier press said: a release
+            // is given to the runs that were alive when it happened, and this
+            // one was not.
+            let (released_tx, released_rx) = watch::channel(false);
+            active.insert(
+                token,
+                Active { run: run.clone(), starting: false, stop: stop_tx, released: released_tx },
+            );
             // On disk from here until the run ends, so that an app killed
             // mid-run leaves something behind that says what was going and
             // under whose name — the map above is memory and dies with the
@@ -389,6 +437,7 @@ fn handle(
                 agent,
                 remove_worktrees,
                 settings_path,
+                released_rx,
                 tracker.clone(),
                 terminal.clone(),
                 report.clone(),
@@ -662,6 +711,9 @@ async fn drive(
     // are the one thing about a run a person may usefully change while it is
     // going.
     settings_path: Option<PathBuf>,
+    // Whether "Run anyway" has been pressed while this run was alive. Read at
+    // every gate check and never written here — see `Active::released`.
+    mut released: watch::Receiver<bool>,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
     report: mpsc::UnboundedSender<Report>,
@@ -835,6 +887,7 @@ async fn drive(
             &mut stop,
             settings_path.as_deref(),
             matches!(last_batch, LastBatch::Limited),
+            &mut released,
         )
         .await
         else {
@@ -1544,6 +1597,7 @@ async fn headroom(
     stop: &mut mpsc::Receiver<()>,
     settings_path: Option<&Path>,
     after_limited: bool,
+    released: &mut watch::Receiver<bool>,
 ) -> Option<Option<u8>> {
     loop {
         // The channel and not `run.stopping`: this task holds its own `Run`,
@@ -1559,16 +1613,35 @@ async fn headroom(
         // Inside the loop rather than above it: a run paused overnight is
         // exactly the run whose thresholds somebody is most likely to come and
         // move, and the poll is where that has to be noticed.
-        let limits = crate::settings::subscription_at(settings_path);
+        let mut limits = crate::settings::subscription_at(settings_path);
+        // A released run stops looking at its pause threshold, and at nothing
+        // else: the reduced band still applies, because taking fewer tasks is
+        // not what anybody pressed the button to escape. Done by moving the
+        // threshold rather than by ignoring the answer, so the hold below keeps
+        // working — `gate` reaches it whatever `pause_at` says, which is what
+        // makes "Run anyway" unable to override a spent allowance.
+        if *released.borrow() {
+            limits.pause_at = usage::OFF;
+        }
         let (reading, decision) = ask(profile, limits, after_limited).await;
         journal.say(&journal::gate(reading.as_ref(), &decision));
         match decision {
             Decision::Pause { pct, resets } => {
-                run.advance(RunState::Paused { pct, resets });
+                // Which of the two pauses this is, asked of the same reading
+                // the decision was made from. The bar draws "Run anyway" on one
+                // and not on the other.
+                let spent = usage::held(reading.as_ref(), after_limited);
+                run.advance(RunState::Paused { pct, resets, spent });
                 say(run);
                 tokio::select! {
                     _ = tokio::time::sleep(usage::POLL) => {}
                     _ = stop.recv() => return None,
+                    // The press has to reach a run that is ten minutes into a
+                    // sleep, or it would read as having done nothing at all.
+                    // A closed channel resolves immediately and falls through
+                    // to the top of the loop, which is where a run whose worker
+                    // entry has gone belongs anyway.
+                    _ = released.changed() => {}
                 }
             }
             decision => {
@@ -2026,9 +2099,15 @@ mod tests {
     /// One entry, the way `Request::Start` leaves things.
     fn insert(active: &mut HashMap<u64, Active>, token: u64, project: &str, scope: RunScope) {
         let (stop, _rx) = mpsc::channel::<()>(1);
+        let (released, _released_rx) = watch::channel(false);
         active.insert(
             token,
-            Active { run: Run::new(token, project.into(), settings(scope)), starting: false, stop },
+            Active {
+                run: Run::new(token, project.into(), settings(scope)),
+                starting: false,
+                stop,
+                released,
+            },
         );
     }
 

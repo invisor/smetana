@@ -197,7 +197,15 @@ pub enum RunState {
     /// `resets` is the harness's own sentence about when the allowance clears
     /// ("Aug 11 at 5:59pm (Europe/Moscow)"), passed through untouched. The app
     /// never turns it into a moment in time — see `usage::Usage`.
-    Paused { pct: u8, resets: Option<String> },
+    ///
+    /// `spent` is which of two pauses this is, and the run bar needs it for one
+    /// decision: `false` is one of the person's own thresholds, which "Run
+    /// anyway" may release, and `true` is `usage::held` — the batch before this
+    /// one died on an exhausted allowance and the allowance is still exhausted,
+    /// where releasing would only spend a session finding that out again. The
+    /// two are indistinguishable from the outside otherwise: both carry a
+    /// percentage and a reset, and both arrive as `Decision::Pause`.
+    Paused { pct: u8, resets: Option<String>, spent: bool },
     Stopped { reason: StopReason },
 }
 

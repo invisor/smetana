@@ -202,6 +202,23 @@ pub fn spent(usage: Option<&Usage>) -> bool {
 /// *do not notice*. Without it a run with the gate off would spend a session
 /// discovering the wall, be told `LastBatch::Limited`, come straight back here,
 /// be told to go, and do it again for as long as the queue lasts.
+/// Whether a pause is the hold above rather than one of the person's own
+/// thresholds — the one distinction the run bar needs, because "Run anyway" is
+/// worth offering for a threshold and worth refusing for a spent allowance,
+/// where the next session would die the moment it started.
+///
+/// Deliberately not read off the `Decision`: both arrive as `Pause` and the
+/// difference is in what produced them. Asked beside `gate` with the same two
+/// arguments, so the two answers cannot come from different readings.
+///
+/// True whenever the hold applies, even where a threshold would have paused the
+/// run anyway. Pressing the button in that case would release the threshold and
+/// leave the allowance exactly as spent, which is the churn the gate exists to
+/// prevent.
+pub fn held(usage: Option<&Usage>, after_limited: bool) -> bool {
+    after_limited && spent(usage)
+}
+
 pub fn gate(usage: Option<&Usage>, limits: Limits, after_limited: bool) -> Decision {
     let decision = decide(usage, limits);
     if !after_limited || matches!(decision, Decision::Pause { .. }) {
@@ -633,5 +650,23 @@ mod tests {
         let limits = Limits { pause_at: 80, reduced_at: 50 };
         let answer = report(Some(&crate::agents::claude::Claude), Some(usage(80, 0)), limits);
         assert!(matches!(answer, AgentUsage::Read { band: Band::Pause, .. }));
+    }
+
+    #[test]
+    fn a_hold_is_told_from_a_threshold_by_what_produced_it() {
+        let reading = usage(95, 0);
+        // Nobody's batch has died yet: whatever the bands say, this is the
+        // person's own gate and the button is worth offering.
+        assert!(!held(Some(&reading), false));
+        // The batch before this one died on it, and it is still spent.
+        assert!(held(Some(&reading), true));
+        // True even where a threshold would have paused the run anyway:
+        // releasing the threshold would leave the allowance just as spent.
+        assert!(held(Some(&reading), true));
+        // Dropped back under the line: the hold is over, and a pause here can
+        // only be somebody's own threshold again.
+        assert!(!held(Some(&usage(60, 0)), true));
+        // Nothing that could not be read ever holds a run.
+        assert!(!held(None, true));
     }
 }

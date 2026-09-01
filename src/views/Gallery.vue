@@ -4505,6 +4505,35 @@ const menuTargetStyle = {
         <!-- The same pause where the harness said nothing about a reset. A bare
              line would read as a hang. -->
         <RunBar :run="runFixture({ kind: 'paused', pct: 92, resets: null })" @stop="() => {}" />
+        <!-- Two runs paused on the same reading, the way the footer draws them:
+             the subscription is one per machine, so the sentence about it is
+             written once. The first carries the words and both buttons; the
+             second is the same state with `speaks` false — the pause glyph and
+             its own Stop, and nothing else. Drawn as a row rather than stacked,
+             because what is being checked is that the pair reads as one
+             statement and one silent neighbour. -->
+        <div :style="{ display: 'flex', gap: 'var(--space-5)', alignItems: 'center' }">
+          <RunBar
+            :run="runFixture({ kind: 'paused', pct: 90, resets: 'Sep 1 at 6pm (Europe/Moscow)' })"
+            @stop="() => {}"
+            @release="() => {}"
+          />
+          <RunBar
+            :run="runFixture({ kind: 'paused', pct: 90, resets: 'Sep 1 at 5:59pm (Europe/Moscow)' })"
+            :speaks="false"
+            @stop="() => {}"
+            @release="() => {}"
+          />
+        </div>
+        <!-- The other pause: the batch before this one died on an allowance
+             that is still spent (`usage::held`). Word for word the same
+             sentence, and no "Run anyway" — the button would work and the
+             session it let through would die at once. -->
+        <RunBar
+          :run="runFixture({ kind: 'paused', pct: 96, resets: 'Sep 1 at 6pm (Europe/Moscow)', spent: true })"
+          @stop="() => {}"
+          @release="() => {}"
+        />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'queue_empty' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'no_progress' } })" />
         <RunBar :run="runFixture({ kind: 'stopped', reason: { kind: 'crashed', attempts: 5 } })" />
@@ -4684,7 +4713,13 @@ const menuTargetStyle = {
              and cannot be pressed, and the description names the reason and the
              tab the switch is on. The chosen language is still handed in and
              still stands, which is what says the switch shuts the row rather
-             than the setting. -->
+             than the setting.
+
+             It carries the other state of the Run limits rows as well — Pause a
+             run at turned off — because off is the value most likely to be
+             drawn wrongly and this is what makes it visible without editing
+             `settings.json`. Take fewer tasks at stays on its shipped 75, so
+             the two shapes sit side by side in one cell. -->
         <!-- Wider than the 380 px the other settings cells take, and it has to
              be: this tab now holds a row asking for a 48ch control, which is
              wider than that cell, so at 380 px the harness would only ever show
@@ -4697,6 +4732,7 @@ const menuTargetStyle = {
             :commit-language="galleryCommitLanguage"
             :report-language="galleryReportLanguage"
             :show-report="false"
+            :subscription-pause-at="0"
             :usage="galleryAgentUsage"
           />
         </div>

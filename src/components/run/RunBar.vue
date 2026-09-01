@@ -5,7 +5,18 @@
    A stopped run stays here until the project changes or another starts. The
    reason it stopped is the thing somebody came back to read, and the unhappy
    endings need different responses — a single word for all of them would send
-   people to the wrong place. */
+   people to the wrong place.
+
+   One segment per run, and a paused one may be drawn without its words. The
+   subscription is one per machine, so the sentence about it is one per footer:
+   `limitVoice.js` next door picks which run says it, and the rest keep the pause
+   glyph and their own Stop button and say nothing. Not `v-if`-ed away, because
+   that button belongs to that run — see the module's own header.
+
+   The run that speaks also carries "Run anyway", which releases every run alive
+   at that moment from its pause threshold until each of them ends. It is absent
+   where the pause is a hold on a spent allowance (`state.spent`): the button
+   would work and the session it let through would die at once. */
 import { computed } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'
@@ -14,10 +25,18 @@ import { TONE, endingDetail, stopReason } from './stopReason.js'
 const props = defineProps({
   /* The whole Run from the worker, or null when nothing has been started. */
   run: { type: Object, default: null },
-  busy: { type: Boolean, default: false }
+  busy: { type: Boolean, default: false },
+  /* Whether this segment is the one that writes the sentence about the
+     subscription limit. Decided by `limitVoice.js` out of the whole list, which
+     is knowledge no single segment has.
+
+     `true` by default, so a bar drawn on its own — the gallery, a footer with
+     one run in it — reads exactly as it always has. The default is the
+     single-run case rather than a caller's obligation. */
+  speaks: { type: Boolean, default: true }
 })
 
-defineEmits(['stop'])
+defineEmits(['stop', 'release'])
 
 const state = computed(() => props.run?.state ?? null)
 const over = computed(() => state.value?.kind === 'stopped')
@@ -40,8 +59,21 @@ const glyph = computed(() => {
   return paused.value ? 'pause' : 'play'
 })
 
+/* The one state that may be drawn without words: a second and a third run
+   paused on the same reading of the same subscription. The glyph stays, the
+   Stop button stays, and the sentence goes to whoever `limitVoice.js` picked. */
+const mute = computed(() => paused.value && !props.speaks)
+
+/* Offered on a threshold and refused on a hold, which is `usage::held`'s answer
+   riding in on the state — the two pauses are otherwise identical, both with a
+   percentage and a reset in them. On the muted segments too: the release is one
+   press for every run, so a second button beside a silent segment would be a
+   second way to do the thing the first one already did. */
+const releasable = computed(() => paused.value && props.speaks && !state.value?.spent)
+
 const label = computed(() => {
   if (!state.value) return ''
+  if (mute.value) return ''
   switch (state.value.kind) {
     case 'preflight':
       return 'Bringing the project up'
@@ -72,6 +104,7 @@ const detail = computed(() => {
      somebody to the terminal to find out what for, and "Could not start"
      without the tool that was not found sends them nowhere at all. The order
      is `endingDetail`'s, next door and pinned by its own tests. */
+  if (mute.value) return ''
   if (over.value) return endingDetail(state.value.reason, branch.value)
   /* While paused the branch is the least of what somebody needs: they came to
      find out when this picks up again, and the harness's own sentence about the
@@ -127,6 +160,18 @@ const detailStyle = {
          name as well as the hint, and both are better for the precision — the
          button does not stop the run where it stands, it stops it after the
          batch in flight. -->
+    <!-- Beside Stop and before it, in the reading order of the sentence it
+         answers: the bar has just said the run is paused, and this is the other
+         thing that can be done about it. `play` is the direct pair of the
+         `pause` glyph already drawn at the head of the segment. -->
+    <IconButton
+      v-if="releasable"
+      icon="play"
+      label="Run anyway"
+      size="sm"
+      :disabled="busy"
+      @click="$emit('release')"
+    />
     <IconButton
       v-if="!over"
       icon="square"

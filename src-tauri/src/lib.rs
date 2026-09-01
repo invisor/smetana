@@ -274,6 +274,7 @@ pub fn run() {
       runs::commands::browser_tools,
       runs::commands::run_start,
       runs::commands::run_stop,
+      runs::commands::run_release,
       runs::commands::run_state,
       runs::commands::target_branches,
       runs::commands::agent_usage,
