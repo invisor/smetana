@@ -155,6 +155,49 @@ pub fn liveness(recorded: &Proc, seen: Seen) -> Liveness {
     }
 }
 
+/// Has the app *proved* that the process recorded as a batch's group leader is
+/// gone?
+///
+/// **The question is about that one process and not about the group**, and the
+/// difference is worth stating because a caller acts on the answer. `Proc` is a
+/// pid with the start stamp that survives pid reuse, and `procs::look` asks the
+/// kernel about that pid alone; a process group on Unix outlives its leader, so
+/// a batch whose lead has exited while something it delegated is still running
+/// answers `Gone` here. That is the reach of this evidence rather than a defect
+/// in it — it is the same evidence `sweep` signals by and `forget_run` keeps
+/// records by, and all three want the same one fact. A group-wide answer does
+/// exist, `killpg(pgid, 0)`, and taking it would be a decision of its own in
+/// `procs.rs` beside the subsystem's only `unsafe`; it is deliberately not
+/// taken here.
+///
+/// The same evidence `forget_run` below conditions on, asked by the one caller
+/// that needs the answer the other way round: that one keeps a batch it cannot
+/// show dead, this one acts only on a batch it can. Both are the single
+/// instinct this module is built from — decide from proof and from nothing else
+/// — and the two conditions are deliberately *not* written as each other's
+/// negation, because they are not one: `Unknown` keeps a record there and
+/// refuses to act here, so tidying either into the other's shape swaps a cost
+/// somebody weighed for the one it was weighed against.
+///
+/// Two answers that are not proof, and each is a night if it is read as one.
+/// `Unknown` is a platform that cannot ask or a pid held by another user. A
+/// batch with **no recorded group at all** is `service::group_of` having
+/// answered `None`, which happens when the terminal worker could not be asked
+/// as readily as when the session was already over; `forget_run` keeps such a
+/// batch for exactly that reason and this refuses it for the same one.
+///
+/// The caller is `runs::service`, giving back the merge lock a batch died
+/// holding (smetana-rxzd). A lead the process table says is gone is not merging
+/// anything, so the half-merged target branch the lock exists to prevent is not
+/// on the table — which is the whole of what makes that release safe, and why
+/// nothing weaker than this may stand in for it.
+pub fn group_is_dead(group: Option<&Proc>, table: &impl Fn(i32) -> Seen) -> bool {
+    match group {
+        None => false,
+        Some(group) => liveness(group, table(group.pid)) == Liveness::Dead,
+    }
+}
+
 /// May this group be signalled at all, whatever the process table says?
 ///
 /// `killpg(0)` signals *our own* process group and `killpg(1)` aims at init's;
@@ -420,6 +463,43 @@ mod tests {
         assert_eq!(liveness(&recorded, Seen::Running { started: 9_999 }), Liveness::Dead);
         assert_eq!(liveness(&recorded, Seen::Gone), Liveness::Dead);
         assert_eq!(liveness(&recorded, Seen::Unknown), Liveness::Unknown);
+    }
+
+    #[test]
+    fn only_a_group_the_table_says_is_gone_is_proved_dead() {
+        // The evidence the merge lock is released on (smetana-rxzd), and the
+        // whole of it. `Gone` and a reused pid are the two shapes of proof;
+        // everything else is refused, because the cost of being wrong here is
+        // a lock taken off a batch that is still merging.
+        let group = stamp(4213, 1_000);
+        assert!(group_is_dead(Some(&group), &table(&[])), "nothing holds the pid");
+        assert!(
+            group_is_dead(Some(&group), &table(&[(4213, Seen::Running { started: 9_999 })])),
+            "the pid was handed out again, which is not this process"
+        );
+        assert!(
+            !group_is_dead(Some(&group), &table(&[(4213, Seen::Running { started: 1_000 })])),
+            "alive is not dead"
+        );
+    }
+
+    #[test]
+    fn a_group_the_platform_cannot_answer_for_is_not_proved_dead() {
+        // `Unknown` is a platform with no way to ask, or a pid held by another
+        // user. `forget_run` keeps a record on it; nothing may be released on
+        // it — the same instinct, and the reason the two conditions are not
+        // written as each other's negation.
+        let group = stamp(4213, 1_000);
+        assert!(!group_is_dead(Some(&group), &table(&[(4213, Seen::Unknown)])));
+    }
+
+    #[test]
+    fn a_batch_with_no_recorded_group_is_not_proved_dead() {
+        // `service::group_of` answers `None` when the terminal worker could not
+        // be asked as readily as when the session was already over, so the
+        // absence says nothing at all about the process — which is exactly why
+        // `forget_run` keeps such a batch too.
+        assert!(!group_is_dead(None, &table(&[])));
     }
 
     #[test]

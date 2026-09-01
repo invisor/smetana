@@ -47,8 +47,8 @@ use super::model::{
 use super::preflight;
 use super::queue::{self, Action, LastBatch, QueueSnapshot};
 use super::recovery;
-use super::registry::Proc;
-use super::report::{self, BatchLine, BatchOutcome};
+use super::registry::{self, Proc};
+use super::report::{self, BatchLine, BatchOutcome, LockRelease};
 use super::summary::{self, Baseline, RunSummary};
 use super::usage::{self, Decision};
 use crate::agents::{Intent, Profile};
@@ -951,7 +951,7 @@ async fn drive(
             // the decision above was made from, which is that set.
             previous.as_ref().map(|snapshot| snapshot.ready.as_slice()).unwrap_or_default(),
         ));
-        let _ = report.send(Report::Started { token, session, group });
+        let _ = report.send(Report::Started { token, session, group: group.clone() });
 
         run.working_in(session);
         run.batches += 1;
@@ -990,6 +990,33 @@ async fn drive(
         let after = fresh_board(&tracker).await;
         let leftovers =
             after.as_deref().map(|issues| queue::left_behind(issues, &actor)).unwrap_or_default();
+        // Asked here, once, and about **this batch's own process group** rather
+        // than about the app that started it (smetana-rxzd). It decides one
+        // thing and nothing else: whether the merge lock among those leftovers
+        // is given back. The group is the right question and the writer is not
+        // — a batch killed mid-merge under an app that is still up leaves a
+        // lock no one will ever release, and the writer being alive says only
+        // that the app is.
+        //
+        // It is asked *after* the wait rather than reused from the batch's
+        // start, and that is what makes any release possible at all: at the
+        // start the lead is alive by construction.
+        //
+        // **What is read is the recorded leader, not the group.** `group.pid`
+        // and the stamp beside it are one process, and a process group on Unix
+        // outlives its leader — so a lead that exited while something it
+        // delegated is still merging answers gone here, and the lock is
+        // released under it. That is the limit of this evidence rather than a
+        // hole in the code, and it is named because the write rests on it;
+        // `registry::group_is_dead` carries it too, with the group-wide probe
+        // that would close it (`killpg(pgid, 0)`, `procs.rs`'s to take) and the
+        // reason taking it is a decision of its own.
+        //
+        // What keeps the one ending that *kills* a lead out of this is **order
+        // rather than the reading**: `remove_session` runs further down, after
+        // the release, so on an unanswered question the lead is still sitting
+        // at its dialog when this is asked and `life` comes back `Unproven`.
+        let life = batch_life(group.as_ref());
         // Taken once, here, rather than inside the emptiness rule below: the
         // line on the record and the value the decision is made from have to be
         // the same snapshot, or the journal describes a board the loop did not
@@ -1023,7 +1050,6 @@ async fn drive(
             reported,
             &leftovers,
         ));
-        account.batches.push(record);
         // One line per batch about both counters, whichever of them moved, and
         // a closure rather than seven copies of it: every arm below ends the
         // batch, and seven call sites is how one of them comes to be missing
@@ -1061,20 +1087,23 @@ async fn drive(
         // actor, and the next batches walked past work nobody was doing until
         // somebody cleared it by hand in the morning. `queue::release` is the
         // rule — `in_progress` back to `open`, `ready_to_merge` unclaimed and
-        // left reviewed, the merge lock never touched.
+        // left reviewed, and the merge lock back to `open` where, and only
+        // where, `life` says the app has proved this batch's group gone.
         //
         // Two endings are not that, and each is refused for its own reason.
-        match &outcome {
+        let released_lock = match &outcome {
             // A hand-back is the one ending whose session is **still alive with
             // a person in it** — that is what the mode is for, and the arm
-            // below says so where it declines to kill anything. So the same
-            // sentence that keeps the merge lock out of `queue::release` keeps
-            // the whole batch out here: releasing a claim behind a live agent
-            // is releasing it in the middle of the work. In Solo it is worse
+            // below says so where it declines to kill anything. So the
+            // sentence that stops `queue::release` giving back the merge lock
+            // of a batch it cannot show dead keeps the whole batch out here:
+            // releasing a claim behind a live agent is releasing it in the
+            // middle of the work, and this is the one ending where the agent is
+            // alive by definition rather than merely unproven. In Solo it is worse
             // than a stray note — the freed task lands back in `ready` and the
             // very next decision sends a second session out on the task
             // somebody is at that moment still talking about.
-            Batch::HandedBack => {}
+            Batch::HandedBack => None,
             // The unanswered question: `park_claims` below owns the claims this
             // batch is still holding `in_progress`, because those are the ones
             // the question is about, and a release running first would leave it
@@ -1086,22 +1115,33 @@ async fn drive(
             // the one branch it did not reach, so the reviewed half is released
             // here and the two sets cannot overlap.
             //
-            // The lock is in neither of them, and that is the whole of
-            // smetana-dgv: `queue::release` refuses it here and
-            // `queue::claimed_by` refuses it there, so a batch killed while it
-            // was merging leaves the lock exactly as it found it. Either path
-            // touching it would be worse than losing this batch — a lock that
-            // is not `open` is claimable by nobody, so it is every later merge
-            // in the project rather than one task.
+            // The lock is in neither of them, and on this branch that is
+            // still whole. `queue::claimed_by` refuses to park it — smetana-dgv,
+            // and a lock written `parked` is claimable by nobody at all, which
+            // is every later merge in the project rather than one task — and
+            // the reviewed half above cannot contain it, a lock being held
+            // `in_progress` and never `ready_to_merge`. The one place the lock
+            // may now move is the `Ended` arm below, and only on `life`, since
+            // the session here is left sitting at its prompt with somebody
+            // about to answer it.
             Batch::Unanswered { .. } => {
                 let reviewed: Vec<queue::Leftover> =
                     leftovers.iter().filter(|left| queue::is_reviewed(left)).cloned().collect();
-                release_claims(&tracker, &root, &repos, batch_no, &actor, &reviewed).await;
+                release_claims(&tracker, &root, &repos, batch_no, &actor, &reviewed, life).await
             }
             Batch::Ended(_) => {
-                release_claims(&tracker, &root, &repos, batch_no, &actor, &leftovers).await;
+                release_claims(&tracker, &root, &repos, batch_no, &actor, &leftovers, life).await
             }
+        };
+        // Only a release that the tracker accepted is written down. The line is
+        // the sole record of it — nothing goes onto the lock's own issue — so a
+        // document claiming a release that failed would be worse than a silent
+        // one: the next lead would read it, believe the lock free, and find it
+        // held by a name the report says was let go.
+        if let Some(id) = released_lock {
+            record.lock_released = Some(LockRelease { id, actor: actor.clone() });
         }
+        account.batches.push(record);
 
         let exit = match outcome {
             // The work is done and the session is still alive with a person in
@@ -1351,6 +1391,22 @@ fn read_batch(dir: &Path, n: u32, seconds: u64, outcome: BatchOutcome) -> BatchL
         reported: parsed.reported_ok,
         outcome,
         left_behind: vec![],
+        lock_released: None,
+    }
+}
+
+/// What the app can prove about this batch's process group, in the one
+/// vocabulary `queue::release` reads (smetana-rxzd).
+///
+/// The rule itself is `registry::group_is_dead`, where the liveness vocabulary
+/// and the `Unknown` asymmetry already live and where its tests are; this is
+/// the two lines that put the live process table in front of it. `procs::look`
+/// is the same reader `recovery`'s start-up sweep uses, so there is one answer
+/// to "what is under this pid" in the subsystem and not two.
+fn batch_life(group: Option<&Proc>) -> queue::BatchLife {
+    match registry::group_is_dead(group, &super::procs::look) {
+        true => queue::BatchLife::ProvenDead,
+        false => queue::BatchLife::Unproven,
     }
 }
 
@@ -1377,21 +1433,33 @@ fn outcome_of(batch: &Batch) -> BatchOutcome {
 ///
 /// **Whose leftovers reach here is the caller's decision, and it is not "every
 /// batch".** A batch that handed its work back is still alive with a person in
-/// it, so nothing of its is released — the argument that keeps the merge lock
-/// out of `queue::release` is the same one, and it applies to a task claim word
-/// for word. On an unanswered question only the reviewed half comes here, since
-/// `park_claims` owns everything that batch holds `in_progress` bar the merge
-/// lock, which neither path may touch. Every other ending is a dead session and
-/// brings all of its leftovers — the lock among them, refused here by
-/// `queue::release` as it is refused there by `queue::claimed_by`.
+/// it, so nothing of its is released — the sentence that stops `queue::release`
+/// giving back the lock of a batch it cannot show dead applies to a task claim
+/// word for word, and that ending is the one where the agent is alive by
+/// definition rather than merely unproven. On an unanswered question only the
+/// reviewed half comes here, since `park_claims` owns everything that batch
+/// holds `in_progress` bar the merge lock, which nothing on that branch may
+/// park; the lock cannot ride in on the reviewed half either, being held
+/// `in_progress` and never `ready_to_merge`, and its session is still sitting
+/// at its prompt in any case. Every other ending is a dead session and brings
+/// all of its leftovers — **the lock among them**, given back by
+/// `queue::release` where `life` says the app has proved this batch dead and
+/// refused by it where it does not, while `queue::claimed_by` goes on refusing
+/// it outright on the parking path.
 ///
 /// The rule itself is `queue::release` and it is pure: `in_progress` returns to
 /// `open` unclaimed, `ready_to_merge` keeps its status and loses only the claim,
-/// the merge lock is never touched. What this side adds is the note's other
-/// half — where the work was left, from the branch whose slug carries the task's
-/// own id (`git::task_work`) — and it looks in every repository the project
-/// declares, since a task's branch is cut in each repository it touches and the
-/// first one to answer is enough for a line somebody reads.
+/// and the merge lock returns to `open` behind a batch — and only behind a batch
+/// — that `life` says the app has proved dead. What this side adds is the note's
+/// other half — where the work was left, from the branch whose slug carries the
+/// task's own id (`git::task_work`) — and it looks in every repository the
+/// project declares, since a task's branch is cut in each repository it touches
+/// and the first one to answer is enough for a line somebody reads.
+///
+/// It hands back the id of the lock it released, or `None`, and that is the
+/// only thing it reports: the lock's own issue is written to in two ways and no
+/// third, so the run's document is where a release is recorded and this is the
+/// one side that knows whether the tracker took it.
 ///
 /// **This is the app writing to the tracker, and it is deliberately not
 /// recovery.** The boundary `recovery.rs` keeps is about a *previous* app's
@@ -1412,18 +1480,30 @@ async fn release_claims(
     batch: u32,
     actor: &str,
     leftovers: &[queue::Leftover],
-) {
+    life: queue::BatchLife,
+) -> Option<String> {
+    let mut released_lock = None;
     for left in leftovers {
-        let work = repos.iter().find_map(|repo| crate::git::task_work(&root.join(repo), &left.id));
+        // The lock takes no note, so a branch lookup behind one would be git
+        // started in every repository the project declares for a sentence
+        // nobody is going to write.
+        let work = (!left.lock)
+            .then(|| repos.iter().find_map(|repo| crate::git::task_work(&root.join(repo), &left.id)))
+            .flatten();
         let borrowed = work.as_ref().map(|(branch, commit)| (branch.as_str(), commit.as_str()));
-        let Some(patch) = queue::release(left, batch, actor, borrowed) else { continue };
+        let Some(patch) = queue::release(left, batch, actor, borrowed, life) else { continue };
         let (tx, rx) = oneshot::channel();
         if tracker.0.send(TrackerRequest::Update(left.id.clone(), patch, tx)).await.is_ok() {
-            if let Ok(Err(err)) = rx.await {
-                log::warn!("could not release {} after batch {batch}: {err}", left.id);
+            match rx.await {
+                Ok(Err(err)) => {
+                    log::warn!("could not release {} after batch {batch}: {err}", left.id)
+                }
+                Ok(Ok(_)) if left.lock => released_lock = Some(left.id.clone()),
+                _ => {}
             }
         }
     }
+    released_lock
 }
 
 /// Has this batch handed its work back — the question that ends a batch in a
