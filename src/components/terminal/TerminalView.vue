@@ -153,11 +153,11 @@ const live = computed(() => !!props.sessionId && !isStarting(props.sessionId))
    asked outright what is drawn there, and the pane takes only what lands inside
    its own xterm host.
 
-   The same question settles the argument with the new task dialog for free:
-   with a modal open the point lands on its scrim, which is not inside this
-   host, so the pane refuses of its own accord and the two subscribers on the
-   one window event never need to know about each other. Any overlay added later
-   is separated by the same property rather than by a list of exceptions. */
+   Which pane of this window, and nothing more. The argument with the new task
+   dialog is not this test's any more — that dialog is a window of its own and
+   Tauri delivers a drop only to the window it landed on — but an overlay added
+   inside *this* window would be separated by this same property rather than by
+   a list of exceptions, which is why the test stays a hit test. */
 function insideHost(x, y) {
   if (!host.value) return false
   const el = document.elementFromPoint(x, y)

@@ -194,9 +194,10 @@ week; a live session has no such duty — the agent reads the file within the mi
 cost storage, narrow the gesture to the four image formats `sniff` knows, and leave rubbish nothing
 refers to.
 
-**Three pieces, and the split is the point.** `components/terminal/dropPaths.js` is the whole of the
-text rule, pure and outside the component because a `.vue` file is the one thing no test here can
-reach (`tests/components/terminal/dropPaths.test.js`). A path goes in bare and takes single quotes only
+**The split is the point, and the pieces are named below rather than counted.**
+`components/terminal/dropPaths.js` is the whole of the text rule, pure and outside the component
+because a `.vue` file is the one thing no test here can reach
+(`tests/components/terminal/dropPaths.test.js`). A path goes in bare and takes single quotes only
 when it needs them — shlex's own safe set — since the ordinary case is a path with nothing special in
 it and a bare one reads better in the middle of a half-typed sentence; an inner quote is written
 `'\''`. **Quoting is not the whole of the text rule**, because this string is typed into a PTY rather
@@ -208,8 +209,31 @@ and the other files of the same drop still go in.
 
 `watchSessionDrops` in `terminals.js` is the subscription, over the webview's `onDragDropEvent`,
 mirroring `watchDrops` in attachments.js down to the browser case — `getCurrentWebview` throws there,
-which is an ordinary mode and gets one debug line. It converts the event's *physical* position with
-`toLogical(devicePixelRatio)` and hands over CSS pixels, and no opinion about whose drop it is.
+which is an ordinary mode and gets one debug line. It hands over CSS pixels measured from the top left
+of the viewport, and no opinion about whose drop it is.
+
+**Getting to those CSS pixels is not one division, and believing it was is smetana-uoux.** Tauri types
+the event's position `PhysicalPosition` on every platform, and on two of the three it is nothing of
+the kind: wry reads the point out of the toolkit and `tauri-runtime-wry` passes it on unscaled, so on
+macOS it is `draggingLocation()` against the webview's `frame()` — AppKit points, the same `frame()`
+wry itself reads back as a `LogicalSize` — and on Linux it is GTK's `drag-motion` widget coordinates,
+logical as well. Windows alone reports device pixels, from `ScreenToClient` on the client area. Points
+are CSS pixels in a webview at zoom 1, so dividing by `devicePixelRatio` on a Retina Mac halved a
+point that had already arrived in the right space: a drag over the middle of the agent panel was
+hit-tested a quarter of the way into the window, the panel answered only where the halved point
+happened to land back inside it, and a person had to hunt for the working part of a panel that looks
+uniform. Nothing threw — `elementFromPoint` answers for any point on the screen.
+
+Which of the two arrives is a fact about the build, so it comes from `drag_drop_space` in
+`src-tauri/src/window.rs` — a `#[cfg]` and two words — for the same reason `window_chrome` beside it
+does: the front end cannot ask what it was built for, and a user-agent string is a guess. The store
+asks once per window and waits for the answer before it starts listening, rather than converting a
+point whose units it does not know. `components/terminal/dropPoint.js` is the arithmetic and the
+closed list of the two words, pure and outside the component beside `dropPaths.js`
+(`tests/components/terminal/dropPoint.test.js`); a word neither side knows is read as physical, which
+is what every platform got before this was measured, so a rename costs the fix rather than the
+gesture. The position is **not** screen-relative and does **not** move with the window — the repro
+that led here suspected that, and the sources say otherwise.
 
 **Whose drop it is is a hit test, not layout arithmetic.** `TerminalView.vue` asks
 `document.elementFromPoint` at that point and takes the drop only if what is drawn there is inside its
