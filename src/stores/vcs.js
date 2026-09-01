@@ -195,6 +195,27 @@ export const vcsState = reactive({
      and one put in the panel behind it would sit under a dialog that is still
      open. */
   conflictError: null,
+  /* The last write git carried through to the end, for the one corner of the
+     screen that reports on it.
+
+     `{ seq, op, repo, ours, theirs, published, landed }`: a counter, which of
+     the writes it was, the repository it ran in, the branch this repository was
+     on, the other side of the operation, whether a push published a branch that
+     had no upstream, and what Rust measured that it moved.
+
+     **`seq` is a counter and not a timestamp**, and it is the whole reason this
+     is a record rather than a flag: merging the same branch twice in a row is
+     two events with identical contents, and an observer watching the object
+     would see one. A clock would do the same job and worse, since two calls
+     landing inside the same millisecond are exactly the case it exists for.
+
+     Set on the success path only, never on a conflict — an operation that
+     stopped has no answer to what it brought, and `ConflictModal` is already
+     the report on that one. Which of the writes are worth a phrase at all is
+     `components/git/writeSummary.js` and not this field: every write that gets
+     as far as here is recorded, and that module is the only place the closed
+     list of four is written down. */
+  lastWrite: null,
   /* The commit message somebody is part-way through writing, by repository
      path. Kept per repository because a project is often several of them and
      the messages are about different work; kept **here** and not in
@@ -318,6 +339,12 @@ export async function loadRepos(project) {
      made it — and `loadStatus` re-derives it below in any case. */
   if (project !== vcsState.project) {
     clearConflict()
+    /* With the conflict and for its reason: what a write moved in the project
+       being left is not something to say over the one being arrived at.
+       `refresh()` comes back through here with the same project and leaves it
+       standing, which is what lets a record survive the refresh the write that
+       made it runs itself. */
+    vcsState.lastWrite = null
     /* The drafts go with the project they were about. `refresh()` comes back
        through here with the same project and leaves them standing, which is
        what lets a message survive the refresh a failed commit is followed
@@ -673,6 +700,29 @@ function currentBranch() {
    pressed. */
 const CONFLICT_OP = { pull: 'merge' }
 
+/* What tells one write apart from the next, for the watcher in
+   `DesktopApp.vue`. It counts writes for the lifetime of the process and is
+   never read for its value — see `lastWrite` above for why it is a counter
+   rather than a clock. */
+let writeSeq = 0
+
+/* What the call answered about what it moved, in the one shape the phrase is
+   written from.
+
+   Two commands answer it differently and neither is wrong. A merge, a rebase
+   and a pull answer a `MergeOutcome`, where the record rides under `landed` on
+   the clean arm and is deliberately absent from the conflicted one. A push has
+   no outcome to carry it in — there is nothing about it that can conflict — so
+   it answers the record itself. Everything else here answers nothing at all,
+   which is not a hole: those writes are their own report on screen. */
+function landedOf(outcome) {
+  if (!outcome || typeof outcome !== 'object') return null
+  if (typeof outcome.kind === 'string') {
+    return outcome.kind === 'clean' ? outcome.landed ?? null : null
+  }
+  return outcome
+}
+
 /* The mechanics every write in this panel shares, with one `invoke` handed in.
 
    Whether a write may be offered at all is `components/git/gitActions.js` — a
@@ -687,16 +737,23 @@ const CONFLICT_OP = { pull: 'merge' }
    as it stands.
 
    `theirs` is what the conflict record calls the other side, and it is the same
-   branch as `busy`'s for every write but the pull: there the row the spinner
-   belongs on is the current branch, while what git was bringing in is that
-   branch's upstream, and the modal's sentence is about the second.
+   branch as `busy`'s for every write but the pull and the push: there the row
+   the spinner belongs on is the current branch, while what git was moving
+   commits to or from is that branch's upstream, and both the modal's sentence
+   and the corner's are about the second.
+
+   `published` is the one argument here that no write but the push has anything
+   to say about, and it is carried rather than derived for the reason `theirs`
+   is: `publishes` in `components/git/tracking.js` decided both the word on the
+   button and the arguments git was given, and a second reading of the tracking
+   record here could disagree with the first.
 
    What follows a write that worked is the whole list again rather than the
    working tree alone: the branch each repository is on is drawn in its row, so
    a status-only refresh would leave the row naming the branch somebody just
    left. The scope bar goes with it, one store over — and after a rebase that is
    not a nicety, since HEAD can be detached now and the bar says so. */
-async function write(op, branch, call, theirs = branch) {
+async function write(op, branch, call, theirs = branch, published = false) {
   const { project, selected } = vcsState
   /* A branch is **not** required here, though three of the four writes cannot
      do without one and guard it themselves. A commit is about the tree rather
@@ -739,6 +796,29 @@ async function write(op, branch, call, theirs = branch) {
          the probe below, a restart, a terminal — leaves the flag down and puts
          the panel's button there instead. */
       vcsState.conflictOpen = true
+    } else {
+      /* The one seam every write in this panel passes through, which is why the
+         record is taken here rather than in each of the writes below it. On the
+         success path alone: a conflict has no answer to what it brought, and
+         the modal is already the report on it.
+
+         After the project guard above, deliberately. A phrase about a merge in
+         a project somebody has since left is a phrase about work they are not
+         looking at, and the corner it lands in belongs to whatever is on screen
+         now.
+
+         `repo` is the repository the operation ran in, captured before the
+         await, for `conflict`'s own reason: by the time git answers, another
+         row may be selected, and the sentence is about the one that was. */
+      vcsState.lastWrite = {
+        seq: ++writeSeq,
+        op,
+        repo: selected,
+        ours,
+        theirs,
+        published,
+        landed: landedOf(outcome)
+      }
     }
     await refresh()
     /* Awaited, unlike the sweep in `catchUp` that fires the same call and walks
@@ -942,8 +1022,21 @@ export async function pull() {
    into this store — cannot ask for the wrong one. */
 export async function push() {
   const branch = currentBranch()
-  const setUpstream = publishes(branch ? vcsState.tracking[branch] : null)
-  await write('push', branch, (repo) => invoke('vcs_push', { repo, setUpstream }))
+  const tracking = branch ? vcsState.tracking[branch] : null
+  const setUpstream = publishes(tracking)
+  /* `theirs` is the upstream and not the branch, exactly as it is for a pull
+     and for the same reason: it is the other side of the operation, and the
+     corner's sentence is about where the commits went. A branch being published
+     has no upstream to name, which is what `published` says instead — and the
+     two are one answer rather than two, since `publishes` is what decided both
+     the word on the button and the arguments git was given. */
+  await write(
+    'push',
+    branch,
+    (repo) => invoke('vcs_push', { repo, setUpstream }),
+    tracking?.upstream ?? null,
+    setUpstream
+  )
 }
 
 /* What is in the draft for the repository on screen. Empty for one nobody has
@@ -1275,6 +1368,12 @@ function reset() {
   vcsState.conflict = null
   vcsState.conflictError = null
   vcsState.conflictOpen = false
+  /* A merge that landed in the project being left is not news in the next one.
+     The corner watches the counter rather than the object, so an old record
+     standing here raises no phrase by itself — what it would do is leave one
+     already on screen with nothing behind it, and leave the count of writes
+     carrying a repository nothing in this store names any more. */
+  vcsState.lastWrite = null
   /* The drafts go with the project they were about. Keeping them would mean a
      sentence about another project's work sitting over this one's file list,
      one keystroke away from being committed there. */

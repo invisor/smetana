@@ -4913,6 +4913,22 @@ const menuTargetStyle = {
           <Toast tone="warning" title="claude-1 needs you" description="bd-a1b2 · worktree name collision · 4m" />
           <Toast tone="error" title="claude-2 failed" description="exit 101 in wt/bd-3c9d" />
           <Toast tone="success" title="bd-12cd done" description="+41 −1 · 2h 14m" />
+          <!-- What the Git panel says after a merge git carried through, and
+               the one place the phrase can be seen by eye at all:
+               `mockBackend.js` refuses every git write on purpose, so a browser
+               can never produce this toast for real. Both halves are drawn —
+               what came in, and the answer when nothing did, which is the case
+               the whole feature exists for. The minus is U+2212. -->
+          <Toast
+            tone="success"
+            title="Merged feature/x"
+            description="3 commits · 7 files · +41 −12"
+          />
+          <Toast
+            tone="success"
+            title="Nothing to merge"
+            description="feature/x is already in main"
+          />
         </div>
         <!-- The bell's panel, both ways round: what it looks like holding
              something, and what it says holding nothing. Drawn inline here

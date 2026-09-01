@@ -181,6 +181,7 @@ export {
 } from './git/reviewRows.js'
 export { BRANCH_ROWS, filler, resolveDrag } from './git/sectionHeights.js'
 export { AHEAD_TOKEN, BEHIND_TOKEN, folderBehind, pullAction, pushAction, trackingMark } from './git/tracking.js'
+export { writeSummary } from './git/writeSummary.js'
 
 // notifications
 export { default as NotificationCard } from './notifications/NotificationCard.vue'

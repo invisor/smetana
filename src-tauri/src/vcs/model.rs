@@ -287,6 +287,76 @@ pub fn branch_from_name_rev(line: &str) -> Option<String> {
     }
 }
 
+/// What an operation actually brought into this repository.
+///
+/// **Every field is optional and a missing one is a measurement that did not
+/// happen, never a zero.** A repository with no commit yet has no HEAD, a
+/// branch nobody has published has no upstream, and `rev-list` can decline for
+/// reasons that have nothing to do with the merge that just worked. None of
+/// that may turn a success into a refusal, and none of it may become a `0` —
+/// a zero says "nothing came" about an operation that may have brought
+/// everything. A number nobody could take simply falls out of the sentence
+/// (`src/components/git/writeSummary.js`).
+///
+/// `commits` is counted from the **other side** and never over the range the
+/// operation opened. The obvious `<head before>..<head after>` is wrong twice:
+/// after a merge it counts the merge commit git had just made itself, and after
+/// a rebase it counts the branch's own commits replayed as copies, which came
+/// from nowhere. "What did that side have that we did not" is one formula that
+/// is honest for all four writes, and a push reads it backwards.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Landed {
+    pub commits: Option<u32>,
+    pub files: Option<u32>,
+    pub insertions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+/// `git diff --shortstat` into files, insertions and deletions.
+///
+/// Pure, and here for the reason every rule in this file is here: it is the
+/// whole of a decision, and a decision under test is one that cannot quietly
+/// change.
+///
+/// Three shapes and one refusal. The full line is
+/// ` 7 files changed, 41 insertions(+), 12 deletions(-)`; git leaves a half out
+/// when it is zero, so ` 1 file changed, 3 insertions(+)` is ordinary and the
+/// missing half really is nothing. **Empty output is `(0, 0, 0)` and not
+/// `None`**: that is what git prints for two revisions whose trees are
+/// identical, which is a measurement that succeeded and found nothing. A line
+/// this parse cannot read is `None` — a measurement that did not happen — and
+/// the two must not be confused, since one of them is the whole of "nothing
+/// came in" and the other says nothing at all.
+pub fn parse_shortstat(out: &str) -> Option<(u32, u32, u32)> {
+    let line = out.trim();
+    if line.is_empty() {
+        return Some((0, 0, 0));
+    }
+    let mut files = None;
+    let mut insertions = 0;
+    let mut deletions = 0;
+    for part in line.split(',') {
+        // `41 insertions(+)` — the count, then the noun git chose for it. The
+        // singular and the plural share a prefix, which is what this matches
+        // on rather than writing both out.
+        let (count, noun) = part.trim().split_once(' ')?;
+        let count: u32 = count.parse().ok()?;
+        if noun.starts_with("file") {
+            files = Some(count);
+        } else if noun.starts_with("insertion") {
+            insertions = count;
+        } else if noun.starts_with("deletion") {
+            deletions = count;
+        } else {
+            return None;
+        }
+    }
+    // A line with no file count in it is not this format, whatever else it
+    // held: the count of files is the one part git always prints.
+    files.map(|files| (files, insertions, deletions))
+}
+
 /// What a merge or a rebase came to.
 ///
 /// A conflict is an **outcome and not a failure**: nothing was lost, nothing
@@ -303,9 +373,18 @@ pub fn branch_from_name_rev(line: &str) -> Option<String> {
 pub enum MergeOutcome {
     /// git finished the operation. There may be a new commit or there may not
     /// — a fast-forward makes none — and the panel draws the tree either way.
-    Clean,
+    ///
+    /// It carries what the operation brought in, because this is the one
+    /// moment anything can: the answer is two readings of the same repository
+    /// taken either side of the write, and by the time the front end could ask,
+    /// HEAD may have moved under an agent committing in the same tree.
+    Clean { landed: Landed },
     /// git stopped, leaving these paths unmerged. Repository-relative, exactly
     /// as `vcs_status` reports every other path.
+    ///
+    /// **No `landed` here, deliberately.** An operation that did not finish has
+    /// no answer to what it brought, and a record of zeros beside a conflict
+    /// would be one.
     Conflict { files: Vec<String> },
 }
 
@@ -950,17 +1029,80 @@ mod tests {
     /// The panel branches on `kind` and reads `files`; both spellings are
     /// written out again in `src/stores/vcs.js`, which is the only other place
     /// they exist.
+    ///
+    /// The clean arm carries the record the corner's phrase is written from, so
+    /// the field names are part of the same contract: `writeSummary.js` reads
+    /// all four by name.
     #[test]
     fn an_outcome_reaches_the_front_end_tagged_by_kind() {
         assert_eq!(
-            serde_json::to_string(&MergeOutcome::Clean).expect("serializes"),
-            r#"{"kind":"clean"}"#
+            serde_json::to_string(&MergeOutcome::Clean {
+                landed: Landed {
+                    commits: Some(3),
+                    files: Some(7),
+                    insertions: Some(41),
+                    deletions: Some(12)
+                }
+            })
+            .expect("serializes"),
+            r#"{"kind":"clean","landed":{"commits":3,"files":7,"insertions":41,"deletions":12}}"#
         );
         assert_eq!(
             serde_json::to_string(&MergeOutcome::Conflict { files: vec!["src/one.rs".into()] })
                 .expect("serializes"),
             r#"{"kind":"conflict","files":["src/one.rs"]}"#
         );
+    }
+
+    /// A measurement that did not happen crosses the wire as `null` and never
+    /// as a zero — the whole of the opposition `Landed`'s own header states,
+    /// pinned at the seam where it could be lost. A repository with no HEAD and
+    /// a branch with no upstream both land here.
+    #[test]
+    fn a_measurement_that_did_not_happen_crosses_as_null() {
+        assert_eq!(
+            serde_json::to_string(&MergeOutcome::Clean { landed: Landed::default() })
+                .expect("serializes"),
+            r#"{"kind":"clean","landed":{"commits":null,"files":null,"insertions":null,"deletions":null}}"#
+        );
+    }
+
+    /// The full line git prints when both halves are there.
+    #[test]
+    fn parse_shortstat_reads_both_halves() {
+        assert_eq!(
+            parse_shortstat(" 7 files changed, 41 insertions(+), 12 deletions(-)\n"),
+            Some((7, 41, 12))
+        );
+    }
+
+    /// git leaves a half out when it is zero, and the singular is a different
+    /// word. The missing half really is nothing, which is why it reads as zero
+    /// here and not as an unknown.
+    #[test]
+    fn parse_shortstat_reads_a_missing_half_as_nothing() {
+        assert_eq!(parse_shortstat(" 1 file changed, 3 insertions(+)\n"), Some((1, 3, 0)));
+        assert_eq!(parse_shortstat(" 2 files changed, 5 deletions(-)\n"), Some((2, 0, 5)));
+    }
+
+    /// What git prints for two revisions whose trees are identical: nothing at
+    /// all. A measurement that succeeded and found nothing, which is exactly
+    /// what the corner needs to be able to say "already in".
+    #[test]
+    fn parse_shortstat_reads_no_output_as_no_change() {
+        assert_eq!(parse_shortstat(""), Some((0, 0, 0)));
+        assert_eq!(parse_shortstat("\n"), Some((0, 0, 0)));
+    }
+
+    /// A line this parse cannot read is a measurement that did not happen, and
+    /// must never come back as zeros: a zero says "nothing came" about an
+    /// operation that may have brought everything.
+    #[test]
+    fn parse_shortstat_refuses_a_line_it_cannot_read() {
+        assert_eq!(parse_shortstat("Already up to date."), None);
+        assert_eq!(parse_shortstat("fatal: bad revision"), None);
+        assert_eq!(parse_shortstat("garbage"), None);
+        assert_eq!(parse_shortstat(" 7 pears changed"), None);
     }
 
     /// The word the panel sends back for an abort, and the word git is given.
