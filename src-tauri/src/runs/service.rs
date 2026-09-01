@@ -360,6 +360,12 @@ fn handle(
             // leave half a night's checkouts on the disk and sweep the other
             // half away, with nothing in either report saying which.
             let remove_worktrees = crate::settings::git_remove_worktrees(app);
+            // Not read here the way the two above are: the *path* is taken
+            // once and the file is asked again at every gate check, so a
+            // threshold moved while a run is paused takes effect on that run
+            // rather than on the next one. See `usage::Limits` for why this
+            // field is the exception to their snapshot.
+            let settings_path = crate::settings::path(app);
 
             let token = *next_token;
             *next_token += 1;
@@ -382,6 +388,7 @@ fn handle(
                 config.project.repos.clone(),
                 agent,
                 remove_worktrees,
+                settings_path,
                 tracker.clone(),
                 terminal.clone(),
                 report.clone(),
@@ -650,6 +657,11 @@ async fn drive(
     // and carried for the whole of it — the same snapshot `agent` above is,
     // and it reaches the lead as a line of `Intent::Run`'s prompt.
     remove_worktrees: bool,
+    // Where `settings.json` is, or `None` on a platform that will not name a
+    // config directory. The gate re-reads it at every check — the thresholds
+    // are the one thing about a run a person may usefully change while it is
+    // going.
+    settings_path: Option<PathBuf>,
     tracker: TrackerHandle,
     terminal: TerminalHandle,
     report: mpsc::UnboundedSender<Report>,
@@ -815,7 +827,16 @@ async fn drive(
         // the whole reason the gate is worth having: an exhausted limit costs
         // no session at all, where discovering it by failing costs one every
         // time round.
-        let Some(tasks) = headroom(&mut run, &say, profile, &account.journal, &mut stop).await
+        let Some(tasks) = headroom(
+            &mut run,
+            &say,
+            profile,
+            &account.journal,
+            &mut stop,
+            settings_path.as_deref(),
+            matches!(last_batch, LastBatch::Limited),
+        )
+        .await
         else {
             finish(&mut run, StopReason::Cancelled, &say, &account, &root, &tracker).await;
             return;
@@ -1143,10 +1164,20 @@ async fn drive(
         // An allowance that ran out mid-batch and a harness that fell over are
         // the same absence to anyone reading an exit code, and they need
         // opposite responses: one is retried, the other is waited out. So the
-        // gate's own question is asked a second time, here as a classification
+        // gate's own reading is taken a second time, here as a classification
         // rather than as a gate — the source of the answer is the same one, and
         // there is no second mechanism to keep in step with the first.
-        if matches!(ask(profile).await.1, Decision::Pause { .. }) {
+        //
+        // The person's own thresholds are deliberately not consulted. `spent` is
+        // the app's own reading of "the harness will refuse the next session",
+        // and it has to stay true when somebody has turned their gate off —
+        // otherwise turning it off would turn every exhausted allowance into a
+        // crash, and the run would end as `Crashed` after `MAX_CRASHES` with
+        // nothing having crashed.
+        let reading = tokio::task::spawn_blocking(move || profile.and_then(usage::read))
+            .await
+            .unwrap_or(None);
+        if usage::spent(reading.as_ref()) {
             // Not a crash: the counter is untouched, and `Limited` is what
             // keeps the next round from reading an unmoved board as stuck.
             // Nothing pauses here — the gate at the top of the loop is where
@@ -1480,10 +1511,14 @@ fn claim_report(dir: &Path, stem: &str) -> Option<(PathBuf, std::fs::File)> {
 /// down and the decision alone cannot carry it: `Decision::Normal` is the
 /// answer to a fresh week and to a probe nobody could read, and those are
 /// different nights (smetana-7di). Nothing decides anything by the extra half.
-async fn ask(profile: Option<&'static dyn Profile>) -> (Option<usage::Usage>, Decision) {
+async fn ask(
+    profile: Option<&'static dyn Profile>,
+    limits: usage::Limits,
+    after_limited: bool,
+) -> (Option<usage::Usage>, Decision) {
     let Some(profile) = profile else { return (None, Decision::Normal) };
     let read = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
-    let decision = usage::decide(read.as_ref(), usage::Limits::default());
+    let decision = usage::gate(read.as_ref(), limits, after_limited);
     (read, decision)
 }
 
@@ -1507,6 +1542,8 @@ async fn headroom(
     profile: Option<&'static dyn Profile>,
     journal: &Journal,
     stop: &mut mpsc::Receiver<()>,
+    settings_path: Option<&Path>,
+    after_limited: bool,
 ) -> Option<Option<u8>> {
     loop {
         // The channel and not `run.stopping`: this task holds its own `Run`,
@@ -1519,7 +1556,11 @@ async fn headroom(
         // Every answer the gate gets, including the ones that only say the
         // wait goes on: a paused run writes a line every ten minutes, and those
         // lines are what tell a night spent waiting from a night spent hung.
-        let (reading, decision) = ask(profile).await;
+        // Inside the loop rather than above it: a run paused overnight is
+        // exactly the run whose thresholds somebody is most likely to come and
+        // move, and the poll is where that has to be noticed.
+        let limits = crate::settings::subscription_at(settings_path);
+        let (reading, decision) = ask(profile, limits, after_limited).await;
         journal.say(&journal::gate(reading.as_ref(), &decision));
         match decision {
             Decision::Pause { pct, resets } => {

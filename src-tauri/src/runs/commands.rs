@@ -173,20 +173,27 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
 /// a heading honest enough about who answered to look exactly like
 /// `agents::pick`'s legitimate substitution. `None` is for a caller with no
 /// opinion and keeps the file as the answer.
+///
+/// **The band is computed from the very thresholds the gate uses**, read off
+/// the same file by `settings::subscription`, so the sentence under the
+/// percentages and what a run would actually do at this reading cannot
+/// disagree. Taken before the profile is resolved only because `app` is moved
+/// into the first blocking call.
 #[tauri::command]
 pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
+    let limits = crate::settings::subscription(&app);
     let profile = tokio::task::spawn_blocking(move || {
         let id = wanted(agent, || crate::settings::agent(&app));
         crate::agents::pick(&id, crate::shell_env::path())
     })
     .await
     .unwrap_or(None);
-    let Some(profile) = profile else { return usage::report(None, None, usage::Limits::default()) };
+    let Some(profile) = profile else { return usage::report(None, None, limits) };
     // `read` answers `None` for a profile with no `usage_command` without
     // spawning anything, so this costs nothing for Codex; `report` is what
     // tells that `None` apart from a probe's.
     let reading = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
-    usage::report(Some(profile), reading, usage::Limits::default())
+    usage::report(Some(profile), reading, limits)
 }
 
 /// Which agent id `agent_usage` resolves: what the caller asked for, and the
