@@ -18,10 +18,11 @@
    the month. No separator marks the boundary either — over four rows it divides
    the menu louder than it divides the meaning.
 
-   `review` opens the branch-review window with one empty row on the repository
-   the Git panel is showing, where the branch row's menu opens it with the
-   branch already filled in and a row for every repository that has it. The two
-   doors differ in what they start with and in nothing else.
+   `review` opens the branch-review window knowing no branch: the checked side
+   of the pair is empty and there are no repositories under it yet, and picking
+   a branch there fills the table. The branch row's menu opens the same window
+   with that side already filled and a row for every repository that has the
+   branch. The two doors differ in what they start with and in nothing else.
 
    Which harness runs is not asked here: the agent comes from `settings.json`,
    exactly as it does for the "+ New agent" row of the Agents panel, and this

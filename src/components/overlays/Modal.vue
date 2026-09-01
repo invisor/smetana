@@ -9,7 +9,20 @@ const props = defineProps({
   title: { type: String, required: true },
   description: { type: String, default: '' },
   width: { type: Number, default: 440 },
-  closable: { type: Boolean, default: true }
+  closable: { type: Boolean, default: true },
+  /* How much room the body and the footer take, for a guest whose own design
+     asks for more than the shared one. Both default to exactly what they were
+     hardcoded as, so the eleven other dialogs pass neither and did not change —
+     the same shape `DiffView`'s column captions took when the compare window
+     needed different ones.
+
+     `review-changes` is the one that passes them: it is 720 wide rather than
+     440, and a dialog at that width laid out on the padding of a 440 one reads
+     as a form that was stretched rather than designed. They are token names
+     rather than lengths, and there is nowhere in this component that would let
+     a caller write a pixel into one. */
+  bodyPadding: { type: String, default: '' },
+  footerPadding: { type: String, default: '' }
 })
 
 defineEmits(['close'])
@@ -67,17 +80,20 @@ const dialogStyle = computed(() => ({
    bottom padding was carrying it. The description, when there is one, is drawn
    with that same header padding and takes the job back. */
 const bodyStyle = computed(() => ({
-  padding: inWindow && !props.description ? 'var(--space-5)' : '0 var(--space-5) var(--space-5)'
+  padding:
+    props.bodyPadding ||
+    (inWindow && !props.description ? 'var(--space-5)' : '0 var(--space-5) var(--space-5)')
 }))
 
-const footerStyle = {
+const footerStyle = computed(() => ({
   display: 'flex',
   justifyContent: 'flex-end',
+  alignItems: 'center',
   gap: 'var(--space-4)',
-  padding: 'var(--space-4) var(--space-5)',
+  padding: props.footerPadding || 'var(--space-4) var(--space-5)',
   borderTop: 'var(--border-w) solid var(--border-subtle)',
   background: 'var(--surface)'
-}
+}))
 </script>
 
 <template>

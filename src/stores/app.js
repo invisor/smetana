@@ -313,6 +313,28 @@ export async function readWindowChrome() {
   }
 }
 
+/* The person's home folder, or null where there is nobody to ask.
+   `window::home_dir` in Rust; `null` in a browser, and `null` too on a machine
+   with no `HOME` at all.
+
+   Here for the reason the chrome above is here: it is a fact about the desktop
+   rather than a setting, and the alternative is `@tauri-apps/api` imported
+   inside a component. Nothing keeps it — a home folder does not change while
+   the app runs, and the one window that wants it asks when it opens.
+
+   Silent on failure and answering null, like `isWindowMaximized` and unlike the
+   three writes above it: nobody asked for this, and the one reader
+   (`components/git/repoLabel.js`) treats an absent home as an ordinary state
+   and draws an absolute path. */
+export async function homeDir() {
+  try {
+    return (await invoke('home_dir')) ?? null
+  } catch (err) {
+    console.debug('[app] no home folder to read (a browser, there is no Tauri):', err)
+    return null
+  }
+}
+
 /* Whether the window is fullscreen, now and whenever it changes. There is no
    fullscreen event of its own, so the resize is the signal and the window is
    asked outright — the answer is a boolean and the question is cheap.

@@ -89,10 +89,10 @@ export const vcsState = reactive({
      the half the names above are not.
 
      Keyed rather than carried on the names, and that is the compatibility this
-     field exists for: `remoteBranches` is a list of **strings** that two
-     callers already spread and hand to a `Dropdown`, and records in its place
-     would break both of them. A reader that wants an age has a name in its hand
-     anyway, exactly as `tracking` above assumed.
+     field exists for: `remoteBranches` is a list of **strings** its callers
+     spread and pass on as names, and records in its place would break them. A
+     reader that wants an age has a name in its hand anyway, exactly as
+     `tracking` above assumed.
 
      A name with no entry and a name whose entry is null mean the same thing —
      nothing is known about its age — and the caption draws neither. */
@@ -596,9 +596,9 @@ export async function loadRemoteBranches(repo) {
     ])
     if (vcsState.project !== project || remoteBranchesAsked !== repo) return
     /* The names on their own, which is what this field has always held and what
-       two callers spread into a `Dropdown`'s options; the stamps arrive beside
-       them keyed by name rather than in their place. All four assignments are
-       one statement — see `remoteBranchesRepo`. */
+       its callers spread; the stamps arrive beside them keyed by name rather
+       than in their place. All four assignments are one statement — see
+       `remoteBranchesRepo`. */
     vcsState.remoteBranches = branches.map((branch) => branch.name)
     vcsState.remoteBranchTimes = Object.fromEntries(
       /* `at` is the field's name on the wire — `git::RemoteBranch` renames it

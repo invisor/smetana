@@ -53,13 +53,19 @@ const REGISTRY = {
      itself: `sessions_delete` says the transcript is no longer on disk, and the
      person reads it as a sentence rather than as a window vanishing. */
   'delete-session': { width: 440, ground: ['project'] },
-  /* Choosing what an agent reviews: a table of repositories, each with a
-     reference branch and a branch to check, and each side either the local
-     branch or what `origin` has.
+  /* Choosing what an agent reviews: one pair of refs for the project — a
+     reference branch and a branch to check, each either the local branch or
+     what `origin` has — and the repositories it reaches, any of which may keep
+     a pair of its own instead.
 
-     **720 and not 440**, which is what the width field was put here for: the
-     row is a repository name and four controls, and at 440 every one of them
-     would be a dropdown too narrow to read a branch name in.
+     **720 and not 440**, which is what the width field was put here for. It was
+     bought for a table of four controls per row and is spent differently now:
+     the branch list opens in the flow, a row full width, so a name like
+     `feature/smetana-4nsa-remote-branches-repo` is read rather than guessed at,
+     and a row of the table carries a repository, its path, its pair and what it
+     is doing at once. The number is written twice — here and as `Modal`'s
+     `:width` inside the component, which is what `?view=gallery` draws it at —
+     and the two have to agree.
 
      Its ground is the project and nothing else, and that is a decision rather
      than a gap. This window is about the project's repositories as a set rather

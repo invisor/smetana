@@ -648,6 +648,30 @@ pub fn window_chrome() -> &'static str {
     }
 }
 
+/// The person's home folder, or `None` where there is no saying.
+///
+/// A fact about the machine rather than a choice about the app, which is what
+/// puts it beside `window_chrome` above and in `stores/app.js` on the other
+/// side: that store is what the app asks the desktop, and without a command
+/// here a component wanting this would have to import `@tauri-apps/api` itself
+/// — the one import that would put it out of reach of every test the front end
+/// has.
+///
+/// The one reader today is the review window's Repository column, where a
+/// repository outside the project draws `~/work/smetana-infra` instead of an
+/// absolute path (`src/components/git/repoLabel.js`). `None` is an ordinary
+/// answer and not a failure: that rule then draws the path unchanged, which is
+/// true rather than merely shorter.
+///
+/// `access::home()` and not a fifth reading of the environment. That function
+/// is the one that carries a name, its rule about an empty `HOME` is written
+/// down there, and this command is exactly the missing half `repoLabel.js`
+/// names — a way of handing that answer to the front end.
+#[tauri::command]
+pub fn home_dir() -> Option<String> {
+    crate::tracker::access::home().map(|home| home.to_string_lossy().into_owned())
+}
+
 /// Which units and origin a drag-drop event's `position` arrives in, as one of
 /// the two names `src/components/terminal/dropPoint.js` holds.
 ///
