@@ -52,9 +52,21 @@
 //! being the size of what it says. It is built hidden at a provisional height
 //! and shown only once the page has measured itself and called
 //! `dialog_window_size` — the same order the main window uses, and for the same
-//! reason. And it is not resizable: the height is content-driven and re-set on
-//! every change to the content, so a hand on the corner would be fighting the
-//! observer that keeps it honest.
+//! reason. And it has two phases, because those two things are both true and
+//! cannot be true at once. Until somebody drags it, the height is
+//! content-driven and re-set on every change to the content, which is what a
+//! dialog the size of what it says needs. From the first pixel of a drag the
+//! window is the person's: nothing computed moves it again, the size is kept in
+//! `settings.json` under `dialogs` so the next one opens at it, and the page
+//! fills the window instead of measuring itself — `views/DialogWindow.vue` and
+//! `overlays/Modal.vue` hold that half. `hand_moved` below is what tells the
+//! two apart, since a `Resized` says nothing about who caused it.
+//!
+//! These windows are also **outside `tauri-plugin-window-state`** — `lib.rs`
+//! filters them out by label prefix. It cannot tell a size somebody chose from
+//! one this file computed, and it restores and *shows* a window from its
+//! `on_window_ready` hook, which used to defeat the `is_visible` test below and
+//! leave a re-opened dialog uncentred.
 //!
 //! One thing travels the other way, and it is the only message this file sends:
 //! a dialog window destroyed by its own frame says so on the channel the
@@ -115,13 +127,16 @@
 //! runs, the plugin's cache has certainly been updated by its own listener of
 //! the same event.
 
+use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+
+use crate::settings;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
 /// The settings window's label. It is also the name the capability in
@@ -388,6 +403,44 @@ fn window_title(name: &str) -> String {
     }
 }
 
+/// What each open dialog window is doing about its size.
+///
+/// `baseline` is the size the window was read back at after the last `set_size`
+/// of ours, in physical pixels — `hand_moved` below says why it is read back
+/// rather than remembered from the request. `latched` is one-way: once a hand
+/// has given this window a size, nothing computed ever moves it again, for the
+/// window's whole life.
+///
+/// A `BTreeMap` in a `static` rather than managed state, for one reason: it has
+/// to be reachable from a window's event closure, which outlives the call that
+/// built it, and `BTreeMap::new` is const where `HashMap::new` is not. The key
+/// is the kind, which is already one window's worth of identity — the label is
+/// `dialog-<kind>` and there is one window per kind.
+#[derive(Debug, Default, Clone, Copy)]
+struct DialogWindowState {
+    baseline: (u32, u32),
+    latched: bool,
+}
+
+static DIALOG_WINDOWS: Mutex<BTreeMap<String, DialogWindowState>> = Mutex::new(BTreeMap::new());
+
+/// Records what the window came to after a `set_size` of ours, so the next
+/// `Resized` can be told apart from it.
+fn note_baseline(kind: &str, size: (u32, u32)) {
+    if let Ok(mut windows) = DIALOG_WINDOWS.lock() {
+        windows.entry(kind.to_string()).or_default().baseline = size;
+    }
+}
+
+/// Whether this kind's window has been given a size by hand.
+fn is_latched(kind: &str) -> bool {
+    DIALOG_WINDOWS
+        .lock()
+        .ok()
+        .and_then(|windows| windows.get(kind).map(|state| state.latched))
+        .unwrap_or(false)
+}
+
 /// Whether a `Resized` came from the hand rather than from our own `set_size`.
 ///
 /// The event carries no such flag, and this app resizes these windows itself on
@@ -432,9 +485,13 @@ fn remembered_size(stored: (f64, f64), floor_width: f64, monitor: (f64, f64)) ->
 /// — and for the same reason: a window shown first and sized afterwards is a
 /// visible jump.
 ///
-/// Not resizable. The height is content-driven and re-set whenever the content
-/// changes, so a person dragging the corner would be fighting the observer that
-/// keeps it honest.
+/// Two phases, and the window is built for the one it is owed. With no size
+/// kept for this kind it is built at the provisional height, and the height
+/// stays the content's for as long as nobody drags the corner. With a size kept
+/// — somebody dragged this kind of window before — it is built at that size,
+/// clamped by `remembered_size`, and carries `&fill=1` so that the page comes
+/// up filling the window rather than switching into it a round trip after its
+/// first paint.
 ///
 /// Deliberately not `async`: a synchronous command runs on the main thread,
 /// which is where a window is created on every platform this app targets.
@@ -448,17 +505,51 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
         return window.set_focus().map_err(|err| err.to_string());
     }
 
+    // A size somebody dragged this kind of window to, if there is one. It also
+    // decides the phase the page comes up in: a window opened at a hand-chosen
+    // size must not have its height computed away by the first measurement, so
+    // the flag travels on the URL and is right before the first paint rather
+    // than one round trip after it.
+    let kept = settings::dialog_size(&app, &kind).map(|size| {
+        let monitor = app
+            .primary_monitor()
+            .ok()
+            .flatten()
+            .map(|monitor| {
+                let size = monitor.size().to_logical::<f64>(monitor.scale_factor());
+                (size.width, size.height)
+            })
+            .unwrap_or((f64::MAX, f64::MAX));
+        remembered_size((size.width as f64, size.height as f64), width, monitor)
+    });
+    if kept.is_some() {
+        if let Ok(mut windows) = DIALOG_WINDOWS.lock() {
+            windows.entry(kind.clone()).or_default().latched = true;
+        }
+    }
+    let (built_width, built_height) = kept.unwrap_or((width, PROVISIONAL_HEIGHT));
+    let fill = if kept.is_some() { "&fill=1" } else { "" };
+
     let mut builder = WebviewWindowBuilder::new(
         &app,
         &label,
-        WebviewUrl::App(format!("index.html?view=dialog&kind={kind}").into()),
+        WebviewUrl::App(format!("index.html?view=dialog&kind={kind}{fill}").into()),
     )
     // The title the OS frame draws is the dialog's own, and it arrives once the
     // page knows it — the props travel by event, not by URL. Until then the
     // frame carries the app's name rather than a placeholder somebody would see.
     .title("Smetana")
-    .inner_size(width, PROVISIONAL_HEIGHT)
-    .resizable(false)
+    .inner_size(built_width, built_height)
+    // Wider and taller than the layout was drawn at, never narrower: the
+    // registry's width is the width every one of this dialog's rows was spaced
+    // for, and the floor on the height is below the shortest dialog the app
+    // draws — it is there to stop a window being dragged shut.
+    .min_inner_size(width, MIN_DIALOG_HEIGHT)
+    .resizable(true)
+    // A resizable window is offered a zoom button, and a maximized dialog is
+    // not a thing this app has a design for — nor one anything here would size
+    // afterwards.
+    .maximizable(false)
     .visible(false);
 
     // A child of the main window for the reason the settings and compare windows
@@ -471,20 +562,89 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
 
     let window = builder.build().map_err(|err| err.to_string())?;
 
-    // A dialog window closed by its own frame is the dialog answering "close",
-    // and it says so on the channel the guest's own emits travel on. Without
-    // this the app window would go on serving a window that is not there: still
-    // announcing props to nobody, and — the part somebody would actually see —
-    // still counting the dialog as open, so the next project switch produced a
-    // toast explaining why a window they had closed themselves had closed.
-    //
-    // Answered from here rather than from the page, because a page being torn
-    // down is not reliably given the chance to say anything.
     let app_handle = app.clone();
     let channel = format!("dialog:result:{kind}");
+    let resized_kind = kind.clone();
+    // The counter cuts off everything but the last event, the shape
+    // `persist_geometry` uses: a drag of the corner sends hundreds, and one
+    // trip to the disk per pixel is hundreds of writes for one number.
+    let latest = Arc::new(AtomicU64::new(0));
     window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Destroyed) {
-            let _ = app_handle.emit(&channel, serde_json::json!({ "name": "close" }));
+        match event {
+            // A dialog window closed by its own frame is the dialog answering
+            // "close", and it says so on the channel the guest's own emits
+            // travel on. Without this the app window would go on serving a
+            // window that is not there: still announcing props to nobody, and —
+            // the part somebody would actually see — still counting the dialog
+            // as open, so the next project switch produced a toast explaining
+            // why a window they had closed themselves had closed.
+            //
+            // Answered from here rather than from the page, because a page
+            // being torn down is not reliably given the chance to say anything.
+            WindowEvent::Destroyed => {
+                let _ = app_handle.emit(&channel, serde_json::json!({ "name": "close" }));
+            }
+            WindowEvent::Resized(size) => {
+                let now = (size.width, size.height);
+                let ours = DIALOG_WINDOWS
+                    .lock()
+                    .ok()
+                    .and_then(|windows| windows.get(&resized_kind).map(|state| state.baseline))
+                    .unwrap_or_default();
+                // No baseline yet means nothing of ours has sized this window
+                // yet, so there is nothing to tell the hand apart from — and
+                // there is no hand either: the window is hidden until the first
+                // `dialog_window_size`, and a window nobody can see is a window
+                // nobody can drag. Without this, a platform that reports a
+                // `Resized` while a window is being brought into existence
+                // would latch a dialog nobody had touched, and that dialog
+                // would never fit its content again. `(0, 0)` is the whole of
+                // "not yet": a window never has a zero inner size, so it cannot
+                // also be a size somebody dragged to.
+                if ours == (0, 0) || !hand_moved(ours, now) {
+                    return;
+                }
+                // The latch is set now and the size is written later. The two
+                // are separate on purpose: the phase has to change on the first
+                // pixel of the drag, so that nothing computed fights the hand
+                // while it is still moving, and the file is worth one write at
+                // the end of it.
+                if let Ok(mut windows) = DIALOG_WINDOWS.lock() {
+                    let state = windows.entry(resized_kind.clone()).or_default();
+                    state.latched = true;
+                    state.baseline = now;
+                }
+                let mine = latest.fetch_add(1, Ordering::SeqCst) + 1;
+                let latest = latest.clone();
+                let app = app_handle.clone();
+                let kind = resized_kind.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(SETTLE).await;
+                    if latest.load(Ordering::SeqCst) != mine {
+                        return;
+                    }
+                    let Some(window) = app.get_webview_window(&format!("{DIALOG_PREFIX}{kind}"))
+                    else {
+                        return;
+                    };
+                    let Ok(scale) = window.scale_factor() else {
+                        return;
+                    };
+                    let Ok(inner) = window.inner_size() else {
+                        return;
+                    };
+                    let inner = inner.to_logical::<f64>(scale);
+                    settings::remember_dialog_size(
+                        &app,
+                        &kind,
+                        settings::model::DialogSize {
+                            width: inner.width.round() as u32,
+                            height: inner.height.round() as u32,
+                        },
+                    );
+                });
+            }
+            _ => {}
         }
     });
 
@@ -497,10 +657,29 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
 /// is a plausible one rather than a meaningful one.
 const PROVISIONAL_HEIGHT: f64 = 120.0;
 
+/// The floor under a dialog window's height, in logical points. Below the
+/// shortest dialog this app draws — it exists so that a window cannot be
+/// dragged shut, not to hold any particular dialog open.
+const MIN_DIALOG_HEIGHT: f64 = 120.0;
+
 /// How much of a monitor a dialog window may take up in height. A dialog taller
 /// than the screen has nowhere to put its footer, and the footer is where the
 /// buttons are; past this the page scrolls its own body.
 const HEIGHT_CEILING: f64 = 0.9;
+
+/// What `dialog_window_size` answers: whether this window's size is the
+/// person's now.
+///
+/// The answer rides back on a call the page already makes on every change to
+/// its viewport — and a hand on the corner is a change to its viewport — which
+/// is what saves an event channel and its race: a window latched while it is
+/// open learns so on its very next report, and a window opened already latched
+/// was told by `&fill=1` on its URL before it painted at all.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DialogSized {
+    pub latched: bool,
+}
 
 /// Gives a dialog window the height its content came to, puts it over the main
 /// window, and shows it.
@@ -529,13 +708,14 @@ pub fn dialog_window_size(
     height: f64,
     viewport: f64,
     title: String,
-) -> Result<(), String> {
+) -> Result<DialogSized, String> {
     let kind = kind_query(&kind).ok_or_else(|| format!("not a dialog kind: {kind}"))?;
     let Some(window) = app.get_webview_window(&format!("{DIALOG_PREFIX}{kind}")) else {
         // Closed between the measurement and the call. Not an error: the app
         // window closes these on its own when their ground goes, and a race with
-        // that is an ordinary outcome.
-        return Ok(());
+        // that is an ordinary outcome. A window that is gone is not a window
+        // somebody has given a size to, so the answer is the flag's own floor.
+        return Ok(DialogSized { latched: false });
     };
 
     // Hidden means this is the first measurement, since the window is built
@@ -543,6 +723,7 @@ pub fn dialog_window_size(
     // ever shows one. A failure to ask is read as "already up", which is the
     // answer that leaves a window where the person put it.
     let first_paint = !window.is_visible().unwrap_or(true);
+    let latched = is_latched(&kind);
 
     // The width is the window's own rather than the registry's: this side is
     // told a height and nothing else, and re-sending a width would be a second
@@ -553,26 +734,49 @@ pub fn dialog_window_size(
         .map_err(|err| err.to_string())?
         .to_logical::<f64>(scale);
 
-    let ceiling = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .map(|monitor| {
-            monitor.size().to_logical::<f64>(monitor.scale_factor()).height * HEIGHT_CEILING
-        })
-        .unwrap_or(f64::MAX);
+    // A window somebody has given a size to is not sized again, ever. The page
+    // is filling it rather than measuring itself by then, so the height it
+    // sends is the viewport's own and means nothing here; what still arrives
+    // with it, and still matters, is the title.
+    if !latched {
+        let ceiling = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .map(|monitor| {
+                monitor.size().to_logical::<f64>(monitor.scale_factor()).height * HEIGHT_CEILING
+            })
+            .unwrap_or(f64::MAX);
 
-    window
-        .set_size(tauri::LogicalSize::new(
-            inner.width,
-            height_to_set(height, inner.height, viewport, ceiling),
-        ))
-        .map_err(|err| err.to_string())?;
+        window
+            .set_size(tauri::LogicalSize::new(
+                inner.width,
+                height_to_set(height, inner.height, viewport, ceiling),
+            ))
+            .map_err(|err| err.to_string())?;
+
+        // What the window came to, which is what the next `Resized` is measured
+        // against. Read back rather than assumed: the OS may have clamped the
+        // request, and a baseline holding what we asked for would read its own
+        // clamping as somebody's hand and latch the window on first paint.
+        if let Ok(size) = window.inner_size() {
+            note_baseline(&kind, (size.width, size.height));
+        }
+    } else if first_paint {
+        // Built at the remembered size and never resized since, so there is
+        // nothing to set — but the baseline still has to hold what the window
+        // actually became.
+        if let Ok(size) = window.inner_size() {
+            note_baseline(&kind, (size.width, size.height));
+        }
+    }
+
     let _ = window.set_title(&title);
     if first_paint {
         center_over_main(&app, &window);
     }
-    window.show().map_err(|err| err.to_string())
+    window.show().map_err(|err| err.to_string())?;
+    Ok(DialogSized { latched })
 }
 
 /// The height to hand `set_size`, given the height the content came to.
