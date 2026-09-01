@@ -5,6 +5,7 @@
 @import "./tokens/color-type.css";
 @import "./tokens/color-ansi.css";
 @import "./tokens/color-editor.css";
+@import "./tokens/color-editor-bracket.css";
 @import "./tokens/typography.css";
 @import "./tokens/space.css";
 @import "./tokens/shape.css";

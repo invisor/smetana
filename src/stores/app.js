@@ -167,12 +167,30 @@ export async function closeDialogWindow(kind) {
    overhead alone — Rust knows what it set the window to, the page knows what
    arrived — and the difference is a title bar, or a title bar with borders, or
    nothing at all, depending on the machine. `window::height_to_set` carries the
-   whole argument and the measurements behind it. */
+   whole argument and the measurements behind it.
+
+   It answers whether this window's size is the person's rather than its
+   content's — the second of the two sources `DialogWindow.vue` has for that
+   flag, and the one that covers a window dragged while it is open. It costs
+   nothing to carry: the page already calls this on every change to its
+   viewport, and a hand on the corner is a change to its viewport.
+
+   **`null` for a call that failed, an object for one that did not**, and the
+   difference is load-bearing rather than tidy: this same call is the only thing
+   that ever shows a dialog window, so the page has to be able to tell "Rust
+   answered, the window is up and not latched" from "the call did not arrive".
+   A single `false` conflated the two, and a window whose first report errored
+   would have been recorded as shown. */
 export async function sizeDialogWindow(kind, height, viewport, title) {
   try {
-    await invoke('dialog_window_size', { kind, height, viewport, title })
+    const answer = await invoke('dialog_window_size', { kind, height, viewport, title })
+    /* `?? false` covers the browser, where the mock answers `null` for this
+       command and nothing is ever dragged — a call that arrived and found no
+       window to latch, which is exactly what a browser tab is. */
+    return { latched: answer?.latched ?? false }
   } catch (err) {
     console.warn('[app] the dialog window kept the size it had:', err)
+    return null
   }
 }
 
