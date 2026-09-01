@@ -13,8 +13,9 @@
    special-character rendering watch — and they would start substituting their
    own hardcoded colours through the &light / &dark placeholders. So the theme
    below has to answer for everything the base themes would paint themselves,
-   and repaint it with a token. Two rules where it does not yet are named at the
-   end of this note.
+   and repaint it with a token. It does, for every class the app's extension set
+   can put on the screen; what that claim does not cover is named at the end of
+   this note, with where each of them lives.
 
    Answering means naming the class at a depth that wins, and for nearly every
    rule here that depth is the plain one. buildTheme's finish() *replaces*
@@ -37,35 +38,39 @@
    plain rule's two — see the selection block below for the shape it has to take.
 
    It is not the only place a plain rule of ours is out-specified, and none of
-   this is a list to stop looking at. The pressed search-panel button in the
-   first bullet below is a second, and it is live. The `&.cm-gutters-before` and
-   `&.cm-gutters-after` that @codemirror/view nests inside `&light .cm-gutters`
-   are a third, a class deeper than the plain gutter rule below and setting a
-   border width there; they are harmless, but only because the border-style tie
-   at plain depth goes to us and a width on a style of none paints nothing.
-   Measure against the mounted sheet before taking a plain rule here for a
-   winning one.
+   this is a list to stop looking at. The **pressed** search-panel button is a
+   second: @codemirror/view nests an `&:active` inside `&light .cm-button`, a
+   class deeper than a plain `.cm-button`, so the `backgroundImage: 'none'`
+   there covered the resting button and not the pressed one and the gradient was
+   on the screen. It is answered below at `&.cm-editor .cm-button:active` — the
+   base's shape plus one class on the element `&` already names. The
+   `&.cm-gutters-before` and `&.cm-gutters-after` that the same package nests
+   inside `&light .cm-gutters` are a third, a class deeper than the plain gutter
+   rule below and setting a border width there; they are harmless, but only
+   because the border-style tie at plain depth goes to us and a width on a style
+   of none paints nothing. Measure against the mounted sheet before taking a
+   plain rule here for a winning one.
 
    Bracket matching is repainted for a different reason: its base in
    @codemirror/language is a flat, unconditional colour that never looks at the
    darkTheme facet at all — so it would have to be overridden in any case,
    regardless of this flag.
 
-   The two rules outside the claim, both older than this note and both filed as
-   work of their own rather than fixed here, so that the claim above stops
-   promising what the file does not deliver:
+   What the claim leaves out, and it is one thing rather than a list of defects:
+   the base themes carry rules for classes **this app's extension set never puts
+   in the DOM**, and a rule answering a class that cannot appear is a rule
+   nobody could ever check. Four are @codemirror/view's — `.cm-placeholder`,
+   `.cm-highlightSpace`, `.cm-highlightTab` and `.cm-trailingSpace`, each with a
+   colour or a radial-gradient of its own, and every one of them belonging to an
+   extension `extensions.js` does not build. Two more are @codemirror/merge's
+   and are named beside the `diff` block below, where the same reasoning is set
+   out for them: `.cm-deletedChunk` and `.cm-collapsedLines` belong to
+   `unifiedMergeView` and `collapseUnchanged`, and this app builds neither. Add
+   one of those extensions and its base rules become this file's to answer.
 
-   - a **pressed** search-panel button still takes the base theme's gradient.
-     `&light .cm-button` in @codemirror/view nests an `&:active` inside itself,
-     which compiles a class deeper than the plain `.cm-button` below, so the
-     `backgroundImage: 'none'` there covers the resting button and not the
-     pressed one — and the comment above that block is wrong to say the gradient
-     is suppressed outright.
-   - a **non-matching** bracket keeps the ground @codemirror/language gives it
-     (`&.cm-focused .cm-nonmatchingBracket` in its own base theme). That one is
-     not a depth argument at all: the rule below sits at the same depth and
-     answers the colour only, never the background, so there is nothing for it
-     to win. */
+   Everything else the base themes would paint is answered below, including the
+   two that were not until smetana-c2kw: the pressed button's gradient, and the
+   ground @codemirror/language gives a bracket with no partner. */
 import { EditorView } from '@codemirror/view'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
@@ -156,12 +161,28 @@ const chrome = EditorView.theme({
     backgroundColor: 'var(--editor-selection-match)',
     color: 'inherit'
   },
-  '&.cm-focused .cm-nonmatchingBracket': { color: 'var(--syn-invalid)' },
+  /* Both bracket rules answer the colour *and* the ground, because
+     @codemirror/language's base theme sets a ground for each and nothing else
+     — `#328c8252` and `#bb555544`, hardcoded and never routed through &light or
+     &dark, so a rule of ours that named only the colour left the package's own
+     tint on the screen in both app themes. These two are the shape the base
+     writes, exactly, and win on mount order rather than on depth: the tie and
+     why it goes to us are the top of this file. The pair is deliberately not
+     one colour with the loudness turned down — a bracket with no partner and a
+     bracket with one are the same mark in two states, and the whole of the
+     difference is which ground it takes. */
+  '&.cm-focused .cm-nonmatchingBracket': {
+    backgroundColor: 'var(--editor-bracket-unmatched-bg)',
+    color: 'var(--syn-invalid)'
+  },
   '.cm-specialChar': { color: 'var(--syn-invalid)' },
 
-  /* The search panel. @codemirror/search's base theme paints it itself,
-     including a linear-gradient on the buttons — and gradients are forbidden in
-     this system. */
+  /* The search panel. @codemirror/search's base theme paints it itself, and
+     @codemirror/view's paints its buttons with a linear-gradient — one for the
+     resting button and a second, nested inside the first as `&:active`, for the
+     pressed one. Gradients are forbidden in this system, so both are answered
+     below: `backgroundImage: 'none'` on the plain rule and again on the pressed
+     one, which has to carry a class more than the base's to say it. */
   '.cm-panels': {
     backgroundColor: 'var(--surface)',
     color: 'var(--text-primary)',
@@ -207,7 +228,19 @@ const chrome = EditorView.theme({
     fontSize: 'var(--text-ui-size)'
   },
   '.cm-button:hover': { backgroundColor: 'var(--action-secondary-bg-hover)' },
-  '.cm-button:active': { backgroundColor: 'var(--action-secondary-bg-active)' },
+  /* The pressed button, and the one rule in this block written at a depth of
+     its own. @codemirror/view nests `&:active` inside `&light .cm-button`,
+     which compiles to `.<base> .cm-button:active` — a class deeper than the
+     plain `.cm-button` above, so the gradient suppressed there was never
+     suppressed here. `&` is the editor element and `cm-editor` is a class it
+     always carries, so `&.cm-editor` is that same element named twice: the
+     base's own shape plus one class, which puts this rule past the base's
+     rather than level with it. The same move the selection layer above makes,
+     for the same reason — !important is the other way and is forbidden here. */
+  '&.cm-editor .cm-button:active': {
+    backgroundColor: 'var(--action-secondary-bg-active)',
+    backgroundImage: 'none'
+  },
   '.cm-panel.cm-search [name="close"]': {
     color: 'var(--text-secondary)',
     background: 'none',

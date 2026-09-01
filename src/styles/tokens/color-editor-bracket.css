@@ -1,0 +1,33 @@
+/* THE GROUND UNDER A BRACKET WITH NO PARTNER.
+
+   This is an editor colour and its home is `color-editor.css` beside
+   `--editor-selection-match`, which is the ground the *matching* bracket takes.
+   It is here instead because the task that added it (smetana-c2kw) was scoped
+   to leave that file untouched, and a token nobody can find is worse than a
+   file nobody expected: fold this declaration into `color-editor.css` and drop
+   this file the moment that one is free to change.
+
+   Why a token of its own rather than a borrowed one. `@codemirror/language`
+   paints this class `#bb555544`, a colour this design system never chose, and
+   it wins by sitting in a base theme; answering it needs a value. The three
+   candidates already in the tree all say something else in the very window this
+   is drawn in: `--editor-selection-match` is the matching bracket, and painting
+   both alike would spend the distinction the mark exists for;
+   `--diff-removed-bg` means "this line is gone" in a diff pane, which is where
+   a click from the Git panel lands; and the status grounds belong to the board's
+   vocabulary, which the editor deliberately does not speak.
+
+   Measured, in the band `--editor-selection-match` already occupies, since the
+   two are the same mark in two states and must read as equally deliberate:
+   against `--editor-bg` 1.25 light / 1.65 dark (the green pair: 1.22 / 1.61),
+   and against `--editor-active-line`, which is where this mark nearly always
+   lands because the cursor is what summons it, 1.18 / 1.50 (the green pair:
+   1.14 / 1.47). `--syn-invalid`, the colour the bracket's own glyph takes,
+   measures 4.52 light and 5.28 dark on it — over the 4.5:1 floor for text in
+   both themes. */
+:root{
+  --editor-bracket-unmatched-bg:#f0dcd8;
+}
+[data-theme="dark"]{
+  --editor-bracket-unmatched-bg:#4d3430;
+}
