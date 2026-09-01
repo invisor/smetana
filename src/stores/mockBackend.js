@@ -147,6 +147,18 @@ const DIALOG_PROPS = {
     actions: { allowed: true, reason: null },
     busy: false
   },
+  /* Renaming one. `from` is a branch of `MOCK_BRANCHES` above, so the list the
+     name is checked against is the one this window is a question about: type
+     `main` into the field and it refuses the name as taken, and put the name
+     back exactly as it was and the button goes dead with no red line — which is
+     the pair of rules `?view=dialog&kind=rename-branch` exists to show. */
+  'rename-branch': {
+    title: 'Rename branch',
+    from: 'feat/worktree-rename',
+    branches: MOCK_BRANCHES,
+    actions: { allowed: true, reason: null },
+    busy: false
+  },
   /* Deleting one, in the state it opens in — the question, before git has been
      asked anything. The other two states are reached by an answer from a
      backend a browser does not have, so they are looked at in `?view=gallery`

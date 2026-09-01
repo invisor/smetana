@@ -200,6 +200,7 @@ import {
   push,
   rebase,
   refresh as refreshGit,
+  renameBranch,
   selectRepo,
   setMessage,
   suggestMessage,
@@ -886,6 +887,55 @@ function openNewBranch(from) {
 const cutBranch = (ask) => {
   closeDialog('new-branch')
   createBranch(ask)
+}
+
+/* Which branch the rename window is about, and null for closed — the branch is
+   the state for `newBranchFrom`'s reason, and here it is also the value the
+   window's field opens filled with. */
+const renamingBranch = ref(null)
+
+/* Renaming one, in a window of its own like the two beside it. The verdict and
+   `busy` are announced live, because a run can start while the window stands
+   and the Rename button has to go dead when it does; the branch list goes with
+   them so a name another branch has taken is refused under the field while it
+   is being typed rather than by git after the window has closed. */
+function openRenameBranch(branch) {
+  renamingBranch.value = branch
+  serveDialog('rename-branch', {
+    /* The repository is part of the ground for `openNewBranch`'s reason:
+       `renameBranch` resolves it from `vcsState.selected` when Rename is
+       pressed, not when this window opened, and there is no scrim stopping
+       somebody clicking another repository row meanwhile. The branch is ground
+       too — this window is entirely about a branch that still answers to the
+       name it opened on. */
+    ground: { project: activePath.value, repo: vcsState.selected, branch },
+    props: () => ({
+      title: 'Rename branch',
+      from: renamingBranch.value,
+      branches: vcsState.branches,
+      actions: gitWrites.value,
+      busy: Boolean(vcsState.busy)
+    }),
+    forget: () => {
+      renamingBranch.value = null
+    },
+    onResult: (name, payload) => {
+      if (name === 'close') closeDialog('rename-branch')
+      if (name === 'rename') renameBranchTo(payload)
+    }
+  })
+}
+
+/* The window closes first and git runs after, which is `cutBranch`'s shape and
+   for its reason: the spinner lands on the row the branch is being renamed
+   from, and a refusal is drawn where the panel draws the rest of git's
+   refusals. Closing first is also what keeps the ground watcher quiet — the
+   branch is about to stop existing under the name this window stood on, and a
+   window still open then would be pulled out from under the person with a
+   notice about the very act they just performed. */
+const renameBranchTo = (ask) => {
+  closeDialog('rename-branch')
+  renameBranch(ask ?? {})
 }
 
 /* Which branch the delete-branch window is asking about, and null for closed —
@@ -3993,6 +4043,28 @@ async function attachToAgent(path) {
   await send(id, text)
 }
 
+/* A branch's whole name on the clipboard, from the Git panel's row menu. The
+   same path as `copyPath` below — `copyText`, then a toast either way, because a
+   copy is the one act whose success has nothing on screen to show for it — and
+   a function of its own for one sentence: the failure line down there names a
+   path, and a branch name is not one.
+
+   Whole and never the leaf: the string is wanted for a git command somewhere
+   else, and `BranchList` hands over `row.name` rather than the `row.label` it
+   draws under a folder heading. */
+async function copyBranchName(branch) {
+  const ok = await copyText(branch)
+  sayFileMenu(
+    ok
+      ? { tone: 'success', title: 'Copied the branch name', description: branch }
+      : {
+          tone: 'error',
+          title: 'Could not copy the branch name',
+          description: 'The clipboard refused it. The reason is in the console.'
+        }
+  )
+}
+
 async function copyPath(text, what) {
   const ok = await copyText(text)
   sayFileMenu(
@@ -5179,7 +5251,9 @@ const toastStackStyle = {
                 @pull="pull"
                 @push="push"
                 @fetch="fetchNow"
+                @copy-name="copyBranchName"
                 @new-branch="openNewBranch"
+                @rename="openRenameBranch"
                 @delete="openDeleteBranch"
                 @message="setMessage"
                 @commit="commit"
@@ -5258,7 +5332,7 @@ const toastStackStyle = {
              repository, since the panel's selection can have moved since. -->
         <!-- Every dialog of this app but two is a window of its own now,
              opened above by `openRun`, `openNewTask`, `openNewBranch`,
-             `openDeleteBranch`, `openPromote`, `openSetup`,
+             `openRenameBranch`, `openDeleteBranch`, `openPromote`, `openSetup`,
              `openProjectSettings`, `openDeleteTask`, `openReadyTask` and
              `openDeleteSession` —
              the whole of `REGISTRY` in `dialogRegistry.js`, which is what

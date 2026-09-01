@@ -98,11 +98,12 @@ export { default as ConflictModal } from './git/ConflictModal.vue'
 export { default as DeleteBranchModal } from './git/DeleteBranchModal.vue'
 export { default as GitPanel } from './git/GitPanel.vue'
 export { default as NewBranchModal } from './git/NewBranchModal.vue'
+export { default as RenameBranchModal } from './git/RenameBranchModal.vue'
 export { default as RepoList } from './git/RepoList.vue'
 export { default as ReviewChangesDialog } from './git/ReviewChangesDialog.vue'
 export { default as SectionHeader } from './git/SectionHeader.vue'
 export { branchMenuItems } from './git/branchMenu.js'
-export { branchNameError, canCreate } from './git/branchName.js'
+export { branchNameError, canCreate, canRename, renameError } from './git/branchName.js'
 export {
   BRANCH_FILTER_LABEL,
   NO_BRANCH_MATCHES,

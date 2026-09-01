@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { branchNameError, canCreate } from '../../../src/components/git/branchName.js'
+import {
+  branchNameError,
+  canCreate,
+  canRename,
+  renameError
+} from '../../../src/components/git/branchName.js'
 
 const BRANCHES = [{ name: 'develop', current: true }, { name: 'feat/login', current: false }]
 
@@ -77,5 +82,92 @@ describe('canCreate', () => {
 
   it('holds it while git is already working', () => {
     expect(canCreate({ ...ready, busy: true })).toBe(false)
+  })
+})
+
+describe('renameError', () => {
+  /* The whole reason this exists beside `branchNameError`: the branch being
+     renamed is in the list it would be checked against, so the plain rule opens
+     the window refusing the name it just filled the field with — a dialog
+     calling a name taken by the person it is asking. */
+  it('does not call the branch’s own name taken', () => {
+    expect(renameError('develop', 'develop', BRANCHES)).toBe(null)
+  })
+
+  it('still refuses a name another branch holds', () => {
+    expect(renameError('feat/login', 'develop', BRANCHES)).toBe(
+      'A branch with this name already exists.'
+    )
+  })
+
+  it('keeps every shape rule git documents', () => {
+    expect(renameError('feat/log in', 'develop', BRANCHES)).toBe(
+      'A branch name cannot contain spaces.'
+    )
+    expect(renameError('.hidden', 'develop', BRANCHES)).toBe(
+      'No part of a branch name can start with a dot.'
+    )
+  })
+
+  /* An emptied field is not a mistake, exactly as it is not one when a branch
+     is being cut: `canRename` is what holds the button. */
+  it('says nothing about an empty field', () => {
+    expect(renameError('', 'develop', BRANCHES)).toBe(null)
+    expect(renameError('   ', 'develop', BRANCHES)).toBe(null)
+  })
+
+  /* Trimmed, since that is the name that would be written — and trimmed before
+     the comparison, so that the branch's own name padded with spaces is still
+     its own name and draws no red line. */
+  it('judges the trimmed name', () => {
+    expect(renameError('  develop  ', 'develop', BRANCHES)).toBe(null)
+    expect(renameError('  feat/login  ', 'develop', BRANCHES)).toBe(
+      'A branch with this name already exists.'
+    )
+  })
+})
+
+describe('canRename', () => {
+  const ready = { name: 'feat/login-2', from: 'develop', branches: BRANCHES }
+
+  it('takes a name nothing is wrong with', () => {
+    expect(canRename(ready)).toBe(true)
+  })
+
+  /* The unchanged name holds the button and says nothing under the field: there
+     is nothing wrong with it and nothing to ask git for. */
+  it('holds the button over the name the branch already has', () => {
+    expect(canRename({ ...ready, name: 'develop' })).toBe(false)
+    expect(canRename({ ...ready, name: '  develop  ' })).toBe(false)
+    expect(renameError('develop', 'develop', BRANCHES)).toBe(null)
+  })
+
+  it('holds it over an empty field', () => {
+    expect(canRename({ ...ready, name: '  ' })).toBe(false)
+  })
+
+  it('holds it over a name git would refuse', () => {
+    expect(canRename({ ...ready, name: 'feat/log in' })).toBe(false)
+  })
+
+  it('holds it over a name another branch already holds', () => {
+    expect(canRename({ ...ready, name: 'feat/login' })).toBe(false)
+  })
+
+  /* The window can be open when a run starts underneath it, so the verdict is
+     read here and not only where the menu was opened. */
+  it('holds it while a run holds the repository', () => {
+    expect(canRename({ ...ready, allowed: false })).toBe(false)
+  })
+
+  it('holds it while git is already working', () => {
+    expect(canRename({ ...ready, busy: true })).toBe(false)
+  })
+
+  /* A caller that went round the menu: with nothing to rename there is nothing
+     to press, and the list would refuse the new name as taken by whichever
+     branch happens to carry it. */
+  it('holds it when there is no branch to rename', () => {
+    expect(canRename({ ...ready, from: null })).toBe(false)
   })
 })

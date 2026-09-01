@@ -248,9 +248,21 @@ on its own, but giving way to nothing draws the same sliver.
 mark and nothing else. Merging and rebasing used to be two `IconButton`s that appeared under
 the pointer — a control per row per verb, in a column that also carries a file tree, a change list
 and a commit box — and they are `components/git/branchMenu.js`'s items now, beside a third the row
-had all along without a name anywhere on screen: the checkout its own click performs. A menu is where
-somebody goes to find out what a place can do, so a place whose main action is missing from its menu
-reads as a place that cannot do it.
+had all along without a name anywhere on screen: the checkout its own gesture performs. A menu is
+where somebody goes to find out what a place can do, so a place whose main action is missing from its
+menu reads as a place that cannot do it.
+
+**That gesture is a double click, and a single click does nothing at all.** This was the one place in
+the app where one click on a row of a list wrote the disk, and it sat beside the gesture that opens
+the menu — a pointer that missed by a row had already run `git switch`. Nothing was put in the single
+click's place: selecting a row would be a state no part of this panel reads, so what was asked to go
+went and nothing was invented for it. Hover and press stay, so the row still reads as pressable, and
+the named way to the same act is the menu's own `Switch to this branch`. A **folder heading keeps its
+single click** — it unfolds and touches the repository not at all. Nothing here captures the pointer,
+which is what lets the double click arrive: `core/interactive.js` binds mouse enter, leave, down and
+up and takes no capture, where `shell/TabBar.vue` had to build its `armed` machine because a
+`pointerdown` capture redirected the compatibility mouse events and killed `Tab.vue`'s click and
+double click both.
 
 What that costs is a gesture nobody is told about: nothing on the row says the two verbs exist. It is
 the deliberate trade, and the only thing paying it back is that the project list one level up answers
@@ -264,10 +276,19 @@ the row with the tick is asking about that row. The menu opens on **every** bran
 refused ones: a gesture that answers on some rows and does nothing on others reads as a broken row
 rather than a refused one.
 
+Two rows of that menu never reach git at all. `Add to favourites` writes a line in `settings.json`;
+`Copy branch name` writes nothing anywhere, and puts the branch's **whole** name on the clipboard —
+`fix/spike` and not the `spike` the row draws under a folder heading, because the string is wanted
+for a git command somewhere else, where a leaf names nothing. Nothing refuses either of them: not a
+run, not an operation in flight, and not the row being the branch already checked out. The copy goes
+out through `stores/app.js`'s `copyText` and answers in a toast either way, which is the same path
+the file tree's own `Copy path` takes — a copy is the one act whose success has nothing on screen to
+show for it.
+
 **The item that leaves the list longer than it found it**: `New branch from this`,
 cut from the row that was clicked and never from HEAD, which is the whole reason it belongs to a row
-rather than to the section header. It is second from the bottom now, in a group of its own with the
-delete below it, and it is the item that made
+rather than to the section header. It shares its group with `Rename this branch` and has the delete
+below the separator under them both, and it is the item that made
 `branchMenu.js`'s refusals grow two different reaches — a run or an operation in flight refuses it
 like everything else, but *being on the branch* does not, since cutting a branch from where you are
 standing is the ordinary case. So "already on this branch" heads the three moving verbs and stops
@@ -322,6 +343,33 @@ of to a trigger — teleported out of the document because every list here sits 
 `overflow`, flipped above the pointer when there is no room below, closed on a scroll anywhere
 underneath. All of it was inline in `shell/ProjectList.vue` while that was the only caller; this made
 it the second, and the component is the one copy both now use.
+
+**Renaming one** is the same four layers with a different verb: `RenameBranchModal.vue` →
+`DesktopApp.renameBranchTo` → `renameBranch` in `stores/vcs.js` → `vcs_rename_branch` →
+`git branch -m <from> <to>`. Its window is `rename-branch`, 440 wide, standing on the same three
+sorts of ground as the two beside it and for the same reasons. Four things about it are decisions
+rather than details:
+
+- **`-m` and never `-M`.** The forced form writes over a branch that already carries the new name,
+  which loses commits nobody asked to lose. The plain one refuses, and git's words land in the panel
+  under `WRITE_REFUSED`'s new line, `Git did not rename the branch`. There is no second question and
+  no substring reading of git's prose — the rule this module keeps everywhere.
+- **The branch the repository is standing on can be renamed**, which is where this parts company with
+  the delete: `git branch -m` renames the branch HEAD is on and HEAD travels with the ref, so a typo
+  in the name of the branch somebody is working in is the ordinary case. So the menu row is refused
+  by `held` alone — a run, or git already working — and by neither `current` nor a guard in Rust,
+  where `delete_branch` has both.
+- **The favourite mark travels with the name**, in place and keeping its position in the list.
+  `favoriteBranches` holds names, so a rename that left it alone would unmark a branch somebody
+  marked. It is moved in the store under `deleteBranch`'s own guard on `settings.activeProject` and
+  for that guard's reason: `write()` answers `true` for a project that moved underneath, and
+  `settings.project` is merged in place.
+- **The name a branch already has is not an error**, it merely holds the button. `renameError` in
+  `branchName.js` is `branchNameError` over the *other* branches — the one being renamed is in that
+  list, and the plain rule would open the window refusing the name it had just filled the field with.
+
+The remote is untouched throughout: no upstream is renamed, the new name is not pushed and the old
+one is not deleted there. That is a different act with different consequences.
 
 **Branch names group into folders**, the way GitLens does it: everything before a slash is a heading
 and a row draws only the leaf, which is the width it buys back — under one heading the prefix is on

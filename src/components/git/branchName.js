@@ -1,5 +1,9 @@
 /* Whether a name can be a branch, and the sentence to put under the field when
-   it cannot.
+   it cannot. Two dialogs ask: the one that cuts a branch and the one that
+   renames one. The shape rules are one list for both — git's
+   `check-ref-format` does not care which command follows — and what the two do
+   not share is which names count as taken, which is the pair at the foot of
+   this file.
 
    The `branchMenu.js` / `gitActions.js` / `commitBox.js` family: pure, no Vue
    and no DOM, which is the whole reason it is a file of its own — no test in
@@ -66,4 +70,37 @@ export function canCreate({ name, branches = [], allowed = true, busy = false })
   const wanted = (name ?? '').trim()
   if (!wanted || !allowed || busy) return false
   return branchNameError(wanted, branches) === null
+}
+
+/* What is wrong with a name a branch is being **renamed** to, or null.
+
+   Every shape rule above holds unchanged — git's `check-ref-format` does not
+   care which command is about to run — and the one check that is not about the
+   shape has to lose one branch: the one being renamed. It is in the list, so
+   `branchNameError` alone would open the field on "A branch with this name
+   already exists." about the very branch the sentence is under, which is a
+   dialog calling a name taken by the person it is asking.
+
+   The unchanged name is deliberately **not** an error either. Nothing is wrong
+   with it — it is the name the branch already has — so there is nothing to put
+   under the field; what it does is hold the button, which is `canRename`'s job
+   and exactly what an empty field does at `canCreate`. A red line about a name
+   somebody has not yet touched is the thing this file's header refuses to do. */
+export function renameError(name, from, branches = []) {
+  return branchNameError(
+    name,
+    (branches ?? []).filter((branch) => branch.name !== from)
+  )
+}
+
+/* Whether the rename dialog's own button may be pressed. `canCreate`'s two
+   halves of the panel's verdict, for its reason — the window can be open across
+   a run starting underneath it — plus the one thing that is this dialog's own:
+   a name equal to the one the branch already carries is nothing to ask git for.
+   Compared after trimming and exactly, since that is the name that would be
+   written. */
+export function canRename({ name, from, branches = [], allowed = true, busy = false }) {
+  const wanted = (name ?? '').trim()
+  if (!wanted || !from || wanted === from || !allowed || busy) return false
+  return renameError(wanted, from, branches) === null
 }

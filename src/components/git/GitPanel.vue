@@ -215,9 +215,20 @@ const emit = defineEmits([
      below for `compare`'s reason and a stronger one: it writes `settings.json`
      and nothing else. */
   'favorite',
+  /* The name a person asked to put on the clipboard, and the one verb of this
+     panel that reaches neither git nor `settings.json`. Absent from
+     `WRITE_REFUSED` below for `compare`'s reason and a stronger one still: the
+     only thing that can refuse it is the clipboard, which answers in a toast
+     where the caller raised it. Whole, never the leaf — the string is wanted
+     for a git command somewhere else. */
+  'copy-name',
   'merge',
   'rebase',
   'new-branch',
+  /* The name of the branch a person asked to rename. Like the delete below it
+     the window that asks is the caller's to open, and what comes back from git
+     lands in `writeError` under this table's own title. */
+  'rename',
   /* The name of the branch a person asked to delete. The window that asks about
      it is the caller's to open, and what comes back from git lands in
      `writeError` under this table's own title like every other write. */
@@ -386,6 +397,11 @@ const WRITE_REFUSED = {
   merge: 'Git did not merge',
   rebase: 'Git did not rebase',
   create: 'Git did not create the branch',
+  /* A rename git declined, which is a name another branch already holds above
+     all — `branch -m` refuses rather than writing over it, and `branchName.js`
+     cannot see a branch the list has not caught up with. There is no second
+     question for the window to ask, so the words land here like a checkout's. */
+  rename: 'Git did not rename the branch',
   abort: 'Git did not abort',
   commit: 'Git did not commit',
   pull: 'Git did not pull',
@@ -895,9 +911,11 @@ const onReset = (section) => emit('resize', { section, rows: null })
             @compare="$emit('compare', $event)"
             @review="$emit('review', $event)"
             @favorite="$emit('favorite', $event)"
+            @copy-name="$emit('copy-name', $event)"
             @merge="$emit('merge', $event)"
             @rebase="$emit('rebase', $event)"
             @new-branch="$emit('new-branch', $event)"
+            @rename="$emit('rename', $event)"
             @delete="$emit('delete', $event)"
             @toggle-folder="$emit('toggle-folder', $event)"
           />
