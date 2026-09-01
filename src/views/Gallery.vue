@@ -3055,7 +3055,7 @@ const menuTargetStyle = {
              about those tabs and has to stay beside them however many files are
              open. -->
         <template #afterPinned>
-          <MenuButton icon="plus" label="New agent, terminal, task or review" :items="NEW_TAB_ITEMS" :width="180" />
+          <MenuButton icon="plus" label="New task, agent, terminal or review" :items="NEW_TAB_ITEMS" :width="180" />
         </template>
       </TabBar>
 

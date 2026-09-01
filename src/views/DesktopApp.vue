@@ -589,15 +589,17 @@ async function newTerminal(cwd = null) {
 
 /* Which row does what. The rows themselves are `newTabMenu.js`'s — two callers
    and no test can reach a template, the same split every other menu in this app
-   keeps. The third row opens no tab: it is a second door onto the new-task
-   dialog, the same window the `+` above the `ready` column opens. */
+   keeps. The branches read by `kind` and never by position, so the order of
+   the menu stays that file's alone. `task` opens no tab: it is a second door
+   onto the new-task dialog, the same window the `+` above the `ready` column
+   opens. */
 const onNewTab = (item) => {
   if (item.kind === 'agent') newAgent()
   else if (item.kind === 'terminal') newTerminal()
   else if (item.kind === 'task') newTask()
-  /* The fourth row, and the second door into the branch-review window: no name
-     to start from, so the table opens as one empty row on the repository the
-     Git panel is showing. */
+  /* The second door into the branch-review window: no name to start from, so
+     the table opens as one empty row on the repository the Git panel is
+     showing. */
   else if (item.kind === 'review') openReviewChanges()
 }
 
@@ -5307,14 +5309,14 @@ const toastStackStyle = {
                drift away from them. The block is what it names and not the board
                within it, since which of the pair the button ends up against is
                the order's to decide. Disabled with no project open, where
-               no row has anywhere to start anything — the two that open a tab
-               have no project root to open it in, the third would file a task
-               against no tracker, and the fourth would ask for a review of no
-               repositories. -->
+               no row has anywhere to start anything — the task row would
+               file against no tracker, the two that open a tab have no project
+               root to open one in, and the review row would ask for a review of
+               no repositories. -->
           <template #afterPinned>
             <MenuButton
               icon="plus"
-              label="New agent, terminal, task or review"
+              label="New task, agent, terminal or review"
               :items="NEW_TAB_ITEMS"
               :width="180"
               :disabled="!activePath"
