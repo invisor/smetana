@@ -424,25 +424,45 @@ window.addEventListener('resize', readViewport)
    unchanged would otherwise keep the frame it had. Nothing is sent before the
    first measurement — there is no height to send, and this call is also what
    shows the window. */
+/* Whether a measurement has ever reached Rust from this window.
+
+   It gates the phase below together with `filled`, and it is not a nicety: that
+   first report is the only thing that ever calls `show()` on a dialog window
+   (`window::dialog_window_size`). A window opened at a remembered size is
+   `filled` before it has painted, so a phase gated on `filled` alone would stop
+   depending on `measured` while `measured` was still 0 — and if the props won
+   the race against the `ResizeObserver`'s first delivery, nothing would ever
+   re-trigger the report. The result is the failure the template at the foot of
+   this file names: a window that exists, holds the label, and can never be seen
+   or closed, with the menu item that opens it focusing it for the rest of the
+   session. Both flags latch once, so this costs one extra run of the getter and
+   no more. */
+const reported = ref(false)
+
 /* What a report depends on, and it is not the same thing in the two phases —
    which is why this is a `watch` over a getter rather than a `watchEffect`: the
    sources are collected afresh on every run, so the dependency itself changes
    with the phase.
 
    Fitting, every change to the measured height or to the viewport has to
-   travel, because that is what sizes the window. Filled, the window's size is
-   the person's and Rust discards both numbers unread — only the title still
-   reaches anything. Without the split, dragging a corner fired one synchronous
-   IPC command per frame, each one asking the window four questions and throwing
-   the answer away. */
+   travel, because that is what sizes the window. Filled *and shown*, the
+   window's size is the person's and Rust discards both numbers unread — only the
+   title still reaches anything. Without the split, dragging a corner fired one
+   synchronous IPC command per frame, each one asking the window four questions
+   and throwing the answer away; and putting `measured` back into the filled
+   branch would not do instead, because a filled root is `height: 100vh` and its
+   measurement moves with the viewport on every frame of that same drag. */
 watch(
   () =>
-    filled.value
+    filled.value && reported.value
       ? [told.value, title.value]
       : [told.value, measured.value, viewport.value, title.value],
   async () => {
     if (!told.value || measured.value <= 0) return
     const latched = await sizeDialogWindow(props.kind, measured.value, viewport.value, title.value)
+    /* Said after the call rather than before it, so that it means what it says:
+       a real measurement has gone over, which is what shows the window. */
+    reported.value = true
     /* Only ever upwards. A call that failed answers false, and a window already
        filled must not fall back to measuring itself because one report did not
        arrive. */

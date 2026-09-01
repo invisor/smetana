@@ -426,18 +426,47 @@ fn window_title(name: &str) -> String {
 /// the next window of that kind, which would then never be sized by anything:
 /// built at the provisional height, refused a `set_size` by the latch, and shown
 /// as a title bar with a scroll bar under it.
+/// **Every size in here is in whole logical points**, which is the unit the
+/// file keeps and the unit `set_size` is given. Physical pixels were the earlier
+/// choice and were wrong for one reason: they change when a window is dragged
+/// between displays of different scale. tao raises `ScaleFactorChanged` and then
+/// a `Resized` carrying a new physical size for an unchanged logical one, and a
+/// comparison in pixels reads that as somebody halving the window — latching a
+/// dialog nobody had touched, on exactly the multi-monitor setup
+/// `remembered_size`'s clamp exists to serve. In points the two sizes are equal
+/// and the event says nothing, which is the truth about it.
 #[derive(Debug, Default, Clone, Copy)]
 struct DialogWindowState {
+    /// The last size we know was ours: what the window came to after a
+    /// `set_size`, or what a hand left it at. A drag is measured against this
+    /// rather than against the previous event, so that a corner nudged a point
+    /// at a time accumulates instead of staying inside `hand_moved`'s slack for
+    /// ever.
     baseline: (u32, u32),
-    /// The logical size, in whole points, that our last `set_size` asked for.
-    /// Kept only to know whether that call could have produced an event at all:
-    /// asking for the size the window already has changes nothing and is
-    /// answered with nothing, which is the ordinary case in the fit phase.
+    /// What our last `set_size` asked for. Kept only to know whether that call
+    /// could have produced an event at all: asking for the size the window
+    /// already has changes nothing and is answered with nothing, which is the
+    /// ordinary case in the fit phase.
     requested: (u32, u32),
-    /// Whether a `Resized` of our own making is still owed to us. See
-    /// `resize_is_the_hand` for why this and not the baseline is what decides.
-    expecting: bool,
+    /// How many `Resized` events of our own making are still owed to us. A count
+    /// and not a flag, because two `set_size` calls for two different sizes can
+    /// both be outstanding: on GTK the event comes back from the compositor's
+    /// configure round trip, while the next IPC message from the webview needs
+    /// no such round trip and can overtake it. A flag raised twice and spent
+    /// once would leave the second event to be judged against the first one's
+    /// baseline, and latch. It is bounded by the number of distinct-size
+    /// requests in flight, which is what the `requested` gate above buys.
+    expecting: u32,
+    /// Whether anything computed may still size this window. One-way.
     latched: bool,
+    /// Whether a **hand** moved this window, which is a narrower thing than
+    /// `latched` and the one the close-write asks about. A window opened at a
+    /// remembered size is latched from birth without anybody touching it, so
+    /// writing its size back on close would overwrite the person's preference
+    /// with whatever `remembered_size` clamped it to on this monitor — a size
+    /// dragged out on an external display would be quietly cut down to the
+    /// laptop's by one open and close, and not come back.
+    moved_by_hand: bool,
 }
 
 static DIALOG_WINDOWS: Mutex<BTreeMap<String, DialogWindowState>> = Mutex::new(BTreeMap::new());
@@ -445,21 +474,37 @@ static DIALOG_WINDOWS: Mutex<BTreeMap<String, DialogWindowState>> = Mutex::new(B
 /// Records a `set_size` of ours: what we asked for, what the window became, and
 /// that an event is now owed to us.
 ///
-/// The flag is raised only when the request differs from the last one, and that
-/// is what keeps it honest rather than permanently standing: a `set_size` to the
-/// size the window already has produces no `Resized` at all, and in the fit
-/// phase that is most of them — the page reports on every content change and the
-/// arithmetic mostly recomputes to the same number. A flag left up by one of
-/// those would swallow the first event of a real drag.
+/// The count is raised only when the request differs from the last one, and that
+/// is what keeps it bounded: a `set_size` to the size the window already has
+/// produces no `Resized` at all, and in the fit phase that is most of them — the
+/// page reports on every content change and the arithmetic mostly recomputes to
+/// the same number. Counting those would leave a total nothing ever spends,
+/// swallowing real drag events for the life of the window.
 fn note_our_size(kind: &str, requested: (u32, u32), became: (u32, u32)) {
     if let Ok(mut windows) = DIALOG_WINDOWS.lock() {
         let state = windows.entry(kind.to_string()).or_default();
         if state.requested != requested {
             state.requested = requested;
-            state.expecting = true;
+            state.expecting = state.expecting.saturating_add(1);
         }
         state.baseline = became;
     }
+}
+
+/// The entry `dialog_window_open` starts a window's life with.
+///
+/// A whole fresh value rather than a field set on whatever was there, and pure
+/// so that it can be tested: the map outlives every window in it, and the
+/// previous window of this kind may have left a latch standing — dragged, then
+/// closed inside the debounce, so no size ever reached the file. Reaching in to
+/// set one field would leave that latch, and the new window, built at the
+/// provisional height with no size kept, would be refused its one `set_size` and
+/// shown 120 points tall for the rest of the session.
+fn open_entry(windows: &mut BTreeMap<String, DialogWindowState>, kind: &str, kept: bool) {
+    windows.insert(
+        kind.to_string(),
+        DialogWindowState { latched: kept, ..DialogWindowState::default() },
+    );
 }
 
 /// Records what the window came to when nothing of ours asked it to — the
@@ -482,12 +527,23 @@ fn logical_inner(window: &tauri::WebviewWindow) -> Option<settings::model::Dialo
     })
 }
 
-/// Whether this kind's window has been given a size by hand.
+/// Whether anything computed may still size this kind's window.
 fn is_latched(kind: &str) -> bool {
     DIALOG_WINDOWS
         .lock()
         .ok()
         .and_then(|windows| windows.get(kind).map(|state| state.latched))
+        .unwrap_or(false)
+}
+
+/// Whether a hand has moved this kind's window during the life of the window
+/// that is open now. Narrower than `is_latched`, and `moved_by_hand` records
+/// what the difference is for.
+fn was_moved_by_hand(kind: &str) -> bool {
+    DIALOG_WINDOWS
+        .lock()
+        .ok()
+        .and_then(|windows| windows.get(kind).map(|state| state.moved_by_hand))
         .unwrap_or(false)
 }
 
@@ -509,11 +565,11 @@ fn is_latched(kind: &str) -> bool {
 /// `settings.json` for a window nobody had touched. It is not a race there: it
 /// is a deterministic read of a stale cache.
 ///
-/// So the deciding signal is `expecting`, raised beside every `set_size` of ours
-/// and spent by the first event after it, whatever size that event carries —
-/// which is also what covers the OS clamping a request, on every platform at
-/// once, where the read-back only covered it on macOS. The baseline is kept
-/// beside it as a second signal, for everything after that first event.
+/// So the deciding signal is `expecting`, counted up beside every `set_size` of
+/// ours and spent by the events that follow, whatever size they carry — which is
+/// also what covers the OS clamping a request, on every platform at once, where
+/// the read-back only covered it on macOS. The baseline is kept beside it as a
+/// second signal, for everything after those events.
 ///
 /// The minimised case is the third guard and belongs to Windows: tao's
 /// `WM_SIZE` arm sends `Resized` for every `WM_SIZE`, `SIZE_MINIMIZED` included,
@@ -536,7 +592,7 @@ fn resize_is_the_hand(state: &DialogWindowState, now: (u32, u32)) -> bool {
     // An event we asked for. Its size is not compared with anything, which is
     // the whole point: what the window became is the platform's answer, and on
     // one of them it is the only correct one available.
-    if state.expecting {
+    if state.expecting > 0 {
         return false;
     }
     hand_moved(state.baseline, now)
@@ -544,9 +600,17 @@ fn resize_is_the_hand(state: &DialogWindowState, now: (u32, u32)) -> bool {
 
 /// Whether two sizes are far enough apart to be different sizes.
 ///
-/// A point of slack on each axis, because a size goes out logical and comes back
-/// physical and the conversion rounds. Nothing but `resize_is_the_hand` above
-/// should call this; the rule it is part of lives there.
+/// Both are whole logical points, and the slack of one on each axis is what
+/// survives the rounding between them and the physical pixels every one of these
+/// numbers was carried in: a size is set in points, delivered as pixels and
+/// divided back by a scale factor that is not always a whole number.
+///
+/// It is slack against *rounding* and nothing else, which is why the baseline it
+/// is given is the last size known to be ours rather than the previous event's:
+/// measured frame to frame, a corner dragged one point at a time would never
+/// leave the slack, and a window nudged slowly would be re-fitted back out from
+/// under the hand. Nothing but `resize_is_the_hand` above should call this; the
+/// rule it is part of lives there.
 fn hand_moved(baseline: (u32, u32), now: (u32, u32)) -> bool {
     baseline.0.abs_diff(now.0) > 1 || baseline.1.abs_diff(now.1) > 1
 }
@@ -623,18 +687,10 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
             .unwrap_or((f64::MAX, f64::MAX));
         remembered_size((size.width as f64, size.height as f64), width, monitor)
     });
-    // A whole fresh entry rather than a field set on whatever was there. The map
-    // outlives its windows, and the previous window of this kind may have left a
-    // latch standing: dragged, then closed inside the debounce below, so no size
-    // reached the file and `settings::dialog_size` answers `None` here. Reaching
-    // in to set one field would leave that latch, and this window — built at the
-    // provisional height with no size kept — would be refused its one `set_size`
-    // and shown 120 points tall for ever. `DialogWindowState` records the rest.
+    // A whole fresh entry for a whole fresh window — `open_entry` above carries
+    // the argument, and is where it is so that a test can reach it.
     if let Ok(mut windows) = DIALOG_WINDOWS.lock() {
-        windows.insert(
-            kind.clone(),
-            DialogWindowState { latched: kept.is_some(), ..DialogWindowState::default() },
-        );
+        open_entry(&mut windows, &kind, kept.is_some());
     }
     let (built_width, built_height) = kept.unwrap_or((width, PROVISIONAL_HEIGHT));
     let fill = if kept.is_some() { "&fill=1" } else { "" };
@@ -703,11 +759,17 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
             // has no backstop, so the last chance to read the size is taken
             // here, while the window is still there to be asked.
             //
-            // Only for a window somebody set the size of. An untouched dialog
-            // must leave no entry behind: a kind with no entry opens fitted,
-            // and that is today's behaviour to the letter.
+            // Only for a window a **hand** moved, which is not the same as a
+            // latched one and is the whole of this guard. A window opened at a
+            // remembered size is latched from birth, so asking `is_latched` here
+            // would write its size back on every close — including the size
+            // `remembered_size` had clamped it to for this monitor. Open a
+            // dialog dragged out on an external display once on the laptop,
+            // close it, and the preference would be gone for good. An untouched
+            // dialog must leave no entry behind at all: a kind with no entry
+            // opens fitted, and that is today's behaviour to the letter.
             WindowEvent::CloseRequested { .. } => {
-                if !is_latched(&resized_kind) {
+                if !was_moved_by_hand(&resized_kind) {
                     return;
                 }
                 let Some(window) =
@@ -728,7 +790,21 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
                 });
             }
             WindowEvent::Resized(size) => {
-                let now = (size.width, size.height);
+                // In points, and the scale factor is read now rather than
+                // remembered, so that an event arriving straight after a
+                // `ScaleFactorChanged` is converted by the factor it was
+                // measured under. `DialogWindowState` records why the whole
+                // comparison moved out of pixels.
+                let Some(window) =
+                    app_handle.get_webview_window(&format!("{DIALOG_PREFIX}{resized_kind}"))
+                else {
+                    return;
+                };
+                let Ok(scale) = window.scale_factor() else {
+                    return;
+                };
+                let now = size.to_logical::<f64>(scale);
+                let now = (now.width.round() as u32, now.height.round() as u32);
                 // The decision and the record it leaves, under one lock.
                 //
                 // The latch is set here and the size is written later. The two
@@ -743,13 +819,25 @@ pub fn dialog_window_open(app: AppHandle, kind: String, width: f64) -> Result<()
                     let state = windows.entry(resized_kind.clone()).or_default();
                     let hand = resize_is_the_hand(state, now);
                     // A collapsed size is a minimise and says nothing about how
-                    // big this window is, so it leaves no record: neither a
-                    // baseline the next event would be measured against, nor a
-                    // spent flag, since the event we are owed may still be due.
+                    // big this window is, so it leaves no record at all: neither
+                    // a baseline, nor a spent count, since the events we are
+                    // owed may still be due.
                     if now.0 != 0 && now.1 != 0 {
-                        state.baseline = now;
-                        state.expecting = false;
-                        state.latched |= hand;
+                        if state.expecting > 0 {
+                            // One of ours. What the window became is the new
+                            // baseline whatever we asked for, which is the whole
+                            // point of counting rather than comparing.
+                            state.expecting -= 1;
+                            state.baseline = now;
+                        } else if hand {
+                            state.latched = true;
+                            state.moved_by_hand = true;
+                            state.baseline = now;
+                        }
+                        // Otherwise it is inside the slack of a baseline we
+                        // already hold, and that baseline is exactly what must
+                        // not move: a drag of one point per event has to
+                        // accumulate against the last size known to be ours.
                     }
                     hand
                 };
@@ -893,7 +981,13 @@ pub fn dialog_window_size(
         // an event is owed to us at all; the read-back is the second signal, and
         // on the one platform where it is a stale cache it is simply the size
         // the next event will be compared against once the flag is spent.
-        let became = window.inner_size().map(|size| (size.width, size.height)).unwrap_or_default();
+        let became = window
+            .inner_size()
+            .map(|size| {
+                let size = size.to_logical::<f64>(scale);
+                (size.width.round() as u32, size.height.round() as u32)
+            })
+            .unwrap_or_default();
         note_our_size(
             &kind,
             (want.width.round() as u32, want.height.round() as u32),
@@ -902,10 +996,8 @@ pub fn dialog_window_size(
     } else if first_paint {
         // Built at the remembered size and never resized since, so there is
         // nothing to set — but the baseline still has to hold what the window
-        // actually became.
-        if let Ok(size) = window.inner_size() {
-            note_baseline(&kind, (size.width, size.height));
-        }
+        // actually became, in the points everything in that record is kept in.
+        note_baseline(&kind, (inner.width.round() as u32, inner.height.round() as u32));
     }
 
     let _ = window.set_title(&title);
@@ -1218,9 +1310,10 @@ pub fn persist_geometry(app: &AppHandle) {
 mod tests {
     use super::{
         compare_query, drag_drop_space, hand_moved, height_to_set, image_query, kind_query,
-        remembered_size, resize_is_the_hand, tab_query, window_chrome, window_title,
+        open_entry, remembered_size, resize_is_the_hand, tab_query, window_chrome, window_title,
         DialogWindowState,
     };
+    use std::collections::BTreeMap;
 
     /// The two words this command may answer with, named here in full because
     /// they are a contract with `src/components/shell/windowChrome.js` and
@@ -1435,24 +1528,61 @@ mod tests {
         DialogWindowState { baseline, ..DialogWindowState::default() }
     }
 
-    /// The event our own `set_size` is owed, and the whole reason the flag
+    /// The event our own `set_size` is owed, and the whole reason the count
     /// decides rather than the baseline: on GTK the size read back after a
     /// `set_size` is the one from *before* it, so the event that follows
     /// carries a size the baseline has never held. Compared, it says "hand" —
-    /// on every dialog, on its first content sizing, for ever. The flag says
+    /// on every dialog, on its first content sizing, for ever. The count says
     /// "ours" whatever size it carries, which is also what covers the OS
     /// clamping a request on any platform.
     #[test]
     fn the_event_our_own_set_size_is_owed_is_never_the_hand() {
         let state = DialogWindowState {
             baseline: (880, 632),
-            expecting: true,
+            expecting: 1,
             ..DialogWindowState::default()
         };
         assert!(
             !resize_is_the_hand(&state, (880, 1006)),
             "a stale read-back makes our own sizing look like a 374-point drag"
         );
+    }
+
+    /// Two `set_size` calls can be outstanding at once, and on GTK the second
+    /// can be *asked for* before the first is answered: the event comes back
+    /// from the compositor's configure round trip while the next IPC message
+    /// from the webview needs no round trip at all. A flag raised twice and
+    /// spent once would leave the second event judged against the first one's
+    /// baseline, and latch a window nobody touched. Both are owed, so both are
+    /// ours.
+    #[test]
+    fn two_sizings_in_flight_are_both_ours() {
+        let mut state = DialogWindowState {
+            baseline: (440, 300),
+            expecting: 2,
+            ..DialogWindowState::default()
+        };
+        assert!(!resize_is_the_hand(&state, (440, 380)), "the first is owed");
+        state.expecting -= 1;
+        state.baseline = (440, 380);
+        assert!(!resize_is_the_hand(&state, (440, 460)), "and so is the second");
+        state.expecting -= 1;
+        state.baseline = (440, 460);
+        assert!(
+            resize_is_the_hand(&state, (700, 460)),
+            "nothing is owed now, so the next one is judged on its size"
+        );
+    }
+
+    /// A size in points does not change when a window is dragged between
+    /// displays of different scale, and that is why the whole comparison is in
+    /// points: tao raises `ScaleFactorChanged` and then a `Resized` carrying a
+    /// new physical size for an unchanged logical one, which in pixels reads as
+    /// somebody halving the window.
+    #[test]
+    fn crossing_between_displays_of_different_scale_is_not_the_hand() {
+        // 880x632 physical at 2x and 440x316 physical at 1x are one size.
+        assert!(!resize_is_the_hand(&settled((440, 316)), (440, 316)));
     }
 
     /// And once it is spent, the next one is judged on its size again.
@@ -1480,17 +1610,46 @@ mod tests {
         assert!(!resize_is_the_hand(&settled((0, 0)), (440, 120)));
     }
 
-    /// A fresh entry is what `dialog_window_open` writes over the old one, and
-    /// an unlatched window is what it has to come to: a latch left behind by a
-    /// window that was dragged and closed too quickly to be written would
-    /// otherwise refuse this one its only `set_size`.
+    /// What a dead window left behind must not reach the next one. The map
+    /// outlives its windows, and the case this is about is reachable: drag a
+    /// dialog, close it inside the 500 ms debounce, and the latch stands with
+    /// nothing written to the file — so the next window of that kind opens with
+    /// no size kept, and a latch inherited from a window that no longer exists
+    /// would refuse it the one `set_size` that ever fits it to its content.
     #[test]
-    fn a_fresh_entry_is_not_latched_and_owes_nothing() {
-        let state = DialogWindowState::default();
-        assert!(!state.latched);
-        assert!(!state.expecting);
-        assert_eq!(state.baseline, (0, 0));
-        assert_eq!(state.requested, (0, 0));
+    fn opening_a_window_clears_what_the_last_one_left() {
+        let mut windows = BTreeMap::new();
+        windows.insert(
+            "run".to_string(),
+            DialogWindowState {
+                baseline: (880, 632),
+                requested: (880, 632),
+                expecting: 1,
+                latched: true,
+                moved_by_hand: true,
+            },
+        );
+
+        open_entry(&mut windows, "run", false);
+
+        let state = windows.get("run").expect("the entry is written, not removed");
+        assert!(!state.latched, "a latch from a window that is gone must not reach this one");
+        assert!(!state.moved_by_hand);
+        assert_eq!(state.expecting, 0, "no event is owed to a window that has not been sized");
+        assert_eq!(state.baseline, (0, 0), "and nothing of this window's size is known yet");
+    }
+
+    /// The other half: a window that *is* opening at a remembered size starts
+    /// latched, because nothing computed may size it — and still without a
+    /// hand against it, which is what keeps its size off the disk on a close
+    /// nobody dragged anything during.
+    #[test]
+    fn opening_at_a_remembered_size_starts_latched_but_untouched() {
+        let mut windows = BTreeMap::new();
+        open_entry(&mut windows, "review-changes", true);
+        let state = windows.get("review-changes").expect("written");
+        assert!(state.latched);
+        assert!(!state.moved_by_hand, "nobody has touched this window yet");
     }
 
     /// A viewport larger than the window's inner size is not something a window

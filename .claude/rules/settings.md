@@ -142,7 +142,7 @@ reach an editor somebody already has open is a CodeMirror compartment rather tha
 (`components/files/editor/compartments.js`, `.claude/rules/files-and-editor.md`), so the caret, the
 selection and the undo history survive the flip.
 
-`git` is the second global section and holds two fields, both **shipped on**, and what they have in
+`git` is a global section and holds two fields, both **shipped on**, and what they have in
 common is the question: what may this app do to a person's repositories without asking each time.
 
 `autoFetch` is the first, and it is the answer to a question no other setting here asks: whether this
@@ -186,7 +186,7 @@ worktree because somebody is coming to look, a task waiting on a live check keep
 not closed yet, and a worktree that refuses to go — dirty, locked — is a line in the report and never
 a stop.
 
-`notifications` is the third global section, and it holds four fields: the two sounds —
+`notifications` is a global section too, and it holds four fields: the two sounds —
 `runFinished` and `needsAttention`, each one of `off`, `sound-1` … `sound-4` — and two booleans
 beside them, `onlyWhenUnfocused` and `showReport`. Global on `git`'s argument exactly: a
 noise is a fact about a person and a room rather than about one repository. Both sounds ship as a sound
@@ -238,7 +238,7 @@ caption rather than under it: a notification is what the app says while nobody i
 switch decides what it opens when somebody is. It sat inside that group at first and read as a third
 kind of announcement beside the two sounds.
 
-`window` is the fourth global section and holds one field, `restoreGeometry`, **shipped on** —
+`window` is a global section and holds one field, `restoreGeometry`, **shipped on** —
 today's behaviour to the letter, since the main window has opened where it was left since before
 there was a switch over it. Global on `git`'s argument, one step shorter: there is one main window,
 and where it sits is a fact about a person's screen. What the switch reaches is the *restoring*
@@ -262,7 +262,7 @@ flat message as `restoreGeometry`, and `applyPatch` checks the type and nothing 
 the whole point of the field, so a coercion would turn a malformed event into a deliberate-looking
 "off".
 
-`dialogs` is the odd section of this file and the one to read before touching it: **it is Rust's,
+`dialogs` is the odd one among the global sections and the one to read before touching it: **it is Rust's,
 and it is the only section Rust writes.** It maps a dialog kind to `{ width, height }` in logical
 points — how big somebody dragged that kind of window — and it is global for `window`'s reason
 exactly, one step further: how big a person likes a window is a fact about their screen and not
@@ -293,7 +293,7 @@ already uses. `MIN_DIALOG_HEIGHT` (120) in `window.rs` is what the *window* is b
 can be made wider but never narrower. The two share a number and not a purpose; neither is the
 other's copy.
 
-`updates` is the fifth global section and holds one field, `autoCheck`, **shipped on** — and it is
+`updates` is a global section and holds one field, `autoCheck`, **shipped on** — and it is
 the second switch in this file over whether the app may open a socket by itself, `git.autoFetch`
 being the first. A section rather than a flat field on `window`'s precedent: one field is already
 the house shape, the key names the subsystem, and a second update preference later has somewhere to
