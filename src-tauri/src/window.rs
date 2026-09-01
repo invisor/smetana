@@ -648,6 +648,38 @@ pub fn window_chrome() -> &'static str {
     }
 }
 
+/// Which units and origin a drag-drop event's `position` arrives in, as one of
+/// the two names `src/components/terminal/dropPoint.js` holds.
+///
+/// Tauri types that field `PhysicalPosition` on every platform, and on two of
+/// the three it is not physical at all. wry reads the point out of the toolkit
+/// and `tauri-runtime-wry` passes it through unscaled, so what arrives is
+/// whatever the toolkit measures in: on macOS `draggingLocation()` against the
+/// webview's `frame()`, both of which AppKit states in points — the same
+/// `frame()` wry itself reads back as a `LogicalSize` in `WebView::bounds` — and
+/// on Linux GTK's `drag-motion` widget coordinates, which are logical too. Only
+/// Windows reports device pixels, from `ScreenToClient` on the client area.
+///
+/// It matters because the front end divides by `devicePixelRatio` to reach the
+/// CSS pixels `document.elementFromPoint` reads: on a Retina Mac that division
+/// halved a point that was already CSS pixels, and the panel took a drop only
+/// where the halved point happened to land back inside it.
+///
+/// A compile-time fact rather than a runtime one, for the same reason
+/// `window_chrome` above is one: the front end cannot ask what it was built
+/// for, and a user-agent string is a guess.
+#[tauri::command]
+pub fn drag_drop_space() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "physical"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "logical"
+    }
+}
+
 /// Subscribes the main window to writing its own geometry.
 ///
 /// There may be no window — a configuration without `main`, a headless run;
@@ -686,7 +718,7 @@ pub fn persist_geometry(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_query, height_to_set, kind_query, tab_query, window_chrome};
+    use super::{compare_query, drag_drop_space, height_to_set, kind_query, tab_query, window_chrome};
 
     /// The two words this command may answer with, named here in full because
     /// they are a contract with `src/components/shell/windowChrome.js` and
@@ -706,6 +738,26 @@ mod tests {
         assert_eq!(window_chrome(), "traffic-lights");
         #[cfg(not(target_os = "macos"))]
         assert_eq!(window_chrome(), "buttons");
+    }
+
+    /// The two words this command may answer with, named here in full for the
+    /// reason the pair above are: they are a contract with
+    /// `src/components/terminal/dropPoint.js`, and that module falls back to
+    /// dividing by the device pixel ratio for a word it has not heard of. A
+    /// rename on either side therefore costs the fix rather than failing —
+    /// on a Retina Mac the agent panel goes back to taking a drop only over
+    /// part of itself.
+    #[test]
+    fn the_front_end_is_told_which_units_a_drop_arrives_in() {
+        assert!(
+            matches!(drag_drop_space(), "logical" | "physical"),
+            "drag_drop_space answered {:?}, which components/terminal/dropPoint.js reads as physical",
+            drag_drop_space()
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(drag_drop_space(), "physical");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(drag_drop_space(), "logical");
     }
 
     #[test]
