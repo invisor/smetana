@@ -126,6 +126,41 @@ pub fn updates_auto_check(path: &Path) -> bool {
     load(path).0.updates.auto_check
 }
 
+/// How big one dialog window was left, and nothing else out of the file. The
+/// shape of `agent` above, one section over, and read from the disk at the
+/// moment the window opens rather than once at start — the same reason
+/// `updates_auto_check` is: it is what makes a size chosen a minute ago apply
+/// to the next window without a restart.
+///
+/// `None` means nobody has ever dragged this kind of window, which is the
+/// ordinary case and asks for the fitted height. A missing or unreadable file
+/// answers `None` too, which is the same request.
+pub fn dialog_size(path: &Path, kind: &str) -> Option<super::model::DialogSize> {
+    load(path).0.dialogs.get(kind).copied()
+}
+
+/// Keeps how big one dialog window was left.
+///
+/// The file is re-read on the way in, exactly as `settings_save` re-reads it:
+/// the front end writes the same file from the other side, and a write built on
+/// a copy taken at startup would put back whatever it held then.
+pub fn remember_dialog_size(
+    path: &Path,
+    kind: &str,
+    size: super::model::DialogSize,
+) -> Result<(), String> {
+    let (mut settings, problem) = load(path);
+    // The asymmetry `settings_save` explains, and for its reason: a broken or
+    // too-new file has already gone to `.bak` and may be written over, while an
+    // unreadable one must not be erased on the strength of a window size.
+    if matches!(problem, Some(Problem::Unreadable)) {
+        return Err(format!("{}: the existing file could not be read", path.display()));
+    }
+    settings.dialogs.insert(kind.to_string(), size);
+    settings.validate();
+    save(path, &settings)
+}
+
 /// The write is atomic: a neighbouring file first, then a rename. Otherwise a
 /// break halfway through would leave half a JSON and the next launch would lose
 /// everything. The content is flushed to disk before the rename — without that

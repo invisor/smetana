@@ -718,7 +718,12 @@ export function installMockBackend() {
 
        Said once rather than per call, which is what the counter is for: the
        three are pressed and measured often enough that a line each would bury
-       whatever else the console was showing. */
+       whatever else the console was showing.
+
+       `dialog_window_size` answers a shape now — whether the window's size is
+       the person's — and `null` is still the right answer here: a browser tab
+       has no window to drag, so it is never filled, and `stores/app.js` reads a
+       missing answer as exactly that. */
     if (
       command === 'dialog_window_open' ||
       command === 'dialog_window_close' ||
@@ -732,6 +737,15 @@ export function installMockBackend() {
       }
       return null
     }
+    /* A window saying it has loaded and may be handed anything it missed. In a
+       browser there is no other window to have missed anything from, and the
+       three windows that make this call — settings, compare and image — are
+       each reachable here through their own `?view=`, so every one of them
+       makes it. Answered rather than refused for `settings_window_open`'s
+       reason exactly: nothing was promised and nothing was lost, and the loud
+       refusal at the bottom would put a line in the console every time one of
+       those three screens was opened for a look. */
+    if (command === 'window_show_ready') return null
     /* The login item. A read, so it answers — otherwise the General tab could
        not be opened under `npm run dev` without an error in the console, and
        the tab is checked by eye there. `supported: false` is the honest answer

@@ -114,3 +114,21 @@ pub fn updates_auto_check(app: &AppHandle) -> bool {
         .map(|path| file::updates_auto_check(&path))
         .unwrap_or_else(|| model::Settings::default().updates.auto_check)
 }
+
+/// How big one dialog window was left. `None` — including when there is no
+/// settings path at all — asks for the height the content comes to.
+pub fn dialog_size(app: &AppHandle, kind: &str) -> Option<model::DialogSize> {
+    file::dialog_size(&path(app)?, kind)
+}
+
+/// Keeps how big one dialog window was left. A failure is a warning and nothing
+/// more: the window on screen is the size the person made it either way, and
+/// what is lost is that size at the next opening.
+pub fn remember_dialog_size(app: &AppHandle, kind: &str, size: model::DialogSize) {
+    let Some(path) = path(app) else {
+        return;
+    };
+    if let Err(err) = file::remember_dialog_size(&path, kind, size) {
+        log::warn!("settings: the dialog size was not kept: {err}");
+    }
+}

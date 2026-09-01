@@ -85,6 +85,17 @@ const MAX_TAB_ORDER: usize = 200;
 /// the same number on the other side — three rows is a reminder, and a longer
 /// list would be a second search nobody asked for.
 const MAX_RECENT_TASKS: usize = 3;
+/// How small and how large a remembered dialog window may be, in logical
+/// points. A sanity bound on a hand-edited file rather than taste: the floor is
+/// below the shortest dialog this app draws, and the ceiling is past any
+/// display, so what these catch is a number nobody typed on purpose.
+const MIN_DIALOG_SIDE: u32 = 120;
+const MAX_DIALOG_SIDE: u32 = 10_000;
+/// How many dialog kinds may be remembered. The closed list of kinds lives in
+/// `src/views/dialogRegistry.js` and is deliberately not repeated here, so this
+/// is a ceiling on the count rather than a check of the names — it exists to
+/// stop a hand-edited file growing without bound.
+const MAX_DIALOGS: usize = 32;
 
 /// Appearance is about the person and their screen, hence shared by all projects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -263,6 +274,34 @@ pub struct WindowSettings {
 impl Default for WindowSettings {
     fn default() -> Self {
         Self { restore_geometry: true }
+    }
+}
+
+/// How big a person dragged one dialog window, in logical points.
+///
+/// Written only when a hand has moved the window: a kind with no entry here
+/// opens at the height its content comes to, which is what every dialog did
+/// before this section existed. `window.rs` holds the whole argument.
+///
+/// Global rather than under a project, on `WindowSettings`' argument exactly:
+/// how big somebody likes a window is a fact about their screen, not about a
+/// repository.
+///
+/// **Rust owns this section, and that is what keeps it.** It is deliberately
+/// absent from `ResolvedSettings`, so `merge` never assigns it and a save from
+/// the front end carries it through untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DialogSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Default for DialogSize {
+    /// Zero rather than a plausible size: a default here would be a size
+    /// nobody chose, and `sane_dialogs` drops it on the way in.
+    fn default() -> Self {
+        Self { width: 0, height: 0 }
     }
 }
 
@@ -887,6 +926,9 @@ pub struct Settings {
     /// unreadable.
     pub open_projects: Vec<String>,
     pub projects: BTreeMap<String, ProjectState>,
+    /// How big each dialog window was dragged to. At the root for the reason
+    /// `DialogSize` records.
+    pub dialogs: BTreeMap<String, DialogSize>,
 }
 
 impl Default for Settings {
@@ -911,6 +953,7 @@ impl Default for Settings {
             last_project: None,
             open_projects: Vec::new(),
             projects: BTreeMap::new(),
+            dialogs: BTreeMap::new(),
         }
     }
 }
@@ -1036,6 +1079,7 @@ pub fn parse(text: &str) -> Outcome {
         last_project: object.get("lastProject").and_then(Value::as_str).map(str::to_owned),
         open_projects: section(&object, "openProjects"),
         projects: projects(&object),
+        dialogs: dialogs(&object),
     };
     adopt_last_project(&mut settings);
     settings.validate();
@@ -1150,6 +1194,37 @@ fn projects(object: &Map<String, Value>) -> BTreeMap<String, ProjectState> {
         .collect()
 }
 
+/// Every entry stands on its own, exactly as `projects` does: one dialog size
+/// somebody hand-edited into nonsense must not take the others with it, which
+/// is what deserializing the whole map at once would do.
+fn dialogs(object: &Map<String, Value>) -> BTreeMap<String, DialogSize> {
+    let Some(map) = object.get("dialogs").and_then(Value::as_object) else {
+        return BTreeMap::new();
+    };
+    map.iter()
+        .filter_map(|(kind, value)| {
+            let size: DialogSize = serde_json::from_value(value.clone()).ok()?;
+            Some((kind.clone(), size))
+        })
+        .collect()
+}
+
+/// Drops what is not a window: a side outside the bounds, a key longer than an
+/// identifier, and everything past the ceiling on the count.
+fn sane_dialogs(dialogs: &mut BTreeMap<String, DialogSize>) {
+    dialogs.retain(|kind, size| {
+        kind.len() <= MAX_ID_LEN
+            && (MIN_DIALOG_SIDE..=MAX_DIALOG_SIDE).contains(&size.width)
+            && (MIN_DIALOG_SIDE..=MAX_DIALOG_SIDE).contains(&size.height)
+    });
+    while dialogs.len() > MAX_DIALOGS {
+        let Some(last) = dialogs.keys().next_back().cloned() else {
+            break;
+        };
+        dialogs.remove(&last);
+    }
+}
+
 /// A seam for migrations, not a migration.
 ///
 /// `parse` reads `version`, calls this function and stamps `CURRENT_VERSION`
@@ -1224,6 +1299,7 @@ impl Settings {
         for state in self.projects.values_mut() {
             state.validate();
         }
+        sane_dialogs(&mut self.dialogs);
         sane_list(&mut self.open_projects, MAX_OPEN, MAX_PATH_LEN);
         active_in(&mut self.last_project, &self.open_projects);
     }
@@ -3166,5 +3242,52 @@ mod tests {
         merge(&mut file, resolved, "2026-09-01T00:00:00Z".into());
         assert_eq!(file.subscription.pause_at, 95);
         assert_eq!(file.subscription.reduced_at, 0);
+    }
+
+    /// Nothing remembers a dialog size until somebody drags a window, so the
+    /// shipped state is an empty map rather than a set of defaults.
+    #[test]
+    fn no_dialog_size_is_remembered_by_default() {
+        assert!(Settings::default().dialogs.is_empty());
+        assert!(settings_of(r#"{"version":1}"#).dialogs.is_empty());
+    }
+
+    #[test]
+    fn a_remembered_dialog_size_reads_off_the_disk() {
+        let file =
+            settings_of(r#"{"version":1,"dialogs":{"review-changes":{"width":980,"height":720}}}"#);
+        assert_eq!(
+            file.dialogs.get("review-changes"),
+            Some(&DialogSize { width: 980, height: 720 })
+        );
+    }
+
+    /// One unusable entry loses itself and nothing else. The shape `projects`
+    /// already uses: every entry in a map stands on its own.
+    #[test]
+    fn an_entry_out_of_its_bounds_is_dropped_and_its_neighbour_survives() {
+        let file = settings_of(
+            r#"{"version":1,"dialogs":{"run":{"width":20,"height":30},"new-task":{"width":600,"height":500}}}"#,
+        );
+        assert_eq!(file.dialogs.get("run"), None, "20 points wide is not a window");
+        assert_eq!(
+            file.dialogs.get("new-task"),
+            Some(&DialogSize { width: 600, height: 500 })
+        );
+    }
+
+    /// The section belongs to Rust: it is not in `ResolvedSettings`, so a save
+    /// from the front end must carry it through untouched. Without this the
+    /// first settings write after a resize would forget every remembered size.
+    #[test]
+    fn a_save_from_the_front_end_keeps_the_remembered_sizes() {
+        let mut file = settings_of(r#"{"version":1,"dialogs":{"run":{"width":600,"height":400}}}"#);
+        let resolved = resolve(&file, None);
+        merge(&mut file, resolved, "2026-09-01T00:00:00Z".into());
+        assert_eq!(
+            file.dialogs.get("run"),
+            Some(&DialogSize { width: 600, height: 400 }),
+            "merge assigns the sections the front end owns and must not touch this one"
+        );
     }
 }

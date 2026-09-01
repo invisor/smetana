@@ -13,12 +13,14 @@
    time would let the file list belong to one commit and the bytes on screen to
    another, with nothing saying so. */
 import { invoke } from '@tauri-apps/api/core'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { reactive } from 'vue'
 
 /* Which pair an already-open window has just been re-aimed at. Not a setting
    and nothing to do with `settings.json`; a message about a window, which is
-   what `app.js`'s `settings:show` is too. */
+   what `app.js`'s `settings:show` is too. The name is spelled here and once
+   more on the far side, as `show_event` in `src-tauri/src/window.rs`, which is
+   the side that sends it. */
 export const COMPARE_SHOW = 'compare:show'
 
 export const compareState = reactive({
@@ -183,9 +185,16 @@ export async function select(path) {
    The pair travels twice, and both halves are needed for one press to work in
    both states — the shape `openSettingsWindow` records in `app.js`. A window
    being built reads it off the URL it already loads; an open one is focused
-   rather than rebuilt, so it never sees a new URL and the event is the only way
-   to reach it. A fresh window is not listening yet and simply misses the event,
-   having already read the parameters.
+   rather than rebuilt, so it never sees a new URL and `compare:show` is the
+   only way to reach it.
+
+   **That event is sent by Rust and not from here**, which is where this parts
+   company with what it used to do. Emitted on the line after the `invoke`, it
+   reached a window built by this very press only if that window had already
+   subscribed, which one a moment old has not; only Rust knows which of the two
+   branches the press took, so only Rust can hold the message back until the
+   window says it is listening — `announceWindowReady` in `stores/app.js` is the
+   window's half, and the header of `src-tauri/src/window.rs` carries the rest.
 
    In a browser there is no window to make: the mock has no `compare_window_open`
    and the menu item is a no-op there, exactly as the gear is. The window itself
@@ -196,18 +205,13 @@ export async function openCompareWindow(repo, branch) {
     await invoke('compare_window_open', { repo, branch })
   } catch (err) {
     console.error('[compare] the compare window did not open:', err)
-    return
-  }
-  try {
-    await emit(COMPARE_SHOW, { repo, branch })
-  } catch (err) {
-    /* The window is open on whatever it was showing, which is a smaller failure
-       than not opening at all. */
-    console.warn('[compare] the compare window was not told what to compare:', err)
   }
 }
 
-/* The compare window's half: which pair it has just been asked for. */
+/* The compare window's half: which pair it has just been asked for. The two
+   field names are the other half of a pair — `compare_show` in
+   `src-tauri/src/window.rs` writes them, and nothing mechanical holds the two
+   sides together. */
 export async function watchCompareTarget(onTarget) {
   return listen(COMPARE_SHOW, (event) =>
     onTarget(event.payload?.repo ?? null, event.payload?.branch ?? null)

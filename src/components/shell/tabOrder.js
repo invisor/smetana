@@ -8,10 +8,10 @@
    One thing here has no parallel on the board: **a leading run that does not
    move.** The board and the Agent tab are `kind: 'pinned'`, they come first, and
    nothing may be put to the left of them — which is also what keeps the
-   "+ New agent, terminal or task" button beside them, since `TabBar.vue` finds
-   that slot by the same leading run. The rule lives here rather than in the
-   component for exactly that reason: two readings of "which tabs are pinned"
-   would be two answers about where that button goes. */
+   "+ New task, agent, terminal or review" button beside them, since
+   `TabBar.vue` finds that slot by the same leading run. The rule lives here
+   rather than in the component for exactly that reason: two readings of "which
+   tabs are pinned" would be two answers about where that button goes. */
 
 /* Where the movable part of the row starts: the length of the leading run of
    pinned tabs. Read off the list rather than counted anywhere, the same way
