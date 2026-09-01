@@ -105,6 +105,19 @@ const view = reactive({
      the first answer arrives. */
   gitAutoFetch: true,
   gitRemoveWorktrees: true,
+  /* The Agents tab's two run limits, the percentages at which a run holds
+     itself back. Shipped as today's behaviour exactly — the same numbers as
+     `settings/model.rs`, `stores/settings.js` and the component's own prop
+     defaults, and those copies have to agree or the tab draws a threshold the
+     app is not using for the moment before the first answer arrives.
+
+     `0` is off, and it is a number rather than a `null` on purpose: `adopt()`
+     below skips a field whose value is `null`, so an `Option` here would mean a
+     threshold turned off in the app window never reached this screen and the
+     old number stood until the window was reopened. Do not "improve" either end
+     into one.  */
+  subscriptionPauseAt: 90,
+  subscriptionReducedAt: 75,
   /* Whether the main window opens where it was left. Shipped on, the same as
      `settings/model.rs` and `stores/settings.js`, for the reason the switch
      above it carries. */
@@ -583,6 +596,8 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :commit-language="view.commitLanguage"
           :report-language="view.reportLanguage"
           :agent-prompt="view.agentPrompt"
+          :subscription-pause-at="view.subscriptionPauseAt"
+          :subscription-reduced-at="view.subscriptionReducedAt"
           :show-report="view.notificationShowReport"
           :usage="usage.reading"
           :busy="usage.busy"
@@ -593,6 +608,8 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:commit-language="change({ commitLanguage: $event })"
           @update:report-language="change({ reportLanguage: $event })"
           @update:agent-prompt="changeAgentPrompt($event)"
+          @update:subscription-pause-at="change({ subscriptionPauseAt: $event })"
+          @update:subscription-reduced-at="change({ subscriptionReducedAt: $event })"
           @refresh="readUsage()"
         />
         <KanbanSettings
