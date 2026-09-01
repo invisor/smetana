@@ -2975,19 +2975,28 @@ const menuTargetStyle = {
       <!-- The three screens the meaning tier has, and the reason the heading
            follows the answer rather than the mode.
 
-           The first is the wait: type `date` and the counter is a spinner while
-           the heading stays `Matching text` and the rows stay the text ones —
-           the agent has ninety seconds, and a heading that moved first would
-           spend them lying. The second is an answer: type `date` and the heading
-           becomes `By meaning` with the agent's own two ids in its own order.
-           The third is a refusal, standing where the empty state would, in the
-           failed colour and in the words `OneshotError` wrote — the handoff
-           draws no error state at all, which is a hole rather than a decision.
+           The first is the wait, and it says so twice: the counter at the end
+           of the field is a spinner, and where the heading would stand there is
+           a waiting row — the same spinner, the words, and a count of seconds
+           climbing once a second, since the agent has ninety of them and only a
+           number that moves tells a slow answer from a hung one. Type `date`
+           and the rows under it stay the text matches, which is the point: the
+           heading does not become `By meaning` before there is a meaning, and
+           `⏎` opens a text match without waiting for the agent at all. Type
+           `zzzqqq` into the same frame for the other half of it — the waiting
+           row stands over an empty list, where `Nothing matched` would be an
+           answer nobody has given yet. The second is an answer: type `date` and
+           the heading becomes `By meaning` with the agent's own two ids in its
+           own order. The last is a refusal, standing where the empty state
+           would, in the failed colour and in the words `OneshotError` wrote —
+           the handoff draws no error state at all, which is a hole rather than
+           a decision.
 
-           `answered` with no ids at all is the fourth, and it is the one worth
-           looking at hardest: the agent looked and named nothing, which is a
-           legitimate answer and gets a sentence of its own rather than the text
-           mode's, because nobody checked any substrings. Type `date` into it. -->
+           `answered` with no ids at all is the one between them, and it is the
+           one worth looking at hardest: the agent looked and named nothing,
+           which is a legitimate answer and gets a sentence of its own rather
+           than the text mode's, because nobody checked any substrings. Type
+           `date` into it. -->
       <div :style="{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }">
         <div :style="paletteStateFrameStyle">
           <CommandPalette

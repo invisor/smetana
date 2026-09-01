@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, useId, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import StatusDot from '../status/StatusDot.vue'
 import {
@@ -7,7 +7,8 @@ import {
   filterIssues,
   relationOf,
   sectionLabel,
-  stepIndex
+  stepIndex,
+  waitingLabel
 } from './commandPalette.js'
 
 /* Finding a task, from the middle of the window rather than from a corner of the
@@ -34,9 +35,9 @@ const props = defineProps({
   /* Ids of the last few tasks somebody opened, newest first — what an empty
      query has to show, since a palette with nothing in it says nothing. */
   recent: { type: Array, default: () => [] },
-  /* The semantic question is out. Drawn as a spinner where the counter is, and
-     nowhere else: the rows and the heading must not move until there is an
-     answer to move them to. */
+  /* The semantic question is out. Drawn twice: the spinner where the counter
+     is, and the waiting row where the heading stands. The rows themselves must
+     not move until there is an answer to move them to. */
   pending: { type: Boolean, default: false },
   /* Why it was refused, already a sentence — `OneshotError` names six ways and
      every one of them is something a person can act on. */
@@ -108,6 +109,57 @@ const rows = computed(() => {
 
 const heading = computed(() => sectionLabel({ query: query.value, answered: props.answered }))
 
+/* How long the question has been out, in whole seconds, and the tick that moves
+   it. A timer is DOM rather than a rule, which is why only the number lives
+   here and the sentence around it is `waitingLabel`.
+
+   Measured against the moment the question went out rather than counted up one
+   per tick: an interval is not a clock — a busy main thread, or a laptop shut
+   halfway through a ninety-second wait, drops ticks — and a counter that lost
+   them would understate exactly the wait somebody is watching it for.
+
+   The clock runs only while the panel is both waiting and open. Closing the
+   palette does not withdraw the question, so `pending` can stand for another
+   minute over nothing anybody can see, and a second of that is a second of an
+   interval nobody is reading. Reopening picks the true elapsed time back up,
+   since `askedAt` survives the close and only a fresh question moves it. */
+const waited = ref(0)
+let askedAt = 0
+let ticker = null
+
+const tick = () => {
+  waited.value = Math.floor((Date.now() - askedAt) / 1000)
+}
+
+const stopTicking = () => {
+  if (ticker === null) return
+  clearInterval(ticker)
+  ticker = null
+}
+
+/* `immediate`, because the gallery mounts this component with `pending` already
+   true: a clock started only on the transition would sit at nought there for
+   good, in the one place any of this is ever looked at. */
+watch(
+  [() => props.pending, () => props.open],
+  ([pending, open], was) => {
+    stopTicking()
+    if (!pending) return
+    if (!was?.[0]) askedAt = Date.now()
+    if (!open) return
+    tick()
+    ticker = setInterval(tick, 1000)
+  },
+  { immediate: true }
+)
+
+/* The component outlives the panel — `open` is a prop and the dialog is a
+   `v-if` inside it — so unmounting is the last of the three ways this stops,
+   not the usual one. */
+onUnmounted(stopTicking)
+
+const waitLabel = computed(() => waitingLabel(waited.value))
+
 /* Silent while nothing is typed: the rows under an empty query are the recents,
    and counting those against the whole project answers a question nobody asked. */
 const counter = computed(() =>
@@ -126,6 +178,11 @@ const counter = computed(() =>
    the `v-else` of the spinner, and the heading lived inside the list's own
    `v-if`, so between them they announced nothing at all. */
 const announcement = computed(() => {
+  /* The seconds are deliberately left out of it, and this is the one place the
+     spoken text and the drawn one part company on purpose: a value changing
+     once a second inside `aria-live` is an announcement once a second, which is
+     a screen reader talking over itself for the whole of the wait. The eye
+     reads the count; speech gets the fact, once. */
   if (props.pending) return 'Asking the agent'
   if (!rows.value.length) return query.value.trim() ? 'Nothing matched' : ''
   return [heading.value, counter.value].filter(Boolean).join(', ')
@@ -133,8 +190,15 @@ const announcement = computed(() => {
 
 /* The empty state and the heading are never on screen together — one block
    saying one thing is the whole point of the redraw. The error takes this same
-   slot rather than adding a third. */
-const isEmpty = computed(() => !props.error && !!query.value.trim() && rows.value.length === 0)
+   slot rather than adding a third.
+
+   A question still in flight silences it too, and that is a correctness fix
+   rather than tidiness: "Nothing matched" is an answer, and the agent has not
+   given one yet. The error cannot collide with the wait — `searchSemantic`
+   clears it before it sends. */
+const isEmpty = computed(
+  () => !props.pending && !props.error && !!query.value.trim() && rows.value.length === 0
+)
 
 /* Two different sentences, because they are two different facts. Reusing the
    text one for a meaning answer would state something about substrings nobody
@@ -318,8 +382,9 @@ const counterStyle = {
   font: 'var(--weight-regular) var(--text-xs)/1 var(--font-mono)'
 }
 
-/* The same spinner every waiting control in this system draws. It is the single
-   signal the wait gets: the list does not blank, and the heading does not move. */
+/* The same spinner every waiting control in this system draws, and it is worn
+   twice over: once here at the end of the field, and once in the waiting row
+   below, which is the one a person actually looks at after `⌘⏎`. */
 const spinStyle = {
   flex: '0 0 auto',
   color: 'var(--attn-live)',
@@ -361,6 +426,32 @@ const headStyle = {
   textTransform: 'uppercase',
   letterSpacing: 'var(--tracking-caps)',
   font: 'var(--weight-regular) var(--text-2xs)/1.6 var(--font-mono)'
+}
+
+/* The wait, in the heading's own style and in the heading's own place.
+
+   Thirteen pixels of spinner at the end of the field was the whole of the
+   signal before, and it is not where anybody looks after pressing `⌘⏎` — they
+   look at the list. So the wait is said where the list is labelled, at the same
+   height and in the same type, and nothing below it moves: the text matches
+   stand until an answer lands, and `⏎` opens one without waiting for the agent
+   at all. The spinner alone would say no more than the corner did; the seconds
+   beside it are what tell a long answer from a hung one, against a deadline of
+   ninety of them. */
+const waitStyle = {
+  ...headStyle,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-2)',
+  /* The two properties the heading is not followed in, and they are the same
+     distinction `Panel.vue`'s `railTitleStyle` draws: caps and letter-spacing
+     mark the *name* of the group below — `RECENT`, `MATCHING TEXT` — and a name
+     is not what this row is. It is a sentence with an ellipsis and a numeral
+     that changes once a second, and shouted it reads `12S`, where the unit
+     turns into a letter. Everything else the heading gives is kept, because the
+     row has to stand at the heading's height and in its place. */
+  textTransform: 'none',
+  letterSpacing: 'var(--tracking-normal)'
 }
 
 /* The row is `--row-h` rather than the handoff's 30 and 24: the token already
@@ -546,8 +637,10 @@ const legendStyle = {
           :aria-activedescendant="rows.length ? rowId(sel) : undefined"
           @keydown="onKeydown"
         />
-        <!-- The wait's one signal. The rows and the heading stay exactly where
-             they were until there is an answer to move them to. -->
+        <!-- The corner's half of the wait, kept as it was: the field says the
+             question is out, and the waiting row below says how long for. The
+             rows themselves stay exactly where they were until there is an
+             answer to move them to. -->
         <Icon
           v-if="pending"
           name="loader-circle"
@@ -564,37 +657,44 @@ const legendStyle = {
         <span :style="liveStyle" aria-live="polite" aria-atomic="true">{{ announcement }}</span>
       </div>
 
-      <!-- Exactly one heading, and only over rows: a heading above an empty
-           state was two blocks competing for one job. It sits above the scroll
-           area rather than inside it, so it cannot be drawn over the row the
-           keyboard just scrolled to. -->
-      <template v-if="rows.length">
-        <div :style="headStyle">{{ heading }}</div>
-        <div ref="scroller" :style="scrollStyle">
-          <div :id="listId" role="listbox" :aria-label="heading">
-            <div
-              v-for="(hit, index) in rows"
-              :id="rowId(index)"
-              :key="hit.id"
-              role="option"
-              :aria-selected="index === sel"
-              :style="rowStyle(index === sel, hit.status)"
-              @mousedown.prevent
-              @mouseenter="sel = index"
-              @click="openRow(hit.id)"
-            >
-              <span :style="idStyle">{{ hit.id }}</span>
-              <span :style="titleStyle">{{ hit.title }}</span>
-              <span v-if="hit.relation" :style="relationStyle">
-                <Icon :name="hit.relation.icon" :size="12" />
-                <span>{{ hit.relation.label }}</span>
-              </span>
-              <span :style="statusStyle">{{ hit.status }}</span>
-              <StatusDot :status="hit.status" :size="8" />
-            </div>
+      <!-- Exactly one line here, ever: the wait while the question is out, the
+           heading over rows once it is back, and nothing at all when there are
+           no rows to label — a heading above an empty state was two blocks
+           competing for one job. The wait is drawn whatever the list is doing,
+           including over an empty one, since "Nothing matched" is an answer and
+           the agent has not given one. It sits above the scroll area rather
+           than inside it, so it cannot be drawn over the row the keyboard just
+           scrolled to. -->
+      <div v-if="pending" :style="waitStyle">
+        <Icon name="loader-circle" :size="12" :style="spinStyle" />
+        <span>{{ waitLabel }}</span>
+      </div>
+      <div v-else-if="rows.length" :style="headStyle">{{ heading }}</div>
+
+      <div v-if="rows.length" ref="scroller" :style="scrollStyle">
+        <div :id="listId" role="listbox" :aria-label="heading">
+          <div
+            v-for="(hit, index) in rows"
+            :id="rowId(index)"
+            :key="hit.id"
+            role="option"
+            :aria-selected="index === sel"
+            :style="rowStyle(index === sel, hit.status)"
+            @mousedown.prevent
+            @mouseenter="sel = index"
+            @click="openRow(hit.id)"
+          >
+            <span :style="idStyle">{{ hit.id }}</span>
+            <span :style="titleStyle">{{ hit.title }}</span>
+            <span v-if="hit.relation" :style="relationStyle">
+              <Icon :name="hit.relation.icon" :size="12" />
+              <span>{{ hit.relation.label }}</span>
+            </span>
+            <span :style="statusStyle">{{ hit.status }}</span>
+            <StatusDot :status="hit.status" :size="8" />
           </div>
         </div>
-      </template>
+      </div>
 
       <!-- Beside the rows rather than instead of them: a refusal leaves the text
            matches standing, and an error drawn only when the list is empty would

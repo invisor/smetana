@@ -5,7 +5,8 @@ import {
   relationOf,
   sectionLabel,
   shortId,
-  stepIndex
+  stepIndex,
+  waitingLabel
 } from '../../../src/components/shell/commandPalette.js'
 
 const issue = (over = {}) => ({
@@ -141,6 +142,26 @@ describe('counterLabel', () => {
 
   it('counts the shown against everything in scope', () => {
     expect(counterLabel(3, 128)).toBe('3 of 128')
+  })
+})
+
+describe('waitingLabel', () => {
+  /* The seconds are the whole reason the row exists: against a ninety-second
+     deadline they are what tells a long answer from a hung one. */
+  it('names the wait and how long it has lasted', () => {
+    expect(waitingLabel(0)).toBe('Asking the agent… 0s')
+    expect(waitingLabel(12)).toBe('Asking the agent… 12s')
+    expect(waitingLabel(89)).toBe('Asking the agent… 89s')
+  })
+
+  it('says whole seconds only, since it is read at a glance', () => {
+    expect(waitingLabel(3.7)).toBe('Asking the agent… 3s')
+  })
+
+  it('reads an impossible elapsed time as nought rather than drawing it', () => {
+    expect(waitingLabel(-4)).toBe('Asking the agent… 0s')
+    expect(waitingLabel(Number.NaN)).toBe('Asking the agent… 0s')
+    expect(waitingLabel(undefined)).toBe('Asking the agent… 0s')
   })
 })
 
