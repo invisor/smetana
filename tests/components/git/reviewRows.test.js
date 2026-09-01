@@ -195,15 +195,19 @@ describe('the effective pair', () => {
     expect(pairOf(form, '/p')).toEqual({ base: local('main'), head: local('feat/x') })
   })
 
-  /* Told nothing about the project, it drops the override and leaves the table
-     alone: a caller that names no repositories has not said that no repository
-     has the branch, it has said nothing, and reading the silence as "nowhere"
-     would empty the table of every row that follows the rule. */
-  it('leaves the table alone when it is told nothing about the project', () => {
+  /* With no branch list to consult it drops the override and leaves the table
+     alone. That silence is reachable — `stores/git.js` empties the list on a
+     failed `target_branches` and on a project change, and this is the one row
+     action that reads it without somebody having just picked out of it — and
+     read as an answer it would say no repository has the branch and collapse
+     the table to its overrides. */
+  it('leaves the table alone when there is no branch list to consult', () => {
     const form = withOverride(opened(), '/p')
-    const back = withoutOverride(form, '/p')
-    expect(back.overrides).toEqual({})
-    expect(back.repoIds).toEqual(['/p', '/p/admin'])
+    for (const context of [{}, { repos: REPOS }, { repos: REPOS, branches: [] }]) {
+      const back = withoutOverride(form, '/p', context)
+      expect(back.overrides).toEqual({})
+      expect(back.repoIds).toEqual(['/p', '/p/admin'])
+    }
   })
 
   it('has nothing to drop for a row that follows the rule', () => {
@@ -359,7 +363,19 @@ describe('adding and removing a repository', () => {
   it('adds nothing while there is no branch to check', () => {
     const empty = reviewForm(REPOS, null, { branches: BRANCHES })
     expect(withRepo(empty, '/p/shared')).toBe(empty)
-    expect(withRepo(opened(), '/p')).not.toBe(opened())
+  })
+
+  /* **Declining is answering with the very form it was given**, and the window
+     reads that identity to know the branch list must not open over a row that
+     was never added. Held in one reference on purpose: `opened()` builds a
+     fresh form every call, so comparing two of them asserts nothing at all. */
+  it('answers with the same form it was given when it declines', () => {
+    const form = opened()
+    expect(withRepo(form, '/p')).toBe(form)
+    expect(withRepo(form, '')).toBe(form)
+    const added = withRepo(form, '/p/shared')
+    expect(added).not.toBe(form)
+    expect(added.repoIds).toEqual(['/p', '/p/admin', '/p/shared'])
   })
 
   /* A pair left behind for a row that is not in the table would come back the

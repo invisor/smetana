@@ -293,12 +293,23 @@ const dropOverride = (form, repoId) => {
 export function withoutOverride(form, repoId, context = {}) {
   if (!isOverride(form, repoId) || isManual(form, repoId)) return form
   const next = dropOverride(form, repoId)
-  /* With nothing to ask about the project, the override goes and the table
-     stays as it is. A caller that names no repositories has not said that no
-     repository has the branch — it has said nothing — and reading the silence
-     as "nowhere" would empty the whole table of rule-following rows. The same
-     reading `reviewForm` takes of a branch list that has not landed. */
-  if (!list(context.repos).length) return next
+  /* With no branch list to consult, the override goes and the table stays as it
+     is.
+
+     The list is the evidence this decision is actually made from: `hasBranch`
+     reads `target_branches`' answer for a local head, and `stores/git.js`
+     empties `gitState.branches` both on a failed call and on a project change —
+     while `undo-2` is the one row action that consults that list without
+     somebody having just picked out of it. Read as an answer, the silence says
+     that no repository has the branch and collapses the table to its overrides.
+     It is not an answer, and this is the same reading `hasBranch` takes of a
+     remote list that has not landed: an absent entry is "not known" and never
+     "not there".
+
+     The repositories are deliberately not what is checked here. `repoIds` comes
+     from them, so an empty `repos` beside a table with rows in it is not a state
+     this window can be in, and a guard on it would be one nothing can reach. */
+  if (!list(context.branches).length) return next
   return {
     ...next,
     repoIds: reached(next, repoIdsWith(context.repos, next.head, context))

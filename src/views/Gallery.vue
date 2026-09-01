@@ -2579,12 +2579,20 @@ const menuTargetStyle = {
            these three carry enough for a browser about 2000px tall, which is an
            ordinary maximised window on a large display.
 
-           The tallest state is the one with the branch list open (about 500 for
-           the first, about 524 for the third, whose table is shorter), and not
-           the one each frame opens on. The busy frame is the exception and its
-           474 is its tallest: every control in it is off, so its list cannot be
-           opened at all. -->
-      <div :style="{ position: 'relative', height: '700px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           The tallest state is the branch list open over a **filled** form, and
+           it is **574** in both of the frames that can reach it, measured at
+           comfortable — not the state either one opens on, and not the 524 the
+           `New review` frame shows before a branch is picked. Once a branch is
+           picked the table fills and the notes block appears, and reopening the
+           list there costs the same 50px it costs in the first frame; that
+           frame's whole subject is that picking a branch fills the table, so
+           the state after the pick is the one to size it for. 574 plus 160 is
+           what makes both of them 740.
+
+           The busy frame is the exception at 680, and it is genuinely done:
+           every control in it is off, so its list cannot be opened and its 474
+           never moves. Compact is shorter everywhere and clears all three. -->
+      <div :style="{ position: 'relative', height: '740px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           :form="REVIEW_FORM"
@@ -2636,11 +2644,11 @@ const menuTargetStyle = {
            prop: the OS frame draws it, and a title written into the template
            would be silently overdrawn.
 
-           It is the tallest frame of the three and opens on the shortest state,
-           which is not a mistake: this is the door where the branch list is the
-           first thing anybody touches, and the list is what decides a frame's
-           height. -->
-      <div :style="{ position: 'relative', height: '720px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           It opens on the shortest state of the three and is sized like the
+           first, which is not a mistake: this is the door where the branch list
+           is the first thing anybody touches, and what decides a frame's height
+           is the list reopened after a branch has been picked. -->
+      <div :style="{ position: 'relative', height: '740px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           title="New review"
