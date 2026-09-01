@@ -65,6 +65,27 @@ pub fn run() {
     .plugin(
       tauri_plugin_window_state::Builder::default()
         .skip_initial_state("main")
+        // The dialog windows are not the plugin's, and it is not enough to skip
+        // restoring them. `restore_state` sets the size, sets the position and
+        // — with `StateFlags::VISIBLE` and a stored `visible: true`, which is
+        // what these entries hold — calls `show()`, from `on_window_ready`,
+        // long before the page has measured anything. So a dialog kind opened
+        // once before came up at its old geometry for a moment; worse,
+        // `dialog_window_size` decides first paint by `!is_visible()`, which
+        // that `show` made false, so such a window was never centred over the
+        // main window at all. Their size is kept in `settings.json` now, by the
+        // one rule that can tell a size somebody chose from one this app
+        // computed. `with_filter` and not `with_denylist`, because the denylist
+        // takes literal labels and the closed list of dialog kinds is the front
+        // end's (`src/views/dialogRegistry.js`).
+        //
+        // The prefix is named rather than repeated. It is `pub(crate)` for this
+        // one caller and reaches nothing outside the crate, which is the whole
+        // cost; the alternative was a third copy of the literal that builds the
+        // label and reads it back, and a copy that drifted would put these
+        // windows back under the plugin silently — which is the bug this filter
+        // is here to fix.
+        .with_filter(|label| !label.starts_with(crate::window::DIALOG_PREFIX))
         .build(),
     )
     // The login item, and nothing about it in `settings.json`: the operating
