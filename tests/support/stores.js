@@ -41,7 +41,8 @@ export async function loadStores() {
     notifications,
     updates,
     vcs,
-    compare
+    compare,
+    app
   ] =
     await Promise.all([
       import('vue'),
@@ -59,7 +60,8 @@ export async function loadStores() {
       import('../../src/stores/notifications.js'),
       import('../../src/stores/updates.js'),
       import('../../src/stores/vcs.js'),
-      import('../../src/stores/compare.js')
+      import('../../src/stores/compare.js'),
+      import('../../src/stores/app.js')
     ])
 
   built.push({ ipc, settings })
@@ -83,7 +85,8 @@ export async function loadStores() {
       notifications,
       updates,
       vcs,
-      compare
+      compare,
+      app
     }
   }
 }

@@ -34,7 +34,7 @@ import ImageViewer from '../components/overlays/ImageViewer.vue'
 import { EDITOR_FONT_DEFAULT, UI_FONT_DEFAULT, effectiveTheme } from '../appearance.js'
 import { paintRoot, usePrefersDark } from './useAppearance.js'
 import { readSharedSettings, watchSharedSettings } from '../stores/settings.js'
-import { closeWindow, watchImageShow } from '../stores/app.js'
+import { announceWindowReady, closeWindow, watchImageShow } from '../stores/app.js'
 import { readAttachment } from '../stores/attachments.js'
 
 const props = defineProps({
@@ -168,6 +168,15 @@ onMounted(async () => {
      itself, for the same reason: the settings are about how this window is
      painted and have nothing to do with which picture is in it. */
   show(props.path, props.name)
+  /* And only now: this window is listening, and the picture its URL named is
+     the one on screen. Anything the app sent while it was still loading — a
+     second thumbnail clicked before this window was up — is handed over on this
+     call and lands as an ordinary `image:show` through the subscription above.
+     Announcing before the line above would let the URL's picture, which is the
+     older of the two, be painted over the newer one; announcing before the
+     subscription would lose the very event this exists to deliver.
+     `stores/app.js` carries the whole argument. */
+  announceWindowReady()
   try {
     const stored = await readSharedSettings()
     if (!heard.value) adopt(stored, false)
