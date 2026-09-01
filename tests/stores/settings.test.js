@@ -853,6 +853,8 @@ describe('the settings window', () => {
       kanbanUnlimited: [],
       gitAutoFetch: true,
       gitRemoveWorktrees: true,
+      subscriptionPauseAt: 90,
+      subscriptionReducedAt: 75,
       restoreGeometry: true,
       updatesAutoCheck: true,
       notificationRunFinished: 'sound-1',
@@ -893,6 +895,8 @@ describe('the settings window', () => {
       kanbanUnlimited: [],
       gitAutoFetch: true,
       gitRemoveWorktrees: true,
+      subscriptionPauseAt: 90,
+      subscriptionReducedAt: 75,
       restoreGeometry: true,
       updatesAutoCheck: true,
       notificationRunFinished: 'sound-1',
@@ -989,5 +993,23 @@ describe('closing the window', () => {
     await vi.waitFor(() => expect(ipc.commands()).toContain('plugin:window|destroy'))
 
     expect(asked).toEqual([false])
+  })
+
+  it('the run gate thresholds ride out flat and come back', async () => {
+    settings.applyPatch({ subscriptionPauseAt: 95, subscriptionReducedAt: 0 })
+
+    expect(settings.settings.subscription).toEqual({ pauseAt: 95, reducedAt: 0 })
+    const shared = settings.sharedSettings()
+    expect(shared.subscriptionPauseAt).toBe(95)
+    /* Off has to travel as a number: `adopt()` in the settings window drops a
+       null, so a threshold turned off would never reach the screen. */
+    expect(shared.subscriptionReducedAt).toBe(0)
+  })
+
+  it('a threshold off the ladder leaves the one already held standing', async () => {
+    settings.applyPatch({ subscriptionPauseAt: 63 })
+    settings.applyPatch({ subscriptionReducedAt: '75' })
+
+    expect(settings.settings.subscription).toEqual({ pauseAt: 90, reducedAt: 75 })
   })
 })
