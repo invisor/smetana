@@ -50,10 +50,12 @@
    next one started — the loop re-reads the file every time round, which is what
    lets somebody watching a paused run lower the gate and have that run go on.
    The block below still says what a run would do *at this reading*, and Rust
-   computes it from these very numbers, so the two cannot disagree. Off is a
-   value like any other and means "do not pre-empt"; a run whose batch then dies
-   on a spent allowance still pauses and waits, which is `usage::spent`'s doing
-   and no setting reaches it.
+   computes it from the thresholds as they stood on disk when that reading was
+   taken. Nothing re-probes when one of these rows moves — a save is up to 400 ms
+   behind the choice — so a threshold changed just now reaches that sentence at
+   the next reading rather than at once. Off is a value like any other and means
+   "do not pre-empt"; a run whose batch then dies on a spent allowance still
+   pauses and waits, which is `usage::spent`'s doing and no setting reaches it.
 
    Plan and Status are gone rather than kept as dashes: `/usage` reports two
    percentages and two reset times and says nothing at all about a tariff, so
