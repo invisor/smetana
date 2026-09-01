@@ -28,8 +28,9 @@
    line all live in `branchPicker.js`, for the reason that whole family exists:
    a `.vue` file is the one thing no test in this repository can reach.
 
-   Nothing here is wired to the review window yet. Adding it is the window's own
-   task; this one builds the component and leaves it in the gallery. */
+   `ReviewChangesDialog.vue` is what draws it: once for the project's own pair
+   and once per row that keeps a pair of its own, in place of the table and
+   never over it. */
 import { computed, nextTick, ref, watch } from 'vue'
 import Icon from '../core/Icon.vue'
 import IconButton from '../core/IconButton.vue'

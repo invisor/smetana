@@ -253,19 +253,20 @@ const stopWaiting = setTimeout(() => {
    silently go nowhere. A name here that a guest does not declare costs nothing:
    it falls through as an inert listener for a DOM event that never fires.
 
-   `branch` is the review window's, and it is the one name here that is not a
-   person finishing with a dialog: it says which branch was picked on the
-   checked side of a lone row, and what comes back is the whole table rebuilt
-   around it — the rule that builds one lives in `reviewRows.js`, outside every
-   `.vue` file, and is called by the app window.
-
    `draft` is `new-task`'s, and it is the one name here that is not an answer at
    all: it is the dialog saying what is in it right now, so that a window closed
    by a project switch does not take the person's words with it. It travels
    rather than being answered here — a draft outlives the window it was written
    in, so the only side that can hold one is the side that is still there
-   afterwards, and it keeps them per project. */
-const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save', 'branch', 'draft']
+   afterwards, and it keeps them per project.
+
+   `branch` was here too, for the review window, and it is gone with the table
+   it belonged to: that window used to send the branch picked on the checked
+   side of a lone row so that the app window could rebuild the table around it.
+   The rules in `reviewRows.js` are pure and the window is handed the
+   repositories and the branch list, so it fills its own table now — one round
+   trip fewer between picking a branch and seeing the rows. */
+const EMITS = ['close', 'confirm', 'create', 'submit', 'resolve', 'rescope', 'save', 'draft']
 
 /* And the three that deliberately do not travel: `new-task`'s images, answered
    in this window by the store above. They are a separate list rather than a

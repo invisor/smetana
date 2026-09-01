@@ -1,18 +1,40 @@
 import { describe, expect, it } from 'vitest'
 import {
-  LOCAL,
-  ORIGIN,
+  FOLLOWS_THE_RULE,
+  NOT_IN_REVIEW,
+  NO_SUCH_BRANCH,
+  RULE_CAPTION,
+  RULE_CAPTION_EMPTY,
+  addableRepos,
+  branchesIn,
   canReview,
-  fetchFailedCaption,
   fetchFailures,
   fetchTargets,
-  fetchingCaption,
-  localNames,
+  footerSummary,
+  hasBranch,
+  isManual,
+  isOverride,
+  missingRepos,
+  oldestFetch,
+  overrideIds,
+  pairLabel,
+  pairOf,
+  pickerScope,
   refOf,
   reportPath,
+  repoIdsWith,
+  reviewForm,
+  reviewNotes,
   reviewPairs,
-  reviewRows,
-  withoutCaption
+  rowStatus,
+  ruleCaption,
+  sideLabel,
+  tableSummary,
+  withOverride,
+  withPick,
+  withRepo,
+  withoutOverride,
+  withoutRepo
 } from '../../../src/components/git/reviewRows.js'
 
 /* `vcsState.repos`' shape, and the names are the ones `[project].repos` gives —
@@ -30,30 +52,27 @@ const BRANCHES = [
   { name: 'feat/x', missing_in: ['shared'] }
 ]
 
-describe('reviewRows', () => {
-  it('gives a row to every repository that has the branch', () => {
-    const { rows } = reviewRows(REPOS, 'feat/x', { branches: BRANCHES })
-    expect(rows.map((r) => r.repo)).toEqual(['/p', '/p/admin'])
-    expect(rows.every((r) => r.head === 'feat/x')).toBe(true)
+const local = (ref) => ({ ref, remote: false })
+const origin = (ref) => ({ ref, remote: true })
+
+const opened = (branch = 'feat/x', options = {}) =>
+  reviewForm(REPOS, branch, { branches: BRANCHES, ...options })
+
+describe('reviewForm', () => {
+  it('opens with a row for every repository that has the branch', () => {
+    const form = opened()
+    expect(form.repoIds).toEqual(['/p', '/p/admin'])
+    expect(form.head).toEqual(local('feat/x'))
+    expect(form.overrides).toEqual({})
   })
 
-  /* A repository without a branch of that name is not a broken row and not an
-     error: it is a fact, said once under the table, and somebody adds it by
-     hand with the name the branch goes by there. */
-  it('leaves a repository the branch is missing from out of the table and names it', () => {
-    const { rows, without } = reviewRows(REPOS, 'feat/x', { branches: BRANCHES })
-    expect(rows.map((r) => r.name)).not.toContain('shared')
-    expect(without).toEqual(['shared'])
-  })
-
-  /* Both sides start local. The choice between a local branch and what origin
-     has is the person's, and the local one is what they were looking at. */
-  it('starts both sides of every row on the local branch', () => {
-    const { rows } = reviewRows(REPOS, 'feat/x', { branches: BRANCHES })
-    for (const row of rows) {
-      expect(row.baseSide).toBe(LOCAL)
-      expect(row.headSide).toBe(LOCAL)
-    }
+  /* Both sides start on the local branch. The choice between a local branch and
+     what origin has is the person's, and the local one is what they were
+     looking at. */
+  it('starts both sides of the rule on the local branch', () => {
+    const form = opened()
+    expect(form.base.remote).toBe(false)
+    expect(form.head.remote).toBe(false)
   })
 
   /* `branchChoice.js`'s existing order, because the run dialog answers this
@@ -61,178 +80,313 @@ describe('reviewRows', () => {
      to it: what this project was left at, then `[defaults].target_branch`, then
      the top of the list. */
   it('fills the base with what was remembered, then what the project declares', () => {
-    const remembered = reviewRows(REPOS, 'feat/x', {
-      branches: BRANCHES,
-      remembered: 'main',
-      configured: 'feat/x'
-    })
-    expect(remembered.rows[0].base).toBe('main')
-    const configured = reviewRows(REPOS, 'feat/x', {
-      branches: BRANCHES,
-      configured: 'feat/x'
-    })
-    expect(configured.rows[0].base).toBe('feat/x')
-    const top = reviewRows(REPOS, 'feat/x', { branches: BRANCHES })
-    expect(top.rows[0].base).toBe('main')
+    expect(opened('feat/x', { remembered: 'main', configured: 'feat/x' }).base.ref).toBe('main')
+    expect(opened('feat/x', { configured: 'feat/x' }).base.ref).toBe('feat/x')
+    expect(opened('feat/x').base.ref).toBe('main')
   })
 
-  /* The base somebody had already chosen on the lone row, carried into the
-     rebuild that the first branch pick sets off.
-
-     It is the whole of a defect this shipped with for one review pass. The
-     `New review` door opens one row with the base filled and the head empty,
-     and the table's columns run Repository, Base, To check — so the ordinary
-     way through the window is to set the base and then the branch. With
-     nothing carried, that first pick rebuilt every row at the default and put
-     it back over the base in the instant somebody's eye had moved to the next
-     column, and the review then ran against a comparison nobody asked for. It
-     rides in as `remembered` because that is `pickBranch`'s first term. */
-  it('keeps a base chosen on the lone row when the table is built around it', () => {
-    const { rows } = reviewRows(REPOS, 'feat/x', {
-      branches: BRANCHES,
-      remembered: 'feat/x',
-      configured: 'main'
-    })
-    expect(rows.every((row) => row.base === 'feat/x')).toBe(true)
-  })
-
-  /* And a base that has gone since it was chosen falls back rather than
-     standing: `pickBranch` skips a remembered name the list no longer holds,
-     which is what makes carrying one safe with no check of its own here. */
-  it('falls back when the carried base is no longer in the list', () => {
-    const { rows } = reviewRows(REPOS, 'feat/x', {
-      branches: BRANCHES,
-      remembered: 'feat/deleted',
-      configured: 'main'
-    })
-    expect(rows[0].base).toBe('main')
-  })
-
-  /* The `New review` door: no name to start from, so one row on the repository
-     the Git panel is showing, with the base filled and the checked side empty.
-     Picking a name there calls this function again and builds the rest. */
-  it('opens on one row with an empty checked side when there is no name', () => {
-    const { rows, without } = reviewRows(REPOS, null, {
-      branches: BRANCHES,
-      selected: '/p/admin'
-    })
-    expect(rows).toHaveLength(1)
-    expect(rows[0].repo).toBe('/p/admin')
-    expect(rows[0].base).toBe('main')
-    expect(rows[0].head).toBe('')
-    expect(without).toEqual([])
-  })
-
-  /* A selection that names no repository of this project is not a reason to
-     draw nothing: the window is about the project, and the first repository is
-     the one the panel would have been showing. */
-  it('falls back to the first repository when nothing is selected', () => {
-    const { rows } = reviewRows(REPOS, '', { branches: BRANCHES })
-    expect(rows.map((r) => r.repo)).toEqual(['/p'])
+  /* The `New review` door: no name to start from, so no branch to check and no
+     rows at all. Picking a name is what builds the table, through the same rule
+     the other door opened with. */
+  it('opens with no branch and no rows at all when there is no name', () => {
+    const form = reviewForm(REPOS, null, { branches: BRANCHES })
+    expect(form.head).toBe(null)
+    expect(form.repoIds).toEqual([])
+    expect(canReview(form)).toBe(false)
   })
 
   /* A name `target_branches` has never heard of is missing from every
-     repository it walked. The table is empty and the caption says why, rather
-     than the window looking as though it had failed to open. */
+     repository it walked. The table is empty and the note under it says why,
+     rather than the window looking as though it had failed to open. */
   it('gives no rows at all for a branch that is nowhere', () => {
-    const { rows, without } = reviewRows(REPOS, 'feat/nowhere', { branches: BRANCHES })
-    expect(rows).toEqual([])
-    expect(without).toEqual(['.', 'admin', 'shared'])
+    const form = opened('feat/nowhere')
+    expect(form.repoIds).toEqual([])
+    expect(missingRepos(REPOS, form, { branches: BRANCHES }).map((r) => r.name)).toEqual([
+      '.',
+      'admin',
+      'shared'
+    ])
   })
 
   it('answers an empty table for no repositories at all', () => {
-    expect(reviewRows(null, 'feat/x', { branches: BRANCHES })).toEqual({ rows: [], without: [] })
-    expect(reviewRows([], 'feat/x', { branches: BRANCHES })).toEqual({ rows: [], without: [] })
+    expect(reviewForm(null, 'feat/x', { branches: BRANCHES }).repoIds).toEqual([])
+    expect(reviewForm([], 'feat/x', { branches: BRANCHES }).repoIds).toEqual([])
   })
 
   /* An absent branch list is the same answer as a branch nowhere, and that is
-     why `DesktopApp.vue` waits for `target_branches` before it builds a table
+     why `DesktopApp.vue` waits for `target_branches` before it builds a form
      rather than after: a list that has not landed is not evidence that nothing
-     has the branch, and this function has no way to tell the two apart. */
+     has the branch, and this rule has no way to tell the two apart. */
   it('reads an absent branch list as a branch no repository has', () => {
-    const { rows, without } = reviewRows(REPOS, 'feat/x', { branches: null })
-    expect(rows).toEqual([])
-    expect(without).toEqual(['.', 'admin', 'shared'])
+    expect(reviewForm(REPOS, 'feat/x', { branches: null }).repoIds).toEqual([])
+  })
+})
+
+describe('hasBranch', () => {
+  it('reads the branch list a repository is not short of', () => {
+    expect(hasBranch(REPOS[0], local('feat/x'), { branches: BRANCHES })).toBe(true)
+    expect(hasBranch(REPOS[2], local('feat/x'), { branches: BRANCHES })).toBe(false)
+  })
+
+  /* A side meaning `origin` is asked of the remote list first: a branch that
+     lives only on the server is exactly the case the local answer gets
+     wrong. */
+  it('asks the remote list for a side that means origin', () => {
+    const context = { branches: BRANCHES, remote: { '/p/shared': ['feat/x'] } }
+    expect(hasBranch(REPOS[2], origin('feat/x'), context)).toBe(true)
+    expect(hasBranch(REPOS[1], origin('feat/x'), { ...context })).toBe(true)
+  })
+
+  /* A repository whose remote list has not landed yet has no entry at all, and
+     a branch missing from a list nobody has read is not a fact about the
+     repository — so it falls through to the local answer. */
+  it('falls back to the local answer while a remote list is still on its way', () => {
+    expect(hasBranch(REPOS[0], origin('feat/x'), { branches: BRANCHES, remote: {} })).toBe(true)
+    expect(hasBranch(REPOS[2], origin('feat/x'), { branches: BRANCHES, remote: {} })).toBe(false)
+  })
+
+  it('has nothing to answer about a side nobody has filled in', () => {
+    expect(hasBranch(REPOS[0], null, { branches: BRANCHES })).toBe(false)
+    expect(hasBranch(REPOS[0], local('  '), { branches: BRANCHES })).toBe(false)
+  })
+})
+
+describe('repoIdsWith', () => {
+  it('names every repository that has the branch, by path and in order', () => {
+    expect(repoIdsWith(REPOS, local('main'), { branches: BRANCHES })).toEqual([
+      '/p',
+      '/p/admin',
+      '/p/shared'
+    ])
+    expect(repoIdsWith(REPOS, local('feat/x'), { branches: BRANCHES })).toEqual(['/p', '/p/admin'])
+  })
+})
+
+describe('the effective pair', () => {
+  /* The one line the whole model rests on: a row is reviewed with its own pair
+     if it has one and with the project's rule otherwise. */
+  it('is the rule for a row that has no override', () => {
+    const form = opened()
+    expect(pairOf(form, '/p')).toEqual({ base: local('main'), head: local('feat/x') })
+    expect(isOverride(form, '/p')).toBe(false)
+  })
+
+  it('is the pair a row keeps of its own once it has one', () => {
+    const form = withPick(withOverride(opened(), '/p/admin'), { side: 'head', repoId: '/p/admin' }, origin('main'))
+    expect(pairOf(form, '/p/admin')).toEqual({ base: local('main'), head: origin('main') })
+    expect(pairOf(form, '/p')).toEqual({ base: local('main'), head: local('feat/x') })
+  })
+
+  /* An override is made by copying the rule, never by starting an empty one:
+     there is no arrangement of this form with a base and no branch to check. */
+  it('starts an override as a whole copy of the rule', () => {
+    const form = withOverride(opened(), '/p')
+    expect(form.overrides['/p']).toEqual({ base: local('main'), head: local('feat/x') })
+    expect(overrideIds(form)).toEqual(['/p'])
+  })
+
+  /* And going back to the rule touches this row and no neighbour. */
+  it('drops one override and leaves the others where they were', () => {
+    let form = withOverride(opened(), '/p')
+    form = withOverride(form, '/p/admin')
+    form = withoutOverride(form, '/p')
+    expect(overrideIds(form)).toEqual(['/p/admin'])
+    expect(form.repoIds).toEqual(['/p', '/p/admin'])
+    expect(pairOf(form, '/p')).toEqual({ base: local('main'), head: local('feat/x') })
+  })
+
+  it('has nothing to drop for a row that follows the rule', () => {
+    const form = opened()
+    expect(withoutOverride(form, '/p')).toBe(form)
+  })
+})
+
+describe('withPick', () => {
+  it('writes one side of the rule and leaves the other alone', () => {
+    const form = withPick(opened(), { side: 'base', repoId: null }, origin('main'))
+    expect(form.base).toEqual(origin('main'))
+    expect(form.head).toEqual(local('feat/x'))
+  })
+
+  /* The whole of the `New review` door: the first branch on the rule's checked
+     side fills the table, through the same rule the other door opened with. */
+  it('fills the table with the first branch picked on an empty rule', () => {
+    const empty = reviewForm(REPOS, null, { branches: BRANCHES })
+    const form = withPick(empty, { side: 'head', repoId: null }, local('feat/x'), {
+      repos: REPOS,
+      branches: BRANCHES
+    })
+    expect(form.repoIds).toEqual(['/p', '/p/admin'])
+    expect(canReview(form)).toBe(true)
+  })
+
+  /* And never again after that. Once the table exists it is somebody's: a
+     person changing their mind about which branch to review must not have the
+     rows they added or took out swept away under them. */
+  it('leaves a table that already exists alone when the branch changes', () => {
+    let form = withRepo(opened(), '/p/shared')
+    form = withPick(form, { side: 'head', repoId: null }, local('main'), {
+      repos: REPOS,
+      branches: BRANCHES
+    })
+    expect(form.repoIds).toEqual(['/p', '/p/admin', '/p/shared'])
+  })
+
+  it('writes into the override of the row the list was opened for', () => {
+    const form = withPick(opened(), { side: 'head', repoId: '/p/admin' }, origin('feat/x'))
+    expect(form.overrides['/p/admin']).toEqual({ base: local('main'), head: origin('feat/x') })
+    expect(form.head).toEqual(local('feat/x'))
+  })
+})
+
+describe('adding and removing a repository', () => {
+  /* A repository added by hand arrives as an override, and that is not a
+     formality: the reason it was not in the table is that the rule's branch is
+     not in it, so following the rule is the one thing this row cannot do. */
+  it('adds a repository as an override at the end of the table', () => {
+    const form = withRepo(opened(), '/p/shared')
+    expect(form.repoIds).toEqual(['/p', '/p/admin', '/p/shared'])
+    expect(form.overrides['/p/shared']).toEqual({ base: local('main'), head: local('feat/x') })
+  })
+
+  it('will not add a repository twice', () => {
+    const form = withRepo(opened(), '/p')
+    expect(form.repoIds).toEqual(['/p', '/p/admin'])
+  })
+
+  /* A pair left behind for a row that is not in the table would come back the
+     next time the same repository was added. */
+  it('takes the override out with the row', () => {
+    const form = withoutRepo(withRepo(opened(), '/p/shared'), '/p/shared')
+    expect(form.repoIds).toEqual(['/p', '/p/admin'])
+    expect(form.overrides).toEqual({})
+  })
+
+  /* Derived rather than stored: the rule fills the table with the repositories
+     that *have* the branch, so a row without it is one somebody named by hand —
+     and it is the one row the `x` may take out again. */
+  it('reads a row the rule could not have put there as one added by hand', () => {
+    const form = withRepo(opened(), '/p/shared')
+    const context = { branches: BRANCHES }
+    expect(isManual(form, REPOS[2], context)).toBe(true)
+    expect(isManual(form, REPOS[0], context)).toBe(false)
+  })
+
+  it('says nothing about a repository that is not in the table at all', () => {
+    expect(isManual(opened(), REPOS[2], { branches: BRANCHES })).toBe(false)
+  })
+})
+
+describe('addableRepos', () => {
+  /* Only what is not already in the table: offering a repository that has a row
+     would be a second row for one repository, which is a pair this window has
+     no way to mean. */
+  it('offers what is not in the table, and says why each is out of it', () => {
+    const form = opened()
+    expect(addableRepos(REPOS, form, { branches: BRANCHES })).toEqual([
+      { repo: REPOS[2], note: NO_SUCH_BRANCH }
+    ])
+  })
+
+  it('says so when a repository is simply not in the review', () => {
+    const form = { ...opened(), repoIds: ['/p'] }
+    expect(addableRepos(REPOS, form, { branches: BRANCHES })).toEqual([
+      { repo: REPOS[1], note: NOT_IN_REVIEW },
+      { repo: REPOS[2], note: NO_SUCH_BRANCH }
+    ])
   })
 })
 
 describe('canReview', () => {
-  const pair = (over = {}) => ({
-    repo: '/p',
-    name: '.',
-    base: 'main',
-    baseSide: LOCAL,
-    head: 'feat/x',
-    headSide: LOCAL,
-    ...over
-  })
-
-  it('refuses an empty table', () => {
-    expect(canReview([])).toBe(false)
+  it('refuses a form with no branch to check and one with no rows', () => {
+    expect(canReview(reviewForm(REPOS, null, { branches: BRANCHES }))).toBe(false)
+    expect(canReview({ ...opened(), repoIds: [] })).toBe(false)
     expect(canReview(null)).toBe(false)
   })
 
-  it('refuses a row with a side nobody has answered', () => {
-    expect(canReview([pair(), pair({ head: '' })])).toBe(false)
-    expect(canReview([pair({ base: '' })])).toBe(false)
-  })
-
-  it('allows a table whose every row has both sides', () => {
-    expect(canReview([pair(), pair({ repo: '/p/admin', name: 'admin' })])).toBe(true)
+  it('allows a form with a branch and a row to check it in', () => {
+    expect(canReview(opened())).toBe(true)
   })
 })
 
 describe('refOf', () => {
   it('spells a local branch as itself and a remote one with its remote', () => {
-    expect(refOf('main', LOCAL)).toBe('main')
-    expect(refOf('main', ORIGIN)).toBe('origin/main')
+    expect(refOf(local('main'))).toBe('main')
+    expect(refOf(origin('main'))).toBe('origin/main')
   })
 
-  it('has nothing to spell for an unanswered side', () => {
-    expect(refOf('', ORIGIN)).toBe('')
+  it('has nothing to spell for a side nobody has answered', () => {
+    expect(refOf(null)).toBe('')
+    expect(refOf({ ref: '', remote: true })).toBe('')
+  })
+})
+
+describe('the labels a side is drawn with', () => {
+  /* The prefix apart from the name, because the window draws the prefix muted
+     and the name in the ordinary colour — which is the whole of how `local` and
+     `origin` are said now that there is no second control for them. */
+  it('splits the remote prefix off the name', () => {
+    expect(sideLabel(origin('main'))).toEqual({ prefix: 'origin/', ref: 'main' })
+    expect(sideLabel(local('main'))).toEqual({ prefix: '', ref: 'main' })
+    expect(sideLabel(null)).toEqual({ prefix: '', ref: '' })
+  })
+
+  it('does the same for the pair one row draws', () => {
+    expect(pairLabel({ base: local('main'), head: origin('feat/x') })).toEqual({
+      base: { prefix: '', ref: 'main' },
+      head: { prefix: 'origin/', ref: 'feat/x' }
+    })
   })
 })
 
 describe('reviewPairs', () => {
-  it('resolves every side into the ref git takes', () => {
-    const rows = [
-      { repo: '/p', base: 'main', baseSide: LOCAL, head: 'feat/x', headSide: ORIGIN },
-      { repo: '/p/admin', base: 'develop', baseSide: ORIGIN, head: 'feat/x', headSide: LOCAL }
-    ]
-    expect(reviewPairs(rows)).toEqual([
-      { repo: '/p', base: 'main', head: 'origin/feat/x' },
-      { repo: '/p/admin', base: 'origin/develop', head: 'feat/x' }
+  /* The exit, and it has not moved: `{ repo, base, head }` apiece with the refs
+     resolved, which is `src-tauri/src/agents/mod.rs`' `ReviewPair`. */
+  it('resolves every row into the pair of refs git takes', () => {
+    let form = opened()
+    form = withPick(form, { side: 'base', repoId: null }, origin('main'))
+    form = withPick(form, { side: 'head', repoId: '/p/admin' }, local('feat/y'))
+    expect(reviewPairs(form)).toEqual([
+      { repo: '/p', base: 'origin/main', head: 'feat/x' },
+      { repo: '/p/admin', base: 'origin/main', head: 'feat/y' }
     ])
+  })
+
+  it('has nothing to send for a form nobody has filled in', () => {
+    expect(reviewPairs(reviewForm(REPOS, null, { branches: BRANCHES }))).toEqual([])
   })
 })
 
 describe('fetchTargets', () => {
   it('names nothing when every side is local', () => {
-    expect(
-      fetchTargets([{ repo: '/p', baseSide: LOCAL, headSide: LOCAL }])
-    ).toEqual([])
+    expect(fetchTargets(opened())).toEqual([])
   })
 
   /* `origin/main` is only as current as the last fetch, so a review that reads
      it without one is a review of a commit nobody asked about — and nothing on
      screen would have said so. */
-  it('names a repository with origin on either side, once', () => {
-    expect(
-      fetchTargets([
-        { repo: '/p', baseSide: ORIGIN, headSide: LOCAL },
-        { repo: '/p', baseSide: LOCAL, headSide: ORIGIN },
-        { repo: '/p/admin', baseSide: LOCAL, headSide: LOCAL }
-      ])
-    ).toEqual(['/p'])
+  it('names a repository with origin on either side of its own pair', () => {
+    const rule = withPick(opened(), { side: 'base', repoId: null }, origin('main'))
+    expect(fetchTargets(rule)).toEqual(['/p', '/p/admin'])
+    const one = withPick(opened(), { side: 'head', repoId: '/p/admin' }, origin('feat/x'))
+    expect(fetchTargets(one)).toEqual(['/p/admin'])
+  })
+
+  /* A row that differs is fetched on its own terms: an override back on the
+     local branch needs no fetch even under a rule that reads origin. */
+  it('leaves out a row whose override is local under a remote rule', () => {
+    let form = withPick(opened(), { side: 'base', repoId: null }, origin('main'))
+    form = withOverride(form, '/p/admin')
+    form = withPick(form, { side: 'base', repoId: '/p/admin' }, local('main'))
+    expect(fetchTargets(form)).toEqual(['/p'])
   })
 })
 
 describe('fetchFailures', () => {
   /* The verdicts arrive as `Promise.all` left them — one per target, in the
      order the targets were fetched in — and the answer is the paths, because
-     that is what a row carries, what a pair names a repository by and what the
-     prompt lists them in. The window's names are this list rendered, never a
-     second walk of the same array. */
+     that is what a row is keyed by, what a pair names a repository by and what
+     the prompt lists them in. */
   it('keeps the targets whose fetch did not answer, in order', () => {
     expect(fetchFailures(['/p', '/p/admin', '/p/shared'], [true, false, false])).toEqual([
       '/p/admin',
@@ -252,6 +406,182 @@ describe('fetchFailures', () => {
   it('reads a missing verdict as a repository that was not reached', () => {
     expect(fetchFailures(['/p', '/p/admin'], [true])).toEqual(['/p/admin'])
     expect(fetchFailures(['/p'], null)).toEqual(['/p'])
+  })
+})
+
+describe('branchesIn', () => {
+  /* One project-wide answer filtered per row, rather than a second git read for
+     every repository in the table. The records travel whole, because the list
+     this fills draws an age and a repository count off them. */
+  it('leaves out the branches this repository is short of', () => {
+    expect(branchesIn(BRANCHES, '.').map((b) => b.name)).toEqual(['main', 'feat/x'])
+    expect(branchesIn(BRANCHES, 'shared').map((b) => b.name)).toEqual(['main'])
+  })
+
+  it('has nothing to offer before the list has landed', () => {
+    expect(branchesIn(null, '.')).toEqual([])
+  })
+})
+
+describe('the words under and around the table', () => {
+  it('names the two fields under them and says what a choice there reaches', () => {
+    expect(ruleCaption(opened())).toBe(RULE_CAPTION)
+    expect(ruleCaption(reviewForm(REPOS, null, { branches: BRANCHES }))).toBe(RULE_CAPTION_EMPTY)
+  })
+
+  /* The one thing that tells a list opened for the whole project from one
+     opened for a single row, and those two do very different things. */
+  it('says what picking a branch applies to', () => {
+    expect(pickerScope()).toBe('sets every repository below')
+    expect(pickerScope('backend')).toBe('this repository only · backend')
+  })
+
+  it('counts the rows and how many of them follow the rule', () => {
+    expect(tableSummary(opened())).toBe('2 · all follow the rule')
+    expect(tableSummary(withOverride(opened(), '/p'))).toBe('2 · 1 follow the rule · 1 differ')
+  })
+
+  it('summarises what a press of Review would start', () => {
+    expect(footerSummary(opened())).toBe('2 pairs')
+    expect(footerSummary(withOverride(opened(), '/p'))).toBe('2 pairs · 1 override')
+    expect(footerSummary(opened(), { notes: 2 })).toBe('2 pairs · 2 notes')
+    expect(footerSummary(reviewForm(REPOS, null, { branches: BRANCHES }))).toBe('0 pairs')
+  })
+
+  /* In busy the button that said what would happen has just gone quiet, and
+     this sentence is the only thing left saying why. */
+  it('says what is happening instead once it is running', () => {
+    expect(footerSummary(opened(), { busy: true })).toBe('starting the review session · 2 pairs')
+  })
+
+  it('keeps the verb and the noun in step for one of anything', () => {
+    const one = { ...opened(), repoIds: ['/p'] }
+    expect(footerSummary(one)).toBe('1 pair')
+  })
+})
+
+describe('rowStatus', () => {
+  const NOW = 1_700_000_000
+
+  it('says a row follows the rule, and says nothing about one that differs', () => {
+    expect(rowStatus({}).text).toBe(FOLLOWS_THE_RULE)
+    expect(rowStatus({ override: true }).text).toBe('')
+  })
+
+  it('turns while origin is being fetched', () => {
+    expect(rowStatus({ fetching: true })).toEqual({
+      text: 'fetching origin',
+      icon: 'loader-circle',
+      spin: true
+    })
+  })
+
+  /* A fetch that did not reach the remote leaves the review reading the copy of
+     origin already on this disk. It is how old the answer is and not an error,
+     so it is a triangle in the muted colour and never red. */
+  it('says how old the copy of origin is when the fetch did not reach it', () => {
+    expect(rowStatus({ stale: true, at: NOW - 2 * 3600, now: NOW })).toEqual({
+      text: 'using origin from 2h ago',
+      icon: 'triangle-alert',
+      spin: false
+    })
+  })
+
+  /* A repository nobody has ever fetched into has no age to give, and
+     `from  ago` with a hole in it would be worse than the shorter sentence. */
+  it('leaves the age out when there is no fetch to date it by', () => {
+    expect(rowStatus({ stale: true, at: null, now: NOW }).text).toBe('using origin from before')
+  })
+})
+
+describe('reviewNotes', () => {
+  /* One block of lines, each a glyph and a sentence with the identifiers in it
+     drawn in mono — the sentence is prose and a repository's name is not. */
+  it('says nothing at all when there is nothing to say', () => {
+    expect(reviewNotes({})).toEqual([])
+    expect(reviewNotes({ fetching: [], failed: [], missing: [] })).toEqual([])
+  })
+
+  it('counts the repositories origin is being fetched for', () => {
+    const [note] = reviewNotes({ fetching: ['/p'] })
+    expect(note.icon).toBe('loader-circle')
+    expect(note.spin).toBe(true)
+    expect(note.parts.map((part) => part.text).join('')).toBe(
+      'Fetching origin for 1 repository.'
+    )
+    const [many] = reviewNotes({ fetching: ['/p', '/p/admin'] })
+    expect(many.parts.map((part) => part.text).join('')).toBe(
+      'Fetching origin for 2 repositories.'
+    )
+  })
+
+  /* A failed fetch is a sentence and not a refusal: what origin holds on this
+     machine is still readable, merely older. */
+  it('says which repositories were not reached, without calling it off', () => {
+    const [note] = reviewNotes({ failed: ['driver'] })
+    expect(note.icon).toBe('triangle-alert')
+    expect(note.parts.map((part) => part.text).join('')).toBe(
+      'Fetch failed for driver. The review still runs and reads the copy of origin from before.'
+    )
+    expect(note.parts.filter((part) => part.mono).map((part) => part.text)).toEqual(['driver'])
+  })
+
+  it('names the repositories with no such branch in one line', () => {
+    const [note] = reviewNotes({ missing: ['extension', 'docs'] })
+    expect(note.icon).toBe('circle-dashed')
+    expect(note.parts.map((part) => part.text).join('')).toBe(
+      'No such branch in extension, docs. They are left out of the review.'
+    )
+    const [one] = reviewNotes({ missing: ['extension'] })
+    expect(one.parts.map((part) => part.text).join('')).toBe(
+      'No such branch in extension. It is left out of the review.'
+    )
+  })
+
+  /* All three at once is the case the block was drawn for: three sentences
+     loose under a table read as one paragraph, and each of these is about a
+     different thing. */
+  it('keeps the three in one order however many of them there are', () => {
+    const notes = reviewNotes({ fetching: ['/p'], failed: ['driver'], missing: ['docs'] })
+    expect(notes.map((note) => note.key)).toEqual(['fetching', 'failed', 'missing'])
+  })
+})
+
+describe('oldestFetch', () => {
+  /* One number stands for several repositories in the list opened for the
+     project's rule, and the oldest is the only one that cannot mislead: a pair
+     set for every repository is as stale as the least recently fetched of
+     them. */
+  it('answers the least recent of the fetch times', () => {
+    expect(oldestFetch(['/p', '/p/admin'], { '/p': 200, '/p/admin': 100 })).toBe(100)
+  })
+
+  /* A repository nobody has ever fetched into takes the answer away entirely:
+     there is no honest number for a project holding one, and the list then says
+     `origin` with nothing after it. */
+  it('has no answer at all when one repository has never been fetched', () => {
+    expect(oldestFetch(['/p', '/p/admin'], { '/p': 200 })).toBe(null)
+    expect(oldestFetch([], {})).toBe(null)
+    expect(oldestFetch(null, null)).toBe(null)
+  })
+})
+
+describe('missingRepos', () => {
+  /* Anything already in the table is not among them, which is what keeps a note
+     from being a sentence about a row directly above it. */
+  it('names what is left out and never what is in the table', () => {
+    const form = opened()
+    expect(missingRepos(REPOS, form, { branches: BRANCHES }).map((r) => r.name)).toEqual(['shared'])
+    const added = withRepo(form, '/p/shared')
+    expect(missingRepos(REPOS, added, { branches: BRANCHES })).toEqual([])
+  })
+
+  /* Without a branch there is nothing to be missing. The `New review` door
+     would otherwise open by naming every repository of the project under a
+     sentence about a branch nobody has chosen yet. */
+  it('names nobody while there is no branch to check', () => {
+    const empty = reviewForm(REPOS, null, { branches: BRANCHES })
+    expect(missingRepos(REPOS, empty, { branches: BRANCHES })).toEqual([])
   })
 })
 
@@ -286,55 +616,5 @@ describe('reportPath', () => {
 
   it('pads a single-digit month, day, hour and minute', () => {
     expect(reportPath('x', new Date(2026, 0, 2, 3, 4))).toBe('.smetana/reviews/2026-01-02-0304-x')
-  })
-})
-
-describe('the captions under the table', () => {
-  /* One sentence for all of them and never a row each: a repository without a
-     branch of that name is a fact, not a broken row. */
-  it('names the repositories the branch is missing from in one line', () => {
-    expect(withoutCaption(['shared'], 'feat/x')).toBe(
-      'shared does not have a branch called feat/x'
-    )
-    expect(withoutCaption(['shared', 'infra'], 'feat/x')).toBe(
-      'shared, infra do not have a branch called feat/x'
-    )
-  })
-
-  it('says nothing when nothing is missing and nothing when there is no name', () => {
-    expect(withoutCaption([], 'feat/x')).toBe('')
-    expect(withoutCaption(null, 'feat/x')).toBe('')
-    expect(withoutCaption(['shared'], '')).toBe('')
-  })
-
-  it('counts the repositories it is fetching for', () => {
-    expect(fetchingCaption([])).toBe('')
-    expect(fetchingCaption(['/p'])).toBe('Fetching origin for 1 repository…')
-    expect(fetchingCaption(['/p', '/p/admin'])).toBe('Fetching origin for 2 repositories…')
-  })
-
-  /* A failed fetch is a sentence and not a refusal: what origin holds on this
-     machine is still readable, merely older. */
-  it('says which repositories were not reached, without calling it off', () => {
-    expect(fetchFailedCaption([])).toBe('')
-    expect(fetchFailedCaption(['admin'])).toBe(
-      'admin was not reached — the review reads what origin was last known to have'
-    )
-    expect(fetchFailedCaption(['admin', 'shared'])).toBe(
-      'admin, shared were not reached — the review reads what origin was last known to have'
-    )
-  })
-})
-
-describe('localNames', () => {
-  /* One project-wide answer filtered per row, rather than a second git read for
-     every repository in the table. */
-  it('leaves out the branches this repository is short of', () => {
-    expect(localNames(BRANCHES, '.')).toEqual(['main', 'feat/x'])
-    expect(localNames(BRANCHES, 'shared')).toEqual(['main'])
-  })
-
-  it('has nothing to offer before the list has landed', () => {
-    expect(localNames(null, '.')).toEqual([])
   })
 })

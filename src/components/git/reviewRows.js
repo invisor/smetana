@@ -1,151 +1,273 @@
-/* What the branch-review window's table holds, and what a press of Review
-   turns it into.
+/* What the branch-review window holds, and what a press of Review turns it into.
 
-   The `branchMenu.js` / `branchTree.js` / `changesFold.js` family: pure, no Vue
+   The `branchPicker.js` / `branchMenu.js` / `branchTree.js` family: pure, no Vue
    and no DOM, which is the whole reason it is a file of its own — a `.vue` file
    is the one thing no test in this repository can reach, so a rule left inside
    the component is a rule nothing checks.
 
-   **A row is a pair.** One repository, one reference branch and one branch to
-   check, with each side saying whether it means the local branch or what
-   `origin` has. What was asked for is that the number of bases always equals
-   the number of branches under review, and that is a property of the shape
-   rather than a rule checked on the way out: there is no arrangement of this
-   table with four bases and three branches, because a base cannot be added
-   without the branch beside it. A rule can be forgotten; a shape cannot.
+   **One pair for the project, and a row that differs keeps its own.** This used
+   to be a table where a row *was* a pair: one repository, its own reference
+   branch and its own branch to check, four controls apiece. That shape held the
+   thing that matters — the number of bases is always the number of branches
+   under review — and paid for it with a wall of controls that grew with the
+   project, four dropdowns deep on every row of five. The shape here holds the
+   same invariant for the same reason and spends one pair of controls on the
+   whole window:
 
-   The table is built here and never in the component, which is what makes both
-   doors into the window one piece of code. From a branch row's menu the name is
-   known, and the table is every repository that has a branch of that name; from
-   `New review` it is not, and the table is one empty row on the repository the
-   Git panel is showing — after which picking a name on that row builds the rest
-   of the table through this same function. The two doors differ only in what
-   they start with. */
+     base:      { ref, remote }
+     head:      { ref, remote } | null
+     repoIds:   string[]                        the rows, in the order shown
+     overrides: { [repoId]: { base, head } }     a row that differs, whole
+
+   **A pair is still indivisible.** There is no arrangement of this form with
+   four bases and three branches to check, because neither the rule nor an
+   override can be half set: both are an object of two sides, and an override is
+   made by copying the rule rather than by starting an empty one. That is a
+   property of the shape rather than a check on the way out, and the difference
+   is the same as it always was — a rule can be forgotten and a shape cannot.
+
+   `remote` is the whole of what `local` and `origin` mean here, and it is a
+   flag on a side rather than a control of its own: the window draws it as the
+   muted `origin/` in front of the name, and `refOf` below is where it becomes
+   the ref git is handed. `origin` and no other remote — there is no notion of a
+   second one anywhere in this app, and inventing one for a case nobody has
+   asked about would be a second vocabulary.
+
+   **The exit is unchanged.** `reviewPairs` answers `{ repo, base, head }`
+   apiece, which is `src-tauri/src/agents/mod.rs`' `ReviewPair`, with the same
+   fields and the same reading of `origin/`. What changed is where a person's
+   answer is kept on the way to it. */
 import { pickBranch } from '../run/branchChoice.js'
+import { shortAge } from './branchPicker.js'
 
-/* Which side of a pair a name is read on. `origin` and no other remote: there
-   is no notion of a second one anywhere in this app, and inventing one here for
-   a case nobody has asked about would be a second vocabulary. */
-export const LOCAL = 'local'
+/* The one remote this app knows, and the prefix a side wears when it means
+   that remote rather than the local branch. */
 export const ORIGIN = 'origin'
 
 const list = (value) => (Array.isArray(value) ? value : [])
+const has = (object, key) =>
+  Boolean(object) && Object.prototype.hasOwnProperty.call(object, key)
 
-/* The table, and the repositories that had nothing to put in it.
-
-   `repos` is `vcsState.repos` — `{ name, path }` apiece, where the name is the
-   one `[project].repos` gives and therefore the same name `missing_in` speaks
-   in. `branches` is `target_branches`' answer, `{ name, missing_in }` apiece,
-   which is the command that already answers the whole multi-repository question
-   — nothing here walks a project a second time.
-
-   A repository the branch is missing from gets no row at all and is named in
-   `without` instead. That is not an error and not a broken row: a repository
-   without a branch of that name is a fact, said once under the table, and
-   somebody who wants it in the review adds it by hand with the name the branch
-   goes by there. A name no repository has is the same answer with nothing left
-   over — an empty table rather than a table of rows that cannot be reviewed.
-
-   Without a name there is one row, on the repository the panel has selected,
-   with the base filled and the checked side empty. The base is
-   `branchChoice.js`'s existing order — what this project was left at, then
-   `[defaults].target_branch`, then the top of the list — because the run dialog
-   answers exactly this question one screen over, and a second order would be a
-   second answer to it. */
-export function reviewRows(repos, branch, options = {}) {
-  const { branches = [], remembered = null, configured = null, selected = null } = options
-  const all = list(repos).filter((repo) => repo && repo.path)
-  if (!all.length) return { rows: [], without: [] }
-
-  const base = pickBranch(branches, remembered, configured)
-  const name = typeof branch === 'string' ? branch.trim() : ''
-
-  if (!name) {
-    const repo = all.find((r) => r.path === selected) ?? all[0]
-    return { rows: [row(repo, base, '')], without: [] }
-  }
-
-  const option = list(branches).find((b) => b?.name === name)
-  /* A name `target_branches` has never heard of is missing from every
-     repository it walked, which is the honest reading and the one that fills
-     the caption: an empty table with nothing said under it would leave somebody
-     looking at a window that had simply not worked. */
-  const missing = option ? list(option.missing_in) : all.map((repo) => repo.name)
-  const has = (repo) => !missing.includes(repo.name)
-  return {
-    rows: all.filter(has).map((repo) => row(repo, base, name)),
-    without: all.filter((repo) => !has(repo)).map((repo) => repo.name)
-  }
-}
-
-const row = (repo, base, head) => ({
-  repo: repo.path,
-  name: repo.name,
-  base,
-  baseSide: LOCAL,
-  head,
-  headSide: LOCAL
-})
-
-/* The local branch names one repository has, out of the project-wide answer.
-
-   `target_branches` is asked once for the whole project and says which
-   repositories each branch is short of, so a row's own list is that answer
-   filtered by this repository's name rather than a second read per row. What
-   `origin` has is the other list and comes from `vcs_remote_branches`, one
-   repository at a time: the two are deliberately not merged, since a remote
-   branch and a local one of the same name are different things to read a diff
-   against, and a name in one and not the other is the ordinary case — a branch
-   that lives only on the server, and a branch nobody has ever pushed. */
-export function localNames(branches, repoName) {
-  return list(branches)
-    .filter((b) => b?.name && !list(b.missing_in).includes(repoName))
-    .map((b) => b.name)
-}
-
-/* Whether there is anything to review. An empty table is the obvious half; a
-   row with a side unanswered is the other, and it is the one that happens — a
-   row added by hand starts with nothing on its checked side, and so does the
-   only row `New review` opens with. Both sides of every row or nothing: a pair
-   short of a reference is not a smaller review, it is a repository the report
-   would have had to guess about. */
-export function canReview(rows) {
-  const all = list(rows)
-  if (!all.length) return false
-  return all.every((r) => Boolean(r?.base) && Boolean(r?.head))
-}
-
-/* A side of a row as git spells it: `main` for the local branch, `origin/main`
-   for what the remote has. The whole of what `local` and `origin` mean, and
-   deliberately nothing cleverer — the choice is resolved here, once, and
-   nothing downstream re-reads a branch list or guesses at a remote. */
-export function refOf(name, side) {
+/* One side of a pair as git spells it: `main` for the local branch,
+   `origin/main` for what the remote has. Resolved here, once, so that nothing
+   downstream re-reads a branch list or guesses at a remote. */
+export function refOf(side) {
+  const name = typeof side?.ref === 'string' ? side.ref.trim() : ''
   if (!name) return ''
-  return side === ORIGIN ? `${ORIGIN}/${name}` : name
+  return side.remote ? `${ORIGIN}/${name}` : name
 }
 
-/* The table as the intent carries it: one `ReviewPair` per row, refs resolved.
-   `src-tauri/src/agents/mod.rs` is the other end of this shape. */
-export function reviewPairs(rows) {
-  return list(rows).map((r) => ({
-    repo: r.repo,
-    base: refOf(r.base, r.baseSide),
-    head: refOf(r.head, r.headSide)
-  }))
+/* The same side split for drawing: the prefix apart from the name, because the
+   window sets the prefix in the muted colour and the name in the ordinary one.
+   A side nobody has answered is two empty strings rather than null, so the
+   caller has nothing to branch on. */
+export function sideLabel(side) {
+  const name = typeof side?.ref === 'string' ? side.ref.trim() : ''
+  if (!name) return { prefix: '', ref: '' }
+  return { prefix: side.remote ? `${ORIGIN}/` : '', ref: name }
+}
+
+/* And a whole pair, for the one cell that draws one: an override's own
+   `main → infra/4nsa-remote-branches`. */
+export function pairLabel(pair) {
+  return { base: sideLabel(pair?.base), head: sideLabel(pair?.head) }
+}
+
+/* Whether a repository has the branch a side names.
+
+   `branches` is `target_branches`' answer — `{ name, missing_in }` apiece, said
+   once for the whole project — and reading the absence rather than the presence
+   is that command's own shape: an empty `missing_in` is the ordinary case and
+   there is nothing to do with it.
+
+   A side meaning `origin` is asked of the remote list first, because a branch
+   that lives only on the server is exactly the case where the local answer is
+   wrong. `remote` is keyed by repository path and is filled one repository at a
+   time as the reads land, so a repository whose list has not arrived yet has no
+   entry at all — and that falls through to the local answer rather than to
+   "no". A branch missing from a list nobody has read is not a fact about the
+   repository. */
+export function hasBranch(repo, head, context = {}) {
+  const { branches = [], remote = {} } = context
+  const name = typeof head?.ref === 'string' ? head.ref.trim() : ''
+  if (!repo?.path || !name) return false
+  if (head.remote) {
+    const known = remote?.[repo.path]
+    if (Array.isArray(known)) return known.includes(name)
+  }
+  const option = list(branches).find((branch) => branch?.name === name)
+  return Boolean(option) && !list(option.missing_in).includes(repo.name)
+}
+
+/* The rows a branch fills the table with: every repository of the project that
+   has it, by path, in the order the project lists them. */
+export function repoIdsWith(repos, head, context = {}) {
+  return list(repos)
+    .filter((repo) => hasBranch(repo, head, context))
+    .map((repo) => repo.path)
+}
+
+/* The form a window opens with.
+
+   From a branch row's menu the name is known, and the table is every repository
+   that has a branch of that name. From `New review` it is not: the head is
+   `null`, there are no rows at all, and `Review` is refused until somebody picks
+   one — at which point `withPick` below fills the table with the very same rule.
+   The two doors differ in what they start with and in nothing else.
+
+   The base is `branchChoice.js`'s existing order — what this project was left
+   at, then `[defaults].target_branch`, then the top of the list — because the
+   run dialog answers exactly this question one screen over, and a second order
+   would be a second answer to it. It starts local: what a person was looking at
+   is the branch on this machine, and `origin` is the deliberate choice. */
+export function reviewForm(repos, branch, options = {}) {
+  const { branches = [], remote = {}, remembered = null, configured = null } = options
+  const base = { ref: pickBranch(branches, remembered, configured), remote: false }
+  const name = typeof branch === 'string' ? branch.trim() : ''
+  const head = name ? { ref: name, remote: false } : null
+  return {
+    base,
+    head,
+    repoIds: head ? repoIdsWith(repos, head, { branches, remote }) : [],
+    overrides: {}
+  }
+}
+
+/* The pair a row is actually reviewed with: its own if it has one, the
+   project's rule otherwise. The one line the whole model rests on. */
+export function pairOf(form, repoId) {
+  if (has(form?.overrides, repoId)) return form.overrides[repoId]
+  return { base: form?.base ?? null, head: form?.head ?? null }
+}
+
+export function isOverride(form, repoId) {
+  return has(form?.overrides, repoId)
+}
+
+/* The rows that differ, in the order the table draws them rather than in
+   whatever order the object was written in. */
+export function overrideIds(form) {
+  return list(form?.repoIds).filter((id) => isOverride(form, id))
+}
+
+/* Whether a row is one somebody put there by hand, which is what earns it the
+   `man` badge and the `x` that takes it out again.
+
+   Derived and deliberately not stored: a row the rule could not have produced
+   is a row somebody added. The rule fills the table with the repositories that
+   *have* the branch, so a row without it is one that was named by hand — and
+   the one action that removes a row is therefore the one on a row the rule
+   would not put back. */
+export function isManual(form, repo, context = {}) {
+  if (!repo?.path || !list(form?.repoIds).includes(repo.path)) return false
+  return !hasBranch(repo, form?.head, context)
+}
+
+/* ---- editing the form --------------------------------------------------- */
+/* Every one of these answers a new form rather than changing the one it was
+   given: the component holds it in a `ref`, and a reactive object edited in
+   place is the version where half a change is on screen. */
+
+const withOverrides = (form, overrides) => ({ ...form, overrides })
+
+/* A branch picked, for whichever side of whichever pair the list was opened
+   for. `picker` is the component's own `{ side, repoId }` — `repoId` null for
+   the project's rule, a path for one row's override.
+
+   The one thing that happens here beyond writing a side: **the first branch on
+   the rule's checked side fills the table.** That is the whole of the
+   `New review` door, and it is here rather than in the component because it is
+   the same rule `reviewForm` opens the other door with. It fires only while the
+   head is still `null`: once the table exists it is somebody's, and a person
+   changing their mind about which branch to review must not have the rows they
+   added or removed swept away under them. */
+export function withPick(form, picker, value, context = {}) {
+  const side = picker?.side === 'base' ? 'base' : 'head'
+  const repoId = picker?.repoId ?? null
+  if (repoId != null) {
+    const pair = pairOf(form, repoId)
+    return withOverrides(form, { ...form?.overrides, [repoId]: { ...pair, [side]: value } })
+  }
+  const next = { ...form, [side]: value }
+  if (side === 'head' && form?.head == null) {
+    next.repoIds = repoIdsWith(context.repos, value, context)
+  }
+  return next
+}
+
+/* A row told to differ: the rule frozen into it, so that changing the rule
+   afterwards leaves this row where it was. A copy of the pair and never half of
+   one — this is the operation the invariant would otherwise be broken by. */
+export function withOverride(form, repoId) {
+  if (!repoId || form?.head == null || isOverride(form, repoId)) return form
+  const pair = pairOf(form, repoId)
+  return withOverrides(form, { ...form?.overrides, [repoId]: { ...pair } })
+}
+
+/* And back to the rule. Only this row: the object is rebuilt without the one
+   key, so no neighbour is touched. */
+export function withoutOverride(form, repoId) {
+  if (!isOverride(form, repoId)) return form
+  const overrides = {}
+  for (const [id, pair] of Object.entries(form.overrides)) {
+    if (id !== repoId) overrides[id] = pair
+  }
+  return withOverrides(form, overrides)
+}
+
+/* A repository added by hand, at the end of the table.
+
+   It arrives as an override, and that is not a formality: the reason it was not
+   in the table is that the rule's branch is not in it, so following the rule is
+   the one thing this row cannot do. The pair it starts from is the rule's, which
+   is a whole pair — the window then opens the branch list on its checked side so
+   the name it goes by here can be given. */
+export function withRepo(form, repoId) {
+  if (!repoId || form?.head == null || list(form?.repoIds).includes(repoId)) return form
+  const added = { ...form, repoIds: [...list(form.repoIds), repoId] }
+  return withOverride(added, repoId)
+}
+
+/* And out again, taking its override with it: a pair left behind for a row that
+   is not in the table would come back the next time the same repository was
+   added. */
+export function withoutRepo(form, repoId) {
+  const dropped = { ...form, repoIds: list(form?.repoIds).filter((id) => id !== repoId) }
+  return withoutOverride(dropped, repoId)
+}
+
+/* ---- what the form answers ---------------------------------------------- */
+
+/* Whether there is anything to review. A branch to check, and at least one row
+   to check it in. Nothing here asks whether a pair is whole, and that is the
+   point of the shape: there is no way to build a half one. */
+export function canReview(form) {
+  return Boolean(form?.head) && list(form?.repoIds).length > 0
+}
+
+/* The form as the intent carries it: one `ReviewPair` per row, refs resolved.
+   `src-tauri/src/agents/mod.rs` is the other end of this shape, and it has not
+   moved. */
+export function reviewPairs(form) {
+  return list(form?.repoIds).map((repoId) => {
+    const pair = pairOf(form, repoId)
+    return { repo: repoId, base: refOf(pair.base), head: refOf(pair.head) }
+  })
 }
 
 /* Which repositories have to be fetched before any of this is read.
 
-   Any row with `origin` on either side: `origin/main` is only as current as the
-   last fetch, and a review of a week-old commit drawn under the name of a
-   branch somebody pushed this morning is the one way this feature fails with
-   nothing on screen saying so. One entry per repository however many of its
-   rows ask for it, and the order the rows are in. */
-export function fetchTargets(rows) {
+   Any row with `origin` on either side of its effective pair: `origin/main` is
+   only as current as the last fetch, and a review of a week-old commit drawn
+   under the name of a branch somebody pushed this morning is the one way this
+   feature fails with nothing on screen saying so. One entry per repository, in
+   the order the rows are in. */
+export function fetchTargets(form) {
   const wanted = []
-  for (const r of list(rows)) {
-    const origin = r?.baseSide === ORIGIN || r?.headSide === ORIGIN
-    if (origin && r?.repo && !wanted.includes(r.repo)) wanted.push(r.repo)
+  for (const repoId of list(form?.repoIds)) {
+    const pair = pairOf(form, repoId)
+    const origin = Boolean(pair?.base?.remote) || Boolean(pair?.head?.remote)
+    if (origin && !wanted.includes(repoId)) wanted.push(repoId)
   }
   return wanted
 }
@@ -154,22 +276,242 @@ export function fetchTargets(rows) {
 
    `reached` is what `Promise.all` handed back over `targets`, one verdict
    apiece and in that order, and joining the two is the whole of this function.
-   It is a rule rather than a line in the view for the reason this whole family
-   exists — a `.vue` file is the one thing no test in this repository can reach
-   — and, more than that, because **two different readers are drawn from what
-   it answers**: the sentence in the window and the toast behind it, and the
-   list that rides into the intent so the report can say so about itself. One
-   list read twice cannot disagree with itself; two walks of the same array
-   could, and the disagreement would be invisible — a review whose report says
-   origin was current when the window had just said it was not.
+   It is a rule rather than a line in the view because **two different readers
+   are drawn from what it answers**: the note in the window and the toast behind
+   it, and the list that rides into the intent so the report can say so about
+   itself. One list read twice cannot disagree with itself; two walks of the
+   same array could, and the disagreement would be invisible — a review whose
+   report says origin was current when the window had just said it was not.
 
-   It answers in **paths**, which is what a row carries, what a `ReviewPair`
-   names a repository by and what the prompt lists them in. The names the
-   window draws are that same list mapped through the panel's repositories,
-   which is a rendering of this answer rather than a second one. */
+   It answers in **paths**, which is what a row is keyed by, what a `ReviewPair`
+   names a repository by and what the prompt lists them in. The names the window
+   draws are that same list mapped through the project's repositories, which is
+   a rendering of this answer rather than a second one. */
 export function fetchFailures(targets, reached) {
   const verdicts = list(reached)
   return list(targets).filter((_, at) => !verdicts[at])
+}
+
+/* The branches of one repository, out of the project-wide answer.
+
+   `target_branches` is asked once for the whole project and says which
+   repositories each branch is short of, so a row's own list is that answer
+   filtered by this repository's name rather than a second read per row. The
+   records travel whole rather than as names, because the list this fills draws
+   an age and a repository count off them. */
+export function branchesIn(branches, repoName) {
+  return list(branches).filter(
+    (branch) => branch?.name && !list(branch.missing_in).includes(repoName)
+  )
+}
+
+/* How fresh the whole project's idea of `origin` is: the oldest of the fetch
+   times, in the epoch seconds `vcs_last_fetch` answers in.
+
+   The branch list opened for the project's rule draws one age against every
+   `origin` row, and one number has to stand for several repositories. The
+   oldest is the only one that cannot mislead — a pair set for every repository
+   is as stale as the least recently fetched of them — and the direction is the
+   safe one: an age that is too old says "ask again", where one that is too
+   fresh promises refs are newer than they are.
+
+   A repository nobody has ever fetched into takes the answer away entirely
+   rather than being skipped. There is no honest number for a project holding
+   one, and the list then says `origin` with nothing after it, which is what a
+   single repository in that state already draws. */
+export function oldestFetch(paths, fetchedAt = {}) {
+  let oldest = null
+  for (const path of list(paths)) {
+    const at = fetchedAt?.[path]
+    if (!Number.isFinite(at)) return null
+    if (oldest === null || at < oldest) oldest = at
+  }
+  return oldest
+}
+
+/* The repositories that are in this project and have no such branch — the ones
+   the review leaves out. Anything already in the table is not among them, which
+   is what keeps a note from being about a row directly above it.
+
+   Nothing at all until there is a branch to be missing. Without that clause the
+   `New review` door would open by naming every repository of the project under
+   a sentence about a branch nobody has chosen yet. */
+export function missingRepos(repos, form, context = {}) {
+  if (!form?.head) return []
+  const rows = list(form?.repoIds)
+  return list(repos).filter(
+    (repo) => repo?.path && !rows.includes(repo.path) && !hasBranch(repo, form?.head, context)
+  )
+}
+
+/* What a row is not in this review because of, for the panel `Add a repository`
+   opens: it has the branch and simply is not in the table, or it has no such
+   branch and whoever adds it will have to say what the branch is called there.
+   Both are ordinary, which is why neither is drawn as a refusal. */
+export const NOT_IN_REVIEW = 'not in this review'
+export const NO_SUCH_BRANCH = 'no such branch — name it by hand'
+
+export function addableRepos(repos, form, context = {}) {
+  const rows = list(form?.repoIds)
+  return list(repos)
+    .filter((repo) => repo?.path && !rows.includes(repo.path))
+    .map((repo) => ({
+      repo,
+      note: hasBranch(repo, form?.head, context) ? NOT_IN_REVIEW : NO_SUCH_BRANCH
+    }))
+}
+
+/* ---- the words ---------------------------------------------------------- */
+
+/* What the checked side says while it is empty, which is the `New review` door
+   at the moment it opens. Lower case and in the muted colour: it is a field
+   waiting to be answered rather than a value. */
+export const PICK_HEAD = 'pick a branch to check'
+/* And what stands where the table will be, for the same door. */
+export const WAITING_FOR_BRANCH = 'waiting for a branch'
+
+/* The line under the pair. It names the two fields rather than repeating what
+   is in them — they are directly above it — and says what a choice there
+   reaches. Without a branch to check it says what will happen instead, because
+   an empty table under an unanswered field otherwise reads as a window that
+   failed to fill. */
+export const RULE_CAPTION = 'base → to check · applies to every repository below'
+export const RULE_CAPTION_EMPTY = 'the repositories that have it will fill in below'
+
+export function ruleCaption(form) {
+  return form?.head ? RULE_CAPTION : RULE_CAPTION_EMPTY
+}
+
+/* The right-hand end of the branch list's footer: what picking there applies
+   to. It is the one thing that tells a list opened for the whole project from
+   one opened for a single row, and those two do very different things. */
+export function pickerScope(repoName = null) {
+  return repoName ? `this repository only · ${repoName}` : 'sets every repository below'
+}
+
+/* The right-hand end of the table's heading: how many rows there are and how
+   many of them are following the rule. `all follow the rule` rather than
+   `6 follow the rule · 0 differ`, because a count of nothing is a fact nobody
+   needs and the sentence is what a person is checking. */
+export function tableSummary(form) {
+  const rows = list(form?.repoIds).length
+  const differ = overrideIds(form).length
+  if (!differ) return `${rows} · all follow the rule`
+  return `${rows} · ${rows - differ} follow the rule · ${differ} differ`
+}
+
+const count = (n, one, many) => `${n} ${n === 1 ? one : many}`
+
+/* The left-hand end of the footer: what pressing Review would start.
+
+   In busy it is what is happening instead, because the button that said so has
+   just gone quiet and the sentence is the only thing left saying why. With no
+   branch to check it is `0 pairs`, which is the honest reading of a form nobody
+   has filled in — and the number the disabled button is about. */
+export function footerSummary(form, options = {}) {
+  const { busy = false, notes = 0 } = options
+  const rows = list(form?.repoIds).length
+  if (busy) return `starting the review session · ${count(rows, 'pair', 'pairs')}`
+  if (!form?.head) return '0 pairs'
+  const parts = [count(rows, 'pair', 'pairs')]
+  const differ = overrideIds(form).length
+  if (differ) parts.push(count(differ, 'override', 'overrides'))
+  if (notes) parts.push(count(notes, 'note', 'notes'))
+  return parts.join(' · ')
+}
+
+/* What one row says about itself, on the right of its pair.
+
+   Four states and only one of them is about this window's own doing. A row that
+   follows the rule says so, since the alternative — nothing at all — reads as a
+   row that has not finished loading. A row that differs says nothing here: its
+   pair is drawn in the cell beside this one, which is the whole answer.
+
+   The fetch is the other two. `fetching origin` turns while it runs, and the
+   one that matters is the third: a fetch that did not reach the remote leaves
+   the review reading the copy of origin already on this disk, which is a fact
+   about how old the answer is and **not an error**. It is drawn in the muted
+   colour with a triangle and never in red — the saturated range belongs to
+   status, and a review that goes ahead over slightly older refs is not a
+   failure to colour.
+
+   Without a stamp it says `from before`, matching the note under the table: a
+   repository nobody has ever fetched into has no age to give, and `from  ago`
+   with a hole in it would be worse than the shorter sentence. */
+export const FOLLOWS_THE_RULE = 'follows the rule'
+export const FETCHING_ORIGIN = 'fetching origin'
+
+export function rowStatus(state = {}) {
+  const { override = false, fetching = false, stale = false, at = null, now = null } = state
+  if (fetching) return { text: FETCHING_ORIGIN, icon: 'loader-circle', spin: true }
+  if (stale) {
+    const age = shortAge(at, now)
+    return {
+      text: age ? `using origin from ${age} ago` : 'using origin from before',
+      icon: 'triangle-alert',
+      spin: false
+    }
+  }
+  if (override) return { text: '', icon: '', spin: false }
+  return { text: FOLLOWS_THE_RULE, icon: '', spin: false }
+}
+
+/* The service messages, as one block of lines rather than three sentences
+   loose under the table.
+
+   Each is a glyph, a sentence and the identifiers inside it in mono — the
+   sentence is prose and a repository's name is not, and the block is unreadable
+   if the two are drawn alike. `parts` is what makes that possible without the
+   component knowing any of the words: a run of pieces, each either prose or an
+   identifier.
+
+   **None of the three is an error.** A fetch in flight is a wait, a fetch that
+   failed is a review going ahead over an older copy of origin, and a repository
+   without such a branch is an ordinary fact about a project made of several. So
+   the whole block is drawn in the quiet idiom, with no red anywhere in it, and
+   `Review` is refused by none of them. */
+const prose = (text) => ({ text, mono: false })
+const ident = (text) => ({ text, mono: true })
+
+export function reviewNotes(state = {}) {
+  const { fetching = [], failed = [], missing = [] } = state
+  const notes = []
+  const waiting = list(fetching).filter(Boolean)
+  if (waiting.length) {
+    notes.push({
+      key: 'fetching',
+      icon: 'loader-circle',
+      spin: true,
+      parts: [prose(`Fetching origin for ${count(waiting.length, 'repository', 'repositories')}.`)]
+    })
+  }
+  const missed = list(failed).filter(Boolean)
+  if (missed.length) {
+    notes.push({
+      key: 'failed',
+      icon: 'triangle-alert',
+      spin: false,
+      parts: [
+        prose('Fetch failed for '),
+        ident(missed.join(', ')),
+        prose('. The review still runs and reads the copy of origin from before.')
+      ]
+    })
+  }
+  const absent = list(missing).filter(Boolean)
+  if (absent.length) {
+    notes.push({
+      key: 'missing',
+      icon: 'circle-dashed',
+      spin: false,
+      parts: [
+        prose('No such branch in '),
+        ident(absent.join(', ')),
+        prose(`. ${absent.length === 1 ? 'It is' : 'They are'} left out of the review.`)
+      ]
+    })
+  }
+  return notes
 }
 
 const pad = (n) => String(n).padStart(2, '0')
@@ -199,55 +541,4 @@ export function reportPath(branch, at) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return `.smetana/reviews/${stamp}-${slug || 'review'}`
-}
-
-/* The one line under the table naming the repositories that had no branch of
-   that name, and '' when there are none.
-
-   **One sentence for all of them rather than a row apiece**, which is the whole
-   of the decision: a repository without such a branch is not a broken row and
-   not an error, it is a fact — said once, in one place, where a row each would
-   have turned an ordinary state into a table half full of things that cannot be
-   reviewed. Somebody who wants one of them in the review adds it by hand, with
-   the name the branch goes by there.
-
-   The verb follows the count, because "shared do not have" is the sort of
-   sentence that makes a person doubt everything else on the screen. */
-export function withoutCaption(names, branch) {
-  const all = list(names).filter(Boolean)
-  if (!all.length || !branch) return ''
-  const verb = all.length === 1 ? 'does not have' : 'do not have'
-  return `${all.join(', ')} ${verb} a branch called ${branch}`
-}
-
-/* What the window says while it is fetching, and '' when it is not.
-
-   It says it at all because the alternative is the silent failure this whole
-   step exists to prevent: without a fetch `origin/main` is as old as whenever
-   somebody last asked, and a review of that commit drawn under this morning's
-   branch name would be wrong with nothing anywhere admitting it. A wait nobody
-   is told about is the other half of the same problem. */
-export function fetchingCaption(repos) {
-  const n = list(repos).length
-  if (!n) return ''
-  return `Fetching origin for ${n} ${n === 1 ? 'repository' : 'repositories'}…`
-}
-
-/* And what it says when a fetch did not work.
-
-   **A failed fetch does not cancel the review**, which is why this is a
-   sentence and not a refusal: what `origin` holds on this machine is still
-   readable, it is merely older than the remote, and stopping here would trade a
-   review that is slightly behind for no review at all. The sentence is what
-   keeps that honest.
-
-   It is the window's half. The same repositories ride into the intent through
-   `fetchFailures`, so the report says it too — a person who did not see
-   this caption or the toast behind it would otherwise have nothing to learn it
-   from. */
-export function fetchFailedCaption(names) {
-  const all = list(names).filter(Boolean)
-  if (!all.length) return ''
-  const verb = all.length === 1 ? 'was' : 'were'
-  return `${all.join(', ')} ${verb} not reached — the review reads what origin was last known to have`
 }
