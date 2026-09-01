@@ -388,6 +388,40 @@ fn window_title(name: &str) -> String {
     }
 }
 
+/// Whether a `Resized` came from the hand rather than from our own `set_size`.
+///
+/// The event carries no such flag, and this app resizes these windows itself on
+/// every change to their content, so the discrimination is by baseline: the
+/// size the window was read back at after the last `set_size` of ours. Reading
+/// it back rather than trusting what we asked for is what makes this survive
+/// the OS clamping a request — against `min_inner_size`, against a monitor
+/// edge — since the baseline is what the window *became*.
+///
+/// A point of slack on each axis, because the size goes out logical and comes
+/// back physical and the conversion rounds. Nothing else moves these windows,
+/// so anything past that is somebody's hand.
+fn hand_moved(baseline: (u32, u32), now: (u32, u32)) -> bool {
+    baseline.0.abs_diff(now.0) > 1 || baseline.1.abs_diff(now.1) > 1
+}
+
+/// The size to open a remembered dialog window at, in logical points.
+///
+/// Two bounds, and each answers a case the other cannot. The monitor's share is
+/// for a window dragged out on a large display and opened on a laptop, where
+/// the stored size would land off the edge; the floor is the width the dialog's
+/// layout was drawn at, which the stored width can only fall below if that
+/// width has grown in `src/views/dialogRegistry.js` since the size was kept.
+///
+/// The share is `HEIGHT_CEILING`, already the bound on a fitted height, applied
+/// to the width as well: the argument for it — a window with nowhere to put its
+/// footer — reads the same way round for a window with nowhere to put its
+/// buttons.
+fn remembered_size(stored: (f64, f64), floor_width: f64, monitor: (f64, f64)) -> (f64, f64) {
+    let width = stored.0.min(monitor.0 * HEIGHT_CEILING).max(floor_width);
+    let height = stored.1.min(monitor.1 * HEIGHT_CEILING);
+    (width, height)
+}
+
 /// Opens a dialog window on one kind, or brings the open one forward.
 ///
 /// The window is built **hidden and at a provisional height**. Its real height
@@ -842,8 +876,8 @@ pub fn persist_geometry(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        compare_query, drag_drop_space, height_to_set, image_query, kind_query, tab_query,
-        window_chrome, window_title,
+        compare_query, drag_drop_space, hand_moved, height_to_set, image_query, kind_query,
+        remembered_size, tab_query, window_chrome, window_title,
     };
 
     /// The two words this command may answer with, named here in full because
@@ -1007,6 +1041,51 @@ mod tests {
     #[test]
     fn the_ceiling_holds_the_size_that_is_set() {
         assert_eq!(height_to_set(2000.0, 471.0, 439.0, 900.0), 900.0);
+    }
+
+    /// The size the window came to after our own `set_size` is the baseline, so
+    /// a `Resized` carrying it is our own doing and must not latch the window.
+    #[test]
+    fn our_own_resize_is_not_the_hand() {
+        assert!(!hand_moved((880, 632), (880, 632)));
+    }
+
+    /// A point of slack, because a logical size set on one side is read back as
+    /// a physical size on the other and the conversion rounds.
+    #[test]
+    fn a_point_of_rounding_is_not_the_hand() {
+        assert!(!hand_moved((880, 632), (881, 631)));
+    }
+
+    #[test]
+    fn a_drag_of_the_corner_is_the_hand() {
+        assert!(hand_moved((880, 632), (1180, 632)), "wider by 300 is a hand");
+        assert!(hand_moved((880, 632), (880, 900)), "taller by 268 is a hand");
+    }
+
+    /// A size dragged out on a large display must open on a small one. The
+    /// share is `HEIGHT_CEILING`, which is what the fitted height is already
+    /// bounded by.
+    #[test]
+    fn a_remembered_size_is_clamped_to_the_monitor() {
+        let (width, height) = remembered_size((3000.0, 2000.0), 440.0, (1440.0, 900.0));
+        assert_eq!(width, 1296.0, "0.9 of a 1440-point display");
+        assert_eq!(height, 810.0, "0.9 of a 900-point display");
+    }
+
+    /// Never narrower than the width the dialog's layout was drawn at. The
+    /// width can only have been dragged wider, so this catches the other case:
+    /// a registry width that has grown since the size was kept.
+    #[test]
+    fn a_remembered_size_is_never_narrower_than_the_registry_width() {
+        let (width, _) = remembered_size((500.0, 400.0), 720.0, (1440.0, 900.0));
+        assert_eq!(width, 720.0);
+    }
+
+    /// A size that fits is handed back as it is.
+    #[test]
+    fn a_remembered_size_that_fits_is_left_alone() {
+        assert_eq!(remembered_size((980.0, 720.0), 720.0, (1920.0, 1200.0)), (980.0, 720.0));
     }
 
     /// A viewport larger than the window's inner size is not something a window
