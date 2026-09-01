@@ -216,36 +216,93 @@ export function withPick(form, picker, value, context = {}) {
   return next
 }
 
-/* The rows the rule's new branch leaves: the ones that stay, in the order they
-   were in, and then the ones it brings in. A row stays if it is not the rule's
-   to decide — an override or one somebody added — or if the repository has the
-   new branch. */
-function refill(form, head, context = {}) {
-  const found = repoIdsWith(context.repos, head, context)
-  const kept = list(form?.repoIds).filter(
+/* Which of the rows the form already holds a rule with this checked side still
+   reaches, in the order they were in.
+
+   **This is the one decision about whether a row may follow the rule**, and it
+   is a function of its own because two different acts ask it: a branch picked
+   on the rule's checked side, and a row put back on the rule with `undo-2`.
+   The second is where it was missing — the override went and the row stayed,
+   claiming `follows the rule` in a repository that has no such branch, with the
+   notes block silent about it because a row in the table is not "left out" and
+   `reviewPairs` sending the agent a head that does not exist there. A rule the
+   repository cannot follow is not a smaller review; it is a pair git refuses,
+   inside a terminal, with nothing in the window having said so.
+
+   A row stays if it is not the rule's to decide — an override, or one somebody
+   added by hand — or if the repository has the branch. */
+function reached(form, found) {
+  return list(form?.repoIds).filter(
     (id) => isOverride(form, id) || isManual(form, id) || found.includes(id)
   )
+}
+
+/* The rows the rule's new branch leaves: the ones it still reaches, and then
+   the ones it brings in. Only a change to the rule's own checked side adds
+   rows — `undo-2` spends the removing half of this alone, because taking one
+   row back to the rule must not reach a neighbour. */
+function refill(form, head, context = {}) {
+  const found = repoIdsWith(context.repos, head, context)
+  const kept = reached(form, found)
   return [...kept, ...found.filter((id) => !kept.includes(id))]
 }
 
 /* A row told to differ: the rule frozen into it, so that changing the rule
    afterwards leaves this row where it was. A copy of the pair and never half of
-   one — this is the operation the invariant would otherwise be broken by. */
+   one — this is the operation the invariant would otherwise be broken by.
+
+   **A row differs on its head and never on its base.** The whole pair is
+   copied, so an override *carries* a base and a caller could set one; nothing
+   in the window ever opens the list on a row's base, and both of the calls that
+   name a repository — the pencil, and a repository added by hand — ask for the
+   checked side. That is the shape rather than an omission: a row differs on
+   what is being checked in it, not on what it is checked against, and the
+   window is a form for one comparison rather than for a table of unrelated
+   ones. */
 export function withOverride(form, repoId) {
   if (!repoId || form?.head == null || isOverride(form, repoId)) return form
   const pair = pairOf(form, repoId)
   return withOverrides(form, { ...form?.overrides, [repoId]: { ...pair } })
 }
 
-/* And back to the rule. Only this row: the object is rebuilt without the one
-   key, so no neighbour is touched. */
-export function withoutOverride(form, repoId) {
-  if (!isOverride(form, repoId)) return form
+/* The pair a row kept of its own, dropped. Only this row: the object is rebuilt
+   without the one key, so no neighbour is touched. */
+const dropOverride = (form, repoId) => {
+  if (!has(form?.overrides, repoId)) return form
   const overrides = {}
   for (const [id, pair] of Object.entries(form.overrides)) {
     if (id !== repoId) overrides[id] = pair
   }
   return withOverrides(form, overrides)
+}
+
+/* And back to the rule — **if the rule reaches it**. A row whose repository has
+   no such branch leaves the table with its override, and `reviewNotes` names it
+   under the table like any other repository the review is not in. Refusing the
+   action instead was the version thrown away: it leaves a row an override with
+   no way back, and it puts the decision in the template, which is the one place
+   this whole family exists to keep it out of.
+
+   **A row somebody added by hand has no rule to go back to**, and this answers
+   with the form untouched rather than leaving that to the order of three icon
+   buttons in a template. The reason it was in the table at all is that the
+   rule's branch was not in its repository, so `follows the rule` is a thing it
+   can never truthfully say; the only way out of the table for one of those is
+   the `x`, which is `withoutRepo` below. Making it unrepresentable here is what
+   keeps it from coming back the next time somebody reorders those buttons. */
+export function withoutOverride(form, repoId, context = {}) {
+  if (!isOverride(form, repoId) || isManual(form, repoId)) return form
+  const next = dropOverride(form, repoId)
+  /* With nothing to ask about the project, the override goes and the table
+     stays as it is. A caller that names no repositories has not said that no
+     repository has the branch — it has said nothing — and reading the silence
+     as "nowhere" would empty the whole table of rule-following rows. The same
+     reading `reviewForm` takes of a branch list that has not landed. */
+  if (!list(context.repos).length) return next
+  return {
+    ...next,
+    repoIds: reached(next, repoIdsWith(context.repos, next.head, context))
+  }
 }
 
 /* A repository added by hand, at the end of the table.
@@ -275,7 +332,11 @@ export function withoutRepo(form, repoId) {
     repoIds: list(form?.repoIds).filter((id) => id !== repoId),
     manual: list(form?.manual).filter((id) => id !== repoId)
   }
-  return withoutOverride(dropped, repoId)
+  /* `dropOverride` and not `withoutOverride`: the row is already gone from the
+     table, so there is nothing here to ask the rule about, and the guarded door
+     would refuse this one anyway — a hand-added row is exactly what it turns
+     away. */
+  return dropOverride(dropped, repoId)
 }
 
 /* ---- what the form answers ---------------------------------------------- */
@@ -297,7 +358,28 @@ export function reviewPairs(form) {
   })
 }
 
-/* Which repositories have to be fetched before any of this is read.
+/* **The base is not checked against any repository, and that is a decision.**
+   Everything in this module that asks whether a branch is there — `hasBranch`,
+   `repoIdsWith`, `reached`, `missingRepos` — asks it about the *head*, and so
+   does every sentence the window draws: `No such branch in extension, docs`,
+   `follows the rule`, `using origin from 2h ago`. A base that exists in one
+   repository of a project is sent as the base for all of them, and a repository
+   without it is not named anywhere.
+
+   The head is what a review is *about* — somebody picked that branch, it is
+   what the report is titled after, and its absence takes the whole row with it
+   — where the base is what the difference is read against and is in practice a
+   long-lived branch every repository has. The window's copy is head-only by
+   design (the spec's own three sentences say nothing about a base), and pairs
+   go to git either way: a base git cannot resolve fails in the agent's terminal
+   in git's own words, which is the same answer the review would give about any
+   ref that moved between the window closing and the session starting.
+
+   Extending the clause to the base is a change to what this window says, not a
+   defect in what it does. It is recorded here so the gap is a decision somebody
+   can re-open rather than an omission somebody has to discover.
+
+   Which repositories have to be fetched before any of this is read.
 
    Any row with `origin` on either side of its effective pair: `origin/main` is
    only as current as the last fetch, and a review of a week-old commit drawn

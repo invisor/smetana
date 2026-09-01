@@ -173,13 +173,22 @@ const context = computed(() => ({
   remote: props.remote ?? {}
 }))
 
-/* A row's repository record. One that has left the project while this window
-   stood open keeps its row rather than dropping out of the middle of a table
-   somebody is reading: it is named `.` so that `repoLabel` draws the folder it
-   sits in, which is the honest answer and the same one that name gets
-   everywhere else. */
-const repoAt = (path) =>
-  (props.repos ?? []).find((repo) => repo?.path === path) ?? { name: '.', path }
+/* A row's repository record, and whether the project still lists one.
+
+   A repository that has left the project while this window stood open keeps its
+   row rather than dropping out of the middle of a table somebody is reading, so
+   `repoAt` always answers: the stand-in is named `.` so that `repoLabel` draws
+   the folder it sits in, which is the honest answer and the same one that name
+   gets everywhere else.
+
+   `listedRepo` is the other half, and the difference matters in exactly one
+   place. A name is what `missing_in` is keyed by, and the stand-in's `.` is
+   somebody else's name — the project root's — so a branch list scoped to a
+   departed repository would be filtered by the wrong repository's answer and
+   then counted as though it were this one's. There is nothing truthful to draw
+   there, and that is what the empty list below says. */
+const listedRepo = (path) => (props.repos ?? []).find((repo) => repo?.path === path) ?? null
+const repoAt = (path) => listedRepo(path) ?? { name: '.', path }
 
 const where = (path) => repoPath(props.root, path, props.home)
 
@@ -246,7 +255,13 @@ const ready = computed(() => canReview(review.value) && !props.busy)
 const pickerBranches = computed(() => {
   const at = picker.value?.repoId
   if (!at) return props.branches ?? []
-  return branchesIn(props.branches, repoAt(at).name)
+  /* Scoped by the repository's own name, and nothing at all for one the project
+     no longer lists: `branchesIn` empties each record's `missing_in` because the
+     list is drawn against one repository *that has the branch*, and that
+     premise is exactly what a stand-in name cannot support — every row would
+     read `local · 1 repo` about a repository nobody can say anything about. */
+  const repo = listedRepo(at)
+  return repo ? branchesIn(props.branches, repo.name) : []
 })
 
 const pickerRepos = computed(() =>
@@ -312,9 +327,13 @@ const differ = (id) => {
   openPicker('head', id)
 }
 
+/* Back to the project's pair — and out of the table entirely when the rule does
+   not reach this repository, which `withoutOverride` decides with the same rule
+   a change of branch uses. The row is then named under the table like any other
+   repository the review is not in. */
 const follow = (id) => {
   if (props.busy) return
-  review.value = withoutOverride(review.value, id)
+  review.value = withoutOverride(review.value, id, context.value)
 }
 
 const drop = (id) => {
@@ -333,7 +352,17 @@ const toggleAdd = () => {
    the branch goes by there. */
 const add = (id) => {
   if (props.busy) return
-  review.value = withRepo(review.value, id)
+  const added = withRepo(review.value, id)
+  /* `withRepo` answers with the form it was given when it declines — no branch
+     to check yet, or a repository that already has a row. The list must not open
+     over a row that does not exist: what was picked in it would be written into
+     `overrides` under a repository outside `repoIds`, which is a pair with no
+     row to draw it, invisible until some later change of branch brought the row
+     back wearing it. The panel below is not offered at all while the checked
+     side is empty; this is the second lock on the same door, so the two cannot
+     drift apart. */
+  if (added === review.value) return
+  review.value = added
   addOpen.value = false
   openPicker('head', id)
 }
@@ -812,37 +841,46 @@ const out = () => {
           </div>
         </template>
 
-        <button
-          type="button"
-          :style="addRowStyle(hovered === 'add')"
-          :disabled="busy"
-          @mouseenter="over('add')"
-          @mouseleave="out"
-          @click="toggleAdd"
-        >
-          <Icon name="plus" :size="PLUS" />
-          Add a repository
-        </button>
-
-        <div v-if="addOpen" :style="panelStyle">
-          <div :style="panelHeadStyle">Repositories not in this review</div>
+        <!-- The last row of the block, and its panel, and neither of them is
+             drawn while there is no branch to check. The empty state is two
+             rows waiting for one, and adding a repository to a review that has
+             no branch is not something this form can mean: `withRepo` refuses
+             it, so an add row offered there is a control that does nothing,
+             over a panel captioning every candidate `no such branch` about a
+             branch nobody has chosen. -->
+        <template v-if="review.head">
           <button
-            v-for="candidate in candidates"
-            :key="candidate.id"
             type="button"
-            :style="candidateStyle(hovered === candidate.id)"
-            @mouseenter="over(candidate.id)"
+            :style="addRowStyle(hovered === 'add')"
+            :disabled="busy"
+            @mouseenter="over('add')"
             @mouseleave="out"
-            @click="add(candidate.id)"
+            @click="toggleAdd"
           >
-            <span :style="nameStyle">{{ candidate.name }}</span>
-            <span :style="pathStyle" :title="candidate.id">{{ candidate.path }}</span>
-            <span :style="noteHintStyle">{{ candidate.note }}</span>
+            <Icon name="plus" :size="PLUS" />
+            Add a repository
           </button>
-          <div v-if="!candidates.length" :style="candidateStyle(false)">
-            <span :style="noteHintStyle">Every repository of this project is in the review.</span>
+
+          <div v-if="addOpen" :style="panelStyle">
+            <div :style="panelHeadStyle">Repositories not in this review</div>
+            <button
+              v-for="candidate in candidates"
+              :key="candidate.id"
+              type="button"
+              :style="candidateStyle(hovered === candidate.id)"
+              @mouseenter="over(candidate.id)"
+              @mouseleave="out"
+              @click="add(candidate.id)"
+            >
+              <span :style="nameStyle">{{ candidate.name }}</span>
+              <span :style="pathStyle" :title="candidate.id">{{ candidate.path }}</span>
+              <span :style="noteHintStyle">{{ candidate.note }}</span>
+            </button>
+            <div v-if="!candidates.length" :style="candidateStyle(false)">
+              <span :style="noteHintStyle">Every repository of this project is in the review.</span>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
 
       <!-- One block for all three, each with its own glyph. None of them is an

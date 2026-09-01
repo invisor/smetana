@@ -1278,6 +1278,27 @@ stay keep their place and new ones arrive at the end, so the table does not shuf
 eye. On `main` this was the `branch` emit's job, done in the app window; it is one rule in one module
 now, and it runs on the first pick of the `New review` door and on every pick after it alike.
 
+**"Does the rule reach this row" is one function and two doors reach it.** `reached` is the half of
+`refill` that only removes, and `withoutOverride` spends it too: `undo-2` on a row whose repository has
+no such branch takes the row out of the table with its override rather than standing it back up under a
+rule it cannot follow. Without that the same defect came back one transformer over — a row saying
+`follows the rule` in a repository that has no such branch, invisible to the notes block because a row
+in the table is not "left out", with `reviewPairs` sending the agent a head that does not exist there
+and git refusing inside the agent's terminal. Refusing the action instead was the version thrown away:
+it leaves a row an override with no way back and puts the rule in a template. The same function refuses
+a **hand-added** row outright — one of those has no rule to go back to, since the reason it is in the
+table is that the rule's branch is not in its repository — so `MAN` beside `follows the rule` is
+unrepresentable rather than one reordering of three icon buttons away.
+
+**`Add a repository` and its panel are not drawn while the checked side is empty.** The empty state is
+the two waiting rows and nothing else, which is what the spec describes; `withRepo` refuses to add to a
+review with no branch, so an add row offered there is a control that does nothing, over a panel
+captioning every candidate `no such branch` about a branch nobody has chosen. The component's `add`
+checks that `withRepo` actually added before it opens the list, which is the second lock on that door:
+a pick made over a row that does not exist would write a pair into `overrides` for a repository outside
+`repoIds` — the state `withoutRepo` exists to prevent — invisible until a later change of branch
+brought the row back wearing it.
+
 **A repository the branch is missing from gets no row**, and it is named in the notes block rather
 than in a row of its own. `Add a repository` is the last row of the table — an action and not the
 half-width dropdown it used to be, which nobody found — and it opens a panel in the flow with the
@@ -1310,7 +1331,19 @@ empties each record's `missing_in` on the way out, because `branchPicker.js` tur
 `local · 4 repos` by subtracting it from however many repositories the list is drawn against — one,
 here. Left in place it read `local · 0 repos` under the very branch the review is about: the list
 denying that any repository has it. Inside a list about one repository that has the branch, absent
-from nowhere is the honest answer.
+from nowhere is the honest answer. The premise is the whole of it, so the one case where it does not
+hold draws **nothing**: a repository that has left the project while the window stood open keeps its
+row under a stand-in name, and a name is what `missing_in` is keyed by, so a list scoped to it would be
+another repository's answer counted as though it were this one's.
+
+**The base is deliberately not checked against any repository**, and `reviewRows.js` says so where the
+rules that check the head are. Everything this window draws about a branch being absent is about the
+head — the notes, `follows the rule`, which rows the rule reaches — while a base picked from the
+project-wide list is sent as the base for every row. The head is what a review is *about*; the base is
+what it is read against, and is in practice a long-lived branch every repository has. Extending the
+clause to the base is a change to what the window says rather than a defect in what it does. And an
+override differs on its head and never on its base: both of the calls that open a list for one row ask
+for the checked side, which is what a row is a row about.
 
 **Where the lists come from.** The repositories are `vcsState.repos`, already loaded by the panel.
 Which branches exist across the whole project, and which repositories each is short of, is the

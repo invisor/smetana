@@ -2570,12 +2570,21 @@ const menuTargetStyle = {
            height stops growing there whatever the project is made of.
 
            The frames below hold the tallest state each one can reach **plus the
-           scrim's own `8vh` of top inset**, which is a share of the viewport
-           rather than of the frame: outside a dialog window `Modal` places
-           itself against the top of the scrim with that gap above it, so a
-           frame sized to the dialog alone hides its footer at every viewport
-           height, and a frame is a picture of the top half. -->
-      <div :style="{ position: 'relative', height: '640px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           scrim's own `8vh` of top inset**, and both halves of that are why the
+           numbers look generous. Outside a dialog window `Modal` places itself
+           against the top of the scrim with that gap above it, so a frame sized
+           to the dialog alone hides its footer — the busy frame's own subject —
+           at every viewport height. And the gap is a share of the *viewport*
+           rather than of the frame, so the slack shrinks as the browser grows:
+           these three carry enough for a browser about 2000px tall, which is an
+           ordinary maximised window on a large display.
+
+           The tallest state is the one with the branch list open (about 500 for
+           the first, about 524 for the third, whose table is shorter), and not
+           the one each frame opens on. The busy frame is the exception and its
+           474 is its tallest: every control in it is off, so its list cannot be
+           opened at all. -->
+      <div :style="{ position: 'relative', height: '700px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           :form="REVIEW_FORM"
@@ -2601,7 +2610,7 @@ const menuTargetStyle = {
            paragraph. None of them is an error and none of them is red — a fetch
            that failed leaves the review reading the copy of origin already on
            this disk, which is how old an answer is rather than a failure. -->
-      <div :style="{ position: 'relative', height: '620px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '680px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           :form="REVIEW_FORM"
@@ -2625,8 +2634,13 @@ const menuTargetStyle = {
            other door opens with — so this frame is also where that is checked.
            Its caption comes from the app window, which is why it is passed as a
            prop: the OS frame draws it, and a title written into the template
-           would be silently overdrawn. -->
-      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           would be silently overdrawn.
+
+           It is the tallest frame of the three and opens on the shortest state,
+           which is not a mistake: this is the door where the branch list is the
+           first thing anybody touches, and the list is what decides a frame's
+           height. -->
+      <div :style="{ position: 'relative', height: '720px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
           title="New review"

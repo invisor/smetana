@@ -189,15 +189,70 @@ describe('the effective pair', () => {
   it('drops one override and leaves the others where they were', () => {
     let form = withOverride(opened(), '/p')
     form = withOverride(form, '/p/admin')
-    form = withoutOverride(form, '/p')
+    form = withoutOverride(form, '/p', { repos: REPOS, branches: BRANCHES })
     expect(overrideIds(form)).toEqual(['/p/admin'])
     expect(form.repoIds).toEqual(['/p', '/p/admin'])
     expect(pairOf(form, '/p')).toEqual({ base: local('main'), head: local('feat/x') })
   })
 
+  /* Told nothing about the project, it drops the override and leaves the table
+     alone: a caller that names no repositories has not said that no repository
+     has the branch, it has said nothing, and reading the silence as "nowhere"
+     would empty the table of every row that follows the rule. */
+  it('leaves the table alone when it is told nothing about the project', () => {
+    const form = withOverride(opened(), '/p')
+    const back = withoutOverride(form, '/p')
+    expect(back.overrides).toEqual({})
+    expect(back.repoIds).toEqual(['/p', '/p/admin'])
+  })
+
   it('has nothing to drop for a row that follows the rule', () => {
     const form = opened()
     expect(withoutOverride(form, '/p')).toBe(form)
+  })
+
+  /* Going back to the rule is going back to a rule that has to reach the row.
+     `shared` has no `feat/x`; it was in the table because it kept a pair of its
+     own, and the moment it gives that up it is a repository the review is not
+     in — a row left behind would claim `follows the rule` while `reviewPairs`
+     sent the agent a head that does not exist there, with the note under the
+     table silent because a row in the table is not "left out". The same
+     decision a change of branch makes, through the same rule. */
+  it('takes a row out of the table when the rule it goes back to does not reach it', () => {
+    let form = reviewForm(REPOS, 'main', { branches: BRANCHES })
+    form = withOverride(form, '/p/shared')
+    form = withPick(form, { side: 'head', repoId: null }, local('feat/x'), {
+      repos: REPOS,
+      branches: BRANCHES
+    })
+    expect(form.repoIds).toContain('/p/shared')
+    const back = withoutOverride(form, '/p/shared', { repos: REPOS, branches: BRANCHES })
+    expect(back.repoIds).toEqual(['/p', '/p/admin'])
+    expect(back.overrides).toEqual({})
+    expect(reviewPairs(back).map((pair) => pair.repo)).toEqual(['/p', '/p/admin'])
+    expect(missingRepos(REPOS, back, { branches: BRANCHES }).map((r) => r.name)).toEqual(['shared'])
+    expect(tableSummary(back)).toBe('2 · all follow the rule')
+  })
+
+  /* And a row the rule does reach keeps its place, with no neighbour touched:
+     only a change to the rule's own checked side ever adds rows. */
+  it('keeps a row the rule reaches, and adds nothing to the table', () => {
+    const form = withOverride(opened(), '/p/admin')
+    const back = withoutOverride(form, '/p/admin', { repos: REPOS, branches: BRANCHES })
+    expect(back.repoIds).toEqual(['/p', '/p/admin'])
+    expect(missingRepos(REPOS, back, { branches: BRANCHES }).map((r) => r.name)).toEqual(['shared'])
+  })
+
+  /* A row somebody added by hand has no rule to go back to — the reason it is
+     in the table at all is that the rule's branch is not in its repository.
+     Refused in the module rather than merely not offered in the template, so
+     that `MAN` beside `follows the rule` is unrepresentable rather than one
+     reordering of three icon buttons away. */
+  it('refuses to put a hand-added row back on a rule it can never follow', () => {
+    const form = withRepo(opened(), '/p/shared')
+    expect(withoutOverride(form, '/p/shared', { repos: REPOS, branches: BRANCHES })).toBe(form)
+    expect(isManual(form, '/p/shared')).toBe(true)
+    expect(isOverride(form, '/p/shared')).toBe(true)
   })
 })
 
@@ -293,6 +348,18 @@ describe('adding and removing a repository', () => {
   it('will not add a repository twice', () => {
     const form = withRepo(opened(), '/p')
     expect(form.repoIds).toEqual(['/p', '/p/admin'])
+  })
+
+  /* And there is nothing to add to a review with no branch to check. It answers
+     with the form it was given, which is what the window reads to know that the
+     branch list must not be opened over a row that does not exist — a pick
+     there would write a pair into `overrides` under a repository outside
+     `repoIds`, invisible until some later change of branch brought the row back
+     wearing it. */
+  it('adds nothing while there is no branch to check', () => {
+    const empty = reviewForm(REPOS, null, { branches: BRANCHES })
+    expect(withRepo(empty, '/p/shared')).toBe(empty)
+    expect(withRepo(opened(), '/p')).not.toBe(opened())
   })
 
   /* A pair left behind for a row that is not in the table would come back the
