@@ -1483,7 +1483,7 @@ fn claim_report(dir: &Path, stem: &str) -> Option<(PathBuf, std::fs::File)> {
 async fn ask(profile: Option<&'static dyn Profile>) -> (Option<usage::Usage>, Decision) {
     let Some(profile) = profile else { return (None, Decision::Normal) };
     let read = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
-    let decision = usage::decide(read.as_ref());
+    let decision = usage::decide(read.as_ref(), usage::Limits::default());
     (read, decision)
 }
 

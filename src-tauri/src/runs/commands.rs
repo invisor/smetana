@@ -181,12 +181,12 @@ pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
     })
     .await
     .unwrap_or(None);
-    let Some(profile) = profile else { return usage::report(None, None) };
+    let Some(profile) = profile else { return usage::report(None, None, usage::Limits::default()) };
     // `read` answers `None` for a profile with no `usage_command` without
     // spawning anything, so this costs nothing for Codex; `report` is what
     // tells that `None` apart from a probe's.
     let reading = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
-    usage::report(Some(profile), reading)
+    usage::report(Some(profile), reading, usage::Limits::default())
 }
 
 /// Which agent id `agent_usage` resolves: what the caller asked for, and the
