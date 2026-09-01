@@ -880,6 +880,20 @@ describe('the settings window', () => {
     expect(heard[0].uiFontSize).toBe(13, 'what it actually holds, not what was asked for')
   })
 
+  it('announces the reduced band it turned off, so the row over there moves too', async () => {
+    /* The correction this window makes to a pair the settings window cannot
+       reconcile for itself: without the announcement the dropdown would keep
+       showing 75 over a stored 0. */
+    const heard = []
+    await listen(settings.SETTINGS_STATE, (event) => heard.push(event.payload))
+
+    await emit(settings.SETTINGS_APPLY, { subscriptionPauseAt: 70 })
+    await vi.waitFor(() => expect(heard).toHaveLength(1))
+
+    expect(heard[0].subscriptionPauseAt).toBe(70)
+    expect(heard[0].subscriptionReducedAt).toBe(0, 'what it holds, not what was asked for')
+  })
+
   it('reads the file directly for the moment before this window has answered', async () => {
     ipc.on('settings_load', { appearance: { theme: 'light', uiFontSize: 15 }, agent: 'codex' })
 
@@ -1011,5 +1025,33 @@ describe('closing the window', () => {
     settings.applyPatch({ subscriptionReducedAt: '75' })
 
     expect(settings.settings.subscription).toEqual({ pauseAt: 90, reducedAt: 75 })
+  })
+
+  it('a pause dropped onto the reduced band turns that band off here, not on disk', async () => {
+    /* Rust does this inside `merge()`, where the screen cannot hear it. Doing it
+       at the moment of the choice is what keeps the file and the dropdown from
+       disagreeing until the next open. */
+    settings.applyPatch({ subscriptionPauseAt: 75 })
+
+    expect(settings.settings.subscription).toEqual({ pauseAt: 75, reducedAt: 0 })
+  })
+
+  it('a reduced band chosen at or above the pause is off before it is stored', async () => {
+    settings.applyPatch({ subscriptionReducedAt: 95 })
+
+    expect(settings.settings.subscription).toEqual({ pauseAt: 90, reducedAt: 0 })
+  })
+
+  it('a pause turned off leaves the reduced band standing', async () => {
+    settings.applyPatch({ subscriptionPauseAt: 0 })
+
+    expect(settings.settings.subscription).toEqual({ pauseAt: 0, reducedAt: 75 })
+  })
+
+  it('an unrelated edit leaves a settled pair alone', async () => {
+    settings.applyPatch({ subscriptionPauseAt: 0, subscriptionReducedAt: 75 })
+    settings.applyPatch({ gitAutoFetch: false })
+
+    expect(settings.settings.subscription).toEqual({ pauseAt: 0, reducedAt: 75 })
   })
 })

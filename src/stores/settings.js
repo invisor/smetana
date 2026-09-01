@@ -39,7 +39,7 @@ import {
    store and the settings tab cannot disagree about which values are legal, and
    so what the tab offers stays a subset of what Rust accepts. */
 import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
-import { isThreshold } from '../components/settings/subscription.js'
+import { isThreshold, reconcile } from '../components/settings/subscription.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
@@ -663,6 +663,18 @@ export function applyPatch(patch) {
   }
   if (isThreshold(patch.subscriptionReducedAt)) {
     settings.subscription.reducedAt = patch.subscriptionReducedAt
+  }
+  /* The one rule of this pair that Rust would otherwise apply behind the
+     screen's back: `reducedAt` at or above an enabled `pauseAt` is off, since
+     there is no band left for it to name. `merge()` does it on every save, so
+     without this the file and the dropdown disagreed until the next open —
+     `reconcile` says the rest. Run only when one of the two arrived, so an
+     unrelated edit never touches a pair already settled. */
+  if (isThreshold(patch.subscriptionPauseAt) || isThreshold(patch.subscriptionReducedAt)) {
+    settings.subscription.reducedAt = reconcile(
+      settings.subscription.pauseAt,
+      settings.subscription.reducedAt
+    )
   }
   /* A switch too, checked exactly the way the two above it are and for the same
      reason: `false` is the whole point of this field, so anything that is not a

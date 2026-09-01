@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   SUBSCRIPTION_STEPS,
   isThreshold,
+  reconcile,
   thresholdOptions
 } from '../../../src/components/settings/subscription.js'
 
@@ -19,5 +20,28 @@ describe('the subscription thresholds offered on the Agents tab', () => {
     expect(isThreshold(63)).toBe(false)
     expect(isThreshold('90')).toBe(false)
     expect(isThreshold(null)).toBe(false)
+  })
+})
+
+describe('reconciling the two thresholds', () => {
+  it('turns the reduced band off once it reaches the pause', () => {
+    expect(reconcile(75, 75)).toBe(0)
+    expect(reconcile(70, 75)).toBe(0)
+  })
+
+  it('leaves a reduced band with room under the pause alone', () => {
+    expect(reconcile(90, 75)).toBe(75)
+    expect(reconcile(80, 75)).toBe(75)
+  })
+
+  it('reconciles nothing against a pause that is off', () => {
+    /* `0` is off rather than a percentage, so there is no pause to be under and
+       a chosen reduced band stands — Rust's `pause_at != OFF` guard exactly. */
+    expect(reconcile(0, 95)).toBe(95)
+    expect(reconcile(0, 0)).toBe(0)
+  })
+
+  it('leaves a reduced band already off where it is', () => {
+    expect(reconcile(90, 0)).toBe(0)
   })
 })
