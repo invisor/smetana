@@ -77,6 +77,11 @@ pub enum BatchOutcome {
 /// for. `left_behind` is filled only for a batch that left no account — see
 /// `service::held_by` — because that is the only case where nobody has said what
 /// state the board was left in.
+///
+/// `lock_released` is the other way round and is filled whatever the batch
+/// said, because it is not a reading of the board but a thing the app *did* to
+/// it (smetana-rxzd), and a write nobody wrote down is a write nobody can
+/// question afterwards.
 #[derive(Debug, Clone)]
 pub struct BatchLine {
     pub n: u32,
@@ -86,6 +91,28 @@ pub struct BatchLine {
     pub reported: bool,
     pub outcome: BatchOutcome,
     pub left_behind: Vec<Leftover>,
+    pub lock_released: Option<LockRelease>,
+}
+
+/// The merge lock this batch's actor was holding when it ended, and which the
+/// run took back off it (smetana-rxzd).
+///
+/// The whole of what the document has to say about a release is who it was
+/// taken from and on what evidence, and only one of those is data: the evidence
+/// is always the same one — the batch's own process group read as gone — and is
+/// a phrase in `released` rather than a field, because a second answer here
+/// would mean a second rule in `queue::release`, and there is exactly one.
+///
+/// Nothing is written to the lock's own issue, deliberately: any note there
+/// moves `updated_at` and makes a dead claim look fresh to every lead waiting
+/// on `merging`'s staleness rule. So this line is the only record of the
+/// release there is.
+#[derive(Debug, Clone)]
+pub struct LockRelease {
+    pub id: String,
+    /// `smetana-run-<session-id>`, the batch's own bd actor — the name the
+    /// claim was sitting under.
+    pub actor: String,
 }
 
 /// What `parse_batch` answers: the file's contents, and whether it was readable
@@ -321,6 +348,7 @@ pub fn render(report: &RunReport) -> String {
             }
             outcome(&mut out, &b.outcome);
             held(&mut out, &b.left_behind);
+            released(&mut out, &b.lock_released);
             out.push_str("</div>");
         }
         out.push_str("</div>");
@@ -397,11 +425,14 @@ fn outcome(out: &mut String, outcome: &BatchOutcome) {
 /// nothing would stand under every batch of every report, and a line that is
 /// always there is one nobody reads.
 ///
-/// **Named, never acted on.** The app writes to the tracker nowhere as part of
-/// recovery (`recovery.rs`), so nothing here releases a lock or parks a claim;
-/// `running-tasks` Phase R does that with the worktrees in front of it. Without
-/// the line, a lock a dead batch is still holding is discovered by the *next*
-/// run failing to take it.
+/// **A reading of the board, never the record of an act.** This is what the
+/// board said a moment after the batch ended, and it says nothing at all about
+/// what the run then did — the release of a lock is `released` below, on its
+/// own line, and everything else here the loop has either given back or parked
+/// by rules of its own. Without this line, a lock a dead batch was holding is
+/// discovered by the *next* run failing to take it, which is what it was
+/// written for; the release that now usually follows is the same fact acted on
+/// rather than a reason to stop naming it.
 fn held(out: &mut String, held: &[Leftover]) {
     if held.is_empty() {
         return;
@@ -422,11 +453,37 @@ fn held(out: &mut String, held: &[Leftover]) {
         out.push(')');
     }
     // The list and nothing after it. A closing sentence about the app having
-    // cleared none of it was written and taken out again: the run *does* park a
-    // stuck batch's claims after an unanswered question, moments after this
-    // reading, so the reassurance would have been false in one of the six
-    // endings and there is nothing in the document to tell the reader which.
+    // cleared none of it was written and taken out again, and it has aged into
+    // being plainly false besides: the run parks a stuck batch's claims after
+    // an unanswered question and gives back everything else behind a session it
+    // has finished with, both moments after this reading. What the app did is
+    // said where it was done — `released` below for the lock, and the board
+    // itself for the rest.
     out.push_str(".</p>");
+}
+
+/// The merge lock this batch's actor was holding, and which the run gave back
+/// (smetana-rxzd).
+///
+/// Drawn whether or not the batch left an account of itself, unlike `held`
+/// above: that is a reading of the board, which a lead who wrote an account has
+/// already described, while this is a **write the app made** and nobody else is
+/// going to mention it. Nothing goes onto the lock's own issue — a note there
+/// would move `updated_at` and make a dead claim look fresh to every lead
+/// waiting on it — so this sentence is the only record of the release there is.
+///
+/// It names the actor it was taken from and the evidence it was taken on,
+/// because those are the two things somebody doubting the release would ask
+/// for, and the second is the entire licence: a batch whose own process group
+/// the app read as gone is not merging, so the half-merged target branch the
+/// lock exists to prevent was never on the table.
+fn released(out: &mut String, released: &Option<LockRelease>) {
+    let Some(release) = released else { return };
+    out.push_str("<p class=\"outcome\">The run released the merge lock <code>");
+    out.push_str(&escape(&release.id));
+    out.push_str("</code>, which <code>");
+    out.push_str(&escape(&release.actor));
+    out.push_str("</code> was still holding: the process group of that session was gone.</p>");
 }
 
 /// One cell of the summary strip. `extra` carries the hue that says what the
@@ -662,6 +719,7 @@ h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}\
 .body code{font-size:12px;color:var(--text-primary)}\
 .unknown{margin:0;color:var(--text-muted)}\
 .outcome{margin:0;color:var(--text-secondary)}\
+.outcome code{font-size:12px}\
 .held{margin:0;color:var(--status-needs-you-fg)}\
 .held code{font-size:12px}\
 .notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;\
@@ -731,6 +789,7 @@ mod tests {
             // test about a crash.
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
+            lock_released: None,
         }
     }
 
@@ -912,6 +971,50 @@ mod tests {
             html.contains(".held{margin:0;color:var(--status-needs-you-fg)}"),
             "drawn loud, and at a contrast a person can read a sentence at: {html}"
         );
+    }
+
+    #[test]
+    fn a_lock_the_run_took_back_is_named_with_the_actor_and_the_evidence() {
+        // The release is a write the app made, and this line is the only
+        // record of it there will ever be: nothing goes onto the lock's own
+        // issue, because a note there would move `updated_at` and make a dead
+        // claim look fresh to every lead waiting on it. So the two things
+        // somebody doubting the release would ask for are both here — whose
+        // claim it was, and what the app read to decide the batch was gone.
+        let mut killed = batch(1);
+        killed.reported = false;
+        killed.outcome = BatchOutcome::NoCode;
+        killed.left_behind =
+            vec![Leftover { id: "smetana-lock".into(), status: "in_progress".into(), lock: true }];
+        killed.lock_released =
+            Some(LockRelease { id: "smetana-lock".into(), actor: "smetana-run-7".into() });
+        let html = render(&report(600, None, &[killed]));
+
+        assert!(html.contains("The run released the merge lock"), "{html}");
+        assert!(html.contains("<code>smetana-lock</code>"), "{html}");
+        assert!(html.contains("<code>smetana-run-7</code>"), "{html}");
+        assert!(html.contains("process group of that session was gone"), "the evidence: {html}");
+        // The reading of the board stands beside it rather than instead of it:
+        // what the batch was holding when it ended is still true, and the
+        // release is the next sentence rather than a reason to stop saying it.
+        assert!(html.contains("still held on the board"), "{html}");
+        assert!(html.contains(".outcome code{font-size:12px}"), "the ids are set in mono: {html}");
+    }
+
+    #[test]
+    fn a_batch_that_released_nothing_says_nothing_about_a_lock() {
+        // The ordinary batch, and much the commonest: it held no lock, or the
+        // app could not prove its group gone. A line saying so would stand
+        // under nearly every batch of every report.
+        let mut held = batch(1);
+        held.reported = false;
+        held.outcome = BatchOutcome::NoCode;
+        held.left_behind =
+            vec![Leftover { id: "smetana-lock".into(), status: "in_progress".into(), lock: true }];
+        let html = render(&report(600, None, &[held]));
+
+        assert!(html.contains("still held on the board"), "{html}");
+        assert!(!html.contains("The run released the merge lock"), "{html}");
     }
 
     #[test]
@@ -1167,6 +1270,7 @@ mod tests {
             reported: true,
             outcome: BatchOutcome::Exited,
             left_behind: vec![],
+            lock_released: None,
         }
     }
 

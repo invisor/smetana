@@ -38,9 +38,11 @@ const BLOCKS: &str = "blocks";
 /// held, it is `in_progress` and would count as unfinished. Either reading
 /// turns coordination into work: a lead would try to implement it, and a run
 /// would keep taking batches to "recover" it. The first half of that — only an
-/// `open` issue is claimable — is also why no rule in this file may ever write
-/// the lock into a status of its own: `release` and `claimed_by` each say what
-/// that cost, and it is the whole project's merges rather than one task's.
+/// `open` issue is claimable — is also why `open` is the one status any rule in
+/// this file may ever write the lock into: `release` puts it back there behind
+/// a batch it can prove dead and `claimed_by` refuses to park it, and each says
+/// what the other cost would be, which is the whole project's merges rather
+/// than one task's.
 pub(super) const LOCK_LABEL: &str = "smetana-lock";
 
 /// The board, as a run cares about it.
@@ -193,9 +195,11 @@ pub fn snapshot(issues: &[Issue], scope: &RunScope, min_priority: Option<u8>) ->
 /// error.
 ///
 /// Its readers in this file want different things of the lock: the snapshot
-/// leaves it out of every count, `claimed_by` refuses to park it, and
+/// leaves it out of every count, `claimed_by` refuses to park it,
 /// `left_behind` keeps it and flags it, since a held lock is exactly what a
-/// report has to name. One reader is outside — `summary.rs` has to make the
+/// report has to name, and `release` reads that flag to decide whether it is
+/// looking at the one leftover with a proof condition on it. One reader is
+/// outside — `summary.rs` has to make the
 /// same exclusion, a lock being coordination there too and never a task a run
 /// closed — which is what `pub(super)` is for. Sharing the predicate is what
 /// stops them from drifting apart.
@@ -240,9 +244,12 @@ fn blocked(issue: &Issue, not_finished: &HashSet<&str>) -> bool {
 /// killed at a question while it held the lock cost every merge in the project
 /// from then on, and nothing but a person editing the board gets it back.
 /// `running-tasks` forbids a lead to park the lock in exactly these words; the
-/// app was doing it in code. It is the same refusal `release` already makes on
-/// the other path, for the same reason: the lock is coordination rather than
-/// work, so no way a batch can end is allowed to move it.
+/// app was doing it in code. This refusal is unconditional and stays that way:
+/// `release` now has one way to move the lock — back to `open` behind a batch
+/// it has proved dead (smetana-rxzd) — and parking is the opposite of that,
+/// putting the lock into a status nobody can claim it from. The lock is
+/// coordination rather than work, so `open` is the only place any ending of a
+/// batch may leave it.
 pub fn claimed_by(issues: &[Issue], actor: &str) -> Vec<String> {
     issues
         .iter()
@@ -304,15 +311,44 @@ pub fn parking_note(question: &str) -> String {
 ///
 /// The predicate exists for one caller and one branch: on the unanswered
 /// question `park_claims` takes the `in_progress` claims — the merge lock
-/// excepted, which neither path may write — and nothing else, so the reviewed
-/// half has to be released beside it, and asking for it by name here is what
-/// keeps `ready_to_merge` a string this file spells once.
+/// excepted, which nothing on that branch may write — and nothing else, so the
+/// reviewed half has to be released beside it, and asking for it by name here
+/// is what keeps `ready_to_merge` a string this file spells once. The lock
+/// falls outside both sets on that branch by being neither parked nor
+/// `ready_to_merge`, and the session it belongs to is still sitting at its
+/// prompt there, so `release`'s own proof would refuse it anyway.
 pub fn is_reviewed(left: &Leftover) -> bool {
     left.status == READY_TO_MERGE
 }
 
+/// What the app has been able to prove about the process group of the batch
+/// whose leftovers these are — and the whole of what decides whether the merge
+/// lock among them is given back (smetana-rxzd).
+///
+/// Deliberately two answers where `registry::liveness` has three. The
+/// difference between `Alive` and `Unknown` does not reach this rule: only
+/// proof of death releases the lock, so everything that is not that proof is
+/// one answer here and gets one treatment. Naming the second variant for what
+/// it is — *unproven*, not "alive" — is what stops the reading that would
+/// invert it, where an unreadable process table quietly became a licence.
+///
+/// It says nothing about the ordinary leftovers: `in_progress` and
+/// `ready_to_merge` are given back behind every session the run has finished
+/// with, alive or not, and that set is `service::drive`'s to choose as it
+/// always was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchLife {
+    /// The app asked the process table about this batch's own group and it
+    /// answered that the recorded process is gone — `registry::group_is_dead`,
+    /// and nothing else may stand in for it.
+    ProvenDead,
+    /// Anything else: a group that is alive, a group this platform or this user
+    /// cannot ask about, or a batch whose group was never recorded at all.
+    Unproven,
+}
+
 /// How one thing a batch left claimed is given back, as a patch for the
-/// tracker — or `None` for the one leftover that is never given back.
+/// tracker — or `None` where nothing is given back at all.
 ///
 /// Three rules, and each of them is a way of being wrong that costs a night:
 ///
@@ -323,18 +359,41 @@ pub fn is_reviewed(left: &Leftover) -> bool {
 /// - **`ready_to_merge` keeps its status and loses only the claim.** That is
 ///   reviewed work waiting to be merged, and putting it back in `open` would
 ///   throw the review away and have it done again.
-/// - **The merge lock is never touched.** Releasing it behind a batch that is
-///   still alive is releasing it in the middle of somebody's merge, which is
-///   the half-merged target branch the lock exists to prevent.
+/// - **The merge lock goes back to `open` and unclaimed, and only behind a
+///   batch the app has *proved* dead** (`BatchLife::ProvenDead`, smetana-rxzd).
+///   This refused it outright until then, and the reason written here was that
+///   releasing it behind a batch that is still alive is releasing it in the
+///   middle of somebody's merge, which is the half-merged target branch the
+///   lock exists to prevent. That reason is intact and is the whole of why
+///   `Unproven` still gets `None`: it is an argument about a *live* batch, and
+///   a group the process table says is gone is not one. What the old refusal
+///   cost was the other side of the same night — the only thing that ever
+///   released the lock was the lead's own last command, so a lead killed
+///   mid-merge left it held for ever and the next run stood at somebody else's
+///   claim.
+///
+/// **The lock takes no note.** Every other leftover here gets a line saying
+/// what happened to it; the lock's issue carries nothing but its claims and
+/// releases, because any other write moves `updated_at` and makes a dead
+/// claim look fresh — which hangs every waiting lead for another hour on the
+/// staleness rule in `merging`. The release is named in the run's own
+/// document instead (`report::LockRelease`), where it costs the board nothing.
+///
+/// **Only the actor's own lock ever reaches here.** `left_behind` filters on
+/// the assignee, so a lock some other lead is holding is not in the set this is
+/// called over and nothing a run does can take it from them.
 ///
 /// A status this rule has never seen is left alone too: `left_behind` produces
 /// only the two above, and guessing at a third is not this function's to do.
 /// Which *endings* this is applied to is `service::drive`'s decision and is
 /// made there: a batch that handed its work back is still alive with a person
 /// in it and is not released at all, and on an unanswered question only the
-/// reviewed half is, `park_claims` owning the rest of what that batch holds —
-/// the lock apart, which the merge-lock bullet above refuses here and
-/// `claimed_by` refuses there, so no ending of a batch writes to it.
+/// reviewed half is, `park_claims` owning the rest of what that batch holds.
+/// The lock is out of both of those by construction — a hand-back releases
+/// nothing, `claimed_by` filters the lock out of the parking set, and a lock is
+/// never `ready_to_merge` — so the one path that can reach it is a batch whose
+/// session is over, which is also the only path on which the proof above can
+/// come out true.
 /// The note is an ordinary one — deliberately not the `parked:` or `resolved:`
 /// the `running-tasks` skill writes, since neither happened here — and it names
 /// the batch, its actor and, where the app could find them, the branch the work
@@ -344,9 +403,21 @@ pub fn release(
     batch: u32,
     actor: &str,
     work: Option<(&str, &str)>,
+    life: BatchLife,
 ) -> Option<IssuePatch> {
     if left.lock {
-        return None;
+        if life != BatchLife::ProvenDead {
+            return None;
+        }
+        return Some(IssuePatch {
+            // `open` whatever status it was held in, because `open` is the only
+            // status anybody can claim from — a lock left anywhere else is
+            // claimable by nobody at all, which is the failure this whole
+            // family of rules is arranged around.
+            status: Some(OPEN.to_string()),
+            assignee: Some(String::new()),
+            ..Default::default()
+        });
     }
     let (status, said) = match left.status.as_str() {
         IN_PROGRESS => (
@@ -897,8 +968,10 @@ mod tests {
 
     #[test]
     fn the_merge_lock_is_never_parked() {
-        // smetana-dgv, and it is the same refusal
-        // `the_merge_lock_is_never_given_back` pins on the other path. A batch
+        // smetana-dgv, and the other path's refusal is narrower rather than
+        // absent: `release` gives the lock back to `open`, and only behind a
+        // batch it has proved dead. Parking has no such case — `parked` is not
+        // claimable by anybody — so this filter is unconditional. A batch
         // killed at an unanswered question while it was merging holds the lock
         // `in_progress` under its own actor, which is precisely the shape this
         // filter passes — so the lock was parked, with the question as its note
@@ -1123,7 +1196,8 @@ mod tests {
             status: "in_progress".into(),
             lock: false,
         };
-        let patch = release(&left, 2, "smetana-run-10", None).expect("work is given back");
+        let patch = release(&left, 2, "smetana-run-10", None, BatchLife::Unproven)
+            .expect("work is given back");
         assert_eq!(patch.status.as_deref(), Some("open"));
         assert_eq!(patch.assignee.as_deref(), Some(""), "bd clears the field on an empty assignee");
         let note = patch.append_notes.expect("a note saying what happened");
@@ -1145,7 +1219,8 @@ mod tests {
             status: "ready_to_merge".into(),
             lock: false,
         };
-        let patch = release(&left, 3, "smetana-run-10", None).expect("the claim is released");
+        let patch = release(&left, 3, "smetana-run-10", None, BatchLife::Unproven)
+            .expect("the claim is released");
         assert_eq!(patch.status, None);
         assert_eq!(patch.assignee.as_deref(), Some(""));
         // The marker rule holds for both notes, not only the returning one: a
@@ -1159,9 +1234,9 @@ mod tests {
     #[test]
     fn reviewed_work_is_what_the_question_path_releases_and_nothing_else() {
         // `park_claims` takes the `in_progress` claims on that branch — the
-        // merge lock apart, which parking filters out and `release` answers
-        // nothing for — so the two sets have to be disjoint and this is the
-        // predicate that says so.
+        // merge lock apart, which parking filters out and which is not
+        // `ready_to_merge` either — so the two sets have to be disjoint and
+        // this is the predicate that says so.
         let reviewed = Leftover {
             id: "a".into(),
             status: "ready_to_merge".into(),
@@ -1173,14 +1248,72 @@ mod tests {
     }
 
     #[test]
-    fn the_merge_lock_is_never_given_back() {
-        // Releasing it behind a batch that is still alive is releasing it in
-        // the middle of somebody's merge — the half-merged target branch the
-        // lock exists to prevent. It is refused in whichever status it is held.
+    fn the_merge_lock_is_not_given_back_behind_a_batch_that_may_be_alive() {
+        // The argument this function was written with, and it survives
+        // smetana-rxzd whole: releasing the lock behind a batch that is still
+        // alive is releasing it in the middle of somebody's merge — the
+        // half-merged target branch the lock exists to prevent. `Unproven` is
+        // that batch, whether the process table said `Alive`, said `Unknown`,
+        // or was never asked because no group was recorded, and the refusal
+        // holds in whichever status the lock is held in.
         for status in ["in_progress", "ready_to_merge"] {
             let lock = Leftover { id: "smetana-uox".into(), status: status.into(), lock: true };
-            assert!(release(&lock, 4, "smetana-run-10", None).is_none(), "in `{status}`");
+            assert!(
+                release(&lock, 4, "smetana-run-10", None, BatchLife::Unproven).is_none(),
+                "in `{status}`"
+            );
         }
+    }
+
+    #[test]
+    fn the_merge_lock_goes_back_to_open_behind_a_batch_proved_dead() {
+        // The other half of smetana-rxzd. The only thing that ever released
+        // the lock was the lead's own last command, so a lead killed mid-merge
+        // left it held for ever and the next run stood at a claim nobody was
+        // going to give up. A batch whose group the process table says is gone
+        // is not merging, so the argument above does not reach it.
+        let lock = Leftover { id: "smetana-uox".into(), status: "in_progress".into(), lock: true };
+        let patch = release(&lock, 4, "smetana-run-10", None, BatchLife::ProvenDead)
+            .expect("a lock behind a dead batch is given back");
+        assert_eq!(patch.status.as_deref(), Some("open"), "claimable is `open` and nothing else");
+        assert_eq!(patch.assignee.as_deref(), Some(""), "and held by nobody");
+    }
+
+    #[test]
+    fn releasing_the_merge_lock_writes_no_note_to_it() {
+        // The lock's issue carries nothing but its claims and releases. Any
+        // other write moves `updated_at`, which makes a dead claim look fresh
+        // and hangs every waiting lead for another hour on `merging`'s own
+        // staleness rule — so the note that every other leftover gets is the
+        // one thing this release must not do. The branch and commit are
+        // offered here precisely to show they change nothing.
+        let lock = Leftover { id: "smetana-uox".into(), status: "in_progress".into(), lock: true };
+        let patch =
+            release(&lock, 4, "smetana-run-10", Some(("main", "d3a4309")), BatchLife::ProvenDead)
+                .expect("a lock behind a dead batch is given back");
+        assert_eq!(patch.append_notes, None, "the lock is written to in two ways and no third");
+    }
+
+    #[test]
+    fn a_lock_somebody_else_is_holding_is_never_in_the_set_at_all() {
+        // The release is applied to `left_behind`'s answer, which filters on
+        // the assignee, so a lock held by another lead — one somebody started
+        // by hand in a terminal, whose actor appears in no run of this app — is
+        // not something a proof about *this* batch's process group can reach.
+        let actor = "smetana-run-10";
+        let mut theirs = issue("smetana-uox", "in_progress");
+        theirs.assignee = Some("smetana-run-3".into());
+        theirs.labels = vec![LOCK_LABEL.into()];
+        let mut mine = issue("mine", "in_progress");
+        mine.assignee = Some(actor.into());
+
+        let left = left_behind(&[theirs, mine], actor);
+        assert_eq!(left, vec![Leftover {
+            id: "mine".into(),
+            status: "in_progress".into(),
+            lock: false
+        }]);
+        assert!(!left.iter().any(|l| l.lock), "no lock of this batch's to release");
     }
 
     #[test]
@@ -1188,7 +1321,7 @@ mod tests {
         // `left_behind` produces exactly two, and guessing at a third is not
         // this function's to do.
         let odd = Leftover { id: "x".into(), status: "hooked".into(), lock: false };
-        assert!(release(&odd, 1, "smetana-run-10", None).is_none());
+        assert!(release(&odd, 1, "smetana-run-10", None, BatchLife::ProvenDead).is_none());
     }
 
     #[test]
@@ -1197,8 +1330,14 @@ mod tests {
         // that was committed and never merged is on a branch, and the note is
         // the only place the board will ever say so.
         let left = Leftover { id: "smetana-08f".into(), status: "in_progress".into(), lock: false };
-        let patch = release(&left, 2, "smetana-run-10", Some(("fix/smetana-08f-a-task", "d3a4309")))
-            .expect("work is given back");
+        let patch = release(
+            &left,
+            2,
+            "smetana-run-10",
+            Some(("fix/smetana-08f-a-task", "d3a4309")),
+            BatchLife::Unproven,
+        )
+        .expect("work is given back");
         let note = patch.append_notes.expect("a note");
         assert!(note.contains("fix/smetana-08f-a-task"), "{note}");
         assert!(note.contains("d3a4309"), "{note}");

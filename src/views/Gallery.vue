@@ -509,6 +509,7 @@ h3{margin:0;font-size:15px;font-weight:600;line-height:1.35}
 .body code{font-size:12px;color:var(--text-primary)}
 .unknown{margin:0;color:var(--text-muted)}
 .outcome{margin:0;color:var(--text-secondary)}
+.outcome code{font-size:12px}
 .held{margin:0;color:var(--status-needs-you-fg)}
 .held code{font-size:12px}
 .notice{background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px;
@@ -558,7 +559,10 @@ font-size:18px;font-weight:500;color:var(--text-primary)}
 process leaves.</p>
 <p class="held">When this batch ended, its actor still held on the board:
 <code>smetana-js4</code>, the merge lock (in_progress), <code>smetana-42v</code>
-(ready_to_merge).</p></div>
+(ready_to_merge).</p>
+<p class="outcome">The run released the merge lock <code>smetana-js4</code>, which
+<code>smetana-run-7</code> was still holding: the process group of that session was
+gone.</p></div>
 </div>
 <p class="notice">This document carries a script that would paint the whole page red and replace
 everything on it with the words THE SANDBOX FAILED. If that is what you are looking at,
