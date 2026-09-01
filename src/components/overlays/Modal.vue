@@ -43,13 +43,33 @@ defineEmits(['close'])
    being drawn. */
 const inWindow = inject('smDialogWindow', false)
 
+/* Whether the window this dialog is drawn in has a size somebody chose, in
+   which case the dialog stops being as tall as its content and becomes as tall
+   as the window: the body takes the spare room and scrolls when there is not
+   enough of it, and the footer stays where the buttons are expected to be.
+
+   A `ref` rather than a value, because a window can be dragged while it is open
+   and the layout has to follow. Absent everywhere else — the app window, the
+   gallery — where the default answers and nothing changed. */
+const filled = inject('smDialogFill', null)
+const isFilled = computed(() => inWindow && Boolean(filled?.value))
+
 /* In the app this is the scrim: the layer that dims the board and centres the
    dialog over it. In a window there is nothing to dim and nothing to centre
    against — the window is the dialog's own — so it is an ordinary block that
    simply holds what is inside it. */
 const scrimStyle = computed(() =>
   inWindow
-    ? { display: 'block' }
+    ? {
+        /* Fitting, an ordinary block that is as tall as what is inside it.
+           Filled, the first of the three boxes between the root and the body
+           that have to pass the window's height down: a column that takes what
+           it is given and refuses to be measured by its content. */
+        display: isFilled.value ? 'flex' : 'block',
+        flexDirection: 'column',
+        flex: '1 1 auto',
+        minHeight: 0
+      }
     : {
         position: 'absolute',
         inset: 0,
@@ -73,7 +93,14 @@ const dialogStyle = computed(() => ({
   font: 'var(--weight-regular) var(--text-body-size)/var(--leading-normal) var(--font-sans)',
   border: inWindow ? 'none' : 'var(--border-w) solid var(--border-strong)',
   borderRadius: inWindow ? '0' : 'var(--radius-4)',
-  boxShadow: inWindow ? 'none' : 'var(--shadow-modal)'
+  boxShadow: inWindow ? 'none' : 'var(--shadow-modal)',
+  /* The second box of the three. `minHeight: 0` is what lets it be shorter than
+     its content at all — a flex item's floor is its content unless it is said,
+     and without it the body below would never be given a reason to scroll. */
+  display: isFilled.value ? 'flex' : 'block',
+  flexDirection: 'column',
+  flex: isFilled.value ? '1 1 auto' : 'none',
+  minHeight: 0
 }))
 
 /* Without the header above it the body owes its own top padding: the header's
@@ -82,11 +109,22 @@ const dialogStyle = computed(() => ({
 const bodyStyle = computed(() => ({
   padding:
     props.bodyPadding ||
-    (inWindow && !props.description ? 'var(--space-5)' : '0 var(--space-5) var(--space-5)')
+    (inWindow && !props.description ? 'var(--space-5)' : '0 var(--space-5) var(--space-5)'),
+  /* The last of the three, and the one that gives: it takes the room the
+     description and the footer leave, and scrolls when a window dragged shorter
+     than the form leaves it less than it wants. Scrolled here rather than on
+     the document, which is what a dialog past `HEIGHT_CEILING` does — the
+     footer holds the buttons, and a window whose buttons are below the fold is
+     worse than one whose middle scrolls. */
+  flex: isFilled.value ? '1 1 auto' : 'none',
+  minHeight: 0,
+  overflowY: isFilled.value ? 'auto' : 'visible'
 }))
 
 const footerStyle = computed(() => ({
   display: 'flex',
+  /* Never squeezed by a body that wants more room than the window has. */
+  flexShrink: 0,
   justifyContent: 'flex-end',
   alignItems: 'center',
   gap: 'var(--space-4)',
@@ -118,7 +156,7 @@ const footerStyle = computed(() => ({
            not, because a frame has nowhere to put a sentence. -->
       <div
         v-else-if="description"
-        :style="{ padding: 'var(--space-5) var(--space-5) var(--space-4)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }"
+        :style="{ flexShrink: 0, padding: 'var(--space-5) var(--space-5) var(--space-4)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }"
       >{{ description }}</div>
       <div v-if="$slots.default" :style="bodyStyle">
         <slot />
