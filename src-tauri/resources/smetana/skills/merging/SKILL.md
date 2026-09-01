@@ -111,7 +111,7 @@ makes of its name — the pid this file names is the only one asked.
 
 **A `smetana-run-<n>` holder the registry does not name at all is the third ground, and
 it is the commonest of the three.** A record leaves the file when its run has ended and
-its processes are shown gone — that is `registry::forget_run`'s whole condition — so the
+its processes are shown gone — that is `registry::forget_run`'s condition — so the
 run that took the lock and was killed before its last command leaves *nothing* behind in
 it. Reading that silence as "no evidence, wait the hour" turned the very case the
 dead-holder ground was written for into the one case it never served (smetana-fa4u):

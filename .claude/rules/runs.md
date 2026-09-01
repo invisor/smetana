@@ -655,10 +655,18 @@ later orphans exactly the process this file exists to reclaim. Conditioning on t
 instead would have been a `match` somebody has to remember to extend. `smetana:merging`'s 60-minute
 lock staleness rule cannot be replaced by the registry and is not: the file names runs this app
 started on this machine, while the lock can be held by a lead somebody started by hand in a terminal,
-whose actor appears nowhere here. What the registry does add, since smetana-0u7, is a **second ground
-for breaking the lock beside the hour** — a holder this file shows dead is broken at once, because an
-hour spent waiting on a process that does not exist buys nobody anything — and one field read for
-that and for nothing else. **A batch's liveness is its own `group`, not its record's `writer`.** A
+under a person's own name rather than a `smetana-run-<n>`, which this file was never going to carry —
+so for any name but that one shape an absence from it says nothing. What the registry adds, since
+smetana-0u7 and smetana-fa4u, is **two further grounds for breaking the lock beside the hour**. A
+holder this file shows dead is broken at once, because an hour spent waiting on a process that does
+not exist buys nobody anything, and that one is a single field read for it and for nothing else. A
+holder named `smetana-run-<n>` that a file read whole, parsed and of `version` 1 names in no record's
+`batches[].actor` is broken at once as well, and that one reads no field of a record at all but the
+absence of every record naming that actor. Which puts `forget_run`'s condition under a reader it was
+not written for: a record goes only when nothing it names is still running, so its absence is what a
+lead outside this app reads a dead holder by, and loosening it without moving `smetana:merging` and
+`smetana:running-tasks` with it would have a lead break the lock of a run that is still merging.
+**A batch's liveness is its own `group`, not its record's `writer`.** A
 batch killed mid-merge under an app that is still up leaves a lock no one will ever release, and the
 writer being alive says only that the app is; the `writer` stays the signal for a task claim, where
 the question is whether the run still exists to finish what it took. Both readings are the skills' to

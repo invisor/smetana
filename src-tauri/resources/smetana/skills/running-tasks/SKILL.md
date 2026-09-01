@@ -326,7 +326,7 @@ on its own. **This runs before you take any new work.**
      questions, two fields — and the reason they are not the same field.
    - **An actor of the form `smetana-run-<n>` that no record in the file names.** The
      record leaves the file when the run has ended and its processes are shown gone —
-     that is `registry::forget_run`'s whole condition — so a run killed after it took the
+     that is `registry::forget_run`'s condition — so a run killed after it took the
      lock and before its last command leaves nothing of itself here at all. The absence
      is the evidence, and it is the commonest way a lock is left standing; reading it as
      "nothing to go on, wait the hour" served the half-dead run whose record is still on
