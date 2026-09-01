@@ -38,9 +38,10 @@ app's own queue.
 release it after the last — on every way out.** A single task merged on its own is a
 batch of one. A gate that went red, a task that parked, a STOP that ends the phase:
 whatever ends this batch's merging, the release below is the last thing done on the way
-out. The one exit that cannot release — the run being killed — is what the two grounds
-for breaking a lock below exist for: an hour on the clock, and a holder that can be shown
-dead.
+out. The one exit that cannot release — the run being killed — is what the three grounds
+for breaking a lock below exist for: an hour on the clock, a holder whose own process can
+be shown gone, and a `smetana-run-<n>` holder the app's run registry does not name at
+all.
 
 Find it by its label:
 
@@ -103,14 +104,47 @@ when the writer is alive but that batch's own `group` pid holds nothing, or hold
 process plainly not the one that batch's own `group.command` records — that name is the
 agent's, never the app's, and it is judged rather than string-compared, since `ps -o
 comm=` prints a full path on macOS against the kernel's short name in the file, so a path
-ending in the recorded name is a match. Those are the only two readings. A holder the
-file names nowhere, a batch with no `group` recorded, no file, or a file you cannot read
-is **not** shown dead — it may be a lead somebody started by hand in a terminal — and it
-waits out the hour like any other. And a live `claude` process somewhere in the process
-table is not evidence about this lock in either direction: not its age, not its start
-time, not what `ps | grep` makes of its name — the pid this file names is the only one
-asked. The break is the same two commands and the same report line as the stale case; a
-dead holder is a second reason to reach for them, not a second mechanism.
+ending in the recorded name is a match. Those are the two readings a record that exists
+answers. And a live `claude` process somewhere in the process table is not evidence about
+this lock in either direction: not its age, not its start time, not what `ps | grep`
+makes of its name — the pid this file names is the only one asked.
+
+**A `smetana-run-<n>` holder the registry does not name at all is the third ground, and
+it is the commonest of the three.** A record leaves the file when its run has ended and
+its processes are shown gone — that is `registry::forget_run`'s whole condition — so the
+run that took the lock and was killed before its last command leaves *nothing* behind in
+it. Reading that silence as "no evidence, wait the hour" turned the very case the
+dead-holder ground was written for into the one case it never served (smetana-fa4u):
+a half-dead run, whose record is still on disk, was served, and a run that finished and
+went away was not. Here the absence itself is the evidence, so all three of these have to
+hold together before it counts:
+
+- **The file was read and parsed.** No `.smetana/runs.json`, or one you cannot read or
+  cannot parse, is the absence of evidence and not evidence of absence — leave the lock
+  and let the hour have it. Concluding a death from a file you never read is how a lead
+  that is alive and merging loses its lock out from under it.
+- **Its `version` is 1.** Anything else was written by an app this rule knows nothing
+  about, and the list of actors is not yours to read out of a shape you have not seen.
+- **No record names the actor, anywhere in the file.** Every `batches[].actor` of every
+  record, not the batches of the one record that caught your eye: an actor can sit under
+  any run, and "it is not in the record I looked at" is not "it is nowhere".
+
+**And only for an assignee of the form `smetana-run-<n>`.** That name is minted by the
+app and by nothing else; the app writes the record when the run starts and takes it away
+only once the run is over and its processes are gone, so for that one shape of name the
+file's silence is a fact about the run rather than a gap in the file. A lead somebody
+started by hand in a terminal holds the lock under a person's name, which this file was
+never going to carry — so a holder not named `smetana-run-<n>` falls through to the hour
+untouched, and the caveat the narrower wording was built around is kept whole rather than
+traded away.
+
+So what is still **not** shown dead, and still waits out the hour: a live `group`; a
+batch whose `group` the file does not record; a missing, unreadable or unparseable
+`.smetana/runs.json`, or one whose `version` is not 1; and a holder whose name is not of
+the `smetana-run-<n>` form.
+
+The break is the same two commands and the same report line as the stale case; a holder
+shown dead is a further reason to reach for them, not a further mechanism.
 
 **Nothing is ever written to the lock issue but the claim and the release** — no notes,
 no labels, no re-titling, no closing, nothing. `updated_at` moves on *any* write, so one
@@ -119,10 +153,12 @@ every waiting lead for a further hour. That the only two writes are the two that
 who holds it is exactly what makes the field above readable as the claim's age.
 
 **Breaking a lock is a report line, never a silent step**: name the actor it was taken
-from and how old the claim was. The claim after the break can still be refused —
-another waiting lead may land first — and that refusal goes back to waiting, not to
-another break: the new claim moves `updated_at` to the moment it landed, so the ordinary
-60-minute rule re-arms and applies to it like any other.
+from, how old the claim was, and which of the three grounds it went on — the hour, the
+holder's own process gone, or, in as many words, the run ended and the registry does not
+name it. The claim after the break can still be refused — another waiting lead may land
+first — and that refusal goes back to waiting, not to another break: the new claim moves
+`updated_at` to the moment it landed, so the ordinary 60-minute rule re-arms and applies
+to it like any other.
 
 The break is release-then-claim and bd has no compare-and-swap, so the pair is not
 atomic: two waiters seeing the same stale lock can interleave, and the second release
