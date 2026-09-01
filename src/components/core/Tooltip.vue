@@ -30,7 +30,17 @@
    the order for free, and at 200 against a modal's 300 a tooltip inside a dialog
    would now go behind it. `--z-popover` is the scale's answer to that, added
    when `Dropdown` needed the same thing — the ordering is the design system's to
-   state, not a local override's. */
+   state, not a local override's.
+
+   Two rules decide when the panel goes away, and both are this component's
+   rather than the controls' that draw one. A press anywhere in the window takes
+   it down: `mouseleave` cannot answer for a press, which moves the pointer
+   nowhere, so a menu opening under a stationary pointer used to leave the hint
+   standing beside it. And focus opens the panel only when the keyboard is what
+   brought it, so the focus a closing menu hands back to its trigger does not put
+   the hint straight back up. Neither rule is the design system's: its panel
+   closes on the two events a trigger raises for itself, which is enough only for
+   a trigger nothing opens over. */
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps({
@@ -98,6 +108,17 @@ function show() {
 async function reveal() {
   open.value = true
   at.value = null
+  /* The press rule, and `document` is the only place that hears every press:
+     in the trigger, in another control, in a card on the board, in empty space.
+     Capture rather than bubble, which is what `MenuButton`, `PointerMenu` and
+     the notifications panel all do for the same job, and it buys one plain
+     ordering fact: capture runs before the handlers on whatever was pressed, so
+     the panel is already down by the time that press does whatever it does.
+     It goes on when there is a panel and comes off in `hide`, so nothing of
+     this component sits on `document` while it has nothing on screen, and a
+     second `reveal` without a `hide` between adds nothing, since the DOM
+     ignores a listener it already has. */
+  document.addEventListener('pointerdown', onDocumentPointerdown, true)
   await nextTick()
   place()
 }
@@ -162,19 +183,178 @@ function hide() {
   cancel()
   open.value = false
   at.value = null
+  document.removeEventListener('pointerdown', onDocumentPointerdown, true)
 }
 
-/* A press on the trigger ends the wait and takes down whatever is up, and only
-   where a delay was asked for. A delayed panel explains something a person is
-   about to act on — a column header is also its own drag handle — so a hint
-   that had just earned its two seconds would otherwise hang over a column
-   already moving. With no delay this is nothing anybody asked for, and every
-   tooltip in the app today would change behaviour on a press. */
+/* Set when a press inside this trigger took the panel down, and read by
+   `onFocusin` alone: it means the focus arriving here is the press's own doing
+   and must not put the hint back up.
+
+   `:focus-visible` cannot answer this on its own, and the case it misses is
+   Esc. Closing a menu that way is a keyboard interaction, so the focus handed
+   back to the trigger is `:focus-visible` by every browser's reckoning — and
+   correctly so, since the button is wearing a focus ring. The measured order is
+   `pointerdown`, `focusin` on the button, `focusout` to the menu's own box,
+   then `focusin` again when Esc gives it back. The two questions are different:
+   the pseudo-class asks whether the keyboard brought this focus at all, and
+   this flag asks whether this particular panel was just pressed away. Both have
+   to be answered, and only the second is this component's to remember.
+
+   Only a press *inside this trigger* arms it. A press on some other control
+   still takes this panel down — that is the rule above — but arming on it would
+   leave a keyboard user who then tabs here with no hint at all. */
+let dismissedByPress = false
+
+/* The press's own arrival, which the flag must not be spent on. A press on a
+   trigger that did not already hold the focus raises two focus events here, and
+   only the second is the hand-back worth refusing: the browser focuses the
+   trigger itself first, and if the flag died on that one it would be gone
+   before the menu had even opened.
+
+   This is observed rather than worked out afterwards, and that is the whole
+   point of it. `focusin` cannot be asked which arrival it is: its
+   `relatedTarget` is wherever the focus came *from*, which for the press's own
+   arrival is wherever the person happened to be standing beforehand — an
+   inactive document tab, an unselected row in the file tree, a disabled
+   control, all of which carry `tabIndex < 0` and are indistinguishable from an
+   overlay handing focus back. The handler below runs in capture, before the
+   browser has moved the focus at all, so it can state the fact instead.
+
+   The same phase answers the other half, and it has to be asked rather than
+   assumed: **whether the press raises an arrival at all.** If the focus is
+   already inside the trigger — the button was tabbed to and is then clicked —
+   nothing moves and no `focusin` follows, so a flag armed as though one were
+   coming would be spent on the hand-back instead, and the panel would survive
+   the close. `document.activeElement` in capture is still the pre-press focus,
+   which is exactly that question, and it is a fact about this trigger rather
+   than an inference from some unrelated element's `tabIndex`. */
+let pressArrival = false
+
+/* The press rule and both flags, in the one place that hears every press. */
+function onDocumentPointerdown(event) {
+  if (trigger.value?.contains(event.target)) {
+    dismissedByPress = true
+    pressArrival = !trigger.value.contains(document.activeElement)
+  }
+  hide()
+}
+
+/* Whether the focus is being handed off rather than walked away with. A
+   `tabIndex` below zero is an element the keyboard cannot reach on its own, so
+   a script put the focus there — an overlay opened by this very press, which
+   will hand it back when it closes — and the flag has to outlive that round
+   trip. Anything the keyboard could have reached, and a focus falling all the
+   way back to the document, is somebody leaving: the flag goes, and the next
+   `Tab` onto this trigger shows the hint as it always did. */
+const handedOff = (related) => !!related && related.tabIndex < 0
+
+/* A press on the trigger, for the one case the listener above cannot have: a
+   wait that is running with no panel up yet, and therefore no listener. The
+   press ends it, rather than letting a hint open two seconds later over
+   whatever the press has since done — a delayed panel explains something a
+   person is about to act on, and a column header is also its own drag handle.
+   Once the panel is up this is the second handler to hear the same press and
+   finds the work already done. The
+   rule used to be narrower than this, `delay > 0` only, on the grounds that a
+   press closing an undelayed tooltip was nothing anybody had asked for; a menu
+   left open beside its own hint is what asked for it. */
 function onPointerdown() {
-  if (props.delay > 0) hide()
+  hide()
 }
 
-onUnmounted(cancel)
+/* Focus opens the panel only when the keyboard brought it here. A pointer has
+   its own way of asking what a glyph means — holding still over it — and what
+   this excludes is the focus a script hands back: closing a menu returns the
+   focus to the button that opened it, which is right for the keyboard and,
+   without this, put the hint back up the instant the press had taken it down,
+   beside a pointer that had long since moved on. The browser is the one that
+   knows the difference, and `:focus-visible` is where it says so — a Tab
+   matches, a `.focus()` after a click does not.
+
+   The flag is the other half, and it is what makes the fallback in
+   `keyboardFocus` safe: on an engine that cannot be asked about
+   `:focus-visible`, the hand-back after a press is still refused here.
+
+   **The flag guards one arrival and then dies**, and the death is the whole
+   reason it cannot mute a keyboard visit later on. Without it the flag outlives
+   the interaction that armed it: open a menu with the mouse, change your mind,
+   click a tab, and the focus leaves for an element with a negative `tabIndex` —
+   a roving tab stop, which `handedOff` cannot tell from an overlay — so
+   `onFocusout` keeps the flag and the next `Tab` here finds the hint silently
+   suppressed, with nothing on screen to say why.
+
+   Which arrival ends it needs no guessing, because `pressArrival` above says
+   whether the press caused one and, if it did, spends the flag on that one so
+   the next is the hand-back, whatever brought it. Every closing route the
+   acceptance criteria name — Esc, a row picked, a press outside — hands the
+   focus back to the trigger, so the flag dies on all three, and it does so
+   whether the press came from outside the trigger or from the trigger already
+   holding the keyboard's focus. It cannot outlive a close into an interaction
+   it knows nothing about.
+
+   What is left is bounded rather than open-ended, and it is measured rather
+   than argued: past the arrival the press causes, if it causes one, exactly one
+   more is refused — so a flag left armed costs one mute keyboard visit, and the
+   hint is back on the visit after it. Two routes still leave one armed, and
+   neither is the press itself. A menu can be closed with the
+   focus already outside it — `Tab` walks off the last row and out of the panel,
+   and the close then hands nothing back. And `handedOff` is asked about a
+   departure, where it cannot tell an overlay from a roving tab stop, so a press
+   followed by the focus going to any `tabIndex < 0` element — an inactive
+   document tab, an unselected row in the file tree — keeps the flag until the
+   arrival after it.
+
+   The cost is **per trigger and does not net out**: the flags are separate
+   pieces of state on separate components, so two triggers armed this way are
+   two mute first visits, one each, not one between them. That was measured on
+   two icon buttons armed in turn, and it is the price of the lifecycle above.
+   The alternative was to hold the `document` listener open for as long as the
+   flag is set, which buys those visits back with a listener per armed tooltip
+   sitting on `document` with nothing on screen — and this component is drawn on
+   nearly every icon button in the app, so that trade is refused here.
+
+   Only the template's own `focusin` is gated; `show` is left as it is for the
+   ancestors that relay into it. */
+function onFocusin(event) {
+  if (dismissedByPress) {
+    if (pressArrival) pressArrival = false
+    else dismissedByPress = false
+    return
+  }
+  if (!keyboardFocus(event.target)) return
+  show()
+}
+
+/* The pointer arriving is a fresh request for the hint, whatever the last press
+   was about, so it clears the flag as well as opening the panel. */
+function onMouseenter() {
+  dismissedByPress = false
+  pressArrival = false
+  show()
+}
+
+/* And the focus leaving for good clears them too — for good being the whole of
+   what `handedOff` decides, which is a fair question of a *departure*: this one
+   really is about where the focus is going. `pressArrival` goes with it, so a
+   press that never moved the focus into the trigger — pressing a control that
+   already had it — cannot leave the next arrival looking like the press's. */
+function onFocusout(event) {
+  if (!handedOff(event.relatedTarget)) {
+    dismissedByPress = false
+    pressArrival = false
+  }
+  hide()
+}
+
+/* Both halves of what this component leaves behind: the wait, and the press
+   listener that `hide` would otherwise be the only one to take off. A tooltip
+   goes out of the document with the control it explains — a card leaving the
+   board takes several — and a listener holding a dead component's `hide` would
+   outlive every one of them. */
+onUnmounted(() => {
+  cancel()
+  document.removeEventListener('pointerdown', onDocumentPointerdown, true)
+})
 
 /* Relays for an ancestor that owns the focus, and nothing wider than that.
    `focusin` bubbles up from whatever took the focus, so an element wrapping
@@ -247,14 +427,49 @@ const tipStyle = computed(() => ({
 }))
 </script>
 
+<script>
+/* Module scope, deliberately: everything in `<script setup>` above is per
+   instance, and this is a fact about the engine the app is running in. A
+   tooltip is drawn on nearly every icon button in the app, so a probe living up
+   there would be re-run once per button for an answer that cannot differ.
+
+   Whether this engine can be asked about `:focus-visible` at all, worked out on
+   the first focus rather than at import time, since the throw is the thing
+   being avoided and asking eagerly would only move it. WebKit knows the
+   pseudo-class from 15.4 and this project's floor is 15, where `matches` on a
+   selector it does not recognise throws rather than answering false — inside a
+   focus handler, which nothing here would survive. `ColumnHeader` carries the
+   same note about the same target.
+
+   The fallback is to open, which is what this component always did: on an
+   engine that cannot answer, the keyboard keeps its hint and what is lost is
+   the focus rule alone — a press anywhere still takes the panel down, and the
+   flag still refuses a hand-back — so the worst case there is the old behaviour
+   rather than a hint that cannot be reached. */
+let knowsFocusVisible = null
+
+function keyboardFocus(el) {
+  if (knowsFocusVisible === null) {
+    try {
+      document.documentElement.matches(':focus-visible')
+      knowsFocusVisible = true
+    } catch {
+      knowsFocusVisible = false
+    }
+  }
+  if (!knowsFocusVisible) return true
+  return el?.matches?.(':focus-visible') === true
+}
+</script>
+
 <template>
   <span
     ref="trigger"
     :style="{ display: 'inline-flex' }"
-    @mouseenter="show"
+    @mouseenter="onMouseenter"
     @mouseleave="hide"
-    @focusin="show"
-    @focusout="hide"
+    @focusin="onFocusin"
+    @focusout="onFocusout"
     @pointerdown="onPointerdown"
   >
     <slot />
