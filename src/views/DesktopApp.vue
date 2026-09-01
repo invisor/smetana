@@ -214,6 +214,7 @@ import {
   loadRun,
   needsSetup,
   runsState,
+  releaseRuns,
   saveDefaults,
   startRun,
   stopRun
@@ -232,6 +233,7 @@ import { absolutePath, relativeTo } from '../paths.js'
 import { dropText } from '../components/terminal/dropPaths.js'
 import { workingKey } from '../components/run/configFreshness.js'
 import { runTitle, scopeBusyReason } from '../components/run/runScopes.js'
+import { limitVoice } from '../components/run/limitVoice.js'
 import { DEFAULTS_FALLBACK, draftFrom } from '../components/run/projectDefaults.js'
 import {
   LEFT_DEFAULT,
@@ -1700,6 +1702,18 @@ const runFailure = (err) => {
    reach exactly that run — its neighbours in the same project keep going. */
 const stopTheRun = (token) => {
   stopRun(token)
+}
+
+/* Which of the paused segments writes the sentence about the subscription
+   limit. Computed here rather than in the segment because it is a fact about
+   the whole list and no segment can see one — the rule itself is
+   `limitVoice.js`, out where a test can reach it. */
+const limitSpeaker = computed(() => limitVoice(runsState.runs))
+
+/* No token: the press releases every run that is alive, because one reading of
+   one subscription is what stood them all up. See `releaseRuns`. */
+const releaseTheRuns = () => {
+  releaseRuns()
 }
 
 const setupFor = ref(null)
@@ -5697,8 +5711,22 @@ const toastStackStyle = {
              not bound: the run a confirm is starting has no segment until the
              worker answers, so `runStarting` is about none of these, and
              passing it disabled the other live runs' stop buttons over a start
-             that never touches them. -->
-        <RunBar v-for="r in runsState.runs" :key="r.token" :run="r" @stop="stopTheRun(r.token)" />
+             that never touches them.
+
+             `speaks` is the other half of the same "several runs" story: the
+             subscription is one per machine, so the sentence about its limit is
+             written once, by whichever segment `limitVoice.js` picks. The rest
+             keep the pause glyph and their own Stop and say nothing. Release
+             takes no token on purpose — one press lets every live run past its
+             threshold, which is why every segment's handler is the same one. -->
+        <RunBar
+          v-for="r in runsState.runs"
+          :key="r.token"
+          :run="r"
+          :speaks="r.token === limitSpeaker"
+          @stop="stopTheRun(r.token)"
+          @release="releaseTheRuns()"
+        />
       </template>
     </StatusFooter>
 

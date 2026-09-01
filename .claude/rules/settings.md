@@ -82,6 +82,39 @@ truthiness guard would swallow the clearing, leaving the old text in the app win
 the next session started while the field on screen looked empty. The shape to copy is
 `editorWordWrap`'s, not `agentLanguage`'s.
 
+`subscription` sits at the root beside `agent` and the languages, on their argument exactly: a
+subscription belongs to the **person** and to the CLI they signed in to, not to a repository. Two
+fields under one section because they are one policy read together — `pauseAt`, at or above which a
+run takes no work at all and waits for the reset, and `reducedAt`, at or above which a batch takes
+`REDUCED_MAX_TASKS` tasks instead of the number chosen for the run. Both ship as today's behaviour
+exactly, 90 and 75, and both take their default from `runs::usage` rather than repeating the number
+here. A per-project version was refused: it would have widened the two windows' contract and put one
+subscription under several policies at once.
+
+**`0` is off, and never `null`**, in the file and on the wire alike. That is against this schema's
+own habit — `min_priority` and `Usage::session_pct` are `Option` precisely so "nobody chose" cannot
+be read as a number — and the reason is mechanical rather than aesthetic: `adopt()` in
+`views/SettingsWindow.vue` skips any field whose value is `null`, so a threshold turned off in the
+app window would never reach the settings window, and the old number would stand on screen until the
+window was reopened. A zero threshold would mean "pause when nothing at all has been used", which is
+nobody's setting, so the value is free to carry the other meaning. An `Option` on disk with a `0` on
+the wire was the alternative and is worse: two forms of one fact, and a mapping between them to keep
+true in both directions.
+
+**A value off the ladder takes the shipped number rather than being forgotten**, which is the
+opposite of `min_priority`'s rule one section up, and the difference is what forgetting would hand
+the decision back to. There it is the project's own default, a real answer; here the only thing to
+fall back to would be "off" — and silently removing somebody's protection because a hand-edited
+number was junk is the one direction this field must not fail in. The ladder is
+`SUBSCRIPTION_STEPS`, `[0, 50, 60, 70, 75, 80, 85, 90, 95]`, and it is **written out a second time**
+in `src/components/settings/subscription.js`, which owns the interface's copy. The two move together:
+a rung missing from Rust's copy is a choice that reverts at the next open, one missing from the front
+end's is simply not offered. It is doubled rather than fetched because each end needs it for a
+different job — Rust to refuse a hand-edited number, the front end to have something for a `Dropdown`
+to draw. A last rule joins them: `reducedAt` at or above an enabled `pauseAt` is turned **off**
+rather than moved, since there is no band left between them for it to name. The schema version does
+not move — the change is additive.
+
 `layout.gitSections` is the other thing at the root that could plausibly have gone under a project and
 did not: how the Git panel's three sections are folded, how tall two of them were dragged to, and how
 tall the commit box's message field was. The

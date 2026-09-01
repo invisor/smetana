@@ -50,6 +50,43 @@ pub const POLL: Duration = Duration::from_secs(10 * 60);
 /// batches with nothing on screen to say why.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// A threshold that is off. Not a percentage anybody could mean: "pause when 0%
+/// of the allowance is used" is "never run at all", so the value is free to
+/// carry the other meaning — and it carries it on the wire and in
+/// `settings.json` too, because `adopt()` in `src/views/SettingsWindow.vue`
+/// skips a field whose value is `null` and an `Option` would therefore never
+/// reach the settings window when somebody turned a threshold off.
+pub const OFF: u8 = 0;
+
+/// At or above this the allowance is out, whatever the person has set their own
+/// gate to. Deliberately a second constant rather than a reuse of
+/// `PAUSE_THRESHOLD`, though it ships with the same number: that one is a
+/// default somebody may move, and this one is the app's own reading of "the
+/// harness will refuse the next session", which is not theirs to move. It is
+/// only ever asked *after* a session has already exited non-zero, so it costs
+/// nothing when things are going well.
+pub const SPENT: u8 = 90;
+
+/// The thresholds a person has chosen, read off `settings.json`.
+///
+/// Read at every gate check rather than once when the run started, which is the
+/// opposite of what `drive` does with `agent` and `remove_worktrees` and for a
+/// reason that does not apply to them: changing those mid-run would make a run
+/// ask about one subscription and spend another, while changing these only
+/// moves when it waits. Somebody watching a paused run and lowering the gate
+/// wants that run to go on, not to be stopped and started again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    pub pause_at: u8,
+    pub reduced_at: u8,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self { pause_at: PAUSE_THRESHOLD, reduced_at: REDUCED_THRESHOLD }
+    }
+}
+
 /// What the harness said is left. Percentages used, not remaining.
 ///
 /// **A percentage is optional, and that is the whole point of the type.** The
@@ -121,28 +158,95 @@ pub enum Decision {
 /// it read — is deliberately the most permissive of the four. Refusing to work
 /// because a probe failed would turn every hiccup in somebody else's CLI into a
 /// stopped run, and the failure this module exists to prevent is not that one.
-pub fn decide(usage: Option<&Usage>) -> Decision {
+///
+/// The bands are the person's own, out of `settings.json`, and `Limits::default`
+/// is what this module used to hold as constants. A threshold set to `OFF` is
+/// never entered at all, however high the reading — which is a decision about
+/// pre-empting and not about noticing: `spent` below is the rule that keeps on
+/// noticing, and `gate` is what puts the two together.
+pub fn decide(usage: Option<&Usage>, limits: Limits) -> Decision {
     let Some(usage) = usage else { return Decision::Normal };
     // A reading with neither half in it says nothing about the allowance, so it
     // takes the same answer as no reading at all — the rule this module is
     // built on is that nothing which failed to be read may hold a run up.
     let Some(pct) = usage.pct() else { return Decision::Normal };
-    if pct >= PAUSE_THRESHOLD {
+    if limits.pause_at != OFF && pct >= limits.pause_at {
         return Decision::Pause { pct, resets: usage.reset().map(str::to_owned) };
     }
-    if pct >= REDUCED_THRESHOLD {
+    if limits.reduced_at != OFF && pct >= limits.reduced_at {
         return Decision::Reduced { pct };
     }
     Decision::Normal
 }
 
+/// Whether the allowance is out, by a rule no setting reaches.
+///
+/// The classification after a session exits non-zero asks this and nothing
+/// else: a limit that ran out mid-batch and a harness that fell over are the
+/// same absence to anyone reading an exit code, and they need opposite
+/// responses. Were this to follow the person's own pause threshold, turning
+/// that threshold off would make every spent allowance read as a crash, and the
+/// run would stop with `Crashed` after `MAX_CRASHES` — which is the failure this
+/// whole module exists to prevent, arriving through the settings window.
+///
+/// `None` is not spent. An unreadable probe never holds a run up.
+pub fn spent(usage: Option<&Usage>) -> bool {
+    usage.and_then(Usage::pct).is_some_and(|pct| pct >= SPENT)
+}
+
+/// Whether a pause is the hold above rather than one of the person's own
+/// thresholds — the one distinction the run bar needs, because "Run anyway" is
+/// worth offering for a threshold and worth refusing for a spent allowance,
+/// where the next session would die the moment it started.
+///
+/// Deliberately not read off the `Decision`: both arrive as `Pause` and the
+/// difference is in what produced them. Asked beside `gate` with the same two
+/// arguments, so the two answers cannot come from different readings.
+///
+/// True whenever the hold applies, even where a threshold would have paused the
+/// run anyway. Pressing the button in that case would release the threshold and
+/// leave the allowance exactly as spent, which is the churn the gate exists to
+/// prevent.
+pub fn held(usage: Option<&Usage>, after_limited: bool) -> bool {
+    after_limited && spent(usage)
+}
+
+/// What the run loop's gate does with a reading: the person's own bands, unless
+/// the batch before this one died on a spent allowance and the allowance is
+/// still spent.
+///
+/// The second half is what keeps "off" meaning *do not pre-empt* rather than
+/// *do not notice*. Without it a run with the gate off would spend a session
+/// discovering the wall, be told `LastBatch::Limited`, come straight back here,
+/// be told to go, and do it again for as long as the queue lasts.
+pub fn gate(usage: Option<&Usage>, limits: Limits, after_limited: bool) -> Decision {
+    let decision = decide(usage, limits);
+    if !after_limited || matches!(decision, Decision::Pause { .. }) {
+        return decision;
+    }
+    match usage.filter(|reading| spent(Some(reading))) {
+        Some(reading) => Decision::Pause {
+            // `spent` is only true for a reading with a percentage in it, so the
+            // fall-back is unreachable; it is there so this cannot panic.
+            pct: reading.pct().unwrap_or(SPENT),
+            resets: reading.reset().map(str::to_owned),
+        },
+        None => decision,
+    }
+}
+
 /// Which of `decide`'s three bands a reading falls in, and nothing else from it.
 ///
-/// The band travels to the front end while `PAUSE_THRESHOLD` and
-/// `REDUCED_THRESHOLD` stay here. Handing the percentages over and comparing
-/// them against 75 and 90 in JS was the alternative, and it was refused for the
-/// reason two copies of a threshold are always refused: the second copy drifts
-/// from the first with nothing on screen to say it has.
+/// The band travels to the front end while the comparison stays here. Handing
+/// the percentages over and comparing them in JS was the alternative, and it
+/// was refused for the reason two copies of a threshold are always refused: the
+/// second copy drifts from the first with nothing on screen to say it has.
+///
+/// Which numbers produced the band is now the person's, out of `settings.json`
+/// — `PAUSE_THRESHOLD` and `REDUCED_THRESHOLD` are what ships, not what applies.
+/// That is what makes the sentence under the percentages in the settings window
+/// and what a run actually does one fact rather than two: both come through
+/// `decide` with the same `Limits`.
 ///
 /// The reading itself is not repeated inside it the way `Decision` repeats it,
 /// since the whole `Usage` is already beside it in the answer.
@@ -198,7 +302,11 @@ pub enum AgentUsage {
 /// The one mapping from "who would answer, and what did they say" to what the
 /// settings window draws. Pure, and the whole of the command behind it: the
 /// command's own body is the two blocking calls that produce these arguments.
-pub fn report(profile: Option<&'static dyn Profile>, reading: Option<Usage>) -> AgentUsage {
+pub fn report(
+    profile: Option<&'static dyn Profile>,
+    reading: Option<Usage>,
+    limits: Limits,
+) -> AgentUsage {
     let Some(profile) = profile else { return AgentUsage::Unsupported { agent: None } };
     let agent = profile.id().to_owned();
     // Asked before the reading is looked at, because a profile that cannot be
@@ -208,7 +316,7 @@ pub fn report(profile: Option<&'static dyn Profile>, reading: Option<Usage>) -> 
         return AgentUsage::Unsupported { agent: Some(agent) };
     }
     let Some(usage) = reading else { return AgentUsage::Unreadable { agent } };
-    let band = Band::of(&decide(Some(&usage)));
+    let band = Band::of(&decide(Some(&usage), limits));
     AgentUsage::Read { agent, usage, band }
 }
 
@@ -290,7 +398,7 @@ mod tests {
         // The whole reason this module is allowed to parse somebody else's
         // prose: when the parse fails, things are exactly where they were
         // before it existed.
-        assert_eq!(decide(None), Decision::Normal);
+        assert_eq!(decide(None, Limits::default()), Decision::Normal);
     }
 
     #[test]
@@ -299,7 +407,7 @@ mod tests {
         // an empty reading — but `decide` is the place the rule is written, and
         // a second caller must not be able to stop a run by handing over an
         // allowance nobody read.
-        assert_eq!(decide(Some(&Usage::default())), Decision::Normal);
+        assert_eq!(decide(Some(&Usage::default()), Limits::default()), Decision::Normal);
         assert_eq!(Usage::default().pct(), None);
     }
 
@@ -310,13 +418,13 @@ mod tests {
         // harmless here and a lie on the settings window. The half that
         // arrived is the number, not its maximum with an invented zero.
         assert_eq!(session_only(80).pct(), Some(80));
-        assert_eq!(decide(Some(&session_only(80))), Decision::Reduced { pct: 80 });
+        assert_eq!(decide(Some(&session_only(80)), Limits::default()), Decision::Reduced { pct: 80 });
         assert_eq!(session_only(0).pct(), Some(0), "a real zero is a reading");
 
         let week_only = Usage { session_pct: None, session_reset: None, ..usage(0, 95) };
         assert_eq!(week_only.pct(), Some(95));
         assert_eq!(
-            decide(Some(&week_only)),
+            decide(Some(&week_only), Limits::default()),
             Decision::Pause { pct: 95, resets: Some("Aug 11 at 5:59pm".into()) },
             "the reset named is the one of the half that is in the way"
         );
@@ -324,26 +432,26 @@ mod tests {
 
     #[test]
     fn the_three_bands_are_read_off_whichever_limit_is_nearer_its_ceiling() {
-        assert_eq!(decide(Some(&usage(0, 0))), Decision::Normal);
-        assert_eq!(decide(Some(&usage(74, 74))), Decision::Normal);
-        assert_eq!(decide(Some(&usage(REDUCED_THRESHOLD, 0))), Decision::Reduced { pct: REDUCED_THRESHOLD });
-        assert_eq!(decide(Some(&usage(0, REDUCED_THRESHOLD))), Decision::Reduced { pct: REDUCED_THRESHOLD });
-        assert_eq!(decide(Some(&usage(89, 89))), Decision::Reduced { pct: 89 });
-        assert!(matches!(decide(Some(&usage(PAUSE_THRESHOLD, 0))), Decision::Pause { .. }));
-        assert!(matches!(decide(Some(&usage(0, PAUSE_THRESHOLD))), Decision::Pause { .. }));
+        assert_eq!(decide(Some(&usage(0, 0)), Limits::default()), Decision::Normal);
+        assert_eq!(decide(Some(&usage(74, 74)), Limits::default()), Decision::Normal);
+        assert_eq!(decide(Some(&usage(REDUCED_THRESHOLD, 0)), Limits::default()), Decision::Reduced { pct: REDUCED_THRESHOLD });
+        assert_eq!(decide(Some(&usage(0, REDUCED_THRESHOLD)), Limits::default()), Decision::Reduced { pct: REDUCED_THRESHOLD });
+        assert_eq!(decide(Some(&usage(89, 89)), Limits::default()), Decision::Reduced { pct: 89 });
+        assert!(matches!(decide(Some(&usage(PAUSE_THRESHOLD, 0)), Limits::default()), Decision::Pause { .. }));
+        assert!(matches!(decide(Some(&usage(0, PAUSE_THRESHOLD)), Limits::default()), Decision::Pause { .. }));
     }
 
     #[test]
     fn a_pause_names_the_reset_of_the_limit_that_is_in_the_way() {
         // Showing the session's reset while it is the week that is exhausted
         // would send somebody back in an hour to find the run still paused.
-        let Decision::Pause { pct, resets } = decide(Some(&usage(10, 95))) else {
+        let Decision::Pause { pct, resets } = decide(Some(&usage(10, 95)), Limits::default()) else {
             panic!("95% of the week is a pause");
         };
         assert_eq!(pct, 95);
         assert_eq!(resets.as_deref(), Some("Aug 11 at 5:59pm"));
 
-        let Decision::Pause { pct, resets } = decide(Some(&usage(95, 10))) else {
+        let Decision::Pause { pct, resets } = decide(Some(&usage(95, 10)), Limits::default()) else {
             panic!("95% of the session is a pause");
         };
         assert_eq!(pct, 95);
@@ -372,14 +480,14 @@ mod tests {
         // put to it at all. Reading that as a failed probe would send somebody
         // to check a login that has nothing to do with it.
         assert_eq!(
-            report(Some(&crate::agents::codex::Codex), None),
+            report(Some(&crate::agents::codex::Codex), None, Limits::default()),
             AgentUsage::Unsupported { agent: Some("codex".into()) }
         );
     }
 
     #[test]
     fn a_machine_with_no_agent_at_all_has_nobody_to_name() {
-        assert_eq!(report(None, None), AgentUsage::Unsupported { agent: None });
+        assert_eq!(report(None, None, Limits::default()), AgentUsage::Unsupported { agent: None });
     }
 
     #[test]
@@ -389,7 +497,7 @@ mod tests {
         // here would put "0% used" on the screen of somebody who is simply not
         // signed in.
         assert_eq!(
-            report(Some(&crate::agents::claude::Claude), None),
+            report(Some(&crate::agents::claude::Claude), None, Limits::default()),
             AgentUsage::Unreadable { agent: "claude".into() }
         );
     }
@@ -397,7 +505,7 @@ mod tests {
     #[test]
     fn a_reading_carries_the_agent_that_answered_and_the_band_it_falls_in() {
         let AgentUsage::Read { agent, usage: read, band } =
-            report(Some(&crate::agents::claude::Claude), Some(usage(10, 80)))
+            report(Some(&crate::agents::claude::Claude), Some(usage(10, 80)), Limits::default())
         else {
             panic!("a reading from a profile that can be asked");
         };
@@ -415,6 +523,7 @@ mod tests {
         let json = serde_json::to_value(report(
             Some(&crate::agents::claude::Claude),
             Some(usage(10, 20)),
+            Limits::default(),
         ))
         .expect("the answer serializes");
         assert_eq!(json["state"], "read");
@@ -432,13 +541,14 @@ mod tests {
         let json = serde_json::to_value(report(
             Some(&crate::agents::claude::Claude),
             Some(session_only(10)),
+            Limits::default(),
         ))
         .expect("the answer serializes");
         assert_eq!(json["usage"]["sessionPct"], 10);
         assert!(json["usage"]["weekPct"].is_null(), "an unread half is null and never a zero");
         assert!(json["usage"].as_object().expect("a reading is an object").contains_key("weekPct"));
 
-        let json = serde_json::to_value(report(Some(&crate::agents::codex::Codex), None))
+        let json = serde_json::to_value(report(Some(&crate::agents::codex::Codex), None, Limits::default()))
             .expect("the answer serializes");
         assert_eq!(json["state"], "unsupported");
         assert_eq!(json["agent"], "codex");
@@ -454,5 +564,109 @@ mod tests {
         {
             assert_eq!(cap(None, &decision), None);
         }
+    }
+
+    #[test]
+    fn a_threshold_that_is_off_is_never_entered() {
+        let limits = Limits { pause_at: OFF, reduced_at: REDUCED_THRESHOLD };
+        // 99% used, and the person has said not to pause on it.
+        assert_eq!(decide(Some(&usage(99, 0)), limits), Decision::Reduced { pct: 99 });
+        let limits = Limits { pause_at: PAUSE_THRESHOLD, reduced_at: OFF };
+        assert_eq!(decide(Some(&usage(80, 0)), limits), Decision::Normal);
+    }
+
+    #[test]
+    fn both_thresholds_off_is_always_normal() {
+        let limits = Limits { pause_at: OFF, reduced_at: OFF };
+        assert_eq!(decide(Some(&usage(100, 100)), limits), Decision::Normal);
+    }
+
+    #[test]
+    fn the_shipped_limits_are_the_bands_this_module_had() {
+        let limits = Limits::default();
+        assert_eq!(decide(Some(&usage(74, 0)), limits), Decision::Normal);
+        assert_eq!(decide(Some(&usage(75, 0)), limits), Decision::Reduced { pct: 75 });
+        assert!(matches!(decide(Some(&usage(90, 0)), limits), Decision::Pause { .. }));
+    }
+
+    #[test]
+    fn a_spent_allowance_is_read_at_ninety_and_above() {
+        assert!(spent(Some(&usage(SPENT, 0))));
+        assert!(spent(Some(&usage(0, 99))));
+        assert!(!spent(Some(&usage(89, 89))));
+    }
+
+    #[test]
+    fn nothing_that_could_not_be_read_is_ever_spent() {
+        assert!(!spent(None));
+        assert!(!spent(Some(&Usage::default())));
+    }
+
+    #[test]
+    fn the_gate_holds_after_a_limited_batch_with_every_threshold_off() {
+        let limits = Limits { pause_at: OFF, reduced_at: OFF };
+        let reading = usage(95, 0);
+        // Nothing was limited yet: the person's own thresholds are the whole
+        // answer, and they say go.
+        assert_eq!(gate(Some(&reading), limits, false), Decision::Normal);
+        // A batch has just died on a spent allowance, so the run waits it out
+        // rather than spending another session finding out again.
+        assert!(matches!(gate(Some(&reading), limits, true), Decision::Pause { pct: 95, .. }));
+    }
+
+    #[test]
+    fn the_gate_lets_a_run_through_once_the_reading_has_dropped() {
+        let limits = Limits { pause_at: OFF, reduced_at: OFF };
+        assert_eq!(gate(Some(&usage(3, 40)), limits, true), Decision::Normal);
+    }
+
+    #[test]
+    fn the_gate_carries_the_reset_of_the_limit_that_is_in_the_way() {
+        let limits = Limits { pause_at: OFF, reduced_at: OFF };
+        let reading = Usage {
+            session_pct: Some(96),
+            session_reset: Some("Sep 1 at 6pm (Europe/Moscow)".into()),
+            week_pct: Some(20),
+            week_reset: Some("Sep 4 at 9am (Europe/Moscow)".into()),
+        };
+        assert_eq!(
+            gate(Some(&reading), limits, true),
+            Decision::Pause { pct: 96, resets: Some("Sep 1 at 6pm (Europe/Moscow)".into()) }
+        );
+    }
+
+    #[test]
+    fn a_reduced_band_the_person_chose_still_stands_after_a_limited_batch() {
+        // The hold is only ever a `Pause`, so a reading inside somebody's own
+        // reduced band comes back reduced rather than being promoted.
+        let limits = Limits { pause_at: OFF, reduced_at: 50 };
+        assert_eq!(gate(Some(&usage(60, 0)), limits, true), Decision::Reduced { pct: 60 });
+    }
+
+    #[test]
+    fn the_band_the_settings_window_draws_is_the_persons_own() {
+        // 80% with the pause threshold moved down to 80: the window must say a
+        // run would stop here, not that it would merely take fewer tasks.
+        let limits = Limits { pause_at: 80, reduced_at: 50 };
+        let answer = report(Some(&crate::agents::claude::Claude), Some(usage(80, 0)), limits);
+        assert!(matches!(answer, AgentUsage::Read { band: Band::Pause, .. }));
+    }
+
+    #[test]
+    fn a_hold_is_told_from_a_threshold_by_what_produced_it() {
+        let reading = usage(95, 0);
+        // Nobody's batch has died yet: whatever the bands say, this is the
+        // person's own gate and the button is worth offering.
+        assert!(!held(Some(&reading), false));
+        // The batch before this one died on it, and it is still spent.
+        assert!(held(Some(&reading), true));
+        // True even where a threshold would have paused the run anyway:
+        // releasing the threshold would leave the allowance just as spent.
+        assert!(held(Some(&reading), true));
+        // Dropped back under the line: the hold is over, and a pause here can
+        // only be somebody's own threshold again.
+        assert!(!held(Some(&usage(60, 0)), true));
+        // Nothing that could not be read ever holds a run.
+        assert!(!held(None, true));
     }
 }

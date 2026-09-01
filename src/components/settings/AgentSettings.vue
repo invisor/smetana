@@ -44,6 +44,19 @@
    outside it: nobody is in a run's conversation to correct an instruction
    written for one.
 
+   The Run limits group above that block is the policy the block's own sentence
+   is computed from: the two percentages at which a run holds itself back. They
+   take effect at the next gate check of a run **already going**, not only of the
+   next one started — the loop re-reads the file every time round, which is what
+   lets somebody watching a paused run lower the gate and have that run go on.
+   The block below still says what a run would do *at this reading*, and Rust
+   computes it from the thresholds as they stood on disk when that reading was
+   taken. Nothing re-probes when one of these rows moves — a save is up to 400 ms
+   behind the choice — so a threshold changed just now reaches that sentence at
+   the next reading rather than at once. Off is a value like any other and means
+   "do not pre-empt"; a run whose batch then dies on a spent allowance still
+   pauses and waits, which is `usage::spent`'s doing and no setting reaches it.
+
    Plan and Status are gone rather than kept as dashes: `/usage` reports two
    percentages and two reset times and says nothing at all about a tariff, so
    those two rows could only ever have stayed empty. */
@@ -54,6 +67,7 @@ import Textarea from '../core/Textarea.vue'
 import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
+import { thresholdOptions } from './subscription.js'
 
 const props = defineProps({
   agent: { type: String, default: 'claude' },
@@ -72,6 +86,12 @@ const props = defineProps({
      Which sessions it reaches is `agents::prompt::talks_to_a_person` in Rust —
      this component only draws the field. */
   agentPrompt: { type: String, default: '' },
+  /* The two percentages the run gate holds a batch on, `0` meaning off. Numbers
+     rather than an object, matching the flat pair the two windows speak in —
+     and defaulted to the shipped thresholds so the tab draws what the app is
+     doing in the moment before the first answer arrives. */
+  subscriptionPauseAt: { type: Number, default: 90 },
+  subscriptionReducedAt: { type: Number, default: 75 },
   /* Whether **Show run report** is on, which lives on the General tab and is
      `view.notificationShowReport` in `SettingsWindow.vue`. Read and never
      emitted back: this tab does not own it, it only draws the Report language
@@ -100,6 +120,8 @@ const emit = defineEmits([
   'update:commitLanguage',
   'update:reportLanguage',
   'update:agentPrompt',
+  'update:subscriptionPauseAt',
+  'update:subscriptionReducedAt',
   'refresh'
 ])
 
@@ -145,6 +167,12 @@ const LANGUAGES = [
   { value: 'it', label: 'Italian' },
   { value: 'tr', label: 'Turkish' }
 ]
+
+/* The rungs both run-limit rows offer, off first. Built once rather than per
+   render: the list never changes, and `components/settings/subscription.js` is
+   where it and its guard live — out of the component for the reason every rule
+   in this tree is, that a `.vue` file is unreachable by any test here. */
+const thresholds = thresholdOptions()
 
 /* Every row on this tab shares one control column, wider than the shipped
    default: "Chinese (Simplified)" is the longest label any of the lists holds,
@@ -348,6 +376,35 @@ const errorStyle = {
           :maxlength="MAX_AGENT_PROMPT"
           placeholder="Anything you want said in every session — how to talk to you, what this machine has, what to leave alone."
           @update:model-value="emit('update:agentPrompt', $event)"
+        />
+      </SettingsRow>
+    </SettingsGroup>
+
+    <!-- Above the block rather than under it, so the policy is read before the
+         numbers it applies to: the sentence in the block is computed from these
+         two thresholds. -->
+    <SettingsGroup label="Run limits">
+      <SettingsRow
+        label="Pause a run at"
+        description="A run takes no new work at or above this share of the subscription and waits for the reset. Off lets it start at any reading; a run whose batch then dies on a spent allowance still pauses and waits."
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.subscriptionPauseAt"
+          :options="thresholds"
+          @update:model-value="emit('update:subscriptionPauseAt', $event)"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        label="Take fewer tasks at"
+        description="At or above this share a batch takes two tasks at a time instead of the number chosen for the run."
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.subscriptionReducedAt"
+          :options="thresholds"
+          @update:model-value="emit('update:subscriptionReducedAt', $event)"
         />
       </SettingsRow>
     </SettingsGroup>

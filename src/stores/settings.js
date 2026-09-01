@@ -39,6 +39,7 @@ import {
    store and the settings tab cannot disagree about which values are legal, and
    so what the tab offers stays a subset of what Rust accepts. */
 import { NOTIFICATION_DEFAULTS, isSound } from '../sounds.js'
+import { isThreshold, reconcile } from '../components/settings/subscription.js'
 
 /* The defaults mirror the ones in Rust. With no back end (a browser) or after
    a failed read, the app still has to open looking a known way. */
@@ -171,6 +172,16 @@ const defaults = () => ({
      answer. Which sessions it reaches is decided in Rust
      (`agents::prompt::talks_to_a_person`); nothing here knows or needs to. */
   agentPrompt: '',
+  /* The two percentages the run gate holds a batch on: `0` is off. Global
+     beside `agent` and the languages, because a subscription is the person's
+     and not the repository's, and shipped as today's behaviour exactly — the
+     copies in `settings/model.rs` and in `SettingsWindow.vue` have to agree
+     with these two numbers or the tab draws a threshold the app is not using
+     for as long as the first answer takes to arrive. */
+  subscription: {
+    pauseAt: 90,
+    reducedAt: 75
+  },
   openProjects: [],
   activeProject: null,
   project: {
@@ -415,6 +426,7 @@ export async function loadSettings() {
     applySection(settings.appearance, base.appearance, stored.appearance)
     applySection(settings.editor, base.editor, stored.editor)
     applySection(settings.git, base.git, stored.git)
+    applySection(settings.subscription, base.subscription, stored.subscription)
     applySection(settings.window, base.window, stored.window)
     applySection(settings.updates, base.updates, stored.updates)
     applySection(settings.kanban, base.kanban, stored.kanban)
@@ -479,6 +491,7 @@ function toShared(source) {
   const editor = { ...base.editor, ...source.editor }
   const kanban = { ...base.kanban, ...source.kanban }
   const git = { ...base.git, ...source.git }
+  const subscription = { ...base.subscription, ...source.subscription }
   /* Deliberately not `window`: that name is the global object, and shadowing it
      inside this function would take `window.addEventListener` and every other
      use of it in this module out of reach for whoever edits here next. */
@@ -504,6 +517,12 @@ function toShared(source) {
     /* Flat for the same reason the four above it are. */
     gitAutoFetch: git.autoFetch,
     gitRemoveWorktrees: git.removeWorktrees,
+    /* Flat beside the agent and the languages, and named for the section plus
+       the field: two numbers of one policy, where a `subscription` object in
+       this message would invite somebody to send half of it and blank the
+       other. `0` is off and travels as a number — `adopt()` drops a null. */
+    subscriptionPauseAt: subscription.pauseAt,
+    subscriptionReducedAt: subscription.reducedAt,
     /* Flat for the same reason, and the whole of what this window may change
        about the main window's geometry — where it is now is not a setting and
        never crosses this contract. */
@@ -633,6 +652,29 @@ export function applyPatch(patch) {
      malformed event into a deliberate-looking answer either way. */
   if (typeof patch.gitRemoveWorktrees === 'boolean') {
     settings.git.removeWorktrees = patch.gitRemoveWorktrees
+  }
+  /* The run gate's two thresholds, checked against the ladder rather than
+     merely for a number, unlike the font sizes above, which are clamped. There
+     is nothing sensible to clamp a threshold to: a 63 is a file or a message
+     that has been made up, and the value already held is a real choice somebody
+     made. */
+  if (isThreshold(patch.subscriptionPauseAt)) {
+    settings.subscription.pauseAt = patch.subscriptionPauseAt
+  }
+  if (isThreshold(patch.subscriptionReducedAt)) {
+    settings.subscription.reducedAt = patch.subscriptionReducedAt
+  }
+  /* The one rule of this pair that Rust would otherwise apply behind the
+     screen's back: `reducedAt` at or above an enabled `pauseAt` is off, since
+     there is no band left for it to name. `merge()` does it on every save, so
+     without this the file and the dropdown disagreed until the next open —
+     `reconcile` says the rest. Run only when one of the two arrived, so an
+     unrelated edit never touches a pair already settled. */
+  if (isThreshold(patch.subscriptionPauseAt) || isThreshold(patch.subscriptionReducedAt)) {
+    settings.subscription.reducedAt = reconcile(
+      settings.subscription.pauseAt,
+      settings.subscription.reducedAt
+    )
   }
   /* A switch too, checked exactly the way the two above it are and for the same
      reason: `false` is the whole point of this field, so anything that is not a

@@ -90,6 +90,18 @@ pub fn agent_prompt(path: &Path) -> String {
     load(path).0.agent_prompt
 }
 
+/// The run gate's thresholds, and nothing else out of the file. The shape of
+/// `agent` above, one section over, and read from the disk at every gate check
+/// rather than once per run: that is the whole of what lets somebody watching a
+/// paused run lower the gate and have that run go on.
+///
+/// A missing or unreadable file answers with the shipped thresholds, which is
+/// today's behaviour — the safe direction for this field, since the other one
+/// would be a run spending an allowance nobody meant it to.
+pub fn subscription(path: &Path) -> crate::settings::model::SubscriptionSettings {
+    load(path).0.subscription
+}
+
 /// Whether a run may remove a task's worktree once it is merged and closed, and
 /// nothing else out of the file. The shape of `agent` above, one field over.
 ///

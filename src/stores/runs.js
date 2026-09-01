@@ -263,6 +263,20 @@ export async function stopRun(token) {
   return run
 }
 
+/* Let every run alive right now past its own pause threshold, until each of
+   them ends. No token, unlike `stopRun` above, and that is the whole shape of
+   it: what stood them all up is one reading of one subscription, so releasing
+   them one at a time would be work for its own sake — and the runs it reaches
+   are every project's, not this one's, for the same reason.
+
+   Nothing comes back and nothing is upserted here. A released run leaves
+   `Paused` when its own loop takes the next batch, and it says so through
+   `run:state` like every other move it makes; writing a state from this side
+   would be the front end claiming a batch the worker has not taken. */
+export async function releaseRuns() {
+  await invoke('run_release')
+}
+
 /* Subscribed once, at start-up, exactly as initTracker is — and like the
    tracker's health event, `run:state` can fire before the webview is
    listening, which is what `run_state` is for.

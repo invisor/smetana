@@ -173,20 +173,27 @@ pub async fn browser_tools(app: AppHandle, project: String) -> BrowserTools {
 /// a heading honest enough about who answered to look exactly like
 /// `agents::pick`'s legitimate substitution. `None` is for a caller with no
 /// opinion and keeps the file as the answer.
+///
+/// **The band is computed from the very thresholds the gate uses**, read off
+/// the same file by `settings::subscription`, so the sentence under the
+/// percentages and what a run would actually do at this reading cannot
+/// disagree. Taken before the profile is resolved only because `app` is moved
+/// into the first blocking call.
 #[tauri::command]
 pub async fn agent_usage(app: AppHandle, agent: Option<String>) -> AgentUsage {
+    let limits = crate::settings::subscription(&app);
     let profile = tokio::task::spawn_blocking(move || {
         let id = wanted(agent, || crate::settings::agent(&app));
         crate::agents::pick(&id, crate::shell_env::path())
     })
     .await
     .unwrap_or(None);
-    let Some(profile) = profile else { return usage::report(None, None) };
+    let Some(profile) = profile else { return usage::report(None, None, limits) };
     // `read` answers `None` for a profile with no `usage_command` without
     // spawning anything, so this costs nothing for Codex; `report` is what
     // tells that `None` apart from a probe's.
     let reading = tokio::task::spawn_blocking(move || usage::read(profile)).await.unwrap_or(None);
-    usage::report(Some(profile), reading)
+    usage::report(Some(profile), reading, limits)
 }
 
 /// Which agent id `agent_usage` resolves: what the caller asked for, and the
@@ -243,6 +250,28 @@ pub async fn run_start(
 #[tauri::command]
 pub async fn run_stop(handle: State<'_, RunHandle>, token: u64) -> Result<Option<Run>, RunError> {
     ask(&handle, |tx| Request::Stop(token, tx)).await
+}
+
+/// Let every run alive right now past its own pause threshold, for the rest of
+/// its life.
+///
+/// **No token, unlike `run_stop` above**, and that is the point rather than an
+/// omission: what stood the runs up is one reading of one subscription, so the
+/// button that answers it answers for all of them. The bar draws it once, beside
+/// the one sentence about the limit — see `limitVoice.js`.
+///
+/// Nothing is written to `settings.json`. A press is an answer to this evening's
+/// reading and not a change of policy; the thresholds are on the Agents tab, and
+/// a button that quietly moved one would be a second way to change a setting
+/// with nothing on screen saying it had.
+///
+/// It does not reach a hold on a spent allowance (`usage::held`) — the gate
+/// keeps that whatever the thresholds say, because a session started into an
+/// exhausted allowance dies at once and the run would spend the night finding
+/// that out. The bar does not offer the button there at all.
+#[tauri::command]
+pub async fn run_release(handle: State<'_, RunHandle>) -> Result<(), RunError> {
+    ask(&handle, Request::Release).await
 }
 
 /// The `run:state` event fires before the webview can subscribe — the same
