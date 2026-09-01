@@ -718,7 +718,12 @@ export function installMockBackend() {
 
        Said once rather than per call, which is what the counter is for: the
        three are pressed and measured often enough that a line each would bury
-       whatever else the console was showing. */
+       whatever else the console was showing.
+
+       `dialog_window_size` answers a shape now — whether the window's size is
+       the person's — and `null` is still the right answer here: a browser tab
+       has no window to drag, so it is never filled, and `stores/app.js` reads a
+       missing answer as exactly that. */
     if (
       command === 'dialog_window_open' ||
       command === 'dialog_window_close' ||

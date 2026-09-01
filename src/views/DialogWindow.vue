@@ -14,14 +14,22 @@
    presentational and unrewritten — the only change any of them saw is that
    `Modal.vue` now draws two frames instead of one.
 
-   The height is measured here rather than named anywhere. A dialog's height is
-   whatever its content comes to, and the content changes — a validation line, a
-   progress report — so a number in the registry would be wrong at the first
-   field somebody adds, and wrong again under a different `--ui-scale` or in
-   compact. The window is built hidden; the first measurement is what puts it on
-   screen. Rust does the sizing, because `core:default` grants neither
-   `set_size` nor `show` and adding them would publish both to every window in
-   the app for the sake of one call. */
+   **This window has two phases, and `filled` below is which one it is in.**
+   Fitting, the height is measured here rather than named anywhere: a dialog's
+   height is whatever its content comes to, and the content changes — a
+   validation line, a progress report — so a number in the registry would be
+   wrong at the first field somebody adds, and wrong again under a different
+   `--ui-scale` or in compact. The window is built hidden; the first measurement
+   is what puts it on screen. Rust does the sizing, because `core:default`
+   grants neither `set_size` nor `show` and adding them would publish both to
+   every window in the app for the sake of one call.
+
+   Filled, somebody has dragged the window's corner and the window is theirs for
+   good: Rust stops sizing it, the measurement goes on being sent — the title
+   rides with it — and means nothing, and this page fills the window instead of
+   being as tall as its content. `Modal.vue` is the other half, since it is what
+   holds the body and the footer; `src-tauri/src/window.rs` carries the whole
+   argument and the one-way latch behind it. */
 import { computed, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watchEffect } from 'vue'
 import DeleteBranchModal from '../components/git/DeleteBranchModal.vue'
 import DeleteSessionModal from '../components/agent/DeleteSessionModal.vue'
@@ -56,6 +64,15 @@ const props = defineProps({
      by hand in the dev server and a missing parameter is an empty window, not a
      warning in a console nobody is looking at. */
   kind: { type: String, default: null },
+  /* Whether this window's size is the person's rather than its content's.
+
+     Two sources and one flag, each covering one case: this prop is the window
+     that opened at a kept size (`?fill=1`, put on the URL by
+     `dialog_window_open`), and the answer from `sizeDialogWindow` below is the
+     window somebody drags while it is open. One-way, like the latch on the
+     other side: a dialog whose size is the person's never goes back to sizing
+     itself. */
+  fill: { type: Boolean, default: false },
   /* The query string's two overrides, passed down for the reason the settings
      and compare windows take theirs: they win over what the app window says,
      for this run only and never written back, and without them this window's
@@ -91,6 +108,13 @@ const component = computed(() => COMPONENTS[props.kind] ?? null)
    of it. Provided here and nowhere else, which is what leaves the gallery and
    the app window exactly as they were. */
 provide('smDialogWindow', true)
+
+/* Which of this window's two phases it is in, and the one thing `Modal.vue`
+   needs from this file to draw the second one. A `ref` rather than a value
+   because a window can be dragged while it is open: the prop above seeds it and
+   the answer from `sizeDialogWindow` below raises it, never the other way. */
+const filled = ref(props.fill)
+provide('smDialogFill', filled)
 
 /* The one store a dialog window holds, and it is held for one kind.
 
@@ -400,9 +424,13 @@ window.addEventListener('resize', readViewport)
    unchanged would otherwise keep the frame it had. Nothing is sent before the
    first measurement — there is no height to send, and this call is also what
    shows the window. */
-watchEffect(() => {
+watchEffect(async () => {
   if (told.value && measured.value > 0) {
-    sizeDialogWindow(props.kind, measured.value, viewport.value, title.value)
+    const latched = await sizeDialogWindow(props.kind, measured.value, viewport.value, title.value)
+    /* Only ever upwards. A call that failed answers false, and a window already
+       filled must not fall back to measuring itself because one report did not
+       arrive. */
+    if (latched) filled.value = true
   }
 })
 
@@ -459,18 +487,39 @@ onUnmounted(() => {
   for (const stop of stops) stop()
 })
 
-/* The width is the registry's rather than the window's, and that is what makes
-   this screen checkable in a browser: in the window the two are the same number,
-   and in `npm run dev` this is what keeps the dialog the width it is in the app
-   instead of stretching across the tab. */
-const rootStyle = computed(() => ({
-  width: `${dialogWidth(props.kind)}px`,
-  maxWidth: '100%',
-  background: 'var(--surface-overlay)',
-  color: 'var(--text-primary)',
-  fontFamily: 'var(--font-sans)',
-  fontSize: 'var(--text-body-size)'
-}))
+/* Two layouts, and which one is drawn is the whole of this window's two phases.
+
+   Fitting, the width is the registry's rather than the window's, and that is
+   what makes this screen checkable in a browser: in the window the two are the
+   same number, and in `npm run dev` this is what keeps the dialog the width it
+   is in the app instead of stretching across the tab.
+
+   Filled, the window is the size somebody made it and the page takes all of it
+   — `height` rather than `min-height`, with the overflow refused here, because
+   what scrolls is the body inside `Modal` and not the document: the footer
+   holds the buttons and must stay where it is. */
+const rootStyle = computed(() =>
+  filled.value
+    ? {
+        width: '100%',
+        height: '100vh',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--surface-overlay)',
+        color: 'var(--text-primary)',
+        fontFamily: 'var(--font-sans)',
+        fontSize: 'var(--text-body-size)'
+      }
+    : {
+        width: `${dialogWidth(props.kind)}px`,
+        maxWidth: '100%',
+        background: 'var(--surface-overlay)',
+        color: 'var(--text-primary)',
+        fontFamily: 'var(--font-sans)',
+        fontSize: 'var(--text-body-size)'
+      }
+)
 </script>
 
 <template>

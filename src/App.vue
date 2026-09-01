@@ -57,6 +57,11 @@ const compareBranch = params.get('branch')
    `views/dialogRegistry.js`, and checking a name against it here would be that
    list written out twice. */
 const dialogKind = params.get('kind')
+/* Whether this dialog window was opened at a size somebody gave it by hand.
+   `window.rs` puts it there when it finds a kept size for the kind, and it is
+   on the URL rather than in an answer so that the window comes up in the right
+   layout instead of switching into it one round trip after its first paint. */
+const dialogFill = params.get('fill') === '1'
 /* Which picture the image window is showing — `image_window_open`
    percent-encoded both into the URL it built. Passed through untouched, the way
    the compare window's pair is: what a stored path and a stored name may hold
@@ -155,6 +160,7 @@ const density = computed(
   <DialogWindow
     v-else-if="dialogWindow"
     :kind="dialogKind"
+    :fill="dialogFill"
     :theme-override="themeOverride"
     :density-override="densityOverride"
   />
