@@ -22,16 +22,18 @@ import FileTree from '../components/files/FileTree.vue'
 import ConflictModal from '../components/git/ConflictModal.vue'
 import GitPanel from '../components/git/GitPanel.vue'
 import { gitActions } from '../components/git/gitActions.js'
-/* What the branch-review window's table is built out of, and what a press of
-   Review turns it into. Pure and outside the component that draws it, for the
-   reason that whole family is: a `.vue` file is the one thing no test in this
+import { repoLabel } from '../components/git/repoLabel.js'
+/* What the branch-review window is filled with, and what a press of Review
+   turns it into. Pure and outside the component that draws it, for the reason
+   that whole family is: a `.vue` file is the one thing no test in this
    repository can reach. */
 import {
+  canReview,
   fetchFailures,
   fetchTargets,
   reportPath,
-  reviewPairs,
-  reviewRows
+  reviewForm,
+  reviewPairs
 } from '../components/git/reviewRows.js'
 import {
   NO_VISIT,
@@ -42,7 +44,6 @@ import {
   toggleChanges
 } from '../components/git/changesFold.js'
 import KanbanBoard from '../components/kanban/KanbanBoard.vue'
-import { pickBranch } from '../components/run/branchChoice.js'
 import { orderColumns } from '../components/kanban/columnOrder.js'
 import { mergeOrder, visibleColumns } from '../components/kanban/boardView.js'
 import { isParked, needsReadyWarning, openQuestions, READY } from '../components/kanban/parked.js'
@@ -143,6 +144,7 @@ import {
   closeDialogWindow,
   closeWindow,
   copyText,
+  homeDir,
   isWindowMaximized,
   minimizeWindow,
   openDialogWindow,
@@ -1050,63 +1052,52 @@ async function removeBranch(force) {
    window is about a set of repositories rather than about the one the panel has
    selected, so a repository going is a row leaving the table rather than a
    window that has lost its subject. */
-const reviewTable = ref([])
-const reviewBranch = ref('')
-const reviewWithout = ref([])
-/* What `origin` has, per repository. The store holds one list at a time — it
-   was written for a caller that asks about one repository — so the answers are
-   copied out of it as they land and kept here, keyed by path. */
+const reviewSeed = ref(null)
+/* What `origin` has, per repository, and when each of them last fetched. The
+   store holds one repository's answer at a time — it was written for a caller
+   that asks about one — so both are copied out of it as they land and kept
+   here, keyed by path. */
 const reviewRemote = ref({})
+const reviewFetchedAt = ref({})
+/* The person's home folder, for the path drawn beside a repository's name. It
+   is asked of the desktop through `stores/app.js`, which is what that store is
+   for: nothing in `src/` knows one, and a component going to look would need
+   the one import that puts it out of reach of every test here. Null is an
+   ordinary answer — a browser, or a machine with no `HOME` — and the column
+   then draws an absolute path, which is true rather than merely shorter. */
+const reviewHome = ref(null)
 const reviewFetching = ref([])
 const reviewFetchFailed = ref([])
 const reviewStarting = ref(false)
 
-/* The two terms `pickBranch` takes before it falls back to the top of the list,
-   in **one expression** rather than one per caller. Both the rule's own fill and
-   a row added by hand read it, and they used to differ by a term: the hand-added
-   row borrowed the run dialog's `?? branchLabel`, so on a project with no
-   `[defaults].target_branch` and nothing remembered it started at the
-   checked-out branch while a rule-built row started at the top of the list.
-   `branchLabel` is a fourth term the spec's order does not have, and it can be
-   `'—'` or `'abc123 (detached)'` besides. */
+/* The two terms `pickBranch` takes before it falls back to the top of the list.
+   The reference branch is filled from the run dialog's own order, through the
+   run dialog's own rule, because the two windows are asking the same question
+   about the same project and a second order would be a second answer to it.
+   Deliberately not the run dialog's `?? branchLabel` behind them: that is a
+   fourth term the order does not have, and it can be `'—'` or
+   `'abc123 (detached)'` besides. */
 const reviewDefaults = () => ({
   remembered: project.runSettings?.targetBranch ?? null,
   configured: runConfig.value?.defaults?.target_branch ?? null
 })
 
-/* What a row added by hand starts its reference side at: the run dialog's own
-   order, through the run dialog's own rule, because the two windows are asking
-   the same question about the same project and a second order would be a second
-   answer to it. */
-const reviewBase = computed(() => {
+/* The form the window opens with, built from a name — or from no name at all,
+   which is the `New review` door and opens with nothing on the checked side.
+
+   Once only, on opening. Picking a branch afterwards is the window's own to
+   handle: `reviewRows.js` is pure and the window has the repositories and the
+   branch list in its hands, so the rule that fills the table runs there rather
+   than over two IPC hops, and a person watching the list close sees the rows
+   appear in the same frame. */
+function seedReview(branch) {
   const { remembered, configured } = reviewDefaults()
-  return pickBranch(gitState.branches, remembered, configured)
-})
-
-/* The table, rebuilt from a name — or from no name at all, which is the
-   `New review` door. Called on opening and again whenever somebody picks a
-   branch on the checked side of a lone row, which is the one edit the window
-   does not make for itself.
-
-   `chosenBase` is what that row already had on its reference side, and it rides
-   in front of the remembered branch rather than beside it. The `New review`
-   door opens with the base filled and the head empty, and the table's columns
-   run Repository, Base, To check — so the ordinary way through this window is
-   to set the base and *then* the branch, and a rebuild that ignored the first
-   would put the default back over it in the moment somebody's eye was on the
-   second. It goes in as `remembered` because that is `pickBranch`'s first term
-   and because a name that has since left the list is skipped there already. */
-function buildReviewTable(branch, chosenBase = null) {
-  const defaults = reviewDefaults()
-  const { rows, without } = reviewRows(vcsState.repos, branch, {
+  reviewSeed.value = reviewForm(vcsState.repos, branch, {
     branches: gitState.branches,
-    ...defaults,
-    remembered: chosenBase || defaults.remembered,
-    selected: vcsState.selected
+    remote: reviewRemote.value,
+    remembered,
+    configured
   })
-  reviewTable.value = rows
-  reviewWithout.value = without
-  reviewBranch.value = typeof branch === 'string' ? branch : ''
 }
 
 /* What `origin` is known to have in each of this project's repositories.
@@ -1137,6 +1128,7 @@ let reviewRemoteRun = 0
 async function loadReviewRemotes(path) {
   const mine = (reviewRemoteRun += 1)
   const answers = {}
+  const stamps = {}
   for (const repo of vcsState.repos) {
     if (!repo?.path) continue
     await loadRemoteBranches(repo.path)
@@ -1146,6 +1138,12 @@ async function loadReviewRemotes(path) {
     if (activePath.value !== path || !openDialogs.has('review-changes')) return
     answers[repo.path] = [...vcsState.remoteBranches]
     reviewRemote.value = { ...answers }
+    /* The fetch time comes out of the same answer and in the same breath, for
+       the reason the store asks for both together: half of it is not a state
+       anybody keeps, and a stamp copied a moment later would be one
+       repository's age under another repository's name. */
+    if (vcsState.remoteFetchedAt != null) stamps[repo.path] = vcsState.remoteFetchedAt
+    reviewFetchedAt.value = { ...stamps }
   }
 }
 
@@ -1153,6 +1151,7 @@ async function openReviewChanges(branch = null) {
   const path = activePath.value
   if (!path) return
   reviewRemote.value = {}
+  reviewFetchedAt.value = {}
   reviewFetching.value = []
   reviewFetchFailed.value = []
   reviewStarting.value = false
@@ -1165,42 +1164,49 @@ async function openReviewChanges(branch = null) {
      list already costs everywhere else in this panel. */
   await loadBranches(path)
   if (activePath.value !== path) return
-  buildReviewTable(branch)
+  seedReview(branch)
   serveDialog('review-changes', {
     ground: { project: path },
     props: () => ({
       /* The frame's caption and the dialog's own heading, one literal in both
-         places — and a third in `mockBackend.js` for the browser. */
-      title: 'Review changes',
-      rows: reviewTable.value,
-      branch: reviewBranch.value,
+         places — and a third in `mockBackend.js` for the browser. The two doors
+         are told apart here and nowhere else: a window opened knowing no branch
+         is a review being started rather than one of this branch, and the frame
+         is the only thing that can say so, since the title is drawn by the OS
+         and never by the template. */
+      title: branch ? 'Review changes' : 'New review',
+      form: reviewSeed.value,
       repos: vcsState.repos,
+      root: path,
+      home: reviewHome.value,
       branches: gitState.branches,
       remote: reviewRemote.value,
-      without: reviewWithout.value,
-      defaultBase: reviewBase.value,
+      fetchedAt: reviewFetchedAt.value,
       fetching: reviewFetching.value,
       fetchFailed: reviewFetchFailed.value,
       busy: reviewStarting.value
     }),
     forget: () => {
-      reviewTable.value = []
-      reviewWithout.value = []
-      reviewBranch.value = ''
+      reviewSeed.value = null
       reviewRemote.value = {}
+      reviewFetchedAt.value = {}
       reviewFetching.value = []
       reviewFetchFailed.value = []
     },
     onResult: (name, payload) => {
       if (name === 'close') closeDialog('review-changes')
-      /* The one message from this window that is not somebody finishing with
-         it: a branch picked on the checked side of a lone row, with the base
-         that row already carried. The rule builds the rest of the table around
-         both and it comes back as a prop. */
-      if (name === 'branch') buildReviewTable(payload?.name, payload?.base)
-      if (name === 'submit') startReview(payload?.rows)
+      if (name === 'submit') startReview(payload?.form)
     }
   })
+  /* Neither of these is waited for, and neither is on the way to anything the
+     window needs to open: the home folder shortens a path that is already true
+     without it, and the origin lists arrive underneath a window that is already
+     drawing local branches. */
+  homeDir()
+    .then((home) => {
+      if (activePath.value === path) reviewHome.value = home
+    })
+    .catch(() => {})
   await loadReviewRemotes(path)
 }
 
@@ -1219,10 +1225,9 @@ async function openReviewChanges(branch = null) {
    keeps `delete-branch` open: what the window is drawing while this runs — the
    fetch, and then which repositories it could not reach — is not said anywhere
    else, so closing first would be closing over the only report of it. */
-async function startReview(rows) {
+async function startReview(form) {
   const path = activePath.value
-  const list = Array.isArray(rows) ? rows : []
-  if (!path || !list.length || reviewStarting.value) return
+  if (!path || !canReview(form) || reviewStarting.value) return
   reviewStarting.value = true
   reviewFetchFailed.value = []
   /* The repositories origin could not be reached in, by path, and the one
@@ -1232,7 +1237,7 @@ async function startReview(rows) {
      — a review where nothing had to be fetched simply carries none. */
   let missed = []
   try {
-    const targets = fetchTargets(list)
+    const targets = fetchTargets(form)
     if (targets.length) {
       reviewFetching.value = targets
       /* Together rather than one after another, unlike the origin lists above:
@@ -1242,25 +1247,24 @@ async function startReview(rows) {
       const reached = await Promise.all(targets.map((repo) => fetchIn(repo)))
       reviewFetching.value = []
       missed = fetchFailures(targets, reached)
-      /* The window and the toast speak in names — they are what
-         `[project].repos` holds and what the table draws — and the intent
-         speaks in paths, because that is how the prompt lists a pair's
-         repository. Both are this one list, so there is no arrangement of
-         them in which the person and the agent are told about different
-         repositories. */
-      reviewFetchFailed.value = missed.map(reviewRepoName)
+      /* One list of paths, read by all three: the window keys a row by it and
+         renders the names itself, the intent carries it because that is how the
+         prompt lists a pair's repository, and the toast below names them the
+         way `[project].repos` does. There is no arrangement of them in which
+         the person and the agent are told about different repositories. */
+      reviewFetchFailed.value = missed
       if (missed.length) {
         sayFileMenu({
           tone: 'info',
           title: 'Origin was not reached everywhere',
-          description: `The review reads what origin was last known to have in ${reviewFetchFailed.value.join(', ')}.`
+          description: `The review reads what origin was last known to have in ${missed.map(reviewRepoName).join(', ')}.`
         })
       }
     }
     /* The name of the branch under review rather than the ref it resolved to:
        the path is what a person reads afterwards, and `origin-feature-x` would
        be naming a remote in a filename. */
-    const report = reportPath(list[0]?.head, new Date())
+    const report = reportPath(form?.head?.ref, new Date())
     /* Both switches the way `newAgent` sets them — this is the same act by
        another door, and a tab that appears a second later leaves the button a
        person pressed looking as though it did nothing — but **only while this is
@@ -1280,7 +1284,7 @@ async function startReview(rows) {
        a week old reads exactly like one a minute old. */
     await createSession(path, {
       kind: 'reviewBranch',
-      pairs: reviewPairs(list),
+      pairs: reviewPairs(form),
       report,
       fetchFailed: missed
     })
@@ -1295,10 +1299,15 @@ async function startReview(rows) {
 }
 
 /* A repository's name for a sentence, from the path a row carries. The panel
-   speaks in names — they are what `[project].repos` holds and what the table
-   draws — and a path in a toast would be a line of chrome nobody reads. */
-const reviewRepoName = (path) =>
-  vcsState.repos.find((repo) => repo.path === path)?.name ?? path
+   speaks in names — they are what `[project].repos` holds and what the window
+   draws — and a path in a toast would be a line of chrome nobody reads. It goes
+   through `repoLabel` for the one name that tells a reader nothing: the project
+   root itself is called `.` in the configuration, and a toast saying origin was
+   not reached in `.` names no repository at all. */
+const reviewRepoName = (path) => {
+  const repo = vcsState.repos.find((one) => one.path === path)
+  return repo ? repoLabel(repo) : path
+}
 
 /* The Git panel's own folds and section heights. They live in `layout` rather
    than under the project — how tall somebody likes their branch list is a habit

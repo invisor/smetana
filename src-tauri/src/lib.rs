@@ -286,6 +286,7 @@ pub fn run() {
       settings::commands::settings_save,
       window::settings_window_open,
       window::window_chrome,
+      window::home_dir,
       window::drag_drop_space,
       window::compare_window_open,
       window::dialog_window_open,

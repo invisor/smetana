@@ -1226,12 +1226,16 @@ the local branch or what `origin` has, and then puts an agent on the difference 
 at the end. Folding the two together was considered and dropped: a second base changes every one of
 the compare window's decisions, in a window that does its own job perfectly well.
 
-**One window, two doors.** `Review this branch…` on a branch row knows the name, and the table opens
-as one row per repository of the project that has a branch of that name. `New review`, the fourth row
-of the `+` menu over the kanban (`shell/newTabMenu.js`), knows nothing, and the table opens as one row
-on the repository the Git panel is showing with its checked side empty — pick a name there and the
-rest of the table is built by the very same rule. The two doors differ in what they start with and in
-nothing else, which is what keeps them one feature rather than two that drift.
+**One window, two doors.** `Review this branch…` on a branch row knows the name, and the window opens
+with the pair filled and a row for every repository of the project that has a branch of that name.
+`New review`, the fourth row of the `+` menu over the kanban (`shell/newTabMenu.js`), knows nothing:
+the checked side is a dashed field reading `pick a branch to check`, the repositories under it are two
+empty rows saying `waiting for a branch`, the footer says `0 pairs` and `Review` is refused — pick a
+name there and the same rule fills the table. The two doors differ in what they start with and in
+nothing else, which is what keeps them one feature rather than two that drift. They differ in their
+caption too, and that is the **only** thing said twice about them: `DesktopApp.vue` announces
+`New review` for the door that knows no branch, because the OS frame draws the title and a title
+written into the template is silently overdrawn (`NewBranchModal.vue` carries the argument).
 
 `Review this branch…` is **the one ellipsis in this application**, and it is a deliberate exception
 recorded in `branchMenu.js` beside the note that says this app spends none. That note stands: a lone
@@ -1247,19 +1251,119 @@ company with the comparison directly above it: a branch has no difference from *
 a review whose two sides are one ref is a table somebody can look at and change, and whether it is
 worth running is visible in the window rather than decided by a grey menu row.
 
-### The table, and why a row is a pair
+### One pair for the project, and the rows that differ
 
 `?view=dialog&kind=review-changes`, `components/git/ReviewChangesDialog.vue` over
 `views/DialogWindow.vue`, **720 wide** — the first dialog to outgrow `Modal`'s 440, which is what the
-width field in `views/dialogRegistry.js` was put there for. Rust needed no change at all:
+width field in `views/dialogRegistry.js` was put there for. That number is written twice, there and as
+`Modal`'s `:width` inside the component, and the two have to agree: the app window is sized from the
+registry and the guest then fills the frame, so the literal in the component is what `?view=gallery`
+and `?view=dialog` draw and nothing in the app would ever show it wrong. Rust needed no change at all:
 `dialog_window_open` takes the width as a parameter and checks the shape of a kind's name rather than
 holding a second copy of the list.
 
-**A row is one repository, one reference branch and one branch to check.** What was asked for is that
-the number of bases always equals the number of branches under review, and making the row the pair
-means there is no arrangement of this table where the two differ — a base cannot be added without the
-branch beside it. That is a property of the shape rather than a rule checked on submission, and the
-difference matters: a rule can be forgotten and a shape cannot.
+**The pair is chosen once for the project, and a row either follows it or keeps its own copy of it.**
+This was a table where a row *was* a pair — a repository, its own base, its own branch to check and a
+`local`/`origin` dropdown beside each — and the shape held the one thing that matters at a price that
+grew with the project: five repositories opened as twenty dropdowns asking the same question five
+times over. The form is
+
+```
+base:      { ref, remote }
+head:      { ref, remote } | null
+repoIds:   string[]
+overrides: { [repoId]: { base, head } }
+```
+
+and a row's effective pair is `overrides[id] ?? { base, head }`. **A pair is still indivisible**: the
+number of bases is always the number of branches under review, because `reviewRows.js` has no
+operation that sets half a pair and an override is made by *copying* the rule rather than by starting
+an empty one. That is a property of the shape rather than a rule checked on submission, exactly as it
+was before — a rule can be forgotten and a shape cannot. What changed is where a person's answer is
+kept on the way to the exit, and the exit itself did not move: `reviewPairs` still answers
+`{ repo, base, head }` apiece, which is `src-tauri/src/agents/mod.rs`' `ReviewPair`.
+
+**`local` and `origin` are a flag on a side and not a control.** `remote: true` draws a muted
+`origin/` in front of the name and resolves to `origin/main` in `refOf`; there is no second dropdown
+anywhere in the window. `origin` and no other remote — there is no notion of a second one anywhere in
+this app, and inventing one for a case nobody has asked about would be a second vocabulary.
+
+**Nothing hangs outside the window, and that is what fixes its height.** The branch list is
+`BranchPicker.vue`, with its rules in `branchPicker.js`, a block in the flow rather than a popover,
+and **while it is open the table is not drawn at all**. So
+the window is about 250px for one repository, about 423px for six with two overrides, and about 514px
+with the list open — and that last number is the ceiling whatever the project is made of, because the
+list is capped at nine rows' worth of `--row-h` and scrolls inside itself. The height is measured by the `ResizeObserver` in
+`DialogWindow.vue` and reset on every one of those changes; the one thing that would break it is a
+`min-height` on the root, which would have the window measure itself and never shrink again.
+
+**What a row is, left to right**: the repository's name (`repoLabel`, so the project root is the
+folder it sits in and never `.`), its path (`repoPath`, `./services/backend` inside the project and
+`~/work/smetana-infra` outside it — the home folder comes from `window::home_dir` through
+`stores/app.js`, and `null` there is an ordinary answer that draws the absolute path), the pair
+**only if this row differs**, what it is doing (`follows the rule`, `fetching origin`,
+`using origin from 2h ago`), and one action. The actions are `pencil` — give this row a pair of its
+own, which freezes the rule into it and opens the branch list on its checked side in one movement —
+`undo-2` back to the rule, and `x` on a row somebody added by hand. Pressing the row does what the
+pencil does; the row is a `role="button"` so the keyboard reaches it, and the action is a real button
+inside it, which is why the row's Enter is `.self`.
+
+**Whether a row was added by hand is a fact the form carries**, `manual: string[]` beside the three
+fields above — written by `withRepo`, forgotten by `withoutRepo`, and what draws the `man` badge and
+turns the row's action into the `x`. It was derived at first, as "in the table without the rule's
+branch", and that answer moved under a foot it should not: the rule's head changes, and a repository
+somebody had added by hand became an ordinary row, lost the `x` and could not be taken out of the
+review at all — while `reviewPairs` went on sending a pair for a branch that repository does not have.
+Provenance is a fact about what a person did; it does not stop being true when they change their mind
+about the branch.
+
+**A change to the rule's head rebuilds the rule's rows**, and that is `refill` inside `withPick`. The
+rows it leaves alone are the ones the rule does not decide — an override carries its own pair, and a
+hand-added row is somebody's decision — and the rest is the rule's: a repository that has the new
+branch is in, one that does not is out and named in the notes block, which is the sentence this window
+already promises (`No such branch in extension, docs. They are left out of the review.`). Rows that
+stay keep their place and new ones arrive at the end, so the table does not shuffle under somebody's
+eye. On `main` this was the `branch` emit's job, done in the app window; it is one rule in one module
+now, and it runs on the first pick of the `New review` door and on every pick after it alike.
+
+**"Does the rule reach this row" is one function and two doors reach it.** `reached` is the half of
+`refill` that only removes, and `withoutOverride` spends it too: `undo-2` on a row whose repository has
+no such branch takes the row out of the table with its override rather than standing it back up under a
+rule it cannot follow. Without that the same defect came back one transformer over — a row saying
+`follows the rule` in a repository that has no such branch, invisible to the notes block because a row
+in the table is not "left out", with `reviewPairs` sending the agent a head that does not exist there
+and git refusing inside the agent's terminal. Refusing the action instead was the version thrown away:
+it leaves a row an override with no way back and puts the rule in a template. The same function refuses
+a **hand-added** row outright — one of those has no rule to go back to, since the reason it is in the
+table is that the rule's branch is not in its repository — so `MAN` beside `follows the rule` is
+unrepresentable rather than one reordering of three icon buttons away.
+
+**`Add a repository` and its panel are not drawn while the checked side is empty.** The empty state is
+the two waiting rows and nothing else, which is what the spec describes; `withRepo` refuses to add to a
+review with no branch, so an add row offered there is a control that does nothing, over a panel
+captioning every candidate `no such branch` about a branch nobody has chosen. The component's `add`
+checks that `withRepo` actually added before it opens the list, which is the second lock on that door:
+a pick made over a row that does not exist would write a pair into `overrides` for a repository outside
+`repoIds` — the state `withoutRepo` exists to prevent — invisible until a later change of branch
+brought the row back wearing it.
+
+**A repository the branch is missing from gets no row**, and it is named in the notes block rather
+than in a row of its own. `Add a repository` is the last row of the table — an action and not the
+half-width dropdown it used to be, which nobody found — and it opens a panel in the flow with the
+repositories that are not in the review and the reason each is out: `not in this review`, or
+`no such branch — name it by hand`. Adding one puts it in as an override and opens the branch list on
+its checked side, since the one thing nobody can fill in for somebody is the name the branch goes by
+there.
+
+**The three service messages are one block**, `reviewNotes` in `components/git/reviewRows.js`: a
+sentence each with its own glyph — `loader-circle` turning while origin is being fetched,
+`triangle-alert` for a fetch that did not reach the remote, `circle-dashed` for a branch no such
+repository has — and the identifiers inside each sentence in mono. Three sentences loose under a table
+read as one paragraph, which is what they were. **None of the three is an error**: a fetch in flight
+is a wait, a fetch that failed is a review going ahead over an older copy of origin, and a repository
+without such a branch is an ordinary fact about a project made of several. There is no red anywhere in
+this window and no brand hue on `Review`, and `Review` is refused by none of them — only by there
+being no branch to check, no row to check it in, or a review already starting.
 
 The ground is `['project']` and deliberately not the repository, which is the opposite of `new-branch`
 and `delete-branch` beside it. Those two are grounded on the selected repository because every write in
@@ -1267,60 +1371,76 @@ and `delete-branch` beside it. Those two are grounded on the selected repository
 scrim can be left standing while somebody clicks another row. Nothing here is resolved that way: each
 row carries the repository it is about. So a repository going is a row leaving the table, and only the
 project going closes the window. The branch is not ground either — a row whose branch has gone is a
-pair git refuses in its own words, which is a better answer than a half-filled table vanishing.
+pair git refuses in its own words, which is a better answer than a half-filled form vanishing.
+
+**A list drawn for one row is scoped to that row**, and both halves of the scope have to move
+together. `branchesIn` filters the project-wide answer to the branches that repository has *and*
+empties each record's `missing_in` on the way out, because `branchPicker.js` turns that field into
+`local · 4 repos` by subtracting it from however many repositories the list is drawn against — one,
+here. Left in place it read `local · 0 repos` under the very branch the review is about: the list
+denying that any repository has it. Inside a list about one repository that has the branch, absent
+from nowhere is the honest answer. The premise is the whole of it, so the one case where it does not
+hold draws **nothing**: a repository that has left the project while the window stood open keeps its
+row under a stand-in name, and a name is what `missing_in` is keyed by, so a list scoped to it would be
+another repository's answer counted as though it were this one's.
+
+**The base is deliberately not checked against any repository**, and `reviewRows.js` says so where the
+rules that check the head are. Everything this window draws about a branch being absent is about the
+head — the notes, `follows the rule`, which rows the rule reaches — while a base picked from the
+project-wide list is sent as the base for every row. The head is what a review is *about*; the base is
+what it is read against, and is in practice a long-lived branch every repository has. Extending the
+clause to the base is a change to what the window says rather than a defect in what it does. And an
+override differs on its head and never on its base: both of the calls that open a list for one row ask
+for the checked side, which is what a row is a row about.
 
 **Where the lists come from.** The repositories are `vcsState.repos`, already loaded by the panel.
 Which branches exist across the whole project, and which repositories each is short of, is the
-existing `runs::commands::target_branches` — `{ name, missing_in }` apiece — which already answers the
-entire multi-repository question, so nothing here walks a project a second time. `DesktopApp.vue`
-awaits that call **before** it builds a table rather than after, unlike the run dialog's own late
+existing `runs::commands::target_branches` — `{ name, missing_in, at }` apiece — which already answers
+the entire multi-repository question, so nothing here walks a project a second time. `DesktopApp.vue`
+awaits that call **before** it builds the form rather than after, unlike the run dialog's own late
 `loadBranches`: that window fills a field and can do it when the list lands, where this window *is*
-the list, and a table built from a list that has not arrived reads as a branch no repository has —
-an empty window with a sentence under it saying something untrue. What `origin` holds is
-`loadRemoteBranches(repo)`, one repository at a time and copied out as each answer lands, because that
-store field is a single list written for a caller looking at one repository. Sequential and not
-parallel for exactly that reason; it costs nothing worth parallelising, since `vcs_remote_branches`
-spawns no process at all.
+the list, and a form built from a list that has not arrived reads as a branch no repository has. What
+`origin` holds is `loadRemoteBranches(repo)`, one repository at a time and copied out as each answer
+lands, because that store field is a single list written for a caller looking at one repository;
+sequential and not parallel for exactly that reason, and it costs nothing worth parallelising since
+`vcs_remote_branches` spawns no process at all. It answers one question here — whether a side reading
+`origin` exists in a repository — and a repository whose list has not landed is read as *not known*
+rather than as *not there*, which falls through to the local answer. When each repository last fetched
+rides out of that same loop, keyed by path, and dates both the `origin` rows in the list and the
+sentence a row draws over a fetch that failed.
 
-**A repository the branch is missing from gets no row**, and is named in **one line under the table**
-rather than in a row of its own — `withoutCaption` in `components/git/reviewRows.js`. A repository
-without such a branch is not an error and not a broken row: it is a fact, said once, and somebody who
-wants it in the review adds it by hand with the name the branch goes by there. `Add a repository`
-offers only what is not already in the table, since a second row for one repository is a pair this
-window has no way to mean.
+**The form is held in the component and seeded from the prop rather than driven by it.** Every prop of
+a dialog window arrives over IPC and is re-announced whenever anything else about the window changes,
+so a driven form would put a round trip between picking a branch and seeing it, and would throw away a
+half-made choice every time an unrelated prop moved. The announcement is adopted only when its
+*contents* differ from what is on screen — an identity watch would fire on every announcement, since
+IPC rebuilds the objects on the way through.
 
-**`local` and `origin` resolve to a ref and to nothing cleverer**: `main` on one side, `origin/main`
-on the other, settled here once so that nothing downstream re-reads a branch list or guesses at a
-remote. `origin` and no other remote — there is no notion of a second one anywhere in this app, and
-inventing one for a case nobody has asked about would be a second vocabulary. The two sides draw
-different lists on purpose: the local one is `target_branches`' answer filtered to that repository,
-the origin one is that repository's own read, and a name in one and not the other is the ordinary case
-— a branch that lives only on the server, and a branch nobody has ever pushed.
-
-**The table is held in the component and seeded from the prop rather than driven by it.** Every prop
-of a dialog window arrives over IPC and is re-announced whenever anything else about the window
-changes, so a fully driven table would put a round trip between opening a dropdown and seeing the
-answer, and would wipe a half-filled row every time an unrelated prop moved. The announcement is
-adopted only when its *contents* differ from what is on screen — an identity watch would fire on every
-announcement, since IPC rebuilds the objects on the way through. The one message that goes back up
-before Review is the branch picked on the checked side of a **lone** row: that is what turns the
-`New review` door into the same table the menu opens, and building a table is `reviewRows.js`' job
-rather than a component's, for the reason that whole family exists.
-
-**That message carries the base beside the name**, and it is worth knowing why rather than reading as
-belt and braces. The columns run Repository, Base, To check, and the `New review` door opens with the
-base filled and the head empty — so the ordinary way through this window is left to right, base and
-then branch. A message carrying only the name had the rebuilt table put the *default* base back over
-whatever had just been chosen, at the instant attention had moved to the next column, and the review
-then ran against a comparison nobody asked for. It goes in as `pickBranch`'s `remembered`, its first
-term, which is also what makes it safe with no check of its own: a name that has since left the list
-is skipped there like any other.
+**Nothing goes back up before `submit` any more, and the `branch` emit is gone with the old table.**
+That message used to carry the branch picked on the checked side of a lone row so that the app window
+could rebuild the table around it; the rules in `reviewRows.js` are pure and the window is handed the
+repositories and the branch list, so it fills its own table in the same frame the list closes in.
+`EMITS` in `DialogWindow.vue` lost the name with it — a name there that no guest raises is inert, but
+a list that says a window sends something it does not is prose that has drifted.
 
 The origin sweep behind the window carries **a generation counter and not only a check that the
 window is open**, and those are two different questions. `serveDialog` lets a kind that is already
 open be reopened — it replaces the service and brings the window forward, and it stops nothing the
 previous opening started — so without the counter two sweeps run at once against a store field that
 holds one list, and one repository's origin branches land under another repository's key.
+
+**Busy is the whole body receding rather than each control going grey**: `--attn-quiet-opacity`, the
+system's one "this recedes" value, with the fields on `--surface-sunken`, every action off, `Cancel`
+and `Review` refused, the button reading `Reviewing…` and the footer saying
+`starting the review session · 6 pairs` beside a turning `loader-circle`. The two animations in this
+window are that spin at `--dur-pulse` and the controls' own `--dur-fast` state changes, and
+`prefers-reduced-motion` takes the spin away globally.
+
+**`Modal` grew two props for this window and nothing else changed.** `bodyPadding` and
+`footerPadding` default to exactly what they were hardcoded as, so the eleven other dialogs pass
+neither;
+720 wide on the padding of a 440 dialog reads as a form that was stretched rather than designed. It is
+the shape `DiffView`'s column captions took for the compare window, one component over.
 
 ### What Review does, in the order it has to happen in
 
@@ -1378,18 +1498,22 @@ same silence pointing the other way.
 
 **It travels in paths and the window draws names, and both are one list.** `fetchFailures` in
 `components/git/reviewRows.js` is the rule — the verdicts `Promise.all` handed back, joined to the
-targets they are about — and `startReview` maps its answer through `reviewRepoName` for the caption
-and the toast while sending the answer itself into the intent. Paths, because the prompt keys its
-lines by the path a `ReviewPair` names a repository by and a second vocabulary would be asking the
-agent to match the two. One list read twice is what keeps what a person saw and what the agent was
-told from disagreeing; two walks of the same array could drift, and the drift would be invisible.
+targets they are about — and that list of paths is what goes into the intent, what the window is
+handed (a row is keyed by path, and the note renders the names itself through `repoLabel`) and what
+the toast names through `reviewRepoName`. Paths, because the prompt keys its lines by the path a
+`ReviewPair` names a repository by and a second vocabulary would be asking the agent to match the two.
+One list read three times is what keeps what a person saw and what the agent was told from
+disagreeing; separate walks of the same array could drift, and the drift would be invisible.
 
 ### How old a branch is, and when this machine last asked
 
 Three ages, all read off the disk and none of them a process, for a list of branches that draws
-`local · 6 repos · 2h` and `origin · fetched 2m ago` under a name. Nothing draws them yet — the
-component is another task's — and what is settled here is where each number comes from and what it
-is allowed to mean.
+`local · 6 repos · 2h` and `origin · fetched 2m ago` under a name. `BranchPicker.vue` inside the
+review window is what draws them, and what is settled here is where each number comes from and what
+it is allowed to mean. The list opened for one row is dated by that repository's own last fetch; the
+one opened for the project's rule is dated by the **oldest** of them (`oldestFetch`), since a pair set
+for every repository is as stale as the least recently fetched of them, and a repository nobody has
+ever fetched into takes the number away entirely rather than being skipped.
 
 **On the wire the stamp is `at`, on both lists**, which is epic smetana-im0c's contract and what the
 component reads by name. In Rust the field is `touched_at` with a `#[serde(rename)]` over it: the
@@ -1439,8 +1563,8 @@ whenever the window opens; under-reporting is also the safe direction, since an 
 says "ask again" where one that is too fresh promises refs are newer than they are.
 
 **In the store the names stay a list of strings, and that is the constraint the whole shape is built
-around.** `DesktopApp.vue` copies `vcsState.remoteBranches` into a map per repository and
-`ReviewChangesDialog.vue` hands those strings straight to a `Dropdown`'s `options`; records in their
+around.** `DesktopApp.vue` copies `vcsState.remoteBranches` into a map per repository and the review
+window reads it as names — whether a side meaning `origin` exists in a repository; records in their
 place would break both. So `loadRemoteBranches` takes the command's records apart and the stamps land
 **beside** the names, in `remoteBranchTimes` keyed by name — a reader wanting an age has a name in
 its hand anyway, the assumption `tracking` already makes — with `remoteFetchedAt` beside them. Those

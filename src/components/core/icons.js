@@ -12,6 +12,7 @@ import {
   Anchor,
   ArrowDown,
   ArrowDownToLine,
+  ArrowRight,
   ArrowRightToLine,
   ArrowUp,
   Bell,
@@ -84,6 +85,7 @@ import {
   Terminal,
   Trash2,
   TriangleAlert,
+  Undo2,
   User,
   UserCheck,
   Wrench,
@@ -216,6 +218,18 @@ export const iconNodes = {
   // status. The line at the end is what makes it "all the way into the queue"
   // rather than a nudge in some direction.
   'arrow-right-to-line': ArrowRightToLine,
+  /* The direction of a comparison, between the two sides of the review
+     window's pair: what it reads from on the left, what it is judging on the
+     right. A bare arrow and not `chevrons-right` or `git-compare` — this is not
+     a control and not a diff, it is the word "to" between two branch names. */
+  'arrow-right': ArrowRight,
+  /* Back to the rule, on a row of that same window that has been given a pair
+     of its own. The arrow curving back on itself is undo everywhere, which is
+     exactly what the row does: it drops what was set here and follows the
+     project's pair again. Deliberately not `x`, which in that table means
+     taking a repository out of the review altogether — the two sit in the same
+     20px of every row and must not read alike. */
+  'undo-2': Undo2,
   wrench: Wrench,
   // The card menu's Edit. `file-pen` is a page with a pen on it and belongs to
   // the file it is about; this one is the bare verb, which is what a row acting

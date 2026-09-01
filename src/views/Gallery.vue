@@ -1090,39 +1090,82 @@ const BRANCHES = [
   { name: 'release/7', current: false }
 ]
 
-/* The branch-review window's table, and what fills it. Two rows and three
-   repositories on purpose: the third is what `Add a repository` offers and what
-   the line under the table is about. The two sides differ between the rows, so
-   both spellings of a side are on the page at once. */
+/* The branch-review window: the project's pair at the top, the repositories
+   under it, and the one row that differs.
+
+   Four repositories and three rows on purpose. The rule's branch is missing
+   from `extension`, which is why that one is out of the review and named in the
+   notes block, and from `infra`, which is in the table anyway because somebody
+   added it by hand — the row with the `man` badge, a pair of its own and the
+   `x` that takes it out again. `infra` also sits outside the project, so it is
+   the one row whose path is drawn `~/work/smetana-infra` rather than `./…`.
+
+   The rule's branch is the long one deliberately: `feature/smetana-4nsa-remote-branches-repo`
+   has to be readable whole in the field, in the branch list the field opens and
+   in a row of the table, which is the whole reason this window was rebuilt. */
 const REVIEW_REPOS = [
   { name: '.', path: '/Users/you/dev/smetana' },
   { name: 'admin', path: '/Users/you/dev/smetana/admin' },
-  { name: 'extension', path: '/Users/you/dev/smetana/extension' }
+  { name: 'extension', path: '/Users/you/dev/smetana/extension' },
+  { name: 'infra', path: '/Users/you/work/smetana-infra' }
 ]
-const REVIEW_ROWS = [
+const REVIEW_ROOT = '/Users/you/dev/smetana'
+const REVIEW_HOME = '/Users/you'
+const REVIEW_HOUR = 3600
+const REVIEW_NOW = Math.floor(Date.now() / 1000)
+/* `target_branches`' answer, and `missing_in` speaks the names above — the
+   project root's is `.`, which is why one entry names it that way. */
+const REVIEW_BRANCHES = [
   {
-    repo: '/Users/you/dev/smetana',
-    name: '.',
-    base: 'main',
-    baseSide: 'local',
-    head: 'release/7',
-    headSide: 'local'
+    name: 'feature/smetana-4nsa-remote-branches-repo',
+    missing_in: ['extension', 'infra'],
+    at: REVIEW_NOW - 2 * REVIEW_HOUR
   },
+  { name: 'main', missing_in: [], at: REVIEW_NOW - 26 * REVIEW_HOUR },
+  { name: 'develop', missing_in: ['admin'], at: REVIEW_NOW - 3 * 24 * REVIEW_HOUR },
+  { name: 'staging', missing_in: [], at: REVIEW_NOW - 40 * 60 },
+  { name: 'release/7', missing_in: ['admin', 'extension'], at: REVIEW_NOW - 9 * 24 * REVIEW_HOUR },
   {
-    repo: '/Users/you/dev/smetana/admin',
-    name: 'admin',
-    base: 'main',
-    baseSide: 'origin',
-    head: 'release/7',
-    headSide: 'local'
+    name: 'infra/4nsa-remote-branches',
+    missing_in: ['.', 'admin', 'extension'],
+    at: REVIEW_NOW - 5 * REVIEW_HOUR
   }
 ]
+const REVIEW_FORM = {
+  base: { ref: 'main', remote: false },
+  head: { ref: 'feature/smetana-4nsa-remote-branches-repo', remote: false },
+  repoIds: [
+    '/Users/you/dev/smetana',
+    '/Users/you/dev/smetana/admin',
+    '/Users/you/work/smetana-infra'
+  ],
+  overrides: {
+    '/Users/you/work/smetana-infra': {
+      base: { ref: 'main', remote: true },
+      head: { ref: 'infra/4nsa-remote-branches', remote: false }
+    }
+  },
+  manual: ['/Users/you/work/smetana-infra']
+}
+/* The `New review` door: a pair with nothing on the checked side, no rows at
+   all, and a footer that says `0 pairs` over a Review nobody may press. */
+const REVIEW_EMPTY = {
+  base: { ref: 'main', remote: false },
+  head: null,
+  repoIds: [],
+  overrides: {},
+  manual: []
+}
 /* Deliberately not the local list: `spike/origin-only` has never been checked
-   out here and `release/7` has never been pushed, which is the whole reason the
-   side switch exists. */
+   out here, which is what a side reading `origin` is for. */
 const REVIEW_REMOTE = {
   '/Users/you/dev/smetana': ['main', 'staging', 'spike/origin-only'],
   '/Users/you/dev/smetana/admin': ['main', 'spike/origin-only']
+}
+const REVIEW_FETCHED_AT = {
+  '/Users/you/dev/smetana': REVIEW_NOW - 2 * 60,
+  '/Users/you/dev/smetana/admin': REVIEW_NOW - 3 * REVIEW_HOUR,
+  '/Users/you/work/smetana-infra': REVIEW_NOW - 20 * REVIEW_HOUR
 }
 
 /* The verdict a live run produces, taken from the rule itself rather than
@@ -2530,55 +2573,111 @@ const menuTargetStyle = {
           @confirm="() => {}"
         />
       </div>
-      <!-- Choosing what an agent reviews. Live, because the table is the whole
-           of this window: change a side to `origin` and the list beside it
-           becomes the other list, take a row out and `Add a repository` grows
-           the name back, empty a side and Review goes dead.
+      <!-- Choosing what an agent reviews. Live, because working the window is
+           the only way to see what it is: click either side of the pair and the
+           branch list opens in place of the table, press the pencil on a row
+           and that row keeps a pair of its own, press `undo-2` and it follows
+           the project again, open `Add a repository` and the repositories that
+           are not in the review are offered with the reason each one is out.
 
-           Two rows rather than one, since a project made of several
-           repositories is what the table exists for; the third repository is
-           deliberately out of the table so that both of the things that depend
-           on it are on screen — the picker that offers only what is missing,
-           and the one line under the table naming the repository the branch is
-           not in. The frame is wide, because the window is 720 in the app and a
-           440 frame here would be a picture of a dialog nobody will ever
-           see. -->
-      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           Three rows out of four repositories on purpose — one that differs,
+           one added by hand, one repository left out and named in the notes
+           block. The frame is 720 wide because that is what the window is in
+           the app, and tall enough for the branch list, which is this window's
+           own ceiling: with the list open the table is not drawn at all, so the
+           height stops growing there whatever the project is made of.
+
+           The frames below hold the tallest state each one can reach **plus the
+           scrim's own `8vh` of top inset**, and both halves of that are why the
+           numbers look generous. Outside a dialog window `Modal` places itself
+           against the top of the scrim with that gap above it, so a frame sized
+           to the dialog alone hides its footer — the busy frame's own subject —
+           at every viewport height. And the gap is a share of the *viewport*
+           rather than of the frame, so the slack shrinks as the browser grows:
+           these three carry enough for a browser about 2000px tall, which is an
+           ordinary maximised window on a large display.
+
+           The tallest state is the branch list open over a **filled** form, and
+           it is **574** in both of the frames that can reach it, measured at
+           comfortable — not the state either one opens on, and not the 524 the
+           `New review` frame shows before a branch is picked. Once a branch is
+           picked the table fills and the notes block appears, and reopening the
+           list there costs the same 50px it costs in the first frame; that
+           frame's whole subject is that picking a branch fills the table, so
+           the state after the pick is the one to size it for. 574 plus 160 is
+           what makes both of them 740.
+
+           The busy frame is the exception at 680, and it is genuinely done:
+           every control in it is off, so its list cannot be opened and its 474
+           never moves. Compact is shorter everywhere and clears all three. -->
+      <div :style="{ position: 'relative', height: '740px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
-          branch="release/7"
-          :rows="REVIEW_ROWS"
+          :form="REVIEW_FORM"
           :repos="REVIEW_REPOS"
-          :branches="everywhere('main', 'staging', 'release/7')"
+          :root="REVIEW_ROOT"
+          :home="REVIEW_HOME"
+          :branches="REVIEW_BRANCHES"
           :remote="REVIEW_REMOTE"
-          :without="['extension']"
-          default-base="main"
+          :fetched-at="REVIEW_FETCHED_AT"
           @close="() => {}"
-          @branch="() => {}"
           @submit="() => {}"
         />
       </div>
-      <!-- The same window while it is fetching. It is on screen for as long as
-           `git fetch` takes in every repository with an `origin` side, which is
-           up to a minute, and it is the only thing saying why the button has
-           gone quiet — so it is a state worth being able to look at rather than
-           one to catch by timing. Beside it the sentence a fetch that failed
-           leaves behind, which does not call the review off. -->
-      <div :style="{ position: 'relative', height: '460px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <!-- The same window after Review was pressed: the body recedes, every
+           action is off, and the footer says what is being started. It is on
+           screen for as long as `git fetch` takes in every repository with an
+           `origin` side, which is up to a minute, and it is the only thing
+           saying why the button has gone quiet — so it is a state worth being
+           able to look at rather than one to catch by timing.
+
+           All three service messages at once, which is the case the notes block
+           exists for: three sentences loose under a table read as one
+           paragraph. None of them is an error and none of them is red — a fetch
+           that failed leaves the review reading the copy of origin already on
+           this disk, which is how old an answer is rather than a failure. -->
+      <div :style="{ position: 'relative', height: '680px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ReviewChangesDialog
           :open="true"
-          branch="release/7"
-          :rows="REVIEW_ROWS"
+          :form="REVIEW_FORM"
           :repos="REVIEW_REPOS"
-          :branches="everywhere('main', 'staging', 'release/7')"
+          :root="REVIEW_ROOT"
+          :home="REVIEW_HOME"
+          :branches="REVIEW_BRANCHES"
           :remote="REVIEW_REMOTE"
-          :without="['extension']"
-          default-base="main"
-          :fetching="['/Users/you/dev/smetana/admin']"
-          :fetch-failed="['extension']"
+          :fetched-at="REVIEW_FETCHED_AT"
+          :fetching="['/Users/you/dev/smetana']"
+          :fetch-failed="['/Users/you/dev/smetana/admin']"
           busy
           @close="() => {}"
-          @branch="() => {}"
+          @submit="() => {}"
+        />
+      </div>
+      <!-- The second door, `New review`, which knows no branch: the checked
+           side is a dashed field asking for one, the table is two rows of
+           nothing waiting for it, the footer says `0 pairs` and Review is
+           refused. Picking a branch here fills the table — the same rule the
+           other door opens with — so this frame is also where that is checked.
+           Its caption comes from the app window, which is why it is passed as a
+           prop: the OS frame draws it, and a title written into the template
+           would be silently overdrawn.
+
+           It opens on the shortest state of the three and is sized like the
+           first, which is not a mistake: this is the door where the branch list
+           is the first thing anybody touches, and what decides a frame's height
+           is the list reopened after a branch has been picked. -->
+      <div :style="{ position: 'relative', height: '740px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ReviewChangesDialog
+          :open="true"
+          title="New review"
+          :form="REVIEW_EMPTY"
+          :repos="REVIEW_REPOS"
+          :root="REVIEW_ROOT"
+          :home="REVIEW_HOME"
+          :branches="REVIEW_BRANCHES"
+          :remote="REVIEW_REMOTE"
+          :fetched-at="REVIEW_FETCHED_AT"
+          @close="() => {}"
           @submit="() => {}"
         />
       </div>

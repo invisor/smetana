@@ -258,58 +258,56 @@ const DIALOG_PROPS = {
     },
     busy: false
   },
-  /* Choosing what an agent reviews. Two rows rather than one, because a project
-     made of several repositories is the case this table exists for and the one
-     a single-repository machine can never show — the paths are the two
-     `vcs_repos` answers with, so the window and the panel behind it agree about
-     what this project is made of.
+  /* Choosing what an agent reviews. One rule at the top and a row that differs
+     under it, because that is the whole shape of this window and a fixture of
+     rows that all follow the rule shows none of it.
 
-     The two sides are deliberately not the same: the first row reads a local
-     base against a local branch, the second an origin base against a local one,
-     which is what puts both spellings of a side on the screen at once. And the
-     third repository of `repos` is not in the table at all, so both of the
-     controls that depend on that are reachable — `Add a repository`, which
-     offers only what is not there yet, and the line under the table naming the
-     repository the branch is missing from.
+     Four repositories and two rows on purpose. `release/7` is missing from
+     `admin` and `extension` (`MOCK_TARGET_BRANCHES` above), so the rule's own
+     table is the project root alone — `admin` is in it because somebody added
+     it by hand, which is what draws the `man` badge, the pair of its own and
+     the `x` that takes it out again. `extension` is left out and named in the
+     notes block; `infra` has the branch and is simply not in the review, so
+     `Add a repository` opens on both of its sentences at once. It also sits
+     outside the project, which is the one repository here whose path is drawn
+     `~/work/smetana-infra` rather than `./…`.
 
-     `branches` is `MOCK_TARGET_BRANCHES` above rather than the panel's list,
-     for the `run` fixture's reason: the table is filled from that same command,
-     and a window offering branches the project behind it does not have would be
-     two fixtures disagreeing about one project. `remote` is keyed by path, as
-     the app window's own announcement is. */
+     `branches` is `MOCK_TARGET_BRANCHES` rather than the panel's list, for the
+     `run` fixture's reason: the window is filled from that same command, and
+     one offering branches the project behind it does not have would be two
+     fixtures disagreeing about one project. `remote` and `fetchedAt` are keyed
+     by path, as the app window's own announcement is. */
   'review-changes': {
     title: 'Review changes',
-    branch: 'release/7',
-    rows: [
-      {
-        repo: '/Users/you/dev/smetana',
-        name: '.',
-        base: 'main',
-        baseSide: 'local',
-        head: 'release/7',
-        headSide: 'local'
+    form: {
+      base: { ref: 'main', remote: false },
+      head: { ref: 'release/7', remote: false },
+      repoIds: ['/Users/you/dev/smetana', '/Users/you/dev/smetana/admin'],
+      overrides: {
+        '/Users/you/dev/smetana/admin': {
+          base: { ref: 'main', remote: true },
+          head: { ref: 'feature/runs-project-config', remote: false }
+        }
       },
-      {
-        repo: '/Users/you/dev/smetana/admin',
-        name: 'admin',
-        base: 'main',
-        baseSide: 'origin',
-        head: 'release/7',
-        headSide: 'local'
-      }
-    ],
+      manual: ['/Users/you/dev/smetana/admin']
+    },
     repos: [
       { name: '.', path: '/Users/you/dev/smetana' },
       { name: 'admin', path: '/Users/you/dev/smetana/admin' },
-      { name: 'extension', path: '/Users/you/dev/smetana/extension' }
+      { name: 'extension', path: '/Users/you/dev/smetana/extension' },
+      { name: 'infra', path: '/Users/you/work/smetana-infra' }
     ],
+    root: '/Users/you/dev/smetana',
+    home: '/Users/you',
     branches: MOCK_TARGET_BRANCHES,
     remote: {
       '/Users/you/dev/smetana': ['main', 'staging', 'release/7'],
       '/Users/you/dev/smetana/admin': ['main', 'feature/runs-project-config']
     },
-    without: ['extension'],
-    defaultBase: 'main',
+    fetchedAt: {
+      '/Users/you/dev/smetana': secondsAgo(2 * 60),
+      '/Users/you/dev/smetana/admin': secondsAgo(3 * 3600)
+    },
     fetching: [],
     fetchFailed: [],
     busy: false
@@ -993,6 +991,11 @@ export function installMockBackend() {
        here to the tracked repository's root, and that is the only way the
        browser's answer differs from the app's. */
     if (command === 'project_root') return payload?.path ?? null
+    /* The home folder the fixtures are written under, so the review window's
+       Repository column draws `~/…` for a repository outside the project in
+       `npm run dev` as it would in the app. A browser cannot read one, and this
+       is the one place that knows what "you" means in these paths. */
+    if (command === 'home_dir') return '/Users/you'
     /* There is nothing to pick a folder with in a browser. We answer as a
        cancelled dialog would: a refusal, not an invented path — by the same
        rule that rejects writes to the tracker here. */
