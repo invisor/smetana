@@ -234,6 +234,204 @@ pub fn path_with(dir: &Path, inherited: Option<&OsStr>) -> OsString {
         .unwrap_or_else(|_| inherited.unwrap_or(OsStr::new("")).to_owned())
 }
 
+/// Whether the program can be run at all, answered in the parent and before
+/// anything is spawned. The rule is `execvp`'s own — a name with a `/` in it is
+/// a path and nothing is searched, a bare name is looked for along `PATH`, the
+/// first candidate that could be executed wins — asked of the filesystem here
+/// instead of the kernel.
+///
+/// **Why this app asks a question the OS is about to answer for it.**
+/// `portable-pty`'s `pre_exec` hook calls `close_random_fds()`, which closes
+/// every descriptor above 2 in the forked child. One of them is the
+/// close-on-exec pipe `std::process` keeps for precisely this purpose: the
+/// child writes the `errno` of a failed `execvp` into it, and the parent reads
+/// either that error or end-of-file, where end-of-file means the `exec`
+/// landed. The pipe is shut inside `pre_exec`, which runs *before* the `exec`
+/// is attempted, so the parent sees end-of-file whatever happens next and
+/// `spawn_command` answers `Ok` for a process that is already dying. What
+/// reached a person instead of "there is no such program" was a session that
+/// appeared and ended a moment later — and, for a missing interpreter, the line
+/// `fatal runtime error: assertion failed: output.write(&bytes).is_ok()`
+/// painted into their terminal by the child's own runtime as it failed to
+/// report the failure.
+///
+/// **Of the two ways out, this is the cheap one, and the other one has nowhere
+/// to live.** A notification channel of our own would have to be a descriptor
+/// `close_random_fds` does not reach, opened by a hook that runs after it; the
+/// hook that closes them is `portable-pty`'s, registered inside
+/// `spawn_command`, and `CommandBuilder` accepts no hook of ours — so having
+/// one means forking the crate, which this task explicitly does not. Checking
+/// first leaves a race, since the program can go between this answer and the
+/// `exec`, and that race is the ordinary state of a filesystem rather than
+/// something introduced here: nothing is promised that was not promised before,
+/// and what is bought is that the failure people actually meet — an agent that
+/// was never installed, a `node` that an npm shebang points at and that is no
+/// longer there — is an error naming the program rather than a session with a
+/// corpse behind it.
+///
+/// **Only the shebang is new information; the rest is better wording.**
+/// `portable-pty`'s own `search_path` already refuses a program that is
+/// missing, that is a directory or that carries no execute permission, and it
+/// does it before the fork, so those three were never the `Ok`-on-a-dead-process
+/// case — what they were is a multi-line refusal quoting the whole of `PATH`
+/// back at whoever read it. A script whose interpreter has gone passes every one
+/// of those tests and fails in the child, which is the half that was invisible.
+/// Only an absolute interpreter is checked, a relative one being resolved by the
+/// kernel against a directory this function is not the authority on, and only
+/// one level, since no kernel here runs a script whose interpreter is itself a
+/// script. `#!/usr/bin/env node` is deliberately as far as this reads: `env`
+/// itself exists, and whether it finds `node` is `env`'s own search along the
+/// same `PATH`, which is not repeated here.
+///
+/// An execute bit — any of the three — rather than `access(X_OK)`: the whole
+/// point is to refuse what plainly cannot run and never to refuse what could,
+/// and the finer question of whether *this* user may run this file is left to
+/// `portable-pty`'s own `access` a few lines later, which asks the kernel and
+/// answers for the right uid.
+#[cfg(unix)]
+pub fn resolve_program(program: &OsStr, path: Option<&OsStr>, cwd: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let named = program.to_string_lossy().into_owned();
+    if program.as_bytes().contains(&b'/') {
+        // A path, not a name. `join` on an absolute path answers the absolute
+        // path, so this one line covers both a `/usr/bin/…` shell and the
+        // `./agent` a person could type.
+        return match inspect(&cwd.join(program)) {
+            Ok(exe) => Ok(exe),
+            Err(Unusable::Absent) => Err(format!("{named} is not on disk")),
+            Err(Unusable::Because(why)) => Err(why),
+        };
+    }
+    let Some(path) = path else {
+        return Err(format!("{named} was looked for, but this session was given no PATH"));
+    };
+    // A candidate that exists and cannot be run does not end the search —
+    // `execvp` walks on to the next directory and so does this — but it is the
+    // more useful thing to say afterwards than "not found", so the first such
+    // reason is kept.
+    let mut refused: Option<String> = None;
+    for dir in std::env::split_paths(path) {
+        // `cwd.join(dir)` and not `dir`: a relative entry in `PATH` is resolved
+        // against the child's working directory, which is the one the command
+        // carries rather than this process's.
+        match inspect(&cwd.join(dir).join(program)) {
+            Ok(exe) => return Ok(exe),
+            Err(Unusable::Absent) => {}
+            Err(Unusable::Because(why)) => {
+                refused.get_or_insert(why);
+            }
+        }
+    }
+    Err(refused.unwrap_or_else(|| format!("{named} is not on PATH")))
+}
+
+/// Why one candidate cannot be run. The two are apart because a `PATH` search
+/// treats them differently: nothing at that path is the ordinary case and the
+/// search goes on, while something unusable is worth repeating to a person.
+#[cfg(unix)]
+enum Unusable {
+    Absent,
+    Because(String),
+}
+
+/// One candidate, measured. `metadata` and not `symlink_metadata`: a symlink is
+/// followed by the kernel too, and a dangling one is simply absent.
+#[cfg(unix)]
+fn inspect(path: &Path) -> Result<PathBuf, Unusable> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let meta = std::fs::metadata(path).map_err(|_| Unusable::Absent)?;
+    let shown = path.display();
+    if meta.is_dir() {
+        return Err(Unusable::Because(format!("{shown} is a directory")));
+    }
+    if meta.permissions().mode() & 0o111 == 0 {
+        return Err(Unusable::Because(format!("{shown} is not executable")));
+    }
+    if let Some(interpreter) = interpreter(path) {
+        if !runnable(&interpreter) {
+            return Err(Unusable::Because(format!(
+                "{shown} runs under {}, which is not there",
+                interpreter.display()
+            )));
+        }
+    }
+    Ok(path.to_path_buf())
+}
+
+/// The interpreter an absolute `#!` line names, if there is one. Anything that
+/// is not a shebang — every real binary — answers `None` and is left alone.
+#[cfg(unix)]
+fn interpreter(path: &Path) -> Option<PathBuf> {
+    use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
+
+    // Kernels read a couple of hundred bytes of this line and no more (127 on
+    // Linux, 512 on macOS), so a buffer of the larger of the two is the whole
+    // of what can be executed. The end of the line has to be *in* it: a first
+    // line that runs off the end of the buffer leaves a truncated path, and a
+    // truncated path is exactly the way this check could refuse a program that
+    // would have run. Answering `None` there is the safe direction — nothing is
+    // refused that was not refused before.
+    let mut head = [0u8; 512];
+    let read = std::fs::File::open(path).ok()?.read(&mut head).ok()?;
+    let line = head.get(..read)?.strip_prefix(b"#!")?;
+    let line = &line[..line.iter().position(|b| *b == b'\n')?];
+    let word = line
+        .split(|b| *b == b' ' || *b == b'\t' || *b == b'\r')
+        .find(|word| !word.is_empty())?;
+    let interpreter = PathBuf::from(OsStr::from_bytes(word));
+    interpreter.is_absolute().then_some(interpreter)
+}
+
+/// The interpreter itself, held to the same two rules as the program: something
+/// is there, and it carries an execute bit.
+#[cfg(unix)]
+fn runnable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .map(|meta| !meta.is_dir() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// The refusal `Pty::start` makes on its own behalf, in the words of the
+/// program that was asked for. `resolve_program` above carries the whole of why
+/// it exists.
+///
+/// Windows has no part in this: there is no fork, `CreateProcess` reports a
+/// failure to the caller synchronously, and nothing between the two ends closes
+/// a channel the way `close_random_fds` does here.
+fn preflight(command: &CommandBuilder) -> Result<(), TerminalError> {
+    #[cfg(not(unix))]
+    let _ = command;
+    #[cfg(unix)]
+    {
+        // An empty argv is `portable-pty`'s own "run the default shell", which
+        // this app never asks for and which names no program to check.
+        let Some(program) = command.get_argv().first() else { return Ok(()) };
+        // The directory a relative program name or a relative `PATH` entry would
+        // be resolved against, which is the command's own and not this
+        // process's. A working directory that is not there is dropped, exactly
+        // as `as_command` drops it a moment later; where the two then differ —
+        // it falls back to the home directory and this to wherever this process
+        // stands — is a difference of nothing, since every program this app runs
+        // is either an absolute path or a bare name looked for along an absolute
+        // `PATH`.
+        let cwd = command
+            .get_cwd()
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_dir())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        resolve_program(program, command.get_env("PATH"), &cwd)
+            .map(|_| ())
+            .map_err(TerminalError::Spawn)?;
+    }
+    Ok(())
+}
+
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn std::io::Write + Send>,
@@ -276,6 +474,13 @@ impl Pty {
         rows: u16,
         out: mpsc::UnboundedSender<Chunk>,
     ) -> Result<Self, TerminalError> {
+        // Before anything is opened or forked: a program that cannot be
+        // executed is refused here, because the `Ok` `spawn_command` answers a
+        // few lines down proves nothing about it. `resolve_program` above is
+        // the whole of that mechanism and of why it is a check in the parent
+        // rather than a channel out of the child.
+        preflight(&command)?;
+
         let system = NativePtySystem::default();
         let pair = system
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -662,5 +867,159 @@ mod tests {
             let actor = cmd.iter_extra_env_as_str().find(|(key, _)| *key == "BEADS_ACTOR");
             assert_eq!(actor, None);
         }
+    }
+
+    /// A directory of this test's own, named after the test so two of them
+    /// running at once cannot write over each other. The same shape
+    /// `service.rs` uses for the shell tests.
+    #[cfg(unix)]
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("smetana-pty-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the temp directory");
+        dir.canonicalize().expect("canonicalize the temp directory")
+    }
+
+    #[cfg(unix)]
+    fn executable(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, body).expect("write the program");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the program executable");
+    }
+
+    /// The failure this whole mechanism exists for, asked of the road the app
+    /// itself takes: `Pty::start`, the one function `spawn` and `spawn_shell`
+    /// both end in. A program that is not on disk must answer with an error and
+    /// never with a session — `spawn_command`'s own `Ok` says nothing about it,
+    /// because `close_random_fds` has already shut the channel the child would
+    /// have reported a failed `exec` on.
+    ///
+    /// Nothing is spawned by this test, in either outcome: the refusal happens
+    /// before the PTY is opened, and the assertion is that it happened.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_is_not_on_disk_is_refused_rather_than_started() {
+        let dir = scratch("start-missing");
+        let program = dir.join("an-agent-that-was-never-installed").display().to_string();
+        let (chunks, _rx) = mpsc::unbounded_channel();
+        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks) {
+            Err(TerminalError::Spawn(why)) => assert!(why.contains(&program), "{why}"),
+            Err(other) => panic!("{other}"),
+            Ok(_) => panic!("a program that is not on disk answered with a session"),
+        }
+    }
+
+    /// The half of it that `portable-pty` cannot see, and the reason the check
+    /// reads the shebang: this program exists, is a regular file and carries
+    /// every execute bit, so `search_path` waves it through — and then the
+    /// `exec` fails in the child, where the report of it has nowhere to go. On
+    /// the code this test was written against the call answered `Ok`, the child
+    /// died at once with status 1, and what a person saw in the terminal was
+    /// `fatal runtime error: assertion failed: output.write(&bytes).is_ok()`
+    /// from the child's own runtime failing to write down why it could not
+    /// start.
+    ///
+    /// This is the shape of a real failure rather than an invented one: an
+    /// agent installed by npm is a script whose first line names `node`, and a
+    /// person who changed node versions has exactly this file.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_whose_interpreter_is_gone_is_refused_rather_than_started() {
+        let dir = scratch("start-shebang");
+        let script = dir.join("agent");
+        executable(&script, "#!/nonexistent/interpreter\nexit 0\n");
+        let program = script.display().to_string();
+        let (chunks, _rx) = mpsc::unbounded_channel();
+        match Pty::start(1, build_shell_command(&program, &dir), &program, 120, 30, chunks) {
+            Err(TerminalError::Spawn(why)) => {
+                assert!(why.contains("/nonexistent/interpreter"), "{why}")
+            }
+            Err(other) => panic!("{other}"),
+            Ok(_) => panic!("a program whose interpreter is gone answered with a session"),
+        }
+    }
+
+    /// The positive control, and the reason it stops at `resolve_program`
+    /// rather than going through `Pty::start`: a program that passes the check
+    /// is spawned, and no test in this file starts a process. Both halves are
+    /// here — a real binary, and a script whose interpreter is where it says it
+    /// is — because a check that refused either of them would break every
+    /// session in the app while leaving the two tests above green.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_can_run_is_not_refused() {
+        let dir = scratch("resolve-good");
+        let script = dir.join("agent");
+        executable(&script, "#!/bin/sh\nexit 0\n");
+        assert_eq!(resolve_program(script.as_os_str(), None, &dir), Ok(script));
+
+        let shell = Path::new("/bin/sh");
+        assert_eq!(resolve_program(shell.as_os_str(), None, &dir), Ok(shell.to_path_buf()));
+    }
+
+    /// A bare name is `PATH`'s to answer, which is how every agent in this app
+    /// is named — the profile gives `claude`, not a path to it.
+    #[cfg(unix)]
+    #[test]
+    fn a_bare_name_is_looked_for_along_the_path() {
+        let dir = scratch("resolve-path");
+        let found = dir.join("agent");
+        executable(&found, "#!/bin/sh\nexit 0\n");
+        let path = OsString::from(format!("/nonexistent/bin:{}", dir.display()));
+        assert_eq!(resolve_program(OsStr::new("agent"), Some(&path), &dir), Ok(found));
+
+        let missing = resolve_program(OsStr::new("no-such-agent"), Some(&path), &dir);
+        assert_eq!(missing, Err("no-such-agent is not on PATH".to_string()));
+    }
+
+    /// `execvp` walks past a candidate it cannot execute and so does this: a
+    /// stray unreadable `agent` early in somebody's `PATH` must not hide the
+    /// real one later in it.
+    #[cfg(unix)]
+    #[test]
+    fn a_candidate_that_cannot_run_does_not_end_the_search() {
+        let root = scratch("resolve-shadowed");
+        let first = root.join("first");
+        let second = root.join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("agent"), "not executable\n").unwrap();
+        let real = second.join("agent");
+        executable(&real, "#!/bin/sh\nexit 0\n");
+        let path = OsString::from(format!("{}:{}", first.display(), second.display()));
+        assert_eq!(resolve_program(OsStr::new("agent"), Some(&path), &root), Ok(real));
+    }
+
+    /// The two refusals `portable-pty` already makes, worded here instead: they
+    /// were never the `Ok`-on-a-dead-process case, and what they gain is a
+    /// sentence a person can read in place of a multi-line dump of `PATH`.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_is_not_executable_and_a_directory_are_both_refused() {
+        let dir = scratch("resolve-unusable");
+        let plain = dir.join("agent");
+        std::fs::write(&plain, "just a file\n").unwrap();
+        assert_eq!(
+            resolve_program(plain.as_os_str(), None, &dir),
+            Err(format!("{} is not executable", plain.display()))
+        );
+        assert_eq!(
+            resolve_program(dir.as_os_str(), None, &dir),
+            Err(format!("{} is a directory", dir.display()))
+        );
+    }
+
+    /// What the shebang reading deliberately stops short of. `env` exists, so
+    /// the program is accepted, and whether `node` is on the `PATH` is `env`'s
+    /// own search — repeating it here would be this function guessing at
+    /// another program's rules.
+    #[cfg(unix)]
+    #[test]
+    fn an_interpreter_that_is_there_is_as_far_as_the_shebang_is_read() {
+        let dir = scratch("resolve-env-shebang");
+        let script = dir.join("agent");
+        executable(&script, "#!/usr/bin/env node\nconsole.log(1)\n");
+        assert_eq!(resolve_program(script.as_os_str(), None, &dir), Ok(script));
     }
 }
