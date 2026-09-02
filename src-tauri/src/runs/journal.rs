@@ -69,6 +69,7 @@ use super::queue::{Action, LastBatch, Leftover, QueueSnapshot};
 use super::registry::Proc;
 use super::service::{Batch, Probe};
 use super::usage::{Decision, Usage};
+use crate::tracker::service::BoardSource;
 
 /// The run's own record, open for as long as the loop task lives.
 ///
@@ -253,9 +254,17 @@ impl Read {
 /// own diff is deliberately wider than that (`summary.rs` reports an epic and
 /// ignores the floor), and this line is the queue's view rather than the
 /// document's.
-pub fn board(read: Read, snapshot: &QueueSnapshot) -> String {
+///
+/// `via=` is where the board came from, and it is the whole of the new logging
+/// smetana-ynyc asked for: `cache` is the tracker worker's live store, which it
+/// keeps only for the project the app window has open, and `bd` is a call made
+/// in this run's own folder because that folder was **not** the one on screen.
+/// The counters alone could not say which project they were counted in, so a
+/// night that read a stranger's board looked exactly like a night whose queue
+/// had emptied.
+pub fn board(read: Read, snapshot: &QueueSnapshot, source: BoardSource) -> String {
     format!(
-        "board {} ready={} {} unfinished={} {} closed={} parked={}",
+        "board {} ready={} {} unfinished={} {} closed={} parked={} via={}",
         read.mark(),
         snapshot.ready.len(),
         ids(&snapshot.ready),
@@ -263,6 +272,10 @@ pub fn board(read: Read, snapshot: &QueueSnapshot) -> String {
         ids(&snapshot.unfinished),
         snapshot.closed,
         snapshot.parked,
+        match source {
+            BoardSource::Cache => "cache",
+            BoardSource::Direct => "bd",
+        },
     )
 }
 
@@ -603,11 +616,23 @@ mod tests {
 
     #[test]
     fn a_board_read_names_the_ids_and_not_only_the_counts() {
-        let line = board(Read::Decision, &snapshot(&["a-1", "a-2"], &["a-3"]));
+        let line = board(Read::Decision, &snapshot(&["a-1", "a-2"], &["a-3"]), BoardSource::Cache);
         assert_eq!(
             line,
-            "board (decision) ready=2 [a-1, a-2] unfinished=1 [a-3] closed=4 parked=1"
+            "board (decision) ready=2 [a-1, a-2] unfinished=1 [a-3] closed=4 parked=1 via=cache"
         );
+    }
+
+    #[test]
+    fn a_board_read_says_whether_the_run_s_project_was_the_one_on_screen() {
+        // Both spellings, because the pair is the whole point: `via=cache` is
+        // the tracker worker's own store, which means the app window had this
+        // run's project open, and `via=bd` is a read the worker could not serve
+        // from that store — the condition that used to end a run on a
+        // stranger's empty queue with nothing on the record to say so.
+        let read = |source| board(Read::Decision, &snapshot(&[], &[]), source);
+        assert!(read(BoardSource::Cache).ends_with(" via=cache"), "{}", read(BoardSource::Cache));
+        assert!(read(BoardSource::Direct).ends_with(" via=bd"), "{}", read(BoardSource::Direct));
     }
 
     #[test]
@@ -616,7 +641,7 @@ mod tests {
         // reader has to be able to tell which one a line is about — the resync
         // that settles a `QueueEmpty`, the read a batch's emptiness is decided
         // from, and the last read of the run are three different facts.
-        let board_of = |read| board(read, &snapshot(&[], &[]));
+        let board_of = |read| board(read, &snapshot(&[], &[]), BoardSource::Cache);
         assert!(board_of(Read::Decision).starts_with("board (decision) ready=0 []"));
         assert!(board_of(Read::Resync).starts_with("board (resync) ready=0 []"));
         assert!(board_of(Read::AfterBatch).starts_with("board (after batch) ready=0 []"));

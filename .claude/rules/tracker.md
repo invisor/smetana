@@ -66,6 +66,21 @@ resolves to its root, so the list, the settings key and the worker all name the 
 allowed by `dialog:allow-open` in `capabilities/default.json`; the picked path is normalized once,
 by the `project_root` command, before it reaches the list.
 
+**The worker holds one project, and two of its requests name a folder anyway.** `Request::BoardAt`
+and `Request::UpdateAt` carry a `dir`, and they exist for the one caller that is not the app window:
+a run lives for hours against the folder it was started in, so every read and write it made was
+answered about whatever project somebody had switched to meanwhile (smetana-ynyc, and
+`.claude/rules/runs.md` carries the night it cost). Where `dir` is the folder the worker already
+holds — `access::same_dir`, which is the literal spelling and then `resolved`, so a symlink is not a
+second project — they are the ordinary paths: the live store, `full_sync` behind `fresh`, and a
+write through the worker's own `Bd` and `finish` so the delta goes out and the board redraws.
+Where it is any other folder the answer is a one-off `Bd::new(app, dir)` and the store is not
+touched, there being nothing on screen showing that board — and health is not touched either, since
+it belongs to the project the person has open. `BoardAt` says which half answered
+(`BoardSource::Cache` or `Direct`), which is what the run's journal writes as `via=`. This is
+deliberately **not** a worker per project: the watcher, the cache, `close_merged` and health all
+stay bound to the selected folder.
+
 Health (`ok`, `no-project`, `not-a-beads-repo`, `bd-version-mismatch`, `folder-refused`, `error`) is
 both an event and a command:
 the event fires microseconds after start, before the webview can subscribe, so the worker also

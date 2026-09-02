@@ -55,7 +55,7 @@ use crate::agents::{Intent, Profile};
 use crate::terminal::model::{Exit, SessionState};
 use crate::terminal::service::{Request as TerminalRequest, TerminalHandle};
 use crate::tracker::model::IssuePatch;
-use crate::tracker::service::{Request as TrackerRequest, TrackerHandle};
+use crate::tracker::service::{BoardSource, Request as TrackerRequest, TrackerHandle};
 
 /// The backstop against a board that churns without finishing anything. It is
 /// not a budget: a healthy run ends on an empty queue long before this.
@@ -803,7 +803,7 @@ async fn drive(
         run.session = None;
         say(&run);
 
-        let Some(issues) = board(&tracker).await else {
+        let Some((issues, source)) = board(&tracker, &root).await else {
             unreadable += 1;
             account.journal.say(&journal::unreadable_board(
                 journal::Read::Decision,
@@ -827,7 +827,7 @@ async fn drive(
         }
 
         let mut now = queue::snapshot(&issues, &run.settings.scope, run.settings.min_priority);
-        account.journal.say(&journal::board(journal::Read::Decision, &now));
+        account.journal.say(&journal::board(journal::Read::Decision, &now, source));
         // Narrower than the mode on purpose: what the decision cares about is
         // whether this run may take a second batch, not who answers a question
         // — see `RunMode::one_batch`.
@@ -843,9 +843,9 @@ async fn drive(
         // `finish` already resyncs for the same reason, one step later and too
         // late to change the decision.
         if matches!(action, Action::Stop(StopReason::QueueEmpty)) {
-            if let Some(fresh) = fresh_board(&tracker).await {
+            if let Some((fresh, source)) = fresh_board(&tracker, &root).await {
                 now = queue::snapshot(&fresh, &run.settings.scope, run.settings.min_priority);
-                account.journal.say(&journal::board(journal::Read::Resync, &now));
+                account.journal.say(&journal::board(journal::Read::Resync, &now, source));
                 action = queue::next_action(
                     &now,
                     previous.as_ref(),
@@ -987,7 +987,12 @@ async fn drive(
         // about two seconds at the one moment in a run when nothing at all is
         // waiting on it.
         let actor = crate::terminal::model::run_actor(session);
-        let after = fresh_board(&tracker).await;
+        // Split the pair the moment it arrives: everything below wants the
+        // issues, and only the journal line wants where they came from.
+        let (after, after_source) = match fresh_board(&tracker, &root).await {
+            Some((issues, source)) => (Some(issues), Some(source)),
+            None => (None, None),
+        };
         let leftovers =
             after.as_deref().map(|issues| queue::left_behind(issues, &actor)).unwrap_or_default();
         // Asked here, once, and about **this batch's own process group** rather
@@ -1030,9 +1035,11 @@ async fn drive(
         // that *failed* falls to the arm that counts the batch as having
         // completed, so the failure has to be on the record as loudly as the
         // success.
-        account.journal.say(&match &after_board {
-            Some(snapshot) => journal::board(journal::Read::AfterBatch, snapshot),
-            None => journal::unreadable_board(journal::Read::AfterBatch, None),
+        account.journal.say(&match (&after_board, after_source) {
+            (Some(snapshot), Some(source)) => {
+                journal::board(journal::Read::AfterBatch, snapshot, source)
+            }
+            _ => journal::unreadable_board(journal::Read::AfterBatch, None),
         });
         // In the document, only for a batch that said nothing: an account is a
         // lead telling somebody where it left the board, and a line about the
@@ -1191,7 +1198,7 @@ async fn drive(
                     // `in_progress`, which the next batch reads as unfinished
                     // work to recover rather than losing.
                     remove_session(&terminal, session).await;
-                    park_claims(&tracker, session, &question).await;
+                    park_claims(&tracker, &root, session, &question).await;
                     last_batch = LastBatch::Asked;
                     counted(last_batch, crashes, empties, None);
                     continue;
@@ -1207,7 +1214,7 @@ async fn drive(
                     // nothing yet, so there is usually nobody left to race —
                     // and killing would take away the very terminal the
                     // person is being sent to.
-                    park_claims(&tracker, session, &question).await;
+                    park_claims(&tracker, &root, session, &question).await;
                     let reason = StopReason::NeedsAnswer { question };
                     finish(&mut run, reason, &say, &account, &root, &tracker).await;
                     return;
@@ -1343,16 +1350,17 @@ async fn finish(
     // board and a board that did not move must never be written down as the
     // same thing — and the line is what lets somebody reading the journal back
     // tell which of the two the document's dashes came from.
-    let last = fresh_board(tracker).await;
+    let last = fresh_board(tracker, root).await;
     account.journal.say(&match &last {
-        Some(issues) => journal::board(
+        Some((issues, source)) => journal::board(
             journal::Read::Ending,
             &queue::snapshot(issues, &run.settings.scope, run.settings.min_priority),
+            *source,
         ),
         None => journal::unreadable_board(journal::Read::Ending, None),
     });
     let tasks = match (account.baseline.as_ref(), last) {
-        (Some(base), Some(issues)) => Some(summary::diff(base, &issues, &run.settings.scope)),
+        (Some(base), Some((issues, _))) => Some(summary::diff(base, &issues, &run.settings.scope)),
         _ => None,
     };
     let report =
@@ -1493,7 +1501,16 @@ async fn release_claims(
         let borrowed = work.as_ref().map(|(branch, commit)| (branch.as_str(), commit.as_str()));
         let Some(patch) = queue::release(left, batch, actor, borrowed, life) else { continue };
         let (tx, rx) = oneshot::channel();
-        if tracker.0.send(TrackerRequest::Update(left.id.clone(), patch, tx)).await.is_ok() {
+        // Addressed at this run's own folder, not at the project the app
+        // window is showing: a release aimed at a stranger's board leaves this
+        // one's task claimed under a dead actor and writes to somebody else's.
+        let request = TrackerRequest::UpdateAt {
+            dir: root.to_path_buf(),
+            id: left.id.clone(),
+            patch,
+            reply: tx,
+        };
+        if tracker.0.send(request).await.is_ok() {
             match rx.await {
                 Ok(Err(err)) => {
                     log::warn!("could not release {} after batch {batch}: {err}", left.id)
@@ -1891,26 +1908,45 @@ async fn healthy(check: config::HealthCheck, stop: &mut mpsc::Receiver<()>) -> P
     }
 }
 
-/// The board, or `None` when the tracker could not be asked.
-async fn board(tracker: &TrackerHandle) -> Option<Vec<crate::tracker::model::Issue>> {
+/// This run's board, by folder — with where it was read from — or `None` when
+/// the tracker could not be asked.
+///
+/// **The folder is named rather than assumed, and that is the whole of
+/// smetana-ynyc.** The tracker worker holds one project, whichever one the app
+/// window is showing, so a `Snapshot` here answered about whatever the person
+/// happened to be looking at. On 2 September a run read another project's board
+/// after its batch, saw no ready work in it, and ended the night one batch early
+/// with two unblocked tasks left standing on its own.
+async fn board(
+    tracker: &TrackerHandle,
+    root: &Path,
+) -> Option<(Vec<crate::tracker::model::Issue>, BoardSource)> {
     let (tx, rx) = oneshot::channel();
-    tracker.0.send(TrackerRequest::Snapshot(tx)).await.ok()?;
-    rx.await.ok().map(|snapshot| snapshot.issues)
+    let request = TrackerRequest::BoardAt { dir: root.to_path_buf(), fresh: false, reply: tx };
+    tracker.0.send(request).await.ok()?;
+    rx.await.ok()?.ok()
 }
 
-/// The board read fresh, for parking: a full resync first, because the claims
-/// being looked for are writes the *agent* made with its own bd, which the
-/// snapshot only learns of through the watcher — a claim written moments before
-/// the session was killed may not have landed yet, and a missed claim here is a
-/// task left `in_progress` under a dead actor. The cached snapshot is the
-/// fallback when the resync fails, being better than parking nothing; `None`
-/// when the tracker cannot be asked at all.
-async fn fresh_board(tracker: &TrackerHandle) -> Option<Vec<crate::tracker::model::Issue>> {
+/// The board read fresh, for parking and for the endings that turn on it: a
+/// full resync first, because the claims being looked for are writes the
+/// *agent* made with its own bd, which the snapshot only learns of through the
+/// watcher — a claim written moments before the session was killed may not have
+/// landed yet, and a missed claim here is a task left `in_progress` under a dead
+/// actor. Where this run's folder is not the one the app window has open there
+/// is no store and no watcher in the way at all: the read is a `bd` call in the
+/// folder, which is as fresh as it gets. The cached read is the fallback when
+/// the resync fails, being better than parking nothing; `None` when the tracker
+/// cannot be asked at all.
+async fn fresh_board(
+    tracker: &TrackerHandle,
+    root: &Path,
+) -> Option<(Vec<crate::tracker::model::Issue>, BoardSource)> {
     let (tx, rx) = oneshot::channel();
-    tracker.0.send(TrackerRequest::Resync(tx)).await.ok()?;
+    let request = TrackerRequest::BoardAt { dir: root.to_path_buf(), fresh: true, reply: tx };
+    tracker.0.send(request).await.ok()?;
     match rx.await.ok()? {
-        Ok(snapshot) => Some(snapshot.issues),
-        Err(_) => board(tracker).await,
+        Ok(answer) => Some(answer),
+        Err(_) => board(tracker, root).await,
     }
 }
 
@@ -1934,9 +1970,9 @@ async fn fresh_board(tracker: &TrackerHandle) -> Option<Vec<crate::tracker::mode
 /// lock takes it out of `open`, only an `open` issue is claimable, and every
 /// merge in the project after that waits for a person to put it back
 /// (smetana-dgv).
-async fn park_claims(tracker: &TrackerHandle, session: u64, question: &str) {
+async fn park_claims(tracker: &TrackerHandle, root: &Path, session: u64, question: &str) {
     let actor = crate::terminal::model::run_actor(session);
-    let Some(issues) = fresh_board(tracker).await else { return };
+    let Some((issues, _)) = fresh_board(tracker, root).await else { return };
     for id in queue::claimed_by(&issues, &actor) {
         let patch = IssuePatch {
             status: Some(queue::PARKED.to_string()),
@@ -1944,7 +1980,11 @@ async fn park_claims(tracker: &TrackerHandle, session: u64, question: &str) {
             ..Default::default()
         };
         let (tx, rx) = oneshot::channel();
-        if tracker.0.send(TrackerRequest::Update(id, patch, tx)).await.is_ok() {
+        // The run's own folder for the same reason the read above names it: a
+        // park is a write, and a write to the wrong board is worse than a read
+        // of one.
+        let request = TrackerRequest::UpdateAt { dir: root.to_path_buf(), id, patch, reply: tx };
+        if tracker.0.send(request).await.is_ok() {
             let _ = rx.await;
         }
     }
