@@ -117,6 +117,29 @@ row or a tab is closed. Whatever the shell itself started outlives a `terminal_r
 agent's own children do; that is the existing behaviour of this command and not something a shell
 introduces.
 
+**A session that could not start answers as a failure, and that is a check of this app's own rather
+than the OS's.** `portable-pty`'s `pre_exec` calls `close_random_fds()`, which closes every
+descriptor above 2 in the forked child — including the close-on-exec pipe `std::process` keeps to
+carry the `errno` of a failed `execvp` back to the parent. It is closed *before* the `exec` is
+attempted, so the parent reads end-of-file, reads that as success, and `spawn_command` answers `Ok`
+for a process that is already dying. So `Pty::start` resolves the program itself first
+(`resolve_program`, which carries the whole reasoning): `execvp`'s own rule for finding it, plus the
+`#!` line, which is the part `portable-pty`'s own `search_path` cannot see — a missing program, a
+directory and a file with no execute bit it already refuses before the fork, and what those three
+gain here is a sentence in place of a multi-line dump of `PATH`. A script whose interpreter has gone
+— an npm-installed agent after a node version was removed — passed every one of its tests and failed
+inside the child, where the only thing left to show a person was `fatal runtime error: assertion
+failed: output.write(&bytes).is_ok()` painted into their own terminal.
+
+The rejected direction is a notification channel of ours that `close_random_fds` does not reach:
+there is nowhere to open one, since the hook that closes them is `portable-pty`'s and
+`CommandBuilder` takes no hook of ours, so it means forking the crate. What checking first costs is a
+race — the program can go between the answer and the `exec` — which is the ordinary state of a
+filesystem and is not what any of this promises against. What it does **not** change is
+`runs::recovery::group`: a child that dies before its `exec` still wears the forking parent's name
+until it is reaped, and the one-second `EXEC` bound there is still the right answer; it is only
+reached less often now.
+
 Detection runs over a shell and is welcome to. Layer A is agent-independent and there is nothing about
 it to switch off; a shell that rings the bell has rung it for the person sitting in front of it, and
 nothing in this app acts on a shell's state — it has no row in the agents panel, it is not counted by
