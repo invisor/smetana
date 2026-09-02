@@ -60,6 +60,33 @@ pub fn agent_prompt(app: &AppHandle) -> String {
     path(app).map(|path| file::agent_prompt(&path)).unwrap_or_default()
 }
 
+/// How compressed an agent started now, in this project, should answer — one of
+/// `model::CAVEMAN_LEVELS`, with the project's `inherit` already resolved
+/// against the global level.
+///
+/// **The resolution lives here rather than in the caller**, which is the whole
+/// reason this is a function and not two reads: "the project's own level beats
+/// the global one" is one rule, and a second caller working it out for itself is
+/// how two answers to one question start to exist.
+///
+/// Beside `agent_prompt` above and read the same way, from the disk on each
+/// call, and by the same caller for the same reason: `terminal::service` builds
+/// every session in the app, a person's and a run's alike. It lives with the
+/// same 400 ms debounce — a session started in the same fraction of a second as
+/// an edit reads the previous level.
+///
+/// A platform that will not name a config directory answers `off`, the shipped
+/// level, which says nothing at all to the agent and is today's behaviour.
+///
+/// Unused until the prompt learns to say it — see `file::caveman_level`, which
+/// carries the reason the pair is written before its first caller.
+#[allow(dead_code)]
+pub fn caveman_level(app: &AppHandle, project: &str) -> String {
+    path(app)
+        .map(|path| file::caveman_level(&path, project))
+        .unwrap_or_else(|| model::CavemanSettings::default().level)
+}
+
 /// The run gate's thresholds as `runs::usage` wants them. The schema's type and
 /// the gate's are deliberately two types: one is a file people edit by hand and
 /// has to tolerate anything, the other is a rule with no serde in it.

@@ -246,6 +246,36 @@ describe('loading', () => {
     const sent = second.ipc.calls('settings_save').at(-1).settings
     expect(sent.agentPrompt).toBe('Always use pnpm.')
   })
+
+  it('opens with caveman off, and keeps both the global level and this project\'s own', async () => {
+    /* Off is today's behaviour to the letter: until somebody chooses a level the
+       app says nothing at all about caveman, and `settings/model.rs` ships the
+       same word. */
+    const { ipc, stores } = await loadStores()
+    ipc.on('settings_load', {})
+    ipc.on('settings_save', null)
+    await stores.settings.loadSettings()
+    expect(stores.settings.settings.caveman).toEqual({ level: 'off' })
+    expect(stores.settings.settings.project.caveman).toBe('inherit')
+
+    const second = await loadStores()
+    second.ipc.on('settings_load', {
+      caveman: { level: 'wenyan-ultra' },
+      project: { caveman: 'lite' }
+    })
+    second.ipc.on('settings_save', null)
+    await second.stores.settings.loadSettings()
+    expect(second.stores.settings.settings.caveman.level).toBe('wenyan-ultra')
+    expect(second.stores.settings.settings.project.caveman).toBe('lite')
+
+    /* And back out on the next write, both of them: a save that dropped either
+       would lose the choice at the next start with nothing to say so. */
+    second.stores.settings.settings.appearance.theme = 'light'
+    await second.stores.settings.flushPending()
+    const written = second.ipc.calls('settings_save').at(-1).settings
+    expect(written.caveman).toEqual({ level: 'wenyan-ultra' })
+    expect(written.project.caveman).toBe('lite')
+  })
 })
 
 describe('a project\'s layout', () => {
@@ -288,6 +318,21 @@ describe('a project\'s layout', () => {
     await settings.loadProjectLayout('/new')
 
     expect(settings.settings.project.recentTasks).toEqual([])
+  })
+
+  it("clears one project's caveman override when another project is opened", async () => {
+    /* The reason the field is listed in `defaults().project`: applySection is
+       Object.assign(target, defaults, stored), so a key the defaults layer does
+       not name is a key it cannot clear — and one project's level would go on
+       compressing an agent in the next project. */
+    ipc.on('settings_load', { project: { caveman: 'ultra' } })
+    await settings.loadSettings()
+    expect(settings.settings.project.caveman).toBe('ultra')
+
+    ipc.on('settings_load', { project: {} })
+    await settings.loadProjectLayout('/another')
+
+    expect(settings.settings.project.caveman).toBe('inherit')
   })
 
   it("remembers the right column's tab, and clears it for a project that has none", async () => {
@@ -833,6 +878,66 @@ describe('the settings window', () => {
     expect(settings.sharedSettings().notificationShowReport).toBe(false)
   })
 
+  /* The caveman level, checked against its ladder the way the two board scalars
+     are checked against `boardView.js`'s: the vocabulary is closed, and a word
+     off it is skipped rather than normalised, so a malformed event leaves the
+     choice already made standing. */
+  it('takes a caveman level off the ladder, and leaves the previous one standing otherwise', async () => {
+    await emit(settings.SETTINGS_APPLY, { cavemanLevel: 'wenyan-lite' })
+    await nextTick()
+    expect(settings.settings.caveman.level).toBe('wenyan-lite')
+
+    await emit(settings.SETTINGS_APPLY, { cavemanLevel: 'loud' })
+    await nextTick()
+    expect(settings.settings.caveman.level).toBe(
+      'wenyan-lite',
+      'a word nobody ships is skipped, not replaced by the default'
+    )
+
+    await emit(settings.SETTINGS_APPLY, { cavemanLevel: null })
+    await nextTick()
+    expect(settings.settings.caveman.level).toBe('wenyan-lite')
+
+    await emit(settings.SETTINGS_APPLY, { cavemanLevel: 'off' })
+    await nextTick()
+    expect(settings.settings.caveman.level).toBe('off', 'off is a rung and not an absence')
+  })
+
+  /* The project's own override, whose ladder is the global one plus `inherit`.
+     That word has to arrive and land: it is how somebody takes an override off
+     again, and it travels as a word rather than as a null precisely so it
+     survives `adopt()` in the settings window. */
+  it("takes this project's caveman override, inherit included", async () => {
+    await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: 'ultra' })
+    await nextTick()
+    expect(settings.settings.project.caveman).toBe('ultra')
+
+    await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: 'inherit' })
+    await nextTick()
+    expect(settings.settings.project.caveman).toBe('inherit')
+
+    await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: 'shout' })
+    await nextTick()
+    expect(settings.settings.project.caveman).toBe('inherit', 'a word off the ladder is skipped')
+
+    await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: null })
+    await nextTick()
+    expect(settings.settings.project.caveman).toBe('inherit')
+  })
+
+  it('both caveman levels reach the settings window as flat fields', async () => {
+    settings.settings.caveman.level = 'full'
+    settings.settings.project.caveman = 'inherit'
+
+    const shared = settings.sharedSettings()
+
+    expect(shared.cavemanLevel).toBe('full')
+    expect(shared.cavemanProjectLevel).toBe(
+      'inherit',
+      'a word rather than a null, or the settings window would never hear it'
+    )
+  })
+
   it('answers a hello with what this window holds, not with what is on disk', async () => {
     settings.settings.appearance.uiFontSize = 20
     const heard = []
@@ -866,7 +971,9 @@ describe('the settings window', () => {
       taskLanguage: 'en',
       commitLanguage: 'en',
       reportLanguage: 'en',
-      agentPrompt: ''
+      agentPrompt: '',
+      cavemanLevel: 'off',
+      cavemanProjectLevel: 'inherit'
     })
   })
 
@@ -922,7 +1029,9 @@ describe('the settings window', () => {
       taskLanguage: 'en',
       commitLanguage: 'en',
       reportLanguage: 'en',
-      agentPrompt: ''
+      agentPrompt: '',
+      cavemanLevel: 'off',
+      cavemanProjectLevel: 'inherit'
     })
   })
 })
