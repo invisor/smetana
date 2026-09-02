@@ -1,5 +1,6 @@
 /* What `[defaults]` in `.smetana/project.toml` may hold, as a rule rather than
-   as a form.
+   as a form, and what the window that edits it says when there is no file to
+   edit.
 
    The `branchChoice.js` / `configFreshness.js` family: pure, no Vue and no DOM,
    which is the whole reason it is a file of its own — no test in this
@@ -114,4 +115,58 @@ export function isDirty(draft, original) {
     draft?.max_parallel_tasks !== original?.max_parallel_tasks ||
     draft?.review_passes !== original?.review_passes
   )
+}
+
+/* The file the four keys above live in, named once. It is an identifier, so
+   every sentence that mentions it hands it over separately rather than
+   embedding it: the window draws it in mono, the way this app draws every path
+   it puts in front of somebody. */
+export const CONFIG_FILE = '.smetana/project.toml'
+
+/* Why the form has no fields, for every state that is not a parsed file. Read
+   by the state's own name — `missing`, `broken` and `ok`, which is what
+   `project_config` answers and `stores/runs.js` keeps whole — so a fourth state
+   invented in Rust turns up here as the last sentence rather than as a form
+   filled with fall-backs somebody could press Save on.
+
+   Two halves rather than one string, with the path between them: the file is an
+   identifier and the window sets it in mono, which a single sentence would have
+   no way to ask for.
+
+   The window it belongs to is not only about this file any more, which is what
+   makes the case worth a sentence at all rather than a greyed menu item. It
+   also carries this machine's caveman level for the project, which lives in
+   `settings.json` and is nothing to do with the repository — so a project
+   nobody has set up still has something to change here, and the fields are the
+   only part that has to say why it is absent. */
+const NOTICE = {
+  missing: {
+    lead: 'This project has no',
+    tail: 'yet, so there is nothing here to fill in. Set the project up from the same menu and these fields appear.'
+  },
+  broken: {
+    lead: "This project's",
+    tail: 'will not parse, so there are no values to put in a form. Set the project up again from the same menu to have it written afresh.'
+  }
+}
+
+const UNKNOWN_NOTICE = {
+  lead: "There is no saying what state this project's",
+  tail: 'is in, so no fields are offered for it. The level above is this machine’s own and is unaffected.'
+}
+
+/* Whether the four fields and Save are drawn at all: a parsed file and nothing
+   looser. `configured` in `views/DesktopApp.vue` is the same question one word
+   shorter, and the two must stay the same question — a form opened over a file
+   this side has not parsed would be four fall-backs presented as the project's
+   values. */
+export function offersDefaults(state) {
+  return state === 'ok'
+}
+
+/* The sentence that stands in their place, or `null` when there is nothing to
+   explain because the fields are there. */
+export function configNotice(state) {
+  if (offersDefaults(state)) return null
+  return NOTICE[state] ?? UNKNOWN_NOTICE
 }

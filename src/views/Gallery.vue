@@ -1822,11 +1822,16 @@ const galleryAgentUsageHalf = {
    the panel's width. The paths are a home directory's own, since that is what
    the journal holds and what has to wrap without widening the column.
 
-   The two levels are a ref rather than a constant because the two dropdowns are
-   the only controls in the group, and a dropdown that cannot move says nothing
-   about whether it is bound to the right prop. They are deliberately not the
-   same value: `full` globally against an overridden `ultra` is what says the
-   two rows are two fields. */
+   The level is a ref rather than a constant because that dropdown is the only
+   control in the group, and a dropdown that cannot move says nothing about
+   whether it is bound to the right prop. The project's own override is not on
+   this tab any more — it is a row in the project settings window, drawn
+   among the dialogs above.
+
+   The second ref beside it is that window's, and it is here rather than up
+   there because this is where the caveman fixtures live: a level that is not
+   `inherit` and not the global one either, so a glance says the row is bound to
+   the project's field and not to the tab's. */
 const galleryCavemanLevel = ref('full')
 const galleryCavemanProjectLevel = ref('ultra')
 const galleryCavemanWired = {
@@ -2498,8 +2503,13 @@ const menuTargetStyle = {
            without starting anything. Deliberately not on its defaults: a form
            showing 2, 3 and 5 with no branch proves nothing about the fields,
            and the branch here is one `branchOptions` had to keep because the
-           list no longer holds it. -->
-      <div :style="{ position: 'relative', height: '600px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+           list no longer holds it.
+
+           The caveman row at the top is live here, since it is the one control
+           in this window that answers without anything behind it: it applies a
+           pick locally and emits, and the handler below does nothing, which is
+           exactly what the app window's absence looks like. -->
+      <div :style="{ position: 'relative', height: '760px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -2509,14 +2519,16 @@ const menuTargetStyle = {
             review_passes: 2
           }"
           :branches="everywhere('main', 'staging')"
+          :caveman-level="galleryCavemanProjectLevel"
           @close="() => {}"
           @save="() => {}"
+          @caveman="galleryCavemanProjectLevel = $event"
         />
       </div>
       <!-- And the shape a refusal takes: the command's own message under the
            fields, which is what "the file will not parse" looks like when the
            file changed under an open window. -->
-      <div :style="{ position: 'relative', height: '600px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+      <div :style="{ position: 'relative', height: '760px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
         <ProjectSettingsModal
           :open="true"
           :defaults="{
@@ -2529,6 +2541,30 @@ const menuTargetStyle = {
           error="unknown field `gate` — .smetana/project.toml could not be read"
           @close="() => {}"
           @save="() => {}"
+        />
+      </div>
+      <!-- The same window over a project with no configuration at all, and over
+           one whose file will not parse: no fields, no Save, one sentence in
+           their place, and the caveman row still live — which is the whole
+           reason the menu item that opens this is no longer greyed in either
+           state. The ghost button reads Close rather than Cancel here, since
+           the only thing on screen has already saved itself. -->
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ProjectSettingsModal
+          :open="true"
+          config-state="missing"
+          caveman-level="inherit"
+          @close="() => {}"
+          @caveman="() => {}"
+        />
+      </div>
+      <div :style="{ position: 'relative', height: '400px', border: 'var(--border-w) solid var(--border)', overflow: 'hidden' }">
+        <ProjectSettingsModal
+          :open="true"
+          config-state="broken"
+          caveman-level="wenyan-ultra"
+          @close="() => {}"
+          @caveman="() => {}"
         />
       </div>
       <!-- Cutting a branch, from a row in the branch list. Live, because the
@@ -4742,7 +4778,6 @@ const menuTargetStyle = {
             :agent-prompt="galleryAgentPrompt"
             :caveman="galleryCavemanWired"
             :caveman-level="galleryCavemanLevel"
-            :caveman-project-level="galleryCavemanProjectLevel"
             project-open
             :usage="galleryAgentUsage"
             @update:agent="galleryAgent = $event"
@@ -4752,7 +4787,6 @@ const menuTargetStyle = {
             @update:report-language="galleryReportLanguage = $event"
             @update:agent-prompt="galleryAgentPrompt = $event"
             @update:caveman-level="galleryCavemanLevel = $event"
-            @update:caveman-project-level="galleryCavemanProjectLevel = $event"
           />
         </div>
         <!-- The same tab with Show run report off on the General tab, which is

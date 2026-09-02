@@ -64,9 +64,20 @@
    The Caveman group sits between the standing instruction and the run limits,
    and that neighbourhood is the argument for the place: it is about how an agent
    talks, which is the question the instruction above it asks. It draws one line
-   about how caveman stands on this machine and up to three rows under it, and
+   about how caveman stands on this machine and up to two rows under it, and
    every word of the first is `caveman.js`'s — the `.vue` file is the one thing
    no test here can reach, so the whole of that rule lives outside it.
+
+   The level here is the one for **all projects**, and it is the only one this
+   tab has. A project's own override used to sit under it and is a row in the
+   project settings window now, off the project tile's right-click menu. This
+   window is about the machine and has no project of its own: the row could only
+   ever mean "whichever project the app window happens to have open", which is
+   not a thing a person reading a settings screen can see, and it went stale on
+   every switch — which is why `loadProjectLayout` in `stores/settings.js` had to
+   announce on one. The field on disk did not move — `project.caveman` in
+   `settings.json` — only the control did, to
+   `components/run/ProjectSettingsModal.vue`.
 
    The Install button installs nothing, and that is the design rather than a
    limitation. It opens a terminal in the active project and **types** the
@@ -91,7 +102,6 @@ import {
   installDescription,
   levelOptions,
   offersInstall,
-  projectLevelOptions,
   stateFacts,
   stateSentence
 } from './caveman.js'
@@ -133,15 +143,13 @@ const props = defineProps({
      nothing about it reaches `settings.json`: the machine's own files are the
      truth, so the window asks afresh every time this tab is opened. */
   caveman: { type: Object, default: null },
-  /* How compressed an agent's answers are, and this project's own override of
-     it. The shipped `off` and `inherit`, which is the fourth copy of each — the
-     other three are `CavemanSettings::default()` and `ProjectState::default()`
+  /* How compressed an agent's answers are, everywhere. The shipped `off`, which
+     is the fourth copy of it — the other three are `CavemanSettings::default()`
      in Rust, `defaults()` in `stores/settings.js` and `view` in
      `SettingsWindow.vue` — and they have to agree, or this tab draws a level
-     the app is not using for the moment before the first answer arrives.
-     `inherit` is a word and never a `null`; `caveman.js` carries why. */
+     the app is not using for the moment before the first answer arrives. A
+     project's own override is not this tab's any more; see the header. */
   cavemanLevel: { type: String, default: 'off' },
-  cavemanProjectLevel: { type: String, default: 'inherit' },
   /* Whether the app window has a project open, which is the whole of what the
      Install button needs to know: the command is typed into a terminal, and a
      terminal is opened somewhere. `false` by default, so the button opens
@@ -171,7 +179,6 @@ const emit = defineEmits([
   'update:subscriptionPauseAt',
   'update:subscriptionReducedAt',
   'update:cavemanLevel',
-  'update:cavemanProjectLevel',
   /* The Install press, carrying nothing: what would be typed is this
      component's to say and the window's to send on, and the terminal is the app
      window's to open. */
@@ -291,10 +298,9 @@ const reportDescription = computed(() =>
     : 'Reports are not shown, so there is nothing here to show you. Turn on Show run report on the General tab to choose a language.'
 )
 
-/* The two ladders, built once: neither list changes, and both live in
+/* The ladder, built once: the list does not change, and it lives in
    `caveman.js` for the reason `thresholdOptions` above does. */
 const cavemanLevels = levelOptions()
-const cavemanProjectLevels = projectLevelOptions()
 
 /* What this machine's four files came to, in one sentence and up to a handful
    of facts. The facts are the journal's, and the group draws them only where
@@ -522,27 +528,19 @@ const errorStyle = {
         </Button>
       </SettingsRow>
 
+      <!-- The level for every project, and the only one this tab draws. A
+           project wanting its own says so in its own window, off the project
+           tile's right-click menu — the header carries why the pair no longer
+           stands here. -->
       <SettingsRow
         label="All projects"
-        description="How compressed an agent's answers are, everywhere. Off is what this app has always said about caveman: nothing at all."
+        description="How compressed an agent's answers are, everywhere. Off is what this app has always said about caveman: nothing at all. A project can take a level of its own in its own settings window."
         :control-width="CONTROL_WIDTH"
       >
         <Dropdown
           :model-value="props.cavemanLevel"
           :options="cavemanLevels"
           @update:model-value="emit('update:cavemanLevel', $event)"
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        label="This project"
-        description="The level for the project the app window has open, which overrides the one above. Same as all projects leaves it to that row."
-        :control-width="CONTROL_WIDTH"
-      >
-        <Dropdown
-          :model-value="props.cavemanProjectLevel"
-          :options="cavemanProjectLevels"
-          @update:model-value="emit('update:cavemanProjectLevel', $event)"
         />
       </SettingsRow>
     </SettingsGroup>

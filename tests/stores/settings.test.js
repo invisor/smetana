@@ -905,8 +905,12 @@ describe('the settings window', () => {
 
   /* The project's own override, whose ladder is the global one plus `inherit`.
      That word has to arrive and land: it is how somebody takes an override off
-     again, and it travels as a word rather than as a null precisely so it
-     survives `adopt()` in the settings window. */
+     again. Its control is the project settings window rather than the settings
+     window now, so what sends this patch is `openProjectSettings` in
+     `views/DesktopApp.vue` calling `applyPatch` directly — the same key and the
+     same ladder check, which is exactly why it goes through this function
+     rather than assigning the field. Driven here through the event because that
+     is what this suite can reach, and both roads meet in `applyPatch`. */
   it("takes this project's caveman override, inherit included", async () => {
     await emit(settings.SETTINGS_APPLY, { cavemanProjectLevel: 'ultra' })
     await nextTick()
@@ -925,27 +929,28 @@ describe('the settings window', () => {
     expect(settings.settings.project.caveman).toBe('inherit')
   })
 
-  it('both caveman levels reach the settings window as flat fields', async () => {
+  it('keeps the project override off the two windows’ contract', async () => {
+    /* It rode there while its control was a row on the Agents tab, and it went
+       back off when that row moved to the project settings window. Every field
+       the settings window is told about is about the machine again, which is
+       what that window is for — and a window that does not know which project
+       is open has no business being sent a per-project value. */
     settings.settings.caveman.level = 'full'
-    settings.settings.project.caveman = 'inherit'
+    settings.settings.project.caveman = 'ultra'
 
     const shared = settings.sharedSettings()
 
     expect(shared.cavemanLevel).toBe('full')
-    expect(shared.cavemanProjectLevel).toBe(
-      'inherit',
-      'a word rather than a null, or the settings window would never hear it'
-    )
+    expect(shared).not.toHaveProperty('cavemanProjectLevel')
   })
 
-  it('announces a project switch, so the two halves of one group cannot describe two projects', async () => {
-    /* The only announcement made outside the bridge's own two listeners, and the
-       field that makes it necessary is `project.caveman`: the settings window
-       draws it, and `loadProjectLayout` is the one thing that ever changes it.
-       Without this, the Caveman group's status line would already be describing
-       the new project — `project:active` in `stores/app.js` is announced on the
-       switch and the state re-read — while the This project row two lines below
-       went on showing the level of the project somebody had just left. */
+  it('says nothing to the settings window when the project changes', async () => {
+    /* Both branches of `loadProjectLayout`, and both silent. The announcement
+       that used to be here existed for `project.caveman` alone, which the
+       settings window drew; with nothing per project left on the contract there
+       is nothing for a switch to correct over there. The caveman *state* line
+       on that tab is per project and is not this contract's — it rides
+       `project:active` in `stores/app.js`. */
     ipc.on('settings_load', { project: { caveman: 'ultra' } })
     await settings.loadProjectLayout('/a')
     expect(settings.settings.project.caveman).toBe('ultra')
@@ -955,26 +960,13 @@ describe('the settings window', () => {
 
     ipc.on('settings_load', { project: {} })
     await settings.loadProjectLayout('/b')
-    await vi.waitFor(() => expect(heard).toHaveLength(1))
-
-    expect(heard[0].cavemanProjectLevel).toBe('inherit')
-  })
-
-  it('announces the last project being closed as well, defaults and all', async () => {
-    /* The other branch, and it needs the announcement more rather than less: no
-       project means the section is reset here, and a window left showing the
-       last project's override would be offering to change a project that is not
-       open. */
-    ipc.on('settings_load', { project: { caveman: 'lite' } })
-    await settings.loadProjectLayout('/a')
-
-    const heard = []
-    await listen(settings.SETTINGS_STATE, (event) => heard.push(event.payload))
+    await nextTick()
+    expect(settings.settings.project.caveman).toBe('inherit', 'the section is still reloaded')
 
     await settings.loadProjectLayout(null)
-    await vi.waitFor(() => expect(heard).toHaveLength(1))
+    await nextTick()
 
-    expect(heard[0].cavemanProjectLevel).toBe('inherit')
+    expect(heard).toEqual([])
   })
 
   it('answers a hello with what this window holds, not with what is on disk', async () => {
@@ -1011,8 +1003,7 @@ describe('the settings window', () => {
       commitLanguage: 'en',
       reportLanguage: 'en',
       agentPrompt: '',
-      cavemanLevel: 'off',
-      cavemanProjectLevel: 'inherit'
+      cavemanLevel: 'off'
     })
   })
 
@@ -1069,8 +1060,7 @@ describe('the settings window', () => {
       commitLanguage: 'en',
       reportLanguage: 'en',
       agentPrompt: '',
-      cavemanLevel: 'off',
-      cavemanProjectLevel: 'inherit'
+      cavemanLevel: 'off'
     })
   })
 })

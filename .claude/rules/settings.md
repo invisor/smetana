@@ -104,30 +104,41 @@ This one **does** have a per-project half, which is where it parts company with 
 `caveman` in the project's own entry, beside `runSettings`, the other preference among a project's
 remembered screen state. `.smetana/project.toml` was the alternative and is refused — that file is
 committed and travels to everybody who works in the repository, while how tersely an agent talks to a
-*person* is not a fact about a repository. The project's vocabulary is the global ladder plus one
+*person* is not a fact about a repository. That argument outlived the control that first stood on it:
+the level is edited in the **project settings window** now, the one window in the app that draws
+`.smetana/project.toml`, and it still does not go into that file. The window writes two files and
+says so on screen (`.claude/rules/runs.md`). The project's vocabulary is the global ladder plus one
 word, `inherit`, which is its default and means "as in every other project"; a word off it takes
 `inherit` rather than `off`. **It is a plain string and never an `Option`**, for the mechanical reason
-the thresholds above record: `adopt()` in `views/SettingsWindow.vue` skips a field that arrives
-`null`, so "no override here" would never reach the settings window and the previous project's level
-would stand on screen. One form on disk and on the wire alike; an `Option` on disk with a sentinel on
-the wire is two shapes of one fact to keep in step in both directions.
+the thresholds above record: a sentinel is a value a window can draw and an absence is a field that
+gets skipped on the way through, and this one is read straight out of `settings.project` by the app
+window to fill a dialog. One form on disk and on the wire alike; an `Option` on disk with a sentinel
+on the wire is two shapes of one fact to keep in step in both directions.
 
 The ladder is written out twice — `CAVEMAN_LEVELS` in `model.rs` and
-`components/settings/caveman.js`, which is the interface's own dictionary and what the Caveman group's
-two `Dropdown`s draw — under `SUBSCRIPTION_STEPS`' obligation: what the front end offers must stay
+`components/settings/caveman.js`, which is the interface's own dictionary and what both lists on
+screen draw from, the settings window's `Dropdown` and the project settings window's `Select` —
+under `SUBSCRIPTION_STEPS`' obligation: what the front end offers must stay
 a subset of what Rust accepts. `stores/settings.js` holds no list of its own and asks that module
 (`isLevel`, `isProjectLevel`), the way it asks `isThreshold` and `isSound`, so the guard on an
 incoming patch and the list on screen cannot disagree;
 `tests/components/settings/caveman.test.js` reads Rust's array out of `model.rs` and pins the subset.
-The two fields ride the flat message as `cavemanLevel` and
-`cavemanProjectLevel`, named for what they decide rather than for where they live, the way
-`notificationShowReport` and `gitAutoFetch` are; `applyPatch` checks each against its own ladder and
-leaves the previous value standing otherwise. `cavemanProjectLevel` is the **first per-project field
-on the two windows' contract**, and widening that contract is the price of a per-project level, said
-out loud rather than smuggled in. Reading it is `settings::caveman_level(app, project)`, which answers
+
+**The two levels are edited in two different windows, and only one of them rides this contract.**
+`cavemanLevel` travels flat as the fields beside it do, named for what it decides rather than for
+where it lives. `cavemanProjectLevel` was the **first per-project field on the two windows'
+contract** and is off it again: its row moved to the project settings window, which is per project
+already and opens for projects the settings window cannot see. The name survived the move — that
+window answers the app window through `onResult`, and `openProjectSettings` in `views/DesktopApp.vue`
+calls `applyPatch` under the same key — so there is still one ladder check for both roads, and
+`applyPatch` still leaves the previous value standing on a word off the ladder. What the narrowing
+buys is a contract on which **every field is about the machine again**: `toShared` sends nothing per
+project, and `loadProjectLayout` no longer has to announce on a switch to stop two rows of one group
+describing two projects. Put that announcement back the moment a per-project field crosses again.
+Reading the level is `settings::caveman_level(app, project)`, which answers
 with `inherit` already resolved — the project's level when it has one, the global one otherwise — so
-that rule exists in one place rather than in each caller. The schema version does not move: the change
-is additive.
+that rule exists in one place rather than in each caller. The schema version does not move, and
+neither does the field: the move was a control's, not a value's.
 
 `subscription` sits at the root beside `agent` and the languages, on their argument exactly: a
 subscription belongs to the **person** and to the CLI they signed in to, not to a repository. Two
@@ -509,6 +520,13 @@ different kinds of thing behind one door and would then have to explain, on the 
 one travels with the repository. It is a dialog window of its own instead, `'project-settings'`, off
 the project tile's right-click menu; `.claude/rules/runs.md` carries the whole of it.
 
+The traffic between the two windows since runs the other way and does not weaken that: the project
+settings window now carries **one** field of `settings.json`, the project's caveman level, above the
+`[defaults]` form. The split still holds because it is by subject rather than by file — that window
+is about one project and this one is about the machine, and a level for "whichever project the app
+window happens to have open" was a row this screen could not honestly draw. The two halves of that
+window save differently and say so on screen, which is the whole of what a reader has to know here.
+
 A tab is a stack of `SettingsRow`s, and where a run of them belongs together it is wrapped in
 `SettingsGroup`. The group draws two marks and they say different halves of one thing: a **caption**
 in mono caps with a hairline running out to the right edge, and a **spine** — `border-left` in
@@ -605,8 +623,13 @@ with no project open or no answer yet it says so rather than drawing an empty li
 
 **The Caveman group** sits on that same tab between Standing instruction and Run limits, and the
 neighbourhood is the argument: it is about how an agent talks. It is one line about how caveman
-stands on this machine and up to three rows under it — Install, All projects, This project — and
+stands on this machine and up to two rows under it — Install and All projects — and
 every sentence in it is `components/settings/caveman.js`'s, another of the `branchChoice.js` family.
+A third row, This project, stood under them and is a row of the **project settings window** now: this
+window is about the machine, that one is about a project, and a per-project row here could only ever
+mean "whichever project the other window happens to have open" — which is not a thing a person
+reading a settings screen can see. `projectLevelOptions()` is still `caveman.js`'s and is drawn over
+there.
 The state is `caveman_state`'s four words (`src-tauri/src/caveman.rs`), read on **opening the tab**
 like the Storage numbers and the subscription probe, and re-read when the project changes, since one
 of the four is about a repository rather than about the machine. The journal's facts — the pack
