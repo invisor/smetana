@@ -89,6 +89,19 @@ const view = reactive({
      `agentPrompt` in `stores/settings.js` for why empty is the whole of
      today's behaviour rather than a placeholder. */
   agentPrompt: '',
+  /* How compressed an agent's answers are, and this project's own override of
+     it. Shipped `off` and `inherit`, the same as `settings/model.rs` and
+     `defaults()` in `stores/settings.js` — the copies have to agree, or this
+     window draws a level the app is not using for the moment before the first
+     answer arrives, and in a browser under `?view=settings` for good.
+
+     `inherit` is a word and never a `null`, and that is load-bearing here of all
+     places: `adopt()` below skips any field that arrives null, so a project with
+     no override would never reach this window and the previously drawn level
+     would stand. The same trap the two subscription thresholds above answered
+     the same way — do not "improve" either end into an absence. */
+  cavemanLevel: 'off',
+  cavemanProjectLevel: 'inherit',
   /* The board's four, flat in the same message the rest ride in — see
      `toShared` in `stores/settings.js`. Shipped as today's board exactly, for
      the same reason the agent and the languages above are shipped values: this
