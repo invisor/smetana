@@ -72,6 +72,42 @@ the event fires microseconds after start, before the webview can subscribe, so t
 answers `tracker_health`. `DesktopApp.vue` renders it where the board would be — quietly, since the
 loud budget belongs to the card that needs a human.
 
+### A branch somebody merged by hand closes its task
+
+On the same sixty-second tick, right after the full sweep, `service::close_merged` closes every task
+in **`ready_to_merge`** whose branch is already in the project's target branch. A task merged through
+the app is closed by the agent that merged it, as `merging`'s last step; a person who merges the
+branch themselves closes nothing, and the task then sits on the board for ever while the work is in
+the target branch — the case this was written for had it deployed to a staging environment
+(holiday-curb-a769). bd cannot see it either: `bd orphans` looks for the id in commit messages, and
+the merge was a **fast-forward**, so no commit anywhere names the task.
+
+Hence the predicate: **the tip of the task's branch is an ancestor of the target's**
+(`vcs::merged::is_ancestor`, `git merge-base --is-ancestor`), never the presence of a merge commit.
+Ancestry sees the ordinary merge, the squash landed as one commit and the fast-forward alike. The
+branch itself is `git::task_work`'s — the id in the last segment of the name — which is refs read off
+the disk with no process, so a task nobody cut a branch for costs no spawn. In a project of several
+repositories a task closes only when its branch is merged in **every** repository that has it, and a
+repository without the branch does not hold the closure up: merged in the backend and outstanding in
+the frontend is half-finished work. The whole of that rule is `vcs::merged::merged_in_all`, pure and
+tested; `merged.rs` exists at all because `git.rs`, which finds the branch, is forbidden a process.
+
+Three narrownesses, and each is a way of being wrong that costs the work rather than a minute.
+**Only `ready_to_merge`** — an `open` or `in_progress` task may have a branch with the same slug, half
+merged or cut for another attempt. **Only local refs** — nothing asks a remote, so no timer ever
+carries a network call, and a branch merged only on somebody's server is not merged on this machine.
+**Only a target branch this project has actually named**: what the run dialog was last left on here
+(`settings.json`, per project), then `[defaults] target_branch` in `.smetana/project.toml`. Those are
+`branchChoice.js`'s first two terms and deliberately not its third — falling back to "the branch most
+recently worked on" is a fair guess in a field somebody is looking at, and a bad one behind a sweep
+nobody sees.
+
+The close carries a reason naming the branch, the short sha of its tip and the branch it reached, so
+a closure nobody performed says where it came from. A failed close is a log line and never health:
+nobody asked for this write, and the task stays where it is for the next tick to try again. This does
+not replace `merging`'s own closing step — that still closes a task the moment it merges it, and this
+picks up what went past the app.
+
 ### A refused folder is not a broken tracker
 
 `folder-refused` exists because the two used to arrive as one state (smetana-8lq). A build opened on

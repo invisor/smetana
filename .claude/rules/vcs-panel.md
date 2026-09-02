@@ -36,6 +36,7 @@ git lives in this app finds two answers.
 |---|---|
 | `model.rs` | `Repo`, `Change`, `ChangeKind`, `WorkingTree`, `Branch`, `OpKind`, `MergeOutcome`, `Landed`, `InProgress`, `VcsError`, the **pure** parses of `git status --porcelain=v2 -z --branch` and of `git diff --shortstat`, the reading of a conflict off the first and `branch_from_name_rev`; the tests are here |
 | `repos.rs` | what a project is made of — the pure rule, split from the directory read |
+| `merged.rs` | whether a task's branch has already reached the target branch: `git merge-base --is-ancestor` and the rule about several repositories. Its one caller is the tracker's sweep, and the section in `.claude/rules/tracker.md` is where the behaviour is described |
 | `run.rs` | the only file that touches the OS |
 | `commands.rs` | thin `#[tauri::command]`s, shaped like `files/`'s |
 

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::RecommendedWatcher;
@@ -268,6 +268,103 @@ async fn full_sync(
     result
 }
 
+/// Close what somebody merged by hand.
+///
+/// **Why the app does this at all.** A task merged through the app is closed by
+/// the agent that merged it, as the last step of `merging`. A person who merges
+/// the branch themselves — in a terminal, in another tool, on a fast-forward
+/// that leaves no merge commit at all — closes nothing, and the task sits in
+/// `ready_to_merge` on the board for ever while the work is in the target
+/// branch and, in the case this was written for, already on a staging
+/// deployment. bd cannot see it either: `bd orphans` looks for the id in commit
+/// messages, and a fast-forward puts it in none.
+///
+/// **`ready_to_merge` and no other status** (`store::ids_with_status`). A task
+/// in `open` or `in_progress` may well have a branch carrying its slug — half
+/// merged, or cut for a different attempt at the same work — and closing that
+/// one would throw away work nobody finished. A missed closure costs a minute;
+/// a false one costs the work.
+///
+/// **The whole of the git side is `vcs::merged`**, which is where the ancestry
+/// question and the multi-repository rule live and where their tests are.
+/// `git.rs` finds the branch and spawns nothing, as its own header requires.
+///
+/// **On the blocking pool**, for the reason `vcs::commands::off_the_runtime`
+/// gives: this worker is the one task answering every tracker command in the
+/// app, and a git call parked on somebody's disk would hold the board, the task
+/// panel and every write behind it. What comes back is a handful of ids, and
+/// the closing itself is bd's own two seconds, which this worker already spends
+/// on every write it makes.
+///
+/// **A failure is a log line and nothing else.** Health is deliberately left
+/// alone: nobody asked for this write, so a failed one must not put a red line
+/// under a board that is otherwise being read perfectly well — and a bd that is
+/// genuinely broken is already saying so through the sweep above. The task
+/// simply stays where it is and the next tick tries again, which is what makes
+/// this idempotent rather than merely repeated.
+async fn close_merged(app: &AppHandle, current: &Option<Project>, store: &mut Store) {
+    let Some(project) = current.as_ref().filter(|p| p.tracked) else { return };
+    let ids = store.ids_with_status(crate::runs::queue::READY_TO_MERGE);
+    if ids.is_empty() {
+        return;
+    }
+    let Some(target) = target_branch(app, &project.dir) else { return };
+
+    let dir = project.dir.clone();
+    let aimed_at = target.clone();
+    let found =
+        tokio::task::spawn_blocking(move || crate::vcs::merged::merged_tasks(&dir, &aimed_at, &ids))
+            .await;
+    let found = match found {
+        Ok(found) => found,
+        // A panicked blocking task, or a runtime shutting down under it. The
+        // empty answer would be a quiet lie — "nothing has been merged" — so it
+        // is named where a developer will find it.
+        Err(err) => {
+            log::warn!("[tracker] the merged-branch sweep did not finish: {err}");
+            return;
+        }
+    };
+
+    for task in found {
+        let reason = crate::vcs::merged::reason(&task, &target);
+        match project.bd.close(&task.id, Some(&reason)).await {
+            Ok(issue) => {
+                log::info!("[tracker] closed {}: {reason}", task.id);
+                emit_delta(app, store.upsert_one(issue));
+            }
+            Err(e) => log::warn!("[tracker] could not close {}: {e}", task.id),
+        }
+    }
+}
+
+/// Which branch this project's work is aimed at: what the run dialog was left
+/// on here, then the project's own `[defaults] target_branch`.
+///
+/// The same two terms `components/run/branchChoice.js` takes, in the same
+/// order, so the board and the run dialog cannot come to disagree about where
+/// this project merges. **Its third term is deliberately not here.** The dialog
+/// falls back to the branch most recently worked on, which is a fair guess to
+/// put in a field somebody is looking at and about to press a button on; behind
+/// this sweep it would be a guess nobody sees, closing tasks against whichever
+/// branch happened to be touched last. A project that has named no target
+/// branch anywhere gets no automatic closures, which is the honest answer.
+///
+/// Two small file reads, on the worker rather than on the blocking pool: they
+/// are what `settings::agent` and `runs::config::load` already cost every other
+/// caller, and reading them at each tick is what lets a branch chosen a minute
+/// ago take effect without a restart.
+fn target_branch(app: &AppHandle, dir: &Path) -> Option<String> {
+    let project = dir.to_string_lossy();
+    if let Some(branch) = crate::settings::target_branch(app, &project) {
+        return Some(branch);
+    }
+    match crate::runs::config::load(dir) {
+        crate::runs::config::ConfigState::Ok { config } => config.defaults.target_branch,
+        _ => None,
+    }
+}
+
 async fn incremental_sync(app: &AppHandle, bd: &Bd, store: &mut Store, health: &mut HealthReporter) {
     let since = since_with_overlap(store.last_seen());
     match bd.list_updated_after(&since).await {
@@ -444,6 +541,11 @@ pub fn start(app: AppHandle, initial: Option<PathBuf>) -> TrackerHandle {
                     if let Some(bd) = tracked(&current) {
                         let _ = full_sync(&app, bd, &mut store, &mut health).await;
                     }
+                    // And after it, on the same tick rather than on a timer of
+                    // its own: what this asks about is the board the sweep has
+                    // just made current, so a second timer could only ask the
+                    // same question of a staler answer.
+                    close_merged(&app, &current, &mut store).await;
                 }
             }
         }

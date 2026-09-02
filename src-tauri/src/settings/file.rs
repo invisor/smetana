@@ -126,6 +126,23 @@ pub fn updates_auto_check(path: &Path) -> bool {
     load(path).0.updates.auto_check
 }
 
+/// What this project's runs were last aimed at, and nothing else out of the
+/// file. The shape of `agent` above, one map deeper.
+///
+/// The key is the project's absolute path exactly as `resolve` stores it, which
+/// is the directory `project::nearest_tracked_ancestor` normalized — the same
+/// one the tracker worker holds, so the two cannot come to name different
+/// folders.
+///
+/// `None` covers every way of having no answer and they all mean the same
+/// thing to the caller: no file, a file that would not read, a project nobody
+/// has opened the run dialog for, and a run dialog left with no target branch
+/// chosen. There is no default to fall back on here — a branch name guessed for
+/// somebody's project would be a wrong answer rather than a missing one.
+pub fn run_target_branch(path: &Path, project: &str) -> Option<String> {
+    load(path).0.projects.get(project)?.run_settings.as_ref()?.target_branch.clone()
+}
+
 /// How big one dialog window was left, and nothing else out of the file. The
 /// shape of `agent` above, one section over, and read from the disk at the
 /// moment the window opens rather than once at start — the same reason
