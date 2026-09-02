@@ -150,6 +150,28 @@ keepawake = { version = "0.6", default-features = false }
 # no copy of it. `src-tauri/src/autostart.rs` records why.
 tauri-plugin-autostart = "2.5.1"
 
+# Where the person's home directory is, for `caveman.rs` — which reads whether
+# somebody else's token-shrinking layer is installed on this machine, out of
+# four files under `~`.
+#
+# A crate rather than the `std::env::var_os("HOME")` this tree reads everywhere
+# else (`tracker::access::home`, `agents::library`, `runs::browser`), and the
+# difference is the platform rather than the taste: `HOME` is a unix
+# convention, Windows sets `USERPROFILE` instead, and a reading that answers
+# `None` there would report caveman absent on every Windows machine whatever
+# is installed on it. The four callers above are macOS-only or work off a path
+# somebody else supplied; this one is asked on every platform.
+#
+# The price, counted against `Cargo.lock` rather than guessed at: **nothing at
+# all**. `dirs` 6.0.0 is already in the lock file — `tauri` reaches it through
+# its own path resolver — together with `dirs-sys`, `option-ext`,
+# `redox_users` and the `windows-sys` under it, so this line is a declaration
+# of something already compiled. The major is pinned to that one deliberately:
+# `dirs` 4.0.0 is *also* in the tree, under `auto-launch`, and asking for `4`
+# here would tie this module to the copy that only exists because a plugin is a
+# version behind.
+dirs = "6"
+
 # Updating in place: fetch `latest.json` off the release the workflow published,
 # check the minisign signature against `plugins.updater.pubkey`, replace the
 # bundle. A plugin rather than anything of ours, because the signature check is
