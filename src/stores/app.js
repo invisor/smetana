@@ -112,6 +112,119 @@ export async function watchBoardColumns(onColumns) {
   return stop
 }
 
+/* Which project the app window is looking at, for the settings window's Caveman
+   group. The same hello-and-announcement pair the board columns above use, and
+   here for their reason exactly: nothing about it reaches `settings.json`, so it
+   has no business in that file's three-event contract.
+
+   Two things on the Agents tab need it and neither can do without. `caveman.rs`
+   is asked about a project, because one of the four states it answers with is
+   the skill in this repository alone; and the Install button opens a terminal,
+   which has to be a terminal somewhere, so with nothing open it is drawn dead
+   and says why. The path itself never leaves this pair — the terminal is opened
+   by the app window, which knows where it is pointed without being told.
+
+   It is a live announcement rather than a field on the settings contract, and
+   that is the whole reason it exists as a pair of its own: `announce()` in
+   `stores/settings.js` fires on a hello and on an edit, never on a project
+   being switched, so a project carried in that message would be the previous
+   one for as long as the settings window stayed open. */
+export const PROJECT_ACTIVE = 'project:active'
+export const PROJECT_HELLO = 'project:hello'
+
+/* The app window's half: this is the project now. `null` is a real answer and
+   the commonest one to matter here — every project closed — so it travels as
+   itself rather than being left out. */
+export async function announceActiveProject(path) {
+  try {
+    await emit(PROJECT_ACTIVE, { path: path ?? null })
+  } catch (err) {
+    console.warn('[app] the settings window was not told which project is active:', err)
+  }
+}
+
+export async function watchProjectHello(onHello) {
+  return listen(PROJECT_HELLO, () => onHello())
+}
+
+/* The settings window's half, and the hello goes after the subscription for the
+   reason `watchBoardColumns` above records: the answer is an event too. A hello
+   that never went costs a tab believing no project is open, which is the state
+   it starts in and the safe one — the Install button is drawn dead rather than
+   opening a terminal somewhere nobody asked for. */
+export async function watchActiveProject(onProject) {
+  const stop = await listen(PROJECT_ACTIVE, (event) => onProject(event.payload?.path ?? null))
+  emit(PROJECT_HELLO, null).catch((err) => {
+    console.warn('[app] the app window was not asked which project is active:', err)
+  })
+  return stop
+}
+
+/* The Install button on the Agents tab, travelling the other way: the settings
+   window has decided what should be typed, and the app window is the one that
+   can type it.
+
+   One event and no answer, which is unlike every other pair in this file, and
+   the asymmetry is the point. Opening a terminal is the app window's own
+   gesture — it has the project, it has the tab row, and `newTerminal` there
+   already focuses the new tab and turns a refusal into the toast it turns every
+   other refused session into. A settings window that called `terminal_shell`
+   itself would make a session nobody was shown: the tab would exist behind the
+   window somebody is looking at, unfocused, with the command in it.
+
+   The command travels as a string rather than as a state to re-derive, because
+   the two windows would otherwise have to agree twice about the same four
+   states. What the far end promises in return is the one thing this feature
+   rests on: it writes those bytes and no newline.
+
+   **That promise is checked here rather than trusted**, and this line is the
+   whole of the feature's safety. A command carrying a newline is a command that
+   runs itself the moment it lands in the shell, which is precisely what the
+   button exists not to do, and the check belongs at the boundary where the
+   sentence is said rather than in whichever caller happens to be sending today:
+   an event can be emitted by anything in this app, and the next caller will not
+   have read `caveman.js`. A refused message costs nothing and says so. */
+export const CAVEMAN_INSTALL = 'caveman:install'
+
+/* Whether this is a command a shell may be handed. One line and no line ending:
+   `\r` is what Enter sends and `\n` is what a pasted second line carries, and
+   either would turn typing into running. */
+function typeableCommand(command) {
+  return typeof command === 'string' && command !== '' && !/[\r\n]/.test(command)
+}
+
+export async function requestCavemanInstall(command) {
+  /* Refused at the sending end as well as at the receiving one, so a caller
+     that never reaches the app window is still told. The two checks are one
+     function rather than two rules to keep in step. */
+  if (!typeableCommand(command)) {
+    console.error('[app] refusing to type a command with a line ending in it:', command)
+    return
+  }
+  try {
+    await emit(CAVEMAN_INSTALL, { command })
+  } catch (err) {
+    console.error('[app] the install command did not reach the app window:', err)
+  }
+}
+
+export async function watchCavemanInstall(onRequest) {
+  return listen(CAVEMAN_INSTALL, (event) => {
+    const command = event.payload?.command
+    /* A malformed message costs nothing: an event is not a response to
+       anything, and there is no shell to open with nothing to put in it. One
+       carrying a line ending is refused loudly instead, because it is not a
+       message this app sends and typing it would run it. */
+    if (typeableCommand(command)) {
+      onRequest(command)
+      return
+    }
+    if (typeof command === 'string' && command) {
+      console.error('[app] refusing to type a command with a line ending in it:', command)
+    }
+  })
+}
+
 /* A dialog in a window of its own: opening one, closing one, sizing one, and
    the two-way traffic that fills it.
 
@@ -495,6 +608,24 @@ export async function watchFullscreen(onChange) {
   } catch (err) {
     console.debug('[app] no window to watch for fullscreen (a browser):', err)
     return () => {}
+  }
+}
+
+/* This window to the front. The one caller is the Install button on the Agents
+   tab: the press happens in the settings window, the terminal opens here, and
+   without this the person would be looking at a window with nothing in it while
+   the thing they asked for appeared behind it. Silent on failure and never
+   thrown — the tab is open and the command is in it either way, so a machine
+   that declines to raise a window has cost a step and not the feature.
+
+   It needs `core:window:allow-set-focus` granted explicitly in
+   `capabilities/default.json`: `core:default` does not carry it, and without
+   the grant this would log the line below and do nothing at all. */
+export async function focusWindow() {
+  try {
+    await getCurrentWindow().setFocus()
+  } catch (err) {
+    console.warn('[app] the window could not be brought forward:', err)
   }
 }
 

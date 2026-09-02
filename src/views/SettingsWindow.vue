@@ -39,10 +39,17 @@ import {
   autostartState,
   openExternal,
   readAgentUsage,
+  readCavemanState,
+  requestCavemanInstall,
   setAutostart,
+  watchActiveProject,
   watchBoardColumns,
   watchSettingsSection
 } from '../stores/app.js'
+/* Pure, no Vue and no DOM: what the Install button would type. The press
+   arrives here as a bare event, the way `refresh` does, so the one place that
+   knows a state's command is the module the group draws from. */
+import { installCommand } from '../components/settings/caveman.js'
 import { clearStorage, surveyStorage } from '../stores/attachments.js'
 import { checkForUpdate, initUpdates, installUpdate, updatesState } from '../stores/updates.js'
 
@@ -238,6 +245,7 @@ const changeAgentPrompt = (text) => {
 let stopWatching = null
 let stopSections = null
 let stopColumns = null
+let stopProject = null
 let stopUpdates = null
 const version = ref(null)
 
@@ -264,6 +272,18 @@ const updateRefusal = ref(null)
    gap. */
 const boardColumns = ref([])
 
+/* Which project the app window has open, announced by it the way the board
+   columns are and for the same reason (`stores/app.js`): it is not a setting
+   and has no business on the settings contract. Two things on the Agents tab
+   want it — the Caveman group's Install button, which opens a terminal and so
+   needs there to be somewhere to open one, and the state read below, since one
+   of the four states caveman can be in is the skill in this repository alone.
+
+   `null` is the ordinary state rather than a gap: every project closed, or no
+   app window to answer at all, which is what a browser under `?view=settings`
+   is. */
+const activeProject = ref(null)
+
 onMounted(async () => {
   try {
     stopWatching = await watchSharedSettings((state) => adopt(state, true))
@@ -287,6 +307,13 @@ onMounted(async () => {
     })
   } catch (err) {
     console.warn('[settings-window] no app window to hear the board columns from:', err)
+  }
+  try {
+    stopProject = await watchActiveProject((path) => {
+      activeProject.value = typeof path === 'string' && path ? path : null
+    })
+  } catch (err) {
+    console.warn('[settings-window] no app window to hear the active project from:', err)
   }
   /* And only now: this window is listening, and the section its URL named is
      the one `tab` was seeded with at setup. A gear pressed on a section while
@@ -316,6 +343,7 @@ onUnmounted(() => {
   stopWatching?.()
   stopSections?.()
   stopColumns?.()
+  stopProject?.()
   stopUpdates?.()
 })
 
@@ -474,6 +502,65 @@ const readUsage = async (agent = adopted.value ? view.agent : null) => {
   }
 }
 
+/* How caveman stands on this machine, and the fifth part of this window that is
+   not a setting: nothing about it reaches `settings.json`. The machine's own
+   four files are the whole of the truth (`src-tauri/src/caveman.rs`), so it is
+   asked rather than remembered — a copy of ours would disagree with the disk
+   the first time somebody ran `caveman enable` outside this app, with no way to
+   tell which half was stale.
+
+   Read on opening the Agents tab, the way the Storage numbers, the login item
+   and the subscription probe are read on opening theirs. Not on mounting the
+   window: everybody who comes to change the theme would otherwise be asking
+   about somebody else's installer. It is re-read when the project changes too,
+   since one of the four states is about a repository rather than about the
+   machine — but only while this tab is the one on screen, for the reason it is
+   not read on mounting.
+
+   The project travels as the empty string when there is none, which is what the
+   command is asked with in a browser and with every project closed. Rust joins
+   the skill path onto it and finds nothing, which is exactly right: the three
+   states that can be true with no project open are facts about the machine and
+   need no path at all.
+
+   The reading is cleared at the start of every read, the way the subscription
+   block's is, so a stale answer about the previous project cannot sit under a
+   sentence about the new one; and the guard is a sequence number for that same
+   reason. `readCavemanState` never rejects — a browser is a `debug` line and an
+   `absent` — so there is no error branch to draw. */
+const caveman = reactive({ reading: null, busy: false })
+let askedCaveman = 0
+
+const readCaveman = async () => {
+  const mine = (askedCaveman += 1)
+  caveman.busy = true
+  caveman.reading = null
+  try {
+    const reading = await readCavemanState(activeProject.value ?? '')
+    if (mine !== askedCaveman) return
+    caveman.reading = reading
+  } finally {
+    if (mine === askedCaveman) caveman.busy = false
+  }
+}
+
+/* The Install press. Nothing is opened from here: the terminal belongs to the
+   app window, which has the project and the tab row, so what goes is the
+   command and the app window types it — without a newline, which is the whole
+   point of the button. A state with no command cannot reach this, since the row
+   is not drawn at all in the other two states. */
+const installCaveman = () => {
+  const command = installCommand(caveman.reading)
+  if (command) requestCavemanInstall(command)
+}
+
+/* The project changed under an open window. Only while the Agents tab is the
+   one on screen: the read is cheap, but asking on behalf of a tab nobody is
+   looking at is the habit this window does not have. */
+watch(activeProject, () => {
+  if (tab.value === 'agents') readCaveman()
+})
+
 /* An agent is chosen: the edit goes where every edit on this window goes, and
    the block is asked again, since it is about whoever would answer now. */
 const chooseAgent = (id) => {
@@ -517,6 +604,10 @@ watch(
        off this tab and back while a minute-long probe is out must not start a
        second one against the same harness. */
     if (which === 'agents' && !usage.busy) readUsage()
+    /* Guarded by `busy` like the two above, though this one is four file reads
+       rather than somebody else's CLI: walking off the tab and back should not
+       queue a second answer behind the first. */
+    if (which === 'agents' && !caveman.busy) readCaveman()
   },
   { immediate: true }
 )
@@ -621,6 +712,10 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           :subscription-pause-at="view.subscriptionPauseAt"
           :subscription-reduced-at="view.subscriptionReducedAt"
           :show-report="view.notificationShowReport"
+          :caveman="caveman.reading"
+          :caveman-level="view.cavemanLevel"
+          :caveman-project-level="view.cavemanProjectLevel"
+          :project-open="Boolean(activeProject)"
           :usage="usage.reading"
           :busy="usage.busy"
           :error="usage.error"
@@ -632,6 +727,9 @@ const columnStyle = { maxWidth: '88ch', margin: '0 auto' }
           @update:agent-prompt="changeAgentPrompt($event)"
           @update:subscription-pause-at="change({ subscriptionPauseAt: $event })"
           @update:subscription-reduced-at="change({ subscriptionReducedAt: $event })"
+          @update:caveman-level="change({ cavemanLevel: $event })"
+          @update:caveman-project-level="change({ cavemanProjectLevel: $event })"
+          @install="installCaveman()"
           @refresh="readUsage()"
         />
         <KanbanSettings

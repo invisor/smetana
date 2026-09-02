@@ -240,3 +240,47 @@ describe('how caveman stands on this machine', () => {
     quiet.mockRestore()
   })
 })
+
+/* The Install button's message, and the one invariant this whole feature rests
+   on: the command is **typed** into a shell and never run, so what travels must
+   be one line with no ending on it. The check lives at the event boundary rather
+   than in the caller — an event can be emitted by anything in this app, and the
+   next caller will not have read `components/settings/caveman.js`.
+
+   What opens the terminal is `views/DesktopApp.vue` and is reachable by no test
+   here; what is checked is that the string reaches it, and that a string which
+   would run itself does not. */
+describe('the command the Install button types into a terminal', () => {
+  it('carries one line through to whoever opens the terminal', async () => {
+    const { stores } = await loadStores()
+    const typed = []
+    await stores.app.watchCavemanInstall((command) => typed.push(command))
+
+    await stores.app.requestCavemanInstall('caveman enable claude')
+    await vi.waitFor(() => expect(typed).toEqual(['caveman enable claude']))
+  })
+
+  it('refuses a command with a line ending, at both ends of the message', async () => {
+    const { stores, emit } = await loadStores()
+    const typed = []
+    await stores.app.watchCavemanInstall((command) => typed.push(command))
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    /* A newline is Enter: it would turn the one thing this button promises not
+       to do into the thing it does. */
+    await stores.app.requestCavemanInstall('caveman enable claude\n')
+    await stores.app.requestCavemanInstall('caveman enable claude\rrm -rf /')
+    /* And again from the far side, for a message this app did not send. */
+    await emit(stores.app.CAVEMAN_INSTALL, { command: 'caveman enable claude\n' })
+    await emit(stores.app.CAVEMAN_INSTALL, { command: '' })
+    await emit(stores.app.CAVEMAN_INSTALL, { command: 7 })
+    await emit(stores.app.CAVEMAN_INSTALL, null)
+    /* A good one last, and waited for: it is the barrier that says the six
+       above were seen and dropped rather than still on their way. */
+    await emit(stores.app.CAVEMAN_INSTALL, { command: 'caveman enable claude' })
+    await vi.waitFor(() => expect(typed).toEqual(['caveman enable claude']))
+
+    expect(said).toHaveBeenCalled()
+    said.mockRestore()
+  })
+})
