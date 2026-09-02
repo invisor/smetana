@@ -59,7 +59,25 @@
 
    Plan and Status are gone rather than kept as dashes: `/usage` reports two
    percentages and two reset times and says nothing at all about a tariff, so
-   those two rows could only ever have stayed empty. */
+   those two rows could only ever have stayed empty.
+
+   The Caveman group sits between the standing instruction and the run limits,
+   and that neighbourhood is the argument for the place: it is about how an agent
+   talks, which is the question the instruction above it asks. It draws one line
+   about how caveman stands on this machine and up to three rows under it, and
+   every word of the first is `caveman.js`'s — the `.vue` file is the one thing
+   no test here can reach, so the whole of that rule lives outside it.
+
+   The Install button installs nothing, and that is the design rather than a
+   limitation. It opens a terminal in the active project and **types** the
+   command without a newline: the person reads it, presses Enter themselves, and
+   watches somebody else's installer rewrite their own `~/.claude/settings.json`
+   with their own eyes. This component only says which command; the terminal is
+   the app window's to open (`stores/app.js`, `typeCavemanInstall` in
+   `views/DesktopApp.vue`), which is why the press leaves here as an event like
+   every other choice on this screen. With no project open there is nothing to
+   open a terminal in, so the button is drawn `disabled` and the row's
+   description names the reason — the Launch at login shape one tab over. */
 import { computed } from 'vue'
 import Button from '../core/Button.vue'
 import Dropdown from '../core/Dropdown.vue'
@@ -68,6 +86,15 @@ import SettingsGroup from './SettingsGroup.vue'
 import SettingsRow from './SettingsRow.vue'
 import { agentOf, offersRefresh, usageLines, usageNote } from './usage.js'
 import { thresholdOptions } from './subscription.js'
+import {
+  installCommand,
+  installDescription,
+  levelOptions,
+  offersInstall,
+  projectLevelOptions,
+  stateFacts,
+  stateSentence
+} from './caveman.js'
 
 const props = defineProps({
   agent: { type: String, default: 'claude' },
@@ -101,6 +128,27 @@ const props = defineProps({
      `true`, the shipped position, so the row is usable in the moment before the
      first answer arrives rather than greying itself out and back. */
   showReport: { type: Boolean, default: true },
+  /* `caveman_state`'s answer whole, in Rust's own shape (`src-tauri/src/
+     caveman.rs`), or `null` before there has been one. Not a setting and
+     nothing about it reaches `settings.json`: the machine's own files are the
+     truth, so the window asks afresh every time this tab is opened. */
+  caveman: { type: Object, default: null },
+  /* How compressed an agent's answers are, and this project's own override of
+     it. The shipped `off` and `inherit`, which is the fourth copy of each — the
+     other three are `CavemanSettings::default()` and `ProjectState::default()`
+     in Rust, `defaults()` in `stores/settings.js` and `view` in
+     `SettingsWindow.vue` — and they have to agree, or this tab draws a level
+     the app is not using for the moment before the first answer arrives.
+     `inherit` is a word and never a `null`; `caveman.js` carries why. */
+  cavemanLevel: { type: String, default: 'off' },
+  cavemanProjectLevel: { type: String, default: 'inherit' },
+  /* Whether the app window has a project open, which is the whole of what the
+     Install button needs to know: the command is typed into a terminal, and a
+     terminal is opened somewhere. `false` by default, so the button opens
+     `disabled` and settles into being live — the other way round it would offer
+     a press for the length of a round trip and then take it away, which is the
+     shape `autostartSupported` on the General tab already refuses. */
+  projectOpen: { type: Boolean, default: false },
   /* `agent_usage`'s answer whole, in Rust's own shape, or `null` before there
      has been one. */
   usage: { type: Object, default: null },
@@ -122,6 +170,12 @@ const emit = defineEmits([
   'update:agentPrompt',
   'update:subscriptionPauseAt',
   'update:subscriptionReducedAt',
+  'update:cavemanLevel',
+  'update:cavemanProjectLevel',
+  /* The Install press, carrying nothing: what would be typed is this
+     component's to say and the window's to send on, and the terminal is the app
+     window's to open. */
+  'install',
   'refresh'
 ])
 
@@ -237,6 +291,22 @@ const reportDescription = computed(() =>
     : 'Reports are not shown, so there is nothing here to show you. Turn on Show run report on the General tab to choose a language.'
 )
 
+/* The two ladders, built once: neither list changes, and both live in
+   `caveman.js` for the reason `thresholdOptions` above does. */
+const cavemanLevels = levelOptions()
+const cavemanProjectLevels = projectLevelOptions()
+
+/* What this machine's four files came to, in one sentence and up to a handful
+   of facts. The facts are the journal's, and the group draws them only where
+   they are true right now — `caveman.js` holds that rule, not this file. */
+const cavemanSentence = computed(() => stateSentence(props.caveman))
+const cavemanFacts = computed(() => stateFacts(props.caveman))
+const cavemanCommand = computed(() => installCommand(props.caveman))
+const cavemanInstallable = computed(() => offersInstall(props.caveman))
+const cavemanInstallDescription = computed(() =>
+  installDescription(props.caveman, props.projectOpen)
+)
+
 const lines = computed(() => usageLines(props.usage))
 const note = computed(() => usageNote(props.usage, props.busy, props.error))
 const refreshable = computed(() => offersRefresh(props.usage))
@@ -264,6 +334,22 @@ const headingStyle = {
   color: 'var(--text-primary)',
   font: 'var(--weight-medium) var(--text-ui-size)/var(--leading-snug) var(--font-sans)'
 }
+/* The line about this machine, drawn where a row would be and with a row's own
+   rule under it, so the group reads as one stack rather than as a paragraph
+   that wandered into it. It is deliberately not a `SettingsRow`: there is
+   nothing to change on this line, and a row with an empty control column reads
+   as a control that failed to draw. */
+const cavemanStatusStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--space-3)',
+  padding: 'var(--space-4) 0',
+  borderBottom: 'var(--border-w) solid var(--border-subtle)'
+}
+const cavemanSentenceStyle = {
+  color: 'var(--text-secondary)',
+  font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-sans)'
+}
 const factStyle = { display: 'flex', alignItems: 'baseline', gap: 'var(--space-4)' }
 /* A `ch` measure, not pixels: this is a column of words, and it is the first
    thing that would clip when the app-wide font size grows. `ch` is the width of
@@ -277,6 +363,17 @@ const nameStyle = {
 const valueStyle = {
   color: 'var(--text-muted)',
   font: 'var(--weight-regular) var(--text-label-size)/var(--leading-normal) var(--font-mono)'
+}
+/* The same value, said of something long. A path and a command are identifiers
+   like the two beside them, so the mono and the colour are borrowed rather than
+   repeated — what is added is the pair of properties that keep a home directory
+   or three chained commands inside the panel: `anywhere` lets the line break
+   where it must, and a `minWidth` of 0 is what lets a flex item narrower than
+   its content do so at all. */
+const cavemanValueStyle = {
+  ...valueStyle,
+  minWidth: 0,
+  overflowWrap: 'anywhere'
 }
 const noteStyle = {
   color: 'var(--text-secondary)',
@@ -376,6 +473,76 @@ const errorStyle = {
           :maxlength="MAX_AGENT_PROMPT"
           placeholder="Anything you want said in every session — how to talk to you, what this machine has, what to leave alone."
           @update:model-value="emit('update:agentPrompt', $event)"
+        />
+      </SettingsRow>
+    </SettingsGroup>
+
+    <!-- Between the standing instruction and the run limits, and the place is
+         the argument: this group is about how an agent talks, which is what the
+         group above it asks for in the person's own words. -->
+    <SettingsGroup label="Caveman">
+      <!-- What the machine's own four files came to. Every word of it is
+           `caveman.js`'s, including the line for a state this build has never
+           heard of and the one for a reading that has not arrived. -->
+      <div :style="cavemanStatusStyle">
+        <span :style="cavemanSentenceStyle">{{ cavemanSentence }}</span>
+        <!-- The pack version, what it was applied to, and every file caveman
+             rewrote. That last list is not decoration: another installer edited
+             two of this person's own configuration files, and this is the only
+             screen that says which. -->
+        <div v-for="(fact, index) in cavemanFacts" :key="index" :style="factStyle">
+          <span :style="nameStyle">{{ fact.name }}</span>
+          <span :style="cavemanValueStyle">{{ fact.value }}</span>
+        </div>
+        <!-- Drawn beside the button rather than only inside the terminal, so it
+             can be read before it is typed — and so somebody with no project
+             open, whose button is dead, can still see what to run themselves. -->
+        <div v-if="cavemanCommand" :style="factStyle">
+          <span :style="nameStyle">Command</span>
+          <span :style="cavemanValueStyle">{{ cavemanCommand }}</span>
+        </div>
+      </div>
+
+      <!-- Only where there is something to install or to wire in. In the other
+           two states the press would do nothing, and a button that does nothing
+           is worse than none. -->
+      <SettingsRow
+        v-if="cavemanInstallable"
+        label="Install"
+        :description="cavemanInstallDescription"
+        :control-width="CONTROL_WIDTH"
+      >
+        <Button
+          variant="secondary"
+          icon="terminal"
+          :disabled="!props.projectOpen"
+          @click="emit('install')"
+        >
+          Install
+        </Button>
+      </SettingsRow>
+
+      <SettingsRow
+        label="All projects"
+        description="How compressed an agent's answers are, everywhere. Off is what this app has always said about caveman: nothing at all."
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.cavemanLevel"
+          :options="cavemanLevels"
+          @update:model-value="emit('update:cavemanLevel', $event)"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        label="This project"
+        description="The level for the project the app window has open, which overrides the one above. Same as all projects leaves it to that row."
+        :control-width="CONTROL_WIDTH"
+      >
+        <Dropdown
+          :model-value="props.cavemanProjectLevel"
+          :options="cavemanProjectLevels"
+          @update:model-value="emit('update:cavemanProjectLevel', $event)"
         />
       </SettingsRow>
     </SettingsGroup>
